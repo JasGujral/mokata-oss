@@ -49,8 +49,15 @@ class TestPluginReferences(unittest.TestCase):
                 f"missing command template {cmd}.md")
 
     def test_plugin_references_both_hooks(self):
+        # Claude Code auto-loads the standard hooks/hooks.json, so the manifest must
+        # NOT re-reference it via a "hooks" key — doing so triggers a "Duplicate hooks
+        # file detected" error on plugin load (fixed in v1.2.3). The hooks still load;
+        # we validate the auto-loaded file directly here.
         data = json.loads(read(".claude-plugin/plugin.json"))
-        hooks_ref = data["hooks"].lstrip("./")
+        self.assertNotIn(
+            "hooks", data,
+            "manifest must not reference hooks/hooks.json (it auto-loads)")
+        hooks_ref = "hooks/hooks.json"
         hooks_json = json.loads(read(hooks_ref))
         blob = json.dumps(hooks_json)
         for hook in HOOKS:

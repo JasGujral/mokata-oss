@@ -4,6 +4,11 @@ All notable changes to mokata are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.3] — 2026-06-24
+
+### Fixed
+- **Plugin manifest:** removed the explicit `hooks` reference from `.claude-plugin/plugin.json`. Claude Code auto-loads the standard `hooks/hooks.json`, so referencing it in the manifest triggered a "Duplicate hooks file detected" error on plugin load. The manifest now only lists additional hook files (there are none); the hooks themselves still load.
+
 ## [1.2.2] — 2026-06-24
 
 ### Changed
