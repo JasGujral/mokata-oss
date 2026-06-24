@@ -1,6 +1,6 @@
 {
   "name": "mokata",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Spec-driven TDD framework for Claude Code \u2014 Socratic brainstorm, provable completeness gate, codebase knowledge graph, persistent self-healing memory, token governance, and human-gated writes.",
   "author": {
     "name": "MoStack"

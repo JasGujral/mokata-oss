@@ -4,6 +4,11 @@ All notable changes to mokata are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] — 2026-06-24
+
+### Changed
+- **Docs:** the install/usage story is presented as a consistent three-tier priority across the whole doc set — (1) Claude Code plugin, (2) Claude Code without the plugin via `mokata setup claude`, (3) the CLI for scripting/inspection (last). Quickstart, README, the plugin and no-plugin how-tos, the "integrate other tools" guide, and the run-a-story tutorial all reflect this ordering, making clear the CLI is the engine's mechanics (no LLM) rather than the primary way to build.
+
 ## [1.2.0] — 2026-06-24
 
 ### Added

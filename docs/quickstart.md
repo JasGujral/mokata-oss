@@ -2,12 +2,14 @@
 
 A fresh user, from zero to a full pipeline run. mokata is **primarily a Claude Code
 plugin** — install it and drive the whole workflow with slash commands inside Claude Code.
-It's also a plain Python package (Python ≥ 3.9, no required deps) you can run as a CLI
-anywhere.
+If you'd rather not use the marketplace, one command wires the same experience into Claude
+Code from a checkout. And it's also a plain Python package you can run as a CLI anywhere.
 
 ## 1. Install
 
-### Primary — as a Claude Code plugin (recommended)
+Three ways, in order of how most people should reach for them.
+
+### Option 1 (recommended) — as a Claude Code plugin
 
 In Claude Code:
 
@@ -23,27 +25,42 @@ the secret-guard hook, all automatic. Full guide: [Use the plugin in Claude Code
 A typical run: `/brainstorm` → approve an approach → `/spec` (blocked until acceptance
 criteria map to tests) → `/test` → `/develop` (RED-before-GREEN) → `/review`.
 
-### Additional — as a CLI (to use the engine outside Claude Code)
+### Option 2 — in Claude Code without the plugin (`mokata setup claude`)
 
-For scripts, CI, or other harnesses — clone the repo from GitHub, then install it:
+Prefer not to use the marketplace? Install the CLI once, then let one human-gated command
+wire the full experience (slash commands + MCP tools + hooks) into Claude Code. It runs on
+your existing Claude Code sign-in — **no API key**:
+
+```bash
+git clone https://github.com/JasGujral/mokata-oss.git
+cd mokata-oss
+pip install -e ".[mcp]"          # CLI + the bundled mokata-mcp server
+
+cd /path/to/your/project
+mokata setup claude              # --profile / --scope options; reverse with `mokata unsetup claude`
+```
+
+Restart Claude Code and you have the same commands, briefing, secret-guard, and MCP tools as
+the plugin. Full guide: [Use mokata without the plugin](how-to/use-without-plugin.md) (also
+covers wiring mokata into other harnesses like Gemini or Codex).
+
+### Option 3 — as a CLI only (outside any harness)
+
+For scripts, CI, or driving the engine yourself — clone and install, no harness wiring:
 
 ```bash
 git clone https://github.com/JasGujral/mokata-oss.git
 cd mokata-oss
 pip install -e .                 # core (Python ≥ 3.9, no required deps)
 # pip install -e ".[schema]"     # optional: richer manifest validation via jsonschema
-# pip install -e ".[mcp]"        # optional: the bundled MCP server (Python ≥ 3.10)
 ```
 
-This puts the `mokata` command on your PATH; run `mokata --help` to confirm.
+This puts the `mokata` command on your PATH; run `mokata --help` to confirm. Note the CLI is
+the engine's mechanics (gates, queries, state) — it doesn't supply an LLM, so it's for
+scripting and inspection rather than writing code on its own.
 
 The rest of this quickstart shows the **CLI** path; inside Claude Code the slash commands
 above do the same thing.
-
-> Want the full Claude Code workflow (slash commands, tools, hooks) **without** installing
-> the plugin? One command does it: `mokata setup claude`. See
-> [Use mokata without the plugin](how-to/use-without-plugin.md) (also covers wiring mokata
-> into other harnesses like Gemini or Codex).
 
 ## 2. Initialize a project (CLI)
 

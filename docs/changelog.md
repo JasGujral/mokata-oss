@@ -4,6 +4,13 @@ The full, versioned changelog lives in the repository's
 [`CHANGELOG.md`](https://github.com/JasGujral/mokata-oss/blob/main/CHANGELOG.md)
 (Keep a Changelog format).
 
+## 1.2.1
+
+- **Docs** present a consistent three-tier priority everywhere: (1) Claude Code plugin,
+  (2) Claude Code without the plugin via `mokata setup claude`, (3) the CLI for
+  scripting/inspection (last). The CLI is clearly the engine's mechanics (no LLM), not the
+  primary way to build.
+
 ## 1.2.0
 
 - **`mokata setup claude`** — one human-gated command to use mokata in Claude Code

@@ -4,6 +4,11 @@ A guided, learn-by-doing walkthrough of one story through the whole pipeline. By
 you'll have seen the HARD-GATE, the completeness gate blocking and passing, RED-before-GREEN,
 the two-stage review, and the audit trail.
 
+> This tutorial drives the **CLI** so each gate is visible step by step. For real day-to-day
+> work the primary path is Claude Code — the [plugin](../how-to/use-the-plugin.md) or
+> [`mokata setup claude`](../how-to/use-without-plugin.md) — where Claude runs these same
+> phases for you. The CLI here is the engine's mechanics, shown to make the flow concrete.
+
 ## 1. Set up
 
 ```bash

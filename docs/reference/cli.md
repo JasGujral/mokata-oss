@@ -1,5 +1,10 @@
 # Reference: CLI
 
+> The CLI is the engine's mechanics — best for scripting, CI, and inspection. For
+> day-to-day building, the primary paths are the [Claude Code plugin](../how-to/use-the-plugin.md)
+> or [`mokata setup claude`](../how-to/use-without-plugin.md), where the LLM drives these
+> same operations. (`mokata setup` itself is documented below.)
+
 Invoke as `mokata <command>` (console script) or `python -m mokata <command>`.
 `mokata --version` prints the version. Most commands accept a shared **`--path PATH`**
 (repo root to operate on; default the current directory). Commands that need an

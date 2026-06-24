@@ -28,30 +28,33 @@
 
 ## Install
 
-**As a Claude Code plugin (primary):**
+**1. As a Claude Code plugin (recommended):**
 
 ```text
 /plugin marketplace add JasGujral/mokata-oss
 /plugin install mokata@mostack
 ```
 
-**As a Python package (secondary)** — clone from GitHub, then install:
+**2. In Claude Code without the plugin** — install the CLI, then one human-gated command
+wires the full workflow (slash commands, MCP tools, hooks) into Claude Code on your existing
+sign-in, no marketplace and no API key:
 
 ```bash
-git clone https://github.com/JasGujral/mokata-oss.git
-cd mokata-oss
-pip install -e .                 # core (Python ≥ 3.9, no required deps)
-pip install -e ".[schema]"       # optional: richer manifest validation via jsonschema
-```
-
-**Without the plugin?** After installing the CLI, one command wires the full workflow
-(slash commands, MCP tools, hooks) into Claude Code — no marketplace, no API key:
-
-```bash
-mokata setup claude              # human-gated; --profile/--scope options; reverse with `mokata unsetup claude`
+git clone https://github.com/JasGujral/mokata-oss.git && cd mokata-oss
+pip install -e ".[mcp]"
+cd /path/to/your/project
+mokata setup claude              # --profile/--scope options; reverse with `mokata unsetup claude`
 ```
 
 See [Use mokata without the plugin](docs/how-to/use-without-plugin.md).
+
+**3. As a CLI only** (scripts, CI, or driving the engine outside any harness):
+
+```bash
+git clone https://github.com/JasGujral/mokata-oss.git && cd mokata-oss
+pip install -e .                 # core (Python ≥ 3.9, no required deps)
+pip install -e ".[schema]"       # optional: richer manifest validation via jsonschema
+```
 
 ## Quickstart
 

@@ -2,8 +2,11 @@
 
 mokata is **primarily a Claude Code plugin**. Once installed, you drive the whole
 spec-driven TDD workflow from inside Claude Code — slash commands for the workflow and
-hooks that run automatically. The [CLI](../reference/cli.md) is the secondary way to use
-the same engine outside Claude Code (or for anything the slash commands don't cover).
+hooks that run automatically. If you'd rather not use the marketplace, you get the same
+in-Claude-Code experience with one command from a checkout —
+[`mokata setup claude`](use-without-plugin.md). The [CLI](../reference/cli.md) comes last:
+it's the engine's mechanics for scripting and inspection outside any harness, not the
+primary way to build.
 
 ## Install
 

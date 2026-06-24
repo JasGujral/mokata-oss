@@ -13,6 +13,11 @@ your machine** unless you wire it.
 mokata is pure Python (≥ 3.9), has **no required runtime dependencies**, is Apache-2.0
 under **MoStack**, and is built clean-room (no dependency on any other framework).
 
+**Three ways to use it, in priority order:** (1) the **Claude Code plugin**; (2) **Claude
+Code without the plugin** via one command, `mokata setup claude`; (3) the **CLI** for
+scripting and inspection. The first two give the LLM the full workflow; the CLI is the
+engine's mechanics and comes last. See [Getting started](quickstart.md).
+
 ## What's here
 
 This site follows the [Diátaxis](https://diataxis.fr/) model:
