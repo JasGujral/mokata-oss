@@ -4,7 +4,7 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/JasGujral/mokata-oss/actions/workflows/ci.yml/badge.svg)](https://github.com/JasGujral/mokata-oss/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.0.0-informational.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/github/v/release/JasGujral/mokata-oss?label=version)](https://github.com/JasGujral/mokata-oss/releases/latest)
 [![Python](https://img.shields.io/badge/python-3.9%E2%80%933.12-blue.svg)](pyproject.toml)
 [![Docs](https://img.shields.io/badge/docs-mkdocs-blue.svg)](https://jasgujral.github.io/mokata-oss/)
 [![local-first](https://img.shields.io/badge/local--first-no%20telemetry-success.svg)](docs/concepts/governance.md)

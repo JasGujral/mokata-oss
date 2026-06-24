@@ -17,6 +17,9 @@ concurrency:
 
 jobs:
   build-deploy:
+    # Only the public repo has GitHub Pages enabled — skip on the private dev repo
+    # (otherwise the deploy-pages step fails there).
+    if: github.repository == 'JasGujral/mokata-oss'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

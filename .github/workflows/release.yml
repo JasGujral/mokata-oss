@@ -17,6 +17,7 @@ permissions:
 
 jobs:
   test:
+    if: github.repository == 'JasGujral/mokata-oss'   # releases only from the public repo
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -38,6 +39,7 @@ jobs:
         run: python -m unittest discover -s tests/integration -t tests/integration
 
   validate:
+    if: github.repository == 'JasGujral/mokata-oss'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -70,6 +72,7 @@ jobs:
 
   github-release:
     needs: [test, validate]
+    if: github.repository == 'JasGujral/mokata-oss'
     runs-on: ubuntu-latest
     permissions:
       contents: write
