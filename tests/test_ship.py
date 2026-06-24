@@ -11,7 +11,7 @@ from mokata import __version__
 from mokata.packaging import validate_marketplace, validate_plugin
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
-VERSION = "1.0.0"
+VERSION = __version__   # canonical; every other location must match it (version-agnostic)
 
 COMMANDS = ("brainstorm", "spec", "test", "develop", "review", "debug", "optimize", "bug")
 HOOKS = ("session_start.py", "secret_guard.py")
@@ -23,15 +23,14 @@ def read(rel):
 
 
 class TestVersionConsistency(unittest.TestCase):
-    def test_version_is_1_0_0_everywhere(self):
-        self.assertEqual(__version__, VERSION)
-        self.assertIn('version = "1.0.0"', read("pyproject.toml"))
+    def test_version_consistent_everywhere(self):
+        self.assertIn(f'version = "{VERSION}"', read("pyproject.toml"))
         self.assertEqual(json.loads(read(".claude-plugin/plugin.json"))["version"],
                          VERSION)
         mp = json.loads(read(".claude-plugin/marketplace.json"))
         self.assertEqual(mp["metadata"]["version"], VERSION)
         self.assertEqual(mp["plugins"][0]["version"], VERSION)
-        self.assertIn("## [1.0.0]", read("CHANGELOG.md"))
+        self.assertIn(f"## [{VERSION}]", read("CHANGELOG.md"))
 
 
 class TestPluginReferences(unittest.TestCase):

@@ -1,16 +1,41 @@
 # mokata — Quickstart
 
-A fresh user, from zero to a full pipeline run. mokata is a plain Python package
-(Python ≥ 3.9, no required dependencies) and a Claude Code plugin.
+A fresh user, from zero to a full pipeline run. mokata is **primarily a Claude Code
+plugin** — install it and drive the whole workflow with slash commands inside Claude Code.
+It's also a plain Python package (Python ≥ 3.9, no required deps) you can run as a CLI
+anywhere.
 
 ## 1. Install
+
+### Primary — as a Claude Code plugin (recommended)
+
+In Claude Code:
+
+```text
+/plugin marketplace add JasGujral/mokata-oss
+/plugin install mokata@mostack
+```
+
+Restart Claude Code. You now have the workflow commands — `/brainstorm`, `/spec`, `/test`,
+`/develop`, `/review`, `/debug`, `/optimize`, `/bug` — plus the SessionStart briefing and
+the secret-guard hook, all automatic. Full guide: [Use the plugin in Claude Code](how-to/use-the-plugin.md).
+
+A typical run: `/brainstorm` → approve an approach → `/spec` (blocked until acceptance
+criteria map to tests) → `/test` → `/develop` (RED-before-GREEN) → `/review`.
+
+### Additional — as a CLI (to use the engine outside Claude Code)
+
+For scripts, CI, or other harnesses:
 
 ```bash
 pip install -e .            # from a checkout
 # pip install -e ".[schema]"  # optional: richer manifest validation via jsonschema
 ```
 
-## 2. Initialize a project
+The rest of this quickstart shows the **CLI** path; inside Claude Code the slash commands
+above do the same thing.
+
+## 2. Initialize a project (CLI)
 
 ```bash
 mokata init                 # default profile: standard (lean, local: grep + SQLite)

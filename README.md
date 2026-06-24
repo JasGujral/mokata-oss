@@ -44,9 +44,19 @@ pip install -e ".[schema]"       # optional: richer manifest validation via json
 
 ## Quickstart
 
+**In Claude Code (primary)** — after installing the plugin, drive the workflow with slash commands:
+
+```text
+/brainstorm        # Socratic pre-spec exploration (HARD-GATE before any spec)
+/spec              # draft the spec (blocked until every acceptance criterion maps to a test)
+/test  /develop    # RED-before-GREEN
+/review            # spec-compliance, then quality
+```
+
+**Or via the CLI** (outside Claude Code):
+
 ```bash
 mokata init                         # scaffold .mokata/ (default profile: standard); human-gated
-# mokata init --profile full        # or: wire every graph + memory provider (degrade to floors)
 mokata brainstorm                   # Socratic pre-spec exploration (HARD-GATE before spec)
 mokata playbook                     # drive the full story end-to-end through the pipeline
 ```

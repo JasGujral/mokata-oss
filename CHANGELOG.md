@@ -4,6 +4,17 @@ All notable changes to mokata are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-06-24
+
+### Added
+- **Bundled MCP server** — Claude Code (and any MCP client) can call mokata operations as native tools: read tools (`query`, `recall`, `doctor`, `coverage`, `budget`, `audit`, `status`, `preview`) and human-gated write tools (`remember`, `import_stack`, `reset`, `apply_proposal` — propose-only unless explicitly confirmed; secrets are an un-overridable hard block). Installed via the optional `mokata[mcp]` extra; the core package and CLI run without it.
+- **Integration test suite** (`tests/integration/`) — end-to-end pipeline across every profile and both execution modes, plus config/memory/knowledge round-trips; wired as a required release gate.
+- **Release CD pipeline** (`release.yml`) — on a version tag, gates on the full test matrix + version/manifest validation, then cuts the GitHub Release.
+
+### Changed
+- Default profile is `standard` (lean, local); documented `mokata init --profile full` to wire every graph/memory provider.
+- Docs are now plugin-first (Claude Code plugin is the primary install path; CLI is the additional option), with a three-panel Material docs site.
+
 ## [1.0.0] — 2026-06-23
 
 First public release — the full feature set, built clean-room, local-first, Apache-2.0.

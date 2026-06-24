@@ -32,8 +32,10 @@ jobs:
         run: |
           python -m pip install -e .
           if [ "${{ matrix.jsonschema }}" = "present" ]; then python -m pip install "jsonschema>=4"; fi
-      - name: Test suite (must pass with jsonschema absent AND present)
+      - name: Unit test suite (must pass with jsonschema absent AND present)
         run: python -m unittest discover -s tests -t tests
+      - name: Integration suite — REQUIRED release gate (jsonschema absent AND present)
+        run: python -m unittest discover -s tests/integration -t tests/integration
 
   validate:
     runs-on: ubuntu-latest

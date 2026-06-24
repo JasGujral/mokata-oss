@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mokata"
-version = "1.0.0"
+version = "1.1.0"
 description = "An open-source, spec-driven TDD framework for Claude Code — governed, knowledge-aware, human-gated."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -20,9 +20,17 @@ dependencies = []
 [project.optional-dependencies]
 # Optional upgrades. Absence is detected and degraded over, never fatal.
 schema = ["jsonschema>=4.0"]
+# Plugin-side only: the MCP server (src/mokata/mcp_server.py) that exposes mokata as native
+# Claude Code tools. The core package and CLI import and run with this absent. The SDK
+# needs Python >= 3.10, so the marker keeps `pip install "mokata[mcp]"` a clean no-op on
+# 3.9 instead of a resolution error.
+mcp = ['mcp>=1.2; python_version >= "3.10"']
 
 [project.scripts]
 mokata = "mokata.cli:main"
+# The MCP server entry point (plugin-launched stdio). Importing the server needs the
+# optional [mcp] extra; the entry point itself is always installed.
+mokata-mcp = "mokata.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

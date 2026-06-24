@@ -15,3 +15,4 @@ push-to-github.command
 
 # MkDocs build output
 site/
+uv.lock
