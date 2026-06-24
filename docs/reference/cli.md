@@ -19,6 +19,26 @@ waits for confirmation).
 | `--yes` | non-interactive; skip the write prompt |
 | `--force` | overwrite an existing manifest |
 
+### `mokata setup <harness>`
+One command to use mokata in a harness **without the plugin**: runs `init` (if needed),
+copies the slash commands into `.claude/commands/`, registers the `mokata-mcp` server in
+`.mcp.json`, and wires the SessionStart + secret-guard hooks into `.claude/settings.json`.
+**Human-gated**; JSON files are merged (never clobbered); idempotent. Currently supports the
+`claude` harness. See [Use mokata without the plugin](../how-to/use-without-plugin.md).
+
+| Flag | Meaning |
+|---|---|
+| `--scope {project,user}` | install into this repo (default) or `~/.claude` (every project) |
+| `--profile {minimal,standard,full,custom}` | profile to init with if not already set up |
+| `--no-hooks` | wire only commands + MCP; skip the hooks |
+| `--yes` | non-interactive; skip the confirmation prompt |
+| `--force` | re-init even if a manifest already exists |
+
+### `mokata unsetup <harness>`
+Reverse `mokata setup`: remove the copied commands, the `mokata` MCP entry, and the mokata
+hook entries (other entries are preserved). Leaves `.mokata/` config intact. Flags:
+`--scope {project,user}`, `--yes`.
+
 ### `mokata bootstrap`
 Print the SessionStart briefing (which stack you're in, live capabilities, inviolable
 gates), capped at a 2,000-token budget. `--show-tokens` prints the token estimate + budget

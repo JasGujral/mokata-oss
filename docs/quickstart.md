@@ -40,6 +40,11 @@ This puts the `mokata` command on your PATH; run `mokata --help` to confirm.
 The rest of this quickstart shows the **CLI** path; inside Claude Code the slash commands
 above do the same thing.
 
+> Want the full Claude Code workflow (slash commands, tools, hooks) **without** installing
+> the plugin? One command does it: `mokata setup claude`. See
+> [Use mokata without the plugin](how-to/use-without-plugin.md) (also covers wiring mokata
+> into other harnesses like Gemini or Codex).
+
 ## 2. Initialize a project (CLI)
 
 ```bash

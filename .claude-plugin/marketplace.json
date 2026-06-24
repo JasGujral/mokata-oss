@@ -2,17 +2,17 @@
   "name": "mostack",
   "owner": {
     "name": "MoStack",
-    "email": "gujralsjasmeet@gmail.com"
+    "email": "jasmeet.gujral@mostacktechnology.com"
   },
   "metadata": {
     "description": "MoStack plugins for Claude Code.",
-    "version": "1.1.0"
+    "version": "1.2.0"
   },
   "plugins": [
     {
       "name": "mokata",
       "source": ".",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "description": "Spec-driven TDD framework: brainstorm -> provable completeness gate -> RED-before-GREEN -> review, with a codebase knowledge graph, self-healing memory, token governance, and human-gated writes. Local-first, Apache-2.0.",
       "license": "Apache-2.0",
       "homepage": "https://jasgujral.github.io/mokata-oss/"

@@ -64,6 +64,7 @@ nav:
   - How-to guides:
       - Install the Claude plugin: how-to/install-plugin.md
       - Use the plugin in Claude Code: how-to/use-the-plugin.md
+      - Use mokata without the plugin: how-to/use-without-plugin.md
       - Integrate with other AI tools: how-to/integrate-other-ai-tools.md
       - Configure a profile: how-to/configure-a-profile.md
       - Set the execution mode: how-to/set-execution-mode.md

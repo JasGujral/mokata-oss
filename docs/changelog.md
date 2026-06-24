@@ -4,6 +4,16 @@ The full, versioned changelog lives in the repository's
 [`CHANGELOG.md`](https://github.com/JasGujral/mokata-oss/blob/main/CHANGELOG.md)
 (Keep a Changelog format).
 
+## 1.2.0
+
+- **`mokata setup claude`** — one human-gated command to use mokata in Claude Code
+  **without the plugin**: it runs `init`, copies the slash commands, registers the
+  `mokata-mcp` server, and wires the hooks (`--scope`, `--profile`, `--no-hooks` options).
+  `mokata unsetup claude` reverses it. Runs locally via your existing Claude Code sign-in —
+  no API key.
+- New "Use mokata without the plugin" how-to, covering the one-command setup, the manual
+  wiring it automates, and harness-agnostic notes for other tools (Gemini, Codex).
+
 ## 1.1.0
 
 - **Bundled MCP server** — Claude Code (and any MCP client) can call mokata operations as

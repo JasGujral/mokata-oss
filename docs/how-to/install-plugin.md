@@ -28,4 +28,6 @@ cd mokata-oss
 pip install -e .
 ```
 
-See the [CLI reference](../reference/cli.md).
+See the [CLI reference](../reference/cli.md). To get the full workflow (slash commands,
+tools, hooks) inside Claude Code **without** installing the plugin — or to wire mokata into
+another harness — see [Use mokata without the plugin](use-without-plugin.md).

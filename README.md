@@ -44,6 +44,15 @@ pip install -e .                 # core (Python ≥ 3.9, no required deps)
 pip install -e ".[schema]"       # optional: richer manifest validation via jsonschema
 ```
 
+**Without the plugin?** After installing the CLI, one command wires the full workflow
+(slash commands, MCP tools, hooks) into Claude Code — no marketplace, no API key:
+
+```bash
+mokata setup claude              # human-gated; --profile/--scope options; reverse with `mokata unsetup claude`
+```
+
+See [Use mokata without the plugin](docs/how-to/use-without-plugin.md).
+
 ## Quickstart
 
 **In Claude Code (primary)** — after installing the plugin, drive the workflow with slash commands:
@@ -85,7 +94,7 @@ Per-layer / per-tool toggles, per-adapter trust dials, and profiles are all in t
 
 ## Commands & skills
 
-`mokata skills` lists the catalog. Highlights: `/brainstorm`, `/spec`, `/test`, `/develop`, `/review`, `/debug`, `/optimize`, `/bug`. CLI also exposes `init`, `bootstrap`, `status`, `query`, `memory`, `enter`, `rules`, `audit`, `budget`, `index`, `lat-check`, `coverage`, `mcp`, `doctor`, `reset`, `suggest`, `chain`, `export`, `import`, `harness`, `playbook`.
+`mokata skills` lists the catalog. Highlights: `/brainstorm`, `/spec`, `/test`, `/develop`, `/review`, `/debug`, `/optimize`, `/bug`. CLI also exposes `init`, `setup`, `unsetup`, `bootstrap`, `status`, `query`, `memory`, `enter`, `rules`, `audit`, `budget`, `index`, `lat-check`, `coverage`, `mcp`, `doctor`, `reset`, `suggest`, `chain`, `export`, `import`, `harness`, `playbook`.
 
 ## Contributing · Security · License
 

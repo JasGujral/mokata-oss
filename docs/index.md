@@ -25,7 +25,8 @@ This site follows the [Diátaxis](https://diataxis.fr/) model:
   [write a skill](how-to/write-a-skill.md),
   [integrate other tools](how-to/integrate-other-ai-tools.md),
   [share a stack](how-to/share-a-stack.md),
-  [install the Claude plugin](how-to/install-plugin.md).
+  [install the Claude plugin](how-to/install-plugin.md),
+  [use mokata without the plugin](how-to/use-without-plugin.md).
 - **Concepts** — how each layer works: the [pipeline & gates](concepts/pipeline.md),
   [knowledge layer](concepts/knowledge.md), [memory](concepts/memory.md),
   [token governance](concepts/token-governance.md),

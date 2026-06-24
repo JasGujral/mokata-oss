@@ -4,6 +4,13 @@ All notable changes to mokata are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-06-24
+
+### Added
+- **`mokata setup <harness>`** — one human-gated command to use mokata in Claude Code **without the plugin**: runs `init` (if needed), copies the slash commands into `.claude/commands/`, registers the `mokata-mcp` server in `.mcp.json`, and wires the SessionStart + secret-guard hooks into `.claude/settings.json`. Flags: `--scope {project,user}`, `--profile`, `--no-hooks`, `--yes`, `--force`. JSON files are merged (never clobbered) and the command is idempotent. Runs entirely on the user's machine via their existing Claude Code sign-in — no API key.
+- **`mokata unsetup <harness>`** — cleanly reverses `setup` (removes the copied commands, the `mokata` MCP entry, and the mokata hook entries; preserves everything else and the `.mokata/` config).
+- **Docs:** new "Use mokata without the plugin" how-to (one-command setup, the manual wiring it automates, and harness-agnostic notes for Gemini/Codex).
+
 ## [1.1.0] — 2026-06-24
 
 ### Added

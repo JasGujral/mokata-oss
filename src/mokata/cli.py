@@ -77,6 +77,13 @@ from .pipeline import PhaseError, plan_entry, render_entry
 from .playbook import run_playbook
 from .skills import SKILL_NAMES, SkillNotFound, get_skill, list_skills, render_skill
 from .profiles import DEFAULT_PROFILE, TOOL_CATALOG, profile_names
+from .harness_setup import (
+    HARNESSES,
+    SCOPES,
+    SetupError,
+    setup_harness,
+    unsetup_harness,
+)
 
 
 def _load_surface(root: str) -> Surface:
@@ -94,6 +101,43 @@ def cmd_init(args: argparse.Namespace) -> int:
         assume_yes=args.yes,
         force=args.force,
     )
+    if result.aborted:
+        print(f"\n{result.message}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_setup(args: argparse.Namespace) -> int:
+    try:
+        result = setup_harness(
+            harness=args.harness,
+            root=args.path,
+            scope=args.scope,
+            profile=args.profile,
+            with_hooks=not args.no_hooks,
+            assume_yes=args.yes,
+            force=args.force,
+        )
+    except SetupError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if result.aborted:
+        print(f"\n{result.message}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_unsetup(args: argparse.Namespace) -> int:
+    try:
+        result = unsetup_harness(
+            harness=args.harness,
+            root=args.path,
+            scope=args.scope,
+            assume_yes=args.yes,
+        )
+    except SetupError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     if result.aborted:
         print(f"\n{result.message}", file=sys.stderr)
         return 1
@@ -540,6 +584,38 @@ def build_parser() -> argparse.ArgumentParser:
         "--force", action="store_true", help="overwrite an existing manifest"
     )
     p_init.set_defaults(func=cmd_init)
+
+    p_setup = sub.add_parser(
+        "setup", parents=[common],
+        help="one command: wire mokata into a harness without the plugin "
+             "(commands + MCP + hooks)",
+    )
+    p_setup.add_argument("harness", choices=HARNESSES,
+                         help="the harness to wire (currently: claude)")
+    p_setup.add_argument("--scope", choices=SCOPES, default="project",
+                         help="install into this project (default) or user-global (~/.claude)")
+    p_setup.add_argument("--profile", default=DEFAULT_PROFILE, choices=profile_names(),
+                         help=f"profile to init with if not already set up "
+                              f"(default: {DEFAULT_PROFILE})")
+    p_setup.add_argument("--no-hooks", action="store_true",
+                         help="skip wiring the SessionStart + secret-guard hooks")
+    p_setup.add_argument("--yes", action="store_true",
+                         help="non-interactive; skip the confirmation prompt")
+    p_setup.add_argument("--force", action="store_true",
+                         help="re-init even if a manifest already exists")
+    p_setup.set_defaults(func=cmd_setup)
+
+    p_unsetup = sub.add_parser(
+        "unsetup", parents=[common],
+        help="reverse `mokata setup`: remove wired commands, MCP entry, and hooks",
+    )
+    p_unsetup.add_argument("harness", choices=HARNESSES,
+                           help="the harness to unwire (currently: claude)")
+    p_unsetup.add_argument("--scope", choices=SCOPES, default="project",
+                           help="which scope to remove from (default: project)")
+    p_unsetup.add_argument("--yes", action="store_true",
+                           help="non-interactive; skip the confirmation prompt")
+    p_unsetup.set_defaults(func=cmd_unsetup)
 
     p_boot = sub.add_parser(
         "bootstrap", parents=[common], help="print the SessionStart briefing"
