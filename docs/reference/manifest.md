@@ -23,7 +23,7 @@ and `pipeline_run__<id>.json` (resume checkpoints).
 ```json
 {
   "manifest_version": 1,
-  "mokata": { "version": "1.2.1" },
+  "mokata": { "version": "1.2.2" },
   "profile": "full",
   "layers": {
     "engine":     { "enabled": true },

@@ -16,6 +16,11 @@ mokata supplies the structure and the tools; the **harness supplies the LLM** (t
 This runs entirely on your machine using your existing Claude Code sign-in — **no API key,
 nothing leaves your computer.**
 
+> **Two no-marketplace routes.** There are two ways to run mokata in Claude Code without the
+> public marketplace (both need no registration): install the **plugin from a local clone**
+> (`/plugin marketplace add ~/path/to/mokata-oss` — see [Install the plugin](install-plugin.md)),
+> or use **`mokata setup claude`** below. This page covers the latter.
+
 ## The one-command way (recommended)
 
 After installing the CLI, a single command wires all three pieces into Claude Code:

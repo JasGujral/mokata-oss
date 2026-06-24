@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mokata"
-version = "1.2.1"
+version = "1.2.2"
 description = "An open-source, spec-driven TDD framework for Claude Code — governed, knowledge-aware, human-gated."
 readme = "README.md"
 requires-python = ">=3.9"

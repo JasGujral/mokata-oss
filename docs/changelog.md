@@ -4,6 +4,14 @@ The full, versioned changelog lives in the repository's
 [`CHANGELOG.md`](https://github.com/JasGujral/mokata-oss/blob/main/CHANGELOG.md)
 (Keep a Changelog format).
 
+## 1.2.2
+
+- **Docs** standardized into three clear tiers everywhere: (1) the **Claude Code plugin**
+  (standard, public marketplace); (2) **Claude Code without the public marketplace** (no
+  registration) — the plugin from a local clone, or `mokata setup claude`; (3) the **CLI,
+  with any AI tool** (Gemini, Codex, scripts, CI). The local-clone plugin install is now a
+  first-class no-registration option.
+
 ## 1.2.1
 
 - **Docs** present a consistent three-tier priority everywhere: (1) Claude Code plugin,

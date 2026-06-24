@@ -28,33 +28,38 @@
 
 ## Install
 
-**1. As a Claude Code plugin (recommended):**
+**1. As a Claude Code plugin (recommended)** — the standard install, from the public marketplace:
 
 ```text
 /plugin marketplace add JasGujral/mokata-oss
 /plugin install mokata@mostack
 ```
 
-**2. In Claude Code without the plugin** — install the CLI, then one human-gated command
-wires the full workflow (slash commands, MCP tools, hooks) into Claude Code on your existing
-sign-in, no marketplace and no API key:
+**2. In Claude Code without the public marketplace** (no registration needed) — two no-marketplace ways to get the same in-Claude-Code experience:
+
+```text
+# 2a. the plugin, from a local clone:
+/plugin marketplace add ~/path/to/mokata-oss
+/plugin install mokata@mostack
+```
 
 ```bash
-git clone https://github.com/JasGujral/mokata-oss.git && cd mokata-oss
-pip install -e ".[mcp]"
-cd /path/to/your/project
+# 2b. or one command wires it in (commands + MCP + hooks), on your existing Claude Code sign-in — no API key:
+pip install -e ".[mcp]"          # from a clone; installs `mokata` + `mokata-mcp`
 mokata setup claude              # --profile/--scope options; reverse with `mokata unsetup claude`
 ```
 
 See [Use mokata without the plugin](docs/how-to/use-without-plugin.md).
 
-**3. As a CLI only** (scripts, CI, or driving the engine outside any harness):
+**3. As a CLI, with any AI tool** — harness-agnostic (Gemini, Codex, scripts, CI). The CLI is the engine's mechanics (no LLM of its own); wire it into any shell- or MCP-capable assistant:
 
 ```bash
 git clone https://github.com/JasGujral/mokata-oss.git && cd mokata-oss
 pip install -e .                 # core (Python ≥ 3.9, no required deps)
 pip install -e ".[schema]"       # optional: richer manifest validation via jsonschema
 ```
+
+See [Integrate with other AI tools](docs/how-to/integrate-other-ai-tools.md).
 
 ## Quickstart
 

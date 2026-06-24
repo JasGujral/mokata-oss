@@ -1,13 +1,30 @@
 # How-to: install the Claude Code plugin
 
-mokata ships as a Claude Code plugin under the **MoStack** marketplace.
+mokata ships as a Claude Code plugin under the **MoStack** marketplace. You can install it
+from the public GitHub repo, or straight from a local clone — **both are the same plugin,
+and neither needs the community marketplace registration.**
+
+**From the public repo:**
 
 ```text
 /plugin marketplace add JasGujral/mokata-oss
 /plugin install mokata@mostack
 ```
 
-This makes the slash commands available — `/brainstorm`, `/spec`, `/test`, `/develop`,
+**From a local clone** (no registration needed — great for the freshest copy or for testing
+before a release is public):
+
+```text
+/plugin marketplace add ~/Documents/Development/claude/cowork/mokata
+/plugin install mokata@mostack
+```
+
+`/plugin marketplace add <path>` reads the `.claude-plugin/marketplace.json` in that
+directory and registers it as a local marketplace named `mostack`; the `@mostack` handle is
+the same either way. (The community marketplace submission is a separate, later step purely
+for public discoverability — it is **not** required to use the plugin.)
+
+Either route makes the slash commands available — `/brainstorm`, `/spec`, `/test`, `/develop`,
 `/review`, `/debug`, `/optimize`, `/bug` — and wires both hooks (declared in
 `hooks/hooks.json`):
 

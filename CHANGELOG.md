@@ -4,6 +4,11 @@ All notable changes to mokata are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] — 2026-06-24
+
+### Changed
+- **Docs:** standardized the install/usage story into three clear tiers everywhere it appears — (1) the **Claude Code plugin** (standard, public marketplace); (2) **Claude Code without the public marketplace** (no registration) — the plugin from a local clone, or `mokata setup claude`; (3) the **CLI, with any AI tool** (Gemini, Codex, scripts, CI). The local-clone plugin install is now documented as a first-class no-registration option alongside `mokata setup claude`.
+
 ## [1.2.1] — 2026-06-24
 
 ### Changed
