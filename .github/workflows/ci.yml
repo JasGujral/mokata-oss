@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  test:
+    name: py${{ matrix.python }} · jsonschema=${{ matrix.jsonschema }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.10", "3.11", "3.12"]
+        jsonschema: ["absent", "present"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install mokata
+        run: pip install -e .
+      - name: Install jsonschema (present matrix leg only)
+        if: matrix.jsonschema == 'present'
+        run: pip install "jsonschema>=4.0"
+      - name: Ensure jsonschema absent (absent matrix leg)
+        if: matrix.jsonschema == 'absent'
+        run: pip uninstall -y jsonschema || true
+      - name: Byte-compile
+        run: python -m compileall -q src
+      - name: Run test suite
+        run: python -m unittest discover -s tests -t tests
+      - name: Playbook smoke run (fresh init)
+        run: |
+          tmp="$(mktemp -d)"
+          mokata init --profile standard --yes --path "$tmp"
+          mokata playbook --path "$tmp"

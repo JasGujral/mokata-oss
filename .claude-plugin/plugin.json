@@ -1,0 +1,21 @@
+{
+  "name": "mokata",
+  "version": "1.0.0",
+  "description": "Spec-driven TDD framework for Claude Code \u2014 Socratic brainstorm, provable completeness gate, codebase knowledge graph, persistent self-healing memory, token governance, and human-gated writes.",
+  "author": {
+    "name": "MoStack"
+  },
+  "homepage": "https://jasgujral.github.io/mokata-oss/",
+  "repository": "https://github.com/JasGujral/mokata-oss",
+  "license": "Apache-2.0",
+  "keywords": [
+    "tdd",
+    "spec-driven",
+    "knowledge-graph",
+    "memory",
+    "governance",
+    "ai-assisted-coding"
+  ],
+  "commands": "./templates/commands",
+  "hooks": "./hooks/hooks.json"
+}

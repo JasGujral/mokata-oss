@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Discussions
+    url: https://github.com/JasGujral/mokata-oss/discussions
+    about: Questions, ideas, and general help — start here.
+  - name: Report a security vulnerability (private)
+    url: https://github.com/JasGujral/mokata-oss/security/advisories/new
+    about: Do NOT file secrets or vulnerabilities as public issues. Report privately.

@@ -1,0 +1,87 @@
+site_name: mokata
+site_description: >-
+  Spec-driven TDD for Claude Code — knowledge-aware, self-healing memory,
+  human-gated, local-first.
+repo_url: https://github.com/JasGujral/mokata-oss
+site_url: https://jasgujral.github.io/mokata-oss/
+copyright: "© MoStack — Apache-2.0"
+
+theme:
+  name: material
+  features:
+    # Left panel (navigation)
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    # Right panel (table of contents) — do NOT enable toc.integrate, which would
+    # merge the TOC into the left nav and collapse the three-panel layout.
+    - toc.follow
+    # Content + search
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+
+# Internal build docs are not part of the published site.
+exclude_docs: |
+  build/
+
+nav:
+  - Home: index.md
+  - Getting started: quickstart.md
+  - Tutorials:
+      - Run a story end-to-end: tutorials/run-a-story.md
+  - How-to guides:
+      - Install the Claude plugin: how-to/install-plugin.md
+      - Use the plugin in Claude Code: how-to/use-the-plugin.md
+      - Integrate with other AI tools: how-to/integrate-other-ai-tools.md
+      - Configure a profile: how-to/configure-a-profile.md
+      - Set the execution mode: how-to/set-execution-mode.md
+      - Use & heal memory: how-to/use-memory.md
+      - Write a skill: how-to/write-a-skill.md
+      - Share a stack: how-to/share-a-stack.md
+      - Profiles & toggles: profiles.md
+  - Concepts:
+      - Pipeline & gates: concepts/pipeline.md
+      - Knowledge layer: concepts/knowledge.md
+      - Memory: concepts/memory.md
+      - Token governance: concepts/token-governance.md
+      - Execution modes: concepts/execution-modes.md
+      - Governance & audit: concepts/governance.md
+  - Reference:
+      - CLI: reference/cli.md
+      - Manifest & config: reference/manifest.md
+      - Skills catalog: reference/skills.md
+  - Developer guide: developer-guide.md
+  - Changelog: changelog.md
+  - Security: security.md

@@ -1,0 +1,8 @@
+mokata
+Copyright 2026 MoStack
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+mokata is built clean-room. Its methodology and prompt devices are reimplemented
+in mokata's own terminology; mokata takes no dependency on, and imports no code
+or text from, any other AI-assisted-coding methodology framework.

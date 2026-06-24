@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mokata"
+version = "1.0.0"
+description = "An open-source, spec-driven TDD framework for Claude Code — governed, knowledge-aware, human-gated."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [{ name = "MoStack" }]
+keywords = ["claude-code", "tdd", "spec-driven", "framework", "ai-assisted-coding"]
+
+# No required runtime dependencies. Every external tool mokata can orchestrate is
+# optional and always has a built-in fallback (see capability router / graceful
+# degradation). This keeps the spine installable and runnable anywhere Python is.
+dependencies = []
+
+[project.optional-dependencies]
+# Optional upgrades. Absence is detected and degraded over, never fatal.
+schema = ["jsonschema>=4.0"]
+
+[project.scripts]
+mokata = "mokata.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

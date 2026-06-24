@@ -1,0 +1,41 @@
+name: Feature request
+description: Propose an enhancement to mokata
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that mokata makes hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - engine
+        - memory
+        - knowledge
+        - governance
+        - execmode
+        - cli
+        - packaging
+        - docs
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope / impact
+      description: Who benefits, and how big is the change?

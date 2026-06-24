@@ -1,0 +1,17 @@
+.DS_Store
+*.log
+.env
+
+# Claude Code local settings (machine-specific; should not be committed)
+.claude/
+
+# Python build/cache artifacts
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Local helper script (one-off; not part of the framework)
+push-to-github.command
+
+# MkDocs build output
+site/

@@ -1,0 +1,57 @@
+name: Bug report
+description: Report a defect in mokata
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please do **not** paste secrets — mokata's audit ledger
+        and config are local; redact before sharing.
+  - type: input
+    id: version
+    attributes:
+      label: mokata version
+      placeholder: "1.0.0 (run `mokata --version`)"
+    validations:
+      required: true
+  - type: dropdown
+    id: profile
+    attributes:
+      label: Profile
+      options: [minimal, standard, full, custom]
+    validations:
+      required: true
+  - type: dropdown
+    id: exec_mode
+    attributes:
+      label: Execution mode
+      options: [sequential, parallel]
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. mokata init --profile standard
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+    validations:
+      required: true
+  - type: textarea
+    id: audit
+    attributes:
+      label: Relevant `mokata audit` excerpt (redacted)
+      render: text
+  - type: input
+    id: env
+    attributes:
+      label: OS / Python version
+      placeholder: "macOS 14 / Python 3.11"
+    validations:
+      required: true
