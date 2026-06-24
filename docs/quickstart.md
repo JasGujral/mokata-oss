@@ -25,12 +25,17 @@ criteria map to tests) → `/test` → `/develop` (RED-before-GREEN) → `/revie
 
 ### Additional — as a CLI (to use the engine outside Claude Code)
 
-For scripts, CI, or other harnesses:
+For scripts, CI, or other harnesses — clone the repo from GitHub, then install it:
 
 ```bash
-pip install -e .            # from a checkout
-# pip install -e ".[schema]"  # optional: richer manifest validation via jsonschema
+git clone https://github.com/JasGujral/mokata-oss.git
+cd mokata-oss
+pip install -e .                 # core (Python ≥ 3.9, no required deps)
+# pip install -e ".[schema]"     # optional: richer manifest validation via jsonschema
+# pip install -e ".[mcp]"        # optional: the bundled MCP server (Python ≥ 3.10)
 ```
+
+This puts the `mokata` command on your PATH; run `mokata --help` to confirm.
 
 The rest of this quickstart shows the **CLI** path; inside Claude Code the slash commands
 above do the same thing.

@@ -7,6 +7,8 @@ the two-stage review, and the audit trail.
 ## 1. Set up
 
 ```bash
+git clone https://github.com/JasGujral/mokata-oss.git
+cd mokata-oss
 pip install -e ".[schema]"
 mkdir demo && cd demo
 mokata init --profile standard --yes

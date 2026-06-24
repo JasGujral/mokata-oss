@@ -20,5 +20,12 @@ Confirm the exact install handle in `.claude-plugin/marketplace.json`. To verify
 install: the `/` commands appear, the SessionStart hook injects the briefing, and planting
 a secret in a tool input is blocked by `secret_guard` (exit 2).
 
-The package itself is plain Python (`pip install -e .`) if you prefer the CLI without the
-plugin. See the [CLI reference](../reference/cli.md).
+Prefer the CLI without the plugin? Clone the repo from GitHub and install it:
+
+```bash
+git clone https://github.com/JasGujral/mokata-oss.git
+cd mokata-oss
+pip install -e .
+```
+
+See the [CLI reference](../reference/cli.md).

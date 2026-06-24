@@ -35,10 +35,12 @@
 /plugin install mokata@mostack
 ```
 
-**As a Python package (secondary):**
+**As a Python package (secondary)** — clone from GitHub, then install:
 
 ```bash
-pip install -e .                 # from a checkout (Python ≥ 3.9, no required deps)
+git clone https://github.com/JasGujral/mokata-oss.git
+cd mokata-oss
+pip install -e .                 # core (Python ≥ 3.9, no required deps)
 pip install -e ".[schema]"       # optional: richer manifest validation via jsonschema
 ```
 
