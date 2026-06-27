@@ -28,6 +28,7 @@ class DoctorFinding:
 @dataclass
 class DoctorReport:
     findings: List[DoctorFinding] = field(default_factory=list)
+    graph_hint: str = ""          # Stage 25 Part B — actionable code-graph guidance
 
     @property
     def errors(self) -> List[DoctorFinding]:
@@ -39,12 +40,16 @@ class DoctorReport:
 
     def render(self) -> str:
         if not self.findings:
-            return "mokata doctor: all checks passed."
-        lines = [f"mokata doctor: {len(self.findings)} finding(s):"]
-        for f in self.findings:
-            lines.append(f"  [{f.severity}] {f.code}: {f.detail}")
-        lines.append("OK" if self.ok else "PROBLEMS FOUND")
-        return "\n".join(lines)
+            body = "mokata doctor: all checks passed."
+        else:
+            lines = [f"mokata doctor: {len(self.findings)} finding(s):"]
+            for f in self.findings:
+                lines.append(f"  [{f.severity}] {f.code}: {f.detail}")
+            lines.append("OK" if self.ok else "PROBLEMS FOUND")
+            body = "\n".join(lines)
+        if self.graph_hint:
+            body += f"\n{self.graph_hint}"
+        return body
 
 
 def diagnose(surface: Any) -> DoctorReport:
@@ -93,4 +98,12 @@ def diagnose(surface: Any) -> DoctorReport:
                 "error", "bad-trust",
                 f"tool '{tool}' has invalid trust level '{level}'"))
 
-    return DoctorReport(findings)
+    # 6) code-graph guidance (Stage 25 Part B) — actionable, not just status.
+    hint = ""
+    try:
+        from ..knowledge import graph_guidance
+        hint = graph_guidance(surface)
+    except Exception:
+        hint = ""
+
+    return DoctorReport(findings, graph_hint=hint)

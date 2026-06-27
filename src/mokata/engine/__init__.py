@@ -26,6 +26,34 @@ from .phases import (
 from .premortem import PreMortemResult, Probe, derive_probes, pre_mortem
 from .preview import Preview, PreviewItem, preview_pipeline
 from .spec import AcceptanceCriterion, Spec, TestRef
+from .ship import (
+    LANDING_OPTIONS,
+    FinishDecision,
+    ShipReadiness,
+    check_ship_readiness,
+    record_finish_decision,
+)
+from .spec_gate import (
+    SPEC_PERSISTED_GATE_ID,
+    SPEC_PERSISTED_MESSAGE,
+    SPEC_STATE_KEY,
+    SpecGateResult,
+    check_spec_persisted,
+    load_emitted_spec,
+)
+from .spec_awareness import (
+    SPEC_CONFLICT_KIND,
+    SPEC_CORPUS_KEY,
+    ChangeSet,
+    GuardOutcome,
+    SpecAwarenessReport,
+    SpecConflict,
+    check_change,
+    expand_touch_set,
+    guard_change,
+    load_decisions,
+    load_spec_corpus,
+)
 
 __all__ = [
     "AcceptanceCriterion",
@@ -59,4 +87,29 @@ __all__ = [
     "Preview",
     "PreviewItem",
     "preview_pipeline",
+    # Stage 32 — spec-persisted precondition
+    "check_spec_persisted",
+    "load_emitted_spec",
+    "SpecGateResult",
+    "SPEC_PERSISTED_GATE_ID",
+    "SPEC_PERSISTED_MESSAGE",
+    "SPEC_STATE_KEY",
+    # Stage 34 — ship (finish) readiness + landing decision
+    "check_ship_readiness",
+    "record_finish_decision",
+    "ShipReadiness",
+    "FinishDecision",
+    "LANDING_OPTIONS",
+    # Stage 37 — spec-awareness / regression guard
+    "ChangeSet",
+    "SpecConflict",
+    "SpecAwarenessReport",
+    "GuardOutcome",
+    "check_change",
+    "guard_change",
+    "expand_touch_set",
+    "load_spec_corpus",
+    "load_decisions",
+    "SPEC_CORPUS_KEY",
+    "SPEC_CONFLICT_KIND",
 ]

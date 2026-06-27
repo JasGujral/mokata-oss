@@ -18,19 +18,58 @@ import re
 from dataclasses import dataclass
 from typing import List, Optional
 
-from . import CONSTITUTION_FILENAME, MANIFEST_FILENAME, MOKATA_DIR
+from . import (
+    CONSTITUTION_FILENAME,
+    MANIFEST_FILENAME,
+    MOKATA_DIR,
+    TEMP_LOCAL_DIRNAME,
+)
 from .detect import Detector
 from .manifest import Manifest, ManifestError
 from .router import Router
 from .state import StateStore
 
-# Subdirectory of .mokata/ holding durable pipeline state (e.g. the brainstorm phase's
-# approved approach). Config is hand-edited; state is produced by pipeline runs.
+# Subdirectory holding transient pipeline state (e.g. the brainstorm phase's approved
+# approach, resume checkpoints). Config is hand-edited and committed; state is produced by
+# pipeline runs and is runtime/transient, so it lives under .mokata/temp_local/ (Stage
+# 24D) — gitignored, alongside the memory store and audit ledger.
 STATE_DIRNAME = "state"
 
 
 class ConfigError(Exception):
     """Raised when the unified surface cannot be loaded (e.g. not initialized)."""
+
+
+def find_project_root(start: str = ".") -> str:
+    """Resolve the real project root from any directory inside it (Stage 23).
+
+    Walks up from `start` and returns the nearest ancestor that already holds an
+    initialized `.mokata/manifest.json`; failing that, the nearest VCS root (`.git`);
+    failing that, `start` itself. This is what lets `init`/`status`/the MCP tools and the
+    SessionStart offer all agree on whether the project is set up — so an already-init
+    repo is recognized from a subdirectory and never re-offered init (the "asks every
+    time" bug)."""
+    cur = os.path.abspath(start)
+
+    probe = cur
+    while True:
+        if os.path.exists(os.path.join(probe, MOKATA_DIR, MANIFEST_FILENAME)):
+            return probe
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+
+    probe = cur
+    while True:
+        if os.path.isdir(os.path.join(probe, ".git")):
+            return probe
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+
+    return cur
 
 
 @dataclass
@@ -74,10 +113,16 @@ class Surface:
         return os.path.join(self.root, MOKATA_DIR)
 
     @property
+    def temp_local_dir(self) -> str:
+        """The gitignored runtime area under .mokata/ for transient data (Stage 24D)."""
+        return os.path.join(self.mokata_dir, TEMP_LOCAL_DIRNAME)
+
+    @property
     def state(self) -> StateStore:
-        """The governed store for durable pipeline state under .mokata/state/.
-        Downstream phases read the brainstorm phase's approved approach from here."""
-        return StateStore(os.path.join(self.mokata_dir, STATE_DIRNAME))
+        """The governed store for transient pipeline state under
+        .mokata/temp_local/state/. Downstream phases read the brainstorm phase's approved
+        approach from here; it's runtime data, not committed config (Stage 24D)."""
+        return StateStore(os.path.join(self.temp_local_dir, STATE_DIRNAME))
 
     @classmethod
     def is_initialized(cls, root: str = ".") -> bool:

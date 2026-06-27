@@ -39,10 +39,13 @@ from .layer import (
     KnowledgeLayer,
     StoryAnalysis,
     build_story_analysis,
+    graph_guidance,
     load_story_analysis,
+    make_graph_scorer,
     persist_story_analysis,
     select_backends,
 )
+from .neo4j_backend import Neo4jGraphClient, Neo4jUnavailable, build_neo4j_client
 from .query import (
     QUERY_KINDS,
     BackendError,
@@ -63,7 +66,12 @@ __all__ = [
     "SubprocessGraphClient",
     "KnowledgeLayer",
     "select_backends",
+    "graph_guidance",
+    "make_graph_scorer",
     "GRAPH_TOOLS",
+    "Neo4jGraphClient",
+    "build_neo4j_client",
+    "Neo4jUnavailable",
     "StoryAnalysis",
     "build_story_analysis",
     "persist_story_analysis",

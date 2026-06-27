@@ -9,7 +9,7 @@ Full documentation: <https://jasgujral.github.io/mokata-oss/>.
 
 ```bash
 git clone https://github.com/JasGujral/mokata-oss && cd mokata-oss
-pip install -e ".[schema]"     # editable install + optional jsonschema
+pip install -e ".[mcp,schema]" # editable install + both extras (MCP server + jsonschema), for dev
 ```
 
 mokata has **no required runtime dependencies**; `jsonschema` is optional and degraded

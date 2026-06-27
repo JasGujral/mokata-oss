@@ -1,7 +1,18 @@
 # Concept: execution modes
 
-At the start of **every** pipeline run, mokata asks which execution mode to use. The
-default is the sequential gated flow; parallel is the governed opt-in.
+At the start of **every** pipeline run — and every implementation (`develop`, `playbook`,
+`exec`) — mokata asks which execution mode to use. The default is the sequential gated flow;
+parallel is the governed opt-in.
+
+## We always ask first
+
+The choice — **parallel subagents vs. sequential flow** — is offered up front, every time,
+and mokata **never fans out without your pick**. It's kept light (progressive disclosure):
+asked **once per run**, not per sub-task, with a sensible default (sequential = lowest
+cost). A saved `settings.execution.default` (`ask` | `sequential` | `parallel`, default
+`ask`) lets power users skip the prompt without ever making parallel a silent default. The
+chosen fan-out maps to the harness's real subagents (Claude Code's Task mechanism); a
+harness without subagents degrades to sequential with a clear message.
 
 ## The selector (E8)
 
@@ -40,9 +51,9 @@ through the same `TokenTracker`.
 
 ## Depth engines (E5/E6)
 
-- **`/bug` (E5)** — capture a reproducer **first**, then fix; labels progress
+- **`/mokata:bug` (E5)** — capture a reproducer **first**, then fix; labels progress
   `reported → reproduced → fixing → verified`; reproducer-before-fix is gated.
-- **`/debug` (E6)** — **root-cause-before-fix** with **N-strikes escalation** (after N
+- **`/mokata:debug` (E6)** — **root-cause-before-fix** with **N-strikes escalation** (after N
   ruled-out hypotheses, escalate the model).
-- **`/optimize` (E6)** — **measure-first**: no change before a baseline; an optimization is
+- **`/mokata:optimize` (E6)** — **measure-first**: no change before a baseline; an optimization is
   kept only when a before/after measurement shows it faster with behavior preserved.

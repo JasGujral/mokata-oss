@@ -16,7 +16,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from .. import CONSTITUTION_FILENAME, MOKATA_DIR
+from .. import MOKATA_DIR
 
 RULE_TIERS = ("always_on", "agent_memory", "steering", "articles")
 CAPS: Dict[str, Optional[int]] = {
@@ -73,6 +73,36 @@ def always_on_rules() -> RuleSet:
     return RuleSet("always_on", _text_to_lines(ALWAYS_ON_RULES), CAPS["always_on"])
 
 
+# Stage 36 — the captured project rules/guardrails appended to the always-on tier. The header
+# costs one line; both header and the project lines fit INSIDE the same hard cap (never blown).
+_PROJECT_RULES_HEADER = "# Project rules & guardrails (captured via /mokata:onboard)"
+
+
+def _project_always_on_lines(surface, budget: int) -> List[str]:
+    """Pull the captured rule/guardrail entries as terse lines, fitting INSIDE `budget` lines
+    (header included). Degrade-clean: memory off / uninitialized / any error -> no lines."""
+    if budget <= 1:
+        return []
+    try:
+        from ..memory import MemoryStore, always_on_lines
+        store = MemoryStore.from_surface(surface)
+        lines, _overflow = always_on_lines(store, budget - 1)   # -1 reserves the header
+    except Exception:
+        return []
+    return [_PROJECT_RULES_HEADER, *lines] if lines else []
+
+
+def always_on_rules_for(surface) -> RuleSet:
+    """The always-on tier WITH the project's captured rules/guardrails merged in, kept within
+    the hard line cap (P11 — the budget is never exceeded; overflow is flagged, not dropped
+    silently)."""
+    base = _text_to_lines(ALWAYS_ON_RULES)
+    cap = CAPS["always_on"] or 0
+    remaining = max(cap - len(base), 0)
+    return RuleSet("always_on", base + _project_always_on_lines(surface, remaining),
+                   CAPS["always_on"])
+
+
 def _read_optional(path: str) -> List[str]:
     if os.path.exists(path):
         with open(path, encoding="utf-8") as fh:
@@ -88,7 +118,7 @@ def load_rules(surface) -> Dict[str, RuleSet]:
     if const is not None and const.text:
         articles_lines = const.text.splitlines()
     return {
-        "always_on": always_on_rules(),
+        "always_on": always_on_rules_for(surface),
         "agent_memory": RuleSet("agent_memory",
                                 _read_optional(os.path.join(mdir, "MEMORY.md")),
                                 CAPS["agent_memory"]),

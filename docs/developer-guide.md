@@ -63,7 +63,7 @@ escalation); `modes/bug.py`, `modes/debug.py`, `modes/optimize.py`.
 
 ```bash
 git clone https://github.com/JasGujral/mokata-oss && cd mokata-oss
-pip install -e ".[schema]"     # editable install + optional jsonschema
+pip install -e ".[mcp,schema]" # editable install + both extras (MCP server + jsonschema), for dev
 ```
 
 ## Running the tests (BOTH jsonschema states)

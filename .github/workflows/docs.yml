@@ -33,6 +33,23 @@ jobs:
           python-version: "3.12"
       - run: pip install mkdocs-material
       - run: mkdocs build --strict
+      # Auto-generate the Complete Guide PDF from its markdown (single source -> no drift)
+      # into the built site, so the in-page "Download PDF" link always matches the page.
+      # Best-effort + pinned tools: if pandoc/wkhtmltopdf are unavailable or rendering
+      # fails, the step is skipped (continue-on-error) and the site still deploys.
+      - name: Generate the Complete Guide PDF (best-effort)
+        continue-on-error: true
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pandoc wkhtmltopdf
+          mkdir -p site/assets
+          pandoc docs/tutorials/mokata-complete-guide.md \
+            -o site/assets/mokata-complete-guide.pdf \
+            --pdf-engine=wkhtmltopdf \
+            --metadata title="mokata — The Complete Guide" \
+            --toc -V toc-title="Contents"
+          test -s site/assets/mokata-complete-guide.pdf && echo "PDF generated."
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

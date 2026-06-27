@@ -16,3 +16,13 @@ push-to-github.command
 # MkDocs build output
 site/
 uv.lock
+
+# The Complete Guide PDF is generated from its markdown in CI (single source, no drift);
+# never commit a static render (it would drift from the page).
+docs/tutorials/mokata-complete-guide.pdf
+
+# Runtime artifact: mokata creates .mokata/ at a repo root when run there (tests/commands).
+# The framework source repo is not itself a mokata project, so never track it.
+.mokata/
+# Release script backups (scripts/release-*.sh) — local safety copies, not source.
+release-backup-*/

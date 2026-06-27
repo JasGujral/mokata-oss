@@ -73,9 +73,9 @@ class TestPersistence(unittest.TestCase):
             reloaded = Surface.load(d)
             loaded = load_approved_approach(reloaded.state)
             self.assertEqual(loaded.approach.name, "cache-aside")
-            # the persisted artifact lives under .mokata/ (reviewable / committable)
+            # the persisted artifact is transient runtime state under temp_local/ (24D)
             self.assertTrue(
-                os.path.exists(os.path.join(reloaded.mokata_dir, "state",
+                os.path.exists(os.path.join(reloaded.mokata_dir, "temp_local", "state",
                                             "approved_approach.json"))
             )
 

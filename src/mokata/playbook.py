@@ -18,7 +18,7 @@ subagent runner is supplied (degrade-safe).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from .brainstorm import Approach, BrainstormSession, ground, persist_approach
 from .engine import AcceptanceCriterion, Spec, TestRef, run_completeness_gate

@@ -372,6 +372,71 @@ def load_approved_approach(store: Any) -> Optional[Handoff]:
     return Handoff.from_dict(data) if data else None
 
 
+# ----------------------------------------------------- Stage 29: auto-engage (toggle)
+# The autonomous-trigger description (clean-room, mokata's own words) that makes Claude Code
+# model-INVOKE brainstorm when the user is exploring — not only on /mokata:brainstorm. Shipped
+# in the command frontmatter's `when_to_use`. Phrased to fire on EXPLORATION, not on direct
+# commands or mid-implementation, so it's proactive without hijacking.
+BRAINSTORM_AUTO_TRIGGER = (
+    "Engage when the user is exploring an approach, weighing options or trade-offs, or "
+    "describing a NEW problem/feature before any implementation — i.e. thinking through "
+    "*what* and *how* before code exists. Do NOT engage for direct commands, edits to "
+    "existing code, or work already mid-implementation."
+)
+
+# settings.brainstorm.auto = on | off | ask  (default "on").
+BRAINSTORM_SETTINGS_KEY = "brainstorm"
+AUTO_ON, AUTO_OFF, AUTO_ASK = "on", "off", "ask"
+AUTO_MODES = (AUTO_ON, AUTO_OFF, AUTO_ASK)
+
+
+def brainstorm_auto_mode(manifest: Any) -> str:
+    """The saved auto-engage preference (Stage 29). Default 'on', easily turned off."""
+    if manifest is None:
+        return AUTO_ON
+    try:
+        s = manifest.setting(BRAINSTORM_SETTINGS_KEY, {}) or {}
+    except AttributeError:
+        return AUTO_ON
+    val = s.get("auto", AUTO_ON) if isinstance(s, dict) else AUTO_ON
+    return val if val in AUTO_MODES else AUTO_ON
+
+
+@dataclass
+class AutoEngageDecision:
+    engage: bool          # True -> start the brainstorm conversation now
+    offer: bool           # True -> mode 'ask': offer it, don't auto-start
+    mode: str
+    reason: str
+    banner: str = ""      # the Stage 27 active-skill banner when engaging
+
+
+def brainstorm_engaged_banner() -> str:
+    """The Stage 27 banner announcing mokata auto-engaged brainstorm."""
+    from .progress import active_banner
+    return active_banner("brainstorm", state="engaged")
+
+
+def decide_auto_engage(manifest: Any, exploring: bool) -> AutoEngageDecision:
+    """Decide whether to auto-engage brainstorm (Stage 29). Proactive but NOT intrusive:
+    engage only when the user is genuinely *exploring* (the model supplies that signal via
+    the SKILL trigger), and honor settings.brainstorm.auto — 'off' never engages, 'ask'
+    offers, 'on' engages. Auto-engaging only STARTS the conversation; it never bypasses the
+    HARD-GATE (no spec/code until an approach is explicitly approved — P2)."""
+    mode = brainstorm_auto_mode(manifest)
+    if not exploring:
+        return AutoEngageDecision(False, False, mode,
+                                  "not exploring — don't hijack a direct task")
+    if mode == AUTO_OFF:
+        return AutoEngageDecision(False, False, mode,
+                                  "auto-engage disabled (settings.brainstorm.auto=off)")
+    if mode == AUTO_ASK:
+        return AutoEngageDecision(False, True, mode,
+                                  "ask first (settings.brainstorm.auto=ask)")
+    return AutoEngageDecision(True, False, mode, "exploring — engaging brainstorm",
+                              banner=brainstorm_engaged_banner())
+
+
 # --------------------------------------------------------------- clean-room prompt
 # The agent-facing protocol. Clean-room: mirrors the *devices* that make models behave
 # (a single hard gate, one-question discipline, an anti-rationalization red-flag table,

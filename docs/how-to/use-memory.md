@@ -55,3 +55,8 @@ epi.search("which database did we choose")   # embeddings optional; lexical fall
 
 Set `settings.memory.episodic: false` (etc.) in the manifest — disabling a type refuses
 its writes and never surfaces it on read. See [memory concepts](../concepts/memory.md).
+
+## Change where memory is stored
+
+Point the backend at a custom SQLite path, an external Obsidian vault, or a hosted Postgres
+database — see [configure storage backends & paths](configure-storage-backends.md).

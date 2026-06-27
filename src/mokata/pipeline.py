@@ -24,6 +24,11 @@ PHASE_GATES: Dict[str, Gate] = {
         "approach-approval",
         "HARD-GATE: no spec until exactly one approach is explicitly approved.",
         "human"),
+    "refine": Gate(
+        "refinement-approval",
+        "HARD-GATE: no spec until the user explicitly approves a scoped set of "
+        "refinements; the approved set hands off to the existing spec skill.",
+        "human"),
     "completeness_gate": Gate(
         "completeness",
         "Provable-completeness blocker: every acceptance criterion maps to a test "
@@ -34,6 +39,13 @@ PHASE_GATES: Dict[str, Gate] = {
         "Emitting durable output (spec/code) is human-gated.",
         "human"),
 }
+
+# Front-end phases are alternative entry points that GATE and then hand off into the linear
+# pipeline (they are not members of the linear 7-phase sequence). `brainstorm` is in the
+# sequence; `refine` (Stage 26) runs standalone and hands to `spec`. ENTRY_PHASES is the
+# set of valid `mokata enter` start phases.
+FRONT_END_PHASES = ("brainstorm", "refine")
+ENTRY_PHASES = ("refine",) + tuple(PIPELINE_PHASES)
 
 
 class PhaseError(Exception):
@@ -54,6 +66,19 @@ def plan_entry(start: str, stop: Optional[str] = None) -> PipelinePlan:
     """Plan entering the pipeline at `start`, stopping after `stop` (default: just
     `start`). Applies only the run phases' gates; reports skipped phases explicitly."""
     phases = list(PIPELINE_PHASES)
+
+    # A standalone front-end (refine) isn't a member of the linear sequence: it runs alone,
+    # applies its own HARD-GATE, then hands off to the pipeline (which is all "downstream").
+    if start in FRONT_END_PHASES and start not in phases:
+        if stop is not None and stop != start:
+            raise PhaseError(
+                f"'{start}' is a front-end phase that runs standalone and hands off to "
+                f"`spec`; it takes no --to target")
+        return PipelinePlan(
+            start=start, stop=start, phases_run=[start],
+            gates_applied=[PHASE_GATES[start]] if start in PHASE_GATES else [],
+            skipped_upstream=[], skipped_downstream=phases)
+
     if start not in phases:
         raise PhaseError(f"unknown phase '{start}'; one of {phases}")
     stop = stop if stop is not None else start

@@ -6,24 +6,42 @@ richer pass, and its absence is degraded over (never fatal).
 
 ## `.mokata/` layout
 
+Everything mokata creates as its own data lives under `.mokata/`, with a clear
+**committed vs. transient** split inside it:
+
+| Path | What | Tracked? |
+|---|---|---|
+| `manifest.json` | the stack manifest (below) | **committed** |
+| `constitution.md` | governing articles, read before non-trivial work | **committed** |
+| `.gitignore` | ignores `temp_local/` (shipped by `mokata init`) | **committed** |
+| `mokata-stack.json` | a stack you chose to export here (optional) | **committed** |
+| `temp_local/` | all transient/runtime data (below) | **gitignored** |
+
+`temp_local/` (transient, regenerated as you work — safe to delete) holds:
+
 | Path | What |
 |---|---|
-| `manifest.json` | the stack manifest (below) |
-| `constitution.md` | governing articles, read before non-trivial work |
-| `state/` | durable pipeline state (JSON) — see below |
-| `audit/ledger.jsonl` | the append-only audit ledger |
-| `memory/memory.db` | SQLite memory backend (and `memory/vault/` for Obsidian) |
+| `temp_local/state/` | pipeline state (JSON) — see below |
+| `temp_local/audit/ledger.jsonl` | the append-only audit ledger |
+| `temp_local/memory/memory.db` | SQLite memory backend (and `memory/vault/` for Obsidian) |
 
 State files include `approved_approach.json` (brainstorm handoff), `emitted_spec.json`,
 `memory_stats.json`, `knowledge_index.json`, `story_analysis__<id>.json`, `undo_log.json`,
-and `pipeline_run__<id>.json` (resume checkpoints).
+and `pipeline_run__<id>.json` (resume checkpoints). They're runtime artifacts, not config —
+hence `temp_local/`. (A user-set `tools.<id>.config.path`/`config.vault` can point a backend
+elsewhere; that's the user's explicit choice, overriding the default location.)
+
+> **Harness wiring is *not* mokata data.** `mokata setup claude` writes `.claude/commands/`,
+> `.mcp.json`, and `.claude/settings.json` — these are **Claude Code's** config and must live
+> at those exact paths, so they stay there by necessity (not a violation of the `.mokata/`
+> invariant). `.mokata/` holds mokata's own data; the harness owns its wiring.
 
 ## Manifest schema
 
 ```json
 {
   "manifest_version": 1,
-  "mokata": { "version": "1.2.2" },
+  "mokata": { "version": "0.0.1" },
   "profile": "full",
   "layers": {
     "engine":     { "enabled": true },
@@ -82,8 +100,24 @@ and `pipeline_run__<id>.json` (resume checkpoints).
   network-capable kinds for local-first accounting.)
 - `enabled` — per-tool toggle (default `true`); a disabled tool is treated as absent and
   the router degrades to the next provider (K1).
-- `detect` — `{ "type": "command"|"python_module"|"path"|"always", "name": "…" }`
-  (`name` required for all but `always`).
+- `detect` — `{ "type": "command"|"python_module"|"path"|"obsidian"|"always", "name": "…" }`
+  (`name` required for `command`/`python_module`/`path`; not used by `obsidian`/`always`).
+  The `obsidian` strategy detects a real Obsidian config dir (macOS
+  `~/Library/Application Support/obsidian`, Linux `~/.config/obsidian` + Flatpak, Windows
+  `%APPDATA%\obsidian`) or a configured `config.vault` that exists.
+- `config` — optional per-tool block read by the backend builders (Stage 24A). Defaults are
+  unchanged when it's absent:
+  | Tool | Key | Effect |
+  |---|---|---|
+  | `obsidian` | `config.vault` | point the Obsidian backend at an external vault directory |
+  | `sqlite` | `config.path` | custom SQLite database path (`~` is expanded) |
+  | `postgres` | `config.dsn_env` | **name of an env var** holding the DSN for the hosted Postgres backend |
+
+  **Never put a secret (an inline DSN, password, or token) in the manifest** — it's a
+  committed, reviewable artifact, and the secret-guard hard-blocks any write that contains
+  one. A remote store (Postgres) is opt-in `external`, accounted by local-first netguard,
+  and degrades to the SQLite floor if `dsn_env` is unset, `psycopg` (the optional
+  `mokata[postgres]` extra) is absent, or the database is unreachable.
 
 ## Settings (the generic toggle store)
 
@@ -110,6 +144,20 @@ read from it the same way.
 
 grep is the universal floor for `code_graph`; SQLite (stdlib) is the guaranteed floor for
 `memory_store`. See [how-to: configure a profile](../how-to/configure-a-profile.md).
+
+## Reading & setting config
+
+`mokata config get <dotted.key>` prints a value; `mokata config set <dotted.key> <value>`
+updates it. `set` is **human-gated** — it previews the old→new change and waits for
+confirmation (`--yes` to skip), validates the result, and hard-blocks any secret. For
+example:
+
+```bash
+mokata config set tools.sqlite.config.path ~/data/mokata.db
+mokata config set tools.postgres.config.dsn_env MOKATA_PG_DSN   # env-var name, not a DSN
+```
+
+See [how-to: configure storage backends & paths](../how-to/configure-storage-backends.md).
 
 ## Sharing a stack
 

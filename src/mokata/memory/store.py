@@ -12,16 +12,20 @@ detection path; SQLite is the guaranteed floor.
 
 from __future__ import annotations
 
+from ..prompt import read_yes_no
+
 import os
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from .. import TEMP_LOCAL_DIRNAME
 from ..manifest import ManifestError
 from .backends import (
     MemoryBackend,
     NativeMemoryBackend,
     ObsidianBackend,
     SQLiteBackend,
+    build_postgres_backend,
 )
 from .consolidation import (
     MERGE,
@@ -31,8 +35,8 @@ from .consolidation import (
     propose_consolidations,
     render_consolidation,
 )
-from .healing import CONTRADICTION, STALE, HealingProposal, detect_issues, render_proposal
-from .item import ACTIVE, DECISION, MEMORY_TYPES, PERSISTENT, STALE as STATUS_STALE
+from .healing import CONTRADICTION, HealingProposal, detect_issues, render_proposal
+from .item import ACTIVE, DECISION, DEFAULT_TOP_K, MEMORY_TYPES, STALE as STATUS_STALE
 from .item import SUPERSEDED, MemoryItem
 
 MEMORY_SETTINGS_KEY = "memory"     # manifest.settings["memory"] = {type: bool}
@@ -59,21 +63,39 @@ def enabled_memory_types(manifest: Any) -> Tuple[str, ...]:
 
 # -------------------------------------------------------------- backend selection
 def build_backend(tool: str, root: str,
-                  clients: Optional[Dict[str, Any]] = None) -> MemoryBackend:
-    """Build the backend the router resolved to, degrading to the SQLite floor when a
-    chosen backend needs external wiring that isn't present."""
+                  clients: Optional[Dict[str, Any]] = None,
+                  config: Optional[Dict[str, Any]] = None) -> MemoryBackend:
+    """Build the backend the router resolved to, honoring the tool's per-tool `config`
+    (Stage 24A) and degrading to the SQLite floor when a chosen backend needs external
+    wiring that isn't present. `config` is the manifest's `tools.<id>.config` block;
+    defaults are unchanged when it's absent."""
     clients = clients or {}
-    mem_dir = os.path.join(root, MEMORY_DIRNAME)
+    config = config or {}
+    # Default runtime stores are transient: under .mokata/temp_local/memory/ (Stage 24D).
+    # A user-set config.path/config.vault overrides this and may point anywhere.
+    mem_dir = os.path.join(root, TEMP_LOCAL_DIRNAME, MEMORY_DIRNAME)
+    floor = lambda: SQLiteBackend(os.path.join(mem_dir, "memory.db"))  # noqa: E731
+
     if tool == "obsidian":
-        return ObsidianBackend(os.path.join(mem_dir, "vault"))
+        vault = config.get("vault")
+        vault = os.path.expanduser(vault) if vault else os.path.join(mem_dir, "vault")
+        return ObsidianBackend(vault)
+    if tool == "sqlite":
+        path = config.get("path")
+        path = os.path.expanduser(path) if path else os.path.join(mem_dir, "memory.db")
+        return SQLiteBackend(path)
+    if tool == "postgres":
+        # opt-in remote store; degrade to the SQLite floor if unset/unreachable (P8).
+        backend = build_postgres_backend(config)
+        return backend if backend is not None else floor()
     if tool == "native-memory":
         client = clients.get("native-memory")
         if client is not None:
             return NativeMemoryBackend(client)
         # no client wired -> degrade to the guaranteed floor (not a second detection)
-        return SQLiteBackend(os.path.join(mem_dir, "memory.db"))
-    # "sqlite", "ripgrep"/unknown, or unavailable -> SQLite floor
-    return SQLiteBackend(os.path.join(mem_dir, "memory.db"))
+        return floor()
+    # "ripgrep"/unknown, or unavailable -> SQLite floor
+    return floor()
 
 
 def select_memory_backend(router: Any, root: str,
@@ -83,7 +105,12 @@ def select_memory_backend(router: Any, root: str,
     except (ManifestError, AttributeError):
         res = None
     tool = res.tool if (res is not None and res.available and res.tool) else "sqlite"
-    return build_backend(tool, root, clients)
+    config: Dict[str, Any] = {}
+    try:
+        config = router.manifest.tool_config(tool)
+    except AttributeError:
+        config = {}
+    return build_backend(tool, root, clients, config)
 
 
 # -------------------------------------------------------------- instrumentation (C8)
@@ -116,6 +143,7 @@ class WriteResult:
     committed: bool
     aborted: bool
     message: str
+    blocked: bool = False        # True when a secret was detected and the write was hard-blocked
 
 
 @dataclass
@@ -124,13 +152,11 @@ class HealingResult:
     aborted: bool = False
     message: str = ""
     item: Optional[MemoryItem] = None
+    blocked: bool = False        # True when a secret was detected and the change was hard-blocked
 
 
 def _default_confirm(text: str) -> bool:
-    try:
-        return input(text + "\nApprove? [y/N] ").strip().lower() in ("y", "yes")
-    except EOFError:
-        return False
+    return read_yes_no(text, "Approve?")
 
 
 class MemoryStore:
@@ -138,9 +164,13 @@ class MemoryStore:
                  enabled_types: Tuple[str, ...] = MEMORY_TYPES,
                  stats_store: Any = None,
                  stats_key: str = MEMORY_STATS_KEY,
-                 ledger: Any = None) -> None:
+                 ledger: Any = None,
+                 embedder: Any = None,
+                 knowledge_layer: Any = None) -> None:
         self.backend = backend
         self.enabled_types = tuple(enabled_types)
+        self.embedder = embedder        # Stage 35e — None => semantic tier off (local-first)
+        self.knowledge_layer = knowledge_layer   # Stage 35f — live graph-proximity tier
         self._stats_store = stats_store
         self._stats_key = stats_key
         self._ledger = ledger
@@ -166,9 +196,23 @@ class MemoryStore:
         backend = select_memory_backend(surface.router, surface.mokata_dir, clients)
         # attach the audit ledger so consolidation proposals/decisions are recorded (I3)
         from ..govern import AuditLedger
+        from .embed import make_embedder
+        # Stage 35e: semantic tier is OPT-IN — `settings.memory.embedder` (e.g. "hashing");
+        # absent => None => semantic off (lexical floor only). Local-first, no network.
+        embedder = make_embedder((surface.manifest.setting("memory", {}) or {})
+                                 .get("embedder"))
+        # Stage 35f: auto-wire the live graph-proximity tier from the in-repo knowledge layer
+        # (degrade-clean — on the grep floor it contributes nothing). Defensive: a layer
+        # build problem must never break memory.
+        try:
+            from ..knowledge import KnowledgeLayer
+            knowledge_layer = KnowledgeLayer.from_surface(surface)
+        except Exception:
+            knowledge_layer = None
         return cls(backend, enabled_types=enabled_memory_types(surface.manifest),
                    stats_store=surface.state,
-                   ledger=AuditLedger.from_mokata_dir(surface.mokata_dir))
+                   ledger=AuditLedger.from_mokata_dir(surface.mokata_dir),
+                   embedder=embedder, knowledge_layer=knowledge_layer)
 
     # --- toggles ------------------------------------------------------------
     def type_enabled(self, mtype: str) -> bool:
@@ -188,6 +232,18 @@ class MemoryStore:
         self._persist_stats()
 
     # --- writes (human-gated, C6) -------------------------------------------
+    def _gated_commit(self, subject: str, content: str, commit: Callable[[], None],
+                      prompt: str, confirm: Optional[Callable[[str], bool]] = None,
+                      assume_yes: bool = False):
+        """M2 (Stage 39): the SINGLE write path for memory — the universal WriteGate does the
+        secret-scan (hard block), the human gate (showing the rich `prompt` surface), the audit-
+        ledger record, then the commit. Returns the gate's WriteOutcome."""
+        from ..govern import WriteGate, WriteRequest
+        gate = WriteGate(ledger=self._ledger)
+        return gate.submit(
+            WriteRequest("memory", f"memory:{subject}", content=content, actor="memory"),
+            commit=commit, confirm=confirm, assume_yes=assume_yes, prompt=prompt)
+
     def render_write(self, item: MemoryItem) -> str:
         return (f"mokata · propose to remember [{item.mtype}] {item.subject} = "
                 f"{item.value!r}\nNothing is stored unless you approve.")
@@ -199,14 +255,29 @@ class MemoryStore:
             raise MemoryDisabledError(
                 f"memory type '{item.mtype}' is disabled; enable it to remember this"
             )
-        if not assume_yes:
-            gate = confirm or _default_confirm
-            if not gate(self.render_write(item)):
-                return WriteResult(None, committed=False, aborted=True,
-                                   message="declined at the human gate")
-        self.backend.put(item)
-        self._bump_write()
-        return WriteResult(item, committed=True, aborted=False, message="ok")
+
+        def _commit() -> None:
+            # Stage 35e (frugal): compute the embedding once, on the gated write, so semantic
+            # recall later embeds only the query. No-op when no embedder is configured.
+            if self.embedder is not None and "_embedding" not in item.provenance:
+                item.provenance["_embedding"] = list(
+                    self.embedder(f"{item.subject} {item.value}"))
+            self.backend.put(item)
+            self._bump_write()
+
+        # M2 (Stage 39): every memory write routes through the ONE universal WriteGate —
+        # secret-scan (hard block) + human gate + audit ledger — with the rich render_write
+        # surface preserved. No second gate path.
+        outcome = self._gated_commit(item.subject, f"{item.subject}\n{item.value}",
+                                     _commit, self.render_write(item),
+                                     confirm=confirm, assume_yes=assume_yes)
+        if outcome.committed:
+            return WriteResult(item, committed=True, aborted=False, message="ok")
+        if outcome.findings:
+            return WriteResult(None, committed=False, aborted=True, blocked=True,
+                               message="blocked: secret detected — not stored")
+        return WriteResult(None, committed=False, aborted=True,
+                           message="declined at the human gate")
 
     def remember_decision(self, subject: str, value: str, **kw) -> WriteResult:
         """C2 — decision memory is wired through the same gated store."""
@@ -223,6 +294,26 @@ class MemoryStore:
 
     def recall(self, subject: str, mtype: Optional[str] = None) -> List[MemoryItem]:
         return [i for i in self.all_active(mtype=mtype) if i.subject == subject]
+
+    def recall_relevant(self, query: str, top_k: int = DEFAULT_TOP_K, semantic: bool = True,
+                        graph_scorer: Any = None) -> List[Any]:
+        """Stage 35e — tiered, by-relevance retrieval (lexical floor + optional graph +
+        semantic when an embedder is wired), fused + ranked, top-k only (frugal). Returns
+        a list of RetrievalHit. Degrades to lexical when the semantic/graph tiers are off.
+
+        Stage 35f: the graph tier is now LIVE BY DEFAULT — when no explicit graph_scorer is
+        passed and a knowledge layer is wired, build one from the code graph. It silently
+        contributes nothing on the grep floor (no real graph ⇒ scorer is None), so
+        lexical+semantic always hold."""
+        from .tiered import tiered_recall
+        if graph_scorer is None and self.knowledge_layer is not None:
+            try:
+                from ..knowledge import make_graph_scorer
+                graph_scorer = make_graph_scorer(self.knowledge_layer, query)
+            except Exception:
+                graph_scorer = None
+        return tiered_recall(self, query, embedder=self.embedder,
+                             graph_scorer=graph_scorer, top_k=top_k, semantic=semantic)
 
     def get(self, item_id: str) -> Optional[MemoryItem]:
         return self.backend.get(item_id)
@@ -247,40 +338,55 @@ class MemoryStore:
         if decision in ("reject", "defer"):
             return HealingResult(changed=False, message=f"{decision}: no change")
 
-        if not assume_yes:
-            gate = confirm or _default_confirm
-            if not gate(self.render_proposal(p)):
-                return HealingResult(changed=False, aborted=True,
-                                     message="declined at the human gate")
-
+        # Build the commit closure + the (untrusted) content to secret-scan + the result.
         if decision == "edit":
             if edited is None:
                 raise MemoryError("edit requires an edited item")
-            # the edit replaces the whole issue: supersede every item it resolves
-            # (both sides of a contradiction; the single stale item otherwise).
-            replaced = [p.old] + ([p.new] if p.new is not None else [])
-            for item in replaced:
-                item.status = SUPERSEDED
-                if item.id not in edited.supersedes:
-                    edited.supersedes.append(item.id)
-                self.backend.update(item)
-            self.backend.put(edited)
-            self._bump_write(len(replaced) + 1)
-            return HealingResult(changed=True, item=edited, message="edited")
+            content = f"{edited.subject}\n{edited.value}"     # the new value is scanned
+            result_item, result_msg = edited, "edited"
 
-        # decision == "approve"
-        if p.kind == CONTRADICTION and p.new is not None:
-            p.old.status = SUPERSEDED
-            if p.old.id not in p.new.supersedes:
-                p.new.supersedes.append(p.old.id)
-            self.backend.update(p.old)
-            self.backend.update(p.new)
-            self._bump_write(2)
-        elif p.kind == STALE:
-            p.old.status = STATUS_STALE
-            self.backend.update(p.old)
-            self._bump_write()
-        return HealingResult(changed=True, message="approved")
+            def _commit() -> None:
+                # the edit replaces the whole issue: supersede every item it resolves
+                # (both sides of a contradiction; the single stale item otherwise).
+                replaced = [p.old] + ([p.new] if p.new is not None else [])
+                for item in replaced:
+                    item.status = SUPERSEDED
+                    if item.id not in edited.supersedes:
+                        edited.supersedes.append(item.id)
+                    self.backend.update(item)
+                self.backend.put(edited)
+                self._bump_write(len(replaced) + 1)
+        elif p.kind == CONTRADICTION and p.new is not None:
+            content = f"{p.new.subject}\n{p.new.value}"       # the winning new value is scanned
+            result_item, result_msg = p.new, "approved"
+
+            def _commit() -> None:
+                p.old.status = SUPERSEDED
+                if p.old.id not in p.new.supersedes:
+                    p.new.supersedes.append(p.old.id)
+                self.backend.update(p.old)
+                self.backend.update(p.new)
+                self._bump_write(2)
+        else:   # STALE approve — marks an existing item stale; no new untrusted value
+            content = p.old.subject
+            result_item, result_msg = None, "approved"
+
+            def _commit() -> None:
+                p.old.status = STATUS_STALE
+                self.backend.update(p.old)
+                self._bump_write()
+
+        # M2 (Stage 39): the SAME WriteGate path as remember — scan + gate (old→new surface) +
+        # ledger — so healing never bypasses the universal gate either.
+        outcome = self._gated_commit(p.subject, content, _commit, self.render_proposal(p),
+                                     confirm=confirm, assume_yes=assume_yes)
+        if outcome.committed:
+            return HealingResult(changed=True, item=result_item, message=result_msg)
+        if outcome.findings:
+            return HealingResult(changed=False, aborted=True, blocked=True,
+                                 message="blocked: secret detected — not applied")
+        return HealingResult(changed=False, aborted=True,
+                             message="declined at the human gate")
 
     # --- consolidation (C7, PROPOSAL-ONLY + gated apply) --------------------
     def propose_consolidations(self, ledger: Any = None

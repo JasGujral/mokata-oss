@@ -13,6 +13,8 @@ overwrite an existing config (never silently clobber a committed artifact).
 
 from __future__ import annotations
 
+from .prompt import read_yes_no
+
 import os
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
@@ -62,6 +64,19 @@ Every gate decision, tool call, and durable write is auditable. A human can
 reconstruct and walk back any choice the system made.
 """
 
+# Committed under .mokata/ so the runtime split is version-controlled (Stage 24D): the
+# committed config (manifest, constitution, an exported stack you choose to commit) stays
+# at the .mokata/ root; everything transient/runtime lives under temp_local/ and is ignored.
+GITIGNORE_FILENAME = ".gitignore"
+DEFAULT_GITIGNORE = """\
+# mokata keeps all its data under .mokata/. Committed config (manifest.json,
+# constitution.md, an exported stack if you choose to commit it, and the shared design
+# vault/) lives at this root; everything transient/runtime — pipeline state, resume
+# checkpoints, the freshness index, caches, the SQLite memory store, and the audit ledger —
+# lives under temp_local/.
+temp_local/
+"""
+
 
 @dataclass
 class InitPlan:
@@ -71,6 +86,7 @@ class InitPlan:
     detected: Dict[str, bool]               # tool_id -> present (whole catalog)
     manifest_path: str
     constitution_path: str
+    gitignore_path: str
     overwrites: List[str] = field(default_factory=list)
 
     def write_files(self) -> List[str]:
@@ -87,6 +103,13 @@ class InitPlan:
             with open(self.constitution_path, "w", encoding="utf-8") as fh:
                 fh.write(DEFAULT_CONSTITUTION)
             written.append(self.constitution_path)
+
+        # The committed ignore rule that keeps temp_local/ out of version control (24D).
+        # Only scaffold if absent so a hand-edited ignore is never clobbered.
+        if not os.path.exists(self.gitignore_path):
+            with open(self.gitignore_path, "w", encoding="utf-8") as fh:
+                fh.write(DEFAULT_GITIGNORE)
+            written.append(self.gitignore_path)
 
         return written
 
@@ -120,6 +143,7 @@ def plan_init(
     mdir = os.path.join(root, MOKATA_DIR)
     manifest_path = os.path.join(mdir, MANIFEST_FILENAME)
     constitution_path = os.path.join(mdir, CONSTITUTION_FILENAME)
+    gitignore_path = os.path.join(mdir, GITIGNORE_FILENAME)
 
     overwrites = [p for p in (manifest_path, constitution_path) if os.path.exists(p)]
 
@@ -130,6 +154,7 @@ def plan_init(
         detected=detected,
         manifest_path=manifest_path,
         constitution_path=constitution_path,
+        gitignore_path=gitignore_path,
         overwrites=overwrites,
     )
 
@@ -160,6 +185,8 @@ def render_plan(plan: InitPlan) -> str:
     lines.append(f"  {plan.manifest_path}")
     if not os.path.exists(plan.constitution_path):
         lines.append(f"  {plan.constitution_path}")
+    if not os.path.exists(plan.gitignore_path):
+        lines.append(f"  {plan.gitignore_path}  (ignores temp_local/)")
     if plan.overwrites:
         lines.append("")
         lines.append("WARNING — these already exist and will be overwritten:")
@@ -169,10 +196,7 @@ def render_plan(plan: InitPlan) -> str:
 
 
 def _default_confirm(prompt: str) -> bool:
-    try:
-        return input(prompt).strip().lower() in ("y", "yes")
-    except EOFError:
-        return False
+    return read_yes_no(prompt)
 
 
 def init_repo(

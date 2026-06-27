@@ -18,9 +18,11 @@ wired). JSON files are *merged*, never clobbered — an existing ``.mcp.json`` o
 
 from __future__ import annotations
 
+from .prompt import read_yes_no
+
 import json
-import os
 import shutil
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -110,9 +112,12 @@ class SetupPlan:
 
 
 def _hook_command(script: str) -> str:
-    # Absolute path to the checkout's hook script. Manual setup has no
-    # ${CLAUDE_PLUGIN_ROOT}, so we point straight at the clone.
-    return f'python3 "{_hooks_dir() / script}"'
+    # Absolute interpreter + absolute hook path (Stage 28). Manual setup has no
+    # ${CLAUDE_PLUGIN_ROOT}, so we point straight at the clone; and we embed
+    # sys.executable — the very Python running mokata now — instead of a bare
+    # `python3` that a minimal PATH (macOS GUI launch) or Windows (python/py)
+    # might not resolve. No PATH dependency on the user's machine.
+    return f'"{sys.executable}" "{_hooks_dir() / script}"'
 
 
 def plan_setup(
@@ -183,7 +188,7 @@ def render_setup_plan(plan: SetupPlan) -> str:
     lines.append(f"  {t.mcp_path}")
     if plan.with_hooks:
         lines.append("")
-        lines.append(f"Will wire hooks (SessionStart briefing + secret-guard) in:")
+        lines.append("Will wire hooks (SessionStart briefing + secret-guard) in:")
         lines.append(f"  {t.settings_path}")
     lines.append("")
     lines.append("Existing JSON files are merged, not overwritten. Reverse anytime with "
@@ -293,10 +298,7 @@ def apply_setup(plan: SetupPlan, *, assume_yes: bool = False, force: bool = Fals
 
 
 def _default_confirm(prompt: str) -> bool:
-    try:
-        return input(prompt).strip().lower() in ("y", "yes")
-    except EOFError:
-        return False
+    return read_yes_no(prompt)
 
 
 @dataclass

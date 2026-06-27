@@ -6,7 +6,8 @@ But the engine is harness-agnostic: the plugin is just a bundle of three portabl
 (prompt templates, the `mokata-mcp` server, and hook scripts), so you can wire those into
 another harness or share a governed stack across a team. The paths below go from
 highest-fidelity (a real harness integration) down to the lowest common denominator (raw
-CLI), so reach for them in that order.
+CLI), so reach for them in that order. (mokata never supplies the LLM — your harness does;
+see [How mokata uses an LLM: harness vs CLI](../concepts/execution-model.md).)
 
 ## 1. Wire mokata into your harness (the `setup` model)
 
@@ -35,8 +36,8 @@ them to stack roles/capabilities. mokata then orchestrates those servers through
 gates and audit trail. Discovery is pluggable and **degrades cleanly** — with no config
 present, the registry is empty and nothing errors.
 
-> In v1.0 mokata *consumes* MCP servers (it discovers and routes to them); it does not
-> itself expose an MCP server.
+> mokata ships **`mokata-mcp`** — its own operations as native Claude Code tools — **and**
+> orchestrates the external MCP servers it discovers and routes to (H4).
 
 ## 4. Cross-harness portability (the harness boundary)
 

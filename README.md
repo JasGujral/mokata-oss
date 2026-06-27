@@ -56,7 +56,7 @@ See [Use mokata without the plugin](docs/how-to/use-without-plugin.md).
 ```bash
 git clone https://github.com/JasGujral/mokata-oss.git && cd mokata-oss
 pip install -e .                 # core (Python ≥ 3.9, no required deps)
-pip install -e ".[schema]"       # optional: richer manifest validation via jsonschema
+# pip install -e ".[schema]"     # optional: richer manifest validation via jsonschema
 ```
 
 See [Integrate with other AI tools](docs/how-to/integrate-other-ai-tools.md).
@@ -66,10 +66,10 @@ See [Integrate with other AI tools](docs/how-to/integrate-other-ai-tools.md).
 **In Claude Code (primary)** — after installing the plugin, drive the workflow with slash commands:
 
 ```text
-/brainstorm        # Socratic pre-spec exploration (HARD-GATE before any spec)
-/spec              # draft the spec (blocked until every acceptance criterion maps to a test)
-/test  /develop    # RED-before-GREEN
-/review            # spec-compliance, then quality
+/mokata:brainstorm        # Socratic pre-spec exploration (HARD-GATE before any spec)
+/mokata:spec              # draft the spec (blocked until every acceptance criterion maps to a test)
+/mokata:test  /mokata:develop    # RED-before-GREEN
+/mokata:review            # spec-compliance, then quality
 ```
 
 **Or via the CLI** (outside Claude Code):
@@ -80,7 +80,11 @@ mokata brainstorm                   # Socratic pre-spec exploration (HARD-GATE b
 mokata playbook                     # drive the full story end-to-end through the pipeline
 ```
 
-Full walkthrough: [`docs/quickstart.md`](docs/quickstart.md) · published docs: <https://jasgujral.github.io/mokata-oss/>
+> A `pip` CLI install is **terminal-only** — it runs the deterministic engine with no LLM
+> attached. It does **not** put mokata inside Claude Code; for that, install the plugin or run
+> `mokata setup claude`. ([Why two ways](https://jasgujral.github.io/mokata-oss/concepts/execution-model/).)
+
+Full walkthrough: [`docs/quickstart.md`](docs/quickstart.md) · full hands-on guide → [the Complete Guide](https://jasgujral.github.io/mokata-oss/tutorials/mokata-complete-guide/) (with a downloadable PDF) · published docs: <https://jasgujral.github.io/mokata-oss/>
 
 ## Core concepts
 
@@ -102,7 +106,7 @@ Per-layer / per-tool toggles, per-adapter trust dials, and profiles are all in t
 
 ## Commands & skills
 
-`mokata skills` lists the catalog. Highlights: `/brainstorm`, `/spec`, `/test`, `/develop`, `/review`, `/debug`, `/optimize`, `/bug`. CLI also exposes `init`, `setup`, `unsetup`, `bootstrap`, `status`, `query`, `memory`, `enter`, `rules`, `audit`, `budget`, `index`, `lat-check`, `coverage`, `mcp`, `doctor`, `reset`, `suggest`, `chain`, `export`, `import`, `harness`, `playbook`.
+`mokata skills` lists the catalog. Highlights: `/mokata:brainstorm`, `/mokata:spec`, `/mokata:test`, `/mokata:develop`, `/mokata:review`, `/mokata:debug`, `/mokata:optimize`, `/mokata:bug`. CLI also exposes `init`, `setup`, `unsetup`, `bootstrap`, `status`, `query`, `memory`, `enter`, `rules`, `audit`, `budget`, `index`, `lat-check`, `coverage`, `mcp`, `doctor`, `reset`, `suggest`, `chain`, `export`, `import`, `harness`, `playbook`.
 
 ## Contributing · Security · License
 

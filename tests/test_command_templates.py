@@ -9,7 +9,7 @@ from _support import sample_manifest_data  # noqa: F401  (path fix side-effect)
 from mokata.skills import command_markdown, get_skill
 
 # brainstorm.md predates this stage (Stage 3) and keeps its own format.
-GENERATED = ("spec", "test", "develop", "review", "debug", "optimize", "bug")
+GENERATED = ("spec", "test", "develop", "review", "debug", "optimize", "bug", "onboard")
 
 
 class TestCommandTemplates(unittest.TestCase):

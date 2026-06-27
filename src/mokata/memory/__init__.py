@@ -21,7 +21,32 @@ from .backends import (
     MemoryClient,
     NativeMemoryBackend,
     ObsidianBackend,
+    PostgresBackend,
+    PostgresUnavailable,
     SQLiteBackend,
+    build_postgres_backend,
+)
+from .share import (
+    MEMORY_SHARE_FILENAME,
+    ImportResult,
+    MemoryShareError,
+    export_memory,
+    import_memory,
+    load_memory_share,
+)
+from .migrate import (
+    SUPPORTED as MIGRATE_BACKENDS,
+    MigrateError,
+    MigrateResult,
+    build_named_backend,
+    migrate_memory,
+)
+from .embed import EMBED_DIM, HashingEmbedder, cosine, make_embedder
+from .tiered import RetrievalHit, tiered_recall
+from .vector import (
+    PgVectorBackend,
+    VectorUnavailable,
+    build_pgvector_backend,
 )
 from .consolidation import (
     MERGE,
@@ -41,12 +66,28 @@ from .healing import (
 )
 from .item import (
     ACTIVE,
+    ALWAYS_ON_KINDS,
+    DEFAULT_TOP_K,
+    BEST_PRACTICE,
+    CONTEXT,
     DECISION,
     EPISODIC,
+    GUARDRAIL,
+    JIT_KINDS,
+    MEMORY_KINDS,
     MEMORY_TYPES,
+    PART_KINDS,
     PERSISTENT,
+    REFERENCE,
+    RULE,
     SUPERSEDED,
     MemoryItem,
+)
+from .brain import (
+    always_on_lines,
+    group_by_kind,
+    jit_recall,
+    normalize_kind,
 )
 from .store import (
     MEMORY_SETTINGS_KEY,
@@ -67,13 +108,31 @@ __all__ = [
     "DECISION",
     "EPISODIC",
     "MEMORY_TYPES",
+    "DEFAULT_TOP_K",
     "ACTIVE",
     "SUPERSEDED",
     "STALE",
+    # Stage 36 — typed-memory parts (the project brain)
+    "RULE",
+    "GUARDRAIL",
+    "BEST_PRACTICE",
+    "CONTEXT",
+    "REFERENCE",
+    "MEMORY_KINDS",
+    "PART_KINDS",
+    "ALWAYS_ON_KINDS",
+    "JIT_KINDS",
+    "group_by_kind",
+    "always_on_lines",
+    "jit_recall",
+    "normalize_kind",
     "MemoryBackend",
     "SQLiteBackend",
     "ObsidianBackend",
     "NativeMemoryBackend",
+    "PostgresBackend",
+    "PostgresUnavailable",
+    "build_postgres_backend",
     "MemoryClient",
     "MemoryStore",
     "MemoryStats",
@@ -99,4 +158,27 @@ __all__ = [
     "MERGE",
     "SUMMARIZE",
     "PRUNE",
+    # Stage 35b — memory export/import (file share)
+    "export_memory",
+    "import_memory",
+    "load_memory_share",
+    "ImportResult",
+    "MemoryShareError",
+    "MEMORY_SHARE_FILENAME",
+    # Stage 35c — migrate between backends
+    "migrate_memory",
+    "build_named_backend",
+    "MigrateResult",
+    "MigrateError",
+    "MIGRATE_BACKENDS",
+    # Stage 35e — vector backend + tiered semantic retrieval
+    "HashingEmbedder",
+    "make_embedder",
+    "cosine",
+    "EMBED_DIM",
+    "tiered_recall",
+    "RetrievalHit",
+    "PgVectorBackend",
+    "build_pgvector_backend",
+    "VectorUnavailable",
 ]

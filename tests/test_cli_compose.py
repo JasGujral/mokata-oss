@@ -41,8 +41,10 @@ class TestSkillsCatalog(unittest.TestCase):
 
 class TestRunStandalone(unittest.TestCase):
     def test_run_works_with_no_init_and_no_pipeline_prerequisite(self):
-        # truly standalone: no repo init, no upstream phase
-        rc, out = run_cli(["run", "test"])
+        # truly standalone: no repo init, no upstream phase. (Implementation skills
+        # develop/test now require a persisted spec — Stage 32 — so this uses `spec`,
+        # which is genuinely standalone.)
+        rc, out = run_cli(["run", "spec"])
         self.assertEqual(rc, 0)
         self.assertIn("standalone", out.lower())
         self.assertIn("Gate", out)

@@ -21,6 +21,8 @@ Stage 1 commands (the conductor everything else plugs into):
   coverage   A6  capability coverage + unmet gaps + overlaps
   mcp        H4  discover MCP servers and map them to roles
   doctor     K5  diagnose the manifest/config
+  baseline       report the test suite green/red at baseline (degrade-clean)
+  config     K1  get/set backend config in the manifest (set is human-gated)
   reset      K6  remove mokata state (uninstall / reset)
   suggest    L6  suggest a relevant command (never runs it)
   chain      L5  plan a manual chain of skills (gates still apply)
@@ -30,6 +32,7 @@ Stage 1 commands (the conductor everything else plugs into):
   exec       E8  show/select the execution mode (sequential default / parallel)
   playbook       run the full v1 story end-to-end (integration check)
   preview    E7  dry-run: planned phases + gates + file touches (no side effects)
+  progress       run-progress tracker (done/current/pending); read-only over run-state
 
 Later stages add more subcommands; this keeps the spine usable from the shell today.
 """
@@ -39,14 +42,15 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from . import __version__
 from .bootstrap import build_bootstrap
 from .brainstorm import ground, load_approved_approach, render_launch
 from .config import ConfigError, Surface
+from . import config_cmd
 from .detect import Detector
-from .init import init_repo
+from .init import init_repo, plan_init, render_plan
 from . import MOKATA_DIR
 from .adapters import (
     AdapterContract,
@@ -56,7 +60,12 @@ from .adapters import (
 )
 from .brainstorm import PIPELINE_PHASES
 from .compose import SuggestionContext, plan_chain, suggest
-from .execmode import PARALLEL, SEQUENTIAL, ExecutionChoice, select_execution_mode
+from .execmode import (
+    PARALLEL,
+    SEQUENTIAL,
+    ExecutionChoice,
+    resolve_execution_choice,
+)
 from .govern import (
     AuditLedger,
     BudgetReport,
@@ -66,6 +75,8 @@ from .govern import (
     plan_reset,
     reset_state,
     validate_caps,
+    WriteGate,
+    WriteRequest,
 )
 from .harness import HARNESS_CAPABILITIES, claude_code_harness
 from .share import SHARE_FILENAME, apply_manifest, export_manifest, load_shared
@@ -73,7 +84,7 @@ from .knowledge import QUERY_KINDS, KnowledgeIndex, KnowledgeLayer, lat_check
 from .manifest import ManifestError
 from .memory import MemoryStore
 from .engine import preview_pipeline
-from .pipeline import PhaseError, plan_entry, render_entry
+from .pipeline import ENTRY_PHASES, PhaseError, plan_entry, render_entry
 from .playbook import run_playbook
 from .skills import SKILL_NAMES, SkillNotFound, get_skill, list_skills, render_skill
 from .profiles import DEFAULT_PROFILE, TOOL_CATALOG, profile_names
@@ -95,6 +106,11 @@ def _load_surface(root: str) -> Surface:
 
 
 def cmd_init(args: argparse.Namespace) -> int:
+    if getattr(args, "preview", False):
+        # Dry-run for the human gate (Stage 23): print the plan, write nothing, exit 0.
+        # Used by /mokata:init to preview before the user approves the real write.
+        print(render_plan(plan_init(args.path, args.profile)))
+        return 0
     result = init_repo(
         root=args.path,
         profile=args.profile,
@@ -214,6 +230,22 @@ def cmd_brainstorm(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_onboard(args: argparse.Namespace) -> int:
+    # Stage 36 — guided, LLM-driven capture of typed project knowledge (like brainstorm). Prints
+    # the clean-room protocol + live grounding; persistence happens through the gated writes the
+    # protocol drives. Runs standalone, no prior phase required; degrades cleanly uninitialized.
+    skill = get_skill("onboard")
+    surface = None
+    if Surface.is_initialized(args.path):
+        try:
+            surface = Surface.load(args.path)
+        except (ConfigError, ManifestError):
+            surface = None
+    grounding = ground(surface.router) if surface is not None else ground(None)
+    sys.stdout.write(render_skill(skill, grounding))
+    return 0
+
+
 def cmd_query(args: argparse.Namespace) -> int:
     surface = _load_surface(args.path)
     layer = KnowledgeLayer.from_surface(surface)
@@ -231,22 +263,93 @@ def cmd_query(args: argparse.Namespace) -> int:
     return 0
 
 
+def _split_csv(value: Optional[str]) -> list:
+    return [v.strip() for v in (value or "").split(",") if v.strip()]
+
+
+def cmd_spec_check(args: argparse.Namespace) -> int:
+    # Stage 37 — spec-awareness / regression guard: cross-check a change's touch-set against the
+    # saved specs + decision memory; surface a conflict and route it through the deviation gate
+    # (human-gated, logged). Degrade-clean: no corpus -> no-op; no graph -> lexical/file overlap.
+    from .engine import ChangeSet, guard_change, load_decisions, load_spec_corpus
+    from .govern import AuditLedger
+    surface = _load_surface(args.path)
+    change = ChangeSet(symbols=_split_csv(args.symbols), files=_split_csv(args.files),
+                       text=args.text or "")
+    specs = load_spec_corpus(surface.state)
+    store = MemoryStore.from_surface(surface)
+    decisions = load_decisions(store)
+    layer = KnowledgeLayer.from_surface(surface)
+    ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+    outcome = guard_change(change, specs=specs, decisions=decisions, layer=layer,
+                           ledger=ledger, phase=args.phase, assume_yes=args.yes)
+    print(outcome.render())
+    return 0 if outcome.proceeded else 1
+
+
 def cmd_memory(args: argparse.Namespace) -> int:
-    # Read-only: surface active memory, the read/write ratio, and pending healing
-    # proposals. Never commits — durable memory writes are human-gated elsewhere.
+    # Read-only surface by default; `export`/`import` share memory across repos (Stage 35b).
     surface = _load_surface(args.path)
     store = MemoryStore.from_surface(surface)
+
+    action = getattr(args, "action", None)
+    if action == "export":
+        from .memory import MEMORY_SHARE_FILENAME, export_memory
+        dest = args.file or os.path.join(args.path, MOKATA_DIR, MEMORY_SHARE_FILENAME)
+        data = export_memory(store, dest=dest)   # read-only on the source
+        print(f"exported {len(data['items'])} memory item(s) (with provenance) to {dest}")
+        return 0
+    if action == "import":
+        from .memory import import_memory, load_memory_share
+        if not args.file:
+            print("error: `memory import <file>` requires a file", file=sys.stderr)
+            return 2
+        try:
+            data = load_memory_share(args.file)
+        except (OSError, ValueError) as exc:
+            print(f"error: cannot read {args.file}: {exc}", file=sys.stderr)
+            return 1
+        ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+        res = import_memory(store, data, assume_yes=args.yes, ledger=ledger)
+        print(res.render())
+        return 1 if res.aborted else 0
+    if action == "migrate":
+        from .memory import migrate_memory
+        if not args.to:
+            print("error: `memory migrate --to <backend>` requires --to "
+                  "(sqlite|obsidian|postgres)", file=sys.stderr)
+            return 2
+        ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+        res = migrate_memory(surface, to_backend=args.to, from_backend=args.from_backend,
+                             assume_yes=args.yes, drop_source=args.drop_source, ledger=ledger)
+        print(res.render())
+        return 1 if res.aborted else 0
+    if action == "edit":
+        return _memory_edit(store, args)
+
     if not store.enabled_types:
         print("memory: disabled for this profile (no memory types enabled).")
         return 0
 
+    # Stage 36 — the project "brain" view: grouped BY KIND (rules / guardrails / best-practices
+    # / context / decisions …), optionally filtered to one --kind. A scannable, committed/
+    # reviewable artifact, not a flat dump.
+    from .memory import group_by_kind, normalize_kind
     active = store.all_active()
+    kind_filter = ""
+    if getattr(args, "kind", None):
+        kind_filter = normalize_kind(args.kind) or args.kind
+        active = [i for i in active if i.effective_kind == kind_filter]
+
     print(f"memory backend: {store.backend.name} · "
           f"types on: {', '.join(store.enabled_types)}")
     print(store.stats.log_line())
-    print(f"active items: {len(active)}")
-    for it in active:
-        print(f"  [{it.mtype}] {it.subject} = {it.value}")
+    suffix = f" · kind: {kind_filter}" if kind_filter else ""
+    print(f"active items: {len(active)}{suffix}")
+    for kind, items in group_by_kind(active).items():
+        print(f"\n{kind} ({len(items)}):")
+        for it in items:
+            print(f"  {it.subject} = {it.value}")
 
     proposals = store.detect_issues()
     if proposals:
@@ -255,6 +358,123 @@ def cmd_memory(args: argparse.Namespace) -> int:
         for p in proposals:
             print(f"  ({p.kind}) [{p.mtype}] {p.subject}: {p.diff()}")
     return 0
+
+
+def _memory_edit(store, args) -> int:
+    """Stage 36 — `mokata memory edit <subject> --value <new>`: human-gated, routed through the
+    self-healing old→new surface (supersede, never silent). Optionally retype with --kind."""
+    from .memory import CONTRADICTION, HealingProposal, MemoryItem, normalize_kind
+    subject = args.file        # the trailing positional carries the subject for `edit`
+    if not subject or args.value is None:
+        print("error: `memory edit <subject> --value <new value>` requires a subject and "
+              "--value", file=sys.stderr)
+        return 2
+    existing = store.recall(subject)
+    if not existing:
+        print(f"error: no active memory item with subject '{subject}' to edit "
+              f"(use /mokata:onboard to capture it)", file=sys.stderr)
+        return 1
+    old = existing[0]
+    new_kind = (normalize_kind(args.kind) or args.kind) if getattr(args, "kind", None) else old.kind
+    new = MemoryItem.create(subject, args.value, mtype=old.mtype, kind=new_kind,
+                            author=os.environ.get("USER") or "user", source="memory-edit")
+    if old.value == new.value and new_kind == old.kind:
+        print(f"memory: '{subject}' unchanged (no-op).")
+        return 0
+    proposal = HealingProposal(kind=CONTRADICTION, subject=subject, mtype=old.mtype,
+                               old=old, new=new,
+                               rationale="user edit via `mokata memory edit`")
+    res = store.apply_proposal(proposal, "approve", assume_yes=args.yes)
+    print(res.message if res.message else ("edited" if res.changed else "no change"))
+    return 0 if res.changed or not res.aborted else 1
+
+
+def cmd_vault(args: argparse.Namespace) -> int:
+    # Stage 35d — team design & spec vault: push (gated) → list/search/pull (read-only).
+    from . import vault as V
+    action = args.action
+    root = args.path
+
+    if action == "list":
+        entries = V.vault_list(root)
+        if not entries:
+            print("vault: empty — `mokata vault push <name> <file>` to add a brainstorm/spec.")
+            return 0
+        print(f"vault: {len(entries)} entr{'y' if len(entries) == 1 else 'ies'} "
+              f"(.mokata/{V.VAULT_DIRNAME}/)")
+        for e in entries:
+            print(f"  {e.summary()}")
+        return 0
+
+    if action == "search":
+        # the query is the `name` positional (quote multi-word: vault search "payments redesign")
+        query = " ".join(p for p in (args.name, args.file) if p)
+        if not query:
+            print("error: `vault search <query>` requires a query", file=sys.stderr)
+            return 2
+        hits = V.vault_search(root, query)
+        if not hits:
+            print(f"vault: no matches for {query!r}")
+            return 0
+        print(f"vault: {len(hits)} match(es) for {query!r}")
+        for h in hits:
+            print(f"  {h.render()}")
+        return 0
+
+    if action == "pull":
+        if not args.name:
+            print("error: `vault pull <name> [dest]` requires a name", file=sys.stderr)
+            return 2
+        dest = args.dest or os.path.join(root, f"{args.name}.md")
+        try:
+            _content, entry = V.vault_pull(root, args.name, dest=dest)
+        except V.VaultError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"pulled '{entry.name}' [{entry.kind} v{entry.version}] → {dest}  "
+              f"(by {entry.author or 'unknown'} · {entry.updated_at[:10]})")
+        return 0
+
+    if action == "push":
+        if not args.name or not args.file:
+            print("error: `vault push <name> <file>` requires a name and a file",
+                  file=sys.stderr)
+            return 2
+        try:
+            plan = V.plan_push(root, args.name, args.file, kind=args.kind, force=args.force)
+        except V.VaultError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if plan.status == "unchanged":
+            print(f"vault: {plan.reason()}")
+            return 0
+        if plan.blocked:
+            print(f"vault: {plan.reason()}", file=sys.stderr)
+            return 1
+        # Durable write → universal gate (secret-scan + human approval + audit).
+        surface = _load_surface(root)
+        ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+        gate = WriteGate(ledger=ledger)
+        author = args.author or os.environ.get("USER") or ""
+        box: Dict[str, Any] = {}
+        outcome = gate.submit(
+            WriteRequest("config", V._artifact_path(root, plan.name),
+                         content=plan.content, actor="cli"),
+            commit=lambda: box.update(
+                entry=V.commit_push(root, plan, author=author)),
+            assume_yes=args.yes,
+        )
+        if not outcome.committed:
+            print(f"vault push {outcome.reason}"
+                  + (f" — {[f.kind for f in outcome.findings]}" if outcome.findings else ""),
+                  file=sys.stderr)
+            return 1
+        entry = box["entry"]
+        print(f"vault: pushed '{entry.name}' [{entry.kind} v{entry.version}] — {plan.reason()}")
+        return 0
+
+    print(f"error: unknown vault action '{action}'", file=sys.stderr)
+    return 2
 
 
 def cmd_skills(args: argparse.Namespace) -> int:
@@ -287,12 +507,27 @@ def cmd_run(args: argparse.Namespace) -> int:
     except SkillNotFound as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    grounding = ground(None)
+    surface = None
     if Surface.is_initialized(args.path):
         try:
-            grounding = ground(Surface.load(args.path).router)
+            surface = Surface.load(args.path)
         except (ConfigError, ManifestError):
-            grounding = ground(None)
+            surface = None
+
+    # Stage 32 — implementation entry points (develop/test) require a persisted, complete
+    # spec before code/tests; the block (and pass) is an audited gate decision.
+    if skill.requires_spec:
+        from .engine import check_spec_persisted
+        from .govern import AuditLedger
+        store = surface.state if surface is not None else None
+        ledger = (AuditLedger.from_mokata_dir(surface.mokata_dir)
+                  if surface is not None else None)
+        res = check_spec_persisted(store, ledger=ledger, phase=skill.name)
+        if not res.passed:
+            print(f"[BLOCKED] {res.gate_id} — {res.reason}", file=sys.stderr)
+            return 1
+
+    grounding = ground(surface.router) if surface is not None else ground(None)
     sys.stdout.write(render_skill(skill, grounding))
     return 0
 
@@ -350,14 +585,32 @@ def cmd_audit(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cli_ask(question: str, default: str) -> str:
+    try:
+        return input(f"{question} [{default}] ").strip() or default
+    except EOFError:
+        return default
+
+
 def cmd_exec(args: argparse.Namespace) -> int:
-    # E8 — report the execution mode for a run. Default is the sequential gated flow;
-    # flags select parallel + isolation/fan-out non-interactively.
+    # E8 / Stage 25 — choose the execution mode for a run. Explicit flags select
+    # non-interactively; otherwise honor the saved settings.execution.default and ask
+    # once (default 'ask') — never fan out without a choice.
     if args.parallel:
         isolation = args.isolation or not args.fanout   # parallel implies ≥ isolation
         choice = ExecutionChoice(PARALLEL, isolation=isolation, fanout=args.fanout)
     else:
-        choice = select_execution_mode()                # no asker -> sequential default
+        manifest = None
+        if Surface.is_initialized(args.path):
+            try:
+                manifest = Surface.load(args.path).manifest
+            except (ConfigError, ManifestError):
+                manifest = None
+        subagents = claude_code_harness().supports("subagents")
+        choice = resolve_execution_choice(
+            manifest=manifest, ask=_cli_ask, out=print, subagents_available=subagents)
+    from .progress import active_banner
+    print(active_banner(f"exec ({choice.mode})", running=False))
     print(f"execution mode: {choice.label()}")
     if choice.is_parallel:
         print("  parallel modes surface a token/cost estimate before running, stay "
@@ -365,6 +618,52 @@ def cmd_exec(args: argparse.Namespace) -> int:
               "sequential flow if subagents are unavailable.")
     else:
         print("  the sequential gated flow is the default, lowest-cost path.")
+    return 0
+
+
+def cmd_progress(args: argparse.Namespace) -> int:
+    # Stage 27 — read-only run-progress tracker. Degrades cleanly with no active run.
+    # Stage 40 — `--lanes` renders the parallel-aware multi-lane view (read-only).
+    surface = _load_surface(args.path)
+    if getattr(args, "lanes", False):
+        from .progress import build_run_lanes, render_lanes
+        ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+        rl = build_run_lanes(surface.state, ledger=ledger, run_id=args.run)
+        print(render_lanes(rl, ascii_only=args.ascii))
+        return 0
+    from .progress import build_progress, render_progress
+    progress = build_progress(surface.state, run_id=args.run)
+    print(render_progress(progress, ascii_only=args.ascii))
+    return 0
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    # Stage 40 — write the self-contained local HTML dashboard (read-only; never mutates a run).
+    # Respects settings.ux.progress: `terminal` writes NO HTML (the terminal tier is the floor).
+    from .dashboard import dashboard_enabled, ux_progress_setting, write_dashboard
+    surface = _load_surface(args.path)
+    if not dashboard_enabled(surface):
+        print(f"mokata watch: the dashboard is off (settings.ux.progress="
+              f"{ux_progress_setting(surface)}). Enable it with "
+              f"`mokata config set settings.ux.progress dashboard` (or `both`).")
+        return 0
+    refresh = None if args.once else 2
+    path = write_dashboard(surface, run_id=args.run, refresh_secs=refresh)
+    print(f"mokata watch: wrote {path}")
+    if args.open:
+        import webbrowser
+        webbrowser.open("file://" + os.path.abspath(path))
+    if args.once:
+        return 0
+    # Live mode: rewrite the file on an interval; the page meta-refreshes itself. Read-only.
+    print("mokata watch: live — refreshing every 2s (Ctrl-C to stop).")
+    try:
+        import time
+        while True:
+            time.sleep(2)
+            write_dashboard(surface, run_id=args.run, refresh_secs=refresh)
+    except KeyboardInterrupt:
+        print("\nmokata watch: stopped.")
     return 0
 
 
@@ -379,14 +678,18 @@ def cmd_preview(args: argparse.Namespace) -> int:
 
 def cmd_playbook(args: argparse.Namespace) -> int:
     # Stage 9 — drive the full v1 story end-to-end on this repo. Parallel without a
-    # subagent harness degrades to sequential (degrade-safe).
+    # subagent harness degrades to sequential (degrade-safe). Stage 27: announce the
+    # active stage (banner) at the start and on completion.
+    from .progress import active_banner
     surface = _load_surface(args.path)
     if args.parallel:
         choice = ExecutionChoice(PARALLEL, isolation=True, fanout=args.fanout)
     else:
         choice = ExecutionChoice(SEQUENTIAL)
+    print(active_banner("playbook", running=True))
     result = run_playbook(surface, choice)
     print(result.render())
+    print(active_banner("playbook", running=False))
     return 0 if result.ok else 1
 
 
@@ -406,13 +709,25 @@ def cmd_index(args: argparse.Namespace) -> int:
               f"+{len(d['added'])} added, -{len(d['removed'])} removed")
     store.write("knowledge_index", idx.to_dict())
     print(f"index: tracking {len(idx.entries)} file(s)")
+    # Stage 35f: name the code-graph backend the refresh runs against — the wired adapter
+    # (e.g. neo4j) when present, the grep floor when not. Degrade-clean: never a hard error.
+    layer = KnowledgeLayer.from_surface(surface)
+    if layer.uses_graph:
+        print(f"index: code graph '{layer.backend_name}' wired — "
+              f"`mokata lat-check` flags drift against it.")
+    else:
+        print("index: no code graph wired — refresh runs on the grep floor "
+              "(`mokata lat-check` still flags concept drift lexically).")
     return 0
 
 
 def cmd_export(args: argparse.Namespace) -> int:
-    # J3 — export the current manifest as a shareable stack file.
+    # J3 — export the current manifest as a shareable stack file. Default destination is
+    # under .mokata/ so mokata keeps its footprint contained (Stage 24D); an explicit
+    # path still writes wherever the user names. The exported stack is committable config,
+    # so it goes at the .mokata/ root (not temp_local/).
     surface = _load_surface(args.path)
-    dest = args.file or os.path.join(args.path, SHARE_FILENAME)
+    dest = args.file or os.path.join(args.path, MOKATA_DIR, SHARE_FILENAME)
     export_manifest(surface, dest=dest)
     print(f"exported stack to {dest}")
     return 0
@@ -454,6 +769,52 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     report = diagnose(surface)
     print(report.render())
     return 0 if report.ok else 1
+
+
+def cmd_baseline(args: argparse.Namespace) -> int:
+    # Stage 34B — report the test suite green/red at baseline; degrade-clean if no command
+    # is known (mokata never guesses a test framework). Read-only diagnostic.
+    from .baseline import baseline_command, baseline_status
+    manifest = None
+    if Surface.is_initialized(args.path):
+        try:
+            manifest = Surface.load(args.path).manifest
+        except (ConfigError, ManifestError):
+            manifest = None
+    cmd = baseline_command(manifest, override=args.cmd)
+    result = baseline_status(cmd, cwd=args.path)
+    print(result.render())
+    # green/unknown don't hard-block (unknown degrades clean); only red is non-zero.
+    return 0 if result.ok else 1
+
+
+def cmd_config(args: argparse.Namespace) -> int:
+    # Stage 24A — read/update backend config in the committed manifest. `get` is
+    # read-only; `set` is human-gated (preview + confirm; secrets are a hard block).
+    try:
+        if args.action == "get":
+            found, val = config_cmd.config_get(args.path, args.key)
+            if not found:
+                print(f"{args.key}: (unset)")
+                return 1
+            import json as _json
+            print(_json.dumps(val))
+            return 0
+        # set
+        if args.value is None:
+            print("error: `config set <key> <value>` requires a value",
+                  file=sys.stderr)
+            return 2
+        # config_set prints its own preview / rejection detail; we add only the result.
+        res = config_cmd.config_set(args.path, args.key, args.value,
+                                    assume_yes=args.yes)
+        if res.committed:
+            print(f"set {res.key}")
+            return 0
+        return 1
+    except config_cmd.ConfigCommandError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
 
 def cmd_reset(args: argparse.Namespace) -> int:
@@ -547,6 +908,9 @@ def cmd_status(args: argparse.Namespace) -> int:
     print(f"mokata {m.mokata_version} · profile '{m.profile}'")
     for line in live:
         print(f"  {line}")
+    # Stage 25 Part B — actionable code-graph hint (active queries, or how to wire one).
+    from .knowledge import graph_guidance
+    print(graph_guidance(surface))
     return 0
 
 
@@ -582,6 +946,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_init.add_argument(
         "--force", action="store_true", help="overwrite an existing manifest"
+    )
+    p_init.add_argument(
+        "--preview", action="store_true",
+        help="print the plan and exit without writing (dry-run for the human gate)"
     )
     p_init.set_defaults(func=cmd_init)
 
@@ -658,6 +1026,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_brain.set_defaults(func=cmd_brainstorm)
 
+    p_onboard = sub.add_parser(
+        "onboard", parents=[common],
+        help="guided capture of typed project knowledge (rules/guardrails/context/docs)",
+    )
+    p_onboard.set_defaults(func=cmd_onboard)
+
     p_query = sub.add_parser(
         "query", parents=[common],
         help="run a structural query (graph if present, else grep floor)",
@@ -670,11 +1044,68 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_query.set_defaults(func=cmd_query)
 
+    p_speck = sub.add_parser(
+        "spec-check", parents=[common],
+        help="check a change against saved specs + decisions; raise a conflict via the "
+             "deviation gate (Stage 37 regression guard)",
+    )
+    p_speck.add_argument("--symbols", default=None,
+                         help="comma-separated symbols the change touches")
+    p_speck.add_argument("--files", default=None,
+                         help="comma-separated files the change touches")
+    p_speck.add_argument("--text", default=None,
+                         help="optional free-text description of the change")
+    p_speck.add_argument("--phase", default="develop",
+                         help="phase this runs at (develop/refine/spec; default: develop)")
+    p_speck.add_argument("--yes", action="store_true",
+                         help="confirm the change at the deviation gate (amend/supersede)")
+    p_speck.set_defaults(func=cmd_spec_check)
+
     p_mem = sub.add_parser(
         "memory", parents=[common],
-        help="surface active memory, read/write ratio, and healing proposals (read-only)",
+        help="surface memory (read-only); `export`/`import` to share it across repos",
     )
+    p_mem.add_argument("action", nargs="?",
+                       choices=("export", "import", "migrate", "edit"), default=None,
+                       help="export/import a share file, migrate the store, or edit an entry")
+    p_mem.add_argument("file", nargs="?", default=None,
+                       help="share file (export/import), or the subject to edit (with `edit`)")
+    p_mem.add_argument("--kind", default=None,
+                       help="filter the view to one kind (rule/guardrail/best-practice/"
+                            "context/reference/decision), or retype an entry on `edit`")
+    p_mem.add_argument("--value", default=None,
+                       help="new value (with `edit`)")
+    p_mem.add_argument("--to", default=None,
+                       help="migrate destination backend (sqlite|obsidian|postgres)")
+    p_mem.add_argument("--from", dest="from_backend", default=None,
+                       help="migrate source backend (default: the resolved store)")
+    p_mem.add_argument("--drop-source", action="store_true",
+                       help="after migrating, delete items from the source (separately gated)")
+    p_mem.add_argument("--yes", action="store_true",
+                       help="non-interactive (approve the gated import/migrate/edit)")
     p_mem.set_defaults(func=cmd_memory)
+
+    p_vault = sub.add_parser(
+        "vault", parents=[common],
+        help="share design artifacts (brainstorm/spec) with the team: push/list/search/pull",
+    )
+    p_vault.add_argument("action", choices=("push", "list", "search", "pull"),
+                         help="push a markdown artifact (gated), or list/search/pull (read-only)")
+    p_vault.add_argument("name", nargs="?", default=None,
+                         help="entry name (push/pull), or the search query's first word")
+    p_vault.add_argument("file", nargs="?", default=None,
+                         help="source markdown file (push)")
+    p_vault.add_argument("--kind", default=None, choices=("brainstorm", "spec"),
+                         help="artifact kind (push; default: inferred from the name/file)")
+    p_vault.add_argument("--dest", default=None,
+                         help="pull destination file (default: <name>.md in the repo root)")
+    p_vault.add_argument("--author", default=None,
+                         help="push author for provenance (default: $USER)")
+    p_vault.add_argument("--force", action="store_true",
+                         help="version a changed re-push instead of refusing (never silent)")
+    p_vault.add_argument("--yes", action="store_true",
+                         help="non-interactive (approve the gated push)")
+    p_vault.set_defaults(func=cmd_vault)
 
     p_skills = sub.add_parser(
         "skills", parents=[common],
@@ -694,7 +1125,7 @@ def build_parser() -> argparse.ArgumentParser:
         "enter", parents=[common],
         help="enter the pipeline at a phase (applies only that phase's gates)",
     )
-    p_enter.add_argument("phase", choices=PIPELINE_PHASES, help="phase to start at")
+    p_enter.add_argument("phase", choices=ENTRY_PHASES, help="phase to start at")
     p_enter.add_argument("--to", choices=PIPELINE_PHASES, default=None,
                          help="optional phase to stop after (default: just the start)")
     p_enter.set_defaults(func=cmd_enter)
@@ -746,12 +1177,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_doc.set_defaults(func=cmd_doctor)
 
+    p_base = sub.add_parser(
+        "baseline", parents=[common],
+        help="report the test suite green/red at baseline (degrades clean if no command)",
+    )
+    p_base.add_argument("--cmd", default=None,
+                        help="test command to run (else settings.baseline.test_command)")
+    p_base.set_defaults(func=cmd_baseline)
+
+    p_config = sub.add_parser(
+        "config", parents=[common],
+        help="get/set backend config in the manifest (set is human-gated; Stage 24A)",
+    )
+    p_config.add_argument("action", choices=("get", "set"),
+                          help="read a key, or set one (preview + confirm)")
+    p_config.add_argument("key", help="dotted manifest key, e.g. tools.sqlite.config.path")
+    p_config.add_argument("value", nargs="?", default=None,
+                          help="value to set (required for 'set')")
+    p_config.add_argument("--yes", action="store_true",
+                          help="non-interactive; skip the confirmation prompt")
+    p_config.set_defaults(func=cmd_config)
+
     p_exp = sub.add_parser(
         "export", parents=[common],
         help="export the current manifest as a shareable stack (J3)",
     )
     p_exp.add_argument("file", nargs="?", default=None,
-                       help="destination file (default: <path>/mokata-stack.json)")
+                       help="destination file (default: <path>/.mokata/mokata-stack.json)")
     p_exp.set_defaults(func=cmd_export)
 
     p_imp = sub.add_parser(
@@ -829,6 +1281,30 @@ def build_parser() -> argparse.ArgumentParser:
     p_prev.add_argument("--to", choices=PIPELINE_PHASES, default=None,
                         help="phase to stop the preview at (default: last)")
     p_prev.set_defaults(func=cmd_preview)
+
+    p_prog = sub.add_parser(
+        "progress", parents=[common],
+        help="show the run-progress tracker (done/current/pending); read-only",
+    )
+    p_prog.add_argument("--run", default=None,
+                        help="a specific run id (default: the active/most-recent run)")
+    p_prog.add_argument("--ascii", action="store_true",
+                        help="ASCII glyphs ([x]/[>]/[ ]) instead of unicode")
+    p_prog.add_argument("--lanes", action="store_true",
+                        help="parallel-aware multi-lane view (one line per concurrent lane)")
+    p_prog.set_defaults(func=cmd_progress)
+
+    p_watch = sub.add_parser(
+        "watch", parents=[common],
+        help="write a self-contained local HTML dashboard of the active run (read-only)",
+    )
+    p_watch.add_argument("--once", action="store_true",
+                         help="write a single snapshot and exit (no live refresh loop)")
+    p_watch.add_argument("--open", action="store_true",
+                         help="open the written HTML file in your browser")
+    p_watch.add_argument("--run", default=None,
+                         help="a specific run id (default: the active/most-recent run)")
+    p_watch.set_defaults(func=cmd_watch)
 
     return parser
 

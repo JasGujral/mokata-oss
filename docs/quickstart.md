@@ -18,12 +18,14 @@ The standard install, from the public marketplace, in Claude Code:
 /plugin install mokata@mostack
 ```
 
-Restart Claude Code. You now have the workflow commands — `/brainstorm`, `/spec`, `/test`,
-`/develop`, `/review`, `/debug`, `/optimize`, `/bug` — plus the SessionStart briefing and
-the secret-guard hook, all automatic. Full guide: [Use the plugin in Claude Code](how-to/use-the-plugin.md).
+Restart Claude Code. You now have the workflow commands — `/mokata:brainstorm`, `/mokata:refine`, `/mokata:spec`,
+`/mokata:test`, `/mokata:develop`, `/mokata:review`, `/mokata:debug`, `/mokata:optimize`, `/mokata:bug` — plus the SessionStart briefing
+and the secret-guard hook, all automatic. Full guide: [Use the plugin in Claude Code](how-to/use-the-plugin.md).
 
-A typical run: `/brainstorm` → approve an approach → `/spec` (blocked until acceptance
-criteria map to tests) → `/test` → `/develop` (RED-before-GREEN) → `/review`.
+A typical run: `/mokata:brainstorm` → approve an approach → `/mokata:spec` (blocked until acceptance
+criteria map to tests) → `/mokata:test` → `/mokata:develop` (RED-before-GREEN) → `/mokata:review`. Working on code
+you already have? Start with [`/mokata:refine`](how-to/refine-existing-code.md) instead of
+`/mokata:brainstorm` — review → approve a scoped set → the same flow.
 
 ### Option 2 — in Claude Code without the public marketplace
 
@@ -71,6 +73,11 @@ engine's mechanics (gates, queries, state) — it doesn't supply an LLM, so it's
 inspection, and wiring into other harnesses rather than writing code on its own. See
 [Integrate with other AI tools](how-to/integrate-other-ai-tools.md).
 
+> **A `pip` CLI install is terminal-only.** It does **not** put mokata inside Claude Code. To
+> use mokata *in* Claude Code (Claude as the brain, gated workflow), install the plugin
+> (Option 1/2a) or run **`mokata setup claude`** (Option 2b). Why there are two ways:
+> [How mokata uses an LLM: harness vs CLI](concepts/execution-model.md).
+
 The rest of this quickstart shows the **CLI** path; inside Claude Code the slash commands
 above do the same thing.
 
@@ -102,7 +109,7 @@ mokata brainstorm
 
 The brainstorm phase explores the problem with you — one question at a time, two or three
 real approaches with tradeoffs — and **refuses to let a spec proceed until you explicitly
-approve one approach**. The approved approach is persisted to `.mokata/state/` and becomes
+approve one approach**. The approved approach is persisted to `.mokata/temp_local/state/` and becomes
 a constraint the completeness gate checks later. `mokata brainstorm --status` shows whether
 an approach has been approved.
 
@@ -149,3 +156,5 @@ sequential flow when no subagent harness is available — never a hard failure.
 - A spec that cannot ship incomplete (every acceptance criterion mapped to a test).
 - A full audit trail of every gate decision and tool call.
 - Local-first by default — the `minimal` profile performs zero network egress.
+
+**Go deeper:** [The Complete Guide](tutorials/mokata-complete-guide.md) is a hands-on, feature-by-feature tour of every command, gate, and layer — with a downloadable PDF.

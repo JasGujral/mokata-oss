@@ -22,8 +22,10 @@ from mokata.memory import DECISION, MemoryItem, MemoryStore
 from mokata.share import export_manifest
 
 EXPECTED_READ = {"query", "recall", "doctor", "coverage", "budget", "audit",
-                 "status", "preview"}
-EXPECTED_WRITE = {"remember", "import_stack", "reset", "apply_proposal"}
+                 "status", "preview", "progress",
+                 "vault_list", "vault_search", "vault_pull"}
+EXPECTED_WRITE = {"remember", "import_stack", "reset", "apply_proposal", "init",
+                  "memory_export", "memory_import", "vault_push", "spec_check"}
 
 
 def _silent(_):

@@ -19,14 +19,27 @@ from .routing import (
     RoutingOutcome,
     model_cost,
 )
-from .selector import PARALLEL, SEQUENTIAL, ExecutionChoice, select_execution_mode
+from .selector import (
+    ASK,
+    EXECUTION_SETTINGS_KEY,
+    PARALLEL,
+    SEQUENTIAL,
+    ExecutionChoice,
+    resolve_execution_choice,
+    saved_execution_default,
+    select_execution_mode,
+)
 from .tasks import SubagentRunner, SubagentUnavailable, Task, TaskResult
 
 __all__ = [
     "SEQUENTIAL",
     "PARALLEL",
+    "ASK",
+    "EXECUTION_SETTINGS_KEY",
     "ExecutionChoice",
     "select_execution_mode",
+    "resolve_execution_choice",
+    "saved_execution_default",
     "Task",
     "TaskResult",
     "SubagentRunner",

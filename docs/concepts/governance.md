@@ -55,11 +55,47 @@ block) → human approval → commit → logged. The **trust dial**
 (`settings.trust.<tool>`) enforces `read-only` (cannot write), `propose-only` (always
 surfaced for approval, never auto-approved), or `gated-write` (default).
 
+## Plan adherence — never silently deviate
+
+A plan change is a **durable change**, so it's human-gated like any other. During
+implementation mokata sticks to the **approved plan**: the approved approach (brainstorm) or
+refinement set (refine), the emitted spec, and its acceptance criteria. It does **not**
+change scope, the chosen approach, the ACs, or the design beyond what was approved — and it
+never expands scope unasked.
+
+If a deviation becomes necessary — an AC is wrong or infeasible, the approved approach
+doesn't work, a materially better design appears, or an unforeseen constraint blocks it —
+mokata **STOPS and asks first**: it surfaces the deviation (*what changes · why · the
+options*) and waits for explicit approval. An approved change **re-enters the approval
+surface** (re-approve the approach/refinements, or amend the spec so every AC still maps to a
+test), and the request *and* the decision are recorded in the audit ledger.
+
+This is the **forward** guardrail. The backstop already exists: the two-pass `review` flags
+any implementation that diverges from the approved plan, so an unapproved deviation fails
+review. Together: *mokata did exactly what you approved — or it asked.*
+
+## Spec-awareness — don't break a saved spec by mistake (Stage 37)
+
+The deviation guard protects *this* story's plan; spec-awareness protects *previously-approved*
+work. Before a change, mokata checks it against the **saved specs** and **recorded decisions**:
+does it touch or contradict something already specified or decided? It computes the change's
+**touch-set** — the symbols/files in play, **expanded through the code graph** (a spec about a
+caller of the changed code is caught too) — and looks for overlap with the spec corpus and
+decision memory.
+
+If it finds one, it does **not** silently proceed: it surfaces *"this change affects spec X /
+decision Y — here's where"* and routes it through the same **deviation gate** — you confirm
+(amend/supersede the affected spec) or re-plan. The conflict **and** your resolution are logged.
+It's **frugal** (only the touch-set is checked, never the whole corpus) and **degrade-clean**:
+no saved specs yet ⇒ a no-op (no false alarm); no code graph ⇒ a lexical/file-overlap check that
+**says so**. Run it via `mokata spec-check` or the `spec_check` tool; `spec`/`refine`/`develop`
+invoke it as part of grounding.
+
 ## Audit ledger (I3)
 
-An append-only `.mokata/audit/ledger.jsonl` records every gate decision, tool call, hook,
-write, savings event, subagent decision, healing/consolidation decision, and more — each
-with a monotonic `seq`. `mokata audit` prints it.
+An append-only `.mokata/temp_local/audit/ledger.jsonl` records every gate decision, tool
+call, hook, write, savings event, subagent decision, healing/consolidation decision, and
+deviation request/decision — each with a monotonic `seq`. `mokata audit` prints it.
 
 ## Reversibility (I5) & resume (I6)
 

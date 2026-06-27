@@ -16,6 +16,7 @@ from typing import Any, List, Optional
 
 from ..brainstorm import load_approved_approach
 from ..pipeline import PHASE_GATES
+from ..refine import load_approved_refinements
 from .acmapper import MapResult, map_acceptance_criteria
 from .spec import Spec, TestRef
 
@@ -32,6 +33,8 @@ class GateResult:
     approach: Optional[str] = None
     approach_present: bool = False
     unmapped_ids: List[str] = field(default_factory=list)
+    refinements_present: bool = False
+    refinements: Optional[str] = None         # Stage 26 — approved refinement set label
     gate_id: str = GATE.id
 
     def render(self) -> str:
@@ -45,8 +48,11 @@ class GateResult:
             lines.append(f"  unmapped: {', '.join(self.unmapped_ids)}")
         if self.approach_present:
             lines.append(f"  approved approach: {self.approach}")
+        elif self.refinements_present:
+            lines.append(f"  approved refinements: {self.refinements}")
         else:
-            lines.append("  approved approach: none on record (brainstorm not run)")
+            lines.append("  approved direction: none on record "
+                         "(brainstorm/refine not run)")
         return "\n".join(lines)
 
 
@@ -54,8 +60,13 @@ def run_completeness_gate(spec: Spec, tests: List[TestRef],
                           handoff: Any = None, store: Any = None) -> GateResult:
     """Block emit unless every AC maps to a test. Reads the brainstorm handoff
     (directly, or from a state store) so the approved approach is in view."""
+    refinements = None
     if handoff is None and store is not None:
         handoff = load_approved_approach(store)
+        if handoff is None:
+            # Stage 26 — the refine front-end is the other approved direction the gate
+            # reads, the same way it reads a brainstorm approach.
+            refinements = load_approved_refinements(store)
     approach_present = handoff is not None
     approach = handoff.approach.name if approach_present else None
 
@@ -76,6 +87,8 @@ def run_completeness_gate(spec: Spec, tests: List[TestRef],
         passed=passed, reason=reason, map_result=map_result,
         approach=approach, approach_present=approach_present,
         unmapped_ids=list(map_result.unmapped_ids),
+        refinements_present=refinements is not None,
+        refinements=refinements.label if refinements is not None else None,
     )
 
 

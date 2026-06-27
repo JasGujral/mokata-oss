@@ -11,7 +11,7 @@ sync security hook, and `hooks/session_start.py` is the canonical async one.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 SECURITY_BLOCK_EXIT = 2
 

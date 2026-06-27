@@ -13,6 +13,14 @@ mokata init --profile custom     # everything wired as a starting point to hand-
 defaults (grep + SQLite). Use `full` to wire every graph/memory provider (each degrades to
 its floor when absent), or `minimal` for just the governed TDD engine.
 
+### From the plugin (no CLI, no pip)
+
+Inside Claude Code you don't need the terminal — type **`/mokata:init full`** (or
+`standard` / `minimal`). It previews exactly what it will write, asks you to approve, then
+sets the profile — running the bundled engine on your existing Claude Code sign-in. You can
+also just say *"set up mokata here"* and Claude will run the gated `init` MCP tool; on a
+brand-new project mokata even offers to initialize it for you (once — never a nag).
+
 ## Tune the committed manifest
 
 Everything is a toggle in `.mokata/manifest.json` (see the
@@ -26,6 +34,12 @@ Everything is a toggle in `.mokata/manifest.json` (see the
 - **Trust dial** — `settings.trust.<tool>` = `read-only` / `propose-only` / `gated-write`.
 - **Output density** — `settings.governance.output_density: true` to enable F4 compression.
 - **Karpathy gates** — `settings.governance.karpathy.<id>: false` to disable a gate.
+
+- **Backend paths** — point a backend at a custom location (SQLite path, Obsidian vault,
+  hosted Postgres) via each tool's `config` block: see
+  [configure storage backends & paths](configure-storage-backends.md).
+- **Codebase graph** — `full` wires a real graph (code-review-graph / serena) for structural
+  queries, with grep as the safe floor: see [use a codebase graph](use-a-codebase-graph.md).
 
 ## Verify
 
