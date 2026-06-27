@@ -1,14 +1,20 @@
 ---
 name: spec
-description: Turn the problem into testable acceptance criteria; map each to a test.
+description: mokata · Turn the problem into testable acceptance criteria; map each to a test.
 ---
 
 # mokata · /spec
 
-Turn the agreed problem into a spec: concrete, testable acceptance criteria. Map every criterion to a test before any code is written. If an approved brainstorm approach exists, the spec must honour it; if not, work from what the user states and mark assumptions.
+BEFORE drafting or emitting ANY acceptance criterion, inspect the REAL code the change touches: the symbols involved, their callers/callees/implementers, the existing tests, and the conventions of nearby code (use the structural queries and memory). Every acceptance criterion must be grounded in actual code — real names, signatures, and behaviour — never a guessed interface. Emit a short "Verified from code:" list naming the symbols / signatures / edges you checked, so the grounding is auditable. If an AC rests on something you could NOT verify from the code, mark it as an assumption and ASK before emitting it. Then turn the agreed problem into a spec: concrete, testable acceptance criteria, and map every criterion to a test before any code is written. Decompose the work into SMALL, ordered, verifiable tasks — each naming the exact files/symbols it touches and a concrete check — so each task is grounded and provable. If an approved brainstorm approach or refinement set exists, the spec must honour it. Spec-awareness (regression guard): before making the change, check it against the SAVED specs and recorded decisions — run `mokata spec-check --symbols <touched> --files <touched>` (or the `spec_check` tool) over the symbols/files in play. If it reports the change affects a saved spec or a recorded decision, STOP and route it through the deviation gate: the human confirms (amend/supersede the affected spec/decision) or you re-plan — never break a previously-approved spec silently. Degrade-clean: no saved specs yet ⇒ it's a no-op (no false alarm); no code graph ⇒ it falls back to a lexical/file-overlap check and says so.
 
 ## Gate (human)
 No spec is complete until every acceptance criterion maps to a test (RED before GREEN) and any approved approach is satisfied; human-approve before emit.
 
 ## Standalone
 This command runs on its own — no upstream pipeline phase is required. It applies only its own gate above, and never silently skips a gate of a phase you did run.
+
+## Grounding discipline
+Decide from the code, not from assumption. Before you assert anything about types, signatures, behaviour, control flow, conventions, dependencies, error handling, or file layout, VERIFY it against the actual code: read the relevant source, run structural queries (`mokata query callers|callees|implementers|imports|blast_radius <symbol>`), and check memory for prior decisions and conventions. Consult the project brain: honour the captured rules and guardrails, and pull in only the context, references, and best-practices RELEVANT to the symbols/topic in play (just-in-time — never the whole corpus). The graph + memory are the source of truth; where they're absent, read or grep the code and state what you read. If a fact CANNOT be determined from the code, state the assumption explicitly and ASK — never silently assume. Cite what you verified. And continuously: if at any point you find a decision rested on an assumption, or the code contradicts something you assumed, STOP — surface it (what you assumed vs. what the code shows), CONFIRM with the user, and re-plan (route it through the deviation gate and amend the spec/ACs so they stay grounded and provable). There is no "assumed and continued" path.
+
+## Progress
+At the START and END of this phase, show where the run is: print the mokata run-progress block (the ordered phases marked done/current/pending with the [done/total] count and what's next) and a one-line banner naming what's running now — e.g. `mokata · spec (running)` then `mokata · spec (done)`. This is read-only over the persisted run-state (`mokata progress` / the `progress` MCP tool) — surface it, don't invent it. So the user never wonders whether mokata is running or which part.

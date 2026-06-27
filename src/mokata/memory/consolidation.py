@@ -10,7 +10,7 @@ the riskier autonomous form stays out — application is always human-gated.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import List, Optional
 
 from .item import EPISODIC, PERSISTENT, MemoryItem
 

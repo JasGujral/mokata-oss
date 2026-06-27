@@ -20,7 +20,7 @@ from typing import Any, Dict, List
 
 # Capability roles mokata's spine understands out of the box. Tools declare which
 # one they `provides`, and capabilities are keyed by these names.
-KNOWN_DETECT_TYPES = ("command", "python_module", "path", "always")
+KNOWN_DETECT_TYPES = ("command", "python_module", "path", "obsidian", "always")
 KNOWN_TOOL_KINDS = ("mcp", "cli", "library", "builtin", "external")
 SUPPORTED_MANIFEST_VERSION = 1
 

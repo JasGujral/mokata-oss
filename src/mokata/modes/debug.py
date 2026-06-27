@@ -7,7 +7,7 @@ when one is supplied). A fix is gated behind an identified root cause — not pr
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, List, Optional
 
 

@@ -13,7 +13,8 @@ from mokata.packaging import validate_marketplace, validate_plugin
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 VERSION = __version__   # canonical; every other location must match it (version-agnostic)
 
-COMMANDS = ("brainstorm", "spec", "test", "develop", "review", "debug", "optimize", "bug")
+COMMANDS = ("brainstorm", "spec", "test", "develop", "review", "debug", "optimize",
+            "bug", "init", "ship", "vault", "onboard")
 HOOKS = ("session_start.py", "secret_guard.py")
 
 
@@ -51,8 +52,8 @@ class TestPluginReferences(unittest.TestCase):
     def test_plugin_references_both_hooks(self):
         # Claude Code auto-loads the standard hooks/hooks.json, so the manifest must
         # NOT re-reference it via a "hooks" key — doing so triggers a "Duplicate hooks
-        # file detected" error on plugin load (fixed in v1.2.3). The hooks still load;
-        # we validate the auto-loaded file directly here.
+        # file detected" error on plugin load. The hooks still load; we validate the
+        # auto-loaded file directly here.
         data = json.loads(read(".claude-plugin/plugin.json"))
         self.assertNotIn(
             "hooks", data,

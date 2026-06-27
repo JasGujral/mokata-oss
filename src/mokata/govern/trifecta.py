@@ -8,6 +8,8 @@ silently, and the decision is logged. When the trifecta is not active, no gate i
 
 from __future__ import annotations
 
+from ..prompt import read_yes_no
+
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
@@ -42,11 +44,7 @@ def detect_trifecta(system_access: bool, private_data: bool, outbound: bool) -> 
 
 
 def _default_confirm(text: str) -> bool:
-    try:
-        return input(text + "\nApprove this outbound action? [y/N] ").strip().lower() \
-            in ("y", "yes")
-    except EOFError:
-        return False
+    return read_yes_no(text, "Approve this outbound action?")
 
 
 class TrifectaGuard:

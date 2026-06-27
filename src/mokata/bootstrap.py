@@ -23,11 +23,35 @@ from .router import Resolution
 # ever grows it.
 BOOTSTRAP_TOKEN_BUDGET = 2000
 
+# Stage 36 — how many captured rule/guardrail lines the briefing surfaces. A small, capped
+# always-on set (P11): the rest stay retrievable via `mokata memory --kind rule`, never dumped.
+BRIEFING_RULES_MAX_LINES = 12
+
 # Inviolable gates, surfaced every session (P2 + P8 — cannot be configured away).
 _INVIOLABLE_GATES = [
     "human-gate: every durable write (code, memory, config) is staged for approval",
     "local-first: nothing leaves the machine unless you explicitly wire it; no telemetry",
 ]
+
+# Injected on SessionStart when a repo isn't set up yet (Stage 23 Part 4): mokata asks
+# FIRST instead of waiting to be told. One offer, never a nag — the moment .mokata/ exists
+# this disappears for good. It instructs Claude to offer; it never writes anything itself.
+SETUP_OFFER = (
+    "mokata: this project is NOT set up yet (no .mokata/). Proactively OFFER to initialize "
+    "it: ask which profile (minimal / standard / full — full wires every graph & memory "
+    "provider, standard is the lean default, minimal is engine-only), then run "
+    "`/mokata:init <profile>` (or the gated `init` MCP tool). Preview first, get explicit "
+    "approval, and never write without it. If the user declines, do not ask again. Once it's "
+    "set up, OFFER `/mokata:onboard` to capture the project's rules, guardrails, conventions, "
+    "and domain context as typed memory mokata will honour — optional, never forced."
+)
+
+
+def build_setup_offer(budget: int = BOOTSTRAP_TOKEN_BUDGET) -> "BootstrapResult":
+    """The one-line setup offer for an uninitialized repo (Stage 23). Same shape as the
+    briefing so the SessionStart hook emits it identically."""
+    text = SETUP_OFFER + "\n"
+    return BootstrapResult(text=text, token_estimate=estimate_tokens(text), budget=budget)
 
 
 def estimate_tokens(text: str) -> int:
@@ -96,12 +120,32 @@ def _render(surface: Surface) -> str:
     else:
         lines.append("Constitution: none committed yet.")
 
+    # Stage 36 — captured project rules/guardrails, honoured EVERY run. A small capped set
+    # (P11); over-budget entries are flagged, not dumped. Degrade-clean if memory is off.
+    rules_lines = _always_on_rule_lines(surface)
+    if rules_lines:
+        lines.append("")
+        lines.append("Project rules & guardrails (always honour):")
+        lines.extend(rules_lines)
+
     lines.append("")
     lines.append(
         "Reflex: before acting, check the relevant gate/skill; verify with evidence, "
-        "not claims."
+        "not claims. Captured context/reference surfaces just-in-time when relevant "
+        "(`mokata memory`), never all at once."
     )
     return "\n".join(lines) + "\n"
+
+
+def _always_on_rule_lines(surface: Surface) -> List[str]:
+    """The capped rule/guardrail lines for the briefing. Guarded: any memory issue -> none."""
+    try:
+        from .memory import MemoryStore, always_on_lines
+        store = MemoryStore.from_surface(surface)
+        lines, _overflow = always_on_lines(store, BRIEFING_RULES_MAX_LINES)
+        return lines
+    except Exception:
+        return []
 
 
 def build_bootstrap(

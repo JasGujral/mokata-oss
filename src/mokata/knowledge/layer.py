@@ -15,13 +15,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+import re
+
 from ..manifest import ManifestError
 from .graph_backend import CodeReviewGraphBackend, GraphQueryClient
 from .grep_backend import GrepBackend
 from .query import BackendError, GraphBackend, QueryResult
 
 # Tools that ARE real structural graphs (everything else is the lexical floor).
-GRAPH_TOOLS = ("code-review-graph", "serena")
+GRAPH_TOOLS = ("code-review-graph", "serena", "neo4j")
 
 STORY_ANALYSIS_PREFIX = "story_analysis__"
 
@@ -35,6 +37,14 @@ def select_backends(
 
     Returns the grep floor as the fallback only when the primary is a real graph, so a
     graph failure degrades cleanly. When the floor is already primary, fallback is None.
+
+    Availability probing is UNIFORM across graph tools (Stage 39 / M5), it just happens at the
+    layer each tool lives in: command-based tools (`code-review-graph`, `serena`, `ripgrep`) are
+    probed by the detector — `router.resolve` only returns a tool whose command is present, so an
+    absent tool never reaches here (it resolves to grep). The external `neo4j` needs an extra
+    BUILD-TIME probe (below) because a present driver module ≠ a reachable DB. In all cases a
+    tool that's present-but-broken at query time raises `BackendError`, which `_run` degrades to
+    the grep floor — so the floor is the universal guarantee no matter where a tool fails.
     """
     try:
         res = router.resolve("code_graph")
@@ -42,6 +52,20 @@ def select_backends(
         res = None
 
     if res is not None and res.available and res.tool in GRAPH_TOOLS:
+        if res.tool == "neo4j":
+            # External Neo4j graph (Stage 35f): build its client from env; if it can't be
+            # built (no driver / no NEO4J_* env / DB down) degrade cleanly to the grep floor.
+            from .neo4j_backend import build_neo4j_client
+            cfg: Dict[str, Any] = {}
+            try:
+                cfg = router.manifest.tool_config("neo4j")
+            except (AttributeError, ManifestError):
+                cfg = {}
+            gclient = client or build_neo4j_client(cfg)
+            if gclient is None:
+                return GrepBackend(root=root, name="grep"), None
+            return (CodeReviewGraphBackend(name="neo4j", root=root, client=gclient),
+                    GrepBackend(root=root))
         primary = CodeReviewGraphBackend(name=res.tool, root=root, client=client)
         return primary, GrepBackend(root=root)
 
@@ -119,6 +143,65 @@ class KnowledgeLayer:
 
     def blast_radius(self, symbol: str, depth: int = 2) -> QueryResult:
         return self._run("blast_radius", symbol, depth=depth)
+
+
+# ----------------------------------------------------- Stage 25 Part B: graph guidance
+def graph_guidance(surface: Any) -> str:
+    """An ACTIONABLE one-line hint for doctor/status (Stage 25 Part B).
+
+    When a real graph is wired, point at the structural queries it unlocks (reflecting any
+    configured path/endpoint from the tool's `config` block, Stage 24A). When only the grep
+    floor is active, give a concrete next step to wire one — not just a status line."""
+    layer = KnowledgeLayer.from_surface(surface)
+    if layer.uses_graph:
+        tool = layer.backend_name
+        cfg = ""
+        try:
+            c = surface.manifest.tool_config(tool)
+            if c:
+                cfg = " [config: " + ", ".join(f"{k}={v}" for k, v in c.items()) + "]"
+        except Exception:
+            cfg = ""
+        return (f"code graph active ({tool}){cfg} — use `mokata query callers <sym>` / "
+                f"`callees <sym>` / `blast_radius <sym>` for structural queries.")
+    return (
+        "no codebase graph wired — running on the grep floor (safe, but lexical). To enable "
+        "richer structural queries, install a graph tool (code-review-graph or serena) and "
+        "wire it: `mokata init --profile full`, or add it via `mokata config set "
+        "tools.<graph>...` / the manifest."
+    )
+
+
+# ----------------------------------------------- Stage 35f: live graph-proximity scorer
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")   # identifier-like tokens (len >= 3)
+
+
+def make_graph_scorer(layer: Any, query: str):
+    """A live graph-keyed relevance scorer for memory's tiered retrieval (closes the 35e
+    SHOULD). Returns `(query, item) -> 0..1` that boosts a memory item which references a
+    symbol the CODE GRAPH confirms is real and related to the query — or None when no real
+    graph is wired (so the graph tier stays silent and lexical+semantic hold).
+
+    Frugal (P11): runs one cheap graph lookup per identifier token in the query (a small set),
+    not per memory item; the resulting anchor set scores items by token membership."""
+    if layer is None or not getattr(layer, "uses_graph", False):
+        return None
+    anchors = set()
+    for tok in {t for t in _IDENT.findall(query or "")}:
+        try:
+            res = layer.callers(tok)          # graph confirms the symbol exists/relates
+        except Exception:
+            continue
+        if res is not None and not res.degraded and res.references:
+            anchors.add(tok)
+    if not anchors:
+        return None
+
+    def _scorer(_query: str, item: Any) -> float:
+        text = f"{item.subject} {item.value}"
+        return 1.0 if any(a in text for a in anchors) else 0.0
+
+    return _scorer
 
 
 # --------------------------------------------------------------- B6 story bridge

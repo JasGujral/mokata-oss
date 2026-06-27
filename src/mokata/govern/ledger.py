@@ -12,6 +12,8 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
+from .. import TEMP_LOCAL_DIRNAME
+
 AUDIT_DIRNAME = "audit"
 LEDGER_FILENAME = "ledger.jsonl"
 
@@ -29,7 +31,9 @@ class AuditLedger:
 
     @classmethod
     def from_mokata_dir(cls, mokata_dir: str) -> "AuditLedger":
-        return cls(os.path.join(mokata_dir, AUDIT_DIRNAME, LEDGER_FILENAME))
+        # The ledger is transient runtime data (Stage 24D): under .mokata/temp_local/.
+        return cls(os.path.join(mokata_dir, TEMP_LOCAL_DIRNAME, AUDIT_DIRNAME,
+                                LEDGER_FILENAME))
 
     def record(self, kind: str, **fields: Any) -> Dict[str, Any]:
         """Append one entry and return it. Never rewrites existing entries."""

@@ -8,7 +8,7 @@ turns into a graceful degrade to the sequential flow.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional, Protocol
 
 

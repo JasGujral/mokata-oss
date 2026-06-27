@@ -38,6 +38,15 @@ TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
         "version": None,
         "detect": {"type": "command", "name": "rg"},
     },
+    "neo4j": {
+        # Opt-in external graph DB (Stage 35f). NOT wired by any default profile (P8): a user
+        # adds it to the code_graph chain + sets NEO4J_* env. Degrades to the grep floor when
+        # the driver/env/DB is absent. URI + credentials via env var only (never inline).
+        "provides": "code_graph",
+        "kind": "external",
+        "version": None,
+        "detect": {"type": "python_module", "name": "neo4j"},
+    },
     "grep": {
         "provides": "code_graph",
         "kind": "builtin",
@@ -57,7 +66,19 @@ TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
         "provides": "memory_store",
         "kind": "external",
         "version": None,
-        "detect": {"type": "path", "name": "~/.obsidian"},
+        # Stage 24A: detect the real per-OS Obsidian config dirs (and a configured
+        # `config.vault`), not the bare ~/.obsidian that usually doesn't exist.
+        "detect": {"type": "obsidian"},
+    },
+    "postgres": {
+        # Opt-in hosted/remote memory backend. NOT wired by any default profile (P8
+        # local-first): a user adds it explicitly via `mokata config set`. The DSN comes
+        # from an env var (config.dsn_env) — never inline. Degrades to SQLite if psycopg
+        # is absent or the DB is unreachable.
+        "provides": "memory_store",
+        "kind": "external",
+        "version": None,
+        "detect": {"type": "python_module", "name": "psycopg"},
     },
     "sqlite": {
         "provides": "memory_store",

@@ -8,11 +8,13 @@ never committed silently.
 
 from __future__ import annotations
 
+from ..prompt import read_yes_no
+
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional
 
 from .secrets import Finding, scan
-from .trust import READ_ONLY, TrustPolicy
+from .trust import TrustPolicy
 
 WRITE_KINDS = ("code", "memory", "config", "send")
 
@@ -35,10 +37,7 @@ class WriteOutcome:
 
 
 def _default_confirm(text: str) -> bool:
-    try:
-        return input(text + "\nApprove this write? [y/N] ").strip().lower() in ("y", "yes")
-    except EOFError:
-        return False
+    return read_yes_no(text, "Approve this write?")
 
 
 class WriteGate:
@@ -54,7 +53,7 @@ class WriteGate:
 
     def submit(self, req: WriteRequest, commit: Optional[Callable[[], None]] = None,
                confirm: Optional[Callable[[str], bool]] = None,
-               assume_yes: bool = False) -> WriteOutcome:
+               assume_yes: bool = False, prompt: Optional[str] = None) -> WriteOutcome:
         # K3 trust dial: a read-only tool cannot write at all; propose-only writes can
         # never be auto-approved (always surfaced for a human).
         if self.trust is not None and req.tool:
@@ -76,12 +75,13 @@ class WriteGate:
                                 "blocked: secret(s) detected — remove before writing",
                                 findings)
 
-        # Layer 2: human gate.
+        # Layer 2: human gate. A caller may supply a richer `prompt` surface (e.g. memory's
+        # render_write / old→new healing diff) so unifying on this gate doesn't flatten it.
         if not assume_yes:
             gate = confirm or _default_confirm
-            prompt = (f"mokata · approve {req.kind} write to {req.target} "
-                      f"({len(req.content)} chars)?")
-            if not gate(prompt):
+            shown = prompt or (f"mokata · approve {req.kind} write to {req.target} "
+                               f"({len(req.content)} chars)?")
+            if not gate(shown):
                 self._log(req, "declined", "human declined")
                 return WriteOutcome(False, True, "declined at the human gate", [])
 

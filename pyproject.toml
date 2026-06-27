@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mokata"
-version = "1.2.3"
+version = "0.0.1"
 description = "An open-source, spec-driven TDD framework for Claude Code — governed, knowledge-aware, human-gated."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -25,6 +25,15 @@ schema = ["jsonschema>=4.0"]
 # needs Python >= 3.10, so the marker keeps `pip install "mokata[mcp]"` a clean no-op on
 # 3.9 instead of a resolution error.
 mcp = ['mcp>=1.2; python_version >= "3.10"']
+# Optional hosted/remote memory backend (Stage 24A): the Postgres store. Lazy-imported;
+# the core, the CLI, and every default profile run with this absent (memory degrades to
+# the SQLite floor). Opt-in only — a remote store is explicit user wiring (local-first).
+postgres = ["psycopg>=3.1"]
+# Optional external codebase-graph backend (Stage 35f): query a team-populated Neo4j graph
+# for structural questions. Lazy-imported; the core, the CLI, and every default profile run
+# with this absent (code_graph degrades to the ripgrep→grep floor). Opt-in only — the URI and
+# credentials come from env vars, never the committed manifest (local-first, no egress).
+neo4j = ["neo4j>=5.0"]
 
 [project.scripts]
 mokata = "mokata.cli:main"

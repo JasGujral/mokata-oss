@@ -10,7 +10,9 @@ and the CLI never drift.
 
 | Skill | Gate id | Kind | What it does |
 |---|---|---|---|
-| `brainstorm` | `approach-approval` | human | Socratic pre-spec exploration; HARD-GATE: no spec until one approach is explicitly approved |
+| `brainstorm` | `approach-approval` | human | Socratic pre-spec exploration (for *new* problems); HARD-GATE: no spec until one approach is explicitly approved |
+| `refine` | `refinement-approval` | human | deep, user-steerable review of *existing* code → prioritized refinements; HARD-GATE: no spec until a scoped set is approved, then hands off to `spec` |
+| `onboard` | `typed-capture-human-gated` | human | guided capture of the project's rules/guardrails/conventions/context/docs into TYPED, human-gated memory the skills reference |
 | `spec` | `completeness` | human | turn the problem into testable acceptance criteria, each mapped to a test |
 | `test` | `red-before-green` | check | write failing tests first (RED); no implementation here |
 | `develop` | `no-code-without-failing-test` | check | implement the minimum to turn a failing test green |
@@ -18,6 +20,18 @@ and the CLI never drift.
 | `debug` | `repro-first` | check | reproduce first, find the root cause (N-strikes escalation), then fix |
 | `optimize` | `measure-first` | check | measure before/after; keep only proven, behavior-preserving wins |
 | `bug` | `reproducer-required` | check | start from a reproducer + failing test, then fix; labels reported→reproduced→fixing→verified |
+
+## `refine` vs `review`
+
+These sound similar but sit at opposite ends of the pipeline:
+
+- **`refine`** = *review my existing code and propose changes.* It's a **front-end** (like
+  `brainstorm`, but for code you already have): deep review → prioritized refinements →
+  approve a scoped set → hand off to `spec`. It has no spec to check against yet.
+- **`review`** = *verify a diff against its spec.* It's the **back-end** check after
+  `develop`: does the change do exactly what the spec said (no more), then quality.
+
+See [how-to: refine existing code](../how-to/refine-existing-code.md).
 
 ## Gate kinds
 

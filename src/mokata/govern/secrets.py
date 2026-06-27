@@ -30,6 +30,12 @@ _SIGNATURES = [
     ("secret-assignment", re.compile(
         r"(?i)(?:api[_-]?key|secret|token|password|passwd|access[_-]?key)"
         r"\s*[:=]\s*['\"][^'\"\s]{8,}['\"]")),
+    # Connection string carrying inline credentials (e.g. a Postgres DSN). mokata only
+    # ever references a DSN via an env var (config.dsn_env); a plaintext one in a
+    # committed manifest is a leak this must block (Stage 24A).
+    ("connection-string-credentials", re.compile(
+        r"(?i)\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|"
+        r"amqps?)://[^/\s:@]+:[^/\s@]+@")),
 ]
 
 _SENSITIVE_NAMES = (".env", "id_rsa", "id_dsa", "credentials", ".npmrc", ".pgpass",

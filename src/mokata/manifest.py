@@ -73,6 +73,16 @@ class Manifest:
             return False
         return bool(tool.get("enabled", True))
 
+    def tool_config(self, tool_id: str) -> Dict[str, Any]:
+        """Per-tool `config` block (Stage 24A) — backend parameters the builders read
+        (e.g. an Obsidian vault path, a custom SQLite path, a Postgres `dsn_env`). Empty
+        when absent, so defaults are unchanged for tools that declare no config."""
+        tool = self.tools.get(tool_id)
+        if not isinstance(tool, dict):
+            return {}
+        cfg = tool.get("config")
+        return cfg if isinstance(cfg, dict) else {}
+
     def capability_layer(self, need: str) -> Optional[str]:
         """The layer a capability belongs to, or None if it declares no layer
         (Stage 1 manifests) — in which case it is never layer-gated."""

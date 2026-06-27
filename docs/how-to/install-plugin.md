@@ -24,8 +24,8 @@ directory and registers it as a local marketplace named `mostack`; the `@mostack
 the same either way. (The community marketplace submission is a separate, later step purely
 for public discoverability — it is **not** required to use the plugin.)
 
-Either route makes the slash commands available — `/brainstorm`, `/spec`, `/test`, `/develop`,
-`/review`, `/debug`, `/optimize`, `/bug` — and wires both hooks (declared in
+Either route makes the slash commands available — `/mokata:brainstorm`, `/mokata:spec`, `/mokata:test`, `/mokata:develop`,
+`/mokata:review`, `/mokata:debug`, `/mokata:optimize`, `/mokata:bug` — and wires both hooks (declared in
 `hooks/hooks.json`):
 
 - **SessionStart** → `hooks/session_start.py` (async/observability) — injects the bootstrap
@@ -44,6 +44,11 @@ git clone https://github.com/JasGujral/mokata-oss.git
 cd mokata-oss
 pip install -e .
 ```
+
+> **Heads up:** `pip install` gives you the `mokata` command **in your terminal only** — it
+> does **not** put mokata inside Claude Code (no slash commands, no hooks). For the in-Claude
+> workflow without this plugin, run **`mokata setup claude`** (see below). Why two ways:
+> [How mokata uses an LLM: harness vs CLI](../concepts/execution-model.md).
 
 See the [CLI reference](../reference/cli.md). To get the full workflow (slash commands,
 tools, hooks) inside Claude Code **without** installing the plugin — or to wire mokata into

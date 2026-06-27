@@ -44,9 +44,9 @@ class TestMemoryPersistsAcrossSessions(unittest.TestCase):
             self.assertEqual([i.value for i in hits], ["postgres"])
             store2.close()
 
-            # the SQLite floor persisted under .mokata/
+            # the SQLite floor persisted under .mokata/temp_local/ (transient runtime; 24D)
             self.assertTrue(os.path.exists(
-                os.path.join(d, ".mokata", "memory", "memory.db")))
+                os.path.join(d, ".mokata", "temp_local", "memory", "memory.db")))
 
 
 class TestHealingIsSurfacedNotApplied(unittest.TestCase):

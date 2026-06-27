@@ -60,19 +60,28 @@ nav:
   - Home: index.md
   - Getting started: quickstart.md
   - Tutorials:
+      - Differentiators in action: tutorials/differentiators-in-action.md
       - Run a story end-to-end: tutorials/run-a-story.md
+      - The Complete Guide: tutorials/mokata-complete-guide.md
   - How-to guides:
       - Install the Claude plugin: how-to/install-plugin.md
       - Use the plugin in Claude Code: how-to/use-the-plugin.md
       - Use mokata without the plugin: how-to/use-without-plugin.md
       - Integrate with other AI tools: how-to/integrate-other-ai-tools.md
       - Configure a profile: how-to/configure-a-profile.md
+      - Configure storage backends & paths: how-to/configure-storage-backends.md
+      - Refine existing code: how-to/refine-existing-code.md
+      - Use a codebase graph: how-to/use-a-codebase-graph.md
       - Set the execution mode: how-to/set-execution-mode.md
+      - Watch a run (lanes + dashboard): how-to/watch-a-run.md
       - Use & heal memory: how-to/use-memory.md
+      - Capture project rules & context: how-to/capture-project-rules-and-context.md
+      - Share a design vault: how-to/share-a-design-vault.md
       - Write a skill: how-to/write-a-skill.md
       - Share a stack: how-to/share-a-stack.md
       - Profiles & toggles: profiles.md
   - Concepts:
+      - How mokata uses an LLM (harness vs CLI): concepts/execution-model.md
       - Pipeline & gates: concepts/pipeline.md
       - Knowledge layer: concepts/knowledge.md
       - Memory: concepts/memory.md

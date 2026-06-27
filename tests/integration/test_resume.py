@@ -38,9 +38,10 @@ class TestResumeFromLastGate(unittest.TestCase):
             cp1.mark_passed("brainstorm")
             cp1.mark_passed("analysis")
 
-            # the checkpoint is on disk under .mokata/state/
+            # the checkpoint is on disk under .mokata/temp_local/state/ (transient; 24D)
             self.assertTrue(os.path.exists(os.path.join(
-                d, ".mokata", "state", CHECKPOINT_PREFIX + "run-1.json")))
+                d, ".mokata", "temp_local", "state",
+                CHECKPOINT_PREFIX + "run-1.json")))
 
             # session 2 — reload the surface, rebuild the checkpoint from disk
             cp2 = PipelineCheckpoint(Surface.load(d).state, "run-1")

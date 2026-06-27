@@ -16,7 +16,7 @@ import math
 import re
 from typing import Any, Callable, List, Optional, Tuple
 
-from .item import EPISODIC, MemoryItem
+from .item import DEFAULT_TOP_K, EPISODIC, MemoryItem
 
 _WORD = re.compile(r"[a-z0-9]+")
 
@@ -58,7 +58,7 @@ class EpisodicMemory:
                                  source=role)
         return self.store.remember(item, confirm=confirm, assume_yes=assume_yes)
 
-    def search(self, query: str, top_k: int = 5,
+    def search(self, query: str, top_k: int = DEFAULT_TOP_K,
                embedder: Optional[Callable[[str], List[float]]] = None,
                ) -> List[Tuple[MemoryItem, float]]:
         """Return up to `top_k` (turn, score) pairs, best first. Uses `embedder` for

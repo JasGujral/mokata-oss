@@ -55,6 +55,14 @@ from .trust import (
     trust_for,
 )
 from .compress import OutputDensity, compress_output, compress_tool_output, density_enabled
+from .deviation import (
+    DEVIATION_KIND,
+    DEVIATION_TARGETS,
+    DeviationGate,
+    DeviationOutcome,
+    DeviationRequest,
+    render_deviation,
+)
 from .gate import WRITE_KINDS, WriteGate, WriteOutcome, WriteRequest
 from .hooks import HookResult, run_async_hook, run_sync_hook
 from .ledger import AuditLedger
@@ -122,4 +130,7 @@ __all__ = [
     "diagnose", "DoctorReport", "DoctorFinding",
     # K6 — lifecycle
     "plan_reset", "reset_state", "ResetPlan", "ResetResult",
+    # Stage 31 — plan-adherence deviation gate
+    "DeviationGate", "DeviationRequest", "DeviationOutcome", "render_deviation",
+    "DEVIATION_KIND", "DEVIATION_TARGETS",
 ]

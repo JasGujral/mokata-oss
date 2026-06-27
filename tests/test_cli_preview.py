@@ -21,7 +21,7 @@ class TestPreviewCLI(unittest.TestCase):
     def test_preview_runs_and_writes_nothing(self):
         with tempfile.TemporaryDirectory() as d:
             init_repo(root=d, profile="standard", assume_yes=True, out=silent)
-            state_dir = os.path.join(d, ".mokata", "state")
+            state_dir = os.path.join(d, ".mokata", "temp_local", "state")
             before = os.path.exists(state_dir)
             buf = io.StringIO()
             with redirect_stdout(buf):

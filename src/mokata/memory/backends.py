@@ -15,7 +15,7 @@ import sqlite3
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
-from .item import ACTIVE, MemoryItem
+from .item import MemoryItem
 
 
 class MemoryBackend(ABC):
@@ -212,3 +212,96 @@ class NativeMemoryBackend(MemoryBackend):
 
     def delete(self, item_id: str) -> bool:
         return self.client.delete(item_id)
+
+
+# -------------------------------------------------------------------------- postgres
+class PostgresUnavailable(Exception):
+    """Raised when the Postgres backend can't be built — psycopg missing or the DB
+    unreachable. The caller catches this and degrades to the SQLite floor (never a
+    hard failure: 'degrade, never break')."""
+
+
+class PostgresBackend(MemoryBackend):
+    """The team's LIVE shared memory store — a hosted/remote backend (`kind: "external"`)
+    whose schema mokata OWNS: it runs `CREATE TABLE IF NOT EXISTS mokata_memory (…)` on connect and
+    implements the full `MemoryBackend` contract (put/upsert/get/all/delete/close), so
+    pointing a whole team's mokata at one Postgres DSN makes everyone read/write the same
+    store live. `autocommit` is on so one client's committed write is immediately visible to
+    the others; conflicts are surfaced (not silently merged) by the store's self-healing
+    layer, writes stay human-gated (P2) and provenance-carrying, and the adapter is
+    trust-dialed (P15) — this class is storage only, the policy lives in the store.
+
+    Opt-in / local-first (P8): nothing connects unless the user wires `config.dsn_env`. The
+    DSN comes from that env var (never inline in the committed manifest). `psycopg` is an
+    optional extra, lazy-imported here; its absence — or an unreachable database — raises
+    `PostgresUnavailable` so selection degrades to the SQLite floor, never a hard failure."""
+
+    name = "postgres"
+    # mokata-OWNED, namespaced schema (Stage 39): a dedicated table, never the generic `memory`,
+    # so mokata's store can't collide with an app's own `memory` table in a shared database.
+    TABLE = "mokata_memory"
+
+    def __init__(self, dsn: str, name: str = "postgres") -> None:
+        from ._pg import connect_psycopg
+        self.name = name
+        self._conn = connect_psycopg(dsn, PostgresUnavailable, setup_sql=[
+            f"CREATE TABLE IF NOT EXISTS {self.TABLE} ("
+            "  id TEXT PRIMARY KEY, mtype TEXT, subject TEXT,"
+            "  status TEXT, doc TEXT, seq BIGSERIAL)",
+        ])
+
+    def put(self, item: MemoryItem) -> None:
+        self._conn.execute(
+            f"INSERT INTO {self.TABLE} (id, mtype, subject, status, doc)"
+            " VALUES (%s, %s, %s, %s, %s)"
+            " ON CONFLICT (id) DO UPDATE SET mtype=EXCLUDED.mtype,"
+            " subject=EXCLUDED.subject, status=EXCLUDED.status, doc=EXCLUDED.doc",
+            (item.id, item.mtype, item.subject, item.status,
+             json.dumps(item.to_dict())),
+        )
+
+    def get(self, item_id: str) -> Optional[MemoryItem]:
+        row = self._conn.execute(
+            f"SELECT doc FROM {self.TABLE} WHERE id=%s", (item_id,)
+        ).fetchone()
+        return MemoryItem.from_dict(json.loads(row[0])) if row else None
+
+    def all(self, mtype: Optional[str] = None,
+            statuses: Optional[Tuple[str, ...]] = None) -> List[MemoryItem]:
+        rows = self._conn.execute(f"SELECT doc FROM {self.TABLE} ORDER BY seq").fetchall()
+        items = [MemoryItem.from_dict(json.loads(r[0])) for r in rows]
+        if mtype is not None:
+            items = [i for i in items if i.mtype == mtype]
+        if statuses is not None:
+            items = [i for i in items if i.status in statuses]
+        return items
+
+    def delete(self, item_id: str) -> bool:
+        cur = self._conn.execute(f"DELETE FROM {self.TABLE} WHERE id=%s", (item_id,))
+        return cur.rowcount > 0
+
+    def close(self) -> None:
+        try:
+            self._conn.close()
+        except Exception:  # pragma: no cover
+            pass
+
+
+def build_postgres_backend(config: Dict[str, Any]) -> Optional["PostgresBackend"]:
+    """Build a Postgres backend from a per-tool `config`, or return None to degrade.
+
+    Honors ONLY `config.dsn_env` — the name of an env var holding the DSN. An inline
+    `dsn` is never read (the manifest is committed; a plaintext credential would be a
+    leak the secret-guard blocks). Returns None when the env var is unset/empty, psycopg
+    is absent, or the database is unreachable — so the caller falls to the SQLite floor.
+    """
+    dsn_env = (config or {}).get("dsn_env")
+    if not dsn_env:
+        return None
+    dsn = os.environ.get(dsn_env)
+    if not dsn:
+        return None
+    try:
+        return PostgresBackend(dsn)
+    except PostgresUnavailable:
+        return None

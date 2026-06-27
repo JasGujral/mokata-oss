@@ -14,7 +14,7 @@ the two-stage review, and the audit trail.
 ```bash
 git clone https://github.com/JasGujral/mokata-oss.git
 cd mokata-oss
-pip install -e ".[schema]"
+pip install -e ".[mcp]"          # the recommended install (CLI + MCP server)
 mkdir demo && cd demo
 mokata init --profile standard --yes
 mokata status
@@ -40,7 +40,7 @@ mokata brainstorm
 
 The brainstorm protocol drives a one-question-at-a-time exploration and **refuses to let a
 spec proceed until you explicitly approve one of 2–3 approaches**. The approved approach is
-persisted to `.mokata/state/approved_approach.json`. Check it:
+persisted to `.mokata/temp_local/state/approved_approach.json`. Check it:
 
 ```bash
 mokata brainstorm --status

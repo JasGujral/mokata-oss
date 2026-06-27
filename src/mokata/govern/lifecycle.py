@@ -8,15 +8,19 @@ moves the state aside so it can be restored instead of destroyed.
 
 from __future__ import annotations
 
+from ..prompt import read_yes_no
+
 import os
 import shutil
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional
+from typing import Callable, List, Optional
 
-from .. import MOKATA_DIR
+from .. import MOKATA_DIR, TEMP_LOCAL_DIRNAME
 
-# State subdirectories removed by a reset that keeps the committed config.
-STATE_SUBDIRS = ("memory", "state", "audit")
+# State subdirectories removed by a reset that keeps the committed config. `temp_local/`
+# holds the runtime split (Stage 24D — memory store, state, audit, caches, index); the
+# bare memory/state/audit names are kept so a legacy pre-24D layout is also cleaned.
+STATE_SUBDIRS = (TEMP_LOCAL_DIRNAME, "memory", "state", "audit")
 
 
 @dataclass
@@ -45,11 +49,7 @@ def plan_reset(root: str, keep_config: bool = False) -> ResetPlan:
 
 
 def _default_confirm(text: str) -> bool:
-    try:
-        return input(text + "\nProceed with removal? [y/N] ").strip().lower() \
-            in ("y", "yes")
-    except EOFError:
-        return False
+    return read_yes_no(text, "Proceed with removal?")
 
 
 def _remove(path: str, backup_dir: Optional[str]) -> None:

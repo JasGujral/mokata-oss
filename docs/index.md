@@ -19,12 +19,16 @@ clone, or one command, `mokata setup claude` (no registration); (3) the **CLI, w
 tool** (Gemini, Codex, scripts, CI). The first two give the LLM the full workflow; the CLI is
 the engine's mechanics and comes last. See [Getting started](quickstart.md).
 
+mokata never calls a model itself — the brain always comes from the harness. For *why* there
+are two ways to run it (and which fits your goal), see
+[How mokata uses an LLM: harness vs CLI](concepts/execution-model.md).
+
 ## What's here
 
 This site follows the [Diátaxis](https://diataxis.fr/) model:
 
 - **[Getting started](quickstart.md)** — install and run your first pipeline in minutes.
-- **Tutorials** — [run a story end-to-end](tutorials/run-a-story.md): a guided, learn-by-doing walkthrough.
+- **Tutorials** — [**differentiators in action**](tutorials/differentiators-in-action.md): a runnable demo of every differentiator (graph, memory, governance — see them work); [run a story end-to-end](tutorials/run-a-story.md): a guided, learn-by-doing walkthrough; and [the Complete Guide](tutorials/mokata-complete-guide.md): every command, gate, and layer (with a downloadable PDF).
 - **How-to guides** — task recipes: [configure a profile](how-to/configure-a-profile.md),
   [set the execution mode](how-to/set-execution-mode.md),
   [use & heal memory](how-to/use-memory.md),

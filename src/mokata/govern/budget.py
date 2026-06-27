@@ -9,7 +9,7 @@ ledger into a report; `budget_statusline` is the live one-liner. Built on F1/F2.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import Any, List
 
 
 @dataclass

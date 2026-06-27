@@ -8,6 +8,8 @@ a durable, human-gated write (overwriting an existing config requires `force`).
 
 from __future__ import annotations
 
+from .prompt import read_yes_no
+
 import json
 import os
 from dataclasses import dataclass, field
@@ -36,6 +38,9 @@ def export_manifest(surface: Any, dest: Optional[str] = None) -> dict:
     """Return the current manifest as shareable data; optionally write it to `dest`."""
     data = surface.manifest.data
     if dest is not None:
+        parent = os.path.dirname(dest)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         with open(dest, "w", encoding="utf-8") as fh:
             fh.write(Manifest.from_dict(data).to_json())
     return data
@@ -47,11 +52,7 @@ def load_shared(path: str) -> dict:
 
 
 def _default_confirm(text: str) -> bool:
-    try:
-        return input(text + "\nApply this shared stack? [y/N] ").strip().lower() \
-            in ("y", "yes")
-    except EOFError:
-        return False
+    return read_yes_no(text, "Apply this shared stack?")
 
 
 def apply_manifest(root: str, data: Any,

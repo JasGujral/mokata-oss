@@ -57,7 +57,8 @@ class TestWholePipelineEndToEnd(unittest.TestCase):
             surface = _init(d, "standard")
             run_playbook(surface, ExecutionChoice(SEQUENTIAL))
 
-            ledger_path = os.path.join(surface.mokata_dir, "audit", "ledger.jsonl")
+            ledger_path = os.path.join(surface.mokata_dir, "temp_local", "audit",
+                                       "ledger.jsonl")
             self.assertTrue(os.path.exists(ledger_path))
 
             # reload from disk (a fresh ledger object) — the steps persisted
