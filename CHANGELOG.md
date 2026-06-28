@@ -10,6 +10,30 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.3] — 2026-06-28
+
+**Wires up governance/token features that previously had no runtime path, plus a second
+secret-guard precision fix. No breaking changes.**
+
+Added / now reachable:
+- **`mokata memory consolidate`** — surface proposal-only memory consolidations (merge/summarize/
+  prune); read-only, applying stays the existing human-gated path.
+- **`mokata skill author`** — author a skill via RED-GREEN-for-docs, written through the
+  human-gated WriteGate.
+- **`mokata playbook --dense`** — output-density compression of sub-agent handbacks
+  (content-preserving, off by default; `settings.governance.output_density`).
+- **Karpathy gates** now run per pipeline phase (toggleable via `settings.governance.karpathy.<id>`,
+  audited), **lethal-trifecta gating** now guards a private outbound `vault push` (human-gated +
+  logged), **rules-learning** now surfaces proposal-only rule promotions from recurring
+  corrections in `mokata rules`, **per-task model routing** is available (opt-in via
+  `settings.execution.model_routing`), and the SessionStart briefing emits a **cache-stable
+  prefix**. All off-by-default / degrade-clean / human-gated where they write.
+
+Fixed:
+- **Secret guard precision** — the entropy layer no longer flags long file paths / URLs / UUIDs
+  in content as secrets (it broke writes of any file containing a path); real-secret detection is
+  unchanged. (Complements the 0.0.2 envelope fix.)
+
 ## [0.0.2] — 2026-06-27
 
 **Critical fix.** The PreToolUse **secret-guard hook** scanned the entire hook payload —

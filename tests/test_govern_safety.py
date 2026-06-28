@@ -38,6 +38,31 @@ class TestSecretProtection(unittest.TestCase):
         findings = scan(text="AKIAIOSFODNN7EXAMPLE", for_send=True)
         self.assertTrue(any(f.layer == "egress" for f in findings))
 
+    # --- entropy-layer precision: paths / URLs / UUIDs in content are NOT secrets
+    #     (regression: a long file path was flagged, blocking legitimate doc/code writes) ---
+
+    def _entropy(self, s):
+        return any(f.layer == "entropy" for f in scan(text=s))
+
+    def test_entropy_ignores_file_paths_and_urls(self):
+        for benign in (
+            "docs/build/02-mokata-build-status.md",
+            "/Users/x/Documents/Development/claude/cowork/mokata/docs/build/02-mokata-build-status.md",
+            "https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.2",
+            "src/mokata/govern/secrets.py",
+            "550e8400-e29b-41d4-a716-446655440000",        # UUID
+            "02-mokata-build-status-final-draft",            # lowercase kebab slug
+        ):
+            self.assertFalse(self._entropy(benign), f"false positive on {benign!r}")
+
+    def test_entropy_still_catches_real_secrets(self):
+        for secret in (
+            "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",              # contiguous hex key
+            "dGhpc2lzYXNlY3JldGtleTEyMzQ1Ng",                 # base64 blob
+            "aB3-xY9z-kQ2m-NpL7-wRtV-bGcH-dEf1",              # mixed-case base64url
+        ):
+            self.assertTrue(self._entropy(secret), f"missed secret {secret!r}")
+
     def test_clean_content_has_no_findings(self):
         self.assertFalse(has_secrets(scan(text="the quick brown fox", path="/a/b.py")))
 

@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from ..brainstorm import PIPELINE_PHASES
-from ..govern import WriteGate, WriteRequest
+from ..govern import KarpathyContext, WriteGate, WriteRequest, run_karpathy_for_phase
 from .completeness import run_completeness_gate
 from .premortem import derive_probes
 from .spec import Spec, TestRef
@@ -64,6 +64,7 @@ class PipelineRun:
     sequence: List[str]
     emitted: Optional[Dict[str, Any]]
     ok: bool
+    karpathy: List[Any] = field(default_factory=list)   # G3 gate fires (when enabled)
 
     def render(self) -> str:
         lines = ["mokata pipeline run:"]
@@ -144,14 +145,31 @@ def _emit(ctx: PhaseContext, store: Any, gate: WriteGate, approve: bool) -> Phas
                        gate_id="emit-approval", gate_passed=out.committed)
 
 
+def _karpathy_context(ctx: PhaseContext) -> KarpathyContext:
+    """Read the Karpathy-gate signals (G3) off the current pipeline state."""
+    return KarpathyContext(
+        has_plan=bool(ctx.handoff),
+        complexity=(len(ctx.analysis.components) if ctx.analysis
+                    else len(ctx.spec.criteria)),
+        touched_files=len(ctx.strawman.components) if ctx.strawman else 0,
+        has_success_criteria=bool(ctx.spec.criteria),
+        verified=bool(ctx.gate_result and getattr(ctx.gate_result, "passed", False)),
+    )
+
+
 def run_pipeline(handoff: Any, spec: Spec, tests: List[TestRef],
                  knowledge: Any = None, ledger: Any = None, store: Any = None,
-                 approve: bool = True) -> PipelineRun:
+                 approve: bool = True, manifest: Any = None) -> PipelineRun:
     """Drive all seven phases end-to-end. Each phase consumes the prior output via the
-    shared context; emit is human-gated and refused unless the completeness gate passed."""
+    shared context; emit is human-gated and refused unless the completeness gate passed.
+
+    G3 (hybrid): when a `manifest` is supplied, the engine fires the Karpathy gates
+    registered at each phase (the rules layer owns the per-gate toggle + audit); without
+    a manifest the gates are skipped entirely (degrade-clean)."""
     ctx = PhaseContext(handoff=handoff, spec=spec, tests=tests, knowledge=knowledge)
     gate = WriteGate(ledger=ledger)
     records: List[PhaseRecord] = []
+    karpathy: List[Any] = []
 
     for phase in PIPELINE_PHASES:
         if phase == "brainstorm":
@@ -172,9 +190,15 @@ def run_pipeline(handoff: Any, spec: Spec, tests: List[TestRef],
             rec = _emit(ctx, store, gate, approve)
         if ledger is not None:
             ledger.record("phase", phase=phase, ok=rec.ok, summary=rec.summary)
+        if manifest is not None:
+            # G3 — fire the (enabled) Karpathy gates for this phase off the post-phase
+            # state; each is audited by the rules layer. Skipped wholesale w/o a manifest.
+            karpathy.extend(run_karpathy_for_phase(
+                phase, _karpathy_context(ctx), manifest=manifest, ledger=ledger))
         records.append(rec)
 
     return PipelineRun(
         phases=records, context=ctx, sequence=[r.name for r in records],
         emitted=ctx.emitted, ok=all(r.ok for r in records) and ctx.emitted is not None,
+        karpathy=karpathy,
     )

@@ -20,7 +20,8 @@ from .karpathy import (
     run_karpathy_gate,
     run_karpathy_pipeline,
 )
-from .learning import RulePromotion, RulesLearner
+from .learning import RulePromotion, RulesLearner, learn_from_ledger
+from .outbound import gate_outbound_publish, looks_private
 from .resume import CHECKPOINT_PREFIX, PipelineCheckpoint
 from .revert import (
     RevertError,
@@ -113,12 +114,12 @@ __all__ = [
     "karpathy_enabled", "run_karpathy_gate", "run_karpathy_for_phase",
     "run_karpathy_pipeline",
     # G5 — rules learning
-    "RulesLearner", "RulePromotion",
+    "RulesLearner", "RulePromotion", "learn_from_ledger",
     # G6 — self-authoring skills
     "SkillDraft", "DocRequirement", "DocCheckResult", "AuthoringError",
     # I4 — lethal-trifecta gate
     "TrifectaState", "OutboundRequest", "OutboundDecision", "TrifectaGuard",
-    "detect_trifecta",
+    "detect_trifecta", "gate_outbound_publish", "looks_private",
     # I5 — reversibility
     "ReversibleStateStore", "UndoRecord", "RevertError", "gated_reversible_write",
     # I6 — resume / recovery

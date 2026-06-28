@@ -6,13 +6,13 @@
   },
   "metadata": {
     "description": "MoStack plugins for Claude Code.",
-    "version": "0.0.2"
+    "version": "0.0.3"
   },
   "plugins": [
     {
       "name": "mokata",
       "source": ".",
-      "version": "0.0.2",
+      "version": "0.0.3",
       "description": "Spec-driven TDD framework: brainstorm -> provable completeness gate -> RED-before-GREEN -> review, with a codebase knowledge graph, self-healing memory, token governance, and human-gated writes. Local-first, Apache-2.0.",
       "license": "Apache-2.0",
       "homepage": "https://jasgujral.github.io/mokata-oss/"

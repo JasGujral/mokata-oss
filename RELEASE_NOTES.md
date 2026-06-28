@@ -1,14 +1,18 @@
-# mokata 0.0.2
+# mokata 0.0.3
 
 **Spec-driven, test-first development for Claude Code — with a real codebase knowledge graph,
 persistent self-healing memory, and human-gated, audited governance.** Clean-room, local-first,
 Apache-2.0 (under MoStack).
 
-> **🔧 Critical fix in 0.0.2.** In 0.0.1 the PreToolUse secret-guard hook scanned Claude Code's
-> whole hook payload — including the high-entropy `session_id`/`transcript_path` — which tripped
-> the secret detector and **blocked every Write/Edit/Bash call**. 0.0.2 scans only the tool's
-> content and target path (never the envelope), so the guard no longer false-blocks while still
-> hard-blocking real secrets. **Anyone on 0.0.1 should upgrade.** No feature changes.
+> **What's new in 0.0.3.** Governance/token features that previously had no runtime path are now
+> wired + reachable: `mokata memory consolidate` (proposal-only), `mokata skill author`
+> (RED-GREEN-for-docs, human-gated), `mokata playbook --dense` (output-density compression);
+> per-phase Karpathy gates, lethal-trifecta gating on a private outbound `vault push`,
+> proposal-only rules-learning in `mokata rules`, opt-in per-task model routing, and a
+> cache-stable briefing prefix — all off-by-default / degrade-clean / human-gated where they
+> write. **Plus a secret-guard precision fix:** the entropy layer no longer flags long file
+> paths / URLs / UUIDs as secrets (real-secret detection unchanged). Upgrading from 0.0.1/0.0.2
+> is recommended.
 
 > **Early & stabilizing.** mokata is early and fast-moving; the pre-1.x history was a stabilizing
 > phase, re-baselined into the 0.0.x line. Expect rapid iteration; pin the version if you need

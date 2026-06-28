@@ -10,6 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Set
 
+# Ledger entry decisions that mark a write/action a human pushed back on.
+_DECLINED = ("declined", "blocked", "rejected", "deny", "denied", "abort", "aborted")
+
 
 @dataclass
 class RulePromotion:
@@ -75,3 +78,35 @@ class RulesLearner:
             led.record("rule_promotion_decision", pattern=promotion.pattern_key,
                        decision="approve", added=True)
         return True
+
+
+def _correction_key(entry: Dict[str, Any]) -> Optional[str]:
+    """The recurring-correction pattern key for one ledger entry, or None if it isn't a
+    correction worth learning from. Keyed on a stable field so repeats coalesce."""
+    kind = entry.get("kind")
+    if kind == "write_gate":
+        if str(entry.get("decision", "")).lower() in _DECLINED:
+            return f"write_gate:{entry.get('target', '')}"
+        return None
+    if kind == "revert":
+        return f"revert:{entry.get('target', '')}"
+    if kind == "spec_conflict":
+        return f"spec_conflict:{entry.get('phase', '')}"
+    return None
+
+
+def learn_from_ledger(ledger: Any, *, threshold: int = 3,
+                      learner: Optional["RulesLearner"] = None) -> List[RulePromotion]:
+    """Replay the audit ledger's recurring CORRECTIONS (declined writes, reverts, spec
+    conflicts) through a `RulesLearner` and return the promotion PROPOSALS — proposal-only,
+    never writing a rule. A pure read over the ledger (the default learner carries no
+    ledger, so nothing is appended); promoting a proposal stays a separate, human-gated
+    step (`apply_promotion`)."""
+    learner = learner or RulesLearner(threshold=threshold)
+    for entry in ledger.entries():
+        key = _correction_key(entry)
+        if key is None:
+            continue
+        learner.observe(key, rule_text=f"Recurring correction '{key}' — consider "
+                                       f"promoting a guardrail rule.")
+    return list(learner.promotions)
