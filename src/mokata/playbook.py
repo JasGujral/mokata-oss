@@ -23,7 +23,13 @@ from typing import Any, Dict, Optional
 from .brainstorm import Approach, BrainstormSession, ground, persist_approach
 from .engine import AcceptanceCriterion, Spec, TestRef, run_completeness_gate
 from .execmode import SEQUENTIAL, ExecutionChoice, Task, run_tasks, two_stage_review
-from .govern import AuditLedger, RedBeforeGreenError, TddGuard
+from .govern import (
+    AuditLedger,
+    OutputDensity,
+    RedBeforeGreenError,
+    TddGuard,
+    density_enabled,
+)
 from .knowledge import KnowledgeLayer
 from .memory import DECISION, MemoryItem, MemoryStore
 
@@ -81,10 +87,28 @@ class PlaybookResult:
         return "\n".join(lines)
 
 
+def _model_router(manifest: Any):
+    """A ModelRouter when settings.execution.model_routing is enabled, else None (E4 is
+    off by default — no routing on a normal run)."""
+    execu = manifest.setting("execution", {}) or {}
+    if not execu.get("model_routing", False):
+        return None
+    from .execmode.routing import ModelRouter
+    return ModelRouter()
+
+
 def run_playbook(surface: Any, exec_choice: Optional[ExecutionChoice] = None,
-                 runner: Any = None) -> PlaybookResult:
+                 runner: Any = None, dense: bool = False) -> PlaybookResult:
     exec_choice = exec_choice or ExecutionChoice(SEQUENTIAL)
     led = AuditLedger.from_mokata_dir(surface.mokata_dir)
+    # F4: output-density on the handback path. Gated by the manifest toggle
+    # (settings.governance.output_density, OFF by default) OR forced on via --dense.
+    # An OutputDensity(False) is a pass-through no-op, so this is degrade-clean.
+    density = OutputDensity(dense or density_enabled(surface.manifest))
+    # E4: per-task model routing on the isolated/parallel path. OFF by default — wired only
+    # when settings.execution.model_routing is set, so a normal run is exactly as before
+    # (no router => no routing, no escalation). Degrade-clean.
+    router = _model_router(surface.manifest)
     checks: Dict[str, Any] = {}
 
     # 1) Brainstorm — explore, approve one approach, persist it (D6/D7).
@@ -130,7 +154,11 @@ def run_playbook(surface: Any, exec_choice: Optional[ExecutionChoice] = None,
 
     # 6) Implement + review through the chosen execution mode (E8); two-stage review (E3).
     tasks = [Task(t.name, f"implement {t.name}", context=STORY["title"]) for t in tests]
-    run = run_tasks(tasks, exec_choice, runner=runner, ledger=led, budget=200_000)
+    run = run_tasks(tasks, exec_choice, runner=runner, ledger=led, budget=200_000,
+                    density=density, router=router)
+    # Informational (a toggle state, not a pass/fail gate): "on" only with --dense or the
+    # manifest toggle; "off" is the frugal default.
+    checks["output_density"] = "on" if density.enabled else "off"
     reviews = [two_stage_review(tk, rs) for tk, rs in zip(tasks, run.results)]
     checks["review_passed"] = bool(reviews) and all(r.passed for r in reviews)
     checks["exec_mode"] = exec_choice.mode

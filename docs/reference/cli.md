@@ -84,10 +84,12 @@ slice. Applies only the run phases' gates; upstream phases are skipped explicitl
 ### `mokata preview [--start <phase>] [--to <phase>]`
 Dry-run: list planned actions, gates, and file touches with **zero side effects**.
 
-### `mokata playbook [--parallel] [--fanout]`
+### `mokata playbook [--parallel] [--fanout] [--dense]`
 Run the full story end-to-end on this repo (brainstorm → completeness gate → tests →
 implement → review). Prints PASS/FAIL per checkpoint; exit non-zero on failure. `--parallel`
 uses subagents (degrades to sequential without a harness); `--fanout` runs concurrently.
+**`--dense`** turns on output-density compression of sub-agent handbacks (whitespace/dupe-only,
+content-preserving) — frugal, OFF by default; also settable via `settings.governance.output_density`.
 
 ### `mokata progress [--lanes] [--run <id>] [--ascii]`
 Read-only run-progress tracker (done/current/pending + `[done/total]`). **`--lanes`** renders
@@ -107,6 +109,12 @@ browser. **Read-only** (never writes durable state / never gates). Respects
 ### `mokata skills [name]`
 List the skill/command catalog (cheap — names + summaries). With a `name`, reveal that
 skill's gate, phase, and full prompt (progressive disclosure).
+
+### `mokata skill author <name> --content-file <f> [--require DOC:MUST-CONTAIN …] [--summary …] [--gate-desc …] [--out …] [--yes]`
+Author a new skill via **RED-GREEN-for-docs**: declare doc requirements (`--require`, RED), the
+`--content-file` content must satisfy them (GREEN), then the rendered command template is written
+through the **universal human-gated WriteGate** (`--yes` approves non-interactively). A RED draft
+(unmet requirements) writes nothing; on approval it lands at `.mokata/skills/<name>.md`.
 
 ### `mokata run <name>`
 Run a skill standalone (no pipeline prerequisite). `name` is one of the 8 skills. Works
@@ -171,14 +179,11 @@ value conflict through the self-healing old→new surface — **never a silent o
 provenance is preserved. (MCP: `memory_export` / `memory_import`, propose-only without
 `confirm`.)
 
-### `mokata memory export [file]` · `mokata memory import <file> [--yes]`
-Share memory across repos. **export** writes a committable artifact (default
-`<path>/.mokata/memory-share.json` — at the `.mokata/` root, *not* `temp_local/`) carrying the
-active items **with provenance**; it's read-only on the source. **import** is a **human-gated**
-merge into local memory: it dedups, gate-adds new items, and routes a same-subject-different-
-value conflict through the self-healing old→new surface — **never a silent overwrite**;
-provenance is preserved. (MCP: `memory_export` / `memory_import`, propose-only without
-`confirm`.)
+### `mokata memory consolidate`
+Surface **proposal-only** consolidations of the memory store — merges of duplicate facts,
+summaries, and prunes — one bounded line each (silent when there's nothing to propose).
+**Read-only: it writes nothing.** Applying a proposal stays the existing human-gated path
+(`apply_consolidation`); this command only shows what *could* be consolidated.
 
 ### `mokata memory migrate --to <backend> [--from <backend>] [--drop-source] [--yes]`
 Port the **live store** between backends (`sqlite` / `obsidian` / `postgres`) via the

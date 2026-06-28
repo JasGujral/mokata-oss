@@ -326,6 +326,22 @@ def cmd_memory(args: argparse.Namespace) -> int:
         return 1 if res.aborted else 0
     if action == "edit":
         return _memory_edit(store, args)
+    if action == "consolidate":
+        # C7 — surface PROPOSAL-ONLY consolidations (merge/summarize/prune). Reads only;
+        # nothing is applied here (applying stays the gated `apply_consolidation` path).
+        if not store.enabled_types:
+            print("memory: disabled for this profile (no memory types enabled).")
+            return 0
+        ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+        proposals = store.propose_consolidations(ledger=ledger)
+        if not proposals:
+            print("memory consolidate: nothing to propose (memory is already consolidated).")
+            return 0
+        print(f"memory consolidate — {len(proposals)} proposal(s) (PROPOSAL-ONLY; nothing "
+              f"changes unless you approve each via the gated apply path):")
+        for p in proposals:
+            print(f"  ({p.kind}) [{p.mtype}] {p.subject}: {p.diff()} — {p.rationale}")
+        return 0
 
     if not store.enabled_types:
         print("memory: disabled for this profile (no memory types enabled).")
@@ -454,6 +470,18 @@ def cmd_vault(args: argparse.Namespace) -> int:
         # Durable write → universal gate (secret-scan + human approval + audit).
         surface = _load_surface(root)
         ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+        # I4 — publishing to the shared vault is an OUTBOUND action. If the artifact
+        # carries private data, the lethal trifecta is live, so gate the publish behind
+        # explicit human approval + audit. Clean content is not gated (degrade-clean;
+        # normal pushes are untouched).
+        from .govern import OutboundRequest, gate_outbound_publish, looks_private
+        if looks_private(plan.content):
+            decision = gate_outbound_publish(
+                OutboundRequest("vault-push", f"vault:{plan.name}", payload=plan.content),
+                private_data=True, ledger=ledger, confirm=_cli_ask, assume_yes=args.yes)
+            if not decision.allowed:
+                print(f"vault push blocked — {decision.reason}", file=sys.stderr)
+                return 1
         gate = WriteGate(ledger=ledger)
         author = args.author or os.environ.get("USER") or ""
         box: Dict[str, Any] = {}
@@ -496,6 +524,77 @@ def cmd_skills(args: argparse.Namespace) -> int:
     print("mokata skills (run `mokata skills <name>` for detail):")
     for name, summary in list_skills():
         print(f"  /{name:10} {summary}")
+    print("\nAuthor your own (G6, RED-GREEN-for-docs; human-gated write):")
+    print("  mokata skill author <name> --summary <s> --require <doc>:<must-contain> "
+          "--content-file <f>")
+    return 0
+
+
+def cmd_skill(args: argparse.Namespace) -> int:
+    if args.action == "author":
+        return _skill_author(args)
+    print(f"error: unknown skill action '{args.action}'", file=sys.stderr)
+    return 2
+
+
+def _skill_author(args: argparse.Namespace) -> int:
+    # G6 — draft a skill test-first (declare doc requirements -> content must satisfy them:
+    # RED before GREEN), then HUMAN-GATE the write of the rendered command template. A RED
+    # draft writes nothing; degrade-clean.
+    from .govern import AuditLedger, SkillDraft, WriteGate, WriteRequest
+    from .skills import Gate, command_markdown
+    draft = SkillDraft(args.name)
+    for spec in (args.require or []):
+        rname, sep, must = spec.partition(":")
+        if not sep or not rname or not must:
+            print(f"error: --require must be name:must-contain (got {spec!r})",
+                  file=sys.stderr)
+            return 2
+        draft.require(rname, must)
+    if not draft.requirements:
+        print("error: declare at least one --require name:must-contain "
+              "(the doc tests, RED-GREEN-for-docs)", file=sys.stderr)
+        return 2
+    if not args.content_file:
+        print("error: --content-file <path> is required (the drafted skill content)",
+              file=sys.stderr)
+        return 2
+    try:
+        with open(args.content_file, encoding="utf-8") as fh:
+            draft.write(fh.read())
+    except OSError as exc:
+        print(f"error: cannot read {args.content_file}: {exc}", file=sys.stderr)
+        return 1
+
+    result = draft.check()
+    if not result.passed:
+        # RED — report the failing doc requirements and write NOTHING.
+        print(f"skill '{args.name}' is RED — doc requirement(s) unmet: "
+              f"{', '.join(result.failures)}")
+        print("Revise the content until every requirement passes (RED -> GREEN), "
+              "then re-run.")
+        return 1
+
+    # GREEN — promote to a Skill and human-gate the write of the rendered command.
+    gate = Gate(f"{args.name}-approval",
+                args.gate_desc or "Human-gated self-authored skill.", "human")
+    skill = draft.to_skill(args.summary or f"mokata · {args.name}", gate)
+    rendered = command_markdown(skill)
+    dest = args.out or os.path.join(args.path, MOKATA_DIR, "skills", f"{args.name}.md")
+    ledger = AuditLedger.from_mokata_dir(os.path.join(args.path, MOKATA_DIR))
+
+    def commit() -> None:
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "w", encoding="utf-8") as fh:
+            fh.write(rendered)
+
+    outcome = WriteGate(ledger=ledger).submit(
+        WriteRequest("config", dest, content=rendered, actor="cli"),
+        commit=commit, assume_yes=args.yes)
+    if not outcome.committed:
+        print(f"skill author: {outcome.reason} — nothing written.")
+        return 1
+    print(f"skill '{args.name}' authored (GREEN) and written to {dest}")
     return 0
 
 
@@ -556,6 +655,16 @@ def cmd_rules(args: argparse.Namespace) -> int:
         for e in errors:
             print(f"  ! {e}")
         return 1
+    # G5 — surface human-gated rule PROPOSALS distilled from recurring ledger corrections
+    # (declined writes, reverts, spec conflicts). Proposal-only — never auto-added; quiet
+    # and bounded when there are none (P11).
+    from .govern import learn_from_ledger
+    ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+    proposals = learn_from_ledger(ledger)
+    if proposals:
+        print("\nRule proposals (recurring corrections — human-gated, not auto-added):")
+        for p in proposals:
+            print(f"  - {p.proposed_rule} [{p.rationale}]")
     return 0
 
 
@@ -687,7 +796,7 @@ def cmd_playbook(args: argparse.Namespace) -> int:
     else:
         choice = ExecutionChoice(SEQUENTIAL)
     print(active_banner("playbook", running=True))
-    result = run_playbook(surface, choice)
+    result = run_playbook(surface, choice, dense=args.dense)
     print(result.render())
     print(active_banner("playbook", running=False))
     return 0 if result.ok else 1
@@ -1066,8 +1175,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="surface memory (read-only); `export`/`import` to share it across repos",
     )
     p_mem.add_argument("action", nargs="?",
-                       choices=("export", "import", "migrate", "edit"), default=None,
-                       help="export/import a share file, migrate the store, or edit an entry")
+                       choices=("export", "import", "migrate", "edit", "consolidate"),
+                       default=None,
+                       help="export/import a share file, migrate the store, edit an entry, "
+                            "or consolidate (propose-only merges/prunes)")
     p_mem.add_argument("file", nargs="?", default=None,
                        help="share file (export/import), or the subject to edit (with `edit`)")
     p_mem.add_argument("--kind", default=None,
@@ -1113,6 +1224,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_skills.add_argument("name", nargs="?", help="reveal detail for one skill")
     p_skills.set_defaults(func=cmd_skills)
+
+    p_skill = sub.add_parser(
+        "skill", parents=[common],
+        help="author a new skill (RED-GREEN-for-docs; human-gated write)",
+    )
+    p_skill.add_argument("action", choices=("author",), help="author a skill")
+    p_skill.add_argument("name", help="skill name (the /<name> command)")
+    p_skill.add_argument("--summary", default=None, help="one-line catalog summary")
+    p_skill.add_argument("--require", action="append", metavar="DOC:MUST-CONTAIN",
+                         help="a doc requirement the content must satisfy (repeatable)")
+    p_skill.add_argument("--content-file", default=None,
+                         help="path to the drafted skill content (markdown)")
+    p_skill.add_argument("--gate-desc", default=None,
+                         help="the human gate's description for the authored skill")
+    p_skill.add_argument("--out", default=None,
+                         help="destination (default: .mokata/skills/<name>.md)")
+    p_skill.add_argument("--yes", action="store_true",
+                         help="approve the human-gated write non-interactively")
+    p_skill.set_defaults(func=cmd_skill)
 
     p_run = sub.add_parser(
         "run", parents=[common],
@@ -1270,6 +1400,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="use parallel subagents (degrades to sequential w/o a harness)")
     p_play.add_argument("--fanout", action="store_true",
                         help="concurrent fan-out (with --parallel)")
+    p_play.add_argument("--dense", action="store_true",
+                        help="F4 output-density: compress sub-agent handbacks (off by "
+                             "default; or set settings.governance.output_density)")
     p_play.set_defaults(func=cmd_playbook)
 
     p_prev = sub.add_parser(

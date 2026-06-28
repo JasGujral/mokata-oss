@@ -8,6 +8,18 @@ The full, versioned changelog lives in the repository's
 > a stabilizing phase and are collapsed into this entry; 0.0.1 is the honest starting point for an
 > early, fast-moving project.
 
+## 0.0.3
+
+**Wires up governance/token features that previously had no runtime path, plus a second
+secret-guard precision fix. No breaking changes.** New/reachable: `mokata memory consolidate`
+(proposal-only), `mokata skill author` (RED-GREEN-for-docs, human-gated), `mokata playbook
+--dense` (output-density compression). Karpathy gates now run per pipeline phase, lethal-trifecta
+gating guards a private outbound `vault push`, rules-learning surfaces proposal-only promotions in
+`mokata rules`, per-task model routing is opt-in, and the briefing emits a cache-stable prefix —
+all off-by-default / degrade-clean / human-gated where they write. **Fixed:** the secret-guard
+entropy layer no longer flags long file paths / URLs / UUIDs as secrets (real-secret detection
+unchanged; complements the 0.0.2 envelope fix).
+
 ## 0.0.2
 
 **Critical fix.** The PreToolUse secret-guard hook scanned the whole hook payload — including

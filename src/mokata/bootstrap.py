@@ -148,10 +148,21 @@ def _always_on_rule_lines(surface: Surface) -> List[str]:
         return []
 
 
+# F6 — the briefing leads with a deterministic, cache-stable prefix (manifest identity +
+# always-on rules + constitution) so a prompt cache hits on it; the live, per-run content
+# (capability resolution, captured rules) follows after this boundary. Keeping the volatile
+# part below the prefix is what lets the cache keep hitting across sessions.
+_LIVE_BOUNDARY = "\n\n=== session (live) ===\n\n"
+
+
 def build_bootstrap(
     surface: Surface, budget: int = BOOTSTRAP_TOKEN_BUDGET
 ) -> BootstrapResult:
-    text = _render(surface)
+    # Local import: govern imports bootstrap.estimate_tokens, so importing it at module
+    # top would be circular. Resolved at call time, after both modules are loaded.
+    from .govern import stable_prefix_for
+    prefix = stable_prefix_for(surface).text()      # F6: byte-stable across runs
+    text = prefix + _LIVE_BOUNDARY + _render(surface)
     tokens = estimate_tokens(text)
 
     if tokens > budget:

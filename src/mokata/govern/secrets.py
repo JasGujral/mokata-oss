@@ -43,6 +43,10 @@ _SENSITIVE_NAMES = (".env", "id_rsa", "id_dsa", "credentials", ".npmrc", ".pgpas
 _SENSITIVE_SUFFIXES = (".pem", ".key", ".p12", ".pfx")
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9+/=_\-]{20,}")
+# Path / URL / filename separators. A matched token is broken on these before the entropy
+# check so a long file path or URL (e.g. "docs/build/02-mokata-build-status.md") is evaluated
+# as its short word-like segments, not as one "high-entropy" blob (the segments don't trip it).
+_SEP_RE = re.compile(r"[/\\.]+")
 
 
 @dataclass
@@ -70,15 +74,32 @@ def _scan_signatures(text: str) -> List[Finding]:
     return out
 
 
+def _is_structured_identifier(tok: str) -> bool:
+    """A lowercase kebab/snake/UUID-style identifier (path segment, slug, filename stem,
+    UUID) — has `-`/`_` separators and no uppercase. Real secrets are either contiguous
+    (hex/base64 runs) or mixed-case random; word-structured lowercase tokens are not secrets,
+    and flagging them (paths, slugs, UUIDs) is the false positive we must avoid. The signature
+    layer still catches credential *assignments*; this only relaxes the heuristic entropy
+    backstop for a clearly-identifier shape."""
+    return ("-" in tok or "_" in tok) and not any(c.isupper() for c in tok)
+
+
 def _scan_entropy(text: str) -> List[Finding]:
     out: List[Finding] = []
     for i, line in enumerate(text.splitlines() or [text], start=1):
         for tok in _TOKEN_RE.findall(line):
-            has_digit = any(c.isdigit() for c in tok)
-            has_alpha = any(c.isalpha() for c in tok)
-            if has_digit and has_alpha and _shannon(tok) >= 3.5:
-                out.append(Finding("entropy", "high-entropy-token",
-                                   f"len={len(tok)} entropy>=3.5", i))
+            for sub in _SEP_RE.split(tok):          # break paths / URLs / filenames
+                if len(sub) < 20:
+                    continue
+                has_digit = any(c.isdigit() for c in sub)
+                has_alpha = any(c.isalpha() for c in sub)
+                if not (has_digit and has_alpha):
+                    continue
+                if _is_structured_identifier(sub):
+                    continue
+                if _shannon(sub) >= 3.5:
+                    out.append(Finding("entropy", "high-entropy-token",
+                                       f"len={len(sub)} entropy>=3.5", i))
     return out
 
 
