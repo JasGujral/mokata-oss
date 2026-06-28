@@ -41,7 +41,7 @@ elsewhere; that's the user's explicit choice, overriding the default location.)
 ```json
 {
   "manifest_version": 1,
-  "mokata": { "version": "0.0.1" },
+  "mokata": { "version": "0.0.2" },
   "profile": "full",
   "layers": {
     "engine":     { "enabled": true },

@@ -26,3 +26,8 @@ docs/tutorials/mokata-complete-guide.pdf
 .mokata/
 # Release script backups (scripts/release-*.sh) — local safety copies, not source.
 release-backup-*/
+
+# Marketing / brand assets — kept local, not shipped with the OSS code or a hotfix.
+# (Publish deliberately as a separate step if/when desired.)
+docs/marketing/
+mokata-ad-features.md

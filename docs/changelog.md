@@ -8,6 +8,14 @@ The full, versioned changelog lives in the repository's
 > a stabilizing phase and are collapsed into this entry; 0.0.1 is the honest starting point for an
 > early, fast-moving project.
 
+## 0.0.2
+
+**Critical fix.** The PreToolUse secret-guard hook scanned the whole hook payload — including
+Claude Code's high-entropy `session_id` and `transcript_path` — which tripped the secret detector
+and **blocked every Write/Edit/Bash call** for installed plugin users. It now scans **only the
+tool's content and target path**, never the envelope metadata. Real-secret detection is unchanged
+(secrets in a command, file content, or a `.env`/`.pem` path still hard-block). No feature changes.
+
 ## 0.0.1
 
 The inaugural public release — clean-room, local-first, Apache-2.0. A spec-driven, test-first
