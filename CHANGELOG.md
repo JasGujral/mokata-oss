@@ -10,6 +10,16 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.2] — 2026-06-27
+
+**Critical fix.** The PreToolUse **secret-guard hook** scanned the entire hook payload —
+including Claude Code's high-entropy `session_id` and `transcript_path` — which tripped the
+secret detector and **blocked every Write/Edit/Bash call** for installed plugin users. The guard
+now parses the PreToolUse envelope and scans **only the tool's content and target path**, never
+the envelope metadata. Real-secret detection is unchanged (secrets in a command, file content, or
+a `.env`/`.pem` path still hard-block); `--text`/`--path` usage and raw-text scanning are
+preserved. Added regression tests for the envelope path. No feature changes.
+
 ## [0.0.1] — 2026-06-27
 
 The inaugural public release — the full feature set, built clean-room, local-first, Apache-2.0.
