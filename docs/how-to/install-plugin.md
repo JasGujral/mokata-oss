@@ -4,12 +4,20 @@ mokata ships as a Claude Code plugin under the **MoStack** marketplace. You can 
 from the public GitHub repo, or straight from a local clone — **both are the same plugin,
 and neither needs the community marketplace registration.**
 
+> ⏳ **Pending directory approval (June 2026):** mokata is awaiting review for the Claude plugin
+> directory, so it is **not yet installable from Claude's in-app "Browse plugins" directory**.
+> Use the `/plugin marketplace add` command below. _(Temporary notice; removed once the listing
+> is live.)_
+
 **From the public repo:**
 
 ```text
-/plugin marketplace add JasGujral/mokata-oss
+/plugin marketplace add https://github.com/JasGujral/mokata-oss.git
 /plugin install mokata@mostack
 ```
+
+> Hitting an SSH `Host key verification failed` error? Your git is rewriting HTTPS→SSH; the
+> `https://…​.git` URL above avoids it (or run `ssh -T git@github.com` once to cache GitHub's key).
 
 **From a local clone** (no registration needed — great for the freshest copy or for testing
 before a release is public):

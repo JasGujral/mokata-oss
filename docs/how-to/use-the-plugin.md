@@ -11,8 +11,12 @@ model itself — see [How mokata uses an LLM](../concepts/execution-model.md).)
 
 ## Install
 
+> ⏳ **Pending directory approval (June 2026):** mokata is awaiting review for the Claude plugin
+> directory — it is **not yet installable from Claude's in-app "Browse plugins" directory** yet.
+> Use the command below. _(Temporary notice; removed once the listing is live.)_
+
 ```text
-/plugin marketplace add JasGujral/mokata-oss
+/plugin marketplace add https://github.com/JasGujral/mokata-oss.git
 /plugin install mokata@mostack
 ```
 

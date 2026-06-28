@@ -28,12 +28,20 @@
 
 ## Install
 
+> ⏳ **Pending directory approval (June 2026):** mokata is awaiting review for the Claude plugin
+> directory, so it is **not yet installable from Claude's in-app "Browse plugins" directory** —
+> install it with the `/plugin marketplace add` command below. _(Temporary notice; removed once
+> the directory listing is live.)_
+
 **1. As a Claude Code plugin (recommended)** — the standard install, from the public marketplace:
 
 ```text
-/plugin marketplace add JasGujral/mokata-oss
+/plugin marketplace add https://github.com/JasGujral/mokata-oss.git
 /plugin install mokata@mostack
 ```
+
+> If you hit an SSH `Host key verification failed` error, your git is rewriting HTTPS→SSH; the
+> `https://…​.git` URL above avoids it (or run `ssh -T git@github.com` once to cache GitHub's key).
 
 **2. In Claude Code without the public marketplace** (no registration needed) — two no-marketplace ways to get the same in-Claude-Code experience:
 
