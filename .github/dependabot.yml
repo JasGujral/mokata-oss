@@ -1,0 +1,14 @@
+# Dependabot — keep GitHub Actions versions patched (supply-chain hygiene).
+# mokata's runtime core is dependency-free, so the only ecosystem to watch is the
+# workflow actions themselves. Weekly is plenty for a small action set.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+      - "github-actions"

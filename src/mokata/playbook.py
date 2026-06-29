@@ -97,6 +97,16 @@ def _model_router(manifest: Any):
     return ModelRouter()
 
 
+def _worktrees(surface: Any, ledger: Any):
+    """A WorktreeManager when settings.execution.worktrees is enabled, else None (Stage 51
+    is OFF by default; degrade-clean to in-place). Isolates parallel/fanout tasks."""
+    execu = surface.manifest.setting("execution", {}) or {}
+    if not execu.get("worktrees", False):
+        return None
+    from .worktree import WorktreeManager
+    return WorktreeManager(surface.root, ledger=ledger)
+
+
 def run_playbook(surface: Any, exec_choice: Optional[ExecutionChoice] = None,
                  runner: Any = None, dense: bool = False) -> PlaybookResult:
     exec_choice = exec_choice or ExecutionChoice(SEQUENTIAL)
@@ -109,6 +119,9 @@ def run_playbook(surface: Any, exec_choice: Optional[ExecutionChoice] = None,
     # when settings.execution.model_routing is set, so a normal run is exactly as before
     # (no router => no routing, no escalation). Degrade-clean.
     router = _model_router(surface.manifest)
+    # Stage 51: throwaway git-worktree isolation for parallel/fanout tasks. OFF by default
+    # (settings.execution.worktrees); degrade-clean to in-place when off / not a git repo.
+    worktrees = _worktrees(surface, led)
     checks: Dict[str, Any] = {}
 
     # 1) Brainstorm — explore, approve one approach, persist it (D6/D7).
@@ -155,7 +168,7 @@ def run_playbook(surface: Any, exec_choice: Optional[ExecutionChoice] = None,
     # 6) Implement + review through the chosen execution mode (E8); two-stage review (E3).
     tasks = [Task(t.name, f"implement {t.name}", context=STORY["title"]) for t in tests]
     run = run_tasks(tasks, exec_choice, runner=runner, ledger=led, budget=200_000,
-                    density=density, router=router)
+                    density=density, router=router, worktrees=worktrees)
     # Informational (a toggle state, not a pass/fail gate): "on" only with --dense or the
     # manifest toggle; "off" is the frugal default.
     checks["output_density"] = "on" if density.enabled else "off"

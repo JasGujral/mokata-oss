@@ -22,13 +22,38 @@ from typing import List, Optional
 
 LAYERS = ("signature", "entropy", "path", "egress")
 
+# Known-credential signatures (Stage 46). Each has a DISTINCTIVE, low-false-positive shape
+# (a fixed prefix or a structural marker) so it hard-blocks regardless of entropy — the
+# named formats never depend on the entropy backstop. Provider-key bodies are matched as
+# CONTIGUOUS runs (no `-`) so a kebab identifier that merely starts with a prefix can't trip.
 _SIGNATURES = [
-    ("aws-access-key", re.compile(r"AKIA[0-9A-Z]{16}")),
-    ("private-key", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----")),
+    # AWS — access key id (long-term AKIA / temporary ASIA). The 40-char secret key has no
+    # distinctive prefix; it's caught by the secret-assignment rule + the entropy backstop.
+    ("aws-access-key", re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}")),
+    # Private keys (PEM) — covers OpenSSH and GCP service-account `private_key` blocks too.
+    ("private-key", re.compile(
+        r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED )?PRIVATE KEY-----")),
+    # GitHub: classic ghp_/gho_/ghs_/ghr_/ghu_ + fine-grained github_pat_.
     ("github-token", re.compile(r"gh[posru]_[A-Za-z0-9]{20,}")),
+    ("github-pat", re.compile(r"github_pat_[0-9A-Za-z_]{20,}")),
+    ("gitlab-token", re.compile(r"glpat-[0-9A-Za-z_\-]{20,}")),
     ("slack-token", re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}")),
+    # GCP API key.
+    ("gcp-api-key", re.compile(r"AIza[0-9A-Za-z_\-]{35}")),
+    # Azure storage account key (in a connection string).
+    ("azure-storage-key", re.compile(r"(?i)AccountKey=[A-Za-z0-9+/]{40,}={0,2}")),
+    # Stripe live/test keys (sk_/pk_/rk_), SendGrid, OpenAI-style sk- keys.
+    ("stripe-key", re.compile(r"[rsp]k_(?:live|test)_[0-9A-Za-z]{10,}")),
+    ("sendgrid-key", re.compile(r"SG\.[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,}")),
+    ("openai-key", re.compile(r"sk-(?:proj-)?[A-Za-z0-9]{20,}")),
+    # JWT (header.payload.signature — both segments begin with the base64 of `{"`).
+    ("jwt", re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}")),
+    # Package-registry tokens.
+    ("npm-token", re.compile(r"npm_[A-Za-z0-9]{36}")),
+    ("pypi-token", re.compile(r"pypi-[A-Za-z0-9_\-]{16,}")),
     ("secret-assignment", re.compile(
-        r"(?i)(?:api[_-]?key|secret|token|password|passwd|access[_-]?key)"
+        r"(?i)(?:api[_-]?key|secret|token|password|passwd|access[_-]?key|"
+        r"client[_-]?secret|auth[_-]?token)"
         r"\s*[:=]\s*['\"][^'\"\s]{8,}['\"]")),
     # Connection string carrying inline credentials (e.g. a Postgres DSN). mokata only
     # ever references a DSN via an env var (config.dsn_env); a plaintext one in a
@@ -47,6 +72,17 @@ _TOKEN_RE = re.compile(r"[A-Za-z0-9+/=_\-]{20,}")
 # check so a long file path or URL (e.g. "docs/build/02-mokata-build-status.md") is evaluated
 # as its short word-like segments, not as one "high-entropy" blob (the segments don't trip it).
 _SEP_RE = re.compile(r"[/\\.]+")
+# Hex alphabet — a pure-hex run is a DIGEST (git SHA, md5, sha256, a UUID's hex), not a
+# credential. Digests are not secrets, so the entropy backstop must not flag them (a 40-hex
+# git SHA blocking legit content was a latent false positive). Credential *assignments* and
+# the known token formats above still catch hex-valued secrets via the signature layer.
+_HEX = frozenset("0123456789" + "abcdef" + "ABCDEF")
+# Subresource-integrity / lockfile hashes (npm `sha512-…`, etc.) — benign base64 digests.
+_INTEGRITY_RE = re.compile(r"^(?:sha1|sha256|sha384|sha512|md5)-", re.IGNORECASE)
+
+
+def _is_pure_hex(s: str) -> bool:
+    return all(c in _HEX for c in s)
 
 
 @dataclass
@@ -85,9 +121,15 @@ def _is_structured_identifier(tok: str) -> bool:
 
 
 def _scan_entropy(text: str) -> List[Finding]:
+    """Backstop for a CONTIGUOUS, rich-alphabet, high-entropy run (a generated-looking
+    key/token with no path separators). Everything that legitimately looks high-entropy but
+    isn't a credential is exempted up front: path/URL segments, kebab/snake/UUID
+    identifiers, pure-hex digests (git SHAs, md5/sha256 hex), and SRI/lockfile hashes."""
     out: List[Finding] = []
     for i, line in enumerate(text.splitlines() or [text], start=1):
         for tok in _TOKEN_RE.findall(line):
+            if _INTEGRITY_RE.match(tok):            # npm/SRI lockfile hash (sha512-…)
+                continue
             for sub in _SEP_RE.split(tok):          # break paths / URLs / filenames
                 if len(sub) < 20:
                     continue
@@ -95,7 +137,9 @@ def _scan_entropy(text: str) -> List[Finding]:
                 has_alpha = any(c.isalpha() for c in sub)
                 if not (has_digit and has_alpha):
                     continue
-                if _is_structured_identifier(sub):
+                if _is_structured_identifier(sub):  # kebab/snake/lowercase-UUID
+                    continue
+                if _is_pure_hex(sub):               # git SHA / md5 / sha256 hex digest
                     continue
                 if _shannon(sub) >= 3.5:
                     out.append(Finding("entropy", "high-entropy-token",

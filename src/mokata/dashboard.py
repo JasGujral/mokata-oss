@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import html
 import os
+from dataclasses import dataclass
 from typing import Any, List, Optional
 
 from . import TEMP_LOCAL_DIRNAME
@@ -26,6 +27,7 @@ from .progress import (
 )
 
 DASHBOARD_FILENAME = "watch.html"
+GOVERN_DASHBOARD_FILENAME = "govern.html"
 # Frugal/bounded (P11): the feed shows only the last N ledger rows, never the full history.
 LEDGER_FEED_TAIL = 50
 
@@ -190,6 +192,174 @@ def write_dashboard(surface: Any, *, run_id: Optional[str] = None,
     out_dir = dashboard_dir(surface.mokata_dir)
     os.makedirs(out_dir, exist_ok=True)
     path = dashboard_path(surface.mokata_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(html_text)
+    return path
+
+
+# =========================================================================== Stage 48 —
+# memory & governance dashboard: a consolidated, clickable, SELF-CONTAINED view of the
+# GOVERNED STATE. Same engine + constraints as `mokata watch` (inline CSS, no network/
+# server/assets, under gitignored temp_local/, read-only). Derived + bounded (P11); it
+# surfaces the gated CLI manage path for each item — it never writes from the dashboard.
+
+def governance_path(mokata_dir: str) -> str:
+    return os.path.join(dashboard_dir(mokata_dir), GOVERN_DASHBOARD_FILENAME)
+
+
+@dataclass
+class GovernanceView:
+    version: str
+    profile: str
+    rule_lines: List[str]            # the always-on tier (rules + guardrails), budget-capped
+    rule_count: int
+    rule_cap: Optional[int]
+    rule_within_cap: bool
+    groups: "Any"                    # OrderedDict[kind -> [MemoryItem]] (brain.group_by_kind)
+    memory_enabled: bool
+    reads: int
+    writes: int
+    ratio: float
+    proposals: List[Any]             # pending self-healing HealingProposals
+
+
+def build_governance_view(surface: Any) -> GovernanceView:
+    """Derive the governed-state view from the manifest + rules + memory store. Read-only;
+    degrade-clean (no/empty memory ⇒ empty groups, never raises)."""
+    from collections import OrderedDict
+
+    from .govern.rules import always_on_rules_for
+    rs = always_on_rules_for(surface)
+    m = surface.manifest
+    enabled, reads, writes, ratio = False, 0, 0, 0.0
+    groups: Any = OrderedDict()
+    proposals: List[Any] = []
+    try:
+        from .memory import MemoryStore
+        from .memory.brain import group_by_kind
+        store = MemoryStore.from_surface(surface)
+        enabled = bool(store.enabled_types)
+        # Snapshot the adoption stats FIRST, then read via the NON-counting path: the
+        # dashboard is read-only and must mutate no durable state (no _bump_read, so two
+        # `mokata govern` runs are byte-identical). peek_active + detect_issues never bump.
+        reads, writes, ratio = store.stats.reads, store.stats.writes, store.stats.ratio
+        if enabled:
+            groups = group_by_kind(store.peek_active())
+            proposals = store.detect_issues()
+    except Exception:
+        pass
+    return GovernanceView(
+        version=m.mokata_version, profile=m.profile,
+        rule_lines=list(rs.lines), rule_count=rs.line_count, rule_cap=rs.cap,
+        rule_within_cap=rs.within_cap, groups=groups, memory_enabled=enabled,
+        reads=reads, writes=writes, ratio=ratio, proposals=proposals)
+
+
+_GOVERN_CSS = """
+.rule{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#cbd5e1;
+white-space:pre-wrap;background:#1e293b;border-radius:8px;padding:10px 12px;margin:0}
+.budget{color:#94a3b8;font-size:12px;margin:4px 0 0}
+.item{background:#1e293b;border-radius:8px;margin:6px 0;padding:8px 12px}
+.item .subj{color:#bfdbfe;font-weight:600}.item .val{color:#e2e8f0}
+.item .prov{color:#64748b;font-size:11px}
+.manage{display:inline-block;margin-top:4px;font-family:ui-monospace,Menlo,monospace;
+font-size:11px;color:#fbbf24;background:#0b1220;border-radius:5px;padding:2px 6px}
+.kindcount{color:#94a3b8;font-weight:400}
+.prop{background:#3f1d1d;border-radius:8px;margin:6px 0;padding:8px 12px;color:#fecaca}
+.ratio{font-size:13px;color:#cbd5e1}
+"""
+
+
+def _manage_cmd(subject: str) -> str:
+    return f'mokata memory edit "{_esc(subject)}"'
+
+
+def _item_card(item: Any) -> str:
+    prov = getattr(item, "provenance", {}) or {}
+    who = prov.get("author") or "unknown"
+    src = prov.get("source") or "unknown"
+    return (
+        "<div class='item'>"
+        f"<div><span class='subj'>{_esc(item.subject)}</span> "
+        f"<span class='muted'>[{_esc(item.effective_kind)}]</span></div>"
+        f"<div class='val'>{_esc(item.value)}</div>"
+        f"<div class='prov'>by {_esc(who)} · source {_esc(src)}</div>"
+        f"<code class='manage'>{_manage_cmd(item.subject)}</code>"
+        "</div>")
+
+
+def render_governance_html(view: GovernanceView) -> str:
+    """Render the self-contained governance dashboard. Pure + deterministic (no wall-clock)."""
+    head = ("<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            f"<title>mokata · govern</title><style>{_CSS}{_GOVERN_CSS}</style></head><body>")
+    foot = ("<p class='foot'>mokata · local read-only governance view — derived from your "
+            "rules + memory store. The manage commands are SURFACED, not run; every write "
+            "stays human-gated. Never writes durable state, never leaves this machine.</p>"
+            "</div></body></html>")
+
+    cap = "no cap" if view.rule_cap is None else f"{view.rule_count} / {view.rule_cap} lines"
+    flag = "within budget" if view.rule_within_cap else "OVER the line budget"
+    rules_block = (
+        "<h2>rules &amp; guardrails (always-on)</h2>"
+        f"<pre class='rule'>{_esc(chr(10).join(view.rule_lines))}</pre>"
+        f"<p class='budget'>line budget: {_esc(cap)} — {_esc(flag)}. "
+        "honoured on every run.</p>")
+
+    # memory by kind
+    if not view.memory_enabled:
+        mem_block = ("<h2>memory by kind</h2><div class='empty'>memory is disabled for this "
+                     "profile — nothing is captured or honoured.</div>")
+    elif not view.groups:
+        mem_block = ("<h2>memory by kind</h2><div class='empty'>no captured memory yet — run "
+                     "<code>/mokata:onboard</code> to capture rules, guardrails, conventions, "
+                     "and domain context.</div>")
+    else:
+        sections = []
+        for kind, items in view.groups.items():
+            cards = "".join(_item_card(i) for i in items)
+            sections.append(
+                f"<details open><summary><b>{_esc(kind)}</b> "
+                f"<span class='kindcount'>({len(items)})</span></summary>{cards}</details>")
+        mem_block = "<h2>memory by kind</h2>" + "".join(sections)
+
+    ratio_block = (
+        "<h2>adoption</h2>"
+        f"<p class='ratio'>memory read/write ratio: <b>{view.ratio:.2f}</b> "
+        f"({view.reads} reads / {view.writes} writes)</p>")
+
+    if view.proposals:
+        props = []
+        for p in view.proposals:
+            props.append(
+                "<div class='prop'>"
+                f"<b>{_esc(getattr(p, 'kind', ''))}</b> · {_esc(p.subject)}: "
+                f"{_esc(p.diff())}<br><span class='prov'>{_esc(getattr(p, 'rationale', ''))}"
+                "</span><br>"
+                f"<code class='manage'>resolve: {_manage_cmd(p.subject)}</code></div>")
+        prop_block = (f"<h2>pending self-healing proposals ({len(view.proposals)})</h2>"
+                      "<p class='muted'>nothing changes until you act — each is human-gated."
+                      "</p>" + "".join(props))
+    else:
+        prop_block = ("<h2>pending self-healing proposals</h2>"
+                      "<div class='empty'>no pending proposals — memory is consistent.</div>")
+
+    body = (
+        f"<div class='wrap'><h1>mokata · govern</h1>"
+        f"<div class='header'>mokata {_esc(view.version)} · profile: {_esc(view.profile)} "
+        "— the state mokata will honour</div>"
+        f"{rules_block}{mem_block}{ratio_block}{prop_block}")
+    return head + body + foot
+
+
+def write_governance_dashboard(surface: Any) -> str:
+    """Build + write the self-contained governance HTML under temp_local/. READ-ONLY on the
+    store (derives the view; performs no write); returns the written file path."""
+    view = build_governance_view(surface)
+    html_text = render_governance_html(view)
+    out_dir = dashboard_dir(surface.mokata_dir)
+    os.makedirs(out_dir, exist_ok=True)
+    path = governance_path(surface.mokata_dir)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(html_text)
     return path

@@ -30,8 +30,18 @@ from typing import Callable, Dict, List, Optional
 from .init import init_repo
 from . import MOKATA_DIR, MANIFEST_FILENAME
 
-HARNESSES = ("claude",)
+HARNESSES = ("claude", "codex")
 SCOPES = ("project", "user")
+
+# Per-harness wiring map (Stage 52a). Each harness is a different mapping of the same
+# portable artifacts; the capabilities a harness lacks are NOT wired (degrade clearly).
+#   dir            — the harness config dir under the scope base
+#   commands_subdir — where prompt/slash commands live
+#   mcp_auto       — auto-register the bundled MCP server in a config file (claude only;
+#                    codex's MCP config is TOML and is left to a documented manual step)
+_HARNESS_DIR = {"claude": ".claude", "codex": ".codex"}
+_HARNESS_COMMANDS_SUBDIR = {"claude": "commands", "codex": "prompts"}
+_HARNESS_MCP_AUTO = {"claude": True, "codex": False}
 
 # The MCP server key + command (mirrors .claude-plugin/plugin.json's mcpServers entry).
 MCP_SERVER_NAME = "mokata"
@@ -68,30 +78,32 @@ class SetupError(Exception):
 
 @dataclass
 class Targets:
-    """Resolved filesystem targets for a (scope) choice."""
-    base: Path                 # the directory .claude/ lives under
-    commands_dir: Path         # <base>/.claude/commands
-    settings_path: Path        # <base>/.claude/settings.json
-    mcp_path: Path             # project: <root>/.mcp.json ; user: ~/.claude.json
+    """Resolved filesystem targets for a (scope, harness) choice."""
+    base: Path                       # the directory the harness config dir lives under
+    commands_dir: Path               # <base>/<hdir>/<commands subdir>
+    settings_path: Optional[Path]    # <base>/.claude/settings.json (None when no hook wiring)
+    mcp_path: Optional[Path]         # MCP config (None when the harness isn't auto-wired)
 
 
-def resolve_targets(scope: str, root: str, home: Optional[str] = None) -> Targets:
+def resolve_targets(scope: str, root: str, home: Optional[str] = None,
+                    harness: str = "claude") -> Targets:
     if scope not in SCOPES:
         raise ValueError(f"unknown scope '{scope}'; choose one of {SCOPES}")
-    if scope == "project":
-        base = Path(root).resolve()
-        mcp_path = base / ".mcp.json"
-    else:  # user
-        base = Path(home).resolve() if home else Path.home()
+    if harness not in HARNESSES:
+        raise ValueError(f"unknown harness '{harness}'; choose one of {HARNESSES}")
+    base = Path(root).resolve() if scope == "project" else (
+        Path(home).resolve() if home else Path.home())
+    hdir = _HARNESS_DIR[harness]
+    commands_dir = base / hdir / _HARNESS_COMMANDS_SUBDIR[harness]
+    settings_path = base / hdir / "settings.json"
+    if _HARNESS_MCP_AUTO[harness]:
         # Claude Code's user-scoped MCP config lives in ~/.claude.json (where
         # `claude mcp add --scope user` writes); project scope uses .mcp.json.
-        mcp_path = base / ".claude.json"
-    return Targets(
-        base=base,
-        commands_dir=base / ".claude" / "commands",
-        settings_path=base / ".claude" / "settings.json",
-        mcp_path=mcp_path,
-    )
+        mcp_path = (base / ".mcp.json") if scope == "project" else (base / ".claude.json")
+    else:
+        mcp_path = None              # harness auto-MCP not supported — manual step
+    return Targets(base=base, commands_dir=commands_dir,
+                   settings_path=settings_path, mcp_path=mcp_path)
 
 
 # --------------------------------------------------------------------------------------
@@ -109,6 +121,8 @@ class SetupPlan:
     command_files: List[str]          # basenames to copy
     needs_init: bool                  # .mokata/manifest.json absent
     hook_commands: Dict[str, str] = field(default_factory=dict)  # event -> command string
+    mcp_auto: bool = True             # auto-register the MCP server (claude); else manual
+    unsupported: List[str] = field(default_factory=list)  # capabilities this harness lacks
 
 
 def _hook_command(script: str) -> str:
@@ -141,10 +155,19 @@ def plan_setup(
     if not command_files:
         raise SetupError(f"no command templates (*.md) found in {tdir}.")
 
+    # Capability-aware (Stage 52a): wire only what this harness actually supports; a
+    # capability it lacks is NOT wired (the engine degrades clearly when it needs it).
+    from .harness import HARNESS_CAPABILITIES, get_harness
+    h = get_harness(harness)
+    unsupported = [c for c in HARNESS_CAPABILITIES if not h.supports(c)]
+    hooks_ok = h.supports("hooks")
+    with_hooks = with_hooks and hooks_ok
+    mcp_auto = _HARNESS_MCP_AUTO[harness]
+
     if with_hooks and not _hooks_dir().is_dir():
         raise SetupError(f"hook scripts not found at {_hooks_dir()}.")
 
-    targets = resolve_targets(scope, root, home)
+    targets = resolve_targets(scope, root, home, harness)
     manifest_path = Path(root).resolve() / MOKATA_DIR / MANIFEST_FILENAME
     needs_init = not manifest_path.exists()
 
@@ -165,6 +188,8 @@ def plan_setup(
         command_files=command_files,
         needs_init=needs_init,
         hook_commands=hook_commands,
+        mcp_auto=mcp_auto,
+        unsupported=unsupported,
     )
 
 
@@ -180,16 +205,26 @@ def render_setup_plan(plan: SetupPlan) -> str:
         lines.append(f"mokata already initialized in {plan.root} "
                      f"(leaving the existing profile/config untouched).")
     lines.append("")
-    lines.append(f"Will copy {len(plan.command_files)} slash commands -> {t.commands_dir}:")
+    lines.append(f"Will copy {len(plan.command_files)} commands -> {t.commands_dir}:")
     lines.append("  /" + "  /".join(Path(f).stem for f in plan.command_files))
     lines.append("")
-    lines.append(f"Will register the MCP server '{MCP_SERVER_NAME}' (command: "
-                 f"{MCP_COMMAND}) in:")
-    lines.append(f"  {t.mcp_path}")
+    if plan.mcp_auto:
+        lines.append(f"Will register the MCP server '{MCP_SERVER_NAME}' (command: "
+                     f"{MCP_COMMAND}) in:")
+        lines.append(f"  {t.mcp_path}")
+    else:
+        lines.append(f"MCP: register the '{MCP_SERVER_NAME}' server (command: {MCP_COMMAND}) "
+                     f"with {plan.harness} yourself — automated MCP wiring is claude-only.")
     if plan.with_hooks:
         lines.append("")
         lines.append("Will wire hooks (SessionStart briefing + secret-guard) in:")
         lines.append(f"  {t.settings_path}")
+    if plan.unsupported:
+        # Degrade CLEARLY — never pretend a capability exists or silently skip it.
+        lines.append("")
+        lines.append(f"NOTE — '{plan.harness}' lacks: {', '.join(plan.unsupported)}. "
+                     f"Those are NOT wired (e.g. no PreToolUse secret-guard / no native "
+                     f"subagent fan-out); the engine degrades clearly when it needs them.")
     lines.append("")
     lines.append("Existing JSON files are merged, not overwritten. Reverse anytime with "
                  f"`mokata unsetup {plan.harness} --scope {plan.scope}`.")
@@ -285,12 +320,13 @@ def apply_setup(plan: SetupPlan, *, assume_yes: bool = False, force: bool = Fals
         shutil.copyfile(_templates_dir() / name, dst)
         touched.append(str(dst))
 
-    # 3. MCP server
-    _merge_mcp(t.mcp_path)
-    touched.append(str(t.mcp_path))
+    # 3. MCP server (auto-registered only where the harness supports it; else manual)
+    if plan.mcp_auto and t.mcp_path is not None:
+        _merge_mcp(t.mcp_path)
+        touched.append(str(t.mcp_path))
 
-    # 4. hooks
-    if plan.with_hooks:
+    # 4. hooks (only if the harness supports them — capability-gated in plan_setup)
+    if plan.with_hooks and t.settings_path is not None:
         _merge_hooks(t.settings_path, plan.hook_commands)
         touched.append(str(t.settings_path))
 
@@ -337,7 +373,11 @@ def setup_harness(
 
     emit("")
     emit(f"mokata is wired into {harness} ({scope} scope).")
-    emit("Restart Claude Code, then try /brainstorm or ask it to \"run mokata doctor\".")
+    if harness == "claude":
+        emit("Restart Claude Code, then try /brainstorm or ask it to \"run mokata doctor\".")
+    else:
+        emit(f"Point {harness} at the copied commands in {plan.targets.commands_dir}; "
+             f"register the '{MCP_SERVER_NAME}' MCP server ({MCP_COMMAND}) per its docs.")
     return SetupResult(touched=touched, plan=plan, message="ok")
 
 
@@ -357,7 +397,7 @@ def plan_unsetup(harness: str, root: str = ".", scope: str = "project",
                  home: Optional[str] = None) -> UnsetupPlan:
     if harness not in HARNESSES:
         raise ValueError(f"unknown harness '{harness}'; choose one of {HARNESSES}")
-    targets = resolve_targets(scope, root, home)
+    targets = resolve_targets(scope, root, home, harness)
     tdir = _templates_dir()
     command_files = sorted(p.name for p in tdir.glob("*.md")) if tdir.is_dir() else []
     return UnsetupPlan(harness=harness, scope=scope, targets=targets,
@@ -368,9 +408,11 @@ def render_unsetup_plan(plan: UnsetupPlan) -> str:
     t = plan.targets
     lines = [f"mokata unsetup {plan.harness} — scope '{plan.scope}'", ""]
     lines.append("Will remove:")
-    lines.append(f"  copied slash commands in {t.commands_dir}")
-    lines.append(f"  the '{MCP_SERVER_NAME}' MCP server entry in {t.mcp_path}")
-    lines.append(f"  mokata hook entries in {t.settings_path}")
+    lines.append(f"  copied commands in {t.commands_dir}")
+    if t.mcp_path is not None:
+        lines.append(f"  the '{MCP_SERVER_NAME}' MCP server entry in {t.mcp_path}")
+    if t.settings_path is not None:
+        lines.append(f"  mokata hook entries in {t.settings_path}")
     lines.append("")
     lines.append("Your .mokata/ config is left untouched (use `mokata reset` for that).")
     return "\n".join(lines)
@@ -388,7 +430,7 @@ def apply_unsetup(plan: UnsetupPlan) -> List[str]:
             removed.append(str(p))
 
     # 2. MCP server entry
-    if t.mcp_path.exists():
+    if t.mcp_path is not None and t.mcp_path.exists():
         data = _load_json(t.mcp_path)
         servers = data.get("mcpServers")
         if isinstance(servers, dict) and MCP_SERVER_NAME in servers:
@@ -401,7 +443,7 @@ def apply_unsetup(plan: UnsetupPlan) -> List[str]:
             removed.append(str(t.mcp_path))
 
     # 3. hook entries
-    if t.settings_path.exists():
+    if t.settings_path is not None and t.settings_path.exists():
         data = _load_json(t.settings_path)
         hooks = data.get("hooks")
         if isinstance(hooks, dict):

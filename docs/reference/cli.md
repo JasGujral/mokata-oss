@@ -36,8 +36,12 @@ asking you to approve the real write.
 One command to use mokata in a harness **without the plugin**: runs `init` (if needed),
 copies the slash commands into `.claude/commands/`, registers the `mokata-mcp` server in
 `.mcp.json`, and wires the SessionStart + secret-guard hooks into `.claude/settings.json`.
-**Human-gated**; JSON files are merged (never clobbered); idempotent. Currently supports the
-`claude` harness. See [Use mokata without the plugin](../how-to/use-without-plugin.md).
+**Human-gated**; JSON files are merged (never clobbered); idempotent. Setup is
+**capability-aware**: `claude` wires all three pieces; a portable harness like `codex` (which
+lacks PreToolUse hooks + native subagents) wires only what it supports — its commands go to
+`.codex/prompts/` and the missing capabilities are stated clearly, never silently skipped (MCP
+registration for codex is a documented manual step). See
+[Use mokata without the plugin](../how-to/use-without-plugin.md).
 
 | Flag | Meaning |
 |---|---|
@@ -95,6 +99,21 @@ content-preserving) — frugal, OFF by default; also settable via `settings.gove
 Read-only run-progress tracker (done/current/pending + `[done/total]`). **`--lanes`** renders
 the **parallel-aware** multi-lane view (one line per concurrent subagent lane; sequential → one
 lane), derived from run-state + the execmode ledger records. Degrades cleanly with no active run.
+
+### `mokata sessions`
+List past + active runs — for each: the run id, `[done/total]` phases, the last passed gate,
+and the resume point (or `complete ✓`), with the active run flagged. **Read-only**, bounded
+(one row per recorded run), friendly empty state when there are none.
+
+### `mokata resume [<id>]`
+Preview where a run continues: the phase to resume at (the first phase after the last passed
+gate) and the gate that **still applies** there — mokata never auto-runs the pipeline, so the
+gates hold on resume. Defaults to the active/most-recent run; pass an `<id>` to target one.
+**Read-only**; degrades cleanly with no run (and reports a complete run as nothing to resume).
+Continue the run with `mokata enter <phase>` (or the `/mokata:<phase>` command).
+A **mid-brainstorm** checkpoint is also resumable: an in-progress `/mokata:brainstorm` (answered
+questions + the approaches being weighed) can be left at any step and resumed later — the
+HARD-GATE still holds (no spec until an approach is explicitly approved).
 
 ### `mokata watch [--once] [--open] [--run <id>]`
 Write a **self-contained** clickable local HTML dashboard of the active run (parallel lanes +
@@ -221,8 +240,13 @@ read-only; `vault_push` propose-only without `confirm`.)
 ### `mokata rules`
 Show the 4-tier rules and their line budgets; exit non-zero if a tier is over cap.
 
-### `mokata audit`
-Show the append-only audit ledger (every gate decision, tool call, write, …).
+### `mokata audit [--why] [--tail N]`
+Show the append-only audit ledger (every gate decision, tool call, write, …). Add `--why`
+for a readable **what + decision + why** timeline of the run — for each entry, what happened,
+the decision, and the reason (the deviation's why, the spec-conflict's affected spec/decision,
+the self-healing rationale, the gate's message). It is **read-only** and **bounded** (`--tail`,
+default 50 — a tail, not the whole history); local-first, and degrades clean when there's no
+ledger yet.
 
 ### `mokata budget`
 Show token savings — a live budget readout (aggregated from the ledger) + a statusline.
@@ -236,9 +260,14 @@ Report capability coverage + unmet gaps + role overlaps (resolved by precedence)
 Discover MCP servers (from `.mokata/mcp.json`) and map them to roles; degrades cleanly
 ("no servers discovered") when none are present.
 
-### `mokata harness`
-Show the harness boundary's capabilities (commands / hooks / context_injection /
-subagents) for the reference Claude Code harness.
+### `mokata harness [<name>]`
+List the available harnesses and their **capability matrix** (commands / hooks /
+context_injection / subagents) — the reference `claude` (all four), the portable `codex`
+(commands + context_injection), and `cowork` (commands + context_injection + subagents, but
+**not** the PreToolUse hook — see [Use mokata in Cowork](../how-to/use-mokata-in-cowork.md)).
+Add a `<name>` to show just one. The engine is
+harness-agnostic: a harness lacking a capability degrades with a clear message, never a crash
+and never a silent no-op of a gate.
 
 ### `mokata export [file]`
 Export the current manifest as a shareable stack file (default `<path>/mokata-stack.json`).
@@ -252,6 +281,12 @@ invalid manifest with exit 1; `--force` overwrites an existing config).
 ### `mokata doctor`
 Diagnose the manifest/config: missing providers, broken adapters, role conflicts, bad
 trust levels, oversized rule tiers. Exit non-zero if any error.
+
+### `mokata baseline [--cmd <test command>]`
+Report whether the test suite is **green or red at baseline** before you start — so any new
+failure is attributable to your change. Read-only; uses `settings.baseline.test_command` (or
+`--cmd`). Degrades clean if no test command is known (mokata never guesses a framework);
+exit non-zero only on a red baseline.
 
 ### `mokata config get <key>` · `mokata config set <key> <value> [--yes]`
 Read or update a dotted manifest key — e.g. backend paths (`tools.sqlite.config.path`,
@@ -267,3 +302,29 @@ deleting (reversible). Human-gated unless `--yes`.
 
 ### `mokata exec [--parallel] [--isolation] [--fanout]`
 Show/select the execution mode for a run (default: sequential gated flow).
+
+### `mokata version [--check]`
+Print the installed version, the project profile, the install method (pip / plugin /
+source), and the Python version. **Offline by default** — local-first, zero network. Add
+`--check` to **opt in** to a single outbound call that compares your version to the latest
+published release; it is accounted in the audit ledger and **degrades clean** offline (a
+blocked/failed check just says it couldn't check — it never errors the command).
+
+### `mokata upgrade [--check] [--method auto|pip|plugin] [--yes]`
+Upgrade mokata. For a **pip** install it proposes `pip install -U mokata` and runs it only
+after you confirm (**human-gated**; `--yes` approves non-interactively — it never auto-runs
+without one or the other). For a **plugin** install it prints the Claude Code steps
+(`/plugin marketplace update mostack` + reinstall) since the CLI can't upgrade the plugin
+itself. `--check` only reports whether a newer release exists (same opt-in outbound check as
+`version --check`). `--method` overrides install-method detection. Inside Claude Code, the
+`/mokata:version` command surfaces the same.
+
+### `mokata govern [--open]`
+Write a **self-contained, clickable local HTML view of the governed state** — the same
+read-only engine/constraints as `mokata watch` (inline CSS, no network/server/assets, under
+gitignored `.mokata/temp_local/`). It shows: the **always-on rules & guardrails** (with
+line-budget usage), **memory grouped by kind** (rule / guardrail / best-practice / context /
+reference / decision — each item with subject, value, and provenance), the **read/write
+ratio**, and any **pending self-healing proposals**. Each item surfaces its gated manage
+command (`mokata memory edit "<subject>"`) — the dashboard never performs a write. `--open`
+opens it in your browser. Degrades clean (no memory → a friendly empty state).

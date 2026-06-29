@@ -69,19 +69,26 @@ def _run_sequential(tasks: List[Task], ledger: Any,
     return results
 
 
-def _invoke_runner(runner, task: Task, model_name: str):
-    """Run the task, passing the routed model name to a model-AWARE runner (E4) while
-    staying compatible with the existing model-agnostic `run(task)` contract."""
+def _invoke_runner(runner, task: Task, model_name: Optional[str] = None,
+                   cwd: Optional[str] = None):
+    """Run the task, passing the routed model name (E4) and/or an isolated worktree `cwd`
+    (Stage 51) to a runner that ACCEPTS them — while staying compatible with the existing
+    model-agnostic `run(task)` contract (a runner that takes neither is called as today)."""
     import inspect
+    kwargs = {}
     try:
-        if "model" in inspect.signature(runner.run).parameters:
-            return runner.run(task, model=model_name)
+        params = inspect.signature(runner.run).parameters
+        if model_name is not None and "model" in params:
+            kwargs["model"] = model_name
+        if cwd is not None and "cwd" in params:
+            kwargs["cwd"] = cwd
     except (TypeError, ValueError):
-        pass
-    return runner.run(task)
+        kwargs = {}
+    return runner.run(task, **kwargs)
 
 
-def _run_routed(task: Task, iso_task: Task, runner, router, ledger) -> TaskResult:
+def _run_routed(task: Task, iso_task: Task, runner, router, ledger,
+                cwd: Optional[str] = None) -> TaskResult:
     """E4 — route the task to the cheapest capable model and escalate on BLOCKED. mokata
     governs the routing PLAN (which model, when to escalate) + audits it; the harness/runner
     executes. Returns the resolved attempt's TaskResult."""
@@ -89,7 +96,7 @@ def _run_routed(task: Task, iso_task: Task, runner, router, ledger) -> TaskResul
     box: dict = {}
 
     def attempt(model) -> str:
-        res = _invoke_runner(runner, iso_task, model.name)
+        res = _invoke_runner(runner, iso_task, model.name, cwd=cwd)
         box["res"] = res
         return BLOCKED if not res.ok else (res.summary or "ok")
 
@@ -101,15 +108,28 @@ def _run_routed(task: Task, iso_task: Task, runner, router, ledger) -> TaskResul
     return box["res"]
 
 
+def _execute(task: Task, iso_task: Task, runner, router, ledger,
+             cwd: Optional[str] = None) -> TaskResult:
+    """Run the (isolated) task once, optionally in a worktree `cwd`, optionally routed."""
+    if router is None:
+        return _invoke_runner(runner, iso_task, cwd=cwd)   # today's path (+ cwd if accepted)
+    return _run_routed(task, iso_task, runner, router, ledger, cwd=cwd)   # E4 (opt-in)
+
+
 def _run_one(task: Task, choice: ExecutionChoice, runner, reviewer, ledger,
              tracker: TokenTracker, handback_cap=None, density=None,
-             router=None) -> TaskResult:
+             router=None, worktrees=None) -> TaskResult:
     # Fresh-subagent isolation (E2): the subagent receives ONLY this task's context.
     iso_task = Task(id=task.id, description=task.description, context=task.context)
-    if router is None:
-        res = runner.run(iso_task)                   # today's path — no routing
+    if worktrees is not None:
+        # Stage 51 — run this isolated unit in a throwaway git worktree so concurrent tasks
+        # can't stomp the main tree. Degrade-clean: wt is None (not a git repo / disabled) ⇒
+        # run in-place exactly as today. Auto-cleaned on exit (no orphan).
+        with worktrees.isolated(f"task-{task.id}") as wt:
+            res = _execute(task, iso_task, runner, router, ledger,
+                           cwd=(wt.path if wt is not None else None))
     else:
-        res = _run_routed(task, iso_task, runner, router, ledger)   # E4 (opt-in)
+        res = _execute(task, iso_task, runner, router, ledger)
     res.isolated = True
     if handback_cap is not None:
         # F3: the parent receives a capped SUMMARY, not the sub-agent's raw context.
@@ -132,24 +152,25 @@ def _run_one(task: Task, choice: ExecutionChoice, runner, reviewer, ledger,
 
 def _run_parallel(tasks: List[Task], choice: ExecutionChoice, runner, reviewer,
                   ledger, tracker: TokenTracker, handback_cap=None,
-                  density=None, router=None) -> List[TaskResult]:
+                  density=None, router=None, worktrees=None) -> List[TaskResult]:
     if choice.fanout and len(tasks) > 1:
         out: dict = {}
         with ThreadPoolExecutor(max_workers=len(tasks)) as ex:
             futures = {ex.submit(_run_one, t, choice, runner, reviewer, ledger,
-                                 tracker, handback_cap, density, router): t
+                                 tracker, handback_cap, density, router, worktrees): t
                        for t in tasks}
             for fut in as_completed(futures):
                 out[futures[fut].id] = fut.result()   # re-raises SubagentUnavailable
         return [out[t.id] for t in tasks]
     return [_run_one(t, choice, runner, reviewer, ledger, tracker, handback_cap,
-                     density, router) for t in tasks]
+                     density, router, worktrees) for t in tasks]
 
 
 def run_tasks(tasks: List[Task], choice: ExecutionChoice, runner=None,
               reviewer=None, ledger: Any = None, tracker: Optional[TokenTracker] = None,
               budget: Optional[int] = None, handback_cap: Optional[int] = None,
-              density: Any = None, router: Any = None) -> RunResult:
+              density: Any = None, router: Any = None,
+              worktrees: Any = None) -> RunResult:
     tracker = tracker or TokenTracker()
     estimate = estimate_run(tasks, choice, tracker)
     if ledger is not None:
@@ -162,7 +183,7 @@ def run_tasks(tasks: List[Task], choice: ExecutionChoice, runner=None,
     if choice.is_parallel and runner is not None:
         try:
             results = _run_parallel(tasks, choice, runner, reviewer, ledger, tracker,
-                                    handback_cap, density, router)
+                                    handback_cap, density, router, worktrees)
         except SubagentUnavailable as exc:
             degraded = True
             tracker.entries.clear()                  # discard partial accounting

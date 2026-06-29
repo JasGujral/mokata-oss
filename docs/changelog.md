@@ -8,6 +8,19 @@ The full, versioned changelog lives in the repository's
 > a stabilizing phase and are collapsed into this entry; 0.0.1 is the honest starting point for an
 > early, fast-moving project.
 
+## 0.0.4
+
+**Governance transparency, session lifecycle, portability & hardening. No breaking changes.**
+New: `mokata govern` (clickable governed-state dashboard — rules/guardrails + memory-by-kind +
+proposals, read-only); `mokata audit --why` (what + decision + why timeline; decisions now record
+rationale); `mokata sessions`/`resume` + a mid-brainstorm checkpoint (leave a brainstorm and come
+back, HARD-GATE intact); opt-in git-worktree isolation for parallel/paused work; cross-harness
+portability (claude/codex/cowork adapters + `mokata harness` matrix, degrade-clear); `mokata
+version`/`upgrade` (offline info, opt-in update check, human-gated upgrade) + `/mokata:version`.
+Hardened: secret guard broadened to 18 formats + fuzz invariant (paths/URLs/UUIDs/hex digests no
+longer false-positive); Dependabot/CodeQL/Scorecard/CODEOWNERS; live-DB CI (Postgres+pgvector+
+Neo4j containers); README + CLI-reference audit with a docs-vs-code drift guard.
+
 ## 0.0.3
 
 **Wires up governance/token features that previously had no runtime path, plus a second

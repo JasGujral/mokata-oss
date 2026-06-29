@@ -38,3 +38,52 @@ jobs:
           tmp="$(mktemp -d)"
           mokata init --profile standard --yes --path "$tmp"
           mokata playbook --path "$tmp"
+
+  live-db:
+    name: live-db (postgres + pgvector + neo4j)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16    # ships the pgvector extension
+        env:
+          POSTGRES_USER: mokata
+          POSTGRES_PASSWORD: mokata
+          POSTGRES_DB: mokata_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mokata -d mokata_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      neo4j:
+        image: neo4j:5
+        env:
+          NEO4J_AUTH: neo4j/mokatatest1
+        ports:
+          - 7687:7687
+        options: >-
+          --health-cmd "cypher-shell -u neo4j -p mokatatest1 'RETURN 1'"
+          --health-interval 10s --health-timeout 10s --health-retries 20
+          --health-start-period 30s
+    env:
+      MOKATA_LIVE_DB: "1"
+      # Password-less DSN + PGPASSWORD (libpq) — no inline credential in the workflow.
+      MOKATA_PG_DSN: "postgresql://mokata@localhost:5432/mokata_test"
+      PGPASSWORD: "mokata"
+      NEO4J_URI: "bolt://localhost:7687"
+      NEO4J_USERNAME: "neo4j"
+      NEO4J_PASSWORD: mokatatest1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Live extras (optional drivers) installed ONLY here — the core stays dependency-free.
+      # pgvector needs no Python client: the backend uses psycopg + the DB extension.
+      - name: Install mokata + live DB extras
+        run: pip install -e ".[postgres,neo4j]"
+      - name: Run the live-DB integration legs (required)
+        run: >-
+          python -m unittest discover -s tests/integration -t tests/integration
+          -p "test_live_db.py" -v

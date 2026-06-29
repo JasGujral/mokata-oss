@@ -287,10 +287,16 @@ class MemoryStore:
         return self.remember(item, confirm=confirm, assume_yes=assume_yes)
 
     # --- reads (honor toggles, count) ---------------------------------------
-    def all_active(self, mtype: Optional[str] = None) -> List[MemoryItem]:
-        self._bump_read()
+    def peek_active(self, mtype: Optional[str] = None) -> List[MemoryItem]:
+        """Active items WITHOUT counting a read — for read-only surfaces (the governance
+        dashboard, always-on rule injection) that must mutate NO durable state. Same data as
+        `all_active`; only the instrumentation differs."""
         items = self.backend.all(mtype=mtype, statuses=(ACTIVE,))
         return [i for i in items if i.mtype in self.enabled_types]
+
+    def all_active(self, mtype: Optional[str] = None) -> List[MemoryItem]:
+        self._bump_read()
+        return self.peek_active(mtype=mtype)
 
     def recall(self, subject: str, mtype: Optional[str] = None) -> List[MemoryItem]:
         return [i for i in self.all_active(mtype=mtype) if i.subject == subject]
@@ -327,6 +333,14 @@ class MemoryStore:
     def render_proposal(self, p: HealingProposal) -> str:
         return render_proposal(p)
 
+    def _record_healing(self, p: HealingProposal, decision: str, changed: bool) -> None:
+        """Audit the self-healing resolution with the WHY (Stage 49): the old→new diff and
+        the proposal's rationale, plus the decision + whether anything changed."""
+        if self._ledger is not None:
+            self._ledger.record("healing_decision", op=p.kind, subject=p.subject,
+                                 decision=decision, changed=changed,
+                                 diff=p.diff(), reason=p.rationale)
+
     def apply_proposal(self, p: HealingProposal, decision: str,
                        edited: Optional[MemoryItem] = None,
                        confirm: Optional[Callable[[str], bool]] = None,
@@ -336,6 +350,7 @@ class MemoryStore:
         if decision not in ("approve", "edit", "reject", "defer"):
             raise MemoryError(f"unknown decision '{decision}'")
         if decision in ("reject", "defer"):
+            self._record_healing(p, decision, changed=False)
             return HealingResult(changed=False, message=f"{decision}: no change")
 
         # Build the commit closure + the (untrusted) content to secret-scan + the result.
@@ -380,6 +395,7 @@ class MemoryStore:
         # ledger — so healing never bypasses the universal gate either.
         outcome = self._gated_commit(p.subject, content, _commit, self.render_proposal(p),
                                      confirm=confirm, assume_yes=assume_yes)
+        self._record_healing(p, decision, changed=outcome.committed)
         if outcome.committed:
             return HealingResult(changed=True, item=result_item, message=result_msg)
         if outcome.findings:
@@ -421,8 +437,8 @@ class MemoryStore:
 
         def _log(changed: bool, outcome: str) -> None:
             if led is not None:
-                led.record("consolidation_decision", op=p.kind, decision=outcome,
-                           changed=changed)
+                led.record("consolidation_decision", op=p.kind, subject=p.subject,
+                           decision=outcome, changed=changed, reason=p.rationale)
 
         if decision in ("reject", "defer"):
             _log(False, decision)

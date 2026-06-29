@@ -1,0 +1,38 @@
+name: Scorecard supply-chain security
+
+# OpenSSF Scorecard — supply-chain posture (branch protection, pinned deps, token
+# permissions, …). Runs on the PUBLIC mirror only (it publishes results to the public
+# OpenSSF API); on the private dev mirror the job is skipped, so this is a no-op there.
+
+on:
+  branch_protection_rule:
+  schedule:
+    - cron: "32 4 * * 2"   # 04:32 UTC every Tuesday
+  push:
+    branches: [master]
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    if: github.repository == 'JasGujral/mokata-oss'
+    permissions:
+      security-events: write   # upload the SARIF results
+      id-token: write          # publish results to the OpenSSF API
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Run analysis
+        uses: ossf/scorecard-action@v2.4.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - name: Upload SARIF to code-scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
