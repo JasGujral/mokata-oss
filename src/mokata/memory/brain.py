@@ -64,8 +64,12 @@ def _line(item: MemoryItem) -> str:
 
 
 def always_on_items(store: Any) -> List[MemoryItem]:
-    """Active rule/guardrail items (the always-on set), regardless of relevance."""
-    return [i for i in store.all_active() if i.effective_kind in ALWAYS_ON_KINDS]
+    """Active rule/guardrail items (the always-on set), regardless of relevance. Surfacing
+    the always-on rules (briefing, rules view, governance dashboard) is automatic injection,
+    not a user recall — read via the NON-counting path so it never moves the read counter or
+    mutates durable stats. (peek_active falls back to all_active for any non-store double.)"""
+    peek = getattr(store, "peek_active", None) or store.all_active
+    return [i for i in peek() if i.effective_kind in ALWAYS_ON_KINDS]
 
 
 def always_on_lines(store: Any, max_lines: int,

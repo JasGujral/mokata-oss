@@ -8,7 +8,7 @@
 [![Python](https://img.shields.io/badge/python-3.9%E2%80%933.12-blue.svg)](pyproject.toml)
 [![Docs](https://img.shields.io/badge/docs-mkdocs-blue.svg)](https://jasgujral.github.io/mokata-oss/)
 [![local-first](https://img.shields.io/badge/local--first-no%20telemetry-success.svg)](docs/concepts/governance.md)
-[![Docs](https://img.shields.io/badge/docs-pages-blue.svg)](https://jasgujral.github.io/mokata-oss/)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/JasGujral/mokata-oss/badge)](https://securityscorecards.dev/viewer/?uri=github.com/JasGujral/mokata-oss)
 
 📖 **Full documentation:** **<https://jasgujral.github.io/mokata-oss/>** — quickstart, tutorials, concepts, and the complete CLI + plugin reference.
 
@@ -99,8 +99,10 @@ Full walkthrough: [`docs/quickstart.md`](docs/quickstart.md) · full hands-on gu
 - **7-phase pipeline + gates** — brainstorm → analysis → strawman → pre-mortem → probes → completeness gate → emit; enter at any phase, each phase's gates still apply.
 - **Knowledge layer** — structural queries (callers/callees/imports/blast-radius) via an adopted graph, grep floor when absent; staleness is surfaced, never served silently.
 - **Memory** — persistent / decision / episodic, on by default, self-healing by *surfacing* old→new diffs for your approval (never a silent rewrite).
-- **Execution modes** — sequential gated flow (default, lowest-cost) or parallel subagents (fresh-context isolation + two-stage review, concurrent fan-out), chosen per run, degrade-safe.
-- **Governance & audit** — 4-tier rules, Karpathy gates, 4-layer secret protection, reversible writes, resume-from-last-gate, full audit ledger.
+- **Execution modes** — sequential gated flow (default, lowest-cost) or parallel subagents (fresh-context isolation + two-stage review, concurrent fan-out), chosen per run, degrade-safe; optional git-worktree isolation keeps concurrent/paused work off the main tree.
+- **Governance & audit** — 4-tier rules, Karpathy gates, 4-layer secret protection, per-task model routing, reversible writes, full audit ledger. See the governed state at a glance with `mokata govern` (a read-only dashboard) and the *what-it-did-and-why* timeline with `mokata audit --why`.
+- **Session lifecycle** — list runs (`mokata sessions`), resume from the last passed gate (`mokata resume`), and pause/resume a mid-brainstorm — the HARD-GATE still holds.
+- **Cross-harness** — the engine runs behind a thin boundary (`mokata harness` shows the capability matrix): the reference Claude Code, a portable `codex`/shell adapter, and Cowork — each degrades clearly where it lacks a capability, never pretending.
 
 ## Profiles & configuration
 
@@ -114,7 +116,17 @@ Per-layer / per-tool toggles, per-adapter trust dials, and profiles are all in t
 
 ## Commands & skills
 
-`mokata skills` lists the catalog. Highlights: `/mokata:brainstorm`, `/mokata:spec`, `/mokata:test`, `/mokata:develop`, `/mokata:review`, `/mokata:debug`, `/mokata:optimize`, `/mokata:bug`. CLI also exposes `init`, `setup`, `unsetup`, `bootstrap`, `status`, `query`, `memory`, `enter`, `rules`, `audit`, `budget`, `index`, `lat-check`, `coverage`, `mcp`, `doctor`, `reset`, `suggest`, `chain`, `export`, `import`, `harness`, `playbook`.
+`mokata skills` lists the catalog. Skills (each a `/mokata:*` command): `brainstorm`, `refine`, `onboard`, `spec`, `test`, `develop`, `review`, `debug`, `optimize`, `bug`, `ship`, `version`.
+
+The CLI exposes 40+ subcommands, including:
+
+- **Pipeline & skills** — `brainstorm`, `spec`, `test`, `develop`, `review`, `ship`, `refine`, `debug`, `bug`, `optimize`, `onboard`, plus `run`/`enter`/`exec`/`playbook` (`--dense`)/`preview`/`chain` and `skill author`.
+- **Inspection (read-only)** — `status`, `query`, `rules`, `audit` (`--why`), `budget`, `coverage`, `lat-check`, `index`, `doctor`, `baseline`, `harness`, `progress` (`--lanes`), `watch`, `govern`, `sessions`.
+- **Memory & knowledge** — `memory` (`edit`/`export`/`import`/`migrate`/`consolidate`), `govern`.
+- **Session lifecycle** — `sessions`, `resume`, `enter`.
+- **Setup, config & distribution** — `init`, `setup`/`unsetup`, `config`, `bootstrap`, `validate`, `route`, `detect`, `reset`, `suggest`, `mcp`, `export`/`import`, `vault`, `version`/`upgrade`.
+
+Full list with flags: the [CLI reference](https://jasgujral.github.io/mokata-oss/reference/cli/).
 
 ## Contributing · Security · License
 

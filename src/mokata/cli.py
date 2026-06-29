@@ -51,6 +51,7 @@ from .config import ConfigError, Surface
 from . import config_cmd
 from .detect import Detector
 from .init import init_repo, plan_init, render_plan
+from .prompt import read_yes_no
 from . import MOKATA_DIR
 from .adapters import (
     AdapterContract,
@@ -222,6 +223,16 @@ def cmd_brainstorm(args: argparse.Namespace) -> int:
                 f"brainstorm: approved approach '{handoff.approach.name}' for topic "
                 f"'{handoff.topic}' (by {handoff.approver} at {handoff.approved_at})."
             )
+        return 0
+    # Stage 50 — resume a saved IN-PROGRESS brainstorm if one exists (left mid-stream). The
+    # HARD-GATE still holds: this only re-hydrates exploration; nothing is approved by resuming.
+    from .brainstorm import restore_brainstorm_progress
+    wip = restore_brainstorm_progress(surface.state)
+    if wip is not None and not wip.approved:
+        print(f"mokata brainstorm: resuming in-progress brainstorm for '{wip.topic}' — "
+              f"{len(wip.answered_questions)} answered question(s), {len(wip.approaches)} "
+              f"approach(es) on the table; NOT yet approved (the spec stays HARD-GATED).\n")
+        sys.stdout.write(wip.design_writeup())
         return 0
     # Standalone launch (L1): print the clean-room protocol + live grounding. No prior
     # pipeline phase is required to run this.
@@ -686,6 +697,17 @@ def cmd_audit(args: argparse.Namespace) -> int:
     if not entries:
         print("audit ledger: empty.")
         return 0
+    if getattr(args, "why", False):
+        # Stage 49 — the read-only "what you did and WHY" timeline: bounded (a tail) and
+        # derived from the ledger; surfaces each entry's decision + rationale. Writes nothing.
+        from .govern.ledger import WHY_TIMELINE_TAIL, why_timeline
+        tail = args.tail if getattr(args, "tail", None) else WHY_TIMELINE_TAIL
+        lines = why_timeline(entries, tail=tail)
+        shown = min(len(lines), len(entries))
+        print(f"audit — why timeline (last {shown} of {len(entries)}):")
+        for line in lines:
+            print(f"  {line}")
+        return 0
     print(f"audit ledger — {len(entries)} entr{'y' if len(entries) == 1 else 'ies'}:")
     for e in entries:
         extra = " ".join(f"{k}={v}" for k, v in e.items()
@@ -746,6 +768,50 @@ def cmd_progress(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sessions(args: argparse.Namespace) -> int:
+    # Stage 50 — list past + active runs (read-only; bounded; friendly empty state).
+    from .progress import list_sessions
+    surface = _load_surface(args.path)
+    sessions = list_sessions(surface.state)
+    if not sessions:
+        print("mokata sessions: no runs on record yet. Start one with /mokata:brainstorm "
+              "or /mokata:refine.")
+        return 0
+    print(f"mokata sessions — {len(sessions)} run(s):")
+    for s in sessions:
+        status = ("complete ✓" if s.complete
+                  else f"resume at '{s.resume_phase}'") + (" · active" if s.active else "")
+        last = f" · last passed '{s.last_passed}'" if s.last_passed else " · not started"
+        print(f"  {s.run_id:24} [{s.done}/{s.total}]{last} — {status}")
+    return 0
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    # Stage 50 — PREVIEW where a run resumes (read-only): the phase + the gate that still
+    # applies. mokata never auto-runs the pipeline; the gates hold on resume.
+    from .pipeline import PHASE_GATES
+    from .progress import build_progress, find_active_run
+    surface = _load_surface(args.path)
+    rid = args.id or find_active_run(surface.state)
+    if rid is None:
+        print("mokata resume: no run to resume. Start one with /mokata:brainstorm.")
+        return 0
+    progress = build_progress(surface.state, run_id=rid)
+    if not progress.active:
+        print(f"mokata resume: {progress.message}")
+        return 0
+    if progress.complete:
+        print(f"mokata resume: run '{rid}' is complete — nothing to resume.")
+        return 0
+    phase = progress.current
+    gate = PHASE_GATES.get(phase)
+    print(f"mokata resume: run '{rid}' — [{progress.done}/{progress.total}] phases passed.")
+    print(f"  resume at: '{phase}'"
+          + (f" (the '{gate.id}' gate still applies — {gate.kind})" if gate else ""))
+    print(f"  continue with: mokata enter {phase}   (or /mokata:{phase}) — gates hold.")
+    return 0
+
+
 def cmd_watch(args: argparse.Namespace) -> int:
     # Stage 40 — write the self-contained local HTML dashboard (read-only; never mutates a run).
     # Respects settings.ux.progress: `terminal` writes NO HTML (the terminal tier is the floor).
@@ -773,6 +839,22 @@ def cmd_watch(args: argparse.Namespace) -> int:
             write_dashboard(surface, run_id=args.run, refresh_secs=refresh)
     except KeyboardInterrupt:
         print("\nmokata watch: stopped.")
+    return 0
+
+
+def cmd_govern(args: argparse.Namespace) -> int:
+    # Stage 48 — write the self-contained governance dashboard (rules + memory-by-kind +
+    # read/write ratio + pending proposals). Read-only; never mutates state. The manage
+    # commands are surfaced, not run.
+    from .dashboard import write_governance_dashboard
+    surface = _load_surface(args.path)
+    path = write_governance_dashboard(surface)
+    print(f"mokata govern: wrote {path}")
+    print("  read-only view of the governed state — manage via the surfaced "
+          "`mokata memory edit` commands (human-gated).")
+    if args.open:
+        import webbrowser
+        webbrowser.open("file://" + os.path.abspath(path))
     return 0
 
 
@@ -863,13 +945,24 @@ def cmd_import(args: argparse.Namespace) -> int:
 
 
 def cmd_harness(args: argparse.Namespace) -> int:
-    # J2 — report the harness boundary's reference harness + capabilities.
-    h = claude_code_harness()
-    print(f"harness: {h.name}")
-    for cap in HARNESS_CAPABILITIES:
-        print(f"  [{'yes' if h.supports(cap) else 'no '}] {cap}")
-    print("(the engine is harness-agnostic; a harness lacking a capability degrades "
-          "with a clear message, never a crash.)")
+    # J2 / Stage 52a — list the available harnesses + their capability matrix. The engine is
+    # harness-agnostic; a harness lacking a capability degrades clearly (never a silent no-op).
+    from .harness import available_harnesses, get_harness
+    names = available_harnesses()
+    if getattr(args, "name", None):
+        if args.name not in names:
+            print(f"error: unknown harness '{args.name}'; available: {', '.join(names)}",
+                  file=sys.stderr)
+            return 1
+        names = [args.name]
+    for nm in names:
+        h = get_harness(nm)
+        label = "reference" if nm == "claude" else "portable"
+        print(f"harness '{nm}' ({h.name}) — {label}:")
+        for cap in HARNESS_CAPABILITIES:
+            print(f"  [{'yes' if h.supports(cap) else 'no '}] {cap}")
+    print("(the engine is harness-agnostic; a harness lacking a capability degrades with a "
+          "clear message, never a crash, and never a silent no-op of a gate.)")
     return 0
 
 
@@ -1023,6 +1116,72 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _profile_for(path: str) -> str:
+    """The project profile if initialized, else a friendly placeholder. Never raises."""
+    try:
+        if Surface.is_initialized(path):
+            return Surface.load(path).manifest.profile
+    except Exception:
+        pass
+    return "(not initialized)"
+
+
+def _ledger_for(path: str):
+    """The audit ledger if the repo is initialized, else None (degrade-clean)."""
+    try:
+        if Surface.is_initialized(path):
+            return AuditLedger.from_mokata_dir(Surface.load(path).mokata_dir)
+    except Exception:
+        pass
+    return None
+
+
+def cmd_version(args: argparse.Namespace) -> int:
+    # 45b — OFFLINE by default: version + profile + install method + Python, zero egress.
+    from .version import check_for_update, version_info
+    print(version_info(profile=_profile_for(args.path)).render())
+    if args.check:
+        # OPT-IN outbound check — netguard-accounted (logged) + degrade-clean offline.
+        print(check_for_update(ledger=_ledger_for(args.path)).render())
+    return 0
+
+
+def cmd_upgrade(args: argparse.Namespace) -> int:
+    # 45b — easy, HUMAN-GATED upgrade. `--check` just reports; never auto-runs an install.
+    from .version import (
+        check_for_update,
+        detect_install_method,
+        run_pip_upgrade,
+        upgrade_steps,
+    )
+    if args.check:
+        print(check_for_update(ledger=_ledger_for(args.path)).render())
+        return 0
+    method = args.method if args.method != "auto" else detect_install_method()
+    print(f"mokata {__version__} · install: {method}")
+    if method == "plugin":
+        # The CLI can't upgrade the plugin itself — print the steps to run in Claude Code.
+        print("This is a plugin install — upgrade it from Claude Code:")
+        for step in upgrade_steps("plugin"):
+            print(f"  {step}")
+        return 0
+    steps = upgrade_steps(method)
+    if method == "source":
+        print("Source checkout — upgrade with:")
+        for step in steps:
+            print(f"  {step}")
+        return 0
+    # pip install — propose `pip install -U mokata`, HUMAN-GATED (never auto-runs).
+    print(f"To upgrade: {steps[0]}")
+    if not args.yes:
+        if not read_yes_no(f"run `{steps[0]}` now?", "Run the upgrade?"):
+            print("not run — run it yourself when ready (or re-run with --yes).")
+            return 0
+    run_pip_upgrade()
+    print(f"ran: {steps[0]}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mokata",
@@ -1124,6 +1283,28 @@ def build_parser() -> argparse.ArgumentParser:
         "status", parents=[common], help="one-line stack summary"
     )
     p_stat.set_defaults(func=cmd_status)
+
+    p_ver = sub.add_parser(
+        "version", parents=[common],
+        help="show version + profile + install method + Python (offline by default)",
+    )
+    p_ver.add_argument("--check", action="store_true",
+                       help="opt-in: check for a newer release (outbound; degrades clean "
+                            "offline)")
+    p_ver.set_defaults(func=cmd_version)
+
+    p_up = sub.add_parser(
+        "upgrade", parents=[common],
+        help="upgrade mokata (human-gated pip install, or print the plugin-update steps)",
+    )
+    p_up.add_argument("--check", action="store_true",
+                      help="opt-in: just check for a newer release, don't upgrade")
+    p_up.add_argument("--method", choices=("auto", "pip", "plugin"), default="auto",
+                      help="override install-method detection (default: auto)")
+    p_up.add_argument("--yes", action="store_true",
+                      help="approve the pip upgrade non-interactively (never auto-runs "
+                           "without this or a confirm)")
+    p_up.set_defaults(func=cmd_upgrade)
 
     p_brain = sub.add_parser(
         "brainstorm", parents=[common],
@@ -1269,6 +1450,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_audit = sub.add_parser(
         "audit", parents=[common], help="show the append-only audit ledger",
     )
+    p_audit.add_argument("--why", action="store_true",
+                         help="a readable what+decision+why timeline (bounded; read-only)")
+    p_audit.add_argument("--tail", type=int, default=None,
+                         help="how many recent entries the --why timeline shows (default 50)")
     p_audit.set_defaults(func=cmd_audit)
 
     p_budget = sub.add_parser(
@@ -1347,8 +1532,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_harn = sub.add_parser(
         "harness", parents=[common],
-        help="show the harness boundary's capabilities (J2)",
+        help="list harnesses + their capability matrix (J2); add a name for one",
     )
+    p_harn.add_argument("name", nargs="?", default=None,
+                        help="show one harness (default: all)")
     p_harn.set_defaults(func=cmd_harness)
 
     p_reset = sub.add_parser(
@@ -1427,6 +1614,20 @@ def build_parser() -> argparse.ArgumentParser:
                         help="parallel-aware multi-lane view (one line per concurrent lane)")
     p_prog.set_defaults(func=cmd_progress)
 
+    p_sessions = sub.add_parser(
+        "sessions", parents=[common],
+        help="list past + active runs (id, phases passed, resume point); read-only",
+    )
+    p_sessions.set_defaults(func=cmd_sessions)
+
+    p_resume = sub.add_parser(
+        "resume", parents=[common],
+        help="preview where a run resumes — the phase + the gate that still applies",
+    )
+    p_resume.add_argument("id", nargs="?", default=None,
+                          help="run id to resume (default: the active/most-recent run)")
+    p_resume.set_defaults(func=cmd_resume)
+
     p_watch = sub.add_parser(
         "watch", parents=[common],
         help="write a self-contained local HTML dashboard of the active run (read-only)",
@@ -1438,6 +1639,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_watch.add_argument("--run", default=None,
                          help="a specific run id (default: the active/most-recent run)")
     p_watch.set_defaults(func=cmd_watch)
+
+    p_govern = sub.add_parser(
+        "govern", parents=[common],
+        help="write a clickable local HTML view of the governed state "
+             "(rules + memory by kind + pending proposals; read-only)",
+    )
+    p_govern.add_argument("--open", action="store_true",
+                          help="open the dashboard in your browser after writing it")
+    p_govern.set_defaults(func=cmd_govern)
 
     return parser
 

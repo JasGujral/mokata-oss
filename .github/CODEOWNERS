@@ -1,0 +1,10 @@
+# Code owners — pairs with branch protection's "require review from Code Owners".
+# A review request goes to the owner automatically on any PR touching these paths.
+
+# Default owner for the whole repository.
+*                       @JasGujral
+
+# Security-sensitive surfaces — keep an explicit owner even if the default changes.
+/hooks/                 @JasGujral
+/src/mokata/govern/     @JasGujral
+/.github/               @JasGujral

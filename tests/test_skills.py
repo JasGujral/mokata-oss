@@ -21,7 +21,7 @@ class TestRegistry(unittest.TestCase):
         self.assertEqual(
             names,
             {"brainstorm", "refine", "onboard", "spec", "test", "develop", "review",
-             "debug", "optimize", "bug", "ship"},
+             "debug", "optimize", "bug", "ship", "version"},
         )
         self.assertEqual(tuple(skill_names()), SKILL_NAMES)
 

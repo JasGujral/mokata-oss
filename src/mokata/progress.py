@@ -128,6 +128,33 @@ def build_progress(store: Any, run_id: Optional[str] = None,
                        next_phase=next_phase, complete=complete)
 
 
+# --------------------------------------------------------------- session lifecycle (Stage 50)
+@dataclass
+class SessionInfo:
+    run_id: str
+    done: int
+    total: int
+    last_passed: Optional[str]      # the most recent passed gate (None for a fresh run)
+    resume_phase: Optional[str]     # the phase resume would continue at (None = complete)
+    complete: bool
+    active: bool                    # the run `resume` (with no id) would pick
+
+
+def list_sessions(store: Any, phases=PIPELINE_PHASES) -> List["SessionInfo"]:
+    """All runs with a checkpoint — id, progress, last-passed/resume phase, complete/active.
+    Read-only + bounded (one row per recorded run); empty list when there are none."""
+    active = find_active_run(store, phases)
+    out: List[SessionInfo] = []
+    for rid in list_runs(store):
+        cp = PipelineCheckpoint(store, rid)
+        passed = [p for p in cp.passed if p in phases]
+        rp = cp.resume_phase(phases)
+        out.append(SessionInfo(run_id=rid, done=len(passed), total=len(phases),
+                               last_passed=cp.last_passed(), resume_phase=rp,
+                               complete=rp is None, active=(rid == active)))
+    return out
+
+
 # --------------------------------------------------------------- renderers
 def render_progress(progress: RunProgress, ascii_only: bool = False) -> str:
     """The compact, glanceable block. No run → the friendly message (degrade-clean)."""

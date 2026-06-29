@@ -162,7 +162,9 @@ class TestPostgresDegrade(unittest.TestCase):
 # ---------------------------------------------------- live Postgres (guarded; CI skips)
 
 def _live_dsn():
-    dsn = os.environ.get("MOKATA_TEST_PG_DSN")
+    # Stage 47 — wired to the standard MOKATA_PG_DSN (the CI live-db job sets it); the
+    # original MOKATA_TEST_PG_DSN is kept as a manual-use fallback.
+    dsn = os.environ.get("MOKATA_PG_DSN") or os.environ.get("MOKATA_TEST_PG_DSN")
     if not (_HAS_PSYCOPG and dsn):
         return None
     try:

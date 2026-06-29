@@ -1,18 +1,22 @@
-# mokata 0.0.3
+# mokata 0.0.4
 
 **Spec-driven, test-first development for Claude Code — with a real codebase knowledge graph,
 persistent self-healing memory, and human-gated, audited governance.** Clean-room, local-first,
 Apache-2.0 (under MoStack).
 
-> **What's new in 0.0.3.** Governance/token features that previously had no runtime path are now
-> wired + reachable: `mokata memory consolidate` (proposal-only), `mokata skill author`
-> (RED-GREEN-for-docs, human-gated), `mokata playbook --dense` (output-density compression);
-> per-phase Karpathy gates, lethal-trifecta gating on a private outbound `vault push`,
-> proposal-only rules-learning in `mokata rules`, opt-in per-task model routing, and a
-> cache-stable briefing prefix — all off-by-default / degrade-clean / human-gated where they
-> write. **Plus a secret-guard precision fix:** the entropy layer no longer flags long file
-> paths / URLs / UUIDs as secrets (real-secret detection unchanged). Upgrading from 0.0.1/0.0.2
-> is recommended.
+> **What's new in 0.0.4 — governance transparency, session lifecycle, portability & hardening.**
+> **See & govern your memory:** `mokata govern` (a clickable governed-state dashboard) and
+> `mokata audit --why` (a what-and-WHY decision timeline). **Pause & resume:** `mokata sessions` /
+> `mokata resume`, plus a mid-brainstorm checkpoint — leave a brainstorm at any step and come back
+> (the approach HARD-GATE still holds). **Run beyond one harness:** a `Harness` boundary with
+> claude / codex / cowork adapters (`mokata harness` shows the capability matrix; missing
+> capabilities degrade clearly), a "use mokata in Cowork" guide, and opt-in **git-worktree
+> isolation** for parallel/paused work. **Stay current:** `mokata version` / `mokata upgrade`
+> (offline info, opt-in update check, human-gated upgrade) + `/mokata:version`. **Hardened:** the
+> secret guard broadened to 18 credential formats with a fuzz invariant (paths/URLs/UUIDs/hex
+> digests no longer false-positive; real secrets still block); Dependabot/CodeQL/Scorecard;
+> live Postgres+pgvector+Neo4j CI; and a README/CLI-reference audit with a docs-vs-code drift
+> guard. No breaking changes — upgrading is recommended.
 
 > **Early & stabilizing.** mokata is early and fast-moving; the pre-1.x history was a stabilizing
 > phase, re-baselined into the 0.0.x line. Expect rapid iteration; pin the version if you need

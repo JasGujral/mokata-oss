@@ -10,6 +10,36 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.4] — 2026-06-28
+
+**Governance transparency, session lifecycle, portability & hardening. No breaking changes.**
+
+Added:
+- **`mokata govern`** — a self-contained, clickable local dashboard of the governed state: rules
+  & guardrails (with line-budget), memory by kind with provenance, the read/write adoption ratio,
+  and pending self-healing proposals — read-only.
+- **`mokata audit --why`** — a what + decision + **why** timeline; every gate / deviation /
+  spec-conflict / self-healing decision now records its rationale.
+- **`mokata sessions` / `mokata resume`** — list past/active runs and resume from the last passed
+  gate; plus a **mid-brainstorm checkpoint** so you can leave a brainstorm at any step and come
+  back (the approach HARD-GATE still holds).
+- **git-worktree isolation** — opt-in (`settings.execution.worktrees`): parallel/fanout tasks and
+  paused/WIP sessions run in throwaway worktrees, auto-cleaned, degrade-clean without git.
+- **Cross-harness portability** — a `Harness` boundary with **claude** (reference), **codex**, and
+  **cowork** adapters; `mokata harness` shows the capability matrix; missing capabilities degrade
+  clearly (never pretend). A "use mokata in Cowork" how-to.
+- **`mokata version` / `mokata upgrade`** — offline version info; opt-in update check (the one
+  outbound call, netguard-accounted); human-gated upgrade; `/mokata:version`.
+
+Hardened:
+- **Secret guard** — broadened to 18 credential formats + a seeded fuzz invariant; pure-hex
+  digests / paths / URLs / UUIDs no longer false-positive (real secrets in context still block).
+- **Repo/OSS hygiene** — Dependabot, CodeQL, Scorecard, CODEOWNERS.
+- **Live-DB CI** — Postgres + pgvector + Neo4j service containers exercise the shared-memory /
+  semantic / graph paths for real (the core stays dependency-free).
+- **Docs** — README + CLI reference audited to match the full command surface, with a docs-vs-code
+  drift guard test.
+
 ## [0.0.3] — 2026-06-28
 
 **Wires up governance/token features that previously had no runtime path, plus a second

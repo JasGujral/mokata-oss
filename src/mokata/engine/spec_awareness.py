@@ -234,8 +234,13 @@ def guard_change(change: ChangeSet, *, specs: List[Spec], decisions: List[Any],
         return GuardOutcome(proceeded=True, blocked=False, report=report)
 
     if ledger is not None:
+        # A human-readable WHY (Stage 49): which saved spec(s)/decision(s) this change
+        # affects, and where (the overlapping symbols/files) — pulled from the real conflicts.
+        reason = "affects " + "; ".join(
+            f"{c.source_kind} '{c.ref}' (via {', '.join(c.where)})"
+            for c in report.conflicts)
         ledger.record(SPEC_CONFLICT_KIND, phase=phase, degraded=report.degraded,
-                      conflicts=[c.to_dict() for c in report.conflicts],
+                      reason=reason, conflicts=[c.to_dict() for c in report.conflicts],
                       touch_set=report.touch_set)
 
     refs = ", ".join(f"{c.source_kind} '{c.ref}'" for c in report.conflicts)

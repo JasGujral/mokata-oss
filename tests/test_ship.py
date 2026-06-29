@@ -78,6 +78,8 @@ class TestOssAndCiFiles(unittest.TestCase):
                   ".github/ISSUE_TEMPLATE/feature_request.yml",
                   ".github/ISSUE_TEMPLATE/config.yml",
                   ".github/workflows/ci.yml", ".github/workflows/docs.yml",
+                  ".github/workflows/codeql.yml", ".github/dependabot.yml",
+                  ".github/CODEOWNERS",
                   "mkdocs.yml"):
             self.assertTrue(os.path.exists(os.path.join(ROOT, f)), f"missing {f}")
 

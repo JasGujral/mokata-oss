@@ -12,7 +12,7 @@ The engine stays harness-agnostic: it only ever calls the boundary.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 HARNESS_CAPABILITIES = ("commands", "hooks", "context_injection", "subagents")
 
@@ -48,6 +48,53 @@ class Harness:
 def claude_code_harness(ops: Optional[Dict[str, Callable]] = None) -> Harness:
     """The reference harness — supports all capabilities."""
     return Harness("claude-code", set(HARNESS_CAPABILITIES), ops)
+
+
+def codex_harness(ops: Optional[Dict[str, Callable]] = None) -> Harness:
+    """A generic Codex / shell harness (Stage 52a). It runs prompt-style commands and injects
+    context, but has NO PreToolUse hooks and NO native subagent fan-out — so it declares only
+    {commands, context_injection}. The engine degrades CLEARLY (states the limitation, falls
+    back) when it needs `hooks` or `subagents` here; it never pretends they exist."""
+    return Harness("codex", {"commands", "context_injection"}, ops)
+
+
+def cowork_harness(ops: Optional[Dict[str, Callable]] = None) -> Harness:
+    """The Cowork plugin host (Stage 52b). Cowork supports plugins, so the `/mokata:*` commands,
+    the SessionStart briefing (context injection), and a subagent runner are available — but its
+    PreToolUse hook enforcement is NOT guaranteed (the secret-guard hook may not run there). So
+    `hooks` is declared False and that gate degrades CLEARLY: in Cowork, durable-write protection
+    relies on mokata's own gated CLI/MCP WriteGate (which scans + gates + audits regardless of
+    the hook), NOT on the PreToolUse hook. Honest over assumed parity."""
+    return Harness("cowork", {"commands", "context_injection", "subagents"}, ops)
+
+
+# The harness registry, keyed by the short name `mokata setup`/`mokata harness` use. The
+# reference harness is "claude"; "codex" + "cowork" are the portable adapters.
+HARNESS_FACTORIES: Dict[str, Callable[..., Harness]] = {
+    "claude": claude_code_harness,
+    "codex": codex_harness,
+    "cowork": cowork_harness,
+}
+
+
+def available_harnesses() -> List[str]:
+    """The registered harness names (deterministic order)."""
+    return list(HARNESS_FACTORIES)
+
+
+def get_harness(name: str) -> Harness:
+    """Construct a registered harness, or raise ValueError for an unknown name."""
+    factory = HARNESS_FACTORIES.get(name)
+    if factory is None:
+        raise ValueError(
+            f"unknown harness '{name}'; available: {', '.join(HARNESS_FACTORIES)}")
+    return factory()
+
+
+def capability_matrix() -> Dict[str, Dict[str, bool]]:
+    """{harness name -> {capability -> supported}} across every registered harness."""
+    return {name: {cap: factory().supports(cap) for cap in HARNESS_CAPABILITIES}
+            for name, factory in HARNESS_FACTORIES.items()}
 
 
 class HarnessBoundary:

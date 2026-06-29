@@ -357,6 +357,35 @@ class BrainstormSession:
             approved_at=self.approved_at or _now_iso(),
         )
 
+    # --- mid-brainstorm checkpoint (Stage 50): save/restore an IN-PROGRESS session --
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize the WHOLE session — answered questions + the candidate approaches being
+        weighed, not just an approved one — so a brainstorm can be left mid-stream and resumed."""
+        return {
+            "topic": self.topic,
+            "grounding": self.grounding.to_dict(),
+            "questions": [q.to_dict() for q in self.questions],
+            "approaches": [a.to_dict() for a in self.approaches],
+            "chosen": self.chosen.name if self.chosen else None,
+            "approved": self.approved,
+            "approver": self.approver,
+            "approved_at": self.approved_at,
+            "events": list(self.events),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "BrainstormSession":
+        s = cls(d["topic"], grounding=Grounding.from_dict(d.get("grounding", {})))
+        s.questions = [Question.from_dict(q) for q in d.get("questions", [])]
+        s.approaches = [Approach.from_dict(a) for a in d.get("approaches", [])]
+        name = d.get("chosen")
+        s.chosen = next((a for a in s.approaches if a.name == name), None) if name else None
+        s.approved = bool(d.get("approved", False))
+        s.approver = d.get("approver")
+        s.approved_at = d.get("approved_at")
+        s.events = list(d.get("events", []))
+        return s
+
 
 # --------------------------------------------------------------------------- persist
 def persist_approach(session: BrainstormSession, store: Any) -> str:
@@ -370,6 +399,30 @@ def load_approved_approach(store: Any) -> Optional[Handoff]:
     """Retrieve the persisted approved approach (the downstream constraint), or None."""
     data = store.read(APPROACH_STATE_KEY)
     return Handoff.from_dict(data) if data else None
+
+
+# --------------------------------------------------- mid-brainstorm checkpoint (Stage 50)
+# An IN-PROGRESS session (answered questions + candidate approaches, NOT just the approved
+# one) so a user can leave a brainstorm at any step and come back. This is resume state, NOT
+# a durable approval — the HARD-GATE still holds: restoring never marks anything approved.
+BRAINSTORM_PROGRESS_KEY = "brainstorm_progress"
+
+
+def save_brainstorm_progress(session: BrainstormSession, store: Any) -> str:
+    """Persist the in-progress session so it can be resumed. An explicit, intentional save
+    (the approval HARD-GATE is unaffected — this stores progress, not a decision)."""
+    return store.write(BRAINSTORM_PROGRESS_KEY, session.to_dict())
+
+
+def restore_brainstorm_progress(store: Any) -> Optional[BrainstormSession]:
+    """Re-hydrate a saved in-progress session, or None if there is none."""
+    data = store.read(BRAINSTORM_PROGRESS_KEY)
+    return BrainstormSession.from_dict(data) if data else None
+
+
+def clear_brainstorm_progress(store: Any) -> bool:
+    """Drop the saved in-progress session (e.g. once an approach is approved)."""
+    return store.delete(BRAINSTORM_PROGRESS_KEY)
 
 
 # ----------------------------------------------------- Stage 29: auto-engage (toggle)
