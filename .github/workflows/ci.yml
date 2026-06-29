@@ -16,7 +16,7 @@ jobs:
         jsonschema: ["absent", "present"]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       - name: Install mokata
@@ -76,7 +76,7 @@ jobs:
       NEO4J_PASSWORD: mokatatest1
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       # Live extras (optional drivers) installed ONLY here — the core stays dependency-free.
