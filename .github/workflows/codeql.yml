@@ -18,6 +18,10 @@ permissions:
 jobs:
   analyze:
     name: Analyze (python)
+    # Code scanning is free on the PUBLIC mirror but needs paid GHAS on the private dev repo,
+    # where the upload fails with "code scanning is not enabled". Gate to the public repo so
+    # CodeQL only runs where it can succeed (matches ci.yml / release.yml / docs.yml).
+    if: github.repository == 'JasGujral/mokata-oss'
     runs-on: ubuntu-latest
     permissions:
       actions: read

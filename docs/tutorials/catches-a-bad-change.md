@@ -76,21 +76,3 @@ That's mokata: it remembers your project and stops the agent shipping the wrong 
 [differentiators in action](differentiators-in-action.md), or
 [get started](../quickstart.md) in your own repo. Inside Claude Code the agent drives the *same
 gates* through the `/mokata:` commands and MCP tools — one engine.
-
----
-
-## 60-second screencast script (shot list)
-
-A tight shot-list for recording the demo above. Target: **≤ 60 seconds**, one terminal, no cuts.
-
-| # | Time | Type / do this | What the viewer sees | Voiceover / caption |
-|---|------|----------------|----------------------|---------------------|
-| 0 | 0:00–0:05 | Title card | `mokata — the memory + seatbelt for your AI coding agent` | "Your AI agent is fast. mokata makes sure it's *right*." |
-| 1 | 0:05–0:12 | Type the `mkdir demo …` + `cat > checkout.py` block, then `mokata init --profile standard --yes` | the four `wrote …` lines + `initialized` | "One command sets up a governed repo — local, no telemetry." |
-| 2 | 0:12–0:25 | Type `mokata run develop` | the red **`[BLOCKED] spec-persisted …`** line | "The agent tries to write code with no spec. Blocked — no code without tests." |
-| 3 | 0:25–0:42 | Run the secret `remember` one-liner | **`status: blocked   findings: ['aws-access-key', …]`** | "Now it tries to stash a secret — even *with* approval. Hard-blocked. A secret can't be approved away." |
-| 4 | 0:42–0:55 | Type `mokata audit` | the **2-entry** ledger | "And every block is on the audit ledger — you can review every decision it made." |
-| 5 | 0:55–0:60 | End card | `install: /plugin install mokata@mostack` · `github.com/JasGujral/mokata-oss` | "Memory + seatbelt for your AI coding agent. Local-first. Apache-2.0." |
-
-**Recording notes:** clear the terminal first; use a large font; pre-create nothing (run it live so
-the blocks are obviously real); keep the audit frame on screen an extra beat — it's the payoff.

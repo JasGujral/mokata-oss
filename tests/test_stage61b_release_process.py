@@ -189,6 +189,8 @@ class TestDocsDeployGatedToMain(unittest.TestCase):
             "the docs BUILD must still run on non-main refs (tags/releases) — keep it")
 
 
+@unittest.skipUnless(os.path.exists(RELEASE_SH),
+                     "release.sh is dev-only, excluded from the public mirror")
 class TestReleaseShHardening(unittest.TestCase):
     def setUp(self):
         with open(RELEASE_SH, encoding="utf-8") as fh:

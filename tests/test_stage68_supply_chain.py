@@ -203,6 +203,8 @@ class TestSecurityDisclosurePolicy(unittest.TestCase):
                         "SECURITY.md should reference the signed-release / SBOM verification")
 
 
+@unittest.skipUnless(os.path.exists(RELEASE_SH),
+                     "release.sh is dev-only, excluded from the public mirror")
 class TestReleaseOrderIntact(unittest.TestCase):
     """Stage 68 must not weaken the prior (Stage-61b) fail-closed release order."""
 
