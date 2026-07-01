@@ -128,6 +128,21 @@ def _render(surface: Surface) -> str:
         lines.append("Project rules & guardrails (always honour):")
         lines.extend(rules_lines)
 
+    # Stage 54 — proactive resume surfacing: ONE line (max two) when there's a resumable run
+    # or an in-progress brainstorm, ABSENT (no noise) when there's nothing to pick up.
+    resume_hint = build_resume_hint(surface)
+    if resume_hint:
+        lines.append("")
+        lines.extend(resume_hint.split("\n"))
+
+    # Stage 60 — "what changed since last session": ONE bounded line, read-only/derived, ABSENT
+    # (no noise) on a first session or when nothing changed. So reopening a repo tells you what
+    # moved while you were away. Never writes; the baseline is captured by the SessionStart hook.
+    since_line = _changed_since_line(surface)
+    if since_line:
+        lines.append("")
+        lines.append(since_line)
+
     lines.append("")
     lines.append(
         "Reflex: before acting, check the relevant gate/skill; verify with evidence, "
@@ -146,6 +161,64 @@ def _always_on_rule_lines(surface: Surface) -> List[str]:
         return lines
     except Exception:
         return []
+
+
+def _changed_since_line(surface: Surface) -> "str | None":
+    """The Stage 60 "since last session" briefing line, or None. Read-only/derived; degrade-clean
+    (any issue / first session / no changes -> None, never an exception)."""
+    try:
+        from .visibility import changed_since_line
+        return changed_since_line(surface)
+    except Exception:
+        return None
+
+
+# Stage 54 — proactive resume surfacing. The briefing leads off with ONE line (max two) when
+# there's something to pick up: a resumable run and/or an in-progress brainstorm. So reopening
+# a repo TELLS you there's a run mid-flight, instead of you having to remember. Read-only —
+# composes progress.list_sessions + brainstorm.restore_brainstorm_progress, which only `read`
+# the StateStore (no stat/counter bumps, no MemoryStore); deterministic; degrade-clean to None.
+_RESUME_GLYPH = "▸"
+
+
+def _resume_run_line(surface: Surface) -> "str | None":
+    """The single most-actionable resumable-run line, or None. A run is resumable when it's the
+    active run (the one `resume` would pick), has a passed gate (progress to pick up), and isn't
+    complete. A fresh run with nothing passed is not surfaced (no progress = no noise)."""
+    from .progress import list_sessions
+    active = next((s for s in list_sessions(surface.state) if s.active), None)
+    if active is None or active.complete:
+        return None
+    if active.last_passed is None or active.resume_phase is None:
+        return None
+    return (f"{_RESUME_GLYPH} Resume: pipeline at '{active.resume_phase}' "
+            f"(last passed '{active.last_passed}') — run `mokata resume`")
+
+
+def _resume_brainstorm_line(surface: Surface) -> "str | None":
+    """The in-progress-brainstorm line, or None. An already-approved checkpoint is not an
+    in-progress brainstorm, so it isn't surfaced here (the run line covers downstream work)."""
+    from .brainstorm import restore_brainstorm_progress
+    bs = restore_brainstorm_progress(surface.state)
+    if bs is None or getattr(bs, "approved", False):
+        return None
+    topic = (bs.topic or "").strip()
+    label = f" '{topic}'" if topic else ""
+    return (f"{_RESUME_GLYPH} Resume: in-progress brainstorm{label} — "
+            f"run `/brainstorm` (or `mokata brainstorm`)")
+
+
+def build_resume_hint(surface: Surface) -> "str | None":
+    """ONE line (max two) when there's something to pick up, else None. Pure + read-only +
+    degrade-clean: any error (no sessions, no brainstorm, a corrupt checkpoint) -> None, never
+    an exception. Prefers the most actionable single line; surfaces both compactly when both
+    exist (still ≤ 2 short lines — never a dump)."""
+    try:
+        lines = [ln for ln in (_resume_run_line(surface),
+                               _resume_brainstorm_line(surface)) if ln]
+        return "\n".join(lines) if lines else None
+    except Exception:
+        return None
 
 
 # F6 — the briefing leads with a deterministic, cache-stable prefix (manifest identity +

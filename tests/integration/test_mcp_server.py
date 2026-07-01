@@ -23,9 +23,25 @@ from mokata.share import export_manifest
 
 EXPECTED_READ = {"query", "recall", "doctor", "coverage", "budget", "audit",
                  "status", "preview", "progress",
-                 "vault_list", "vault_search", "vault_pull"}
+                 "lanes", "watch", "govern",          # Stage 54d — parallel-agent observability
+                 "vault_list", "vault_search", "vault_pull",
+                 # Stage 54e — command-parity read tools
+                 "rules", "skills", "suggest", "lat_check", "index_status",
+                 "baseline", "sessions", "config_get", "export_preview",
+                 "decompose",                          # Stage 54f — task decomposition (read)
+                 "session_list",                       # Stage 55a — portable sessions (read)
+                 "tour",                                # Stage 56 — read-only first-run demo
+                 "ci_check",                            # Stage 58 — mokata-as-a-PR-check (read)
+                 "stacks_list", "stacks_search",        # Stage 70 — community stacks (read)
+                 "stacks_show"}
 EXPECTED_WRITE = {"remember", "import_stack", "reset", "apply_proposal", "init",
-                  "memory_export", "memory_import", "vault_push", "spec_check"}
+                  "memory_export", "memory_import", "vault_push", "spec_check",
+                  "config_set", "export_stack",       # Stage 54e — command-parity write tools
+                  "session_push", "session_pull",     # Stage 55a — portable sessions (gated)
+                  "session_name",                     # Stage 55b — rename (gated)
+                  "reconfigure",                      # Stage 56b — reconfigure wizard (gated)
+                  "stacks_install",                   # Stage 70 — community stacks (gated install)
+                  "audit_share"}                      # Stage 71 — team audit shared publish (gated)
 
 
 def _silent(_):

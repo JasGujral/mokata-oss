@@ -8,6 +8,24 @@ The full, versioned changelog lives in the repository's
 > a stabilizing phase and are collapsed into this entry; 0.0.1 is the honest starting point for an
 > early, fast-moving project.
 
+## 0.0.5
+
+**Portable sessions, in-Claude-Code UX, every-agent reach, team sharing & supply-chain trust.
+No breaking changes.**
+Fixed: hook invocation now uses a PATH-resolved `mokata-hook` console entry (the `python3: command
+not found` pre-hook error on Windows / GUI macOS / exotic PATHs is gone). New: portable/shareable
+**sessions** (`session push`/`pull`/`list`/`name` — machine-path-free, secret-scanned,
+human-gated); an always-on **stage badge** + flow legibility + parallel-agent **lanes** + full
+Claude-Code **command parity** (CI-enforced) + task decomposition + brainstorm anti-drift anchor +
+native **to-do widget** (one `RunProgress`, many renderers); a **first-run/`reconfigure` wizard**;
+**memory intelligence** (explainable retrieval, health nudges, proposed guardrails); a **CI/PR
+check** GitHub Action; reach under **Cursor/Copilot/Windsurf/Codex/Gemini/Aider**, a **VS Code
+extension** + **Copilot Chat `@mokata`**, language + OS matrix; **team join/sync/audit** +
+community **stacks** + **project-scoped shared backends** (one DB, many projects, no bleed — all
+no-telemetry). Hardened: supply-chain (**SBOM + Sigstore provenance**, least-privilege SHA-pinned
+CI); reliability fuzz pass + a measured **performance budget**; release-process version-at-tag
+verification.
+
 ## 0.0.4
 
 **Governance transparency, session lifecycle, portability & hardening. No breaking changes.**

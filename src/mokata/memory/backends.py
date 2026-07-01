@@ -241,34 +241,68 @@ class PostgresBackend(MemoryBackend):
     # so mokata's store can't collide with an app's own `memory` table in a shared database.
     TABLE = "mokata_memory"
 
-    def __init__(self, dsn: str, name: str = "postgres") -> None:
-        from ._pg import connect_psycopg
+    def __init__(self, dsn: Optional[str] = None, name: str = "postgres",
+                 project: Optional[str] = None, conn: Any = None) -> None:
         self.name = name
-        self._conn = connect_psycopg(dsn, PostgresUnavailable, setup_sql=[
-            f"CREATE TABLE IF NOT EXISTS {self.TABLE} ("
-            "  id TEXT PRIMARY KEY, mtype TEXT, subject TEXT,"
-            "  status TEXT, doc TEXT, seq BIGSERIAL)",
-        ])
+        # Stage 71a — SCOPE every row by the current project key so one shared DSN safely hosts
+        # many projects. `project=None` spans ALL projects (review `--all` only). The CREATE gains
+        # the `project` column; the ADD-COLUMN-IF-MISSING migrates a pre-71a table (its old rows
+        # read back as legacy/unscoped under `--all`). `conn` injects a connection (tests / a
+        # host-provided client) so the scoping is exercisable without a live DB.
+        self.project = project
+        if conn is not None:
+            self._conn = conn
+            for stmt in self._setup_sql():
+                try:
+                    self._conn.execute(stmt)
+                except Exception:  # pragma: no cover - a fake may no-op DDL
+                    pass
+            return
+        from ._pg import connect_psycopg
+        self._conn = connect_psycopg(dsn, PostgresUnavailable, setup_sql=self._setup_sql())
 
+    @classmethod
+    def _setup_sql(cls) -> List[str]:
+        return [
+            f"CREATE TABLE IF NOT EXISTS {cls.TABLE} ("
+            "  id TEXT PRIMARY KEY, mtype TEXT, subject TEXT,"
+            "  status TEXT, doc TEXT, seq BIGSERIAL, project TEXT)",
+            f"ALTER TABLE {cls.TABLE} ADD COLUMN IF NOT EXISTS project TEXT",
+        ]
+
+    def _scope(self, prefix: str = "AND") -> Tuple[str, tuple]:
+        """The project WHERE fragment (empty when spanning all projects)."""
+        if self.project is None:
+            return "", ()
+        return f" {prefix} project=%s", (self.project,)
+
+    # Justification for the B608 suppressions below (bandit false positive): every SQL string
+    # here interpolates ONLY the mokata-OWNED constant `self.TABLE` (+ a fixed `_scope()`
+    # fragment) — never user input. All VALUES go through the driver's parameterized `%s`
+    # placeholders, so there is no injection surface. Suppression markers only, no behaviour change.
     def put(self, item: MemoryItem) -> None:
         self._conn.execute(
-            f"INSERT INTO {self.TABLE} (id, mtype, subject, status, doc)"
-            " VALUES (%s, %s, %s, %s, %s)"
+            f"INSERT INTO {self.TABLE} (id, mtype, subject, status, doc, project)"  # nosec B608
+            " VALUES (%s, %s, %s, %s, %s, %s)"
             " ON CONFLICT (id) DO UPDATE SET mtype=EXCLUDED.mtype,"
-            " subject=EXCLUDED.subject, status=EXCLUDED.status, doc=EXCLUDED.doc",
+            " subject=EXCLUDED.subject, status=EXCLUDED.status, doc=EXCLUDED.doc,"
+            " project=EXCLUDED.project",
             (item.id, item.mtype, item.subject, item.status,
-             json.dumps(item.to_dict())),
+             json.dumps(item.to_dict()), self.project),
         )
 
     def get(self, item_id: str) -> Optional[MemoryItem]:
+        clause, params = self._scope()
         row = self._conn.execute(
-            f"SELECT doc FROM {self.TABLE} WHERE id=%s", (item_id,)
+            f"SELECT doc FROM {self.TABLE} WHERE id=%s{clause}", (item_id, *params)  # nosec B608
         ).fetchone()
         return MemoryItem.from_dict(json.loads(row[0])) if row else None
 
     def all(self, mtype: Optional[str] = None,
             statuses: Optional[Tuple[str, ...]] = None) -> List[MemoryItem]:
-        rows = self._conn.execute(f"SELECT doc FROM {self.TABLE} ORDER BY seq").fetchall()
+        clause, params = self._scope(prefix="WHERE")
+        rows = self._conn.execute(
+            f"SELECT doc FROM {self.TABLE}{clause} ORDER BY seq", params).fetchall()  # nosec B608
         items = [MemoryItem.from_dict(json.loads(r[0])) for r in rows]
         if mtype is not None:
             items = [i for i in items if i.mtype == mtype]
@@ -277,8 +311,17 @@ class PostgresBackend(MemoryBackend):
         return items
 
     def delete(self, item_id: str) -> bool:
-        cur = self._conn.execute(f"DELETE FROM {self.TABLE} WHERE id=%s", (item_id,))
+        clause, params = self._scope()
+        cur = self._conn.execute(
+            f"DELETE FROM {self.TABLE} WHERE id=%s{clause}", (item_id, *params))  # nosec B608
         return cur.rowcount > 0
+
+    def list_projects(self) -> List[str]:
+        """The distinct project keys present in the shared table — for review `--list-projects`.
+        A pre-71a (NULL) row reads back as the LEGACY bucket. Never raises on an odd row."""
+        rows = self._conn.execute(
+            f"SELECT DISTINCT project FROM {self.TABLE}").fetchall()  # nosec B608
+        return _distinct_projects(rows)
 
     def close(self) -> None:
         try:
@@ -287,13 +330,22 @@ class PostgresBackend(MemoryBackend):
             pass
 
 
-def build_postgres_backend(config: Dict[str, Any]) -> Optional["PostgresBackend"]:
+def _distinct_projects(rows: List[tuple]) -> List[str]:
+    """Normalize a `SELECT DISTINCT project` result: NULL/empty → the LEGACY bucket; sorted."""
+    from ..project import LEGACY_PROJECT
+    out = {(r[0] if r and r[0] else LEGACY_PROJECT) for r in rows}
+    return sorted(out)
+
+
+def build_postgres_backend(config: Dict[str, Any],
+                           project: Optional[str] = None) -> Optional["PostgresBackend"]:
     """Build a Postgres backend from a per-tool `config`, or return None to degrade.
 
     Honors ONLY `config.dsn_env` — the name of an env var holding the DSN. An inline
     `dsn` is never read (the manifest is committed; a plaintext credential would be a
     leak the secret-guard blocks). Returns None when the env var is unset/empty, psycopg
     is absent, or the database is unreachable — so the caller falls to the SQLite floor.
+    `project` (Stage 71a) SCOPES all rows to the current project; None spans all (review).
     """
     dsn_env = (config or {}).get("dsn_env")
     if not dsn_env:
@@ -302,6 +354,6 @@ def build_postgres_backend(config: Dict[str, Any]) -> Optional["PostgresBackend"
     if not dsn:
         return None
     try:
-        return PostgresBackend(dsn)
+        return PostgresBackend(dsn, project=project)
     except PostgresUnavailable:
         return None

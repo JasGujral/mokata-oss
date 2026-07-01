@@ -116,6 +116,27 @@ mokata query imports <module>        # who imports it
 mokata query blast_radius <symbol>   # transitive impact of a change
 ```
 
+## Which languages work
+
+The queries above work across **Python, JS/TS, Go, Rust, and Java**. The *real* graph covers
+whatever languages the adopted tool supports; the **grep floor** is language-aware on its own
+(extension awareness + per-language lexical patterns — `function`/`def`/`func`/`fn`,
+`import`/`require`/`use`, `class`/`impl`/`interface`), with **no parser** — it's the
+heuristic floor and says so (`degraded`).
+
+| Language | Files | Grep-floor structural queries | AC-tagged tests it finds |
+|---|---|---|---|
+| Python | `.py` `.pyi` | callers / callees / imports / implementers | pytest `def test_*` |
+| JS / TS | `.js` `.jsx` `.ts` `.tsx` | callers / callees / imports / implementers (`extends`/`implements`) | jest/vitest `test(...)` / `it(...)` |
+| Go | `.go` | callers / callees / imports *(interfaces are structural — `implementers` degrades)* | `func Test*` |
+| Rust | `.rs` | callers / callees / imports / implementers (`impl Trait for Type`) | `#[test]` |
+| Java | `.java` | callers / callees / imports / implementers | JUnit `@Test` |
+| anything else | any extension | **generic** identifier matching — never crashes | — |
+
+Wire a real graph tool (above) for precise, cross-language structural answers; the floor is
+always there underneath so the queries never hard-fail on a stack the graph tool doesn't cover.
+An unknown language falls back to **generic identifier matching** (degrade-clean, no crash).
+
 ## Degrade-to-grep is safe
 
 If the graph tool is absent or errors mid-query, mokata **falls back to the grep floor**

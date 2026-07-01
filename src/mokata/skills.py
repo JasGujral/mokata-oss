@@ -101,7 +101,22 @@ PROGRESS_INSTRUCTION = (
     "[done/total] count and what's next) and a one-line banner naming what's running now "
     "— e.g. `mokata · {name} (running)` then `mokata · {name} (done)`. This is read-only "
     "over the persisted run-state (`mokata progress` / the `progress` MCP tool) — surface "
-    "it, don't invent it. So the user never wonders whether mokata is running or which part."
+    "it, don't invent it. So the user never wonders whether mokata is running or which part. "
+    "Where the harness has a NATIVE to-do list (a summary line + steps you can mark done / "
+    "in-progress / pending), render THIS SAME run-progress there — a summary line plus one item "
+    "per phase, each done / in-progress / pending — and keep it in sync as each gate passes. "
+    "DERIVE those items from mokata's run-state (`mokata progress` / `build_todo_items`), never "
+    "invent steps of your own; YOU render the widget (mokata drives it through this prompt — it "
+    "cannot call the to-do tool itself). Where there is NO native to-do surface, fall back to "
+    "printing the run-progress block above. It is one run-progress, shown on whichever channel "
+    "the user is looking at. "
+    "When the phase FINISHES, also print a one-line recap + the single next step — "
+    "`✓ {name} done — <one-line recap>. Next: `/mokata:<next>`` (include the in-stage "
+    "counter, e.g. `[3/7 ACs]`, when one applies). The next step reaches the user through the "
+    "`/` command autocomplete (click-to-fill) and your own follow-up offer — you CANNOT "
+    "pre-fill the prompt box or rebind Tab, so never imply you can; just NAME the command and "
+    "offer to proceed. If a gate fired, print its one-line verdict and, on a block, the single "
+    "action that clears it (`→ to unblock: …`)."
 )
 
 
@@ -323,7 +338,10 @@ _SKILLS: List[Skill] = [
             "description), but run a git action ONLY after the human's explicit confirmation "
             "of a specific option. Never merge, force, or delete anything unasked; never "
             "discard work without explicit confirmation.\n"
-            "4. RECORD the finish decision in the audit ledger."
+            "4. RECORD the finish decision in the audit ledger, then show the end-of-run "
+            "\"what I changed and WHY\" recap — mokata's bounded, read-only `audit --why` over "
+            "this run (what changed + each gate decision + why) — so finishing the run shows "
+            "what landed and why. The recap is derived; it never implies mokata merged anything."
         ),
         gate=Gate("finish-is-human-landed",
                   "Shipping verifies done (green tests + met ACs + passed review) and the "

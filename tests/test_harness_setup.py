@@ -173,9 +173,10 @@ class TestSetupCLI(unittest.TestCase):
             self.assertEqual(rc, 0)
 
     def test_cli_rejects_unknown_harness(self):
+        # `gemini` became a real harness in Stage 63; use a name that will never be one.
         with tempfile.TemporaryDirectory() as d:
             with self.assertRaises(SystemExit):
-                run_cli(["setup", "gemini", "--yes", "--path", d])
+                run_cli(["setup", "notanagent", "--yes", "--path", d])
 
 
 if __name__ == "__main__":

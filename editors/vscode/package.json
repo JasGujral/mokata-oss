@@ -1,0 +1,150 @@
+{
+  "name": "mokata-vscode",
+  "displayName": "mokata",
+  "description": "Read-only editor presence for mokata: stage badge, run progress & lanes, memory health, and gate verdicts — surfaced inline. A thin client over the mokata CLI; durable writes stay human-gated in the terminal.",
+  "version": "0.0.1",
+  "publisher": "mostack",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/mostack/mokata",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mostack/mokata.git",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
+  "keywords": [
+    "mokata",
+    "governance",
+    "memory",
+    "tdd",
+    "read-only"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "mokata.refresh",
+        "title": "mokata: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "mokata.showStatus",
+        "title": "mokata: Show Status"
+      },
+      {
+        "command": "mokata.showProgress",
+        "title": "mokata: Show Run Progress & Lanes"
+      },
+      {
+        "command": "mokata.showGovernance",
+        "title": "mokata: Show Governance & Gate Verdicts"
+      },
+      {
+        "command": "mokata.showMemory",
+        "title": "mokata: Show Memory & Health"
+      },
+      {
+        "command": "mokata.runInTerminal",
+        "title": "mokata: Run a /mokata command in the terminal…"
+      },
+      {
+        "command": "mokata.setupCopilotMcp",
+        "title": "mokata: Register mokata-mcp with Copilot Chat (MCP)…"
+      }
+    ],
+    "chatParticipants": [
+      {
+        "id": "mokata.chat",
+        "name": "mokata",
+        "fullName": "mokata",
+        "description": "Read-only mokata in chat: status, progress/lanes, memory & health, and why a gate blocked. Proposes (never runs) any command that would write.",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "status",
+            "description": "mokata stack status"
+          },
+          {
+            "name": "progress",
+            "description": "run progress & parallel lanes"
+          },
+          {
+            "name": "memory",
+            "description": "memory + the health nudge"
+          },
+          {
+            "name": "why",
+            "description": "governance & gate verdicts (why a gate blocked)"
+          }
+        ]
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "mokata",
+          "title": "mokata",
+          "icon": "$(shield)"
+        }
+      ]
+    },
+    "views": {
+      "mokata": [
+        {
+          "id": "mokataPanel",
+          "name": "Governance & Memory",
+          "contextualTitle": "mokata"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "mokata.refresh",
+          "when": "view == mokataPanel",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "mokata",
+      "properties": {
+        "mokata.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the mokata status bar badge and panel (opt-in; turn off to hide mokata in this editor). The extension is read-only — it never writes."
+        },
+        "mokata.cliPath": {
+          "type": "string",
+          "default": "mokata",
+          "description": "Path to the mokata CLI executable. Leave as 'mokata' if it's on your PATH."
+        },
+        "mokata.refreshIntervalSeconds": {
+          "type": "number",
+          "default": 30,
+          "minimum": 0,
+          "description": "How often (seconds) to refresh the status badge. 0 disables the timer (a .mokata/ file-watch still refreshes)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "node --test ./out/test/"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0"
+  }
+}

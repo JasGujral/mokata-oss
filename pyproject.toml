@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mokata"
-version = "0.0.4"
+version = "0.0.5"
 description = "An open-source, spec-driven TDD framework for Claude Code — governed, knowledge-aware, human-gated."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -40,6 +40,17 @@ mokata = "mokata.cli:main"
 # The MCP server entry point (plugin-launched stdio). Importing the server needs the
 # optional [mcp] extra; the entry point itself is always installed.
 mokata-mcp = "mokata.mcp_server:main"
+# The hook entry point (Stage 53b). Claude Code launches the SessionStart briefing +
+# PreToolUse secret-guard as `mokata-hook <subcommand>` — resolved on PATH exactly like
+# mokata-mcp, with no bare `python3` / `sh` / launch.sh resolution to fail on.
+mokata-hook = "mokata.hook_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# Stage 70 — the curated community-stack catalog (a versioned index.json + per-framework
+# governed stack manifests) ships with the wheel so `mokata stacks` works from a pip/pipx
+# install. The runtime source of truth is `mokata.stacks` (in-code), so this is a reviewable
+# mirror + the file-backed catalog convention any git-org/vault reuses; absence is degrade-clean.
+mokata = ["stacks/*.json"]

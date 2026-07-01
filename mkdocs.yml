@@ -60,14 +60,19 @@ nav:
   - Home: index.md
   - Getting started: quickstart.md
   - Tutorials:
+      - Catches a bad change (60s): tutorials/catches-a-bad-change.md
       - Differentiators in action: tutorials/differentiators-in-action.md
       - Run a story end-to-end: tutorials/run-a-story.md
       - The Complete Guide: tutorials/mokata-complete-guide.md
   - How-to guides:
+      - Your first run (quickstart): how-to/first-run.md
+      - Install mokata (pip/pipx/uv/brew): how-to/install-mokata.md
+      - mokata as a PR check: how-to/mokata-as-a-pr-check.md
       - Install the Claude plugin: how-to/install-plugin.md
       - Use the plugin in Claude Code: how-to/use-the-plugin.md
       - Use mokata without the plugin: how-to/use-without-plugin.md
       - Use mokata in Cowork: how-to/use-mokata-in-cowork.md
+      - Use mokata with other AI agents: how-to/use-with-other-agents.md
       - Integrate with other AI tools: how-to/integrate-other-ai-tools.md
       - Configure a profile: how-to/configure-a-profile.md
       - Configure storage backends & paths: how-to/configure-storage-backends.md
@@ -75,11 +80,17 @@ nav:
       - Use a codebase graph: how-to/use-a-codebase-graph.md
       - Set the execution mode: how-to/set-execution-mode.md
       - Watch a run (lanes + dashboard): how-to/watch-a-run.md
+      - Use mokata in VS Code: how-to/use-mokata-in-vs-code.md
       - Use & heal memory: how-to/use-memory.md
       - Capture project rules & context: how-to/capture-project-rules-and-context.md
       - Share a design vault: how-to/share-a-design-vault.md
+      - Portable / shareable sessions: how-to/portable-sessions.md
       - Write a skill: how-to/write-a-skill.md
       - Share a stack: how-to/share-a-stack.md
+      - Community stacks (share & install): how-to/community-stacks.md
+      - Team setup (shared governed stack): how-to/team-setup.md
+      - Team audit / shared activity log: how-to/team-audit.md
+      - Multi-project on one shared backend: how-to/multi-project-shared-backend.md
       - Profiles & toggles: profiles.md
   - Concepts:
       - How mokata uses an LLM (harness vs CLI): concepts/execution-model.md
@@ -89,10 +100,15 @@ nav:
       - Token governance: concepts/token-governance.md
       - Execution modes: concepts/execution-modes.md
       - Governance & audit: concepts/governance.md
+      - Portable sessions: concepts/portable-sessions.md
   - Reference:
       - CLI: reference/cli.md
+      - Command surfaces (CLI ↔ slash ↔ MCP): reference/command-surfaces.md
       - Manifest & config: reference/manifest.md
       - Skills catalog: reference/skills.md
+      - Platform support (Windows/macOS/Linux): reference/platform-support.md
+      - Performance / latency budget: reference/performance-budget.md
+      - Supply-chain & security: reference/supply-chain.md
   - Developer guide: developer-guide.md
   - Changelog: changelog.md
   - Security: security.md

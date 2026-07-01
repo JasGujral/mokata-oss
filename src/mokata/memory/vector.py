@@ -16,7 +16,7 @@ stored embeddings) is what the tests exercise for ranking behaviour.
 from __future__ import annotations
 
 import json
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from .backends import MemoryBackend
 from .embed import EMBED_DIM, Embedder
@@ -34,42 +34,68 @@ class PgVectorBackend(MemoryBackend):
     name = "pgvector"
     TABLE = "mokata_memory_vectors"
 
-    def __init__(self, dsn: str, embedder: Embedder, dim: int = EMBED_DIM,
-                 name: str = "pgvector") -> None:
+    def __init__(self, dsn: Optional[str] = None, embedder: Optional[Embedder] = None,
+                 dim: int = EMBED_DIM, name: str = "pgvector",
+                 project: Optional[str] = None, conn: Any = None) -> None:
         if embedder is None:
             raise VectorUnavailable("no embedder configured — semantic tier is off")
-        from ._pg import connect_psycopg
         self.name = name
         self.dim = dim
         self._embed = embedder
-        # mokata-OWNED schema: the extension + our own namespaced table.
-        self._conn = connect_psycopg(dsn, VectorUnavailable, setup_sql=[
+        # Stage 71a — scope every row by the current project (None spans all, review only). `conn`
+        # injects a connection so the scoping is testable without a live pgvector DB.
+        self.project = project
+        setup = [
             "CREATE EXTENSION IF NOT EXISTS vector",
             f"CREATE TABLE IF NOT EXISTS {self.TABLE} ("
             "  id TEXT PRIMARY KEY, mtype TEXT, subject TEXT, status TEXT,"
-            f"  doc TEXT, embedding vector({dim}), seq BIGSERIAL)",
-        ])
+            f"  doc TEXT, embedding vector({dim}), seq BIGSERIAL, project TEXT)",
+            f"ALTER TABLE {self.TABLE} ADD COLUMN IF NOT EXISTS project TEXT",
+        ]
+        if conn is not None:
+            self._conn = conn
+            for stmt in setup:
+                try:
+                    self._conn.execute(stmt)
+                except Exception:  # pragma: no cover - a fake may no-op DDL
+                    pass
+            return
+        # mokata-OWNED schema: the extension + our own namespaced table (+ the project column).
+        from ._pg import connect_psycopg
+        self._conn = connect_psycopg(dsn, VectorUnavailable, setup_sql=setup)
+
+    def _scope(self, prefix: str = "AND") -> Tuple[str, tuple]:
+        if self.project is None:
+            return "", ()
+        return f" {prefix} project=%s", (self.project,)
 
     # --- contract ---------------------------------------------------------------
+    # Justification for the B608 suppressions below (bandit false positive): every SQL string
+    # here interpolates ONLY the mokata-OWNED constant `self.TABLE` (+ the fixed `_scope()`
+    # fragment), never user input; all VALUES ride the driver's `%s` placeholders. Suppression
+    # markers only — no injection surface, no behaviour change.
     def put(self, item: MemoryItem) -> None:
         vec = self._embed(f"{item.subject} {item.value}")
         self._conn.execute(
-            f"INSERT INTO {self.TABLE} (id, mtype, subject, status, doc, embedding)"
-            " VALUES (%s, %s, %s, %s, %s, %s)"
+            f"INSERT INTO {self.TABLE} (id, mtype, subject, status, doc, embedding, project)"  # nosec B608
+            " VALUES (%s, %s, %s, %s, %s, %s, %s)"
             " ON CONFLICT (id) DO UPDATE SET mtype=EXCLUDED.mtype,"
             " subject=EXCLUDED.subject, status=EXCLUDED.status, doc=EXCLUDED.doc,"
-            " embedding=EXCLUDED.embedding",
+            " embedding=EXCLUDED.embedding, project=EXCLUDED.project",
             (item.id, item.mtype, item.subject, item.status,
-             json.dumps(item.to_dict()), _vlit(vec)))
+             json.dumps(item.to_dict()), _vlit(vec), self.project))
 
     def get(self, item_id: str) -> Optional[MemoryItem]:
+        clause, params = self._scope()
         row = self._conn.execute(
-            f"SELECT doc FROM {self.TABLE} WHERE id=%s", (item_id,)).fetchone()
+            f"SELECT doc FROM {self.TABLE} WHERE id=%s{clause}", (item_id, *params)).fetchone()  # nosec B608
         return MemoryItem.from_dict(json.loads(row[0])) if row else None
 
     def all(self, mtype: Optional[str] = None,
             statuses: Optional[Tuple[str, ...]] = None) -> List[MemoryItem]:
-        rows = self._conn.execute(f"SELECT doc FROM {self.TABLE} ORDER BY seq").fetchall()
+        clause, params = self._scope(prefix="WHERE")
+        rows = self._conn.execute(
+            f"SELECT doc FROM {self.TABLE}{clause} ORDER BY seq", params).fetchall()  # nosec B608
         items = [MemoryItem.from_dict(json.loads(r[0])) for r in rows]
         if mtype is not None:
             items = [i for i in items if i.mtype == mtype]
@@ -78,8 +104,15 @@ class PgVectorBackend(MemoryBackend):
         return items
 
     def delete(self, item_id: str) -> bool:
-        cur = self._conn.execute(f"DELETE FROM {self.TABLE} WHERE id=%s", (item_id,))
+        clause, params = self._scope()
+        cur = self._conn.execute(
+            f"DELETE FROM {self.TABLE} WHERE id=%s{clause}", (item_id, *params))  # nosec B608
         return cur.rowcount > 0
+
+    def list_projects(self) -> List[str]:
+        from .backends import _distinct_projects
+        rows = self._conn.execute(f"SELECT DISTINCT project FROM {self.TABLE}").fetchall()  # nosec B608
+        return _distinct_projects(rows)
 
     def close(self) -> None:
         try:
@@ -91,11 +124,14 @@ class PgVectorBackend(MemoryBackend):
     def semantic_search(self, query: str, top_k: int = DEFAULT_TOP_K,
                         statuses: Tuple[str, ...] = (ACTIVE,)
                         ) -> List[Tuple[MemoryItem, float]]:
-        """Nearest items to `query` by cosine distance, best first — via the pgvector index."""
+        """Nearest items to `query` by cosine distance, best first — via the pgvector index.
+        SCOPED to the current project (Stage 71a) so a shared DB never leaks another project's
+        neighbours into a recall."""
         qv = _vlit(self._embed(query))
+        clause, sparams = self._scope(prefix="WHERE")
         rows = self._conn.execute(
-            f"SELECT doc, 1 - (embedding <=> %s) AS score FROM {self.TABLE} "
-            "ORDER BY embedding <=> %s LIMIT %s", (qv, qv, top_k)).fetchall()
+            f"SELECT doc, 1 - (embedding <=> %s) AS score FROM {self.TABLE}{clause} "  # nosec B608
+            "ORDER BY embedding <=> %s LIMIT %s", (qv, *sparams, qv, top_k)).fetchall()
         out = []
         for doc, score in rows:
             it = MemoryItem.from_dict(json.loads(doc))
@@ -109,10 +145,12 @@ def _vlit(vec: List[float]) -> str:
     return "[" + ",".join(repr(float(x)) for x in vec) + "]"
 
 
-def build_pgvector_backend(config: dict, embedder: Optional[Embedder]) -> Optional["PgVectorBackend"]:
+def build_pgvector_backend(config: dict, embedder: Optional[Embedder],
+                           project: Optional[str] = None) -> Optional["PgVectorBackend"]:
     """Build a pgvector backend from per-tool `config` + an embedder, or None to degrade.
     Honors ONLY `config.dsn_env` (never an inline DSN). Returns None when the env var is
-    unset, no embedder is configured, psycopg/pgvector is absent, or the DB is unreachable."""
+    unset, no embedder is configured, psycopg/pgvector is absent, or the DB is unreachable.
+    `project` (Stage 71a) scopes all rows to the current project; None spans all (review)."""
     import os
     if embedder is None:
         return None
@@ -123,6 +161,6 @@ def build_pgvector_backend(config: dict, embedder: Optional[Embedder]) -> Option
     if not dsn:
         return None
     try:
-        return PgVectorBackend(dsn, embedder)
+        return PgVectorBackend(dsn, embedder, project=project)
     except VectorUnavailable:
         return None

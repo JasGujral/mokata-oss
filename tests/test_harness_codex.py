@@ -67,7 +67,11 @@ class TestCodexHarness(unittest.TestCase):
         self.assertIn("subagents", sub.message)
 
     def test_registry_and_matrix(self):
-        self.assertEqual(available_harnesses(), ["claude", "codex", "cowork"])
+        # Stage 63 extended the registry with cursor/copilot/windsurf/gemini/aider; the
+        # reference (claude) + the Stage-52 adapters (codex/cowork) stay first + unchanged.
+        self.assertEqual(available_harnesses(),
+                         ["claude", "codex", "cowork", "cursor", "copilot", "windsurf",
+                          "gemini", "aider"])
         with self.assertRaises(ValueError):
             get_harness("nope")
         matrix = capability_matrix()

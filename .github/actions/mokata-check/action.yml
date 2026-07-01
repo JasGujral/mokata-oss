@@ -1,0 +1,68 @@
+name: "mokata PR check"
+description: >-
+  Run mokata's completeness gate + spec-awareness regression guard over a pull request's changed
+  files. Opt-in, degrade-clean (it never false-blocks when there's nothing to check), and it only
+  PRODUCES the review comment — the calling workflow's own GITHUB_TOKEN posts it.
+author: "MoStack"
+branding:
+  icon: "shield"
+  color: "purple"
+
+inputs:
+  base:
+    description: "Base git ref/SHA to diff against (the PR base). Default: the merge-base with origin/HEAD."
+    required: false
+    default: ""
+  path:
+    description: "Repo root mokata operates on."
+    required: false
+    default: "."
+  install:
+    description: >-
+      If set, `pip install` this before running (e.g. `mokata`, or `-e .` from a clone). Leave
+      empty if your workflow already installed mokata.
+    required: false
+    default: ""
+  comment-file:
+    description: "Path the PR review-comment body (markdown) is written to."
+    required: false
+    default: "mokata-check-comment.md"
+  fail-on-block:
+    description: "Fail the check (non-zero exit) when mokata blocks. Set to 'false' for report-only."
+    required: false
+    default: "true"
+
+outputs:
+  blocked:
+    description: "'true' when mokata blocked the PR."
+    value: ${{ steps.run.outputs.blocked }}
+  comment-file:
+    description: "Path to the written review-comment body."
+    value: ${{ inputs.comment-file }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: run
+      shell: bash
+      run: |
+        set -uo pipefail
+        if [ -n "${{ inputs.install }}" ]; then
+          python -m pip install --quiet ${{ inputs.install }}
+        fi
+        # Resolve the engine: prefer an installed `mokata`, else `python -m mokata`.
+        if command -v mokata >/dev/null 2>&1; then ENGINE="mokata"; else ENGINE="python -m mokata"; fi
+        # Resolve the base: the input, else the merge-base with origin/HEAD, else the previous commit.
+        base="${{ inputs.base }}"
+        if [ -z "$base" ]; then
+          base="$(git -C '${{ inputs.path }}' merge-base origin/HEAD HEAD 2>/dev/null || echo HEAD~1)"
+        fi
+        fail_flag=""
+        if [ "${{ inputs.fail-on-block }}" != "true" ]; then fail_flag="--no-fail"; fi
+        set +e
+        $ENGINE ci-check --path "${{ inputs.path }}" --base "$base" \
+          --comment-file "${{ inputs.comment-file }}" $fail_flag | tee -a "$GITHUB_STEP_SUMMARY"
+        rc=${PIPESTATUS[0]}
+        set -e
+        if [ "$rc" -ne 0 ]; then echo "blocked=true" >> "$GITHUB_OUTPUT"; else echo "blocked=false" >> "$GITHUB_OUTPUT"; fi
+        exit "$rc"

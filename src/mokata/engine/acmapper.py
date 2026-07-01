@@ -52,6 +52,7 @@ class MapResult:
 
 def map_acceptance_criteria(spec: Spec, tests: List[TestRef]) -> MapResult:
     """Map every AC in `spec` to the tests that declare it."""
+    tests = tests or []          # degrade-clean: a None/absent test list maps nothing (all unmapped)
     mappings: List[ACMapping] = []
     for ac in spec.criteria:
         covering = [t for t in tests if ac.id in t.ac_ids]
@@ -66,14 +67,18 @@ def _mentions(text: str, ac_id: str) -> bool:
 
 
 def scan_tests(root: str, ac_ids: List[str]) -> List[TestRef]:
-    """Discover TestRefs by reading test files: for each `def test_...`, record which of
-    `ac_ids` appear within that function. Dependency-free, static."""
+    """Discover TestRefs by reading test files: for each recognised test, record which of
+    `ac_ids` appear within it. Dependency-free, static, LANGUAGE-AWARE (Stage 65): test
+    conventions across Python (pytest `test_*`), JS/TS (jest/vitest `test`/`it`), Go
+    (`Test*`), Rust (`#[test]`) and Java (JUnit `@Test`) are recognised via the lexical
+    heuristics in `mokata.languages`. Degrade-clean: an unknown language with no test
+    convention simply contributes nothing (never a crash)."""
+    from .. import languages
     refs: List[TestRef] = []
-    def_re = re.compile(r"^(\s*)def\s+(test_\w+)\s*\(")
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if not d.startswith(".")]
         for fn in filenames:
-            if not fn.endswith(".py"):
+            if not languages.is_source_file(fn):
                 continue
             path = os.path.join(dirpath, fn)
             try:
@@ -81,26 +86,10 @@ def scan_tests(root: str, ac_ids: List[str]) -> List[TestRef]:
                     lines = fh.read().splitlines()
             except OSError:
                 continue
-            i = 0
-            while i < len(lines):
-                m = def_re.match(lines[i])
-                if not m:
-                    i += 1
-                    continue
-                base, name, start = len(m.group(1)), m.group(2), i
-                block = [lines[i]]
-                j = i + 1
-                while j < len(lines):
-                    ln = lines[j]
-                    if ln.strip() and (len(ln) - len(ln.lstrip())) <= base:
-                        break
-                    block.append(ln)
-                    j += 1
-                body = "\n".join(block)
+            lang = languages.language_for(fn)
+            rel = os.path.relpath(path, root)
+            for name, start_line, body in lang.tests(lines):
                 found = [a for a in ac_ids if _mentions(body, a)]
                 if found:
-                    refs.append(TestRef(name=name, ac_ids=found,
-                                        path=os.path.relpath(path, root),
-                                        line=start + 1))
-                i = j
+                    refs.append(TestRef(name=name, ac_ids=found, path=rel, line=start_line))
     return refs

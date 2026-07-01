@@ -1,0 +1,99 @@
+{
+  "manifest_version": 1,
+  "mokata": {
+    "version": "0.0.5"
+  },
+  "profile": "standard",
+  "layers": {
+    "engine": {
+      "enabled": true
+    },
+    "knowledge": {
+      "enabled": true
+    },
+    "memory": {
+      "enabled": true
+    },
+    "governance": {
+      "enabled": true
+    }
+  },
+  "capabilities": {
+    "code_graph": {
+      "description": "Structural codebase queries (callers/callees, imports, blast-radius); grep is the universal fallback.",
+      "layer": "knowledge",
+      "fallback": [
+        "ripgrep",
+        "grep"
+      ]
+    },
+    "memory_store": {
+      "description": "Where persistent/decision memory is stored; SQLite is the guaranteed default backend.",
+      "layer": "memory",
+      "fallback": [
+        "sqlite"
+      ]
+    }
+  },
+  "tools": {
+    "ripgrep": {
+      "provides": "code_graph",
+      "kind": "cli",
+      "version": null,
+      "detect": {
+        "type": "command",
+        "name": "rg"
+      },
+      "enabled": true
+    },
+    "grep": {
+      "provides": "code_graph",
+      "kind": "builtin",
+      "version": null,
+      "detect": {
+        "type": "always"
+      },
+      "enabled": true
+    },
+    "sqlite": {
+      "provides": "memory_store",
+      "kind": "library",
+      "version": null,
+      "detect": {
+        "type": "python_module",
+        "name": "sqlite3"
+      },
+      "enabled": true
+    }
+  },
+  "settings": {
+    "stack": {
+      "name": "python-web",
+      "framework": "Python web (FastAPI / Django / Flask)",
+      "version": "0.0.5",
+      "summary": "Governed stack for a Python web service \u2014 migrations, secrets-in-env, typed boundaries, tests-first.",
+      "guardrails": [
+        "Never inline a credential or DSN \u2014 reference an env var; the secret-guard hard-blocks a secret in any committed file.",
+        "A schema/DB change ships with a migration and a test that exercises it.",
+        "Validate and type every request boundary (pydantic / serializers) before use.",
+        "No new endpoint or behaviour without a failing test that demands it (RED first)."
+      ],
+      "skills": [
+        "brainstorm",
+        "spec",
+        "test",
+        "develop",
+        "review",
+        "ship"
+      ],
+      "tags": [
+        "python",
+        "web",
+        "api",
+        "fastapi",
+        "django",
+        "flask"
+      ]
+    }
+  }
+}

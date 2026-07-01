@@ -180,6 +180,123 @@ def render_progress(progress: RunProgress, ascii_only: bool = False) -> str:
     return "\n".join(lines)
 
 
+# =============================================================== Stage 70c — native to-do widget
+# One MORE renderer over the SAME RunProgress — never a second progress model. It projects the
+# existing build_progress() view into the shape a harness's NATIVE to-do widget wants: a one-line
+# summary + ordered items each marked done | in_progress | pending (the harness's own idea of a
+# checklist). mokata cannot call the to-do tool itself — the AGENT renders the widget, driven by
+# the single PROGRESS_INSTRUCTION; this function just gives it the derived items so it never has to
+# invent them. Read-only, deterministic, degrade-clean: no run (or a surface it can't read) -> an
+# empty summary + [] items, which the agent falls back from to the printed run-progress block.
+
+# Native-widget vocabulary: RunProgress' `current` is the widget's `in_progress`.
+_TODO_STATUS = {DONE: "done", CURRENT: "in_progress", PENDING: "pending"}
+
+
+def _todo_summary(prog: "RunProgress") -> str:
+    """The widget's top summary line, DERIVED from the same RunProgress counts."""
+    if prog.complete:
+        return f"mokata · run [{prog.done}/{prog.total} done] — complete"
+    cur = prog.current or "—"
+    return f"mokata · run [{prog.done}/{prog.total} done] — current: {cur}"
+
+
+def build_todo_items(surface: Any, run_id: Optional[str] = None,
+                     phases=PIPELINE_PHASES) -> dict:
+    """Project the EXISTING RunProgress into `{summary, items:[{step, status}]}` for a native
+    to-do widget. A THIN renderer: it calls build_progress() and never recomputes progress, so it
+    cannot drift from the badge / block / lanes views. The active stage's sub-steps are surfaced
+    when the run-state carries them (none today — degrade-clean, so none are invented). Pure,
+    read-only, deterministic; no run / an unreadable surface -> `{"summary": "", "items": []}`."""
+    try:
+        store = surface.state
+        prog = build_progress(store, run_id=run_id, phases=phases)
+    except Exception:
+        return {"summary": "", "items": []}
+    if not prog.active:
+        return {"summary": "", "items": []}
+    items = [{"step": s.phase, "status": _TODO_STATUS[s.status]} for s in prog.steps]
+    return {"summary": _todo_summary(prog), "items": items}
+
+
+# =============================================================== Stage 54b — the stage badge
+# A persistent "mode badge" (the feel of Claude Code's own "plan mode on" indicator) that
+# always shows which USER-FACING stage a run is in. The five user stages are the pipeline
+# SKILLS a user steps through — distinct from the 7 internal PIPELINE_PHASES the engine runs
+# under the hood. We DERIVE the active user stage from the same read-only run-state
+# build_progress() already exposes (+ an in-progress brainstorm), collapsing the internal
+# phases onto the user-visible arc. Read-only, deterministic, degrade-clean: no run -> a
+# minimal `mokata`, never an error; nothing new is ever written.
+
+STAGE_BADGE_STAGES = ("brainstorm", "spec", "develop", "review", "ship")
+
+# How the internal pipeline maps onto the user-facing arc:
+#   brainstorm phase / in-progress brainstorm -> "brainstorm"
+#   analysis..emit (building + emitting the spec) -> "spec"
+#   the pipeline is complete (spec emitted) -> "develop" (the next thing the user does)
+# develop/review/ship beyond "spec emitted -> develop" are separate skills with no shared
+# run-state checkpoint, so they aren't distinguishable from the pipeline run alone — those
+# cells simply render un-highlighted (honest; we never invent state we don't have).
+
+
+def statusline_enabled(surface: Any) -> bool:
+    """settings.ux.statusline — the badge is opt-OUT (default True). A broken/absent surface
+    reads as enabled so the default-on behaviour is never silently lost."""
+    try:
+        return bool((surface.manifest.setting("ux", {}) or {}).get("statusline", True))
+    except Exception:
+        return True
+
+
+def _badge_state(surface: Any):
+    """(active_user_stage, counter) derived read-only from run-state — (None, "") with no
+    run. `counter` is the pipeline phase fraction shown only during the spec stage."""
+    store = surface.state                       # may raise on a broken surface -> caller guards
+    try:
+        from .brainstorm import restore_brainstorm_progress
+        if restore_brainstorm_progress(store) is not None:
+            return "brainstorm", ""             # mid-stream exploration (HARD-GATE still holds)
+    except Exception:
+        pass
+    prog = build_progress(store)
+    if not prog.active:
+        return None, ""
+    if prog.complete:
+        return "develop", ""                    # spec emitted -> the user moves to develop
+    if prog.current == "brainstorm":
+        return "brainstorm", ""
+    return "spec", f"{prog.done}/{prog.total}"  # building the spec (analysis..emit)
+
+
+def build_stage_badge(surface: Any, *, session_name: Optional[str] = None,
+                      ascii_only: bool = False) -> str:
+    """The one-line mode badge, e.g. `mokata ▸ [brainstorm · spec · ›develop‹ · review · ship]`.
+
+    Highlights the active user stage among STAGE_BADGE_STAGES; appends a compact phase
+    counter during the spec stage; takes an optional `session_name` (the Stage-55 hook —
+    Claude Code passes it on the statusLine stdin, omitted gracefully when absent). Pure,
+    read-only, deterministic; with no run (or a surface it can't read) it degrades to a
+    minimal `mokata`, never an error."""
+    try:
+        active, counter = _badge_state(surface)
+    except Exception:
+        active, counter = None, ""
+    if active is None:
+        return "mokata"
+    lo, hi = (">", "<") if ascii_only else ("›", "‹")
+    arrow = ">" if ascii_only else "▸"
+    cells = [f"{lo}{s}{hi}" if s == active else s for s in STAGE_BADGE_STAGES]
+    strip = "[" + " · ".join(cells) + "]"
+    name = f"{session_name} · " if session_name else ""
+    badge = f"mokata {arrow} {name}{strip}"
+    if counter:
+        badge += f" · {counter}"
+    agents = _badge_agents(surface)          # Stage 54d — compact fan-out summary, if any
+    if agents:
+        badge += f" · {agents}"
+    return badge
+
+
 def active_banner(label: str, running: bool = True,
                   sub_done: Optional[int] = None,
                   sub_total: Optional[int] = None,
@@ -338,3 +455,32 @@ def render_lanes(rl: RunLanes, ascii_only: bool = False) -> str:
         suffix = f"  ({ln.note})" if ln.note else ""
         lines.append(f"  {glyphs.get(ln.state, '?')} {ln.name:<20}{ln.state}{suffix}")
     return "\n".join(lines)
+
+
+# =============================================================== Stage 54d — badge agents summary
+# A COMPACT one-line agents summary for the 54b badge during a fan-out — e.g. "2 running ·
+# 1 blocked". DERIVED from the SAME build_run_lanes view (no re-derivation); shown only for a
+# parallel/fanout batch, omitted for sequential / no parallel run (degrade-clean).
+
+def agents_summary(rl: RunLanes) -> str:
+    """`<n> running · <n> done · <n> blocked` (only the non-zero states, in that order) for a
+    PARALLEL/fanout batch; `""` for a sequential run, a degraded-to-sequential run, or no run."""
+    if rl is None or not rl.active or rl.mode not in _PARALLEL_MODES:
+        return ""
+    counts: dict = {}
+    for ln in rl.lanes:
+        counts[ln.state] = counts.get(ln.state, 0) + 1
+    parts = [f"{counts[s]} {s}"
+             for s in (L_RUNNING, L_DONE, L_BLOCKED, L_DEGRADED) if counts.get(s)]
+    return " · ".join(parts)
+
+
+def _badge_agents(surface: Any) -> str:
+    """The agents summary for `surface`'s active run (read-only, bounded ledger tail). `""` on
+    any problem / no parallel batch — the badge degrades clean."""
+    try:
+        from .govern import AuditLedger
+        ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+        return agents_summary(build_run_lanes(surface.state, ledger=ledger))
+    except Exception:
+        return ""

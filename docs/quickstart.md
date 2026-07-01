@@ -13,9 +13,12 @@ Three tiers, in order of how most people should reach for them.
 
 The standard install, from the public marketplace, in Claude Code:
 
-> ⏳ **Pending directory approval (June 2026):** mokata is awaiting review for the Claude plugin
-> directory, so it is **not yet installable from Claude's in-app "Browse plugins" directory** —
-> use the command below. _(Temporary notice; removed once the listing is live.)_
+<!-- mokata:directory-listing:start -->
+> ⏳ **Pending Claude plugin-directory approval.** mokata isn't in Claude's in-app
+> "Browse plugins" directory **yet** — install it via `/plugin marketplace add` (you get
+> the same in-Claude-Code experience). _(This notice auto-flips once the listing is
+> approved — single source: `scripts/directory_listing.py`.)_
+<!-- mokata:directory-listing:end -->
 
 ```text
 /plugin marketplace add https://github.com/JasGujral/mokata-oss.git

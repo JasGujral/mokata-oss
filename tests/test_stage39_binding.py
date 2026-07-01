@@ -4,8 +4,6 @@ Both jsonschema states. Asserts the Part A remediation behaviours and the Part B
 frugality invariants hold together (evidence, not claims).
 """
 
-import os
-import sys
 import tempfile
 import unittest
 
@@ -165,12 +163,14 @@ class TestFrugalityBinding(unittest.TestCase):
 # ----------------------------------------------------------------- Stage 28 / 29 still landed
 
 class TestEarlierStagesLanded(unittest.TestCase):
-    def test_stage28_hooks_use_absolute_interpreter(self):
-        # Stage 28: hooks embed sys.executable, not a bare `python3` (cross-platform).
+    def test_stage28_53b_hooks_use_console_entry_point(self):
+        # Stage 53b (supersedes Stage 28's sys.executable wiring): hooks are launched via
+        # the `mokata-hook` console entry point — never a bare `python3` (cross-platform).
         from mokata.harness_setup import _hook_command
         cmd = _hook_command("session_start.py")
-        self.assertIn(sys.executable, cmd)
-        self.assertIn("session_start.py", cmd)
+        self.assertIn("mokata-hook", cmd)
+        self.assertIn("session-start", cmd)
+        self.assertNotRegex(cmd, r'(^|\s)python3(\s|$)')
 
     def test_stage29_brainstorm_autotrigger_and_banner(self):
         from mokata.skills import get_skill

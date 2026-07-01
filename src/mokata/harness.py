@@ -68,12 +68,69 @@ def cowork_harness(ops: Optional[Dict[str, Callable]] = None) -> Harness:
     return Harness("cowork", {"commands", "context_injection", "subagents"}, ops)
 
 
+# ======================================================================================
+# Stage 63 — the Reach batch: more agents than Claude Code, behind the SAME boundary.
+# Each adapter declares ONLY the capabilities we can VERIFY the agent actually supports; an
+# unverified/unsupported capability is declared ABSENT so the HarnessBoundary degrades
+# CLEARLY (ok=False/degraded, names the missing capability) — never a silent gate no-op.
+# When unsure, declare absent. (MCP auto-wiring is tracked separately in harness_setup, per
+# whether the agent's MCP config schema matches mokata's `mcpServers` merge.)
+# ======================================================================================
+
+def cursor_harness(ops: Optional[Dict[str, Callable]] = None) -> Harness:
+    """Cursor. Supports custom markdown commands (`.cursor/commands/*.md`) and project context
+    (`.cursor/rules`), and speaks MCP (`.cursor/mcp.json`, `mcpServers`). It has NO mokata-
+    drivable PreToolUse enforcement hook and NO programmatic subagent fan-out we can drive, so
+    `hooks` + `subagents` are declared absent and degrade clearly. Honest, not assumed."""
+    return Harness("cursor", {"commands", "context_injection"}, ops)
+
+
+def copilot_harness(ops: Optional[Dict[str, Callable]] = None) -> Harness:
+    """GitHub Copilot. Supports prompt files (`.github/prompts/*.prompt.md`) and custom
+    instructions (`.github/copilot-instructions.md`, context). No enforcement hook, no
+    drivable subagent fan-out → `hooks` + `subagents` declared absent (degrade clearly). Its
+    MCP config (VS Code `mcp.json`) uses a DIFFERENT schema (`servers`), so MCP is a documented
+    manual step, not auto-wired — never a silent half-wiring."""
+    return Harness("copilot", {"commands", "context_injection"}, ops)
+
+
+def windsurf_harness(ops: Optional[Dict[str, Callable]] = None) -> Harness:
+    """Windsurf (Codeium). Supports workflows (`.windsurf/workflows/*.md`, slash-invocable) and
+    rules (`.windsurf/rules`, context). No mokata-drivable enforcement hook / subagent fan-out →
+    `hooks` + `subagents` absent (degrade clearly). Its MCP config lives outside the project
+    (`~/.codeium/windsurf/mcp_config.json`), so MCP is a documented manual step."""
+    return Harness("windsurf", {"commands", "context_injection"}, ops)
+
+
+def gemini_harness(ops: Optional[Dict[str, Callable]] = None) -> Harness:
+    """Gemini CLI. Supports custom commands (`.gemini/commands/*.toml`) and context
+    (`GEMINI.md`), and speaks MCP (`.gemini/settings.json`, `mcpServers`). No enforcement hook /
+    drivable subagent fan-out → `hooks` + `subagents` absent (degrade clearly)."""
+    return Harness("gemini", {"commands", "context_injection"}, ops)
+
+
+def aider_harness(ops: Optional[Dict[str, Callable]] = None) -> Harness:
+    """Aider. Supports context injection (conventions / `--read` files, `CONVENTIONS.md`) but
+    has NO user-authored slash-command FILE system (its `/commands` are built-in, not
+    extensible by prompt files), no enforcement hook, no drivable subagent fan-out, and no
+    native MCP. So it declares ONLY `context_injection`; `commands`/`hooks`/`subagents` are
+    absent and degrade CLEARLY (mokata's commands are provided as REFERENCE prompts, never
+    pretended to be native slash commands)."""
+    return Harness("aider", {"context_injection"}, ops)
+
+
 # The harness registry, keyed by the short name `mokata setup`/`mokata harness` use. The
-# reference harness is "claude"; "codex" + "cowork" are the portable adapters.
+# reference harness is "claude"; the rest are portable adapters (codex/cowork from Stage 52,
+# cursor/copilot/windsurf/gemini/aider from Stage 63).
 HARNESS_FACTORIES: Dict[str, Callable[..., Harness]] = {
     "claude": claude_code_harness,
     "codex": codex_harness,
     "cowork": cowork_harness,
+    "cursor": cursor_harness,
+    "copilot": copilot_harness,
+    "windsurf": windsurf_harness,
+    "gemini": gemini_harness,
+    "aider": aider_harness,
 }
 
 

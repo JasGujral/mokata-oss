@@ -1,13 +1,16 @@
-"""Stage 28 — cross-platform Python invocation (Windows + macOS + Linux).
+"""Stage 28 + Stage 53b — cross-platform hook invocation (Windows + macOS + Linux).
 
-Two layers (see docs/build/15-stage-28-cross-platform-python.md):
+Stage 53b superseded the bare-`python3` / `sh launch.sh` resolution chain with the
+``mokata-hook`` console entry point — resolved on PATH exactly like ``mokata-mcp``:
 
-1. Anything mokata *writes* (the `setup claude` hook block) embeds the absolute
-   interpreter discovered at run time (``sys.executable``) — no PATH dependency.
-2. The static, shipped plugin ``hooks/hooks.json`` can't bake in the user's
-   interpreter, so it calls ``hooks/launch.sh``, a POSIX launcher that resolves
-   *a* Python 3 (``python3`` / ``python`` / ``py -3`` + common-location
-   fallbacks) and degrades to a clear no-op (exit 0) when none exists.
+1. Anything mokata *writes* (the `setup claude` hook block) wires ``mokata-hook
+   <subcommand>`` — no bare ``python3`` a minimal PATH (macOS GUI) or Windows
+   (python/py) wouldn't resolve.
+2. The shipped plugin ``hooks/hooks.json`` also wires ``mokata-hook <subcommand>``.
+
+``hooks/launch.sh`` still ships as a last-resort fallback for a pure-plugin-without-pip
+install and is exercised below as a standalone resolver, but it is no longer on the
+default hook path.
 """
 
 import json
@@ -33,30 +36,29 @@ needs_sh = unittest.skipUnless(SH, "POSIX sh not available (e.g. Windows without
 
 
 # ---------------------------------------------------------------------------
-# Layer 1 — mokata-written commands use the absolute interpreter (sys.executable)
+# Layer 1 — mokata-written commands wire the `mokata-hook` console entry point
 # ---------------------------------------------------------------------------
 
-class TestSetupUsesAbsoluteInterpreter(unittest.TestCase):
-    def test_hook_command_uses_sys_executable_not_bare_python3(self):
+class TestSetupUsesConsoleEntryPoint(unittest.TestCase):
+    def test_hook_command_uses_mokata_hook_not_bare_python3(self):
         cmd = harness_setup._hook_command("session_start.py")
-        # Absolute interpreter, quoted — never a bare `python3` that a minimal
+        # The `mokata-hook` console entry point — never a bare `python3` that a minimal
         # PATH (macOS GUI launch) or Windows (python/py) wouldn't find.
-        self.assertIn(sys.executable, cmd)
+        self.assertIn("mokata-hook", cmd)
+        self.assertIn("session-start", cmd)
         self.assertNotRegex(cmd, r'(^|\s)python3(\s|$)')
-        self.assertIn("session_start.py", cmd)
 
-    def test_setup_writes_absolute_interpreter_into_settings(self):
+    def test_setup_writes_mokata_hook_into_settings(self):
         with tempfile.TemporaryDirectory() as d:
             harness_setup.setup_harness(
                 "claude", root=d, assume_yes=True, out=lambda _: None)
             settings = json.loads(
                 (Path(d) / ".claude" / "settings.json").read_text())
-            blob = json.dumps(settings)
-            self.assertIn(sys.executable, blob)
-            # the wired command must not rely on bare `python3` on PATH
             for event in ("SessionStart", "PreToolUse"):
                 for entry in settings["hooks"][event]:
                     for h in entry["hooks"]:
+                        self.assertIn("mokata-hook", h["command"])
+                        # the wired command must not rely on bare `python3` on PATH
                         self.assertNotRegex(
                             h["command"], r'(^|\s)python3(\s|$)')
 
@@ -69,23 +71,24 @@ class TestSetupUsesAbsoluteInterpreter(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Layer 2 — the static plugin hooks.json delegates to the launcher
+# Layer 2 — the plugin hooks.json wires the console entry point (Stage 53b)
 # ---------------------------------------------------------------------------
 
-class TestHooksJsonUsesLauncher(unittest.TestCase):
-    def test_launcher_ships(self):
-        self.assertTrue(LAUNCH.exists(), "hooks/launch.sh must ship")
+class TestHooksJsonUsesConsoleEntryPoint(unittest.TestCase):
+    def test_hooks_json_uses_mokata_hook_no_python3_no_launcher(self):
+        flat = json.dumps(json.loads(HOOKS_JSON.read_text()))
+        self.assertIn("mokata-hook session-start", flat)
+        self.assertIn("mokata-hook secret-guard", flat)
+        # no fragile resolution remains: no bare python3, no `sh launch.sh`
+        self.assertNotRegex(flat, r'(^|\s)python3(\s|\\|$)')
+        self.assertNotIn("launch.sh", flat)
 
-    def test_hooks_json_calls_launcher_not_bare_python3(self):
-        blob = HOOKS_JSON.read_text()
-        data = json.loads(blob)
-        flat = json.dumps(data)
-        self.assertIn("launch.sh", flat)
-        # both scripts still referenced (test_ship asserts this too)
-        self.assertIn("session_start.py", flat)
-        self.assertIn("secret_guard.py", flat)
-        # no bare `python3 "..."` invocation remains in the static file
-        self.assertNotIn('python3 "', flat)
+    def test_launcher_still_ships_as_fallback(self):
+        # launch.sh remains for the pure-plugin-without-pip last resort.
+        self.assertTrue(LAUNCH.exists(), "hooks/launch.sh must still ship")
+        # and the standalone shim scripts it would launch still exist.
+        self.assertTrue((ROOT / "hooks" / "session_start.py").exists())
+        self.assertTrue((ROOT / "hooks" / "secret_guard.py").exists())
 
 
 # ---------------------------------------------------------------------------

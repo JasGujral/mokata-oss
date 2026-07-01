@@ -55,6 +55,20 @@ mokata memory edit tax_rate --value 0.25 [--kind context] [--yes]
 Human-gated and routed through **self-healing**: the old value is **superseded** (kept in the
 record), the new one becomes active — surfaced, never silently overwritten.
 
+## Auto-proposed guardrails (recurring corrections)
+
+When you keep correcting the same thing — declining a write, reverting a change, hitting a spec
+conflict — mokata notices and distils it into a guardrail-rule **proposal**. Running
+`/mokata:onboard` (and `mokata rules`) surfaces these:
+
+```
+Proposed guardrails (recurring corrections mokata noticed — human-gated, NOT auto-added):
+  - Recurring correction 'write_gate:src/x.py' — consider promoting a guardrail rule. [observed 3 times …]
+```
+
+They are **proposal-only**: approve, edit, or reject each through the normal gated capture above —
+mokata **never auto-adds a rule**.
+
 ## How the skills use it (the payoff)
 
 - **rule / guardrail** are injected into the **SessionStart briefing** and the always-on rules

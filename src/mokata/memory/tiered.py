@@ -47,6 +47,13 @@ class RetrievalHit:
     def tiers(self) -> dict:
         return {"lexical": self.lexical, "graph": self.graph, "semantic": self.semantic}
 
+    def explain(self, query: str) -> str:
+        """Stage 59 — a short, deterministic "why it surfaced" phrase for THIS hit, from its
+        own per-tier scores + the query (the strongest tier + the matched token + kind).
+        Read-only; the hit carries its own explanation."""
+        from .intelligence import why_surfaced
+        return why_surfaced(query, self.item, tiers=self.tiers())
+
 
 def _text(item: Any) -> str:
     return f"{item.subject} {item.value}"

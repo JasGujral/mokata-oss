@@ -64,13 +64,15 @@ class MigrateResult:
 
 def build_named_backend(tool: str, root: str,
                         config: Optional[dict] = None,
-                        clients: Optional[dict] = None) -> MemoryBackend:
+                        clients: Optional[dict] = None,
+                        project: Optional[str] = None) -> MemoryBackend:
     """Build the EXACT named backend (NON-degrading). Postgres that can't be reached raises
     `MigrateError` rather than falling to the SQLite floor — so a migration never silently
-    lands somewhere it shouldn't."""
+    lands somewhere it shouldn't. `project` (Stage 71a) scopes the shared Postgres to the current
+    project so a migration reads/writes ONLY this project's rows on a shared DSN."""
     config = config or {}
     if tool == "postgres":
-        be = build_postgres_backend(config)
+        be = build_postgres_backend(config, project=project)
         if be is None:
             raise MigrateError(
                 "postgres backend is unreachable or unconfigured (set config.dsn_env, "
@@ -97,11 +99,7 @@ def _default_confirm(text: str) -> bool:
 
 
 def _default_drop_confirm(text: str) -> bool:
-    try:
-        return input(text + "\nDROP the source after migrating? [y/N] ").strip().lower() \
-            in ("y", "yes")
-    except EOFError:
-        return False
+    return read_yes_no(text, "DROP the source after migrating?")
 
 
 def migrate_memory(surface: Any, to_backend: str, from_backend: Optional[str] = None,
@@ -116,6 +114,8 @@ def migrate_memory(surface: Any, to_backend: str, from_backend: Optional[str] = 
     root = surface.mokata_dir
     manifest = surface.manifest
     src_tool = from_backend or _resolved_memory_tool(surface)
+    from ..project import project_id
+    project = project_id(surface)      # Stage 71a — migrate ONLY the current project's rows
 
     if to_backend not in SUPPORTED:
         return MigrateResult(from_backend=src_tool, to_backend=to_backend, aborted=True,
@@ -124,14 +124,16 @@ def migrate_memory(surface: Any, to_backend: str, from_backend: Optional[str] = 
 
     # Build the source (its config from the manifest).
     try:
-        source = build_named_backend(src_tool, root, manifest.tool_config(src_tool))
+        source = build_named_backend(src_tool, root, manifest.tool_config(src_tool),
+                                     project=project)
     except MigrateError as exc:
         return MigrateResult(from_backend=src_tool, to_backend=to_backend, aborted=True,
                              error=f"source '{src_tool}' unavailable: {exc}")
 
     # Build the destination NON-degrading — a failure here writes NOTHING (degrade-clean).
     try:
-        dest = build_named_backend(to_backend, root, manifest.tool_config(to_backend))
+        dest = build_named_backend(to_backend, root, manifest.tool_config(to_backend),
+                                   project=project)
     except MigrateError as exc:
         source.close()
         return MigrateResult(from_backend=src_tool, to_backend=to_backend, aborted=True,

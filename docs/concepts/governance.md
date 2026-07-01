@@ -55,6 +55,15 @@ block) → human approval → commit → logged. The **trust dial**
 (`settings.trust.<tool>`) enforces `read-only` (cannot write), `propose-only` (always
 surfaced for approval, never auto-approved), or `gated-write` (default).
 
+**One-key approve / edit / reject (Stage 54c).** Where a gated write offers an *editable*
+value — a memory edit, or a self-healing `old → new` proposal — the human gate isn't just
+yes/no: it's **approve** (apply the proposed value), **edit** (supply a different one), or
+**reject**, with the **safe default = no change** (a blank answer or EOF rejects — nothing is
+ever rewritten without your say-so). This is a richer *prompt*, not a weaker gate: it routes
+through the same `WriteGate`, so the **secret hard-block still fires** — `approve` (or an
+edited value containing a secret) can **never** override a security block. Plain
+approve/decline stays everywhere else.
+
 ## Plan adherence — never silently deviate
 
 A plan change is a **durable change**, so it's human-gated like any other. During
@@ -95,7 +104,30 @@ invoke it as part of grounding.
 
 An append-only `.mokata/temp_local/audit/ledger.jsonl` records every gate decision, tool
 call, hook, write, savings event, subagent decision, healing/consolidation decision, and
-deviation request/decision — each with a monotonic `seq`. `mokata audit` prints it.
+deviation request/decision — each with a monotonic `seq`. `mokata audit` prints it;
+`mokata audit --why` renders the read-only **what + decision + why** timeline (Stage 49).
+
+## Trust & visibility (Stage 60)
+
+Three read-only, derived surfaces so you can always see what mokata did **and why** — none of
+them mutate the state they show:
+
+- **Live `mokata govern` / `mokata watch`.** The governance dashboard takes the same optional
+  self-meta-refresh as `watch`: `mokata govern --live` re-writes on a 2s interval and the page
+  refreshes itself (honouring `settings.ux.progress`; the static snapshot — `mokata govern` /
+  `--once` — always works and is byte-identical/deterministic). Self-contained: inline CSS, **no
+  network**, under gitignored `temp_local/`.
+- **"What changed since last session."** A concise diff of new/changed memory, new rules, and
+  the gate decisions made since a lightweight **last-session snapshot**. The snapshot is captured
+  at the session boundary (the SessionStart hook) into transient `temp_local/`; the diff
+  **derives** against it and never writes. It surfaces in the `govern` view and as one bounded
+  SessionStart briefing line (within the 2k budget; absent on a first session or when nothing
+  changed). Read-only — it bumps no counter and the snapshot capture is read-only on the
+  governed state.
+- **End-of-run "what I changed and WHY."** Finishing a run (`/mokata:ship`) folds in a bounded
+  `audit --why` recap of this run — what changed and the why behind each gate decision — so
+  landing it is a reviewed decision. Shipping stays **human-gated**: mokata records the landing
+  choice but **never merges / opens a PR / deletes** on its own.
 
 ## Reversibility (I5) & resume (I6)
 

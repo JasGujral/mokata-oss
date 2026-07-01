@@ -37,6 +37,11 @@ class SpecGateResult:
         head = "PASS" if self.passed else "BLOCK"
         return f"[{head}] {self.gate_id} — {self.reason}"
 
+    def verdict(self, ascii_only: bool = False) -> str:
+        """Stage 54c — the shared one-line gate verdict (read-only; no re-derivation)."""
+        from ..legibility import verdict
+        return verdict(self, ascii_only=ascii_only)
+
 
 def load_emitted_spec(store: Any) -> Optional[Spec]:
     """The persisted spec from the state store, or None when absent/unreadable."""

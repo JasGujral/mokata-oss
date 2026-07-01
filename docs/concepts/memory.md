@@ -114,6 +114,25 @@ end to end: no `psycopg` / no `pgvector` / no embedder ⇒ semantic silently abs
 crashes, no partial writes. Frugal: embeddings are computed **once, on the gated write**;
 recall embeds only the query and returns only the top-k.
 
+### Explainable retrieval (Stage 59)
+
+Every recall hit carries a short, deterministic **"why it surfaced"** phrase so a surfaced
+memory is never a black box — it names the strongest signal that pulled the item in plus its
+kind:
+
+| phrase | what pulled it in |
+| --- | --- |
+| `[context] matched "auth"` | a lexical keyword overlap (the JIT floor) — names the query token |
+| `[reference] semantically near your query` | an embedding neighbour (semantic tier) |
+| `[context] graph-anchored "load"` | a code-graph anchor (graph tier) — names the matched anchor |
+| `[guardrail] always-on (project guardrail)` | an always-on rule/guardrail, injected (no query) |
+
+It's pure + **read-only** (no LLM, no wall-clock, no stat bump beyond the existing recall
+instrumentation) and **frugal** — one short phrase per hit, so the top-k/no-corpus-dump bound
+still holds. Threaded through `recall_relevant` (`RetrievalHit.explain(query)`) and `jit_recall`
+(`explain_recall(query, hits)`); inside Claude Code, `recall(query=…)` returns each hit with its
+`why`.
+
 ## Human-gated writes (C6)
 
 Nothing reaches a backend without approval. The write API takes a `confirm` callback or an
@@ -142,6 +161,32 @@ human-gated like C5, logged to the audit ledger.
 disabling the whole `memory` layer turns them all off. A disabled type is refused on write
 and never surfaced on read. mokata logs the read/write ratio — if writes ≫ reads, the
 feature is failing.
+
+## Memory-health nudge (Stage 59)
+
+The health signals above become **one actionable line** instead of a number you have to read.
+mokata turns the self-healing backlog (stale · contradictory, from C5 detection) plus the C8
+read/write ratio (the **unused-memory** signal — writes not yet balanced by a recall) into a
+nudge that points at the **gated** review path:
+
+```
+mokata · memory health: 2 stale · 1 contradictory · 3 unused — review with
+`mokata memory` (gated) / `mokata govern`; nothing changes until you approve.
+```
+
+It's surfaced on `mokata memory`, the `mokata govern` view, and the `govern` MCP tool. It is
+**read-only + deterministic** (derived from values already in hand; no extra reads, no stat
+bump) and **proposal-only** — it *points at* the gated resolve path and **never auto-edits or
+auto-prunes** memory. **Degrade-clean:** a healthy store nudges nothing (the line is empty).
+
+## Auto-proposed guardrails (Stage 59)
+
+When a **correction recurs** — a write you declined, a change you reverted, a spec conflict —
+mokata distils it into a guardrail-rule **proposal** (the G5 `learn_from_ledger` pass). These
+proposals are surfaced where you'd act on them: `mokata rules`, the `rules` MCP tool, and the
+**`/mokata:onboard`** capture flow. They are **proposal-only** — you approve, edit, or reject
+each through the normal gated capture; mokata **never auto-adds a rule**. Quiet and bounded
+when there are none.
 
 See [how-to: use & heal memory](../how-to/use-memory.md) and the
 [configuration reference](../reference/manifest.md).

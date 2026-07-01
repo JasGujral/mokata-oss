@@ -21,8 +21,8 @@ from __future__ import annotations
 from .prompt import read_yes_no
 
 import json
+import shlex
 import shutil
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -30,18 +30,51 @@ from typing import Callable, Dict, List, Optional
 from .init import init_repo
 from . import MOKATA_DIR, MANIFEST_FILENAME
 
-HARNESSES = ("claude", "codex")
+# Stage 54b — where the original statusLine is stashed when mokata composes over a user's
+# own (so `unsetup` can restore it verbatim). Claude Code ignores unknown statusLine keys.
+_WRAPPED_KEY = "_mokataWrapped"
+
+# Setup targets (Stage 52: claude/codex; Stage 63: cursor/copilot/windsurf/gemini/aider).
+# `cowork` is registry/matrix-only (a plugin host, not a `mokata setup` target).
+HARNESSES = ("claude", "codex", "cursor", "copilot", "windsurf", "gemini", "aider")
 SCOPES = ("project", "user")
 
-# Per-harness wiring map (Stage 52a). Each harness is a different mapping of the same
-# portable artifacts; the capabilities a harness lacks are NOT wired (degrade clearly).
-#   dir            — the harness config dir under the scope base
-#   commands_subdir — where prompt/slash commands live
-#   mcp_auto       — auto-register the bundled MCP server in a config file (claude only;
-#                    codex's MCP config is TOML and is left to a documented manual step)
-_HARNESS_DIR = {"claude": ".claude", "codex": ".codex"}
-_HARNESS_COMMANDS_SUBDIR = {"claude": "commands", "codex": "prompts"}
-_HARNESS_MCP_AUTO = {"claude": True, "codex": False}
+# Per-harness wiring map (Stage 52a, extended Stage 63). Each harness is a different mapping
+# of the same portable artifacts; the capabilities a harness lacks are NOT wired (degrade
+# clearly — never pretend).
+#   dir             — the harness config dir under the scope base
+#   commands_subdir — where prompt/slash/workflow commands live (the native surface)
+#   command_format  — how a `<name>.md` template is materialized natively:
+#                       "md"        → copy as-is (claude/codex/cursor/windsurf)
+#                       "prompt.md" → `<name>.prompt.md` (copilot prompt files)
+#                       "toml"      → `<name>.toml` with description + prompt (gemini)
+#                       "reference" → copied as REFERENCE prompts (aider has no slash cmds)
+#   mcp_auto        — auto-register the bundled MCP server where the agent's MCP config schema
+#                     matches mokata's `mcpServers` merge (claude/cursor/gemini); else a
+#                     documented MANUAL step (codex TOML, copilot VS Code schema, windsurf path)
+_HARNESS_DIR = {"claude": ".claude", "codex": ".codex", "cursor": ".cursor",
+                "copilot": ".github", "windsurf": ".windsurf", "gemini": ".gemini",
+                "aider": ".aider"}
+_HARNESS_COMMANDS_SUBDIR = {"claude": "commands", "codex": "prompts", "cursor": "commands",
+                            "copilot": "prompts", "windsurf": "workflows",
+                            "gemini": "commands", "aider": "mokata-commands"}
+_HARNESS_COMMAND_FORMAT = {"claude": "md", "codex": "md", "cursor": "md",
+                           "copilot": "prompt.md", "windsurf": "md", "gemini": "toml",
+                           "aider": "reference"}
+_HARNESS_MCP_AUTO = {"claude": True, "codex": False, "cursor": True, "copilot": False,
+                     "windsurf": False, "gemini": True, "aider": False}
+
+# A one-line description of each agent's NATIVE command surface (for the setup plan + docs).
+_HARNESS_NATIVE_NOTE = {
+    "claude": "Claude Code slash commands (.claude/commands/*.md)",
+    "codex": "Codex prompts (.codex/prompts/*.md)",
+    "cursor": "Cursor commands (.cursor/commands/*.md) + rules context; MCP via .cursor/mcp.json",
+    "copilot": "Copilot prompt files (.github/prompts/*.prompt.md) + instructions context",
+    "windsurf": "Windsurf workflows (.windsurf/workflows/*.md) + rules context",
+    "gemini": "Gemini CLI commands (.gemini/commands/*.toml) + MCP via .gemini/settings.json",
+    "aider": "Aider reference prompts (.aider/mokata-commands/) + conventions context "
+             "— Aider has NO native slash-command files",
+}
 
 # The MCP server key + command (mirrors .claude-plugin/plugin.json's mcpServers entry).
 MCP_SERVER_NAME = "mokata"
@@ -97,9 +130,16 @@ def resolve_targets(scope: str, root: str, home: Optional[str] = None,
     commands_dir = base / hdir / _HARNESS_COMMANDS_SUBDIR[harness]
     settings_path = base / hdir / "settings.json"
     if _HARNESS_MCP_AUTO[harness]:
-        # Claude Code's user-scoped MCP config lives in ~/.claude.json (where
-        # `claude mcp add --scope user` writes); project scope uses .mcp.json.
-        mcp_path = (base / ".mcp.json") if scope == "project" else (base / ".claude.json")
+        if harness == "claude":
+            # Claude Code's user-scoped MCP config lives in ~/.claude.json (where
+            # `claude mcp add --scope user` writes); project scope uses .mcp.json.
+            mcp_path = (base / ".mcp.json") if scope == "project" else (base / ".claude.json")
+        elif harness == "cursor":
+            mcp_path = base / ".cursor" / "mcp.json"        # `mcpServers` schema
+        elif harness == "gemini":
+            mcp_path = base / ".gemini" / "settings.json"   # top-level `mcpServers` (merged)
+        else:                                               # generic mcpServers fallback
+            mcp_path = base / hdir / "mcp.json"
     else:
         mcp_path = None              # harness auto-MCP not supported — manual step
     return Targets(base=base, commands_dir=commands_dir,
@@ -125,13 +165,43 @@ class SetupPlan:
     unsupported: List[str] = field(default_factory=list)  # capabilities this harness lacks
 
 
+# The hook scripts (kept as standalone shims) map to `mokata-hook` subcommands.
+_HOOK_SUBCOMMAND = {"session_start.py": "session-start", "secret_guard.py": "secret-guard"}
+
+
 def _hook_command(script: str) -> str:
-    # Absolute interpreter + absolute hook path (Stage 28). Manual setup has no
-    # ${CLAUDE_PLUGIN_ROOT}, so we point straight at the clone; and we embed
-    # sys.executable — the very Python running mokata now — instead of a bare
-    # `python3` that a minimal PATH (macOS GUI launch) or Windows (python/py)
-    # might not resolve. No PATH dependency on the user's machine.
-    return f'"{sys.executable}" "{_hooks_dir() / script}"'
+    # Stage 53b: wire hooks as the `mokata-hook` console entry point — the SAME mechanism
+    # the bundled `mokata-mcp` server already uses reliably — instead of a bare `python3`
+    # (which a minimal PATH or Windows wouldn't resolve) or the `sh launch.sh` chain.
+    # `mokata setup` runs from the installed package, so `mokata-hook` is a guaranteed
+    # sibling console script; resolve it to an absolute path for zero PATH dependency in
+    # the user's later sessions, falling back to the bare name.
+    exe = shutil.which("mokata-hook") or "mokata-hook"
+    sub = _HOOK_SUBCOMMAND[script]
+    cmd = f'"{exe}" {sub}'
+    if sub == "session-start":
+        # Forward the clone root so /mokata:init can locate the bundled engine (manual
+        # setup has no ${CLAUDE_PLUGIN_ROOT}).
+        cmd += f' --plugin-root "{repo_root()}"'
+    return cmd
+
+
+def _statusline_command(wrap_command: Optional[str] = None) -> str:
+    # Stage 54b: the Claude Code statusLine command — the SAME PATH-resolved `mokata-hook`
+    # console entry point the hooks use. With `wrap_command` set, mokata COMPOSES over a
+    # user's existing statusLine (runs theirs, then appends mokata's) instead of clobbering.
+    exe = shutil.which("mokata-hook") or "mokata-hook"
+    cmd = f'"{exe}" statusline'
+    if wrap_command:
+        cmd += f" --wrap {shlex.quote(wrap_command)}"
+    return cmd
+
+
+def _is_mokata_statusline(block: Dict) -> bool:
+    """True if a settings.json statusLine block is one mokata wired (so re-setup is
+    idempotent and unsetup only touches our own)."""
+    cmd = str(block.get("command", "")) if isinstance(block, dict) else ""
+    return "mokata-hook" in cmd and "statusline" in cmd
 
 
 def plan_setup(
@@ -205,8 +275,9 @@ def render_setup_plan(plan: SetupPlan) -> str:
         lines.append(f"mokata already initialized in {plan.root} "
                      f"(leaving the existing profile/config untouched).")
     lines.append("")
-    lines.append(f"Will copy {len(plan.command_files)} commands -> {t.commands_dir}:")
+    lines.append(f"Will write {len(plan.command_files)} commands -> {t.commands_dir}:")
     lines.append("  /" + "  /".join(Path(f).stem for f in plan.command_files))
+    lines.append(f"  (native surface: {_HARNESS_NATIVE_NOTE[plan.harness]})")
     lines.append("")
     if plan.mcp_auto:
         lines.append(f"Will register the MCP server '{MCP_SERVER_NAME}' (command: "
@@ -219,6 +290,13 @@ def render_setup_plan(plan: SetupPlan) -> str:
         lines.append("")
         lines.append("Will wire hooks (SessionStart briefing + secret-guard) in:")
         lines.append(f"  {t.settings_path}")
+    if (plan.with_hooks and plan.harness == "claude" and t.settings_path is not None
+            and _statusline_setting_on(plan.root)):
+        lines.append("")
+        lines.append("Will wire the pipeline-stage badge as a statusLine (default-on; "
+                     "opt out with `mokata config set settings.ux.statusline false`):")
+        lines.append(f"  {t.settings_path}")
+        lines.append("  (any existing statusLine is composed/wrapped, not overwritten.)")
     if plan.unsupported:
         # Degrade CLEARLY — never pretend a capability exists or silently skip it.
         lines.append("")
@@ -264,10 +342,15 @@ def _merge_mcp(path: Path) -> None:
 
 
 def _is_mokata_hook(entry: Dict) -> bool:
-    """True if a hook block is one mokata wired (its command points at our hooks dir)."""
+    """True if a hook block is one mokata wired. Matches the Stage-53b `mokata-hook`
+    console command AND the legacy hooks-dir path (so unsetup still cleans entries written
+    by an older mokata)."""
     hooks_marker = str(_hooks_dir())
     for h in entry.get("hooks", []):
-        if isinstance(h, dict) and hooks_marker in str(h.get("command", "")):
+        if not isinstance(h, dict):
+            continue
+        cmd = str(h.get("command", ""))
+        if "mokata-hook" in cmd or hooks_marker in cmd:
             return True
     return False
 
@@ -294,6 +377,94 @@ def _merge_hooks(path: Path, hook_commands: Dict[str, str]) -> None:
     _write_json(path, data)
 
 
+def _merge_statusline(path: Path) -> None:
+    """Wire mokata's statusLine badge into settings.json — MERGE-SAFE (Stage 54b).
+
+    No existing statusLine -> set ours. A user's own statusLine -> COMPOSE over it (run
+    theirs, then mokata's) and stash the original under ``_mokataWrapped`` so unsetup can
+    restore it verbatim. Already ours -> refresh, preserving any wrapped original
+    (idempotent; never double-wraps)."""
+    data = _load_json(path)
+    existing = data.get("statusLine")
+
+    wrapped = None
+    if isinstance(existing, dict) and _is_mokata_statusline(existing):
+        # already mokata's — keep any original we previously composed over
+        prev = existing.get(_WRAPPED_KEY)
+        wrapped = prev if isinstance(prev, dict) else None
+    elif isinstance(existing, dict) and existing.get("command"):
+        # a user's own statusLine — compose over it, preserving the original
+        wrapped = existing
+
+    inner = wrapped.get("command") if isinstance(wrapped, dict) else None
+    block: Dict = {"type": "command", "command": _statusline_command(inner)}
+    if isinstance(wrapped, dict):
+        block[_WRAPPED_KEY] = wrapped
+    data["statusLine"] = block
+    _write_json(path, data)
+
+
+def _statusline_setting_on(root: str) -> bool:
+    """settings.ux.statusline from the committed manifest (default-on / opt-out). Read the
+    file directly so apply_setup needn't construct a full Surface."""
+    try:
+        data = _load_json(Path(root).resolve() / MOKATA_DIR / MANIFEST_FILENAME)
+        ux = data.get("settings", {}).get("ux", {})
+        return bool(ux.get("statusline", True)) if isinstance(ux, dict) else True
+    except Exception:
+        return True
+
+
+# --------------------------------------------------------------------------------------
+# Command-file materialization (per-harness native format — Stage 63)
+# --------------------------------------------------------------------------------------
+
+def _command_target_name(harness: str, name: str) -> str:
+    """The native filename a `<name>.md` template materializes to for this harness, so setup
+    and unsetup agree on exactly which file to write/remove (no residue)."""
+    fmt = _HARNESS_COMMAND_FORMAT[harness]
+    stem = name[:-3] if name.endswith(".md") else name
+    if fmt == "prompt.md":
+        return f"{stem}.prompt.md"
+    if fmt == "toml":
+        return f"{stem}.toml"
+    return name                          # "md" / "reference" keep the .md filename
+
+
+def _frontmatter_description(md: str) -> str:
+    """Best-effort pull of the `description:` line from a template's frontmatter."""
+    if md.startswith("---"):
+        end = md.find("\n---", 3)
+        block = md[3:end] if end != -1 else md
+        for line in block.splitlines():
+            s = line.strip()
+            if s.lower().startswith("description:"):
+                return s.split(":", 1)[1].strip()
+    return ""
+
+
+def _to_gemini_toml(md: str) -> str:
+    """A Gemini CLI custom-command TOML from a markdown template: a `description` + the full
+    prompt as a multi-line LITERAL string. Deterministic; never escapes wrongly (templates
+    carry no triple single-quote)."""
+    desc = _frontmatter_description(md).replace("\\", "\\\\").replace('"', '\\"')
+    body = md.replace("'''", "’’’") if "'''" in md else md
+    return f"description = \"{desc}\"\nprompt = '''\n{body}'''\n"
+
+
+def _write_command_file(harness: str, src: Path, commands_dir: Path, name: str) -> str:
+    """Materialize one command template into the harness's NATIVE command surface (md copy,
+    `*.prompt.md`, a Gemini `*.toml`, or a reference copy). Returns the written path. The
+    claude/codex path stays a byte-identical `copyfile` (no regression)."""
+    fmt = _HARNESS_COMMAND_FORMAT[harness]
+    dst = commands_dir / _command_target_name(harness, name)
+    if fmt == "toml":
+        dst.write_text(_to_gemini_toml(src.read_text(encoding="utf-8")), encoding="utf-8")
+    else:                                # md / prompt.md / reference all carry the md content
+        shutil.copyfile(src, dst)
+    return str(dst)
+
+
 # --------------------------------------------------------------------------------------
 # Apply
 # --------------------------------------------------------------------------------------
@@ -312,13 +483,12 @@ def apply_setup(plan: SetupPlan, *, assume_yes: bool = False, force: bool = Fals
             raise SetupError(f"init failed: {res.message}")
         touched.extend(res.written)
 
-    # 2. slash commands
+    # 2. slash/prompt/workflow commands — materialized in the harness's NATIVE format.
     t = plan.targets
     t.commands_dir.mkdir(parents=True, exist_ok=True)
     for name in plan.command_files:
-        dst = t.commands_dir / name
-        shutil.copyfile(_templates_dir() / name, dst)
-        touched.append(str(dst))
+        touched.append(_write_command_file(plan.harness, _templates_dir() / name,
+                                            t.commands_dir, name))
 
     # 3. MCP server (auto-registered only where the harness supports it; else manual)
     if plan.mcp_auto and t.mcp_path is not None:
@@ -329,6 +499,15 @@ def apply_setup(plan: SetupPlan, *, assume_yes: bool = False, force: bool = Fals
     if plan.with_hooks and t.settings_path is not None:
         _merge_hooks(t.settings_path, plan.hook_commands)
         touched.append(str(t.settings_path))
+
+    # 5. statusLine badge (Stage 54b) — default-ON (opt-out), merge-safe. Claude-only (it's
+    # a Claude Code feature); shares settings.json with the hooks, so `--no-hooks` (leave my
+    # Claude settings alone) skips it too; skipped when settings.ux.statusline=false.
+    if (plan.with_hooks and plan.harness == "claude" and t.settings_path is not None
+            and _statusline_setting_on(plan.root)):
+        _merge_statusline(t.settings_path)
+        if str(t.settings_path) not in touched:
+            touched.append(str(t.settings_path))
 
     return touched
 
@@ -376,8 +555,11 @@ def setup_harness(
     if harness == "claude":
         emit("Restart Claude Code, then try /brainstorm or ask it to \"run mokata doctor\".")
     else:
-        emit(f"Point {harness} at the copied commands in {plan.targets.commands_dir}; "
-             f"register the '{MCP_SERVER_NAME}' MCP server ({MCP_COMMAND}) per its docs.")
+        emit(f"Native surface: {_HARNESS_NATIVE_NOTE[harness]}.")
+        emit(f"Point {harness} at the commands in {plan.targets.commands_dir}.")
+        if not plan.mcp_auto:
+            emit(f"MCP: register the '{MCP_SERVER_NAME}' server ({MCP_COMMAND}) with "
+                 f"{harness} yourself (automated MCP wiring isn't available for it).")
     return SetupResult(touched=touched, plan=plan, message="ok")
 
 
@@ -413,6 +595,8 @@ def render_unsetup_plan(plan: UnsetupPlan) -> str:
         lines.append(f"  the '{MCP_SERVER_NAME}' MCP server entry in {t.mcp_path}")
     if t.settings_path is not None:
         lines.append(f"  mokata hook entries in {t.settings_path}")
+        lines.append(f"  the mokata statusLine badge in {t.settings_path} "
+                     f"(any composed-over statusLine is restored)")
     lines.append("")
     lines.append("Your .mokata/ config is left untouched (use `mokata reset` for that).")
     return "\n".join(lines)
@@ -422,9 +606,9 @@ def apply_unsetup(plan: UnsetupPlan) -> List[str]:
     t = plan.targets
     removed: List[str] = []
 
-    # 1. commands
+    # 1. commands (remove the harness's native filename — no residue across formats)
     for name in plan.command_files:
-        p = t.commands_dir / name
+        p = t.commands_dir / _command_target_name(plan.harness, name)
         if p.exists():
             p.unlink()
             removed.append(str(p))
@@ -442,12 +626,13 @@ def apply_unsetup(plan: UnsetupPlan) -> List[str]:
             _write_json(t.mcp_path, data)
             removed.append(str(t.mcp_path))
 
-    # 3. hook entries
+    # 3. hook entries + the statusLine badge (Stage 54b) — one read/write of settings.json
     if t.settings_path is not None and t.settings_path.exists():
         data = _load_json(t.settings_path)
+        changed = False
+
         hooks = data.get("hooks")
         if isinstance(hooks, dict):
-            changed = False
             for event in list(hooks):
                 entries = hooks.get(event)
                 if not isinstance(entries, list):
@@ -465,8 +650,20 @@ def apply_unsetup(plan: UnsetupPlan) -> List[str]:
                     data["hooks"] = hooks
                 else:
                     data.pop("hooks", None)
-                _write_json(t.settings_path, data)
-                removed.append(str(t.settings_path))
+
+        # statusLine: restore the user's original (if we composed over one), else drop ours.
+        sl = data.get("statusLine")
+        if isinstance(sl, dict) and _is_mokata_statusline(sl):
+            wrapped = sl.get(_WRAPPED_KEY)
+            if isinstance(wrapped, dict):
+                data["statusLine"] = wrapped
+            else:
+                data.pop("statusLine", None)
+            changed = True
+
+        if changed:
+            _write_json(t.settings_path, data)
+            removed.append(str(t.settings_path))
 
     return removed
 

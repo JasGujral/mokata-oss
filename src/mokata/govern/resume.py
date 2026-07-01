@@ -21,7 +21,12 @@ class PipelineCheckpoint:
         self.ledger = ledger
         self.key = CHECKPOINT_PREFIX + run_id
         data = store.read(self.key)
-        self.passed: List[str] = list(data["passed"]) if data else []
+        # Degrade-clean: a corrupt or wrong-shape checkpoint (top-level not a mapping, or a
+        # `passed` that isn't a list) reads as a fresh/empty run rather than crashing the
+        # read-only progress/badge/lanes/resume hot paths (the documented "never raises"
+        # contract). The state file is already broken; treating it as fresh is the safe floor.
+        passed = data.get("passed") if isinstance(data, dict) else None
+        self.passed: List[str] = list(passed) if isinstance(passed, list) else []
 
     def _save(self) -> None:
         self.store.write(self.key, {"run_id": self.run_id, "passed": self.passed})

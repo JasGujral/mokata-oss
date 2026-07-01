@@ -11,9 +11,12 @@ model itself — see [How mokata uses an LLM](../concepts/execution-model.md).)
 
 ## Install
 
-> ⏳ **Pending directory approval (June 2026):** mokata is awaiting review for the Claude plugin
-> directory — it is **not yet installable from Claude's in-app "Browse plugins" directory** yet.
-> Use the command below. _(Temporary notice; removed once the listing is live.)_
+<!-- mokata:directory-listing:start -->
+> ⏳ **Pending Claude plugin-directory approval.** mokata isn't in Claude's in-app
+> "Browse plugins" directory **yet** — install it via `/plugin marketplace add` (you get
+> the same in-Claude-Code experience). _(This notice auto-flips once the listing is
+> approved — single source: `scripts/directory_listing.py`.)_
+<!-- mokata:directory-listing:end -->
 
 ```text
 /plugin marketplace add https://github.com/JasGujral/mokata-oss.git
@@ -40,6 +43,37 @@ Each runs standalone — no full-pipeline prerequisite, and each applies its own
 | `/mokata:debug` | Root-cause-before-fix with N-strikes escalation | `repro-first` |
 | `/mokata:optimize` | Measure-first optimization (keep only if faster + behavior preserved) | `measure-first` |
 | `/mokata:bug` | Reproduce-first bug fix with label progression | `reproducer-required` |
+
+**Observability (read-only, no gate):**
+
+| Command | What it does |
+|---|---|
+| `/mokata:progress` | The 7-phase tracker **and** the parallel-agent lanes (running / done / blocked) |
+| `/mokata:watch` | Open the self-contained, clickable dashboard of the run (lanes + pipeline + gate feed) |
+| `/mokata:govern` | The governed-state view — rules, memory-by-kind, read/write ratio, pending proposals |
+
+These call mokata's read-only MCP tools (`progress`/`lanes`/`watch`/`govern`) so you watch the
+governed fan-out **without leaving Claude Code**; nothing is written or gated.
+
+**Workflow & utilities (slash commands):**
+
+| Command | What it does |
+|---|---|
+| `/mokata:enter` | Enter the pipeline at a phase (only that phase's gates apply) |
+| `/mokata:exec` | Show or choose the execution mode — sequential (default) or parallel subagents |
+| `/mokata:decompose` | Split the approved spec into independent subtasks + a dependency plan, then confirm to run (never silently parallel) |
+| `/mokata:chain` | Plan a manual chain of skills; each step keeps its own gate |
+| `/mokata:playbook` | Run the full v1 story end-to-end (integration check) |
+| `/mokata:resume` | Preview where a run resumes — the phase + the gate that still applies |
+| `/mokata:skill` | Author a new skill test-first (RED-GREEN-for-docs); the write is human-gated |
+| `/mokata:upgrade` | Update mokata — human-gated pip upgrade or the plugin-update steps |
+
+Everything else is reachable too: read-only inspection (`rules`, `skills`, `suggest`,
+`lat_check`, `index_status`, `baseline`, `sessions`, `config_get`, `export_preview`) as MCP
+read tools, and durable writes (`config_set`, `export_stack`, …) as **human-gated** MCP write
+tools. The complete map — and the install/diagnostic plumbing that stays CLI-or-hook by design
+— is the [command-surface reference](../reference/command-surfaces.md), kept honest by a CI
+parity test.
 
 You can also **enter the pipeline at any phase** — run just the completeness gate on a
 hand-written spec, or jump straight to `/mokata:test` for existing code. Upstream phases aren't
@@ -83,9 +117,17 @@ Everything the slash commands don't surface is available from the same engine vi
 can call these too (see [Integrate with other AI tools](integrate-other-ai-tools.md)).
 
 > mokata **ships its own MCP server** (`mokata-mcp`) — the plugin registers it so mokata's
-> operations (query, recall, doctor, progress, gated writes, …) are callable as native
-> tools. It **also orchestrates external MCP servers** it discovers (H4, `mokata mcp`) and
-> maps them to capabilities.
+> operations are callable as native tools. Read tools (query, recall, doctor, coverage, budget,
+> audit, status, preview, progress, **lanes / watch / govern**, rules, skills, suggest,
+> lat_check, index_status, baseline, sessions, config_get, export_preview, vault_*) expose
+> data directly; write tools (remember, init, config_set, export_stack, vault_push,
+> import_stack, spec_check, reset, …) are **always human-gated**. It **also orchestrates
+> external MCP servers** it discovers (H4, `mokata mcp`) and maps them to capabilities.
+>
+> **Full command parity:** every user-facing CLI command is reachable from inside Claude Code
+> (a slash command and/or an MCP tool); the install/diagnostic plumbing is explicitly exempted.
+> See the [command-surface reference](../reference/command-surfaces.md), enforced by a CI
+> parity test.
 
 ## A typical session
 

@@ -42,6 +42,20 @@ APPROACH_STATE_KEY = "approved_approach"
 MIN_APPROACHES = 2
 MAX_APPROACHES = 3
 
+# Stage 54g — anti-drift bounds. The running synthesis is a COMPACT state of the
+# exploration, re-surfaced every turn — never a transcript dump. So it is hard-capped:
+# at most this many constraints / approaches, each line clipped to this length.
+MAX_SYNTHESIS_ITEMS = 6
+MAX_SYNTHESIS_LINE = 200
+
+
+def _clip_line(text: Any) -> str:
+    """Collapse to a single bounded line — frugal, deterministic, transcript-proof."""
+    s = " ".join(str(text or "").split())
+    if len(s) > MAX_SYNTHESIS_LINE:
+        s = s[: MAX_SYNTHESIS_LINE - 1].rstrip() + "…"
+    return s
+
 
 class BrainstormError(Exception):
     """A brainstorm-flow rule was violated (bad question order, bad approach set…)."""
@@ -95,6 +109,51 @@ class Approach:
     def from_dict(cls, d: Dict[str, Any]) -> "Approach":
         return cls(name=d["name"], summary=d.get("summary", ""),
                    pros=list(d.get("pros", [])), cons=list(d.get("cons", [])))
+
+
+@dataclass
+class Synthesis:
+    """Stage 54g — a COMPACT running synthesis of the exploration so far: the goal, the
+    constraints decided, the approaches on the table, and the current open question. Updated
+    each turn and re-surfaced (with the anchor) so a long brainstorm never loses the thread.
+
+    It is BOUNDED by construction — `__post_init__` clips every line and caps the lists — so
+    no caller (or restored dict) can turn it into a transcript dump."""
+
+    goal: str = ""
+    constraints: List[str] = field(default_factory=list)
+    approaches: List[str] = field(default_factory=list)
+    open_question: str = ""
+
+    def __post_init__(self) -> None:
+        self.goal = _clip_line(self.goal)
+        self.open_question = _clip_line(self.open_question)
+        self.constraints = [_clip_line(c) for c in list(self.constraints)[:MAX_SYNTHESIS_ITEMS]
+                            if str(c).strip()]
+        self.approaches = [_clip_line(a) for a in list(self.approaches)[:MAX_SYNTHESIS_ITEMS]
+                           if str(a).strip()]
+
+    @property
+    def is_empty(self) -> bool:
+        return not (self.goal or self.constraints or self.approaches or self.open_question)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "goal": self.goal,
+            "constraints": list(self.constraints),
+            "approaches": list(self.approaches),
+            "open_question": self.open_question,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "Synthesis":
+        # Construction re-applies the bounds, so a hand-crafted/oversized dict is still clamped.
+        return cls(
+            goal=d.get("goal", ""),
+            constraints=list(d.get("constraints", [])),
+            approaches=list(d.get("approaches", [])),
+            open_question=d.get("open_question", ""),
+        )
 
 
 @dataclass
@@ -223,7 +282,8 @@ class Handoff:
 
 # --------------------------------------------------------------------------- session
 class BrainstormSession:
-    def __init__(self, topic: str, grounding: Optional[Grounding] = None) -> None:
+    def __init__(self, topic: str, grounding: Optional[Grounding] = None,
+                 anchor: Optional[str] = None) -> None:
         self.topic = topic
         self.grounding = grounding or Grounding(
             False, None, False, None,
@@ -236,9 +296,45 @@ class BrainstormSession:
         self.approver: Optional[str] = None
         self.approved_at: Optional[str] = None
         self.events: List[str] = []
+        # Stage 54g — the IMMUTABLE anchor (the original ask/goal) + the compact running
+        # synthesis. The anchor is set ONCE and never mutated by later turns or by restore;
+        # the synthesis is bounded and updated each turn. See `set_anchor` / `update_synthesis`.
+        self._anchor: Optional[str] = _clip_line(anchor) if anchor else None
+        self.synthesis: Optional[Synthesis] = None
 
     def _log(self, msg: str) -> None:
         self.events.append(msg)
+
+    # --- Stage 54g: the immutable anchor + the bounded running synthesis ----
+    @property
+    def anchor(self) -> Optional[str]:
+        """The original ask/goal, captured once at brainstorm start. Read-only — there is no
+        setter, so later turns and restore can never mutate it."""
+        return self._anchor
+
+    def set_anchor(self, text: str) -> Optional[str]:
+        """Record the original ask ONCE. Set-once: if an anchor already exists this is a no-op
+        (the original wins) — a later turn cannot overwrite the thread the user came with."""
+        if self._anchor is None and str(text or "").strip():
+            self._anchor = _clip_line(text)
+            self._log(f"anchor: {self._anchor}")
+        return self._anchor
+
+    def update_synthesis(self, goal: Optional[str] = None,
+                         constraints: Optional[List[str]] = None,
+                         approaches: Optional[List[str]] = None,
+                         open_question: Optional[str] = None) -> Synthesis:
+        """Update the compact running synthesis. Only the fields passed are replaced; the
+        result is re-bounded on every update (never a transcript dump)."""
+        cur = self.synthesis or Synthesis()
+        self.synthesis = Synthesis(
+            goal=cur.goal if goal is None else goal,
+            constraints=cur.constraints if constraints is None else constraints,
+            approaches=cur.approaches if approaches is None else approaches,
+            open_question=cur.open_question if open_question is None else open_question,
+        )
+        self._log("synthesis updated")
+        return self.synthesis
 
     # --- Socratic, one question at a time -----------------------------------
     def pending_question(self) -> Optional[Question]:
@@ -363,6 +459,8 @@ class BrainstormSession:
         weighed, not just an approved one — so a brainstorm can be left mid-stream and resumed."""
         return {
             "topic": self.topic,
+            "anchor": self._anchor,
+            "synthesis": self.synthesis.to_dict() if self.synthesis else None,
             "grounding": self.grounding.to_dict(),
             "questions": [q.to_dict() for q in self.questions],
             "approaches": [a.to_dict() for a in self.approaches],
@@ -375,7 +473,12 @@ class BrainstormSession:
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "BrainstormSession":
-        s = cls(d["topic"], grounding=Grounding.from_dict(d.get("grounding", {})))
+        # The anchor is restored straight into the immutable slot — it is NEVER re-derived or
+        # mutated, so a resumed brainstorm keeps the exact original ask it started with.
+        s = cls(d["topic"], grounding=Grounding.from_dict(d.get("grounding", {})),
+                anchor=d.get("anchor"))
+        syn = d.get("synthesis")
+        s.synthesis = Synthesis.from_dict(syn) if syn else None
         s.questions = [Question.from_dict(q) for q in d.get("questions", [])]
         s.approaches = [Approach.from_dict(a) for a in d.get("approaches", [])]
         name = d.get("chosen")
@@ -385,6 +488,32 @@ class BrainstormSession:
         s.approved_at = d.get("approved_at")
         s.events = list(d.get("events", []))
         return s
+
+
+# ------------------------------------------------------ Stage 54g: the anchor brief
+def build_anchor_brief(session: BrainstormSession) -> str:
+    """Render the compact anchor + running-synthesis block to re-surface every turn.
+
+    Pure and deterministic; frugal/bounded (the synthesis is hard-capped, so this can't grow
+    into a transcript). Degrade-clean: with no synthesis yet it is just the anchor line; with
+    no explicit anchor it falls back to the topic. Always ends with the drift-check prompt so
+    a straying turn is re-grounded against the original ask."""
+    anchor = session.anchor or session.topic
+    lines = ["mokata · brainstorm anchor (re-grounding)",
+             f"▸ Original ask: {anchor}"]
+    syn = session.synthesis
+    if syn is not None and not syn.is_empty:
+        if syn.goal:
+            lines.append(f"· Goal: {syn.goal}")
+        if syn.constraints:
+            lines.append("· Decided so far: " + "; ".join(syn.constraints))
+        if syn.approaches:
+            lines.append("· Approaches on the table: " + "; ".join(syn.approaches))
+        if syn.open_question:
+            lines.append(f"· Open question: {syn.open_question}")
+    lines.append(f"Drift-check: we're exploring “{anchor}” — does this turn still "
+                 "serve that? If it strays, re-ground before continuing.")
+    return "\n".join(lines) + "\n"
 
 
 # --------------------------------------------------------------------------- persist
@@ -521,6 +650,18 @@ skipped, softened, or assumed. If you are unsure whether approval was given, it 
 5. Write the design up in digestible sections (problem, what we learned, the approaches
    and their tradeoffs, your recommendation), then ask for explicit approval of one.
 
+## Stay anchored (so a long brainstorm never drifts off-thread)
+A long exploration loses the plot if the original ask scrolls out of view. Hold it down:
+1. RECORD THE ANCHOR at the start — the user's original ask/goal, in one line. It is
+   IMMUTABLE: capture it once and never rewrite it. Everything is measured against it.
+2. MAINTAIN A COMPACT SYNTHESIS and RESTATE it each turn — the goal, the constraints decided
+   so far, the approaches on the table, and the current open question. Keep it tight (a few
+   lines): it is a running state, NOT a transcript — never replay the whole conversation.
+3. DRIFT-CHECK every turn against the anchor: "we're exploring <the anchor> — does this still
+   serve that?" If the turn has strayed, say so and RE-GROUND to the anchor before continuing,
+   rather than following the tangent. Surfacing the anchor + synthesis each turn is what keeps
+   the original topic in context no matter how long the chat runs.
+
 ## Red flags — STOP if you catch yourself thinking:
 | Thought | Why it's wrong |
 |---|---|
@@ -529,6 +670,8 @@ skipped, softened, or assumed. If you are unsure whether approval was given, it 
 | "Two of these are weak, but I'll list them as options." | Foils aren't options. Offer real, defensible alternatives. |
 | "They seemed happy — that's basically approval." | Seeming happy is not approval. Ask for it explicitly. |
 | "No graph/memory, so I'll assume the structure." | Absence means read/grep and state assumptions, never guess silently. |
+| "We've wandered, but I'll keep following this thread." | Drift-check against the anchor and re-ground — the original ask is the thread. |
+| "I'll rewrite the original ask to match where we ended up." | The anchor is immutable. Update the synthesis, never the anchor. |
 
 ## When approval is given
 Record the approved approach and the answered questions as mokata's downstream

@@ -5,25 +5,24 @@ search over source files — NOT a parser and NOT a graph. Results are approxima
 design (every result is marked `degraded`); the value is that the same typed API keeps
 working with zero external dependencies, on any machine, so the engine never hard-fails.
 
-The heuristics are Python-shaped (the v1 sample language); the file walk is generic.
+Stage 65: the floor is LANGUAGE-AWARE. The file walk and the structural-query patterns are
+driven by `mokata.languages` — a per-language table of lexical heuristics (def/func/fn,
+import/require/use, class/impl/interface) covering Python / JS-TS / Go / Rust / Java, with a
+generic fallback for any other extension. Still heuristic-only: it stays the floor and the
+result `note` announces it is lexical; the adopted graph adapter is always preferred.
 """
 
 from __future__ import annotations
 
 import os
 import re
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
+from .. import languages
 from .query import QUERY_KINDS, GraphBackend, QueryResult, Reference
 
-SOURCE_EXTENSIONS = (".py",)
-
-# Identifiers that look like calls but are language keywords, not callees.
-_PY_KEYWORDS = {
-    "if", "elif", "for", "while", "with", "return", "and", "or", "not", "in", "is",
-    "def", "class", "lambda", "assert", "yield", "await", "del", "raise", "except",
-    "import", "from", "global", "nonlocal", "pass", "else", "try", "finally", "as",
-}
+# Kept as a module symbol for back-compat; the default walk now spans every known language.
+SOURCE_EXTENSIONS = languages.SOURCE_EXTENSIONS
 
 
 class GrepBackend(GraphBackend):
@@ -78,82 +77,80 @@ class GrepBackend(GraphBackend):
         return os.path.relpath(path, self.root)
 
     @staticmethod
-    def _enclosing(lines: List[str], idx: int):
-        """Nearest preceding def/class with smaller indentation than line `idx`."""
+    def _lang(path: str) -> languages.Language:
+        return languages.language_for(path)
+
+    @staticmethod
+    def _enclosing(lang: languages.Language, lines: List[str], idx: int) -> Optional[str]:
+        """Nearest preceding scope opener (def/func/fn/class/type) with smaller indentation
+        than line `idx`. Indentation is a lexical proxy for nesting — approximate for
+        brace languages, which is exactly the floor's contract."""
         indent = len(lines[idx]) - len(lines[idx].lstrip())
         for j in range(idx - 1, -1, -1):
-            m = re.match(r"^(\s*)(?:def|class)\s+(\w+)", lines[j])
-            if m and len(m.group(1)) < indent:
-                return m.group(2)
+            line = lines[j]
+            this_indent = len(line) - len(line.lstrip())
+            if this_indent < indent:
+                name = lang.scope_name(line)
+                if name:
+                    return name
         return None
 
     # --- query implementations ----------------------------------------------
     def _callers(self, target: str) -> List[Reference]:
         call = re.compile(r"(?<![\w.])" + re.escape(target) + r"\s*\(")
-        is_def = re.compile(r"^\s*(?:def|class)\s+" + re.escape(target) + r"\b")
         out: List[Reference] = []
         for path in self._files():
+            lang = self._lang(path)
             lines = self._read(path)
             for i, line in enumerate(lines):
-                if is_def.search(line):
+                if lang.defines(line, target):
                     continue
                 if call.search(line):
                     out.append(Reference(self._rel(path), i + 1, line.strip(),
-                                         self._enclosing(lines, i)))
+                                         self._enclosing(lang, lines, i)))
         return out
 
     def _callees(self, target: str) -> List[Reference]:
         call = re.compile(r"(?<![\w.])(\w+)\s*\(")
-        is_def = re.compile(r"^(\s*)def\s+" + re.escape(target) + r"\s*\(")
         out: List[Reference] = []
         for path in self._files():
+            lang = self._lang(path)
             lines = self._read(path)
-            i = 0
-            while i < len(lines):
-                m = is_def.match(lines[i])
-                if not m:
-                    i += 1
+            for i, line in enumerate(lines):
+                if lang.func_name(line) != target:
                     continue
-                base = len(m.group(1))
-                j = i + 1
-                while j < len(lines):
-                    ln = lines[j]
-                    if ln.strip() == "":
-                        j += 1
-                        continue
-                    if len(ln) - len(ln.lstrip()) <= base:
-                        break          # dedent: end of the def body
-                    for cm in call.finditer(ln):
+                for j, body_line in languages.iter_block_lines(lines, i, lang.block_style):
+                    for cm in call.finditer(body_line):
                         name = cm.group(1)
-                        if name == target or name in _PY_KEYWORDS:
+                        if name == target or lang.is_call_keyword(name):
                             continue
-                        out.append(Reference(self._rel(path), j + 1, ln.strip(), name))
-                    j += 1
-                i = j
+                        out.append(Reference(self._rel(path), j + 1,
+                                             body_line.strip(), name))
         return out
 
     def _implementers(self, target: str) -> List[Reference]:
-        cls = re.compile(r"^\s*class\s+(\w+)\s*\(([^)]*)\)")
         word = re.compile(r"(?<![\w.])" + re.escape(target) + r"(?![\w])")
         out: List[Reference] = []
         for path in self._files():
+            lang = self._lang(path)
             lines = self._read(path)
             for i, line in enumerate(lines):
-                m = cls.match(line)
-                if m and word.search(m.group(2)):
-                    out.append(Reference(self._rel(path), i + 1, line.strip(),
-                                         m.group(1)))
+                rel = lang.inheritance(line)
+                if rel and word.search(rel[1]):
+                    out.append(Reference(self._rel(path), i + 1, line.strip(), rel[0]))
         return out
 
     def _imports(self, target: str) -> List[Reference]:
-        word = re.compile(r"(?<![\w.])" + re.escape(target) + r"(?![\w])")
+        # Unlike callers/implementers, imports are DOTTED/qualified (`com.example.mod_a`,
+        # `crate::mod_a`) so a leading `.`/`:` must NOT exclude the match — only word chars do.
+        word = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(target) + r"(?![A-Za-z0-9_])")
         out: List[Reference] = []
         for path in self._files():
+            lang = self._lang(path)
             lines = self._read(path)
             for i, line in enumerate(lines):
-                s = line.strip()
-                if (s.startswith("import ") or s.startswith("from ")) and word.search(line):
-                    out.append(Reference(self._rel(path), i + 1, s, None))
+                if lang.is_import_line(line) and word.search(line):
+                    out.append(Reference(self._rel(path), i + 1, line.strip(), None))
         return out
 
     def _blast_radius(self, target: str, depth: int) -> List[Reference]:

@@ -56,6 +56,32 @@ ripgrep → grep`) and uses the first present provider:
 
 If the graph backend errors mid-query, the layer degrades to grep rather than failing.
 
+## Language coverage (Stage 65)
+
+mokata's structural paths work across **Python, JS/TS, Go, Rust, and Java** — not just
+Python. The **real graph** comes from the adopted tool (whatever languages it supports); the
+**grep floor** is language-aware via a central, dependency-free table of *lexical heuristics*
+(`mokata/languages.py`) — extension awareness plus per-language patterns for
+`function`/`def`/`func`/`fn`, `import`/`require`/`use`, and `class`/`impl`/`interface`. **No
+parser, no AST** — the floor is the locked-inviolable grep heuristic, and it announces itself
+as lexical (`degraded=True`).
+
+| Language | Extensions | Real graph (adopt) | Grep-floor heuristics | Tests recognised |
+|---|---|---|---|---|
+| Python | `.py` `.pyi` | code-review-graph / serena / Neo4j | `def`/`class`, `import`/`from`, `class X(Base)` | pytest `def test_*` |
+| JS / TS | `.js` `.jsx` `.ts` `.tsx` `.mjs` `.cjs` | code-review-graph / serena† | `function`/method, `import`/`require`, `extends`/`implements` | jest/vitest `test(...)`/`it(...)` |
+| Go | `.go` | code-review-graph / serena† | `func`, `import`, *(interfaces are structural → no `implements` to match → degrades)* | `func Test*` |
+| Rust | `.rs` | code-review-graph / serena† | `fn`, `use`/`mod`, `impl Trait for Type` | `#[test]` attribute |
+| Java | `.java` | code-review-graph / serena† | method/`class`, `import`, `extends`/`implements` | JUnit `@Test` |
+| *unknown* | *any other* | — | **generic** identifier matching (def/func/fn/class/…) — never crashes | — |
+
+† Whether a given graph tool covers a language is the tool's matter; mokata adopts it and
+falls back to the language-aware grep floor where it doesn't. A grep heuristic is approximate
+by design — it's the floor, and the real graph adapter is always preferred when wired. An
+unknown extension degrades to **generic identifier matching** (no crash); a language without a
+given convention (e.g. Go `implements`) simply returns nothing for that query rather than
+guessing.
+
 **External graph database (Neo4j).** `neo4j` is an optional `code_graph` provider, never a
 hard dependency: the driver is an optional extra, the URI + credentials come from **env vars
 only**, and no driver / no `NEO4J_*` env / an unreachable DB ⇒ the layer degrades cleanly to

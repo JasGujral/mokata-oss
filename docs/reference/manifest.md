@@ -126,6 +126,8 @@ elsewhere; that's the user's explicit choice, overriding the default location.)
 | Key | Shape | Default | Feature |
 |---|---|---|---|
 | `memory` | `{persistent: bool, decision: bool, episodic: bool}` | all on | per-type memory toggles (C9) |
+| `ux.progress` | `"terminal"`/`"dashboard"`/`"both"` | `terminal` | run-observability tier (Stage 40) |
+| `ux.statusline` | bool | `true` | the always-on pipeline-stage badge (Stage 54b) — opt-out |
 | `governance.output_density` | bool | `false` | output-density compression (F4) |
 | `governance.karpathy.<id>` | bool per gate id | all on | Karpathy gate toggles (G3) — ids: `think-first`, `simplicity`, `surgical-scope`, `verify` |
 | `trust.<tool>` | `"read-only"`/`"propose-only"`/`"gated-write"` | `gated-write` | per-adapter trust dial (K3) |

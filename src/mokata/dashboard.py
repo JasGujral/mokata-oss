@@ -22,6 +22,7 @@ from . import TEMP_LOCAL_DIRNAME
 from .progress import (
     DONE,
     CURRENT,
+    L_RUNNING,
     RunLanes,
     build_run_lanes,
 )
@@ -30,6 +31,8 @@ DASHBOARD_FILENAME = "watch.html"
 GOVERN_DASHBOARD_FILENAME = "govern.html"
 # Frugal/bounded (P11): the feed shows only the last N ledger rows, never the full history.
 LEDGER_FEED_TAIL = 50
+# Bounded length for the per-card activity phrase (a short label, never a sentence).
+LANE_ACTIVITY_MAX = 28
 
 # UX-tier setting: terminal (no HTML) | dashboard | both.
 UX_SETTINGS_KEY = "ux"
@@ -78,22 +81,85 @@ def _feed_row(entry: dict) -> str:
             f"<td class='at'>{at}</td><td class='det'>{bits}</td></tr>")
 
 
-def _lane_card(lane, feed: List[dict]) -> str:
-    color = _STATE_COLORS.get(lane.state, "#475569")
-    rows = [e for e in feed
+def _lane_feed_rows(lane, feed: List[dict]) -> List[dict]:
+    """The ledger rows belonging to one lane (its own subagent rows + the batch-wide
+    exec_estimate / exec_degrade markers). The single source for both the card's activity
+    label and its drill-down table, so the two can't drift."""
+    return [e for e in feed
             if str(e.get("task", "")) == lane.name or e.get("kind") in (
                 "exec_degrade", "exec_estimate")]
+
+
+def lane_activity_label(lane, feed: List[dict]) -> str:
+    """A short, bounded activity phrase for a lane — e.g. "running", "blocked", "review
+    passed" — DERIVED from that lane's LATEST ledger row (deterministic; reuses the per-lane
+    feed mapping). Falls back to the lane's own state when it has no ledger rows. Pure."""
+    rows = _lane_feed_rows(lane, feed)
+    if not rows:
+        return lane.state
+    last = rows[-1]
+    # an explicit activity-ish field on the row wins (future rows may carry one), still bounded.
+    for key in ("activity", "action", "step"):
+        val = last.get(key)
+        if val:
+            return _clip(str(val))
+    kind = str(last.get("kind", ""))
+    if kind == "exec_degrade":
+        return "degraded"
+    if kind == "exec_estimate":
+        return "starting"
+    if kind == "subagent":
+        if last.get("ok", True) is False or last.get("review_passed") is False:
+            return "blocked"
+        if last.get("review_passed") is True:
+            return "review passed"
+        return "running"
+    if kind == "sequential":
+        return "done" if last.get("ok", True) else "running"
+    return _clip(kind or lane.state)
+
+
+def _clip(text: str, limit: int = LANE_ACTIVITY_MAX) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _lane_card(lane, feed: List[dict]) -> str:
+    """One agent card: a live/idle dot, the agent title, a status+activity pill, and the
+    per-lane ledger feed kept as a native <details> drill-down (no detail lost)."""
+    color = _STATE_COLORS.get(lane.state, "#475569")
+    activity = lane_activity_label(lane, feed)
+    rows = _lane_feed_rows(lane, feed)
     inner = "".join(_feed_row(e) for e in rows) or \
         "<tr><td colspan='4' class='muted'>no ledger rows for this lane</td></tr>"
+    dot_cls = "dot live" if lane.state == L_RUNNING else "dot"
+    note = (f"<div class='cardnote muted'>{_esc(lane.note)}</div>" if lane.note else "")
     return (
-        f"<details class='lane'>"
-        f"<summary><span class='dot' style='background:{color}'></span>"
-        f"<b>{_esc(lane.name)}</b> — <span style='color:{color}'>{_esc(lane.state)}</span>"
-        + (f" <span class='muted'>· {_esc(lane.note)}</span>" if lane.note else "")
-        + (f" <span class='muted'>· {_esc(lane.at)}</span>" if lane.at else "")
-        + "</summary>"
+        f"<details class='card'>"
+        f"<summary>"
+        f"<span class='cardhead'>"
+        f"<span class='{dot_cls}' style='background:{color}'></span>"
+        f"<span class='title'>{_esc(lane.name)}</span></span>"
+        f"<span class='statuspill' style='color:{color};border-color:{color}'>"
+        f"{_esc(lane.state)} · {_esc(activity)}</span>"
+        f"{note}"
+        f"</summary>"
         f"<table class='feed'><tr><th>#</th><th>kind</th><th>at</th><th>details</th></tr>"
         f"{inner}</table></details>")
+
+
+def _agents_panel(rl: RunLanes, feed: List[dict]) -> str:
+    """The "Running N agents" panel: a header count (N = lanes currently running) over a
+    responsive card grid, one card per subagent. Degrade-clean: a single (sequential) lane
+    renders as one card; an empty lane set falls back to a friendly note."""
+    running = sum(1 for ln in rl.lanes if ln.state == L_RUNNING)
+    cards = "".join(_lane_card(ln, feed) for ln in rl.lanes)
+    if not cards:
+        return ("<h2>Running 0 agents</h2>"
+                "<p class='muted'>no agent lanes — sequential run not started</p>")
+    return (f"<h2>Running {running} agents</h2>"
+            f"<p class='muted'>{len(rl.lanes)} agent lanes · mode: {_esc(rl.mode)}</p>"
+            f"<div class='agentgrid'>{cards}</div>")
 
 
 def _phase_pills(rl: RunLanes) -> str:
@@ -120,7 +186,21 @@ color:#94a3b8;margin:24px 0 8px}
 font-weight:600}
 .lane{background:#1e293b;border-radius:8px;margin:6px 0;padding:8px 12px}
 .lane summary{cursor:pointer;list-style:none}
-.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px}
+.agentgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;
+margin-top:8px}
+.card{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:10px 12px}
+.card summary{cursor:pointer;list-style:none;display:flex;flex-direction:column;gap:6px}
+.card summary::-webkit-details-marker{display:none}
+.cardhead{display:flex;align-items:center;gap:7px}
+.card .title{font-weight:600;color:#f1f5f9;overflow:hidden;text-overflow:ellipsis;
+white-space:nowrap}
+.statuspill{align-self:flex-start;padding:2px 9px;border-radius:999px;border:1px solid;
+font-size:11px;background:#0b1220}
+.cardnote{font-size:11px}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;flex:0 0 auto}
+.card .dot{margin-right:0}
+.dot.live{box-shadow:0 0 0 0 currentColor;animation:pulse 1.6s infinite}
+@keyframes pulse{0%{opacity:1}50%{opacity:.35}100%{opacity:1}}
 table.feed{width:100%;border-collapse:collapse;margin-top:8px;font-size:12px}
 table.feed th{text-align:left;color:#64748b;font-weight:500;border-bottom:1px solid #334155;
 padding:3px 6px}
@@ -150,8 +230,6 @@ def render_dashboard_html(rl: RunLanes, feed: List[dict],
                 f"Start a run with /mokata:brainstorm or /mokata:refine.</span></div>")
         return head + body + foot
 
-    lane_cards = "".join(_lane_card(ln, feed) for ln in rl.lanes) or \
-        "<p class='muted'>no lanes — sequential run not started</p>"
     feed_rows = "".join(_feed_row(e) for e in feed) or \
         "<tr><td colspan='4' class='muted'>no audit ledger yet — lanes only</td></tr>"
 
@@ -161,7 +239,7 @@ def render_dashboard_html(rl: RunLanes, feed: List[dict],
         f"<div class='header'>{_esc(rl.header)} · mode: {_esc(rl.mode)}"
         + ("  <b style='color:#d97706'>· degraded</b>" if rl.degraded else "") + "</div>"
         f"<h2>pipeline</h2>{_phase_pills(rl)}"
-        f"<h2>lanes ({len(rl.lanes)})</h2>{lane_cards}"
+        f"{_agents_panel(rl, feed)}"
         f"<h2>gate &amp; decision feed (last {len(feed)})</h2>"
         f"<table class='feed'><tr><th>#</th><th>kind</th><th>at</th><th>details</th></tr>"
         f"{feed_rows}</table>")
@@ -221,6 +299,8 @@ class GovernanceView:
     writes: int
     ratio: float
     proposals: List[Any]             # pending self-healing HealingProposals
+    health: Any = None               # Stage 59 — read-only MemoryHealth nudge (proposal-only)
+    session_diff: Any = None         # Stage 60 — read-only "what changed since last session"
 
 
 def build_governance_view(surface: Any) -> GovernanceView:
@@ -248,11 +328,24 @@ def build_governance_view(surface: Any) -> GovernanceView:
             proposals = store.detect_issues()
     except Exception:
         pass
+    # Stage 59 — derive the memory-health nudge from the proposals + C8 counters ALREADY in
+    # hand (no extra store reads, no stat bumps). Proposal-only: it points at the gated review
+    # path; it never edits/prunes memory.
+    from .memory.intelligence import memory_health
+    health = memory_health(proposals, reads, writes)
+    # Stage 60 — the read-only "what changed since last session" diff (derived; never writes).
+    # Degrade-clean: any problem (or no prior snapshot) yields a friendly first-session diff.
+    try:
+        from .visibility import compute_session_diff
+        session_diff = compute_session_diff(surface)
+    except Exception:
+        session_diff = None
     return GovernanceView(
         version=m.mokata_version, profile=m.profile,
         rule_lines=list(rs.lines), rule_count=rs.line_count, rule_cap=rs.cap,
         rule_within_cap=rs.within_cap, groups=groups, memory_enabled=enabled,
-        reads=reads, writes=writes, ratio=ratio, proposals=proposals)
+        reads=reads, writes=writes, ratio=ratio, proposals=proposals, health=health,
+        session_diff=session_diff)
 
 
 _GOVERN_CSS = """
@@ -267,6 +360,10 @@ font-size:11px;color:#fbbf24;background:#0b1220;border-radius:5px;padding:2px 6p
 .kindcount{color:#94a3b8;font-weight:400}
 .prop{background:#3f1d1d;border-radius:8px;margin:6px 0;padding:8px 12px;color:#fecaca}
 .ratio{font-size:13px;color:#cbd5e1}
+.nudge{font-size:13px;color:#fde68a;background:#3f2d0b;border-radius:8px;padding:8px 12px;
+margin:6px 0}.nudge code{color:#fbbf24}
+ul.since{margin:4px 0 0;padding-left:18px;color:#cbd5e1;font-size:12px}
+ul.since li{font-family:ui-monospace,Menlo,monospace;margin:2px 0}
 """
 
 
@@ -288,11 +385,33 @@ def _item_card(item: Any) -> str:
         "</div>")
 
 
-def render_governance_html(view: GovernanceView) -> str:
-    """Render the self-contained governance dashboard. Pure + deterministic (no wall-clock)."""
+def _since_block(view: GovernanceView) -> str:
+    """Stage 60 — the read-only "what changed since last session" block. Pure/derived;
+    deterministic (no wall-clock — the decision lines come from the timestamp-free
+    why_timeline). Degrade-clean: first session / no changes → a friendly one-liner."""
+    diff = view.session_diff
+    if diff is None:
+        return ""
+    head = "<h2>what changed since last session</h2>"
+    if diff.first_session:
+        return head + ("<div class='empty'>first session — no prior snapshot to compare "
+                       "yet. The baseline is captured at each session start.</div>")
+    if not diff.has_changes:
+        return head + "<div class='empty'>no changes since last session.</div>"
+    rows = "".join(f"<li>{_esc(line)}</li>" for line in diff.detail_lines()[1:])
+    return (head + f"<p class='ratio'>{_esc(diff.summary_line())}</p>"
+            f"<ul class='since'>{rows}</ul>")
+
+
+def render_governance_html(view: GovernanceView, refresh_secs: Optional[int] = None) -> str:
+    """Render the self-contained governance dashboard. Pure + deterministic (no wall-clock);
+    `refresh_secs` adds a self meta-refresh for live mode (mirrors `mokata watch`)."""
+    refresh = (f'<meta http-equiv="refresh" content="{int(refresh_secs)}">'
+               if refresh_secs else "")
     head = ("<!doctype html><html lang='en'><head><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-            f"<title>mokata · govern</title><style>{_CSS}{_GOVERN_CSS}</style></head><body>")
+            f"{refresh}<title>mokata · govern</title>"
+            f"<style>{_CSS}{_GOVERN_CSS}</style></head><body>")
     foot = ("<p class='foot'>mokata · local read-only governance view — derived from your "
             "rules + memory store. The manage commands are SURFACED, not run; every write "
             "stays human-gated. Never writes durable state, never leaves this machine.</p>"
@@ -328,6 +447,18 @@ def render_governance_html(view: GovernanceView) -> str:
         f"<p class='ratio'>memory read/write ratio: <b>{view.ratio:.2f}</b> "
         f"({view.reads} reads / {view.writes} writes)</p>")
 
+    # Stage 59 — the memory-health nudge: actionable, proposal-only, SILENT when healthy.
+    nudge = view.health.nudge() if view.health is not None else ""
+    if nudge:
+        h = view.health
+        ratio_block += (
+            "<p class='nudge'>"
+            f"<b>memory health</b>: {h.stale} stale &middot; {h.contradictory} contradictory "
+            f"&middot; {h.unused} unused — review with "
+            "<code>mokata memory</code> / <code>mokata govern</code>. "
+            "Proposal-only: nothing changes until you approve (human-gated)."
+            "</p>")
+
     if view.proposals:
         props = []
         for p in view.proposals:
@@ -348,15 +479,16 @@ def render_governance_html(view: GovernanceView) -> str:
         f"<div class='wrap'><h1>mokata · govern</h1>"
         f"<div class='header'>mokata {_esc(view.version)} · profile: {_esc(view.profile)} "
         "— the state mokata will honour</div>"
-        f"{rules_block}{mem_block}{ratio_block}{prop_block}")
+        f"{_since_block(view)}{rules_block}{mem_block}{ratio_block}{prop_block}")
     return head + body + foot
 
 
-def write_governance_dashboard(surface: Any) -> str:
+def write_governance_dashboard(surface: Any, refresh_secs: Optional[int] = None) -> str:
     """Build + write the self-contained governance HTML under temp_local/. READ-ONLY on the
-    store (derives the view; performs no write); returns the written file path."""
+    store (derives the view; performs no write); `refresh_secs` adds the live self meta-refresh
+    (mirrors `mokata watch`). Returns the written file path."""
     view = build_governance_view(surface)
-    html_text = render_governance_html(view)
+    html_text = render_governance_html(view, refresh_secs=refresh_secs)
     out_dir = dashboard_dir(surface.mokata_dir)
     os.makedirs(out_dir, exist_ok=True)
     path = governance_path(surface.mokata_dir)

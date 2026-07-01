@@ -6,8 +6,28 @@ surfacing** — it never silently rewrites.
 ## Inspect (read-only)
 
 ```bash
-mokata memory     # active items, read/write ratio, and pending self-healing proposals
+mokata memory     # active items, read/write ratio, pending proposals + the health nudge
 ```
+
+When the store needs attention `mokata memory` (and the `mokata govern` view) print a
+one-line **health nudge** — `N stale · M contradictory · K unused — review with mokata memory
+/ mokata govern` — pointing at the gated review path. It is read-only and **proposal-only**:
+it never edits or prunes memory, and it's silent when the store is healthy.
+
+## Explainable recall — "why did this surface?"
+
+A by-relevance recall names *why* each hit surfaced (matched token / graph anchor / semantic
+neighbour / kind):
+
+```python
+from mokata.memory import explain_recall
+hits = store.recall_relevant("auth token rotation")   # or jit_recall(store, query)
+for e in explain_recall("auth token rotation", hits):
+    print(e.line())     # - auth.policy: rotate tokens daily  ↳ [context] matched "auth"
+```
+
+Inside Claude Code, `recall(query="…")` returns each hit with its `why`. The explanation is
+deterministic and read-only; one short phrase per hit, so the top-k frugality bound holds.
 
 ## Record facts/decisions (gated)
 

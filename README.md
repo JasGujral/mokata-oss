@@ -1,6 +1,8 @@
 # mokata
 
-**Spec-driven TDD for Claude Code — knowledge-aware, self-healing memory, human-gated, local-first.**
+**The memory + seatbelt for your AI coding agent.** Spec-driven TDD for Claude Code —
+knowledge-aware, self-healing memory, human-gated, local-first. It remembers your project and
+stops the agent shipping the wrong thing.
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/JasGujral/mokata-oss/actions/workflows/ci.yml/badge.svg)](https://github.com/JasGujral/mokata-oss/actions/workflows/ci.yml)
@@ -11,6 +13,29 @@
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/JasGujral/mokata-oss/badge)](https://securityscorecards.dev/viewer/?uri=github.com/JasGujral/mokata-oss)
 
 📖 **Full documentation:** **<https://jasgujral.github.io/mokata-oss/>** — quickstart, tutorials, concepts, and the complete CLI + plugin reference.
+
+---
+
+## See it catch a bad change (30 seconds)
+
+An AI agent, mid-task, tries two bad changes — ship code with no spec, and stash a secret.
+mokata stops both, and puts both on the audit ledger. (Real output; run it yourself with
+`mokata init --profile standard --yes` in a scratch repo.)
+
+```console
+$ mokata run develop          # the agent tries to write code with no spec...
+[BLOCKED] spec-persisted — no saved spec — draft and emit it first (/mokata:spec); the completeness gate must pass before implementation.
+
+$ # ...and tries to stash a secret (even with approve=True):
+status: blocked   findings: ['aws-access-key', 'high-entropy-token', 'sensitive-location']
+
+$ mokata audit                # every block is on the ledger
+audit ledger — 2 entries:
+  #1   gate        gate=spec-persisted phase=develop decision=blocked reason=no saved spec ...
+  #2   write_gate  write_kind=memory target=memory:aws.key actor=mcp decision=blocked reason=secret detected
+```
+
+**The full copy-paste demo + a 60-second screencast script:** [mokata catches a bad change](docs/tutorials/catches-a-bad-change.md). See *every* differentiator run in [differentiators in action](docs/tutorials/differentiators-in-action.md).
 
 ---
 
@@ -25,13 +50,16 @@
 - **Governed by default.** Every durable write (code, memory, config) is human-gated; sync hooks block only for security (exit 2), async hooks observe; every gate decision and tool call lands in an append-only audit ledger.
 - **Local-first, no telemetry.** Nothing leaves your machine unless you explicitly wire an external service. The `minimal` profile performs zero network egress.
 - **Configurable & composable.** Toggle any layer/tool, pick a profile, run any capability standalone, and enter the pipeline from any phase.
+- **Meets you where you work, ships trustworthy.** Runs under Claude Code, Cursor, Copilot, Windsurf, Codex, Gemini CLI, and Aider, plus a VS Code extension; sessions travel between machines; teams share one governed backend safely; and releases carry an SBOM + Sigstore provenance — no telemetry, ever.
 
 ## Install
 
-> ⏳ **Pending directory approval (June 2026):** mokata is awaiting review for the Claude plugin
-> directory, so it is **not yet installable from Claude's in-app "Browse plugins" directory** —
-> install it with the `/plugin marketplace add` command below. _(Temporary notice; removed once
-> the directory listing is live.)_
+<!-- mokata:directory-listing:start -->
+> ⏳ **Pending Claude plugin-directory approval.** mokata isn't in Claude's in-app
+> "Browse plugins" directory **yet** — install it via `/plugin marketplace add` (you get
+> the same in-Claude-Code experience). _(This notice auto-flips once the listing is
+> approved — single source: `scripts/directory_listing.py`.)_
+<!-- mokata:directory-listing:end -->
 
 **1. As a Claude Code plugin (recommended)** — the standard install, from the public marketplace:
 
@@ -101,8 +129,11 @@ Full walkthrough: [`docs/quickstart.md`](docs/quickstart.md) · full hands-on gu
 - **Memory** — persistent / decision / episodic, on by default, self-healing by *surfacing* old→new diffs for your approval (never a silent rewrite).
 - **Execution modes** — sequential gated flow (default, lowest-cost) or parallel subagents (fresh-context isolation + two-stage review, concurrent fan-out), chosen per run, degrade-safe; optional git-worktree isolation keeps concurrent/paused work off the main tree.
 - **Governance & audit** — 4-tier rules, Karpathy gates, 4-layer secret protection, per-task model routing, reversible writes, full audit ledger. See the governed state at a glance with `mokata govern` (a read-only dashboard) and the *what-it-did-and-why* timeline with `mokata audit --why`.
-- **Session lifecycle** — list runs (`mokata sessions`), resume from the last passed gate (`mokata resume`), and pause/resume a mid-brainstorm — the HARD-GATE still holds.
-- **Cross-harness** — the engine runs behind a thin boundary (`mokata harness` shows the capability matrix): the reference Claude Code, a portable `codex`/shell adapter, and Cowork — each degrades clearly where it lacks a capability, never pretending.
+- **Session lifecycle & portable sessions** — list runs (`mokata sessions`), resume from the last passed gate (`mokata resume`), pause/resume a mid-brainstorm (the HARD-GATE still holds), and **carry a session across machines or hand it to a teammate**: `mokata session push <tag>` / `pull <tag>` packages checkpoints + approach + in-progress brainstorm + relevant memory into a machine-path-free, versioned, **secret-scanned + human-gated** bundle. Sessions carry a human-friendly name you can `rename`.
+- **Progress & visibility, one model** — one `RunProgress` drives every surface: an always-on **stage badge** (statusline, on by default, merge-safe), the native **to-do widget** where the harness has one, the printed run-progress block, and the per-subagent **lanes** in `mokata watch` / `progress --lanes`. No duplicated progress logic — channel-specific renderers over one source of truth.
+- **Runs under every agent, shows up in your editor** — the engine runs behind a thin boundary (`mokata harness` shows the capability matrix) with in-harness surfaces for **Claude Code, Cursor, GitHub Copilot, Windsurf, Codex, Gemini CLI, and Aider**, each degrading clearly where it lacks a capability. Plus a **VS Code extension** (`editors/vscode`) and a read-only **Copilot Chat `@mokata` participant** — governance, memory, and run-progress where you already work.
+- **Team & sharing** — one guided `mokata team join` chains adopt → shared memory (BYO Postgres) → vault pull → onboard → doctor (each human-gated, secret-scanned, reversible); publish/adopt governed per-framework **community stacks** (`mokata stacks`); and the team's **audit/activity logs** can live shared or local, conflict-free — **no telemetry, nothing phoned home**. One shared backend safely hosts **many projects**: every shared row is scoped by a stable project key, so review defaults to your project (`--all` / `--project` to span or pick).
+- **Supply-chain trust** — releases ship a reproducible sdist+wheel, a **CycloneDX SBOM**, and a **Sigstore build-provenance attestation** generated at tag-time in CI (the repo ships no pre-signed artifacts); all five CI workflows are least-privilege and SHA-pinned.
 
 ## Profiles & configuration
 
@@ -123,8 +154,9 @@ The CLI exposes 40+ subcommands, including:
 - **Pipeline & skills** — `brainstorm`, `spec`, `test`, `develop`, `review`, `ship`, `refine`, `debug`, `bug`, `optimize`, `onboard`, plus `run`/`enter`/`exec`/`playbook` (`--dense`)/`preview`/`chain` and `skill author`.
 - **Inspection (read-only)** — `status`, `query`, `rules`, `audit` (`--why`), `budget`, `coverage`, `lat-check`, `index`, `doctor`, `baseline`, `harness`, `progress` (`--lanes`), `watch`, `govern`, `sessions`.
 - **Memory & knowledge** — `memory` (`edit`/`export`/`import`/`migrate`/`consolidate`), `govern`.
-- **Session lifecycle** — `sessions`, `resume`, `enter`.
-- **Setup, config & distribution** — `init`, `setup`/`unsetup`, `config`, `bootstrap`, `validate`, `route`, `detect`, `reset`, `suggest`, `mcp`, `export`/`import`, `vault`, `version`/`upgrade`.
+- **Session lifecycle & portability** — `sessions`, `resume`, `enter`, `session` (`push`/`pull`/`list`/`name`).
+- **Team, stacks & sharing** — `team` (`join`/`adopt`/`connect`), `stacks` (`list`/`search`/`show`/`install`), `vault`, `marketplace`.
+- **Setup, config & distribution** — `init`, `setup`/`unsetup`, `reconfigure`, `tour`, `config`, `bootstrap`, `validate`, `route`, `detect`, `reset`, `suggest`, `mcp`, `ci-check`, `export`/`import`, `version`/`upgrade`, `release-check`.
 
 Full list with flags: the [CLI reference](https://jasgujral.github.io/mokata-oss/reference/cli/).
 

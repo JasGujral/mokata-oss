@@ -47,7 +47,12 @@ then waits for your confirmation. It:
 - runs `mokata init` (if the project isn't set up yet),
 - copies the slash commands into `.claude/commands/`,
 - registers the `mokata-mcp` server in `.mcp.json`,
-- wires the SessionStart + secret-guard hooks into `.claude/settings.json`.
+- wires the SessionStart + secret-guard hooks into `.claude/settings.json`,
+- wires the always-on **pipeline-stage badge** as a Claude Code `statusLine` (default-on;
+  composes over any statusLine you already have — see the
+  [stage badge](../concepts/pipeline.md#the-always-on-stage-badge-stage-54b)). Opt out with
+  `mokata config set settings.ux.statusline false`, or `--no-hooks` to skip the
+  settings.json wiring entirely.
 
 Then **restart Claude Code** in that project. You'll have `/mokata:brainstorm`, `/mokata:spec`, `/mokata:test`,
 `/mokata:develop`, `/mokata:review`, `/mokata:debug`, `/mokata:optimize`, `/mokata:bug`, the bootstrap briefing, the
@@ -109,11 +114,11 @@ Write tools are propose-only unless explicitly confirmed; secrets are a hard blo
 
 ### 3. Enforcement — the hooks
 
-Add to `.claude/settings.json`, pointing at the scripts in your clone (manual setup has no
-`${CLAUDE_PLUGIN_ROOT}`, so use an absolute path). Use the **absolute path to your Python
-interpreter** rather than a bare `python3` — that's what `mokata setup` writes automatically,
-and it's why the hooks work even where `python3` isn't on the hook's PATH (see
-[Cross-platform Python](#cross-platform-python-python3-not-found) below):
+Add to `.claude/settings.json`. The hooks are launched through the **`mokata-hook` console
+entry point** — the same PATH-resolved mechanism the bundled `mokata-mcp` server uses (both
+land on PATH when you `pip install` mokata), so there is no bare `python3` / `sh` / `launch.sh`
+resolution to fail on. `mokata setup` writes exactly this block, resolving `mokata-hook` to its
+absolute path; by hand the bare name works just as well:
 
 ```json
 {
@@ -121,29 +126,31 @@ and it's why the hooks work even where `python3` isn't on the hook's PATH (see
     "SessionStart": [
       { "hooks": [
         { "type": "command",
-          "command": "/ABSOLUTE/PATH/TO/python3 \"/ABSOLUTE/PATH/TO/mokata-oss/hooks/session_start.py\"" }
+          "command": "mokata-hook session-start --plugin-root \"/ABSOLUTE/PATH/TO/mokata-oss\"" }
       ] }
     ],
     "PreToolUse": [
       { "matcher": "Write|Edit|MultiEdit|Bash",
         "hooks": [
           { "type": "command",
-            "command": "/ABSOLUTE/PATH/TO/python3 \"/ABSOLUTE/PATH/TO/mokata-oss/hooks/secret_guard.py\"" }
+            "command": "mokata-hook secret-guard" }
         ] }
     ]
   }
 }
 ```
 
-To find your interpreter path, run `python3 -c "import sys; print(sys.executable)"` (or
-just let `mokata setup claude` write the block for you). `SessionStart` injects the bootstrap
-briefing; `PreToolUse` blocks a secret-bearing write or command with **exit code 2**.
+`SessionStart` injects the bootstrap briefing (the `--plugin-root` lets `/mokata:init` locate
+the bundled engine — manual setup has no `${CLAUDE_PLUGIN_ROOT}`); `PreToolUse` blocks a
+secret-bearing write or command with **exit code 2**. Just let `mokata setup claude` write the
+block for you to get the absolute-path form automatically.
 
 ### Plugin vs. manual vs. `mokata setup`
 
-All three are functionally identical. The plugin bundles everything and resolves paths via
-`${CLAUDE_PLUGIN_ROOT}`; `mokata setup` and the manual steps point at your checkout instead.
-If you later install the plugin, run `mokata unsetup claude` first to avoid duplication.
+All three are functionally identical. All launch the hooks via the `mokata-hook` entry point;
+the plugin additionally forwards `${CLAUDE_PLUGIN_ROOT}` to it, while `mokata setup` and the
+manual steps forward your checkout path instead. If you later install the plugin, run
+`mokata unsetup claude` first to avoid duplication.
 
 ## Other harnesses
 
@@ -159,29 +166,26 @@ The artifacts are harness-agnostic; only the glue differs:
 are on the roadmap (the same three steps, mapped to each harness's conventions). See also
 [Integrate with other AI tools](integrate-other-ai-tools.md).
 
-## Cross-platform Python (`python3` not found)
+## Cross-platform hooks (no `python3: command not found`)
 
-mokata's hooks need *a* Python 3 — they carry no third-party dependencies, so any Python 3
-works. But a bare `python3` command can fail to resolve:
+Earlier builds launched the hooks with a bare `python3` (via `sh launch.sh`), which failed to
+resolve in a few common setups — **Windows** names the interpreter `python` or `py -3`; a
+**GUI-launched Claude Code on macOS** runs hooks with a minimal `PATH` that often omits
+Homebrew (`/opt/homebrew/bin`), pyenv shims, or `/usr/local/bin`. The symptom was a
+non-blocking `python3: command not found` line and the SessionStart briefing / secret-guard
+silently not running.
 
-- **Windows** names the interpreter `python` or `py -3`, not `python3`.
-- A **GUI-launched Claude Code on macOS** runs hooks with a minimal `PATH` that often omits
-  Homebrew (`/opt/homebrew/bin`), pyenv shims, or `/usr/local/bin` — so even a working
-  `python3` in your terminal isn't visible to the hook.
+mokata now launches the hooks through the **`mokata-hook` console entry point** (the
+`session-start` / `secret-guard` subcommands). When you `pip install` mokata, `mokata-hook`
+lands on PATH exactly like the `mokata` CLI and the `mokata-mcp` server — so if the MCP server
+resolves for you (it must, for its tools to work), the hooks resolve identically. No bare
+`python3`, no `sh`, no PATH guessing. `mokata setup` additionally pins it to its absolute path.
 
-The symptom is a non-blocking line like `python3: command not found` and the SessionStart
-briefing / secret-guard silently not running. mokata handles this two ways:
-
-- **`mokata setup claude` and any command mokata writes** embed the **absolute interpreter
-  path** (`sys.executable`) — the exact Python that ran the command — so there is no PATH
-  dependency at all.
-- **The plugin's shipped `hooks/hooks.json`** can't know your interpreter ahead of time, so
-  it calls **`hooks/launch.sh`**, a small launcher that resolves a Python 3 at run time:
-  it tries `python3`, `python`, then `py -3`, and falls back to common install locations
-  (`/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `~/.pyenv/shims`). If it finds none,
-  it prints one clear line and **exits 0 — a missing Python never blocks your session.**
-
-**If a hook still can't find Python** (e.g. an unusual install location), set the
-`MOKATA_PYTHON` environment variable to your interpreter's absolute path; the launcher uses
-it directly. On **Windows**, install [Git for Windows](https://git-scm.com/downloads/win) —
-Claude Code already recommends it, and the launcher runs under its bundled Git Bash.
+**Last-resort fallback (pure plugin, no `pip install`).** If you ran the plugin *without*
+installing the package, `mokata-hook` isn't on PATH. The plugin then materializes
+`hooks/launch.sh` at init with an absolute interpreter, and as a final safety net that launcher
+resolves a Python 3 at run time (`python3` → `python` → `py -3`, then common install
+locations); set `MOKATA_PYTHON` to your interpreter's absolute path if it still can't find one.
+Either way a missing interpreter prints one clear line and **exits 0 — it never blocks your
+session.** On **Windows**, install [Git for Windows](https://git-scm.com/downloads/win) — Claude
+Code already recommends it, and the fallback launcher runs under its bundled Git Bash.

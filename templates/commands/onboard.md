@@ -27,6 +27,9 @@ For each thing the user gives you (including any ingested document — capture t
 ## Human-gate every write, then persist (typed + shared)
 Nothing is stored until the user approves it. For each proposed entry let the user approve / edit / reject, then persist the approved ones through the gated write (the `remember` tool with its `kind` set, or `mokata memory`). Persisted entries are shared per the team's memory backend (Stage 35); rules/guardrails are always-on and committed. A secret in a value is blocked at the gate even when approved — strip it and reference an env var instead.
 
+## Surface the auto-proposed guardrails (recurring corrections)
+mokata watches the audit ledger for corrections that recur — writes you declined, changes you reverted, spec conflicts — and distils them into guardrail-rule PROPOSALS (the same proposals `mokata rules` surfaces). When this command runs it lists any such proposals. Treat each as a suggestion the user decides on: read it back, and if they want it, capture it as a `rule`/`guardrail` through the normal gated write above. PROPOSAL-ONLY — mokata never auto-adds a rule; the user approves, edits, or rejects each one.
+
 ## Review, edit, and re-run anytime
 Show the user how to live with the brain: `mokata memory --kind <rule|guardrail|best-practice|context|reference|decision>` reviews what mokata will honour, grouped by kind; `mokata memory edit <subject>` updates an entry (a formula changes, a guardrail is revised) — human-gated and routed through self-healing, never silent. This skill is re-invokable: run it during setup and any time later to add or update knowledge.
 

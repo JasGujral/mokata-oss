@@ -8,7 +8,6 @@ from _support import sample_manifest_data  # noqa: F401  (path fix side-effect)
 from mokata.compose import (
     SuggestionContext,
     plan_chain,
-    run_chain,
     suggest,
 )
 from mokata.skills import SkillNotFound
@@ -20,12 +19,6 @@ class TestChaining(unittest.TestCase):
         self.assertEqual([s.skill for s in steps], ["spec", "test"])
         self.assertEqual(steps[0].gate, "completeness")
         self.assertEqual(steps[1].gate, "red-before-green")
-
-    def test_run_chain_runs_steps_in_order_with_gates(self):
-        ran = []
-        result = run_chain(["debug", "test"], runner=lambda name: ran.append(name))
-        self.assertEqual(ran, ["debug", "test"])             # ran in order
-        self.assertTrue(all(s.gate for s in result.steps))   # each step has its gate
 
     def test_unknown_skill_in_chain_raises(self):
         with self.assertRaises(SkillNotFound):

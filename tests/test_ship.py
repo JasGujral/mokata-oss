@@ -15,7 +15,10 @@ VERSION = __version__   # canonical; every other location must match it (version
 
 COMMANDS = ("brainstorm", "spec", "test", "develop", "review", "debug", "optimize",
             "bug", "init", "ship", "vault", "onboard")
-HOOKS = ("session_start.py", "secret_guard.py")
+# Stage 53b: hooks are wired as `mokata-hook <subcommand>` (console entry point); the
+# standalone scripts still ship as shims for the launch.sh fallback.
+HOOK_SUBCOMMANDS = ("session-start", "secret-guard")
+HOOK_SHIMS = ("session_start.py", "secret_guard.py")
 
 
 def read(rel):
@@ -58,13 +61,15 @@ class TestPluginReferences(unittest.TestCase):
         self.assertNotIn(
             "hooks", data,
             "manifest must not reference hooks/hooks.json (it auto-loads)")
-        hooks_ref = "hooks/hooks.json"
-        hooks_json = json.loads(read(hooks_ref))
+        hooks_json = json.loads(read("hooks/hooks.json"))
         blob = json.dumps(hooks_json)
-        for hook in HOOKS:
-            self.assertIn(hook, blob, f"hooks.json does not reference {hook}")
-            self.assertTrue(os.path.exists(os.path.join(ROOT, "hooks", hook)))
-        # the security hook is wired on a tool-use event; session_start on session start
+        # Stage 53b: wired via the `mokata-hook` console entry point (no bare python3/sh).
+        for sub in HOOK_SUBCOMMANDS:
+            self.assertIn(f"mokata-hook {sub}", blob,
+                          f"hooks.json does not wire `mokata-hook {sub}`")
+        for shim in HOOK_SHIMS:                 # the fallback shims still ship
+            self.assertTrue(os.path.exists(os.path.join(ROOT, "hooks", shim)))
+        # the security hook is wired on a tool-use event; session-start on session start
         self.assertIn("PreToolUse", blob)
         self.assertIn("SessionStart", blob)
 

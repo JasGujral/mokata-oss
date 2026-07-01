@@ -28,7 +28,7 @@ are two ways to run it (and which fits your goal), see
 This site follows the [Diátaxis](https://diataxis.fr/) model:
 
 - **[Getting started](quickstart.md)** — install and run your first pipeline in minutes.
-- **Tutorials** — [**differentiators in action**](tutorials/differentiators-in-action.md): a runnable demo of every differentiator (graph, memory, governance — see them work); [run a story end-to-end](tutorials/run-a-story.md): a guided, learn-by-doing walkthrough; and [the Complete Guide](tutorials/mokata-complete-guide.md): every command, gate, and layer (with a downloadable PDF).
+- **Tutorials** — [**mokata catches a bad change**](tutorials/catches-a-bad-change.md): the 60-second wow demo (copy-paste it and watch the seatbelt catch a bad change); [**differentiators in action**](tutorials/differentiators-in-action.md): a runnable demo of every differentiator (graph, memory, governance — see them work); [run a story end-to-end](tutorials/run-a-story.md): a guided, learn-by-doing walkthrough; and [the Complete Guide](tutorials/mokata-complete-guide.md): every command, gate, and layer (with a downloadable PDF).
 - **How-to guides** — task recipes: [configure a profile](how-to/configure-a-profile.md),
   [set the execution mode](how-to/set-execution-mode.md),
   [use & heal memory](how-to/use-memory.md),

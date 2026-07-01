@@ -43,6 +43,10 @@ MEMORY_SETTINGS_KEY = "memory"     # manifest.settings["memory"] = {type: bool}
 MEMORY_STATS_KEY = "memory_stats"  # StateStore key
 MEMORY_DIRNAME = "memory"
 
+# Stage 71a — sentinel: "scope to the CURRENT project" (the default). Distinct from ALL_PROJECTS
+# (None → span all) and from a concrete project-id string, so from_surface can tell them apart.
+_PROJECT_CURRENT = object()
+
 
 class MemoryError(Exception):
     pass
@@ -64,11 +68,14 @@ def enabled_memory_types(manifest: Any) -> Tuple[str, ...]:
 # -------------------------------------------------------------- backend selection
 def build_backend(tool: str, root: str,
                   clients: Optional[Dict[str, Any]] = None,
-                  config: Optional[Dict[str, Any]] = None) -> MemoryBackend:
+                  config: Optional[Dict[str, Any]] = None,
+                  project: Optional[str] = None) -> MemoryBackend:
     """Build the backend the router resolved to, honoring the tool's per-tool `config`
     (Stage 24A) and degrading to the SQLite floor when a chosen backend needs external
     wiring that isn't present. `config` is the manifest's `tools.<id>.config` block;
-    defaults are unchanged when it's absent."""
+    defaults are unchanged when it's absent. `project` (Stage 71a) SCOPES the shared
+    Postgres backend to the current project; None spans all (review). Local SQLite/Obsidian
+    are already per-repo and ignore it."""
     clients = clients or {}
     config = config or {}
     # Default runtime stores are transient: under .mokata/temp_local/memory/ (Stage 24D).
@@ -86,7 +93,8 @@ def build_backend(tool: str, root: str,
         return SQLiteBackend(path)
     if tool == "postgres":
         # opt-in remote store; degrade to the SQLite floor if unset/unreachable (P8).
-        backend = build_postgres_backend(config)
+        # Stage 71a — scoped to the current project so one shared DSN hosts many, no bleed.
+        backend = build_postgres_backend(config, project=project)
         return backend if backend is not None else floor()
     if tool == "native-memory":
         client = clients.get("native-memory")
@@ -99,7 +107,8 @@ def build_backend(tool: str, root: str,
 
 
 def select_memory_backend(router: Any, root: str,
-                          clients: Optional[Dict[str, Any]] = None) -> MemoryBackend:
+                          clients: Optional[Dict[str, Any]] = None,
+                          project: Optional[str] = None) -> MemoryBackend:
     try:
         res = router.resolve("memory_store")
     except (ManifestError, AttributeError):
@@ -110,7 +119,7 @@ def select_memory_backend(router: Any, root: str,
         config = router.manifest.tool_config(tool)
     except AttributeError:
         config = {}
-    return build_backend(tool, root, clients, config)
+    return build_backend(tool, root, clients, config, project=project)
 
 
 # -------------------------------------------------------------- instrumentation (C8)
@@ -185,15 +194,22 @@ class MemoryStore:
     def from_router(cls, router: Any, root: str,
                     enabled_types: Optional[Tuple[str, ...]] = None,
                     stats_store: Any = None,
-                    clients: Optional[Dict[str, Any]] = None) -> "MemoryStore":
-        backend = select_memory_backend(router, root, clients)
+                    clients: Optional[Dict[str, Any]] = None,
+                    project: Optional[str] = None) -> "MemoryStore":
+        backend = select_memory_backend(router, root, clients, project=project)
         types = enabled_types if enabled_types is not None else MEMORY_TYPES
         return cls(backend, enabled_types=types, stats_store=stats_store)
 
     @classmethod
     def from_surface(cls, surface: Any,
-                     clients: Optional[Dict[str, Any]] = None) -> "MemoryStore":
-        backend = select_memory_backend(surface.router, surface.mokata_dir, clients)
+                     clients: Optional[Dict[str, Any]] = None,
+                     project: Any = _PROJECT_CURRENT) -> "MemoryStore":
+        # Stage 71a — SCOPE the shared backend to the current project by default. `project` can be
+        # overridden for review: a specific id (str), or `ALL_PROJECTS` (None) to span all.
+        from ..project import project_id
+        scope = project_id(surface) if project is _PROJECT_CURRENT else project
+        backend = select_memory_backend(surface.router, surface.mokata_dir, clients,
+                                        project=scope)
         # attach the audit ledger so consolidation proposals/decisions are recorded (I3)
         from ..govern import AuditLedger
         from .embed import make_embedder

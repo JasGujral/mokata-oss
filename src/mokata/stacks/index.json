@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "kind": "mokata-stack-index",
+  "authored_for": "0.0.5",
+  "stacks": [
+    {
+      "name": "python-web",
+      "framework": "Python web (FastAPI / Django / Flask)",
+      "summary": "Governed stack for a Python web service \u2014 migrations, secrets-in-env, typed boundaries, tests-first.",
+      "version": "0.0.5",
+      "profile": "standard",
+      "guardrails": 4,
+      "skills": [
+        "brainstorm",
+        "spec",
+        "test",
+        "develop",
+        "review",
+        "ship"
+      ],
+      "tags": [
+        "python",
+        "web",
+        "api",
+        "fastapi",
+        "django",
+        "flask"
+      ],
+      "manifest": "python-web.json"
+    },
+    {
+      "name": "node-ts",
+      "framework": "Node.js + TypeScript",
+      "summary": "Governed stack for a TypeScript service \u2014 strict types, no any-escapes, env-based config, tested boundaries.",
+      "version": "0.0.5",
+      "profile": "standard",
+      "guardrails": 4,
+      "skills": [
+        "brainstorm",
+        "spec",
+        "test",
+        "develop",
+        "review",
+        "ship"
+      ],
+      "tags": [
+        "node",
+        "typescript",
+        "ts",
+        "javascript",
+        "backend"
+      ],
+      "manifest": "node-ts.json"
+    },
+    {
+      "name": "go-service",
+      "framework": "Go service",
+      "summary": "Governed stack for a Go service \u2014 errors handled explicitly, table-driven tests, env config, no swallowed failures.",
+      "version": "0.0.5",
+      "profile": "standard",
+      "guardrails": 4,
+      "skills": [
+        "brainstorm",
+        "spec",
+        "test",
+        "develop",
+        "review",
+        "ship"
+      ],
+      "tags": [
+        "go",
+        "golang",
+        "service",
+        "backend"
+      ],
+      "manifest": "go-service.json"
+    }
+  ]
+}

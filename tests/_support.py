@@ -53,6 +53,163 @@ def write_sample_repo(root):
     return root
 
 
+# --- Stage 65: a tiny polyglot repo, one file per language, same relationships ---------
+# In every language: helper() <- called by compute(); compute() <- called by caller();
+# a type Impl implements/extends Base; a module mod_a is imported; one AC-1-tagged test.
+_POLYGLOT = {
+    "svc.py": '''\
+import mod_a
+
+
+def helper():
+    return 1
+
+
+def compute():
+    return helper()
+
+
+def caller():
+    return compute()
+
+
+class Impl(Base):
+    pass
+
+
+def test_login():
+    # AC-1 login works
+    assert compute() == 1
+''',
+    "svc.ts": '''\
+import { thing } from "./mod_a";
+
+
+function helper() {
+    return 1;
+}
+
+
+function compute() {
+    return helper();
+}
+
+
+function caller() {
+    return compute();
+}
+
+
+class Impl extends Base {
+}
+
+
+test("logs in", () => {
+    // AC-1 login works
+    expect(compute()).toBe(1);
+});
+''',
+    "svc.go": '''\
+package main
+
+import "mod_a"
+
+
+func helper() int {
+    return 1
+}
+
+
+func compute() int {
+    return helper()
+}
+
+
+func caller() int {
+    return compute()
+}
+
+
+func TestLogin(t *testing.T) {
+    // AC-1 login works
+    compute()
+}
+''',
+    "svc.rs": '''\
+use mod_a;
+
+
+fn helper() -> i32 {
+    1
+}
+
+
+fn compute() -> i32 {
+    helper()
+}
+
+
+fn caller() -> i32 {
+    compute()
+}
+
+
+struct Impl;
+
+impl Base for Impl {
+}
+
+
+#[test]
+fn test_login() {
+    // AC-1 login works
+    assert_eq!(compute(), 1);
+}
+''',
+    "Svc.java": '''\
+import com.example.mod_a;
+
+
+class Impl extends Base {
+    int helper() {
+        return 1;
+    }
+
+    int compute() {
+        return helper();
+    }
+
+    int caller() {
+        return compute();
+    }
+
+    @Test
+    void testLogin() {
+        // AC-1 login works
+        compute();
+    }
+}
+''',
+}
+
+
+def write_polyglot_repo(root):
+    """Write one source file per supported language into `root`; return the path.
+
+    The same structural relationships hold in each file so a single set of assertions can
+    exercise the language-aware grep floor across Python/JS-TS/Go/Rust/Java."""
+    for name, body in _POLYGLOT.items():
+        with open(os.path.join(root, name), "w", encoding="utf-8") as fh:
+            fh.write(body)
+    return root
+
+
+def polyglot_files():
+    """Map language name -> the filename written by write_polyglot_repo (for per-file asserts)."""
+    return {"python": "svc.py", "ts": "svc.ts", "go": "svc.go",
+            "rust": "svc.rs", "java": "Svc.java"}
+
+
 def sample_manifest_data():
     """A small, valid manifest with one degradable and one always-on capability."""
     return {

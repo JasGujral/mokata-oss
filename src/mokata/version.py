@@ -99,7 +99,10 @@ def _default_fetch(url: str) -> str:
     import urllib.request
     req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json",
                                                "User-Agent": "mokata-version-check"})
-    with urllib.request.urlopen(req, timeout=5) as resp:       # noqa: S310 (https only)
+    # Justification for the B310 suppression: `url` is the hardcoded GitHub Releases API constant
+    # (an https:// URL built in-code, never user input; no file:/custom scheme reachable); the call
+    # is opt-in, timeout-bounded, and ledger-accounted, and the caller degrades clean on failure.
+    with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310  # nosec B310
         data = json.loads(resp.read().decode("utf-8"))
     tag = data.get("tag_name") or data.get("name")
     if not tag:

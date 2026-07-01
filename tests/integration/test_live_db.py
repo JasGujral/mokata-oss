@@ -98,6 +98,98 @@ class TestLivePgVectorSemanticRecall(unittest.TestCase):
             be.close()
 
 
+@unittest.skipUnless(_PG_LIVE, _PG_REASON)
+class TestLivePostgresSessionTransport(unittest.TestCase):
+    """Stage 55b — a portable session round-trips through the SHARED Postgres transport: one
+    machine pushes (gated), another pulls (gated) the SAME owned table, resume continues."""
+
+    def setUp(self):
+        os.environ.setdefault("MOKATA_SESSION_PG_DSN", _pg_dsn())
+        from mokata.session_transport import PostgresTransport
+        t = PostgresTransport(dsn=_pg_dsn())      # isolate: clear the mokata-owned bundle table
+        for tag in t.list_tags():
+            t.delete_bundle(tag)
+
+    def test_push_then_pull_over_shared_postgres_resumes(self):
+        import tempfile
+        from mokata import session_bundle as SB
+        from mokata import session_transport as ST
+        from mokata.config import Surface
+        from mokata.govern.resume import PipelineCheckpoint
+        from mokata.init import init_repo
+
+        from mokata import config_cmd
+
+        def repo(d):
+            init_repo(root=d, profile="standard", assume_yes=True, out=lambda _: None)
+            # Stage 71a — two clones of the SAME project (a → b, different "machines") share one
+            # project key, so the scoped shared transport resolves the pushed bundle on pull. In
+            # the real world the git remote supplies this automatically; here we pin it explicitly.
+            config_cmd.config_set(d, "settings.project.id", "portable-demo",
+                                  assume_yes=True, out=lambda _m: None)
+            return Surface.load(d)
+
+        with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
+            src = repo(a)
+            cp = PipelineCheckpoint(src.state, "auth-refactor")
+            cp.mark_passed("brainstorm")
+            cp.mark_passed("analysis")
+            push_t = ST.make_transport("postgres", a, project="portable-demo")   # scoped connect
+            plan = SB.plan_session_push(a, src, "auth-refactor", transport=push_t,
+                                        now="2026-06-30T00:00:00+00:00")
+            self.assertTrue(SB.commit_session_push_gated(plan, confirm=lambda _: True).committed)
+
+            dst = repo(b)
+            # a different "machine", same DSN + same project key → the scoped read finds it
+            pull_t = ST.make_transport("postgres", b, project="portable-demo")
+            pull = SB.plan_session_pull(b, "auth-refactor", b, transport=pull_t)
+            self.assertEqual(pull.status, "ok")
+            self.assertTrue(SB.hydrate_bundle(dst, pull.bundle, confirm=lambda _: True).committed)
+            self.assertEqual(PipelineCheckpoint(dst.state, "auth-refactor").resume_phase(),
+                             "strawman")
+
+
+@unittest.skipUnless(_PG_LIVE, _PG_REASON)
+class TestLiveTwoProjectIsolation(unittest.TestCase):
+    """Stage 71a — two projects on ONE shared DSN each read back ONLY their own rows (no bleed):
+    memory + session bundles with a COLLIDING tag both survive, scoped by the project key."""
+
+    def setUp(self):
+        # isolate: clear both owned tables across ALL projects (project=None spans all)
+        a = PostgresBackend(_pg_dsn(), project=None)
+        for it in a.all():
+            a.delete(it.id)
+        a.close()
+        from mokata.session_transport import PostgresTransport
+        t = PostgresTransport(dsn=_pg_dsn(), project=None)
+        for tag in t.list_tags():
+            t.delete_bundle(tag)
+
+    def test_memory_rows_do_not_bleed_across_projects(self):
+        pa = PostgresBackend(_pg_dsn(), project="proj-A")
+        pb = PostgresBackend(_pg_dsn(), project="proj-B")
+        try:
+            pa.put(MemoryItem.create("k", "A-value"))
+            pb.put(MemoryItem.create("k", "B-value"))
+            self.assertEqual(sorted(i.value for i in pa.all()), ["A-value"])
+            self.assertEqual(sorted(i.value for i in pb.all()), ["B-value"])
+            self.assertEqual({"proj-A", "proj-B"}, set(pa.list_projects()))
+        finally:
+            pa.close()
+            pb.close()
+
+    def test_session_bundles_with_a_colliding_tag_both_survive(self):
+        from mokata.session_transport import PostgresTransport
+        ta = PostgresTransport(dsn=_pg_dsn(), project="proj-A")
+        tb = PostgresTransport(dsn=_pg_dsn(), project="proj-B")
+        ta.write_bundle("auth", '{"who":"A"}')          # SAME tag, different project
+        tb.write_bundle("auth", '{"who":"B"}')
+        self.assertEqual(ta.read_bundle("auth"), '{"who":"A"}')   # no clobber
+        self.assertEqual(tb.read_bundle("auth"), '{"who":"B"}')
+        self.assertEqual(ta.list_tags(), ["auth"])
+        self.assertEqual(tb.list_tags(), ["auth"])
+
+
 @unittest.skipUnless(_NEO4J_LIVE, _NEO4J_REASON)
 class TestLiveNeo4jGraph(unittest.TestCase):
     """D22 — a real Cypher query answers callers + blast-radius over a seeded graph."""

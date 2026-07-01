@@ -49,6 +49,7 @@ from .bootstrap import build_bootstrap
 from .brainstorm import ground, load_approved_approach, render_launch
 from .config import ConfigError, Surface
 from . import config_cmd
+from .crossplat import current_user as _current_user
 from .detect import Detector
 from .init import init_repo, plan_init, render_plan
 from .prompt import read_yes_no
@@ -106,12 +107,54 @@ def _load_surface(root: str) -> Surface:
         raise SystemExit(1)
 
 
+# Stage 71a — review scoping for the SHARED backends (memory / audit / sessions). A shared DSN can
+# host many projects; review DEFAULTS to the current project, with `--all` / `--project` escapes.
+_SCOPE_CURRENT = object()          # the default: the current project only
+
+
+def _review_scope(args: argparse.Namespace):
+    """Resolve --all / --project into a scope: `ALL_PROJECTS` (span all), a specific project id, or
+    the `_SCOPE_CURRENT` sentinel (the default — the current project)."""
+    from .project import ALL_PROJECTS
+    if getattr(args, "all", False):
+        return ALL_PROJECTS
+    proj = getattr(args, "project", None)
+    if proj:
+        return proj
+    return _SCOPE_CURRENT
+
+
+def _backend_projects(obj: Any) -> Optional[List[str]]:
+    """The distinct project keys a shared backend/transport reports, or None when it can't (a
+    local, per-repo backend has no cross-project space). Degrade-clean — never raises."""
+    fn = getattr(obj, "list_projects", None)
+    if fn is None:
+        return None
+    try:
+        return fn()
+    except Exception:
+        return None
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     if getattr(args, "preview", False):
         # Dry-run for the human gate (Stage 23): print the plan, write nothing, exit 0.
         # Used by /mokata:init to preview before the user approves the real write.
         print(render_plan(plan_init(args.path, args.profile)))
         return 0
+    # Stage 56 — the magical first-run: when run INTERACTIVELY on a fresh repo (or with an
+    # explicit --wizard / --setup-harness), use the guided Q&A wizard. The non-interactive
+    # --yes/--profile path is preserved verbatim for CI/scripts.
+    explicit_profile = (args.profile != DEFAULT_PROFILE)
+    interactive = sys.stdin.isatty() and not args.yes and not args.force
+    use_wizard = getattr(args, "wizard", False) or (
+        interactive and not explicit_profile and not Surface.is_initialized(args.path))
+    if use_wizard:
+        from . import onboarding
+        res = onboarding.run_wizard(
+            root=args.path, force=args.force,
+            wire_harness=(True if getattr(args, "setup_harness", False) else None))
+        return 1 if res.aborted else 0
     result = init_repo(
         root=args.path,
         profile=args.profile,
@@ -120,6 +163,36 @@ def cmd_init(args: argparse.Namespace) -> int:
     )
     if result.aborted:
         print(f"\n{result.message}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_tour(args: argparse.Namespace) -> int:
+    # Stage 56 — a short, self-contained, READ-ONLY demo (graph query, memory recall, gate
+    # catch). Writes nothing to the repo; the memory recall runs in an in-memory store.
+    from . import onboarding
+    print(onboarding.build_tour(ascii_only=getattr(args, "ascii", False)))
+    return 0
+
+
+def cmd_reconfigure(args: argparse.Namespace) -> int:
+    # Stage 56b — the re-runnable reconfigure wizard: change what's wired on an already-
+    # initialized repo (add/remove an integration, switch a backend, change profile), gated +
+    # idempotent + reversible. Interactive by default; explicit flags / --yes for scripts.
+    from . import onboarding
+    config_edits = {}
+    for pair in (args.set or []):
+        if "=" not in pair:
+            print(f"error: --set expects KEY=VALUE (got '{pair}')", file=sys.stderr)
+            return 2
+        key, val = pair.split("=", 1)
+        config_edits[key] = val
+    wire_harness = True if args.wire_harness else (False if args.unwire_harness else None)
+    res = onboarding.run_reconfigure(
+        root=args.path, profile=args.profile, add=(args.add or None),
+        remove=(args.remove or None), config_edits=(config_edits or None),
+        wire_harness=wire_harness, scope=args.scope, assume_yes=args.yes)
+    if not res.initialized:
         return 1
     return 0
 
@@ -185,6 +258,16 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_release_check(args: argparse.Namespace) -> int:
+    """Stage 61b — PURE/OFFLINE: assert every version field == the intended tag. Exit 1
+    (fail-closed) naming any mismatch so `release.sh` can REFUSE to tag a lagging commit."""
+    from .packaging import check_release_consistency
+    target = args.version or __version__
+    res = check_release_consistency(target, root=args.root)
+    print(res.render())
+    return 0 if res.consistent else 1
+
+
 def cmd_route(args: argparse.Namespace) -> int:
     surface = _load_surface(args.path)
     try:
@@ -226,12 +309,16 @@ def cmd_brainstorm(args: argparse.Namespace) -> int:
         return 0
     # Stage 50 — resume a saved IN-PROGRESS brainstorm if one exists (left mid-stream). The
     # HARD-GATE still holds: this only re-hydrates exploration; nothing is approved by resuming.
-    from .brainstorm import restore_brainstorm_progress
+    from .brainstorm import build_anchor_brief, restore_brainstorm_progress
     wip = restore_brainstorm_progress(surface.state)
     if wip is not None and not wip.approved:
         print(f"mokata brainstorm: resuming in-progress brainstorm for '{wip.topic}' — "
               f"{len(wip.answered_questions)} answered question(s), {len(wip.approaches)} "
               f"approach(es) on the table; NOT yet approved (the spec stays HARD-GATED).\n")
+        # Stage 54g — re-surface the immutable anchor + compact synthesis so the resumed
+        # brainstorm picks up grounded to the original ask, not just wherever it left off.
+        sys.stdout.write(build_anchor_brief(wip))
+        sys.stdout.write("\n")
         sys.stdout.write(wip.design_writeup())
         return 0
     # Standalone launch (L1): print the clean-room protocol + live grounding. No prior
@@ -254,6 +341,19 @@ def cmd_onboard(args: argparse.Namespace) -> int:
             surface = None
     grounding = ground(surface.router) if surface is not None else ground(None)
     sys.stdout.write(render_skill(skill, grounding))
+
+    # Stage 59 — surface AUTO-PROPOSED guardrails: rule PROPOSALS distilled from recurring
+    # ledger corrections (declined writes / reverts / spec conflicts, G5). PROPOSAL-ONLY —
+    # the user approves each through the gated capture; mokata never auto-adds a rule. Quiet
+    # + bounded when there are none (degrade-clean).
+    if surface is not None:
+        from .govern import learn_from_ledger
+        proposals = learn_from_ledger(AuditLedger.from_mokata_dir(surface.mokata_dir))
+        if proposals:
+            print("\nProposed guardrails (recurring corrections mokata noticed — "
+                  "human-gated, NOT auto-added; approve/edit/reject each):")
+            for p in proposals:
+                print(f"  - {p.proposed_rule} [{p.rationale}]")
     return 0
 
 
@@ -296,6 +396,45 @@ def cmd_spec_check(args: argparse.Namespace) -> int:
                            ledger=ledger, phase=args.phase, assume_yes=args.yes)
     print(outcome.render())
     return 0 if outcome.proceeded else 1
+
+
+def cmd_ci_check(args: argparse.Namespace) -> int:
+    # Stage 58 — mokata as a CI / PR check: run the completeness gate + spec-awareness over a PR's
+    # changed files. READ-ONLY (surfaces blocks; never posts to GitHub). DEGRADE-CLEAN: nothing to
+    # check → PASS (never false-block). Reuses the existing engines (no logic duplicated).
+    from . import ci_check as CI
+    files = _split_csv(args.files)
+    if args.base and not files:
+        files = _git_changed_files(args.path, args.base)
+    symbols = _split_csv(args.symbols) if args.symbols else None
+    result = CI.run_ci_check(args.path, files, changed_symbols=symbols)
+    print(result.render(ascii_only=args.ascii))
+    if args.comment_file:
+        try:
+            with open(args.comment_file, "w", encoding="utf-8") as fh:
+                fh.write(result.comment_body() + "\n")
+        except OSError as exc:
+            print(f"warning: could not write comment file: {exc}", file=sys.stderr)
+    # `--no-fail` makes it report-only (the workflow still posts the comment but the job stays
+    # green); the default fails the check on a real block so it gates the PR.
+    if args.no_fail:
+        return 0
+    return result.exit_code
+
+
+def _git_changed_files(root: str, base: str) -> list:
+    """The files changed since `base` (`git diff --name-only base...HEAD`). Degrade-clean — any
+    git failure yields an empty list (→ nothing to check → PASS), never a crash."""
+    import subprocess
+    for spec in (f"{base}...HEAD", base):
+        try:
+            out = subprocess.run(["git", "-C", root, "diff", "--name-only", spec],
+                                 capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return []
+        if out.returncode == 0:
+            return [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
+    return []
 
 
 def cmd_memory(args: argparse.Namespace) -> int:
@@ -358,6 +497,24 @@ def cmd_memory(args: argparse.Namespace) -> int:
         print("memory: disabled for this profile (no memory types enabled).")
         return 0
 
+    # Stage 71a — REVIEW scoping over a shared backend. `--list-projects` enumerates the projects
+    # present; `--all` spans them; `--project X` selects one; the default is the current project.
+    from .project import project_id
+    scope = _review_scope(args)
+    if getattr(args, "list_projects", False):
+        projs = _backend_projects(store.backend)
+        if projs is None:
+            print(f"memory backend: {store.backend.name} — local/per-repo (single project: "
+                  f"{project_id(surface)}). --list-projects applies to a shared backend.")
+            return 0
+        print(f"memory backend: {store.backend.name} — {len(projs)} project(s) present:")
+        for p in projs:
+            here = "  ← current" if p == project_id(surface) else ""
+            print(f"  {p}{here}")
+        return 0
+    if scope is not _SCOPE_CURRENT:
+        store = MemoryStore.from_surface(surface, project=scope)   # re-scope for the review view
+
     # Stage 36 — the project "brain" view: grouped BY KIND (rules / guardrails / best-practices
     # / context / decisions …), optionally filtered to one --kind. A scannable, committed/
     # reviewable artifact, not a flat dump.
@@ -384,6 +541,15 @@ def cmd_memory(args: argparse.Namespace) -> int:
               f"(nothing changes until you act):")
         for p in proposals:
             print(f"  ({p.kind}) [{p.mtype}] {p.subject}: {p.diff()}")
+
+    # Stage 59 — the actionable memory-health nudge (stale · contradictory · unused), derived
+    # from the proposals + the C8 ratio. Proposal-only + SILENT when healthy; it points at the
+    # gated review path, it never edits/prunes memory.
+    from .memory.intelligence import memory_health
+    nudge = memory_health(proposals, store.stats.reads, store.stats.writes).nudge(
+        ascii_only=getattr(args, "ascii", False))
+    if nudge:
+        print(f"\n{nudge}")
     return 0
 
 
@@ -404,14 +570,31 @@ def _memory_edit(store, args) -> int:
     old = existing[0]
     new_kind = (normalize_kind(args.kind) or args.kind) if getattr(args, "kind", None) else old.kind
     new = MemoryItem.create(subject, args.value, mtype=old.mtype, kind=new_kind,
-                            author=os.environ.get("USER") or "user", source="memory-edit")
+                            author=_current_user() or "user", source="memory-edit")
     if old.value == new.value and new_kind == old.kind:
         print(f"memory: '{subject}' unchanged (no-op).")
         return 0
     proposal = HealingProposal(kind=CONTRADICTION, subject=subject, mtype=old.mtype,
                                old=old, new=new,
                                rationale="user edit via `mokata memory edit`")
-    res = store.apply_proposal(proposal, "approve", assume_yes=args.yes)
+    if args.yes:
+        res = store.apply_proposal(proposal, "approve", assume_yes=True)
+    else:
+        # Stage 54c — one-key approve / edit / reject over the old→new diff; SAFE DEFAULT
+        # (reject / EOF) = no change. Reuses the existing apply_proposal mechanism; the
+        # WriteGate secret hard-block still fires (approve can't override a security block).
+        from .prompt import read_approve_edit_reject
+        resp = read_approve_edit_reject(store.render_proposal(proposal), new.value)
+        if not resp.is_change:
+            print(f"memory: '{subject}' unchanged (no change).")
+            return 0
+        if resp.action == "edit":
+            edited = MemoryItem.create(subject, resp.value, mtype=old.mtype, kind=new_kind,
+                                       author=_current_user() or "user",
+                                       source="memory-edit")
+            res = store.apply_proposal(proposal, "edit", edited=edited, assume_yes=True)
+        else:
+            res = store.apply_proposal(proposal, "approve", assume_yes=True)
     print(res.message if res.message else ("edited" if res.changed else "no change"))
     return 0 if res.changed or not res.aborted else 1
 
@@ -494,7 +677,7 @@ def cmd_vault(args: argparse.Namespace) -> int:
                 print(f"vault push blocked — {decision.reason}", file=sys.stderr)
                 return 1
         gate = WriteGate(ledger=ledger)
-        author = args.author or os.environ.get("USER") or ""
+        author = args.author or _current_user() or ""
         box: Dict[str, Any] = {}
         outcome = gate.submit(
             WriteRequest("config", V._artifact_path(root, plan.name),
@@ -516,8 +699,196 @@ def cmd_vault(args: argparse.Namespace) -> int:
     return 2
 
 
+def cmd_session(args: argparse.Namespace) -> int:
+    # Stage 55a/55b — portable tagged sessions: push / pull / list / name across transports.
+    from . import session_bundle as SB
+    from . import session_transport as STX
+    action = args.action
+    root = args.path
+
+    def _open(kind):
+        """Build a transport, degrading clean (clear message, rc 1) on an unavailable remote."""
+        try:
+            return STX.make_transport(kind, root), 0
+        except STX.SessionTransportUnavailable as exc:
+            print(f"session: {exc}", file=sys.stderr)
+            return None, 1
+
+    if action == "list":
+        # Stage 71a — the shared Postgres leg is SCOPED to the current project by default; --all
+        # spans all, --project selects one, --list-projects enumerates. Local/vault are per-repo.
+        from .project import ALL_PROJECTS
+        scope = _review_scope(args)
+        initialized = Surface.is_initialized(root)
+        has_shared = bool(STX.resolve_pg_dsn())
+
+        if getattr(args, "list_projects", False):
+            if not has_shared:
+                print("session: no shared backend configured — projects apply to a shared DSN.")
+                return 0
+            try:
+                pg = STX.make_transport("postgres", root, project=ALL_PROJECTS)
+            except STX.SessionTransportUnavailable as exc:
+                print(f"session: {exc}", file=sys.stderr)
+                return 1
+            projs = _backend_projects(pg) or []
+            print(f"session: {len(projs)} project(s) with bundles on the shared backend:")
+            for p in projs:
+                print(f"  {p}")
+            return 0
+
+        # OUTSIDE a project (bare CLI, no .mokata) with a shared DSN: never silently dump every
+        # project — require --all/--project, or point at --list-projects.
+        if has_shared and not initialized and scope is _SCOPE_CURRENT:
+            print("session: not inside a mokata project. On a shared backend, choose a scope: "
+                  "`--all` (every project), `--project <id>`, or `--list-projects` to see what's "
+                  "present. (Refusing to dump every project's sessions.)")
+            return 2
+
+        # span local + the committed vault, plus shared Postgres when a DSN is configured.
+        transports = [STX.LocalTransport(root), STX.VaultTransport(root)]
+        if has_shared:
+            try:
+                # default scope → derive the current project; --all → span (None); --project → id.
+                pg = (STX.make_transport("postgres", root) if scope is _SCOPE_CURRENT
+                      else STX.make_transport("postgres", root, project=scope))
+                transports.append(pg)
+            except STX.SessionTransportUnavailable:
+                pass                                       # degrade clean — local/vault still list
+        infos = SB.list_session_bundles_across(root, transports)
+        if not infos:
+            print("session: no shared bundles — `mokata session push <tag>` to package this "
+                  "session for another machine / a teammate.")
+            return 0
+        print(f"session: {len(infos)} bundle(s) (local + remote)")
+        for i in infos:
+            print(f"  {i.summary()}")
+        return 0
+
+    if action == "push":
+        if not args.tag:
+            print("error: `session push <tag>` requires a tag", file=sys.stderr)
+            return 2
+        transport, rc = _open(args.to)
+        if transport is None:
+            return rc
+        surface = _load_surface(root)
+        try:
+            plan = SB.plan_session_push(root, surface, args.tag, run_id=args.run,
+                                        force=args.force, author=args.author or "",
+                                        transport=transport)
+        except SB.SessionBundleError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if plan.status in ("empty", "unchanged"):
+            print(f"session: {plan.reason()}")
+            return 0
+        if plan.blocked:
+            print(f"session: {plan.reason()}", file=sys.stderr)
+            return 1
+        # Durable write → universal gate (secret-scan hard-block + human approval + audit).
+        ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+        res = SB.commit_session_push_gated(plan, ledger=ledger, confirm=_cli_ask,
+                                           assume_yes=args.yes)
+        if not res.committed:
+            print(f"session push {res.reason}"
+                  + (f" — {[f.kind for f in res.findings]}" if res.findings else ""),
+                  file=sys.stderr)
+            return 1
+        print(f"session: pushed '{plan.tag}' to {transport.name} — {plan.reason()}. "
+              f"`mokata session pull {plan.tag} --from {transport.name}` on the other side "
+              f"→ `mokata resume`.")
+        return 0
+
+    if action == "pull":
+        if not args.tag:
+            print("error: `session pull <tag> [--into <repo>]` requires a tag", file=sys.stderr)
+            return 2
+        transport, rc = _open(args.frm)
+        if transport is None:
+            return rc
+        target = args.into or root
+        try:
+            plan = SB.plan_session_pull(root, args.tag, target, force=args.force,
+                                        transport=transport)
+        except SB.SessionBundleError as exc:
+            print(f"error: {exc}", file=sys.stderr)       # corrupt/unreadable bundle
+            return 1
+        if plan.status in ("missing", "mismatch"):
+            print(f"session: {plan.reason()}", file=sys.stderr)
+            return 1
+        target_surface = _load_surface(target)
+        ledger = AuditLedger.from_mokata_dir(target_surface.mokata_dir)
+        res = SB.hydrate_bundle(target_surface, plan.bundle, ledger=ledger,
+                                confirm=_cli_ask, assume_yes=args.yes)
+        if not res.committed:
+            print(f"session pull {res.reason}"
+                  + (f" — {[f.kind for f in res.findings]}" if res.findings else ""),
+                  file=sys.stderr)
+            return 1
+        rp = (plan.bundle.get("resume") or {}).get("resume_phase")
+        print(f"session: pulled '{plan.tag}' (from {transport.name}) into {target} — "
+              f"`mokata resume` continues" + (f" at '{rp}'." if rp else "."))
+        return 0
+
+    if action == "name":
+        if not args.tag or not args.newname:
+            print("error: `session name <tag> <newname>` requires both names", file=sys.stderr)
+            return 2
+        transport, rc = _open(args.to)
+        if transport is None:
+            return rc
+        try:
+            plan = SB.plan_session_rename(root, args.tag, args.newname, transport=transport,
+                                          force=args.force)
+        except SB.SessionBundleError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if plan.status == "noop":
+            print(f"session: {plan.reason()}")
+            return 0
+        if plan.status in ("missing", "collision"):
+            print(f"session: {plan.reason()}", file=sys.stderr)
+            return 1
+        ledger = AuditLedger.from_mokata_dir(_load_surface(root).mokata_dir)
+        res = SB.commit_session_rename_gated(plan, ledger=ledger, confirm=_cli_ask,
+                                             assume_yes=args.yes)
+        if not res.committed:
+            print(f"session name {res.reason}"
+                  + (f" — {[f.kind for f in res.findings]}" if res.findings else ""),
+                  file=sys.stderr)
+            return 1
+        print(f"session: renamed '{plan.old}' → '{plan.new}' on {transport.name} "
+              f"(provenance preserved).")
+        return 0
+
+    print(f"error: unknown session action '{action}'", file=sys.stderr)
+    return 2
+
+
+def _search_skills(query: str) -> List[tuple]:
+    """Filter the skill catalog by keyword over name + one-line summary (Stage 70). Read-only,
+    deterministic (catalog order preserved)."""
+    q = query.lower()
+    return [(n, s) for n, s in list_skills() if q in n.lower() or q in s.lower()]
+
+
 def cmd_skills(args: argparse.Namespace) -> int:
     # L4 — catalog with progressive disclosure: bare list is cheap; a name reveals detail.
+    # Stage 70 — a discoverable skill catalog: `mokata skills search <query>` filters by keyword.
+    if args.name == "search":
+        query = getattr(args, "query", None)
+        if not query:
+            print("error: `skills search <query>` requires a query", file=sys.stderr)
+            return 2
+        hits = _search_skills(query)
+        if not hits:
+            print(f"skills: no matches for {query!r}")
+            return 0
+        print(f"skills: {len(hits)} match(es) for {query!r}:")
+        for name, summary in hits:
+            print(f"  /{name:10} {summary}")
+        return 0
     if args.name:
         try:
             skill = get_skill(args.name)
@@ -691,7 +1062,28 @@ def cmd_budget(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_bench(args: argparse.Namespace) -> int:
+    # Stage 67 — wall-clock latency of the hot paths vs their budgets (read-only). Distinct from
+    # `mokata budget` (tokens). Degrade-clean: an uninitialized repo just says so.
+    if not Surface.is_initialized(args.path):
+        print(f"bench: mokata is not initialized in '{args.path}' — run `mokata init` first "
+              "(nothing to measure).")
+        return 0
+    from .perf import DEFAULT_REPEAT, render_report, run_benchmarks
+    surface = _load_surface(args.path)
+    repeat = getattr(args, "repeat", None) or DEFAULT_REPEAT
+    results = run_benchmarks(surface, repeat=repeat)
+    print(render_report(results, ascii_only=getattr(args, "ascii", False)))
+    over = [r.name for r in results if not r.within_budget]
+    return 1 if over else 0
+
+
 def cmd_audit(args: argparse.Namespace) -> int:
+    # Stage 71 — team audit / shared activity log (shared OR local, conflict-free, NO telemetry).
+    if getattr(args, "share", False):
+        return _cmd_audit_share(args)
+    if getattr(args, "team", False) or getattr(args, "list_projects", False):
+        return _cmd_audit_team(args)
     ledger = AuditLedger.from_mokata_dir(os.path.join(args.path, MOKATA_DIR))
     entries = ledger.entries()
     if not entries:
@@ -714,6 +1106,75 @@ def cmd_audit(args: argparse.Namespace) -> int:
                          if k not in ("seq", "kind", "at"))
         print(f"  #{e['seq']:<3} {e['kind']:<11} {extra}")
     return 0
+
+
+def _audit_surface_or_none(path: str):
+    """The Surface if mokata is initialized, else None (degrade-clean, no crash)."""
+    try:
+        if Surface.is_initialized(path):
+            return Surface.load(path)
+    except Exception:
+        pass
+    return None
+
+
+def _cmd_audit_team(args: argparse.Namespace) -> int:
+    # Stage 71 — the team-wide who-did-what/why over the SHARED log (spans all actors). Read-only;
+    # degrade-clean when sharing is off / the backend is absent (LOCAL log unaffected).
+    from .team_audit import make_shared_log, render_team_timeline, team_audit_view
+    surface = _audit_surface_or_none(args.path)
+    if surface is None:
+        print("mokata is not initialized here — no team audit. Run `mokata init` first.")
+        return 0
+    # Stage 71a — the team read is SCOPED to the current project by default; --all spans, --project
+    # selects, --list-projects enumerates the projects present on the shared audit log.
+    from .team_audit import dsn_env_name, shared_enabled
+    if getattr(args, "list_projects", False):
+        if not shared_enabled(surface.manifest.data):
+            print("audit: team sharing is OFF — projects apply to a shared backend.")
+            return 0
+        try:
+            log = make_shared_log(dsn_env_name(surface.manifest.data))
+            projs = _backend_projects(log) or []
+        except Exception as exc:                                 # degrade-clean
+            print(f"audit: shared log unavailable ({exc}).")
+            return 0
+        print(f"audit: {len(projs)} project(s) on the shared team log:")
+        for p in projs:
+            print(f"  {p}")
+        return 0
+    scope = _review_scope(args)
+    view = (team_audit_view(args.path, surface) if scope is _SCOPE_CURRENT
+            else team_audit_view(args.path, surface, project=scope))
+    if not view.available:
+        print(view.message)
+        return 0
+    print(f"team audit — {view.message}")
+    if not view.entries:
+        print("  (no shared entries yet — a teammate publishes with `mokata audit --share`.)")
+        return 0
+    tail = args.tail if getattr(args, "tail", None) else None
+    for line in render_team_timeline(view, tail=tail):
+        print(f"  {line}")
+    return 0
+
+
+def _cmd_audit_share(args: argparse.Namespace) -> int:
+    # Stage 71 — publish this dev's NEW local entries to the team's shared log. Data leaving the
+    # machine → human-gated + secret-scanned (the WriteGate, kind `send`). Degrade-clean.
+    from .team_audit import share_audit
+    surface = _audit_surface_or_none(args.path)
+    if surface is None:
+        print("mokata is not initialized here — nothing to share. Run `mokata init` first.")
+        return 0
+    ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+    res = share_audit(args.path, surface, assume_yes=args.yes, confirm=None, out=print,
+                      ledger=ledger)
+    # A clean no-op (not enabled / already in sync / backend absent) is success; a real decline or
+    # a secret block is a non-zero exit so scripts see it.
+    if res.committed or res.reason in ("not enabled", "in sync", "unavailable"):
+        return 0
+    return 1
 
 
 def _cli_ask(question: str, default: str) -> str:
@@ -749,6 +1210,43 @@ def cmd_exec(args: argparse.Namespace) -> int:
               "sequential flow if subagents are unavailable.")
     else:
         print("  the sequential gated flow is the default, lowest-cost path.")
+    return 0
+
+
+def cmd_decompose(args: argparse.Namespace) -> int:
+    # Stage 54f — propose an independent-subtask split of the emitted spec's ACs, then (with
+    # --run) human-gate the confirm and feed the confirmed tasks into the EXISTING flow
+    # (resolve_execution_choice -> run_tasks). The split itself is read-only.
+    from .engine import load_emitted_spec
+    from .execmode.decompose import (confirm_decomposition, decompose,
+                                     run_decomposition)
+    surface = _load_surface(args.path)
+    spec = load_emitted_spec(surface.state)
+    if spec is None or not spec.criteria:
+        print("mokata decompose: no emitted spec with acceptance criteria — run "
+              "/mokata:spec first (the split is derived from the approved ACs).")
+        return 0
+    layer = KnowledgeLayer.from_surface(surface)
+    plan = decompose(spec, layer=layer)
+    if not args.run:
+        print(plan.render(ascii_only=args.ascii))
+        return 0
+    # --run: gated confirm, then the existing execution flow (default sequential).
+    ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+    asker = None if args.yes else _cli_ask
+    outcome = confirm_decomposition(plan, ask=asker, ledger=ledger, out=print,
+                                    assume_yes=args.yes)
+    if not outcome.confirmed:
+        print("mokata decompose: not confirmed — nothing fanned out (the split stays "
+              "read-only until you confirm).")
+        return 0
+    subagents = claude_code_harness().supports("subagents")
+    result = run_decomposition(outcome.plan, manifest=surface.manifest, ask=asker,
+                               ledger=ledger, out=print, runner=None,
+                               subagents_available=subagents)
+    degraded = " · degraded to sequential" if result.degraded else ""
+    print(f"mokata decompose: ran {len(result.results)} task(s) "
+          f"[{result.choice.label()}{degraded}].")
     return 0
 
 
@@ -844,17 +1342,38 @@ def cmd_watch(args: argparse.Namespace) -> int:
 
 def cmd_govern(args: argparse.Namespace) -> int:
     # Stage 48 — write the self-contained governance dashboard (rules + memory-by-kind +
-    # read/write ratio + pending proposals). Read-only; never mutates state. The manage
-    # commands are surfaced, not run.
-    from .dashboard import write_governance_dashboard
+    # read/write ratio + pending proposals + Stage 60 "since last session" diff). Read-only;
+    # never mutates state. The manage commands are surfaced, not run.
+    # Stage 60 — optional live self-meta-refresh (mirrors `mokata watch`), honouring
+    # settings.ux.progress: the live loop runs only on the dashboard tier; the static snapshot
+    # always works (the govern view is valuable even on the terminal tier).
+    from .dashboard import dashboard_enabled, ux_progress_setting, write_governance_dashboard
     surface = _load_surface(args.path)
-    path = write_governance_dashboard(surface)
+    live = getattr(args, "live", False) and not getattr(args, "once", False)
+    if live and not dashboard_enabled(surface):
+        print(f"mokata govern: live refresh needs the dashboard tier (settings.ux.progress="
+              f"{ux_progress_setting(surface)}). Writing a static snapshot. Enable live with "
+              f"`mokata config set settings.ux.progress dashboard` (or `both`).")
+        live = False
+    refresh = 2 if live else None
+    path = write_governance_dashboard(surface, refresh_secs=refresh)
     print(f"mokata govern: wrote {path}")
     print("  read-only view of the governed state — manage via the surfaced "
           "`mokata memory edit` commands (human-gated).")
     if args.open:
         import webbrowser
         webbrowser.open("file://" + os.path.abspath(path))
+    if not live:
+        return 0
+    # Live mode: rewrite the file on an interval; the page meta-refreshes itself. Read-only.
+    print("mokata govern: live — refreshing every 2s (Ctrl-C to stop).")
+    try:
+        import time
+        while True:
+            time.sleep(2)
+            write_governance_dashboard(surface, refresh_secs=refresh)
+    except KeyboardInterrupt:
+        print("\nmokata govern: stopped.")
     return 0
 
 
@@ -942,6 +1461,138 @@ def cmd_import(args: argparse.Namespace) -> int:
         return 1
     print(f"applied shared stack to {result.path}")
     return 0
+
+
+def cmd_stacks(args: argparse.Namespace) -> int:
+    # Stage 70 — community stacks & skill marketplace. list/search/show over a CURATED index
+    # (read-only); install = the human-gated, secret-scanned adopt path. NO hosted marketplace.
+    from . import stacks as ST
+    action = getattr(args, "action", None) or "list"
+    source = getattr(args, "source", None)
+
+    if action in ("list", "search", "show"):
+        try:
+            index = ST.load_index(source)
+        except ST.StackError as exc:
+            print(f"stacks: {exc}", file=sys.stderr)
+            return 1
+
+    if action == "list":
+        entries = ST.list_stacks(index)
+        if not entries:
+            print("stacks: the catalog is empty.")
+            return 0
+        print(f"mokata stacks ({len(entries)} available — `mokata stacks show <name>` for detail, "
+              f"`mokata stacks install <name>` to adopt):")
+        for e in entries:
+            print(f"  {e['name']:12} {e.get('framework', '')}")
+            print(f"  {'':12} {e.get('summary', '')}")
+        print(f"\n{ST.HONEST_NOTE}")
+        return 0
+
+    if action == "search":
+        query = getattr(args, "target", None)
+        if not query:
+            print("error: `stacks search <query>` requires a query", file=sys.stderr)
+            return 2
+        hits = ST.search_stacks(query, index)
+        if not hits:
+            print(f"stacks: no matches for {query!r}")
+            return 0
+        print(f"stacks: {len(hits)} match(es) for {query!r}")
+        for h in hits:
+            print(f"  [{h.score:.2f}] {h.entry['name']:12} {h.entry.get('framework', '')}")
+        return 0
+
+    if action == "show":
+        name = getattr(args, "target", None)
+        if not name:
+            print("error: `stacks show <name>` requires a stack name", file=sys.stderr)
+            return 2
+        entry = ST.show_stack(name, index)
+        if entry is None:
+            print(f"stacks: no stack named {name!r} (try `mokata stacks list`)", file=sys.stderr)
+            return 1
+        print(f"{entry['name']} — {entry.get('framework', '')}  (v{entry.get('version', '?')}, "
+              f"base profile: {entry.get('profile', '?')})")
+        print(f"  {entry.get('summary', '')}")
+        print(f"  guardrails: {entry.get('guardrails', 0)} curated · "
+              f"skills: {', '.join(entry.get('skills', []) or [])}")
+        if entry.get("tags"):
+            print(f"  tags: {', '.join(entry['tags'])}")
+        print(f"\n{ST.HONEST_NOTE}")
+        return 0
+
+    if action == "install":
+        name = getattr(args, "target", None)
+        if not name:
+            print("error: `stacks install <name>` requires a stack name", file=sys.stderr)
+            return 2
+        res = ST.install_stack(args.path, name, source=source, assume_yes=args.yes,
+                               force=getattr(args, "force", False), out=print)
+        return 0 if res.installed else 1
+
+    print(f"stacks: unknown action '{action}' (use list | search | show | install).",
+          file=sys.stderr)
+    return 2
+
+
+def cmd_team(args: argparse.Namespace) -> int:
+    # Stage 69 — zero-setup team sync: adopt a team's governed stack + (optionally) point shared
+    # memory/sessions at the team's OWN managed Postgres via an env-var DSN. mokata hosts nothing.
+    if not Surface.is_initialized(args.path):
+        print(f"team: mokata is not initialized in '{args.path}' — run `mokata init` first.")
+        return 0
+    from . import team as T
+    action = getattr(args, "action", None) or "status"
+    ledger = _ledger_for(args.path)
+
+    if action == "status":
+        surface = _load_surface(args.path)
+        env = T.connect_status(surface)
+        if env:
+            ready = T._readiness(env)
+            print(f"team: shared memory + sessions point at your managed Postgres via ${env} "
+                  f"({'active' if ready.active else 'inactive — driver/DSN not present yet'}).")
+        else:
+            print("team: local-only (no managed Postgres connected). "
+                  "`mokata team connect --dsn-env MOKATA_PG_DSN` to wire your own.")
+        print(T.honest_note())
+        return 0
+
+    if action == "join":
+        # Stage 70b — the ONE guided path: adopt → connect → vault → onboard → verify. Each step
+        # is confirmable + degrade-clean; reuses the primitives below (no new engine).
+        surface = _load_surface(args.path)
+        res = T.team_join(args.path, surface, getattr(args, "source", None),
+                          dsn_env=getattr(args, "dsn_env", None) or T.DEFAULT_DSN_ENV,
+                          vault_ref=getattr(args, "vault", None), assume_yes=args.yes,
+                          force=getattr(args, "force", False), ledger=ledger, out=print)
+        return 1 if res.aborted else 0
+
+    if action == "adopt":
+        if not getattr(args, "source", None):
+            print("team adopt: a <source> (a teammate's stack file or repo) is required.",
+                  file=sys.stderr)
+            return 1
+        res = T.team_adopt(args.path, args.source, assume_yes=args.yes,
+                           force=getattr(args, "force", False), ledger=ledger, out=print)
+        return 0 if (res.adopted or res.idempotent) else 1
+
+    if action == "connect":
+        surface = _load_surface(args.path)
+        res = T.team_connect(args.path, surface, getattr(args, "dsn_env", None)
+                             or T.DEFAULT_DSN_ENV, assume_yes=args.yes, ledger=ledger, out=print)
+        return 0 if res.connected else 1
+
+    if action == "disconnect":
+        surface = _load_surface(args.path)
+        res = T.team_disconnect(args.path, surface, assume_yes=args.yes, ledger=ledger, out=print)
+        return 0 if res.changed or not res.aborted else 1
+
+    print(f"team: unknown action '{action}' (use join | status | adopt | connect | disconnect).",
+          file=sys.stderr)
+    return 2
 
 
 def cmd_harness(args: argparse.Namespace) -> int:
@@ -1219,7 +1870,46 @@ def build_parser() -> argparse.ArgumentParser:
         "--preview", action="store_true",
         help="print the plan and exit without writing (dry-run for the human gate)"
     )
+    p_init.add_argument(
+        "--wizard", action="store_true",
+        help="force the guided interactive first-run wizard (detect → ask → wire, gated)"
+    )
+    p_init.add_argument(
+        "--setup-harness", action="store_true",
+        help="in the wizard, also wire mokata into the harness (commands + MCP + hooks)"
+    )
     p_init.set_defaults(func=cmd_init)
+
+    p_tour = sub.add_parser(
+        "tour", parents=[common],
+        help="a 60-second read-only demo (graph query, memory recall, gate catch)",
+    )
+    p_tour.add_argument("--ascii", action="store_true",
+                        help="ASCII-only glyphs (no unicode arrows/checks)")
+    p_tour.set_defaults(func=cmd_tour)
+
+    p_recfg = sub.add_parser(
+        "reconfigure", parents=[common],
+        help="re-runnable wizard: change what's wired later (add/remove integration, switch "
+             "backend, change profile) — gated, idempotent, reversible",
+    )
+    p_recfg.add_argument("--profile", choices=profile_names(), default=None,
+                         help="switch the profile (default: keep the current one)")
+    p_recfg.add_argument("--add", action="append", metavar="TOOL",
+                         help="wire a detected integration (repeatable; absent → recommended)")
+    p_recfg.add_argument("--remove", action="append", metavar="TOOL",
+                         help="cleanly unwire an integration (repeatable; no residue)")
+    p_recfg.add_argument("--set", action="append", metavar="KEY=VALUE",
+                         help="switch a backend setting in the manifest (repeatable; gated)")
+    p_recfg.add_argument("--wire-harness", action="store_true",
+                         help="wire mokata into the harness (commands + MCP + hooks)")
+    p_recfg.add_argument("--unwire-harness", action="store_true",
+                         help="remove the harness wiring (reversible; no residue)")
+    p_recfg.add_argument("--scope", choices=SCOPES, default="project",
+                         help="harness scope for --wire-harness/--unwire-harness")
+    p_recfg.add_argument("--yes", action="store_true",
+                         help="non-interactive; apply the explicit changes without prompting")
+    p_recfg.set_defaults(func=cmd_reconfigure)
 
     p_setup = sub.add_parser(
         "setup", parents=[common],
@@ -1267,6 +1957,20 @@ def build_parser() -> argparse.ArgumentParser:
         "validate", parents=[common], help="validate the committed manifest"
     )
     p_val.set_defaults(func=cmd_validate)
+
+    p_relchk = sub.add_parser(
+        "release-check",
+        help="verify all version fields == the intended tag (pure/offline; exit 1 on mismatch)",
+    )
+    p_relchk.add_argument(
+        "version", nargs="?", default=None,
+        help="the intended tag/version (e.g. 0.0.5 or v0.0.5); default: this package's version",
+    )
+    p_relchk.add_argument(
+        "--root", default=".",
+        help="the checkout to verify (e.g. the public mirror before tagging); default: cwd",
+    )
+    p_relchk.set_defaults(func=cmd_release_check)
 
     p_route = sub.add_parser(
         "route", parents=[common], help="resolve a capability to its tool"
@@ -1351,6 +2055,25 @@ def build_parser() -> argparse.ArgumentParser:
                          help="confirm the change at the deviation gate (amend/supersede)")
     p_speck.set_defaults(func=cmd_spec_check)
 
+    p_ci = sub.add_parser(
+        "ci-check", parents=[common],
+        help="mokata-as-a-check: run the completeness gate + spec-awareness over a PR's "
+             "changed files (read-only; degrade-clean — never false-blocks)",
+    )
+    p_ci.add_argument("--files", default=None,
+                      help="comma-separated changed files (the PR's touch-set)")
+    p_ci.add_argument("--symbols", default=None,
+                      help="comma-separated changed symbols (default: derived from --files)")
+    p_ci.add_argument("--base", default=None,
+                      help="git base ref/SHA to diff against (changed files via `git diff`)")
+    p_ci.add_argument("--comment-file", default=None,
+                      help="write the PR review comment body (markdown) to this path")
+    p_ci.add_argument("--no-fail", action="store_true",
+                      help="report-only: print/post the verdict but always exit 0")
+    p_ci.add_argument("--ascii", action="store_true",
+                      help="ASCII-only glyphs in the printed report")
+    p_ci.set_defaults(func=cmd_ci_check)
+
     p_mem = sub.add_parser(
         "memory", parents=[common],
         help="surface memory (read-only); `export`/`import` to share it across repos",
@@ -1375,6 +2098,13 @@ def build_parser() -> argparse.ArgumentParser:
                        help="after migrating, delete items from the source (separately gated)")
     p_mem.add_argument("--yes", action="store_true",
                        help="non-interactive (approve the gated import/migrate/edit)")
+    # Stage 71a — review scoping over a shared backend (default: the current project only).
+    p_mem.add_argument("--all", action="store_true",
+                       help="review across ALL projects on a shared backend (default: this one)")
+    p_mem.add_argument("--project", default=None,
+                       help="review a specific project id on a shared backend")
+    p_mem.add_argument("--list-projects", dest="list_projects", action="store_true",
+                       help="list the projects present on the shared backend, then exit")
     p_mem.set_defaults(func=cmd_memory)
 
     p_vault = sub.add_parser(
@@ -1399,11 +2129,52 @@ def build_parser() -> argparse.ArgumentParser:
                          help="non-interactive (approve the gated push)")
     p_vault.set_defaults(func=cmd_vault)
 
+    p_session = sub.add_parser(
+        "session", parents=[common],
+        help="portable / shareable tagged sessions: push (gated) / pull (gated) / list",
+    )
+    p_session.add_argument("action", choices=("push", "pull", "list", "name"),
+                           help="push the current session (gated), pull+rehydrate (gated), "
+                                "list bundles (local + remote, read-only), or rename a tag (gated)")
+    p_session.add_argument("tag", nargs="?", default=None,
+                           help="the bundle tag (push/pull/name), e.g. auth-refactor")
+    p_session.add_argument("newname", nargs="?", default=None,
+                           help="the new tag for `name <tag> <newname>` (rename)")
+    p_session.add_argument("--run", default=None,
+                           help="scope push to one run id (default: every recorded run)")
+    p_session.add_argument("--into", default=None,
+                           help="pull target repo root (default: this repo)")
+    p_session.add_argument("--author", default=None,
+                           help="push author for provenance (default: $USER)")
+    p_session.add_argument("--to", choices=("local", "vault", "postgres"), default="local",
+                           help="push/name transport: local (default), vault (committed/synced), "
+                                "or postgres (shared DSN; opt-in, degrades clean)")
+    p_session.add_argument("--from", dest="frm",
+                           choices=("local", "vault", "postgres"), default="local",
+                           help="pull transport (default: local) — same choices as --to")
+    p_session.add_argument("--force", action="store_true",
+                           help="push: overwrite a changed bundle; pull: apply despite a "
+                                "cross-codebase fingerprint mismatch; name: overwrite a colliding "
+                                "name (never silent)")
+    p_session.add_argument("--yes", action="store_true",
+                           help="non-interactive (approve the gated push/pull/name)")
+    # Stage 71a — `list` scoping over a shared backend (default: the current project only).
+    p_session.add_argument("--all", action="store_true",
+                           help="list bundles across ALL projects on a shared backend")
+    p_session.add_argument("--project", default=None,
+                           help="list a specific project's bundles on a shared backend")
+    p_session.add_argument("--list-projects", dest="list_projects", action="store_true",
+                           help="list the projects present on the shared backend, then exit")
+    p_session.set_defaults(func=cmd_session)
+
     p_skills = sub.add_parser(
         "skills", parents=[common],
         help="list the skill/command catalog (add a name for detail)",
     )
-    p_skills.add_argument("name", nargs="?", help="reveal detail for one skill")
+    p_skills.add_argument("name", nargs="?",
+                          help="reveal detail for one skill (or `search` to filter, Stage 70)")
+    p_skills.add_argument("query", nargs="?",
+                          help="with `skills search <query>`: filter the catalog by keyword")
     p_skills.set_defaults(func=cmd_skills)
 
     p_skill = sub.add_parser(
@@ -1453,7 +2224,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_audit.add_argument("--why", action="store_true",
                          help="a readable what+decision+why timeline (bounded; read-only)")
     p_audit.add_argument("--tail", type=int, default=None,
-                         help="how many recent entries the --why timeline shows (default 50)")
+                         help="how many recent entries the --why / --team timeline shows "
+                              "(default 50)")
+    p_audit.add_argument("--team", action="store_true",
+                         help="Stage 71: the team-wide who-did-what/why over the SHARED log "
+                              "(spans all actors; read-only; NO telemetry). Needs sharing on")
+    p_audit.add_argument("--share", action="store_true",
+                         help="Stage 71: publish your NEW local entries to the team's SHARED log "
+                              "(opt-in; human-gated + secret-scanned; append-only, per-actor)")
+    p_audit.add_argument("--yes", action="store_true",
+                         help="non-interactive; approve a --share publish (still secret-scanned)")
+    # Stage 71a — scope the --team read over a shared backend (default: the current project only).
+    p_audit.add_argument("--all", action="store_true",
+                         help="with --team: span ALL projects on the shared log (default: this one)")
+    p_audit.add_argument("--project", default=None,
+                         help="with --team: read a specific project id on the shared log")
+    p_audit.add_argument("--list-projects", dest="list_projects", action="store_true",
+                         help="with --team: list the projects present on the shared log, then exit")
     p_audit.set_defaults(func=cmd_audit)
 
     p_budget = sub.add_parser(
@@ -1461,6 +2248,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="show token savings (live budget readout + statusline)",
     )
     p_budget.set_defaults(func=cmd_budget)
+
+    p_bench = sub.add_parser(
+        "bench", parents=[common],
+        help="measure wall-clock latency of the hot paths vs their budget (read-only)",
+    )
+    p_bench.add_argument("--repeat", type=int, default=None,
+                         help="samples per op (median reported; default 7)")
+    p_bench.set_defaults(func=cmd_bench)
 
     p_index = sub.add_parser(
         "index", parents=[common],
@@ -1530,6 +2325,47 @@ def build_parser() -> argparse.ArgumentParser:
     p_imp.add_argument("--force", action="store_true", help="overwrite existing config")
     p_imp.set_defaults(func=cmd_import)
 
+    p_stacks = sub.add_parser(
+        "stacks", parents=[common],
+        help="community stacks: list/search/show a curated catalog + install a governed stack "
+             "(gated adopt). No hosted marketplace — git/vault publish + a reviewable index.",
+    )
+    p_stacks.add_argument("action", nargs="?", default="list",
+                          choices=("list", "search", "show", "install"),
+                          help="list (default) | search <query> | show <name> | install <name>")
+    p_stacks.add_argument("target", nargs="?", default=None,
+                          help="search: a query · show/install: a stack name")
+    p_stacks.add_argument("--source", default=None,
+                          help="a git-org/vault catalog dir or index.json to read instead of the "
+                               "bundled curated index (same index.json format)")
+    p_stacks.add_argument("--yes", action="store_true",
+                          help="install: non-interactive (approve the gate)")
+    p_stacks.add_argument("--force", action="store_true",
+                          help="install: overwrite an existing config")
+    p_stacks.set_defaults(func=cmd_stacks)
+
+    p_team = sub.add_parser(
+        "team", parents=[common],
+        help="zero-setup team sync: adopt a shared governed stack + (optionally) point shared "
+             "memory/sessions at your OWN managed Postgres (mokata hosts nothing)",
+    )
+    p_team.add_argument("action", nargs="?", default="status",
+                        choices=("join", "status", "adopt", "connect", "disconnect"),
+                        help="join <source> (guided onboarding) | status (default) | "
+                             "adopt <source> | connect --dsn-env <ENV> | disconnect")
+    p_team.add_argument("source", nargs="?", default=None,
+                        help="join/adopt: a teammate's stack file or repo dir")
+    p_team.add_argument("--dsn-env", dest="dsn_env", default=None,
+                        help="join/connect: the env-var NAME holding your managed-Postgres DSN "
+                             "(default MOKATA_PG_DSN); the DSN value is never stored")
+    p_team.add_argument("--vault", dest="vault", default=None,
+                        help="join: a repo/dir holding a shared design/spec vault to pull "
+                             "(secret-scanned; skipped when absent)")
+    p_team.add_argument("--yes", action="store_true", help="non-interactive (approve the gate)")
+    p_team.add_argument("--force", action="store_true",
+                        help="adopt: overwrite an existing config")
+    p_team.set_defaults(func=cmd_team)
+
     p_harn = sub.add_parser(
         "harness", parents=[common],
         help="list harnesses + their capability matrix (J2); add a name for one",
@@ -1578,6 +2414,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_exec.add_argument("--fanout", action="store_true",
                         help="concurrent fan-out (run tasks at once)")
     p_exec.set_defaults(func=cmd_exec)
+
+    p_decomp = sub.add_parser(
+        "decompose", parents=[common],
+        help="propose an independent-subtask split of the emitted spec's ACs; --run "
+             "human-gates the confirm then feeds the existing exec flow (Stage 54f)",
+    )
+    p_decomp.add_argument("--run", action="store_true",
+                          help="confirm the split (human-gated) and run it via the existing "
+                               "execution flow (default: just show the read-only split)")
+    p_decomp.add_argument("--ascii", action="store_true",
+                          help="ASCII glyphs instead of unicode in the split view")
+    p_decomp.add_argument("--yes", action="store_true",
+                          help="approve the confirm non-interactively (with --run)")
+    p_decomp.set_defaults(func=cmd_decompose)
 
     p_play = sub.add_parser(
         "playbook", parents=[common],
@@ -1647,14 +2497,53 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_govern.add_argument("--open", action="store_true",
                           help="open the dashboard in your browser after writing it")
+    p_govern.add_argument("--live", action="store_true",
+                          help="auto-refresh: re-write on an interval + self meta-refresh "
+                               "(dashboard tier only; Ctrl-C to stop)")
+    p_govern.add_argument("--once", action="store_true",
+                          help="write a single static snapshot and exit (no live loop)")
     p_govern.set_defaults(func=cmd_govern)
 
     return parser
 
 
+def _first_command_token(argv: List[str]) -> Optional[str]:
+    """The first positional token (the subcommand). Returns None for help/version or when the
+    leading tokens are global options, so argparse handles those itself."""
+    for tok in argv:
+        if tok in ("-h", "--help", "--version"):
+            return None
+        if tok.startswith("-"):
+            continue
+        return tok
+    return None
+
+
+def _subcommand_set(parser: argparse.ArgumentParser) -> set:
+    for action in parser._actions:
+        if action.__class__.__name__ == "_SubParsersAction":
+            return set(action.choices)
+    return set()
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    # Stage 56 — a friendly "did you mean …" + next step on an unknown subcommand, BEFORE
+    # argparse exits with its terse error.
+    token = _first_command_token(raw)
+    known = _subcommand_set(parser)
+    if token is not None and token not in known:
+        from . import onboarding
+        try:
+            pi = raw.index("--path")
+            root = raw[pi + 1]
+        except (ValueError, IndexError):
+            root = "."
+        print(onboarding.unknown_command_message(
+            token, known=known, initialized=Surface.is_initialized(root)), file=sys.stderr)
+        return 2
+    args = parser.parse_args(raw)
     # argparse stores --path before the subcommand; subcommands read args.path.
     if not hasattr(args, "path"):
         args.path = "."

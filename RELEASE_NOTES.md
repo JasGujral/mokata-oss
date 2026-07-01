@@ -1,22 +1,31 @@
-# mokata 0.0.4
+# mokata 0.0.5
 
 **Spec-driven, test-first development for Claude Code — with a real codebase knowledge graph,
 persistent self-healing memory, and human-gated, audited governance.** Clean-room, local-first,
 Apache-2.0 (under MoStack).
 
-> **What's new in 0.0.4 — governance transparency, session lifecycle, portability & hardening.**
-> **See & govern your memory:** `mokata govern` (a clickable governed-state dashboard) and
-> `mokata audit --why` (a what-and-WHY decision timeline). **Pause & resume:** `mokata sessions` /
-> `mokata resume`, plus a mid-brainstorm checkpoint — leave a brainstorm at any step and come back
-> (the approach HARD-GATE still holds). **Run beyond one harness:** a `Harness` boundary with
-> claude / codex / cowork adapters (`mokata harness` shows the capability matrix; missing
-> capabilities degrade clearly), a "use mokata in Cowork" guide, and opt-in **git-worktree
-> isolation** for parallel/paused work. **Stay current:** `mokata version` / `mokata upgrade`
-> (offline info, opt-in update check, human-gated upgrade) + `/mokata:version`. **Hardened:** the
-> secret guard broadened to 18 credential formats with a fuzz invariant (paths/URLs/UUIDs/hex
-> digests no longer false-positive; real secrets still block); Dependabot/CodeQL/Scorecard;
-> live Postgres+pgvector+Neo4j CI; and a README/CLI-reference audit with a docs-vs-code drift
-> guard. No breaking changes — upgrading is recommended.
+> **What's new in 0.0.5 — portable sessions, in-Claude-Code UX, every-agent reach, team sharing &
+> supply-chain trust.**
+> **Fixed first:** hooks now resolve via a PATH-based `mokata-hook` console entry — the
+> `python3: command not found` pre-hook error (Windows / GUI-launched macOS / exotic PATHs) is
+> gone. **Portable sessions (the headline):** `mokata session push <tag>` / `pull` / `list` /
+> `name` — package your run (checkpoints + approach + in-progress brainstorm + memory) into a
+> machine-path-free, secret-scanned, human-gated bundle; start on one machine, resume on another,
+> or hand it to a teammate. **Inside Claude Code:** an always-on **stage badge**, gate-verdict
+> legibility (why-blocked + how-to-unblock), the parallel-agent **lanes** view + `/mokata:progress`
+> / `watch` / `govern`, **full command parity** (every command reachable in-harness, CI-enforced),
+> assisted task decomposition, a brainstorm anti-drift anchor, and the native **to-do widget** —
+> all one `RunProgress`, many renderers. **Zero-to-wired:** an interactive `/mokata:setup` wizard +
+> a re-runnable `reconfigure`. **Smarter memory:** explainable retrieval, health nudges, and
+> proposed guardrails (proposal-only). **Every agent, in your editor:** in-harness surfaces for
+> Cursor / Copilot / Windsurf / Codex / Gemini CLI / Aider, a **VS Code extension**, a Copilot
+> Chat **`@mokata`** participant, and a language + Windows/macOS/Linux matrix. **Teams:** one
+> guided `mokata team join`, community **stacks**, shared-or-local **audit logs**, and
+> **project-scoped shared backends** (one DB, many projects, no bleed) — all **no-telemetry**. A
+> **CI/PR check** GitHub Action brings the completeness gate to every pull request. **Hardened:**
+> supply-chain (**SBOM + Sigstore provenance**, least-privilege SHA-pinned CI), a reliability fuzz
+> pass + a measured **performance budget**, and release-process version-at-tag verification. No
+> breaking changes — upgrading is recommended.
 
 > **Early & stabilizing.** mokata is early and fast-moving; the pre-1.x history was a stabilizing
 > phase, re-baselined into the 0.0.x line. Expect rapid iteration; pin the version if you need

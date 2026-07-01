@@ -53,7 +53,18 @@ class GateResult:
         else:
             lines.append("  approved direction: none on record "
                          "(brainstorm/refine not run)")
+        if not self.passed:
+            # Stage 54c — every block names the single next action that clears it.
+            from ..legibility import unblock_hint
+            action = unblock_hint(self.gate_id)
+            if action:
+                lines.append(f"  → to unblock: {action}")
         return "\n".join(lines)
+
+    def verdict(self, ascii_only: bool = False) -> str:
+        """Stage 54c — the shared one-line gate verdict (read-only; no re-derivation)."""
+        from ..legibility import verdict
+        return verdict(self, ascii_only=ascii_only)
 
 
 def run_completeness_gate(spec: Spec, tests: List[TestRef],

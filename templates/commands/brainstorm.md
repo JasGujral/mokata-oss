@@ -45,6 +45,20 @@ skipped, softened, or assumed. If you are unsure whether approval was given, it 
 5. Write the design up in digestible sections (problem, what we learned, the approaches
    and their tradeoffs, your recommendation), then ask for explicit approval of one.
 
+## Stay anchored (so a long brainstorm never drifts off-thread)
+
+A long exploration loses the plot if the original ask scrolls out of view. Hold it down:
+
+1. RECORD THE ANCHOR at the start — the user's original ask/goal, in one line. It is
+   IMMUTABLE: capture it once and never rewrite it. Everything is measured against it.
+2. MAINTAIN A COMPACT SYNTHESIS and RESTATE it each turn — the goal, the constraints decided
+   so far, the approaches on the table, and the current open question. Keep it tight (a few
+   lines): it is a running state, NOT a transcript — never replay the whole conversation.
+3. DRIFT-CHECK every turn against the anchor: "we're exploring <the anchor> — does this still
+   serve that?" If the turn has strayed, say so and RE-GROUND to the anchor before continuing,
+   rather than following the tangent. Surfacing the anchor + synthesis each turn is what keeps
+   the original topic in context no matter how long the chat runs.
+
 ## Red flags — STOP if you catch yourself thinking:
 
 | Thought | Why it's wrong |
@@ -54,6 +68,8 @@ skipped, softened, or assumed. If you are unsure whether approval was given, it 
 | "Two of these are weak, but I'll list them as options." | Foils aren't options. Offer real, defensible alternatives. |
 | "They seemed happy — that's basically approval." | Seeming happy is not approval. Ask for it explicitly. |
 | "No graph/memory, so I'll assume the structure." | Absence means read/grep and state assumptions, never guess silently. |
+| "We've wandered, but I'll keep following this thread." | Drift-check against the anchor and re-ground — the original ask is the thread. |
+| "I'll rewrite the original ask to match where we ended up." | The anchor is immutable. Update the synthesis, never the anchor. |
 
 ## When approval is given
 

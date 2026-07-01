@@ -75,7 +75,11 @@ def baseline_status(command: Optional[str], cwd: Optional[str] = None,
     if not command:
         return BaselineResult(state=UNKNOWN, detail=NO_COMMAND_MESSAGE)
     try:
-        proc = subprocess.run(command, shell=True, cwd=cwd, capture_output=True,
+        # Justification for the B602 suppression: `command` is the USER's OWN test command (their
+        # `settings.baseline` config / CLI arg), run in their own shell exactly as they'd run it;
+        # not attacker-controlled input. A shell is required so a normal test one-liner
+        # (`pytest -q && ruff .`, pipes, globs) works. Bounded by `timeout`; degrade-clean.
+        proc = subprocess.run(command, shell=True, cwd=cwd, capture_output=True,  # nosec B602
                               text=True, timeout=timeout)
     except Exception as exc:  # missing binary, timeout, etc. — report, don't crash
         return BaselineResult(state=RED, command=command,

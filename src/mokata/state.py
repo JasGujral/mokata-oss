@@ -38,12 +38,22 @@ class StateStore:
         return path
 
     def read(self, name: str) -> Optional[Dict[str, Any]]:
-        """Return the parsed JSON, or None if the artifact does not exist."""
+        """Return the parsed JSON, or None if the artifact does not exist.
+
+        A corrupt / truncated / unreadable state file (e.g. an interrupted write, a
+        half-synced bundle) degrades to None — "absent" — rather than raising into a
+        read-only view (the progress/badge/lanes/resume hot paths). State lives in
+        gitignored temp_local/; a malformed file must never traceback into a session
+        (degrade-clean, P11). Only file-content/IO problems are swallowed; the gate
+        layers above re-create state from a clean point."""
         path = self.path(name)
         if not os.path.exists(path):
             return None
-        with open(path, "r", encoding="utf-8") as fh:
-            return json.load(fh)
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except (ValueError, OSError):
+            return None
 
     def delete(self, name: str) -> bool:
         """Remove the artifact. Returns True if it existed, False otherwise."""

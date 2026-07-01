@@ -10,6 +10,55 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.5] — 2026-07-01
+
+**Portable sessions, in-Claude-Code UX, every-agent reach, team sharing & supply-chain trust.
+No breaking changes.**
+
+Fixed:
+- **Hook invocation** — replaced the fragile `sh launch.sh → python3` hook chain with a
+  PATH-resolved `mokata-hook` console entry point (the same reliable mechanism `mokata-mcp`
+  uses). The `python3: command not found` pre-hook error on Windows / GUI-launched macOS / exotic
+  PATHs is gone; `launch.sh` remains only as a last-resort pure-plugin fallback.
+
+Added:
+- **Portable / shareable sessions** — `mokata session push <tag>` / `pull <tag>` / `list` / `name`:
+  package checkpoints + approach + in-progress brainstorm + relevant memory into a
+  machine-path-free, versioned, **secret-scanned + human-gated** bundle (local file or shared
+  transport); start on one machine, resume on another, or hand it to a teammate.
+- **In-Claude-Code UX** — an always-on **stage badge** (statusline, on by default, merge-safe);
+  pipeline flow legibility (gate verdicts, why-blocked + how-to-unblock, one-key gate responses,
+  progress counters); the parallel-agent **lanes** view + `/mokata:progress` / `watch` / `govern`
+  slash commands + MCP tools; **full command-surface parity** (every user command reachable in
+  Claude Code, enforced by a CI parity gate); assisted **task decomposition** + parallel-plan
+  confirm; a **brainstorm anti-drift anchor**; and the native **to-do widget** projection — all
+  channel-specific renderers over one `RunProgress`.
+- **Magical first-run + reconfigure** — an interactive `/mokata:setup` Q&A wizard (detect → wire →
+  build → guardrails, human-gated) and a re-runnable `mokata reconfigure` to change what's wired.
+- **Memory intelligence** — explainable retrieval (why a memory surfaced), memory-health nudges
+  (stale / contradictory / unused), and auto-proposed guardrails from observed corrections
+  (proposal-only, human-gated).
+- **CI / PR check** — the completeness + spec-awareness gate as a reusable GitHub Action; a
+  `/mokata:review` PR comment. Opt-in, degrade-clean.
+- **Every agent, in your editor** — in-harness surfaces for **Cursor, GitHub Copilot, Windsurf,
+  Codex, Gemini CLI, and Aider** (not just Claude Code); a **VS Code extension**; and a read-only
+  **Copilot Chat `@mokata`** participant. Language coverage (Python/JS-TS/Go/Rust/Java) +
+  Windows/macOS/Linux CI matrix.
+- **Team & sharing** — one guided `mokata team join` (adopt → shared memory → vault → onboard →
+  doctor, each human-gated); publishable governed **community stacks** (`mokata stacks`); and
+  team **audit/activity logs** shared or local, conflict-free — **no telemetry**. One shared
+  backend safely hosts **many projects**: every shared row scoped by a stable project key
+  (review defaults to your project; `--all` / `--project` to span or pick).
+
+Hardened:
+- **Supply-chain trust** — reproducible sdist+wheel, a **CycloneDX SBOM**, and a **Sigstore
+  build-provenance attestation** at tag-time; all five CI workflows least-privilege + SHA-pinned.
+- **Reliability** — a seeded fuzz/edge pass across the hot paths (no false-blocks); a
+  **performance budget** (`mokata lat-check`) with measured per-operation latencies.
+- **Release process** — `scripts/release.sh` tags only after the public sync and **verifies
+  version-consistency at the exact commit** (`mokata release-check`); Pages deploy restricted to
+  `main`.
+
 ## [0.0.4] — 2026-06-28
 
 **Governance transparency, session lifecycle, portability & hardening. No breaking changes.**

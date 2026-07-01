@@ -53,6 +53,14 @@ ONBOARD_PROTOCOL = (
     "secret in a value is blocked at the gate even when approved — strip it and reference an env "
     "var instead.\n\n"
 
+    "## Surface the auto-proposed guardrails (recurring corrections)\n"
+    "mokata watches the audit ledger for corrections that recur — writes you declined, changes "
+    "you reverted, spec conflicts — and distils them into guardrail-rule PROPOSALS (the same "
+    "proposals `mokata rules` surfaces). When this command runs it lists any such proposals. "
+    "Treat each as a suggestion the user decides on: read it back, and if they want it, capture "
+    "it as a `rule`/`guardrail` through the normal gated write above. PROPOSAL-ONLY — mokata "
+    "never auto-adds a rule; the user approves, edits, or rejects each one.\n\n"
+
     "## Review, edit, and re-run anytime\n"
     "Show the user how to live with the brain: `mokata memory --kind <rule|guardrail|"
     "best-practice|context|reference|decision>` reviews what mokata will honour, grouped by "

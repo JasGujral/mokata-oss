@@ -14,10 +14,11 @@ see [How mokata uses an LLM: harness vs CLI](../concepts/execution-model.md).)
 The best integration mirrors what `mokata setup claude` does: point your harness at the
 three artifacts — the prompt templates (`templates/commands/*.md`), the `mokata-mcp` MCP
 server, and the hook scripts — using that harness's own command/MCP/hook conventions. For
-Claude Code this is one command ([`mokata setup claude`](use-without-plugin.md)); for other
-harnesses (Gemini CLI, Codex) the same three pieces map to their equivalents (worked
-examples are on the roadmap). This gives the LLM the full structured workflow, not just
-shell access.
+Claude Code this is one command ([`mokata setup claude`](use-without-plugin.md)); the same
+one-command wiring now covers **Cursor, GitHub Copilot, Windsurf, Gemini CLI, Codex, and
+Aider** — each mapped to that agent's native command/MCP surface, degrading clearly where an
+agent lacks a capability. See [Use mokata with other AI agents](use-with-other-agents.md).
+This gives the LLM the full structured workflow, not just shell access.
 
 ## 2. The CLI works anywhere (lowest common denominator)
 

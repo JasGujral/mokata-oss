@@ -1,0 +1,97 @@
+{
+  "manifest_version": 1,
+  "mokata": {
+    "version": "0.0.5"
+  },
+  "profile": "standard",
+  "layers": {
+    "engine": {
+      "enabled": true
+    },
+    "knowledge": {
+      "enabled": true
+    },
+    "memory": {
+      "enabled": true
+    },
+    "governance": {
+      "enabled": true
+    }
+  },
+  "capabilities": {
+    "code_graph": {
+      "description": "Structural codebase queries (callers/callees, imports, blast-radius); grep is the universal fallback.",
+      "layer": "knowledge",
+      "fallback": [
+        "ripgrep",
+        "grep"
+      ]
+    },
+    "memory_store": {
+      "description": "Where persistent/decision memory is stored; SQLite is the guaranteed default backend.",
+      "layer": "memory",
+      "fallback": [
+        "sqlite"
+      ]
+    }
+  },
+  "tools": {
+    "ripgrep": {
+      "provides": "code_graph",
+      "kind": "cli",
+      "version": null,
+      "detect": {
+        "type": "command",
+        "name": "rg"
+      },
+      "enabled": true
+    },
+    "grep": {
+      "provides": "code_graph",
+      "kind": "builtin",
+      "version": null,
+      "detect": {
+        "type": "always"
+      },
+      "enabled": true
+    },
+    "sqlite": {
+      "provides": "memory_store",
+      "kind": "library",
+      "version": null,
+      "detect": {
+        "type": "python_module",
+        "name": "sqlite3"
+      },
+      "enabled": true
+    }
+  },
+  "settings": {
+    "stack": {
+      "name": "go-service",
+      "framework": "Go service",
+      "version": "0.0.5",
+      "summary": "Governed stack for a Go service \u2014 errors handled explicitly, table-driven tests, env config, no swallowed failures.",
+      "guardrails": [
+        "Every returned error is handled or wrapped with context \u2014 never discarded with `_`.",
+        "Config and credentials read from the environment; nothing sensitive in the repo.",
+        "Cover behaviour with table-driven tests; a new path needs a failing test first.",
+        "Keep the exported surface small and documented; guard concurrency with the race detector in CI."
+      ],
+      "skills": [
+        "brainstorm",
+        "spec",
+        "test",
+        "develop",
+        "review",
+        "ship"
+      ],
+      "tags": [
+        "go",
+        "golang",
+        "service",
+        "backend"
+      ]
+    }
+  }
+}

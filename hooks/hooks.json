@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/launch.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/session_start.py\""
+            "command": "mokata-hook session-start --plugin-root \"${CLAUDE_PLUGIN_ROOT}\""
           }
         ]
       }
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/launch.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/secret_guard.py\""
+            "command": "mokata-hook secret-guard"
           }
         ]
       }

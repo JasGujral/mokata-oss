@@ -89,6 +89,14 @@ from .brain import (
     jit_recall,
     normalize_kind,
 )
+from .intelligence import (
+    MemoryHealth,
+    RecallExplanation,
+    assess_health,
+    explain_recall,
+    memory_health,
+    why_surfaced,
+)
 from .store import (
     MEMORY_SETTINGS_KEY,
     HealingResult,
@@ -178,6 +186,13 @@ __all__ = [
     "EMBED_DIM",
     "tiered_recall",
     "RetrievalHit",
+    # Stage 59 — memory intelligence (explainable retrieval + health nudge)
+    "why_surfaced",
+    "explain_recall",
+    "RecallExplanation",
+    "MemoryHealth",
+    "memory_health",
+    "assess_health",
     "PgVectorBackend",
     "build_pgvector_backend",
     "VectorUnavailable",

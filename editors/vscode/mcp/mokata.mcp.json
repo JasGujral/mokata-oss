@@ -1,0 +1,10 @@
+{
+  "//": "mokata MCP server for VS Code / GitHub Copilot Chat. Copy this into your workspace's .vscode/mcp.json (or merge the 'servers' entry). VS Code will discover it; Copilot Chat agent mode can then call mokata's governed MCP tools. mokata's MCP WRITE tools stay human-gated via the WriteGate inside the server. Requires the mokata CLI installed so 'mokata-mcp' is on PATH (pipx install mokata). VS Code asks you to start/trust the server — that step is yours.",
+  "servers": {
+    "mokata": {
+      "command": "mokata-mcp",
+      "args": [],
+      "type": "stdio"
+    }
+  }
+}

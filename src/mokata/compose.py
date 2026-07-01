@@ -10,8 +10,8 @@ functions return data; they never run anything.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional
+from dataclasses import dataclass
+from typing import List
 
 from .skills import get_skill
 
@@ -23,29 +23,14 @@ class ChainStep:
     gate: str
 
 
-@dataclass
-class ChainRun:
-    steps: List[ChainStep] = field(default_factory=list)
-
-
 def plan_chain(skill_names: List[str]) -> List[ChainStep]:
     """Resolve a chain to its steps, each carrying its skill's gate. Raises
-    SkillNotFound for an unknown skill (no silent skip)."""
+    SkillNotFound for an unknown skill (no silent skip).
+
+    Plan-only: `mokata chain` ships the resolved steps + their gates for the human to run;
+    there is intentionally no in-process `run_chain` executor (removed pre-0.0.5 as
+    production-orphaned — each step runs through its own gated skill, not a bypass loop)."""
     return [ChainStep(name, get_skill(name).gate.id) for name in skill_names]
-
-
-def run_chain(skill_names: List[str],
-              runner: Optional[Callable[[str], Any]] = None,
-              ledger: Any = None) -> ChainRun:
-    """Run a manual chain in order. Each step's gate applies (it rides on the ChainStep
-    and is enforced when the step itself runs); the chain auto-approves nothing."""
-    steps = plan_chain(skill_names)
-    for step in steps:
-        if ledger is not None:
-            ledger.record("chain_step", skill=step.skill, gate=step.gate)
-        if runner is not None:
-            runner(step.skill)
-    return ChainRun(steps=steps)
 
 
 # ------------------------------------------------------------ L6: suggestions

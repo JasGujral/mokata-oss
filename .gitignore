@@ -31,3 +31,7 @@ release-backup-*/
 # (Publish deliberately as a separate step if/when desired.)
 docs/marketing/
 mokata-ad-features.md
+
+# Large launch/marketing media — hosted elsewhere (or Git LFS), never in git history.
+mokata_ad_60s_memory_vertical.mp4
+docs/launch/assets/

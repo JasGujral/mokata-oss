@@ -1,0 +1,98 @@
+{
+  "manifest_version": 1,
+  "mokata": {
+    "version": "0.0.5"
+  },
+  "profile": "standard",
+  "layers": {
+    "engine": {
+      "enabled": true
+    },
+    "knowledge": {
+      "enabled": true
+    },
+    "memory": {
+      "enabled": true
+    },
+    "governance": {
+      "enabled": true
+    }
+  },
+  "capabilities": {
+    "code_graph": {
+      "description": "Structural codebase queries (callers/callees, imports, blast-radius); grep is the universal fallback.",
+      "layer": "knowledge",
+      "fallback": [
+        "ripgrep",
+        "grep"
+      ]
+    },
+    "memory_store": {
+      "description": "Where persistent/decision memory is stored; SQLite is the guaranteed default backend.",
+      "layer": "memory",
+      "fallback": [
+        "sqlite"
+      ]
+    }
+  },
+  "tools": {
+    "ripgrep": {
+      "provides": "code_graph",
+      "kind": "cli",
+      "version": null,
+      "detect": {
+        "type": "command",
+        "name": "rg"
+      },
+      "enabled": true
+    },
+    "grep": {
+      "provides": "code_graph",
+      "kind": "builtin",
+      "version": null,
+      "detect": {
+        "type": "always"
+      },
+      "enabled": true
+    },
+    "sqlite": {
+      "provides": "memory_store",
+      "kind": "library",
+      "version": null,
+      "detect": {
+        "type": "python_module",
+        "name": "sqlite3"
+      },
+      "enabled": true
+    }
+  },
+  "settings": {
+    "stack": {
+      "name": "node-ts",
+      "framework": "Node.js + TypeScript",
+      "version": "0.0.5",
+      "summary": "Governed stack for a TypeScript service \u2014 strict types, no any-escapes, env-based config, tested boundaries.",
+      "guardrails": [
+        "`strict` TypeScript stays on; a new `any` needs an explicit, reviewed reason.",
+        "Configuration and secrets come from the environment, never a committed file.",
+        "Public functions carry explicit return types; validate external input at the edge.",
+        "No implementation before a failing test expresses the behaviour (RED before GREEN)."
+      ],
+      "skills": [
+        "brainstorm",
+        "spec",
+        "test",
+        "develop",
+        "review",
+        "ship"
+      ],
+      "tags": [
+        "node",
+        "typescript",
+        "ts",
+        "javascript",
+        "backend"
+      ]
+    }
+  }
+}

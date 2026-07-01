@@ -30,6 +30,7 @@ from .ship import (
     LANDING_OPTIONS,
     FinishDecision,
     ShipReadiness,
+    build_finish_summary,
     check_ship_readiness,
     record_finish_decision,
 )
@@ -97,6 +98,7 @@ __all__ = [
     # Stage 34 — ship (finish) readiness + landing decision
     "check_ship_readiness",
     "record_finish_decision",
+    "build_finish_summary",
     "ShipReadiness",
     "FinishDecision",
     "LANDING_OPTIONS",

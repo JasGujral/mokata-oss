@@ -42,6 +42,34 @@ Parallel runs **surface a token/cost estimate before running**, stay inside the 
 gates + audit ledger + token budget, **log every subagent decision**, and **degrade to the
 sequential flow** when subagent execution is unavailable — never a hard failure.
 
+## Assisted task decomposition (Stage 54f)
+
+The selector and orchestrator answer *how* to run a set of tasks — but where do the tasks
+come from? `mokata decompose` (and the `decompose` MCP tool / `/mokata:decompose`) **splits
+the approved work into the tasks it runs**, then hands them straight to the flow above. It
+adds **no** fan-out logic of its own — it reuses the selector and `run_tasks`.
+
+**decompose → confirm → parallel/sequential:**
+
+1. **Decompose (read-only, derived).** From the emitted spec's acceptance criteria it
+   proposes **one independent subtask per AC** and infers **dependencies**: two subtasks that
+   touch the **same symbol or file** are kept ordered (a `depends_on` edge). The **code
+   graph** verifies independence when one is wired (it expands each symbol's blast-radius
+   neighbourhood, catching links the text alone would miss); otherwise the **lexical floor**
+   is used and independence is flagged **unverified**.
+2. **Confirm (human-gated, logged).** The proposed split + dependency plan is presented
+   compactly; **nothing fans out until you confirm**. You can approve as-is, **edit** (name
+   the subtasks to keep), or reject. The decision is recorded in the audit ledger.
+3. **Run (the existing flow).** Confirmed tasks flow into `resolve_execution_choice` (shows
+   the cost estimate, asks parallel-vs-sequential, default **sequential**) → `run_tasks`
+   (isolation + two-stage review + degrade-clean).
+
+**Conservative by construction.** It **never silently parallelizes** work that might be
+dependent: when dependencies exist — or independence is unverified because no graph is wired
+— concurrent **fan-out is withheld** and isolated tasks run in **declared order** (you're told
+why). Degrade-clean: no spec/ACs → a friendly "nothing to split"; subagents unavailable →
+sequential.
+
 ## Per-task model routing (E4)
 
 `ModelRouter` picks the **cheapest capable** model for a task and **escalates on a BLOCKED
