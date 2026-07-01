@@ -36,6 +36,8 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install mokata
         run: pip install -e .
+      - name: Install workflow-lint test tooling (PyYAML — a test-only dep, not a mokata dep)
+        run: pip install pyyaml
       - name: Install jsonschema (present matrix leg only)
         if: matrix.jsonschema == 'present'
         run: pip install "jsonschema>=4.0"

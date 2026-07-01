@@ -12,8 +12,10 @@ benignly (Pages env protection). This battery proves neither can recur:
     docs BUILD still runs on every trigger (verification kept);
   * the new `release-check` CLI command stays declared in the 54e parity matrix.
 
-Pure/offline; dependency-free (yaml is already present via mkdocs; the script checks are
-parse-level — no shellcheck needed). Deterministic.
+Pure/offline; dependency-free. PyYAML is NOT a mokata dependency, so the docs-deploy-gating
+checks (which need a parsed workflow) skip when it's absent and run for real in CI, which
+installs it for exactly these workflow-lint tests. The script checks are parse-level — no
+shellcheck needed. Deterministic.
 """
 
 import io
@@ -21,6 +23,12 @@ import json
 import os
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+
+try:
+    import yaml
+    _HAVE_YAML = True
+except ImportError:
+    _HAVE_YAML = False
 
 from _support import sample_manifest_data  # noqa: F401  (path-fix side-effect)
 
@@ -143,9 +151,9 @@ class TestReleaseCheckCLI(unittest.TestCase):
         self.assertIn("9.9.9", text)               # names the intended tag it checked against
 
 
+@unittest.skipUnless(_HAVE_YAML, "PyYAML not installed (not a mokata dependency); run in CI")
 class TestDocsDeployGatedToMain(unittest.TestCase):
     def setUp(self):
-        import yaml
         with open(DOCS_YML) as fh:
             self.doc = yaml.safe_load(fh)
         with open(DOCS_YML) as fh:

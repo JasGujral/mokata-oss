@@ -28,6 +28,15 @@ import _support  # noqa: F401  (puts src/ on the path)
 from mokata import ci_check as CI
 from mokata.config import Surface
 from mokata.engine.spec import AcceptanceCriterion, Spec
+
+# PyYAML is NOT a mokata dependency (the core stays dependency-free). When it's present we
+# parse the workflow YAML for a precise structural assertion; when it's absent we fall back
+# to a text assertion of the same security-relevant keys — so the guard always runs in CI.
+try:
+    import yaml
+    _HAVE_YAML = True
+except ImportError:
+    _HAVE_YAML = False
 from mokata.engine.spec_gate import SPEC_STATE_KEY
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -221,25 +230,32 @@ class TestCliSurface(unittest.TestCase):
 # ============================================================ the reusable action + workflow
 class TestAction(unittest.TestCase):
     def test_action_yml_is_a_valid_composite_action(self):
-        import yaml
         path = os.path.join(ROOT, ".github", "actions", "mokata-check", "action.yml")
         self.assertTrue(os.path.exists(path), "action.yml missing")
         with open(path, encoding="utf-8") as fh:
-            data = yaml.safe_load(fh)
-        self.assertEqual(data["runs"]["using"], "composite")
-        self.assertIn("inputs", data)
-        self.assertIn("base", data["inputs"])
+            text = fh.read()
+        if _HAVE_YAML:
+            data = yaml.safe_load(text)
+            self.assertEqual(data["runs"]["using"], "composite")
+            self.assertIn("inputs", data)
+            self.assertIn("base", data["inputs"])
+        else:
+            self.assertIn("composite", text)     # runs.using (quote-agnostic fallback)
+            self.assertIn("base:", text)          # the documented input
 
     def test_example_workflow_is_least_privilege(self):
-        import yaml
         path = os.path.join(ROOT, ".github", "actions", "mokata-check", "example-pr-check.yml")
         self.assertTrue(os.path.exists(path), "example workflow missing")
         with open(path, encoding="utf-8") as fh:
-            data = yaml.safe_load(fh)
-        perms = data["permissions"]
-        self.assertEqual(perms.get("contents"), "read")
-        self.assertEqual(perms.get("pull-requests"), "write")     # to post the comment
-        self.assertNotIn("write-all", str(perms))
+            text = fh.read()
+        self.assertNotIn("write-all", text)
+        if _HAVE_YAML:
+            perms = yaml.safe_load(text)["permissions"]
+            self.assertEqual(perms.get("contents"), "read")
+            self.assertEqual(perms.get("pull-requests"), "write")     # to post the comment
+        else:
+            self.assertIn("contents: read", text)
+            self.assertIn("pull-requests: write", text)
 
 
 # ============================================================ parity
