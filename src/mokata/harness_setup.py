@@ -168,6 +168,7 @@ class SetupPlan:
     mcp_auto: bool = True             # auto-register the MCP server (claude); else manual
     unsupported: List[str] = field(default_factory=list)  # capabilities this harness lacks
     skill_names: List[str] = field(default_factory=list)  # Agent Skills to install (claude)
+    plugin_provides_skills: bool = False  # plugin detected → skills suppressed to avoid dupes
 
 
 # The hook scripts (kept as standalone shims) map to `mokata-hook` subcommands.
@@ -207,6 +208,28 @@ def _is_mokata_statusline(block: Dict) -> bool:
     idempotent and unsetup only touches our own)."""
     cmd = str(block.get("command", "")) if isinstance(block, dict) else ""
     return "mokata-hook" in cmd and "statusline" in cmd
+
+
+def _mokata_plugin_installed(home: Optional[str] = None) -> bool:
+    """True if the mokata Claude Code PLUGIN appears installed. The plugin already provides the
+    Agent Skills (as ``mokata:<name>``), so the no-plugin ``mokata setup`` path must NOT also
+    write a project-scope copy — otherwise Claude Code lists every mokata skill TWICE. Detected
+    by a ``plugin.json`` named ``mokata`` anywhere under ``~/.claude/plugins/``. Best-effort and
+    quiet: any error → False (we simply don't suppress)."""
+    base = Path(home) if home is not None else Path.home()
+    plugins = base / ".claude" / "plugins"
+    try:
+        if not plugins.is_dir():
+            return False
+        for pj in plugins.rglob("plugin.json"):
+            try:
+                if json.loads(pj.read_text(encoding="utf-8")).get("name") == "mokata":
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        return False
+    return False
 
 
 def plan_setup(
@@ -258,6 +281,12 @@ def plan_setup(
     # renders from the SAME command templates, so it can't drift from the commands.
     from .agent_skills import CURATED_SKILLS
     skill_names = list(CURATED_SKILLS) if targets.skills_dir is not None else []
+    plugin_provides_skills = False
+    if skill_names and _mokata_plugin_installed(home=home):
+        # The plugin already ships these skills (as `mokata:<name>`); a project-scope copy would
+        # make Claude Code list each skill twice. Suppress the write and say so in the plan.
+        skill_names = []
+        plugin_provides_skills = True
 
     return SetupPlan(
         harness=harness,
@@ -272,6 +301,7 @@ def plan_setup(
         mcp_auto=mcp_auto,
         unsupported=unsupported,
         skill_names=skill_names,
+        plugin_provides_skills=plugin_provides_skills,
     )
 
 
@@ -296,6 +326,10 @@ def render_setup_plan(plan: SetupPlan) -> str:
                      f"/<name>/SKILL.md:")
         lines.append("  " + "  ".join(plan.skill_names))
         lines.append("  (model-invocable twin of the commands; Claude may auto-engage these)")
+        lines.append("")
+    elif plan.plugin_provides_skills and t.skills_dir is not None:
+        lines.append("Agent Skills: SKIPPED — the mokata plugin is installed and already "
+                     "provides them; a project copy would duplicate every skill in Claude Code.")
         lines.append("")
     if plan.mcp_auto:
         lines.append(f"Will register the MCP server '{MCP_SERVER_NAME}' (command: "

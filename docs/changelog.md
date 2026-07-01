@@ -8,6 +8,13 @@ The full, versioned changelog lives in the repository's
 > a stabilizing phase and are collapsed into this entry; 0.0.1 is the honest starting point for an
 > early, fast-moving project.
 
+## 0.0.8
+
+**Fix: no duplicate Agent Skills when the plugin is installed.** `mokata setup claude` now detects
+an installed mokata plugin and skips writing project-scope Agent Skills (the plugin already
+provides them) — running both previously listed every skill twice in Claude Code. Commands, hooks,
+and MCP wiring unchanged; no effect when the plugin isn't installed.
+
 ## 0.0.7
 
 **Agent Skills surface. No breaking changes; additive.** mokata's core capabilities now also

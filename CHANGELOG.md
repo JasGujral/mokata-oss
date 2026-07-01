@@ -10,6 +10,17 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.8] — 2026-07-01
+
+**Fix: no duplicate Agent Skills when the plugin is installed.**
+
+Fixed: `mokata setup claude` (the no-plugin path) now detects an installed mokata **plugin** and
+**skips writing the project-scope Agent Skills**, since the plugin already provides them — running
+both previously made Claude Code list every mokata skill twice (`mokata:<name>` from the plugin
+plus a bare `<name>` from `.claude/skills/`). Detected via a `plugin.json` named `mokata` under
+`~/.claude/plugins/`; the plan output says `Agent Skills: SKIPPED` when suppressed. Commands, hooks,
+and MCP wiring are unchanged. No effect when the plugin isn't installed.
+
 ## [0.0.7] — 2026-07-01
 
 **Agent Skills surface. No breaking changes; additive.**

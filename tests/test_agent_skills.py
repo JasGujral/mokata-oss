@@ -120,10 +120,12 @@ class TestDriftGuard(unittest.TestCase):
 
 
 class TestSetupWiresSkills(unittest.TestCase):
+    # home=d → a plugin-free HOME so the plugin-dedup guard doesn't suppress skills; keeps these
+    # deterministic on machines where the mokata plugin IS installed (see TestPluginDedup).
     def test_setup_claude_writes_skill_files(self):
         with tempfile.TemporaryDirectory() as d:
             setup_harness("claude", root=d, scope="project", profile="standard",
-                          assume_yes=True, out=lambda _: None)
+                          assume_yes=True, home=d, out=lambda _: None)
             for name in CURATED_SKILLS:
                 self.assertTrue(
                     os.path.isfile(os.path.join(d, ".claude", "skills", name, "SKILL.md")),
@@ -132,7 +134,7 @@ class TestSetupWiresSkills(unittest.TestCase):
     def test_plan_lists_skills_and_render_mentions_them(self):
         with tempfile.TemporaryDirectory() as d:
             from mokata.harness_setup import render_setup_plan
-            plan = plan_setup("claude", root=d, scope="project")
+            plan = plan_setup("claude", root=d, scope="project", home=d)
             self.assertEqual(list(plan.skill_names), list(CURATED_SKILLS))
             rendered = render_setup_plan(plan)
             self.assertIn("Agent Skills", rendered)
@@ -140,7 +142,7 @@ class TestSetupWiresSkills(unittest.TestCase):
     def test_unsetup_removes_only_mokata_skills(self):
         with tempfile.TemporaryDirectory() as d:
             setup_harness("claude", root=d, scope="project", profile="standard",
-                          assume_yes=True, out=lambda _: None)
+                          assume_yes=True, home=d, out=lambda _: None)
             skills_dir = os.path.join(d, ".claude", "skills")
             # a user's own skill must survive unsetup
             own = os.path.join(skills_dir, "my-own", "SKILL.md")
@@ -161,10 +163,49 @@ class TestSetupWiresSkills(unittest.TestCase):
     def test_unsetup_removes_empty_skills_dir(self):
         with tempfile.TemporaryDirectory() as d:
             setup_harness("claude", root=d, scope="project", profile="standard",
-                          assume_yes=True, out=lambda _: None)
+                          assume_yes=True, home=d, out=lambda _: None)
             apply_unsetup(plan_unsetup("claude", root=d, scope="project"))
             # nothing else was in skills/, so it should be gone entirely (no residue)
             self.assertFalse(os.path.exists(os.path.join(d, ".claude", "skills")))
+
+
+class TestPluginDedup(unittest.TestCase):
+    """When the mokata PLUGIN is installed it already provides the Agent Skills, so
+    `mokata setup claude` must NOT write a project-scope copy — otherwise Claude Code lists
+    every skill twice. The guard detects the plugin under ~/.claude/plugins/ and suppresses."""
+
+    def _make_home_with_plugin(self, home, named="mokata"):
+        # a realistic plugin layout: ~/.claude/plugins/<anything>/.claude-plugin/plugin.json
+        pj = os.path.join(home, ".claude", "plugins", "repos", "acme",
+                          "mokata", ".claude-plugin", "plugin.json")
+        os.makedirs(os.path.dirname(pj), exist_ok=True)
+        with open(pj, "w", encoding="utf-8") as fh:
+            fh.write('{"name": "%s", "version": "0.0.7"}' % named)
+
+    def test_plugin_present_suppresses_skills(self):
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as d:
+            self._make_home_with_plugin(home)
+            plan = plan_setup("claude", root=d, scope="project", home=home)
+            self.assertEqual(list(plan.skill_names), [], "skills must be suppressed")
+            self.assertTrue(plan.plugin_provides_skills)
+            from mokata.harness_setup import render_setup_plan
+            self.assertIn("SKIPPED", render_setup_plan(plan))
+
+    def test_setup_writes_no_skill_files_when_plugin_present(self):
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as d:
+            self._make_home_with_plugin(home)
+            setup_harness("claude", root=d, scope="project", profile="standard",
+                          assume_yes=True, home=home, out=lambda _: None)
+            self.assertFalse(os.path.exists(os.path.join(d, ".claude", "skills")),
+                             "no project skills should be written when the plugin is present")
+
+    def test_no_plugin_writes_skills(self):
+        # a HOME with an UNRELATED plugin must NOT suppress mokata's skills
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as d:
+            self._make_home_with_plugin(home, named="somethingelse")
+            plan = plan_setup("claude", root=d, scope="project", home=home)
+            self.assertEqual(list(plan.skill_names), list(CURATED_SKILLS))
+            self.assertFalse(plan.plugin_provides_skills)
 
 
 class TestNonClaudeDegradesClean(unittest.TestCase):

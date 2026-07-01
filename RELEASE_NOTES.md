@@ -1,9 +1,16 @@
-# mokata 0.0.7
+# mokata 0.0.8
 
 **Spec-driven, test-first development for Claude Code — with a real codebase knowledge graph,
 persistent self-healing memory, and human-gated, audited governance.** Clean-room, local-first,
 Apache-2.0 (under MoStack).
 
+> **What's new in 0.0.8 — fix: no duplicate Agent Skills.** If you had **both** the mokata
+> plugin and `mokata setup claude` active, Claude Code listed every mokata skill twice (the
+> plugin's `mokata:<name>` plus a project-scope `<name>`). `setup` now detects an installed
+> mokata plugin (via `~/.claude/plugins/`) and **skips writing the project-scope skills** — the
+> plugin already provides them; the plan prints `Agent Skills: SKIPPED`. Commands, hooks, and MCP
+> are unchanged, and there's no effect when the plugin isn't installed.
+>
 > **What's new in 0.0.7 — Agent Skills (additive; no breaking changes).** mokata's core
 > capabilities now also register as Claude Code **Agent Skills** — Claude auto-engages them from
 > their `description` — right alongside the existing `/mokata:*` slash commands. 14 skills
