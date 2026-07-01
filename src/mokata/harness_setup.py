@@ -116,6 +116,7 @@ class Targets:
     commands_dir: Path               # <base>/<hdir>/<commands subdir>
     settings_path: Optional[Path]    # <base>/.claude/settings.json (None when no hook wiring)
     mcp_path: Optional[Path]         # MCP config (None when the harness isn't auto-wired)
+    skills_dir: Optional[Path] = None  # <base>/.claude/skills (Agent Skills — claude only)
 
 
 def resolve_targets(scope: str, root: str, home: Optional[str] = None,
@@ -142,8 +143,11 @@ def resolve_targets(scope: str, root: str, home: Optional[str] = None,
             mcp_path = base / hdir / "mcp.json"
     else:
         mcp_path = None              # harness auto-MCP not supported — manual step
+    # Agent Skills are a Claude Code surface (`.claude/skills/<name>/SKILL.md`); only claude
+    # gets a skills target. Other harnesses leave it None (nothing written / nothing to undo).
+    skills_dir = (base / hdir / "skills") if harness == "claude" else None
     return Targets(base=base, commands_dir=commands_dir,
-                   settings_path=settings_path, mcp_path=mcp_path)
+                   settings_path=settings_path, mcp_path=mcp_path, skills_dir=skills_dir)
 
 
 # --------------------------------------------------------------------------------------
@@ -163,6 +167,7 @@ class SetupPlan:
     hook_commands: Dict[str, str] = field(default_factory=dict)  # event -> command string
     mcp_auto: bool = True             # auto-register the MCP server (claude); else manual
     unsupported: List[str] = field(default_factory=list)  # capabilities this harness lacks
+    skill_names: List[str] = field(default_factory=list)  # Agent Skills to install (claude)
 
 
 # The hook scripts (kept as standalone shims) map to `mokata-hook` subcommands.
@@ -248,6 +253,12 @@ def plan_setup(
             "PreToolUse": _hook_command("secret_guard.py"),
         }
 
+    # Agent Skills — the model-invocable twin of the slash commands. Only where the harness
+    # has that surface (claude); degrade-clean (empty list) everywhere else. The curated set
+    # renders from the SAME command templates, so it can't drift from the commands.
+    from .agent_skills import CURATED_SKILLS
+    skill_names = list(CURATED_SKILLS) if targets.skills_dir is not None else []
+
     return SetupPlan(
         harness=harness,
         scope=scope,
@@ -260,6 +271,7 @@ def plan_setup(
         hook_commands=hook_commands,
         mcp_auto=mcp_auto,
         unsupported=unsupported,
+        skill_names=skill_names,
     )
 
 
@@ -279,6 +291,12 @@ def render_setup_plan(plan: SetupPlan) -> str:
     lines.append("  /" + "  /".join(Path(f).stem for f in plan.command_files))
     lines.append(f"  (native surface: {_HARNESS_NATIVE_NOTE[plan.harness]})")
     lines.append("")
+    if plan.skill_names and t.skills_dir is not None:
+        lines.append(f"Will write {len(plan.skill_names)} Agent Skills -> {t.skills_dir}"
+                     f"/<name>/SKILL.md:")
+        lines.append("  " + "  ".join(plan.skill_names))
+        lines.append("  (model-invocable twin of the commands; Claude may auto-engage these)")
+        lines.append("")
     if plan.mcp_auto:
         lines.append(f"Will register the MCP server '{MCP_SERVER_NAME}' (command: "
                      f"{MCP_COMMAND}) in:")
@@ -490,6 +508,15 @@ def apply_setup(plan: SetupPlan, *, assume_yes: bool = False, force: bool = Fals
         touched.append(_write_command_file(plan.harness, _templates_dir() / name,
                                             t.commands_dir, name))
 
+    # 2b. Agent Skills (claude only) — the model-invocable twin of the commands, rendered from
+    # the SAME command templates so the two surfaces can't drift. One dir per skill:
+    # <skills_dir>/<name>/SKILL.md.
+    if plan.skill_names and t.skills_dir is not None:
+        from .agent_skills import generate_skill_files, write_skill_files
+        files = generate_skill_files(_templates_dir(), names=tuple(plan.skill_names))
+        for p in write_skill_files(t.skills_dir, files):
+            touched.append(str(p))
+
     # 3. MCP server (auto-registered only where the harness supports it; else manual)
     if plan.mcp_auto and t.mcp_path is not None:
         _merge_mcp(t.mcp_path)
@@ -553,6 +580,10 @@ def setup_harness(
     emit("")
     emit(f"mokata is wired into {harness} ({scope} scope).")
     if harness == "claude":
+        if plan.skill_names:
+            emit(f"Installed {len(plan.skill_names)} Agent Skills "
+                 f"({', '.join(plan.skill_names)}) alongside the /commands — Claude can now "
+                 f"auto-engage them, and they show in the Agent Skills list.")
         emit("Restart Claude Code, then try /brainstorm or ask it to \"run mokata doctor\".")
     else:
         emit(f"Native surface: {_HARNESS_NATIVE_NOTE[harness]}.")
@@ -573,6 +604,7 @@ class UnsetupPlan:
     scope: str
     targets: Targets
     command_files: List[str]
+    has_skills: bool = False          # an Agent Skills surface to remove (claude)
 
 
 def plan_unsetup(harness: str, root: str = ".", scope: str = "project",
@@ -583,7 +615,8 @@ def plan_unsetup(harness: str, root: str = ".", scope: str = "project",
     tdir = _templates_dir()
     command_files = sorted(p.name for p in tdir.glob("*.md")) if tdir.is_dir() else []
     return UnsetupPlan(harness=harness, scope=scope, targets=targets,
-                       command_files=command_files)
+                       command_files=command_files,
+                       has_skills=targets.skills_dir is not None)
 
 
 def render_unsetup_plan(plan: UnsetupPlan) -> str:
@@ -591,6 +624,9 @@ def render_unsetup_plan(plan: UnsetupPlan) -> str:
     lines = [f"mokata unsetup {plan.harness} — scope '{plan.scope}'", ""]
     lines.append("Will remove:")
     lines.append(f"  copied commands in {t.commands_dir}")
+    if plan.has_skills and t.skills_dir is not None:
+        lines.append(f"  mokata Agent Skills in {t.skills_dir} (only mokata's own SKILL.md; "
+                     f"your other skills are left untouched)")
     if t.mcp_path is not None:
         lines.append(f"  the '{MCP_SERVER_NAME}' MCP server entry in {t.mcp_path}")
     if t.settings_path is not None:
@@ -612,6 +648,24 @@ def apply_unsetup(plan: UnsetupPlan) -> List[str]:
         if p.exists():
             p.unlink()
             removed.append(str(p))
+
+    # 1b. Agent Skills (claude) — remove ONLY mokata-authored SKILL.md (identified by the
+    # banner marker), then their now-empty <name>/ dirs, and the skills/ dir if we emptied it.
+    # Never touch a user's own skills; leave no mokata residue even if the curated set drifted.
+    if plan.has_skills and t.skills_dir is not None and t.skills_dir.is_dir():
+        from .agent_skills import SKILL_MARKER
+        for sk in sorted(t.skills_dir.glob("*/SKILL.md")):
+            try:
+                if SKILL_MARKER not in sk.read_text(encoding="utf-8"):
+                    continue
+            except OSError:
+                continue
+            sk.unlink()
+            removed.append(str(sk))
+            if not any(sk.parent.iterdir()):
+                sk.parent.rmdir()
+        if t.skills_dir.exists() and not any(t.skills_dir.iterdir()):
+            t.skills_dir.rmdir()
 
     # 2. MCP server entry
     if t.mcp_path is not None and t.mcp_path.exists():

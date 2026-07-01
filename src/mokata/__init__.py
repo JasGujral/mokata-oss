@@ -10,7 +10,7 @@
 #   - A5 unified config + constitution surface     -> config.py
 #   - A7 `mokata init` onboarding                  -> init.py, profiles.py, cli.py
 
-__version__ = "0.0.6"
+__version__ = "0.0.7"
 
 # The directory, relative to a repo root, that holds mokata's committed config.
 MOKATA_DIR = ".mokata"

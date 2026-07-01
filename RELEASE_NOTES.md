@@ -1,9 +1,19 @@
-# mokata 0.0.6
+# mokata 0.0.7
 
 **Spec-driven, test-first development for Claude Code — with a real codebase knowledge graph,
 persistent self-healing memory, and human-gated, audited governance.** Clean-room, local-first,
 Apache-2.0 (under MoStack).
 
+> **What's new in 0.0.7 — Agent Skills (additive; no breaking changes).** mokata's core
+> capabilities now also register as Claude Code **Agent Skills** — Claude auto-engages them from
+> their `description` — right alongside the existing `/mokata:*` slash commands. 14 skills
+> (`brainstorm`, `spec`, `develop`, `review`, `refine`, `test`, `debug`, `bug`, `optimize`,
+> `ship`, `onboard`, `govern`, `session`, `playbook`) ship as `skills/<name>/SKILL.md`, each
+> **rendered from its one command template** — a single source with a drift guard, so a skill can
+> never diverge from or duplicate its command. Installed by **both** paths: the plugin (`skills/`
+> + `"skills"` in `plugin.json`) and `mokata setup claude` (writes `.claude/skills/`, reversed
+> cleanly by `mokata unsetup claude`). Non-Claude harnesses degrade clean.
+>
 > **What's new in 0.0.6 — Windows portability fix (no breaking changes; Linux/macOS unchanged).**
 > The Windows CI matrix ran for the first time on the 0.0.5 re-cut and caught two real Windows-only
 > bugs (prior green runs were Linux-only). **Fixed:** (1) the SQLite memory backend held a file

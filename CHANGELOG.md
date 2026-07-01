@@ -10,6 +10,20 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.7] — 2026-07-01
+
+**Agent Skills surface. No breaking changes; additive.**
+
+Added: mokata's core capabilities now also register as Claude Code **Agent Skills** (which Claude
+auto-engages from their `description`), alongside the existing `/mokata:*` slash commands. 14
+skills (`brainstorm`, `spec`, `develop`, `review`, `refine`, `test`, `debug`, `bug`, `optimize`,
+`ship`, `onboard`, `govern`, `session`, `playbook`) ship as `skills/<name>/SKILL.md`, each
+**rendered from the one command template** — a single source with a drift guard, so a skill can
+never diverge from or duplicate its command. Installed by **both** paths: the plugin (`skills/` +
+`"skills"` in `plugin.json`) and `mokata setup claude` (writes `.claude/skills/<name>/SKILL.md`,
+removed cleanly by `mokata unsetup claude` without touching your own skills). Non-Claude harnesses
+degrade clean (no skills surface).
+
 ## [0.0.6] — 2026-07-01
 
 **Windows portability fix. No breaking changes; Linux/macOS behavior unchanged.**

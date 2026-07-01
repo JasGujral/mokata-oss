@@ -8,6 +8,15 @@ The full, versioned changelog lives in the repository's
 > a stabilizing phase and are collapsed into this entry; 0.0.1 is the honest starting point for an
 > early, fast-moving project.
 
+## 0.0.7
+
+**Agent Skills surface. No breaking changes; additive.** mokata's core capabilities now also
+register as Claude Code **Agent Skills** (auto-engaged from their `description`), alongside the
+`/mokata:*` slash commands. 14 skills ship as `skills/<name>/SKILL.md`, each rendered from the one
+command template (single source + drift guard — no duplication). Installed by both the plugin
+(`skills/` + `"skills"` in `plugin.json`) and `mokata setup claude` (`.claude/skills/`, reversible
+via `mokata unsetup claude`). Non-Claude harnesses degrade clean.
+
 ## 0.0.6
 
 **Windows portability fix. No breaking changes; Linux/macOS behavior unchanged.** The Windows
