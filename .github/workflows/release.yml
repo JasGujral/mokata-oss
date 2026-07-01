@@ -120,21 +120,20 @@ jobs:
           /tmp/sbomenv/bin/python -m pip install --upgrade pip >/dev/null
           /tmp/sbomenv/bin/python -m pip install dist/*.whl >/dev/null
           cyclonedx-py environment /tmp/sbomenv/bin/python \
-            --output-format JSON --outfile sbom.cdx.json
-          echo "SBOM written:"; head -c 400 sbom.cdx.json; echo
+            --output-format JSON --outfile dist/sbom.cdx.json
+          echo "SBOM written:"; head -c 400 dist/sbom.cdx.json; echo
       - name: Attest build provenance (Sigstore) for the artifacts + SBOM
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
-          subject-path: |
-            dist/*
-            sbom.cdx.json
+          # SBOM now lives in dist/ alongside the wheel+sdist, so dist/* covers all three.
+          subject-path: dist/*
       - name: Upload artifacts for the release job
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
+          # Archive rooted at dist/ (flat) → download-artifact restores dist/*.whl, dist/*.tar.gz,
+          # dist/sbom.cdx.json exactly where the github-release job's globs expect them.
           name: mokata-dist
-          path: |
-            dist/*
-            sbom.cdx.json
+          path: dist/*
 
   github-release:
     needs: [build]
