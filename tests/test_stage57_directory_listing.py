@@ -7,7 +7,7 @@ directory APPROVAL itself is external (a Claude/GitHub action), so this test pro
   * we DON'T claim the listing is live while the flag is False;
   * every target doc is IN SYNC with the flag (the drift guard — a notice can't go stale);
   * flipping the flag flips cleanly and reversibly (apply True → False restores the docs);
-  * the wow-demo tutorial exists, is in the nav, and carries the real demo + screencast script.
+  * the wow-demo tutorial exists, is in the nav, and carries the real demo blocks.
 """
 
 import os
@@ -97,13 +97,13 @@ class TestWowDemo(unittest.TestCase):
         with open(os.path.join(ROOT, rel), encoding="utf-8") as fh:
             return fh.read()
 
-    def test_demo_page_exists_with_the_real_blocks_and_screencast(self):
+    def test_demo_page_exists_with_the_real_blocks(self):
         demo = self._read("docs/tutorials/catches-a-bad-change.md")
         self.assertIn("mokata run develop", demo)
         self.assertIn("[BLOCKED] spec-persisted", demo)          # real output of beat 1
         self.assertIn("status: blocked", demo)                   # real output of beat 2
         self.assertIn("audit ledger — 2 entries", demo)          # the audit punchline
-        self.assertIn("screencast script", demo.lower())         # the 60-second shot list
+        # (the internal 60-second screencast shot-list was removed from this public tutorial)
 
     def test_demo_is_registered_in_the_nav(self):
         nav = self._read("mkdocs.yml")
