@@ -14,10 +14,10 @@ from mokata.config import ConfigError, Constitution, Surface
 def write_repo(root, with_constitution=True):
     mdir = os.path.join(root, MOKATA_DIR)
     os.makedirs(mdir, exist_ok=True)
-    with open(os.path.join(mdir, MANIFEST_FILENAME), "w") as fh:
+    with open(os.path.join(mdir, MANIFEST_FILENAME), "w", encoding="utf-8") as fh:
         json.dump(sample_manifest_data(), fh)
     if with_constitution:
-        with open(os.path.join(mdir, CONSTITUTION_FILENAME), "w") as fh:
+        with open(os.path.join(mdir, CONSTITUTION_FILENAME), "w", encoding="utf-8") as fh:
             fh.write("# c\n## Article 1 — x\n## Article 2 — y\n")
 
 
@@ -51,7 +51,7 @@ class TestSurface(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             mdir = os.path.join(d, MOKATA_DIR)
             os.makedirs(mdir)
-            with open(os.path.join(mdir, MANIFEST_FILENAME), "w") as fh:
+            with open(os.path.join(mdir, MANIFEST_FILENAME), "w", encoding="utf-8") as fh:
                 fh.write("{ broken json")
             with self.assertRaises(ConfigError):
                 Surface.load(d)

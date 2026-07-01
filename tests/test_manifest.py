@@ -158,7 +158,7 @@ class TestManifestLoad(unittest.TestCase):
     def test_load_bad_json_raises(self):
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "manifest.json")
-            with open(p, "w") as fh:
+            with open(p, "w", encoding="utf-8") as fh:
                 fh.write("{ not json ")
             with self.assertRaises(ManifestError):
                 Manifest.load(p)
@@ -166,7 +166,7 @@ class TestManifestLoad(unittest.TestCase):
     def test_load_valid_file(self):
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "manifest.json")
-            with open(p, "w") as fh:
+            with open(p, "w", encoding="utf-8") as fh:
                 json.dump(sample_manifest_data(), fh)
             m = Manifest.load(p)
             self.assertEqual(m.profile, "standard")

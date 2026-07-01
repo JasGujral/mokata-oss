@@ -81,10 +81,14 @@ class TestBuildBackendConfig(unittest.TestCase):
 
     def test_config_path_expands_user(self):
         with tempfile.TemporaryDirectory() as home:
-            with mock.patch.dict(os.environ, {"HOME": home}):
+            # `~` expands via HOME on POSIX and USERPROFILE on Windows — set both so the test
+            # is cross-platform. Compare normalized paths: expanduser only rewrites the `~`, so
+            # the input's "/" survives on Windows ("home/db.sqlite" vs "home\\db.sqlite").
+            with mock.patch.dict(os.environ, {"HOME": home, "USERPROFILE": home}):
                 be = build_backend("sqlite", "/ignored",
                                    config={"path": "~/db.sqlite"})
-                self.assertEqual(be.path, os.path.join(home, "db.sqlite"))
+                self.assertEqual(os.path.normpath(be.path),
+                                 os.path.normpath(os.path.join(home, "db.sqlite")))
 
     def test_select_memory_backend_threads_tool_config(self):
         with tempfile.TemporaryDirectory() as d:

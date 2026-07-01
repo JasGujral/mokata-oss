@@ -40,11 +40,11 @@ class TestSetupHarnessE2E(unittest.TestCase):
                              "review.md"):
                 self.assertIn(expected, cmds)
             # MCP server registered
-            with open(os.path.join(d, ".mcp.json")) as fh:
+            with open(os.path.join(d, ".mcp.json"), encoding="utf-8") as fh:
                 mcp = json.load(fh)
             self.assertEqual(mcp["mcpServers"]["mokata"]["command"], "mokata-mcp")
             # hooks wired
-            with open(os.path.join(d, ".claude", "settings.json")) as fh:
+            with open(os.path.join(d, ".claude", "settings.json"), encoding="utf-8") as fh:
                 settings = json.load(fh)
             self.assertIn("SessionStart", settings["hooks"])
             self.assertIn("PreToolUse", settings["hooks"])
@@ -53,7 +53,7 @@ class TestSetupHarnessE2E(unittest.TestCase):
             rc, _ = run_cli(["unsetup", "claude", "--yes", "--path", d])
             self.assertEqual(rc, 0)
             self.assertEqual(os.listdir(os.path.join(d, ".claude", "commands")), [])
-            with open(os.path.join(d, ".mcp.json")) as fh:
+            with open(os.path.join(d, ".mcp.json"), encoding="utf-8") as fh:
                 self.assertNotIn("mokata", json.load(fh).get("mcpServers", {}))
             # config preserved across unsetup
             self.assertTrue(os.path.exists(os.path.join(d, MOKATA_DIR, "manifest.json")))

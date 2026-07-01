@@ -1,9 +1,21 @@
-# mokata 0.0.5
+# mokata 0.0.6
 
 **Spec-driven, test-first development for Claude Code — with a real codebase knowledge graph,
 persistent self-healing memory, and human-gated, audited governance.** Clean-room, local-first,
 Apache-2.0 (under MoStack).
 
+> **What's new in 0.0.6 — Windows portability fix (no breaking changes; Linux/macOS unchanged).**
+> The Windows CI matrix ran for the first time on the 0.0.5 re-cut and caught two real Windows-only
+> bugs (prior green runs were Linux-only). **Fixed:** (1) the SQLite memory backend held a file
+> handle across operations, so a temp-dir teardown failed on Windows with
+> `PermissionError [WinError 32]` — it now opens a short-lived connection per operation (also a
+> genuine resource-leak fix; an in-memory `:memory:` DB keeps its connection, having no file to
+> leak); (2) text files written without an explicit encoding landed as cp1252 on Windows (em-dash
+> `—` → `0x97`) and broke the utf-8 read — every text-mode file I/O now declares
+> `encoding="utf-8"`. **Guarded** on every OS by a lint test (encoding on all text I/O) and a
+> portability test (a memory op leaves no lingering file handle). Upgrading is recommended for
+> anyone on Windows.
+>
 > **What's new in 0.0.5 — portable sessions, in-Claude-Code UX, every-agent reach, team sharing &
 > supply-chain trust.**
 > **Fixed first:** hooks now resolve via a PATH-based `mokata-hook` console entry — the

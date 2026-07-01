@@ -10,6 +10,29 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.6] — 2026-07-01
+
+**Windows portability fix. No breaking changes; Linux/macOS behavior unchanged.**
+
+The Windows CI matrix ran for the first time on the 0.0.5 re-cut and exposed two real,
+Windows-only bugs (the prior green runs were Linux-only). Both are fixed:
+
+Fixed:
+- **SQLite memory backend held a file handle across operations** — a persistent connection
+  kept `memory.db` open, so on Windows a tempdir teardown failed with
+  `PermissionError: [WinError 32] … used by another process` (dozens of tests). The
+  file-backed SQLite backend now uses a short-lived connection per operation (no OS handle
+  outlives a call — also a real resource-leak fix); an in-memory (`:memory:`) DB keeps its
+  connection, since it has no file to leak.
+- **Text files written without an explicit encoding** landed as cp1252 on Windows (em-dash
+  `—` → `0x97`), then the utf-8 read raised `UnicodeDecodeError`. Every text-mode file
+  open/read/write now declares `encoding="utf-8"`.
+
+Guarded:
+- A lint test fails if any text-mode `open()` / `read_text` / `write_text` omits `encoding=`.
+- A portability test exercises the memory store in a temp dir and asserts no lingering file
+  handle (removable while the backend is alive) — reproducible on every OS.
+
 ## [0.0.5] — 2026-07-01
 
 **Portable sessions, in-Claude-Code UX, every-agent reach, team sharing & supply-chain trust.

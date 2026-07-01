@@ -51,18 +51,18 @@ def _make_repo(tmp, *, pyproject="0.0.4", plugin="0.0.4", mp_meta="0.0.4",
     os.makedirs(os.path.join(tmp, ".claude-plugin"), exist_ok=True)
     os.makedirs(os.path.join(tmp, "src", "mokata"), exist_ok=True)
     if "pyproject" not in omit:
-        with open(os.path.join(tmp, "pyproject.toml"), "w") as fh:
+        with open(os.path.join(tmp, "pyproject.toml"), "w", encoding="utf-8") as fh:
             fh.write(f'[project]\nname = "mokata"\nversion = "{pyproject}"\n')
     if "plugin" not in omit:
-        with open(os.path.join(tmp, ".claude-plugin", "plugin.json"), "w") as fh:
+        with open(os.path.join(tmp, ".claude-plugin", "plugin.json"), "w", encoding="utf-8") as fh:
             json.dump({"name": "mokata", "version": plugin}, fh)
     if "marketplace" not in omit:
-        with open(os.path.join(tmp, ".claude-plugin", "marketplace.json"), "w") as fh:
+        with open(os.path.join(tmp, ".claude-plugin", "marketplace.json"), "w", encoding="utf-8") as fh:
             json.dump({"name": "mostack", "metadata": {"version": mp_meta},
                        "plugins": [{"name": "mokata", "source": ".",
                                     "version": mp_plugin}]}, fh)
     if "pkg" not in omit:
-        with open(os.path.join(tmp, "src", "mokata", "__init__.py"), "w") as fh:
+        with open(os.path.join(tmp, "src", "mokata", "__init__.py"), "w", encoding="utf-8") as fh:
             fh.write(f'__version__ = "{pkg}"\n')
     return tmp
 
@@ -154,9 +154,9 @@ class TestReleaseCheckCLI(unittest.TestCase):
 @unittest.skipUnless(_HAVE_YAML, "PyYAML not installed (not a mokata dependency); run in CI")
 class TestDocsDeployGatedToMain(unittest.TestCase):
     def setUp(self):
-        with open(DOCS_YML) as fh:
+        with open(DOCS_YML, encoding="utf-8") as fh:
             self.doc = yaml.safe_load(fh)
-        with open(DOCS_YML) as fh:
+        with open(DOCS_YML, encoding="utf-8") as fh:
             self.raw = fh.read()
 
     def test_a_deploy_job_is_gated_to_main_only(self):
@@ -191,7 +191,7 @@ class TestDocsDeployGatedToMain(unittest.TestCase):
 
 class TestReleaseShHardening(unittest.TestCase):
     def setUp(self):
-        with open(RELEASE_SH) as fh:
+        with open(RELEASE_SH, encoding="utf-8") as fh:
             self.sh = fh.read()
 
     def test_fails_closed(self):

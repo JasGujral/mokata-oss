@@ -8,6 +8,18 @@ The full, versioned changelog lives in the repository's
 > a stabilizing phase and are collapsed into this entry; 0.0.1 is the honest starting point for an
 > early, fast-moving project.
 
+## 0.0.6
+
+**Windows portability fix. No breaking changes; Linux/macOS behavior unchanged.** The Windows
+CI matrix first ran on the 0.0.5 re-cut and surfaced two real Windows-only bugs (prior green runs
+were Linux-only). Fixed: (1) the SQLite memory backend held a persistent file handle across
+operations, so a tempdir teardown failed on Windows with `PermissionError [WinError 32]` — the
+file-backed backend now opens a short-lived connection per operation (an in-memory `:memory:` DB
+keeps its connection, having no file to leak); (2) text files written without an explicit encoding
+landed as cp1252 on Windows (em-dash → `0x97`) and broke the utf-8 read — every text-mode file
+I/O now passes `encoding="utf-8"`. Guarded by a lint test (encoding on all text I/O) and a
+portability test (no lingering handle) that run on every OS.
+
 ## 0.0.5
 
 **Portable sessions, in-Claude-Code UX, every-agent reach, team sharing & supply-chain trust.

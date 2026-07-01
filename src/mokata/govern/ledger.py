@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
@@ -16,6 +17,12 @@ from .. import TEMP_LOCAL_DIRNAME
 
 AUDIT_DIRNAME = "audit"
 LEDGER_FILENAME = "ledger.jsonl"
+
+# Serialize the read-seq-then-append across threads: parallel fanout (Stage 8) shares one
+# ledger, and a plain text-mode append is atomic on POSIX (O_APPEND) but NOT on Windows, where
+# concurrent appends can clobber each other and drop an entry. One process-wide lock keeps the
+# append-only ledger correct on every OS; single-threaded behavior is unchanged.
+_RECORD_LOCK = threading.Lock()
 
 
 def _now_iso() -> str:
@@ -36,13 +43,15 @@ class AuditLedger:
                                 LEDGER_FILENAME))
 
     def record(self, kind: str, **fields: Any) -> Dict[str, Any]:
-        """Append one entry and return it. Never rewrites existing entries."""
-        entry: Dict[str, Any] = {"seq": len(self) + 1, "kind": kind,
-                                 "at": _now_iso()}
-        entry.update(fields)
-        with open(self.path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(entry) + "\n")
-        return entry
+        """Append one entry and return it. Never rewrites existing entries. The
+        seq-then-append is locked so concurrent fanout writers never drop an entry."""
+        with _RECORD_LOCK:
+            entry: Dict[str, Any] = {"seq": len(self) + 1, "kind": kind,
+                                     "at": _now_iso()}
+            entry.update(fields)
+            with open(self.path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(entry) + "\n")
+            return entry
 
     def entries(self) -> List[Dict[str, Any]]:
         if not os.path.exists(self.path):

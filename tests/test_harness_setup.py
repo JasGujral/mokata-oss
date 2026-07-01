@@ -90,9 +90,9 @@ class TestIdempotencyAndMerge(unittest.TestCase):
     def test_merge_preserves_existing_entries(self):
         with tempfile.TemporaryDirectory() as d:
             os.makedirs(os.path.join(d, ".claude"))
-            with open(os.path.join(d, ".mcp.json"), "w") as fh:
+            with open(os.path.join(d, ".mcp.json"), "w", encoding="utf-8") as fh:
                 json.dump({"mcpServers": {"other": {"command": "other-mcp"}}}, fh)
-            with open(os.path.join(d, ".claude", "settings.json"), "w") as fh:
+            with open(os.path.join(d, ".claude", "settings.json"), "w", encoding="utf-8") as fh:
                 json.dump({
                     "permissions": {"allow": ["Read"]},
                     "hooks": {"PreToolUse": [
@@ -114,9 +114,9 @@ class TestUnsetup(unittest.TestCase):
     def test_unsetup_removes_only_mokata(self):
         with tempfile.TemporaryDirectory() as d:
             os.makedirs(os.path.join(d, ".claude"))
-            with open(os.path.join(d, ".mcp.json"), "w") as fh:
+            with open(os.path.join(d, ".mcp.json"), "w", encoding="utf-8") as fh:
                 json.dump({"mcpServers": {"other": {"command": "other-mcp"}}}, fh)
-            with open(os.path.join(d, ".claude", "settings.json"), "w") as fh:
+            with open(os.path.join(d, ".claude", "settings.json"), "w", encoding="utf-8") as fh:
                 json.dump({
                     "permissions": {"allow": ["Read"]},
                     "hooks": {"PreToolUse": [

@@ -89,8 +89,14 @@ class TestPluginRootCache(unittest.TestCase):
 
     def test_record_never_raises_on_bad_home(self):
         # A write failure must degrade to None, never raise (the hook can't hard-fail).
-        bogus = os.path.join(os.sep, "nonexistent-root-xyz", "deep", "home")
-        self.assertIsNone(record_plugin_root("/whatever", home=bogus))
+        # Use a FILE as the parent directory — makedirs under it fails on every OS (a bare
+        # "/nonexistent" root is writable on a Windows CI runner, so it wouldn't fail there).
+        with tempfile.TemporaryDirectory() as d:
+            blocker = os.path.join(d, "not-a-dir")
+            with open(blocker, "w", encoding="utf-8") as fh:
+                fh.write("x")
+            bogus = os.path.join(blocker, "home")
+            self.assertIsNone(record_plugin_root("/whatever", home=bogus))
 
     def test_read_absent_is_none(self):
         with tempfile.TemporaryDirectory() as home:
@@ -172,7 +178,10 @@ class TestSessionStartOffer(unittest.TestCase):
     def test_hook_records_plugin_root(self):
         with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as home:
             env = dict(os.environ)
+            # HOME is POSIX; the hook's `~` resolves via USERPROFILE on Windows — set both so
+            # the child writes the plugin-root cache into the test's home on every OS.
             env["HOME"] = home
+            env["USERPROFILE"] = home
             env.pop("CLAUDE_PLUGIN_ROOT", None)
             subprocess.run([sys.executable, HOOK], input=json.dumps({"cwd": d}),
                            capture_output=True, text=True, env=env)

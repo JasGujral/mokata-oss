@@ -13,6 +13,7 @@ import json
 import os
 import sqlite3
 from abc import ABC, abstractmethod
+from contextlib import closing, contextmanager
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from .item import MemoryItem
@@ -49,45 +50,67 @@ class SQLiteBackend(MemoryBackend):
     def __init__(self, path: str, name: str = "sqlite") -> None:
         self.path = path
         self.name = name
-        parent = os.path.dirname(path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        self._conn = sqlite3.connect(path)
-        self._conn.execute(
-            """CREATE TABLE IF NOT EXISTS memory (
-                   seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                   id TEXT UNIQUE,
-                   mtype TEXT,
-                   subject TEXT,
-                   status TEXT,
-                   doc TEXT
-               )"""
-        )
-        self._conn.commit()
+        # A file-backed DB uses short-lived per-operation connections (see _connect): a
+        # persistent handle would keep the .db file open — fine on POSIX, but it blocks
+        # deletion on Windows (WinError 32) and leaks a handle. An in-memory DB (":memory:"
+        # or a private "") exists ONLY inside its connection, so it MUST keep a persistent
+        # one — but it touches no file, so it has no Windows hazard.
+        self._memory = path in (":memory:", "") or "mode=memory" in path
+        if not self._memory:
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+        self._mem_conn = sqlite3.connect(path) if self._memory else None
+        with self._connect() as conn:
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS memory (
+                       seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                       id TEXT UNIQUE,
+                       mtype TEXT,
+                       subject TEXT,
+                       status TEXT,
+                       doc TEXT
+                   )"""
+            )
+            conn.commit()
+
+    @contextmanager
+    def _connect(self):
+        """A connection scoped to one operation. File-backed DBs open and close per call so no
+        OS handle outlives the operation; an in-memory DB reuses its persistent connection
+        (closing it would discard the data — and it has no file handle to leak)."""
+        if self._memory:
+            yield self._mem_conn
+        else:
+            with closing(sqlite3.connect(self.path)) as conn:
+                yield conn
 
     def put(self, item: MemoryItem) -> None:
         doc = json.dumps(item.to_dict())
-        self._conn.execute(
-            """INSERT INTO memory (id, mtype, subject, status, doc)
-               VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(id) DO UPDATE SET
-                   mtype=excluded.mtype, subject=excluded.subject,
-                   status=excluded.status, doc=excluded.doc""",
-            (item.id, item.mtype, item.subject, item.status, doc),
-        )
-        self._conn.commit()
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO memory (id, mtype, subject, status, doc)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                       mtype=excluded.mtype, subject=excluded.subject,
+                       status=excluded.status, doc=excluded.doc""",
+                (item.id, item.mtype, item.subject, item.status, doc),
+            )
+            conn.commit()
 
     def get(self, item_id: str) -> Optional[MemoryItem]:
-        row = self._conn.execute(
-            "SELECT doc FROM memory WHERE id=?", (item_id,)
-        ).fetchone()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT doc FROM memory WHERE id=?", (item_id,)
+            ).fetchone()
         return MemoryItem.from_dict(json.loads(row[0])) if row else None
 
     def all(self, mtype: Optional[str] = None,
             statuses: Optional[Tuple[str, ...]] = None) -> List[MemoryItem]:
-        rows = self._conn.execute(
-            "SELECT doc FROM memory ORDER BY seq"
-        ).fetchall()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT doc FROM memory ORDER BY seq"
+            ).fetchall()
         items = [MemoryItem.from_dict(json.loads(r[0])) for r in rows]
         if mtype is not None:
             items = [i for i in items if i.mtype == mtype]
@@ -96,12 +119,17 @@ class SQLiteBackend(MemoryBackend):
         return items
 
     def delete(self, item_id: str) -> bool:
-        cur = self._conn.execute("DELETE FROM memory WHERE id=?", (item_id,))
-        self._conn.commit()
-        return cur.rowcount > 0
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM memory WHERE id=?", (item_id,))
+            conn.commit()
+            return cur.rowcount > 0
 
     def close(self) -> None:
-        self._conn.close()
+        # File-backed DBs hold no persistent handle (per-operation connections). An in-memory
+        # DB keeps one — close it here (its data is discarded, which is the point).
+        if self._mem_conn is not None:
+            self._mem_conn.close()
+            self._mem_conn = None
 
 
 # ------------------------------------------------------------------------- obsidian

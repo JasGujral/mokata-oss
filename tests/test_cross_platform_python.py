@@ -53,7 +53,7 @@ class TestSetupUsesConsoleEntryPoint(unittest.TestCase):
             harness_setup.setup_harness(
                 "claude", root=d, assume_yes=True, out=lambda _: None)
             settings = json.loads(
-                (Path(d) / ".claude" / "settings.json").read_text())
+                (Path(d) / ".claude" / "settings.json").read_text(encoding="utf-8"))
             for event in ("SessionStart", "PreToolUse"):
                 for entry in settings["hooks"][event]:
                     for h in entry["hooks"]:
@@ -76,7 +76,7 @@ class TestSetupUsesConsoleEntryPoint(unittest.TestCase):
 
 class TestHooksJsonUsesConsoleEntryPoint(unittest.TestCase):
     def test_hooks_json_uses_mokata_hook_no_python3_no_launcher(self):
-        flat = json.dumps(json.loads(HOOKS_JSON.read_text()))
+        flat = json.dumps(json.loads(HOOKS_JSON.read_text(encoding="utf-8")))
         self.assertIn("mokata-hook session-start", flat)
         self.assertIn("mokata-hook secret-guard", flat)
         # no fragile resolution remains: no bare python3, no `sh launch.sh`
@@ -107,7 +107,7 @@ class TestLauncherResolver(unittest.TestCase):
         p.write_text(
             "import sys\n"
             "print('MOKATA_OK ' + sys.executable)\n"
-            "print('argv ' + ' '.join(sys.argv[1:]))\n")
+            "print('argv ' + ' '.join(sys.argv[1:]))\n", encoding="utf-8")
         return p
 
     def test_resolves_and_runs_target(self):
@@ -157,6 +157,10 @@ class TestLauncherResolver(unittest.TestCase):
         self.assertEqual(res.returncode, 0)
         self.assertIn("mokata", res.stderr.lower())
 
+    @unittest.skipIf(os.name == "nt",
+                     "launch.sh empty-PATH resolution via a python3 symlink is a POSIX / "
+                     "macOS-GUI path; Windows resolves the interpreter via the mokata-hook "
+                     "console entry, not the bash shim.")
     def test_resolves_via_common_dir_when_path_empty(self):
         # Empty PATH, but a common dir holds a `python3` → the launcher must
         # find it there (the macOS-GUI minimal-PATH case). Build a deterministic

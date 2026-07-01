@@ -78,7 +78,7 @@ class TestInstallDetection(unittest.TestCase):
     def test_plugin_when_root_cache_points_at_the_package(self):
         with tempfile.TemporaryDirectory() as home:
             os.makedirs(os.path.join(home, ".mokata"))
-            with open(os.path.join(home, ".mokata", "plugin-root"), "w") as fh:
+            with open(os.path.join(home, ".mokata", "plugin-root"), "w", encoding="utf-8") as fh:
                 fh.write(_repo_root() + "\n")
             self.assertEqual(detect_install_method(home=home), "plugin")
 

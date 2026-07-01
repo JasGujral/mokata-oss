@@ -209,7 +209,7 @@ class TestSelectBackendsNeo4j(unittest.TestCase):
         # Degrade-clean: callers() returns a (grep) result even with no graph wired.
         with tempfile.TemporaryDirectory() as d, \
                 mock.patch.dict(os.environ, {}, clear=True):
-            with open(os.path.join(d, "m.py"), "w") as fh:
+            with open(os.path.join(d, "m.py"), "w", encoding="utf-8") as fh:
                 fh.write("def run():\n    return 1\n")
             primary, fallback = select_backends(_Router("neo4j"), root=d)
             layer = KnowledgeLayer(primary, fallback)
@@ -300,7 +300,7 @@ class TestIndexOverBackend(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d, \
                 mock.patch.dict(os.environ, {}, clear=True):
             cli.main(["init", "--path", d, "--yes"])
-            with open(os.path.join(d, "m.py"), "w") as fh:
+            with open(os.path.join(d, "m.py"), "w", encoding="utf-8") as fh:
                 fh.write("def run():\n    return 1\n")
             import io
             import contextlib
