@@ -10,10 +10,10 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
-## [0.0.9rc1] — 2026-07-04
+## [0.0.9] — 2026-07-04
 
-**Release candidate for 0.0.9.** Install with `pip install --pre mokata` (plain `pip install
-mokata` still gives the latest stable). Please try it and report anything before the final cut.
+Promotes `0.0.9rc1` unchanged (same code; version fields and notes only). Install with
+`pip install mokata`.
 
 **Installs from PyPI, no clone — and the MCP server works out of the box.**
 
@@ -46,6 +46,10 @@ mokata` still gives the latest stable). Please try it and report anything before
 Publishing (public repo only), a fail-closed release pipeline that won't tag on a red matrix, and
 internal refactors (`cli`/`mcp` split into packages) with no behavior change. Local-first, no
 telemetry, Apache-2.0.
+
+**Known issue** (fix scheduled for the next release): invoking `mokata-hook statusline` /
+`session-start` by hand with stdin attached to a pipe that never closes can block until the pipe
+does. Claude Code's own hook invocation (payload + EOF) is unaffected — normal use never hits this.
 
 ## [0.0.8] — 2026-07-01
 
