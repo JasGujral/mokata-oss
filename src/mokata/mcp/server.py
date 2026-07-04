@@ -20,9 +20,18 @@ from . import tools_read, tools_write  # noqa: F401
 
 
 def mcp_available() -> bool:
-    """True when the optional MCP SDK is importable."""
-    import importlib.util
-    return importlib.util.find_spec("mcp") is not None
+    """True only when the optional MCP SDK is actually IMPORTABLE — not merely present on disk.
+    A `find_spec("mcp")` check reports True for a present-but-broken SDK (e.g. the SDK imports
+    jsonschema, but jsonschema is absent), which then explodes inside build_server()'s
+    `from mcp...`. So mirror that import here and treat any ImportError as unavailable: `main`
+    fails loud with guidance (Stage 3b.1 guarantee #2), and the SDK stays lazily imported (the
+    import is inside this function, keyed by string — no top-level `import mcp`)."""
+    import importlib
+    try:
+        importlib.import_module("mcp.server.fastmcp")
+        return True
+    except ImportError:
+        return False
 
 
 def _public_module() -> Any:

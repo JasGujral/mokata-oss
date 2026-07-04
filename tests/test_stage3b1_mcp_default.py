@@ -14,11 +14,14 @@ three guarantees so they can't silently regress:
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
 
+import importlib
+import importlib.util
 import io
 import os
 import re
 import unittest
 from contextlib import redirect_stderr
+from unittest import mock
 
 from mokata import mcp_server as M
 
@@ -81,6 +84,34 @@ class TestFailLoudNotDead(unittest.TestCase):
         finally:
             M.mcp_available = original
         self.assertIsInstance(rc, int)
+
+
+class TestMcpAvailableReflectsUsability(unittest.TestCase):
+    """`mcp_available()` must reflect whether the SDK can actually be IMPORTED, not merely whether
+    it sits on disk. A present-but-broken SDK (its own transitive dep missing — e.g. the SDK
+    imports jsonschema, but jsonschema is absent) must read as UNAVAILABLE, so `mokata-mcp` fails
+    loud (guarantee #2) instead of build_server() raising an uncaught error mid-startup. The
+    jsonschema-absent CI leg hit exactly this: find_spec('mcp') was truthy, so the old check
+    reported the SDK available, then build_server()'s `from mcp...` raised ModuleNotFoundError."""
+
+    def test_false_when_sdk_present_but_import_raises(self):
+        real_import = importlib.import_module
+        real_find = importlib.util.find_spec
+
+        def broken_import(name, *a, **k):
+            if name == "mcp" or name.startswith("mcp."):
+                raise ImportError("No module named 'jsonschema'")   # the SDK's own dep is gone
+            return real_import(name, *a, **k)
+
+        def present_on_disk(name, *a, **k):
+            if name == "mcp" or name.startswith("mcp."):
+                return object()                                     # pretend it's installed
+            return real_find(name, *a, **k)
+
+        with mock.patch("importlib.import_module", side_effect=broken_import), \
+             mock.patch("importlib.util.find_spec", side_effect=present_on_disk):
+            self.assertFalse(M.mcp_available(),
+                             "a present-but-unimportable SDK must read as unavailable")
 
 
 class TestSdkStaysLazilyImported(unittest.TestCase):
