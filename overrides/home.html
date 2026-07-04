@@ -14,20 +14,22 @@
 {% block content %}
 <div class="mk-home">
 
-  <!-- hero -->
-  <section class="mk-hero">
-    <img class="mk-hero__wordmark" src="assets/brand/mokata-wordmark-dark.svg" alt="mokata" width="340" height="101">
-    <span class="mk-hero__badge">open source · spec-driven tdd · claude code</span>
-    <h1>The <em>memory + seatbelt</em><br>for your AI coding agent.</h1>
-    <p class="mk-hero__sub">
-      mokata refuses to write code until every acceptance criterion maps to a failing test —
-      RED before GREEN — then reviews the result back against the spec. Around the engine:
-      a codebase knowledge graph, self-healing memory, token governance, and a full audit
-      trail. Every durable write human-gated. Nothing leaves your machine.
-    </p>
-    <div class="mk-hero__cta">
-      <a class="mk-btn mk-btn--primary" href="{{ config.repo_url }}">★ Star on GitHub</a>
-      <a class="mk-btn" href="getting-started/">Get started</a>
+  <!-- hero: copy left, live terminal right -->
+  <section class="mk-hero mk-hero--split">
+    <div class="mk-hero__copy">
+      <img class="mk-hero__wordmark" src="assets/brand/mokata-wordmark-dark.svg" alt="mokata" width="340" height="101">
+      <span class="mk-hero__badge">open source · spec-driven tdd · claude code</span>
+      <h1>The <em>memory + seatbelt</em><br>for your AI coding agent.</h1>
+      <p class="mk-hero__sub">
+        mokata refuses to write code until every acceptance criterion maps to a failing test —
+        RED before GREEN — then reviews the result back against the spec. Around the engine:
+        a codebase knowledge graph, self-healing memory, token governance, and a full audit
+        trail. Every durable write human-gated. Nothing leaves your machine.
+      </p>
+      <div class="mk-hero__cta">
+        <a class="mk-btn mk-btn--primary" href="{{ config.repo_url }}">★ Star on GitHub</a>
+        <a class="mk-btn" href="getting-started/">Get started</a>
+      </div>
     </div>
 
     <!-- terminal pane -->
@@ -49,16 +51,32 @@
     </div>
   </section>
 
-  <!-- skills video -->
+  <!-- video left · quick start right -->
   <section class="mk-features">
-    <div class="mk-features__kicker">// see it in action</div>
-    <h2>Skills, explained in one video</h2>
-    <div class="mk-video">
-      <video controls preload="metadata" playsinline>
-        <source src="assets/mokata-skills.mp4" type="video/mp4">
-        Your browser doesn't support embedded video —
-        <a href="assets/mokata-skills.mp4">download it instead</a>.
-      </video>
+    <div class="mk-duo">
+      <div>
+        <div class="mk-features__kicker">// see it in action</div>
+        <h2>Skills, explained in one video</h2>
+        <div class="mk-video">
+          <video controls preload="metadata" playsinline>
+            <source src="assets/mokata-skills.mp4" type="video/mp4">
+            Your browser doesn't support embedded video —
+            <a href="assets/mokata-skills.mp4">download it instead</a>.
+          </video>
+        </div>
+      </div>
+      <div class="mk-quick">
+        <div class="mk-features__kicker">// get running in 60s</div>
+        <h2>Install, wire, run</h2>
+        <div class="mk-quick__cmd"><span class="dim">$</span> pip install mokata && mokata setup claude</div>
+        <p class="mk-quick__note">One package, zero required dependencies. mokata never calls a
+        model itself — the brain always comes from your harness.</p>
+        <ul class="mk-quick__links">
+          <li><a href="getting-started/">Get started →</a></li>
+          <li><a href="concepts/pipeline/">How the pipeline works →</a></li>
+          <li><a href="quickstart/">Quickstart in 60 seconds →</a></li>
+        </ul>
+      </div>
     </div>
   </section>
 
