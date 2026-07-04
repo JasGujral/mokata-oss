@@ -1,0 +1,145 @@
+{% extends "main.html" %}
+
+{% block extrahead %}
+  {{ super() }}
+  <style>
+    /* landing page only: hide sidebars, full-width content */
+    .md-sidebar { display: none !important; }
+    .md-content { max-width: 100%; }
+    .md-content__inner { margin: 0; padding-top: 0; }
+    .md-content__inner::before { display: none; }
+  </style>
+{% endblock %}
+
+{% block content %}
+<div class="mk-home">
+
+  <!-- hero -->
+  <section class="mk-hero">
+    <img class="mk-hero__wordmark" src="assets/brand/mokata-wordmark-dark.svg" alt="mokata" width="340" height="101">
+    <span class="mk-hero__badge">open source · spec-driven tdd · claude code</span>
+    <h1>The <em>memory + seatbelt</em><br>for your AI coding agent.</h1>
+    <p class="mk-hero__sub">
+      mokata refuses to write code until every acceptance criterion maps to a failing test —
+      RED before GREEN — then reviews the result back against the spec. Around the engine:
+      a codebase knowledge graph, self-healing memory, token governance, and a full audit
+      trail. Every durable write human-gated. Nothing leaves your machine.
+    </p>
+    <div class="mk-hero__cta">
+      <a class="mk-btn mk-btn--primary" href="{{ config.repo_url }}">★ Star on GitHub</a>
+      <a class="mk-btn" href="getting-started/">Get started</a>
+    </div>
+
+    <!-- terminal pane -->
+    <div class="mk-term">
+      <div class="mk-term__bar">
+        <span class="mk-term__dot"></span><span class="mk-term__dot"></span><span class="mk-term__dot mk-term__dot--go"></span>
+        <span class="mk-term__title">mokata · story-042 · live</span>
+      </div>
+      <pre>
+<span class="dim">$</span> pip install mokata && mokata setup claude
+<span class="dim">$</span> mokata run story-042
+
+<span class="ok">✓</span> spec drafted          <span class="dim">7 acceptance criteria</span>
+<span class="ok">✓</span> ac → test map         <span class="dim">7/7 mapped · completeness gate</span>
+<span class="ok">✓</span> red gate              <span class="dim">7 tests failing — as they should</span>
+<span class="ok">✓</span> green                 <span class="dim">42 passed · 0 skipped</span>
+<span class="ok">✓</span> spec compliance       <span class="dim">reviewed against spec</span>
+<span class="wait">⏸</span> human gate            <span class="dim">approve durable writes? [y/N]</span></pre>
+    </div>
+  </section>
+
+  <!-- skills video -->
+  <section class="mk-features">
+    <div class="mk-features__kicker">// see it in action</div>
+    <h2>Skills, explained in one video</h2>
+    <div class="mk-video">
+      <video controls preload="metadata" playsinline>
+        <source src="assets/mokata-skills.mp4" type="video/mp4">
+        Your browser doesn't support embedded video —
+        <a href="assets/mokata-skills.mp4">download it instead</a>.
+      </video>
+    </div>
+  </section>
+
+  <!-- feature grid -->
+  <section class="mk-features">
+    <div class="mk-features__kicker">// what mokata gives you</div>
+    <h2>One governed engine</h2>
+    <div class="mk-grid">
+
+      <div class="mk-card">
+        <span class="mk-card__icon">≡ spec</span>
+        <h3>Spec-Driven Pipeline</h3>
+        <p>Brainstorm → spec → tests → code → review. Seven phases, each gated. No code is written until every acceptance criterion maps to a test.</p>
+        <span class="mk-card__tag">7 phases · gated</span>
+      </div>
+
+      <div class="mk-card">
+        <span class="mk-card__icon">✗→✓ tdd</span>
+        <h3>RED Before GREEN</h3>
+        <p>Tests must fail first. mokata proves the test can catch the bug before the implementation exists — no vacuous green suites.</p>
+        <span class="mk-card__tag">provable tdd</span>
+      </div>
+
+      <div class="mk-card">
+        <span class="mk-card__icon">◉ graph</span>
+        <h3>Codebase Knowledge Graph</h3>
+        <p>An adopted code graph with typed queries, incremental indexing, staleness detection, and drift anchors — with a grep floor as fallback.</p>
+        <span class="mk-card__tag">typed queries · incremental</span>
+      </div>
+
+      <div class="mk-card">
+        <span class="mk-card__icon">∞ mem</span>
+        <h3>Self-Healing Memory</h3>
+        <p>Persistent, decision, and episodic memory that surfaces itself when relevant and consolidates over time. Pluggable backends. On by default.</p>
+        <span class="mk-card__tag">on by default</span>
+      </div>
+
+      <div class="mk-card">
+        <span class="mk-card__icon">⏸ gate</span>
+        <h3>Human-Gated Writes</h3>
+        <p>Every durable write — memory, graph, rules, code — stops at a gate you approve. The agent proposes; you decide.</p>
+        <span class="mk-card__tag">you approve · always</span>
+      </div>
+
+      <div class="mk-card">
+        <span class="mk-card__icon">Σ tokens</span>
+        <h3>Token Governance</h3>
+        <p>Active tracking, JIT retrieval, handback caps, output-density control, and cache-stable prefixes. Budgets, not vibes.</p>
+        <span class="mk-card__tag">budgeted · measured</span>
+      </div>
+
+      <div class="mk-card">
+        <span class="mk-card__icon">⌂ local</span>
+        <h3>Local-First & Private</h3>
+        <p>Nothing leaves your machine unless you wire it. mokata never calls a model itself — the brain always comes from your harness.</p>
+        <span class="mk-card__tag">zero exfiltration</span>
+      </div>
+
+      <div class="mk-card">
+        <span class="mk-card__icon">≣ audit</span>
+        <h3>Full Audit Trail</h3>
+        <p>Every gate decision, rule application, and durable write is recorded. Reconstruct any run — what changed, why, and who approved it.</p>
+        <span class="mk-card__tag">traceable runs</span>
+      </div>
+
+      <div class="mk-card">
+        <span class="mk-card__icon">∅ deps</span>
+        <h3>Zero Dependencies</h3>
+        <p>Pure Python ≥ 3.9 with no required runtime dependencies. Apache-2.0, clean-room, works with Claude Code, CLI, Gemini, Codex, or CI.</p>
+        <span class="mk-card__tag">pip install mokata</span>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- markdown body (docs map) -->
+  <section class="mk-features" style="margin-top:0">
+    <article class="md-content__inner md-typeset">
+      {{ page.content }}
+    </article>
+  </section>
+
+</div>
+{% endblock %}

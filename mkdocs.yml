@@ -1,13 +1,20 @@
 site_name: mokata
+# Brand tagline (assets/brand/BRAND.md): one tagline everywhere, verbatim.
 site_description: >-
-  Spec-driven TDD for Claude Code — knowledge-aware, self-healing memory,
-  human-gated, local-first.
+  The memory + seatbelt for your AI coding agent. Spec-driven TDD for
+  Claude Code — knowledge-aware, human-gated, local-first.
 repo_url: https://github.com/JasGujral/mokata-oss
 site_url: https://jasgujral.github.io/mokata-oss/
 copyright: "© MoStack — Apache-2.0"
 
 theme:
   name: material
+  custom_dir: overrides
+  logo: assets/brand/mokata-wordmark-dark.svg
+  favicon: assets/brand/mokata-icon.svg
+  font:
+    text: Inter
+    code: JetBrains Mono
   features:
     # Left panel (navigation)
     - navigation.instant
@@ -23,21 +30,14 @@ theme:
     - search.highlight
     - content.code.copy
     - content.code.annotate
+  # Brand: dark-only terminal theme, code-green accent (see docs/stylesheets/mokata.css)
   palette:
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
-      primary: indigo
-      accent: indigo
-      toggle:
-        icon: material/brightness-7
-        name: Switch to dark mode
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
-      primary: indigo
-      accent: indigo
-      toggle:
-        icon: material/brightness-4
-        name: Switch to light mode
+    scheme: slate
+    primary: black
+    accent: green
+
+extra_css:
+  - stylesheets/mokata.css
 
 plugins:
   - search
@@ -52,9 +52,12 @@ markdown_extensions:
   - pymdownx.highlight:
       anchor_linenums: true
 
-# Internal build docs are not part of the published site.
+# Internal docs are never part of a site build — even one run from the private repo.
+# (Defense-in-depth alongside scripts/sync-public.sh, which keeps them out of the public repo.)
 exclude_docs: |
   build/
+  launch/
+  marketing/
 
 nav:
   - Home: index.md

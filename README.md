@@ -1,4 +1,9 @@
-# mokata
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/mokata-wordmark-dark.svg">
+    <img src="assets/brand/mokata-wordmark-light.svg" alt="mokata" width="340">
+  </picture>
+</p>
 
 **The memory + seatbelt for your AI coding agent.** Spec-driven TDD for Claude Code —
 knowledge-aware, self-healing memory, human-gated, local-first. It remembers your project and

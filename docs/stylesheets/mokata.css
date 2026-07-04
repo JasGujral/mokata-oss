@@ -1,0 +1,355 @@
+/* ==========================================================================
+   mokata brand theme — dark terminal + code green
+   Applies to every MkDocs Material page (slate scheme).
+   ========================================================================== */
+
+:root {
+  --mk-bg: #070c09;          /* near-black, green-tinted */
+  --mk-surface: #0c1410;     /* cards / code panes */
+  --mk-surface-2: #101a14;
+  --mk-border: #1c2b21;
+  --mk-green: #3df58c;       /* code green (accent) */
+  --mk-green-dim: #22c55e;
+  --mk-green-glow: rgba(61, 245, 140, 0.14);
+  --mk-text: #d9e4dc;
+  --mk-muted: #8fa79a;
+  --mk-heading: #ffffff;
+  --mk-on-green: #04130a;  /* text on green fills */
+  --mk-wait: #fbbf24;        /* semantic "waiting on human gate" color — not a brand accent */
+  --mk-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* ---- Material palette overrides (slate) ---------------------------------- */
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: var(--mk-bg);
+  --md-default-fg-color: var(--mk-text);
+  --md-default-fg-color--light: var(--mk-muted);
+  --md-default-fg-color--lighter: #5f7568;
+  --md-default-fg-color--lightest: #2a3a30;
+
+  --md-primary-fg-color: var(--mk-bg);
+  --md-primary-bg-color: var(--mk-text);
+  --md-accent-fg-color: var(--mk-green);
+
+  --md-typeset-color: var(--mk-text);
+  --md-typeset-a-color: var(--mk-green);
+
+  --md-code-bg-color: var(--mk-surface);
+  --md-code-fg-color: var(--mk-text);
+  --md-code-hl-color: var(--mk-green-glow);
+
+  --md-footer-bg-color: var(--mk-bg);
+  --md-footer-bg-color--dark: var(--mk-bg);
+
+  /* code highlight tokens — brand greens only (BRAND.md rule 2: no third green) */
+  --md-code-hl-string-color: var(--mk-green);
+  --md-code-hl-keyword-color: var(--mk-green-dim);
+  --md-code-hl-function-color: var(--mk-text);
+  --md-code-hl-number-color: var(--mk-green);
+  --md-code-hl-constant-color: var(--mk-green-dim);
+  --md-code-hl-special-color: var(--mk-green-dim);
+  --md-code-hl-name-color: var(--md-code-fg-color);
+  --md-code-hl-comment-color: var(--mk-muted);
+}
+
+/* ---- Chrome: header / tabs / footer -------------------------------------- */
+.md-header,
+.md-tabs {
+  background: rgba(7, 12, 9, 0.85);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--mk-border);
+  color: var(--mk-text);
+}
+.md-header__title,
+.md-header__topic {
+  font-family: var(--mk-mono);
+  font-weight: 600;
+}
+/* wordmark logo already says "mokata" — hide the duplicate site-name text (brand rule: assets/brand/BRAND.md) */
+.md-header__title { display: none; }
+.md-header__button.md-logo img { height: 1.3rem; width: auto; }
+.md-footer,
+.md-footer-meta {
+  border-top: 1px solid var(--mk-border);
+}
+
+/* ---- Typography ----------------------------------------------------------- */
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3 {
+  font-family: var(--mk-mono);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--mk-text);
+}
+.md-typeset h1 { color: var(--mk-heading); }
+.md-typeset h2::before {
+  content: "// ";
+  color: var(--mk-green);
+  opacity: 0.9;
+}
+.md-typeset a:hover { color: var(--mk-green); text-decoration: underline; }
+
+/* ---- Code blocks: terminal panes ----------------------------------------- */
+.md-typeset pre > code {
+  border: 1px solid var(--mk-border);
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px rgba(61, 245, 140, 0.04), 0 8px 30px rgba(0, 0, 0, 0.35);
+}
+.md-typeset code {
+  border-radius: 4px;
+}
+.md-clipboard { color: var(--mk-muted); }
+.md-clipboard:hover { color: var(--mk-green); }
+
+/* ---- Nav / TOC ------------------------------------------------------------ */
+.md-nav__item .md-nav__link--active,
+.md-nav__link--active {
+  color: var(--mk-green);
+  font-weight: 600;
+}
+.md-nav__title { color: var(--mk-muted); }
+
+/* ---- Admonitions → terminal callouts -------------------------------------- */
+.md-typeset .admonition,
+.md-typeset details {
+  background: var(--mk-surface);
+  border: 1px solid var(--mk-border);
+  border-left: 3px solid var(--mk-green);
+  box-shadow: none;
+}
+.md-typeset .admonition-title,
+.md-typeset summary {
+  background: var(--mk-surface-2) !important;
+  font-family: var(--mk-mono);
+}
+
+/* ---- Tables ---------------------------------------------------------------- */
+.md-typeset table:not([class]) {
+  background: var(--mk-surface);
+  border: 1px solid var(--mk-border);
+}
+.md-typeset table:not([class]) th {
+  background: var(--mk-surface-2);
+  font-family: var(--mk-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mk-muted);
+}
+
+/* ---- Buttons ---------------------------------------------------------------- */
+.md-typeset .md-button {
+  font-family: var(--mk-mono);
+  border: 1px solid var(--mk-green);
+  color: var(--mk-green);
+  border-radius: 6px;
+}
+.md-typeset .md-button--primary {
+  background: var(--mk-green);
+  color: var(--mk-on-green);
+}
+.md-typeset .md-button:hover {
+  background: var(--mk-green);
+  color: var(--mk-on-green);
+  border-color: var(--mk-green);
+  box-shadow: 0 0 24px var(--mk-green-glow);
+}
+
+/* ---- Search ----------------------------------------------------------------- */
+[data-md-color-scheme="slate"] .md-search__form {
+  background: var(--mk-surface);
+  border: 1px solid var(--mk-border);
+}
+
+/* ==========================================================================
+   Landing page (home.html) — px0-style hero, terminal, bento grid
+   ========================================================================== */
+
+.mk-home { font-family: var(--mk-mono); }
+.mk-home .md-content__inner { padding-top: 0; }
+
+.mk-hero {
+  max-width: 880px;
+  margin: 3.6rem auto 2.4rem;
+  padding: 0 1rem;
+  text-align: center;
+}
+.mk-hero__wordmark {
+  width: 320px;
+  max-width: 72%;
+  height: auto;
+  display: block;
+  margin: 0 auto 1.4rem;
+}
+.mk-hero__badge {
+  display: inline-block;
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  text-transform: lowercase;
+  color: var(--mk-green);
+  border: 1px solid var(--mk-border);
+  background: var(--mk-surface);
+  border-radius: 999px;
+  padding: 0.28rem 0.8rem;
+  margin-bottom: 1.4rem;
+}
+.mk-hero h1 {
+  font-size: clamp(1.9rem, 5vw, 3.1rem);
+  line-height: 1.12;
+  margin: 0 0 1.1rem;
+  color: var(--mk-heading);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+.mk-hero h1 em {
+  font-style: normal;
+  color: var(--mk-green);
+  text-shadow: 0 0 32px var(--mk-green-glow);
+}
+.mk-hero__sub {
+  color: var(--mk-muted);
+  font-size: 0.82rem;
+  line-height: 1.7;
+  max-width: 640px;
+  margin: 0 auto 1.6rem;
+  font-family: var(--md-text-font-family, sans-serif);
+}
+.mk-hero__cta { display: flex; gap: 0.7rem; justify-content: center; flex-wrap: wrap; }
+.mk-btn {
+  font-size: 0.72rem;
+  padding: 0.55rem 1.2rem;
+  border-radius: 6px;
+  border: 1px solid var(--mk-border);
+  color: var(--mk-text);
+  transition: all 0.15s ease;
+}
+.mk-btn--primary {
+  background: var(--mk-green);
+  border-color: var(--mk-green);
+  color: var(--mk-on-green);
+  font-weight: 700;
+}
+.mk-btn--primary:hover { box-shadow: 0 0 28px var(--mk-green-glow); color: var(--mk-on-green); }
+.mk-btn:hover { border-color: var(--mk-green); color: var(--mk-green); }
+
+/* terminal pane */
+.mk-term {
+  max-width: 720px;
+  margin: 2.6rem auto 0;
+  background: var(--mk-surface);
+  border: 1px solid var(--mk-border);
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px rgba(61, 245, 140, 0.05), 0 24px 60px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  text-align: left;
+}
+.mk-term__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.55rem 0.9rem;
+  background: var(--mk-surface-2);
+  border-bottom: 1px solid var(--mk-border);
+  font-size: 0.62rem;
+  color: var(--mk-muted);
+}
+.mk-term__dot { width: 9px; height: 9px; border-radius: 50%; background: var(--mk-border); }
+.mk-term__dot--go { background: var(--mk-green-dim); }
+.mk-term__title { margin-left: 0.5rem; }
+.mk-term pre {
+  margin: 0;
+  padding: 1rem 1.2rem;
+  font-size: 0.72rem;
+  line-height: 1.75;
+  overflow-x: auto;
+  background: transparent;
+}
+.mk-term .ok { color: var(--mk-green); }
+.mk-term .bad { color: #f87171; }
+.mk-term .dim { color: var(--mk-muted); }
+.mk-term .wait { color: var(--mk-wait); }
+
+/* skills video */
+.mk-video {
+  max-width: 760px;
+  margin: 0 auto;
+  background: var(--mk-surface);
+  border: 1px solid var(--mk-border);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(61, 245, 140, 0.05), 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+.mk-video video { display: block; width: 100%; height: auto; }
+
+/* bento feature grid */
+.mk-features {
+  max-width: 1060px;
+  margin: 3.5rem auto 3rem;
+  padding: 0 1rem;
+}
+.mk-features__kicker {
+  font-size: 0.68rem;
+  color: var(--mk-green);
+  margin-bottom: 0.4rem;
+}
+.mk-features h2 {
+  font-size: 1.5rem;
+  color: var(--mk-heading);
+  margin: 0 0 1.6rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.mk-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0.9rem;
+}
+.mk-card {
+  background: var(--mk-surface);
+  border: 1px solid var(--mk-border);
+  border-radius: 10px;
+  padding: 1.2rem 1.3rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.mk-card:hover {
+  border-color: rgba(61, 245, 140, 0.45);
+  box-shadow: 0 0 30px var(--mk-green-glow);
+}
+.mk-card__icon {
+  font-size: 0.68rem;
+  color: var(--mk-green);
+  background: var(--mk-green-glow);
+  border: 1px solid rgba(61, 245, 140, 0.25);
+  border-radius: 6px;
+  display: inline-block;
+  padding: 0.2rem 0.55rem;
+  margin-bottom: 0.8rem;
+}
+.mk-card h3 {
+  font-size: 0.88rem;
+  color: var(--mk-heading);
+  margin: 0 0 0.45rem;
+  font-weight: 700;
+}
+.mk-card p {
+  font-size: 0.72rem;
+  line-height: 1.65;
+  color: var(--mk-muted);
+  margin: 0 0 0.8rem;
+  font-family: var(--md-text-font-family, sans-serif);
+}
+.mk-card__tag {
+  font-size: 0.6rem;
+  color: var(--mk-green-dim);
+  letter-spacing: 0.08em;
+}
+
+/* hide sidebars/TOC on the landing page only */
+.mk-home .md-sidebar { display: none; }
+.mk-home .md-content { max-width: 100%; }
+
+@media (max-width: 600px) {
+  .mk-hero { margin-top: 2.2rem; }
+  .mk-term pre { font-size: 0.62rem; }
+}

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mokata"
 version = "0.0.9"
-description = "An open-source, spec-driven TDD framework for Claude Code — governed, knowledge-aware, human-gated."
+description = "The memory + seatbelt for your AI coding agent. Spec-driven TDD for Claude Code — knowledge-aware, human-gated, local-first."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }

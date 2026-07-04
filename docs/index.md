@@ -1,6 +1,12 @@
-# mokata
+---
+template: home.html
+title: mokata — The memory + seatbelt for your AI coding agent
+hide:
+  - navigation
+  - toc
+---
 
-**Spec-driven TDD for Claude Code — knowledge-aware, self-healing memory, human-gated, local-first.**
+## About mokata
 
 mokata is an open-source framework for Claude Code that brings the strongest ideas in
 AI-assisted coding into one governed engine. It brainstorms the problem with you, drafts a

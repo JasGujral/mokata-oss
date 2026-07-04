@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+
+{% block extrahead %}
+  {{ super() }}
+  {# Brand social/OG image — see assets/brand/BRAND.md #}
+  <meta property="og:image" content="{{ config.site_url }}assets/brand/mokata-icon-512.png" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:image" content="{{ config.site_url }}assets/brand/mokata-icon-512.png" />
+  <meta name="theme-color" content="#070c09" />
+{% endblock %}

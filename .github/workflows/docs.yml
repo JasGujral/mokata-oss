@@ -44,10 +44,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends pandoc wkhtmltopdf
           mkdir -p site/assets
+          # Branded cover (assets/brand/pdf-cover.html: pixel wordmark + tagline, per BRAND.md)
           pandoc docs/tutorials/mokata-complete-guide.md \
             -o site/assets/mokata-complete-guide.pdf \
             --pdf-engine=wkhtmltopdf \
             --metadata title="mokata — The Complete Guide" \
+            --include-before-body docs/assets/brand/pdf-cover.html \
             --toc -V toc-title="Contents"
           test -s site/assets/mokata-complete-guide.pdf && echo "PDF generated."
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
