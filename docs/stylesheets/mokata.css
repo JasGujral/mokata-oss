@@ -65,8 +65,10 @@
   font-family: var(--mk-mono);
   font-weight: 600;
 }
-/* wordmark logo already says "mokata" — hide the duplicate site-name text (brand rule: assets/brand/BRAND.md) */
-.md-header__title { display: none; }
+/* wordmark logo already says "mokata" — hide the duplicate site-name text (brand rule: assets/brand/BRAND.md).
+   visibility (not display): the title is the flex spacer that keeps search + the GitHub
+   source link pinned right; removing it from layout makes them float toward the center. */
+.md-header__title { visibility: hidden; }
 .md-header__button.md-logo img { height: 1.3rem; width: auto; }
 .md-footer,
 .md-footer-meta {
