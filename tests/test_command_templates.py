@@ -15,7 +15,7 @@ GENERATED = ("spec", "test", "develop", "review", "debug", "optimize", "bug", "o
 class TestCommandTemplates(unittest.TestCase):
     def _path(self, name):
         here = os.path.dirname(__file__)
-        return os.path.join(here, "..", "templates", "commands", f"{name}.md")
+        return os.path.join(here, "..", "src", "mokata", "templates", "commands", f"{name}.md")
 
     def test_each_command_template_exists_and_matches_source(self):
         for name in GENERATED:

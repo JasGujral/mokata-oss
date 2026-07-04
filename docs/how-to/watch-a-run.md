@@ -12,6 +12,21 @@ mokata config set settings.ux.progress both          # both
 Both tiers are **read-only**: they only reflect run-state + the audit ledger. They never write
 durable state, never gate, and never mutate a run — and nothing leaves your machine.
 
+## `mokata progress` — the enriched, at-a-glance view
+
+`mokata progress` (or **`/mokata:progress`** inside Claude Code) is the max-detail read of the
+active run. Alongside the 7-phase pipeline tracker it now surfaces:
+
+- the **five user-stage arc** — `brainstorm → spec → develop → review → ship`, each marked
+  done / current / pending;
+- the **develop task counter** — `develop [<done>/<total>]` — shown when a real decomposition
+  batch is on record;
+- a **"pending this session: …"** line naming the stages still ahead.
+
+All of it is **derived read-only** from the same run-state and progress log the always-on
+[stage badge](../concepts/pipeline.md#the-always-on-stage-badge-stage-54b) reads — never
+fabricated. With no active run it prints a friendly empty view instead of an error.
+
 ## Tier 1 — parallel-aware terminal lanes (always on)
 
 ```bash

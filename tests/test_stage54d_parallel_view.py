@@ -26,7 +26,7 @@ from mokata.govern import AuditLedger
 from mokata.govern.resume import PipelineCheckpoint
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-COMMANDS_DIR = os.path.join(ROOT, "templates", "commands")
+COMMANDS_DIR = os.path.join(ROOT, "src", "mokata", "templates", "commands")
 
 
 def _repo(d, profile="standard"):

@@ -155,29 +155,31 @@ The router binds the **first present** provider in each chain. Our goal in §2 i
 ### 2.1 Step 1 — base system (Python, git, a shell)
 
 ```bash
-python3 --version      # need ≥ 3.9 (≥ 3.10 to also get the [mcp] extra)
+python3 --version      # need ≥ 3.9 (≥ 3.10 also gets the bundled mokata-mcp server)
 git --version
 ```
 
 If Python is older than 3.9, install a newer one (`pyenv install 3.12`, `brew install python@3.12`, or your distro's package) before continuing.
 
-### 2.2 Step 2 — clone mokata into an isolated environment
+### 2.2 Step 2 — an isolated environment
+
+The end-user install is plain `pip install mokata` from PyPI — **no clone required**.
 
 ```bash
-git clone https://github.com/JasGujral/mokata-oss.git
-cd mokata-oss
 python3 -m venv .venv && source .venv/bin/activate   # isolate; keeps your global env clean
 pip install -U pip
 ```
 
-### 2.3 Step 3 — install mokata with every Python extra
+### 2.3 Step 3 — install mokata
+
+On **Python ≥ 3.10** `pip install mokata` also pulls the MCP SDK (a default dep), so the bundled `mokata-mcp` server works out of the box; on **Python 3.9** the CLI still works but the MCP server is unavailable.
 
 ```bash
-pip install -e ".[schema,mcp]"     # core + jsonschema + the mokata-mcp server
+pip install mokata                 # add "mokata[schema]" for richer manifest-validation messages
 mokata --version                   # → prints the installed mokata version (confirms the console script is on PATH)
 ```
 
-If you're on Python 3.9, drop `mcp` (it's marked for ≥ 3.10 and is a clean no-op there anyway): `pip install -e ".[schema]"`.
+> **Contributors only:** to hack on mokata itself, clone and install editable instead — `git clone https://github.com/JasGujral/mokata-oss.git && cd mokata-oss && pip install -e ".[schema]"`. End users never need this.
 
 > **Checkpoint A.** `mokata --version` prints a version. You now have the engine. Everything below adds *providers* the engine can route to.
 
@@ -260,38 +262,38 @@ mokata doctor       # missing providers, broken adapters, role conflicts, bad tr
 
 ### 2.8 Step 8 — drive it from Claude Code (the primary surface)
 
-The CLI you just verified is the engine's mechanics. For day-to-day building you'll drive the same engine from **inside Claude Code**, three ways (priority order):
+The CLI you just verified is the engine's mechanics. For day-to-day building you'll drive the same engine from **inside Claude Code**. (The canonical pip-first setup is in [Getting started](../getting-started.md); this section shows it in context.)
 
-**Tier 1 (recommended) — the plugin from the public marketplace:**
-
-<!-- mokata:directory-listing:start -->
-> ⏳ **Pending Claude plugin-directory approval.** mokata isn't in Claude's in-app
-> "Browse plugins" directory **yet** — install it via `/plugin marketplace add` (you get
-> the same in-Claude-Code experience). _(This notice auto-flips once the listing is
-> approved — single source: `scripts/directory_listing.py`.)_
-<!-- mokata:directory-listing:end -->
-
-```text
-/plugin marketplace add https://github.com/JasGujral/mokata-oss.git
-/plugin install mokata@mostack
-```
-
-Restart Claude Code. You now have the workflow slash commands (`/mokata:brainstorm`, `/mokata:refine`, `/mokata:spec`, `/mokata:test`, `/mokata:develop`, `/mokata:review`, `/mokata:debug`, `/mokata:optimize`, `/mokata:bug`, and `/mokata:init`), the SessionStart briefing hook, and the secret-guard hook — all automatic. Typing `/mokata` lists them all (Claude Code namespaces plugin commands as `/mokata:<command>`). Confirm with `/plugin`: `mokata` appears under the `mostack` marketplace.
-
-> You don't even have to set up first: on a fresh repo mokata's SessionStart briefing **offers to initialize it for you** (once), and you can run **`/mokata:init full`** from inside Claude Code — pip-free, human-gated, no terminal trip.
-
-**Tier 2 — same experience without the marketplace.** Either install the plugin from your local clone (`/plugin marketplace add ~/path/to/mokata-oss` then `/plugin install mokata@mostack`), **or** wire it in with one command on your existing Claude Code sign-in (no API key):
+**Recommended — wire it in with one command (`mokata setup claude`):** on your existing Claude Code sign-in, no API key:
 
 ```bash
 cd /path/to/your/project
 mokata setup claude          # --profile / --scope options; reverse with `mokata unsetup claude`
+# restart Claude Code, then:
+mokata mcp status            # expect: mokata-mcp: CONNECTED ✓
 ```
 
-`mokata setup claude` runs `init` if needed, copies the slash commands into `.claude/commands/`, registers the `mokata-mcp` server in `.mcp.json`, and wires the SessionStart + secret-guard hooks into `.claude/settings.json`. JSON files are **merged, never clobbered**, and it's idempotent. `--scope user` installs into `~/.claude` for every project; `--no-hooks` wires only commands + MCP.
+`mokata setup claude` runs `init` if needed, copies the slash commands into `.claude/commands/`, installs the Agent Skills, registers the `mokata-mcp` server in `.mcp.json`, wires the SessionStart + secret-guard hooks into `.claude/settings.json`, and wires the status-line badge. JSON files are **merged, never clobbered**, and it's idempotent (re-running syncs and prunes old skills on update). `--scope user` installs into `~/.claude` for every project; `--no-hooks` wires only commands + MCP.
 
-**Tier 3 — any other harness, or none.** The `mokata` CLI is harness-agnostic and has **no LLM of its own** — invoke as `mokata <command>` or `python -m mokata <command>` from any shell, script, CI, or shell-capable assistant (Gemini, Codex). Almost every command accepts **`--path PATH`** (the repo root; defaults to cwd). Commands that need an initialized repo exit non-zero with a clear error if `.mokata/` is missing.
+Restart Claude Code. You now have the workflow slash commands (`/mokata:brainstorm`, `/mokata:refine`, `/mokata:spec`, `/mokata:test`, `/mokata:develop`, `/mokata:review`, `/mokata:debug`, `/mokata:optimize`, `/mokata:bug`, and `/mokata:init`), the SessionStart briefing hook, and the secret-guard hook — all automatic. Typing `/mokata` lists them all.
 
-> **A `pip` CLI install is terminal-only.** It does **not** put mokata inside Claude Code (no slash commands, no hooks, no LLM driving the gates). For the in-Claude workflow, use Tier 1 (plugin) or Tier 2 (`mokata setup claude`). See [How mokata uses an LLM: harness vs CLI](../concepts/execution-model.md).
+> You don't even have to set up first: on a fresh repo mokata's SessionStart briefing **offers to initialize it for you** (once), and you can run **`/mokata:init full`** from inside Claude Code — human-gated, no terminal trip.
+
+<!-- mokata:directory-listing:start -->
+> ⏳ **Pending Claude plugin-directory approval.** A one-click Claude Code **plugin** is
+> **planned, not yet available** — mokata isn't registered on any Claude Code marketplace.
+> The supported way to run mokata inside Claude Code today is the pip-first path:
+> `pip install mokata` → `mokata setup claude`
+> (see [Getting started](https://jasgujral.github.io/mokata-oss/getting-started/)).
+> _(This notice auto-flips once the listing is approved — single source:
+> `scripts/directory_listing.py`.)_
+<!-- mokata:directory-listing:end -->
+
+(An experimental manual `/plugin marketplace add ~/path/to/mokata-oss` route from a local clone exists for advanced users — see [Install the plugin](../how-to/install-plugin.md).)
+
+**Any other harness, or none.** The `mokata` CLI is harness-agnostic and has **no LLM of its own** — invoke as `mokata <command>` or `python -m mokata <command>` from any shell, script, CI, or shell-capable assistant (Gemini, Codex). Almost every command accepts **`--path PATH`** (the repo root; defaults to cwd). Commands that need an initialized repo exit non-zero with a clear error if `.mokata/` is missing.
+
+> **A `pip` CLI install is terminal-only.** It does **not** put mokata inside Claude Code (no slash commands, no hooks, no LLM driving the gates). For the in-Claude workflow, run **`mokata setup claude`** (above). See [How mokata uses an LLM: harness vs CLI](../concepts/execution-model.md).
 
 > **The rest of this guide leads with the CLI** so each gate is visible as a discrete step. The mapping is one-to-one: inside Claude Code the slash commands and the LLM run these same operations. Where a step has a slash-command equivalent, it's called out.
 
@@ -300,7 +302,7 @@ mokata setup claude          # --profile / --scope options; reverse with `mokata
 ```bash
 git clone https://github.com/JasGujral/mokata-oss.git && cd mokata-oss
 python3 -m venv .venv && source .venv/bin/activate && pip install -U pip
-pip install -e ".[schema,mcp]"                 # engine + extras ([postgres] too for a hosted store)
+pip install -e ".[schema]"                     # engine + extras ([postgres] too for a hosted store); MCP SDK comes by default on ≥ 3.10
 brew install ripgrep                           # (or apt/dnf/pacman) — the rg floor
 #  …install code-review-graph + serena per their READMEs so both commands are on PATH
 #  …install Obsidian (or `mokata config set tools.obsidian.config.vault <path>`) for that backend

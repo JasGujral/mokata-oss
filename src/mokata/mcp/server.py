@@ -1,0 +1,79 @@
+"""MCP wiring — lazily imports the optional SDK; never imported by the core/CLI.
+
+The MCP SDK is an OPTIONAL, plugin-side dependency (`pip install "mokata[mcp]"`). It is imported
+LAZILY inside `build_server`, so the core package and CLI import and run with the SDK absent.
+Note: `mokata.mcp` (this namespaced package) does NOT shadow the SDK's top-level `mcp` — the
+absolute `from mcp.server.fastmcp import FastMCP` below resolves to the installed SDK, and
+`mcp_available()`'s `find_spec("mcp")` looks up the same top-level SDK, never this package.
+
+Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
+"""
+
+from __future__ import annotations
+
+import sys
+from typing import Any, List, Optional
+
+from .registry import SERVER_NAME, TOOLS
+# tools_read / tools_write populate the shared TOOLS registry as an import side effect.
+from . import tools_read, tools_write  # noqa: F401
+
+
+def mcp_available() -> bool:
+    """True when the optional MCP SDK is importable."""
+    import importlib.util
+    return importlib.util.find_spec("mcp") is not None
+
+
+def _public_module() -> Any:
+    """The compat surface callers monkeypatch — the `mokata.mcp_server` shim, falling back to
+    this module. `main` resolves `mcp_available` through it so the historical patch point
+    (`mokata.mcp_server.mcp_available = ...`) keeps working unchanged after the package split
+    (zero behavior change)."""
+    return sys.modules.get("mokata.mcp_server", sys.modules[__name__])
+
+
+def build_server() -> Any:
+    """Construct the FastMCP server with every tool registered. Requires the optional
+    `mcp` SDK (`pip install "mokata[mcp]"`)."""
+    try:
+        from mcp.server.fastmcp import FastMCP
+    except ImportError as exc:  # pragma: no cover - exercised only with the SDK absent
+        raise RuntimeError(
+            "the MCP SDK is not installed; run `pip install \"mokata[mcp]\"` to enable "
+            "the mokata MCP server"
+        ) from exc
+
+    server = FastMCP(SERVER_NAME)
+    for spec in TOOLS:
+        server.add_tool(spec.fn, name=spec.name,
+                        description=(spec.fn.__doc__ or "").strip())
+    return server
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    import argparse
+    parser = argparse.ArgumentParser(
+        prog="mokata-mcp",
+        description="mokata MCP server (stdio) — mokata operations as native MCP tools.")
+    parser.add_argument("--path", default=".",
+                        help="repo root the tools operate on (default: current dir)")
+    parser.parse_args(argv)
+
+    # Fail LOUD, not dead (Stage 3b.1). The MCP SDK ships by default on Python >= 3.10, but a
+    # 3.9 (or otherwise stripped) environment can't have it. Rather than let build_server()
+    # raise an uncaught ImportError/RuntimeError traceback — which Claude Code surfaces only as
+    # a failed/absent server the user can't diagnose — name the cause and the fix on stderr and
+    # exit non-zero, so the failure is legible.
+    if not _public_module().mcp_available():
+        import platform
+        sys.stderr.write(
+            "mokata-mcp: the MCP SDK is not installed, so the mokata MCP server cannot start.\n"
+            f"  Cause: the SDK requires Python >= 3.10 (this is Python "
+            f"{platform.python_version()}), or your install is missing it.\n"
+            "  Fix:   on Python >= 3.10, (re)install mokata — `pip install -U mokata` — and the "
+            "SDK installs by default. The mokata CLI works fully without the MCP server.\n")
+        return 1
+
+    _public_module().build_server().run()   # stdio (plugin-launched); each tool takes its `path`
+    return 0

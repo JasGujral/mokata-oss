@@ -208,7 +208,7 @@ class TestProtocolAndTemplate(unittest.TestCase):
 
     def test_template_carries_anchor_and_drift_language(self):
         here = os.path.dirname(__file__)
-        path = os.path.join(here, "..", "templates", "commands", "brainstorm.md")
+        path = os.path.join(here, "..", "src", "mokata", "templates", "commands", "brainstorm.md")
         with open(path, encoding="utf-8") as fh:
             text = fh.read().lower()
         self.assertIn("anchor", text)

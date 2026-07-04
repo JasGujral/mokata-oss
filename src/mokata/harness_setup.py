@@ -21,14 +21,24 @@ from __future__ import annotations
 from .prompt import read_yes_no
 
 import json
+import os
 import shlex
 import shutil
+import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from .init import init_repo
-from . import MOKATA_DIR, MANIFEST_FILENAME
+from . import MOKATA_DIR, MANIFEST_FILENAME, package_data_root
+# Stage 3d.1: the shared MCP name + Claude config-path resolution live in the neutral
+# `harness_paths` leaf so `mcp_admin` can depend on THEM instead of on this module (which
+# broke the mcp_admin ↔ harness_setup cycle). Re-exported below for back-compat importers.
+from .harness_paths import MCP_SERVER_NAME, claude_mcp_config_path, scope_base
+# Stage 3d.1: cycle gone → the `mcp_admin` import that used to be lazy (below, in
+# `setup_harness`) is now a plain module-level import.
+from .mcp_admin import status_lines
 
 # Stage 54b — where the original statusLine is stashed when mokata composes over a user's
 # own (so `unsetup` can restore it verbatim). Claude Code ignores unknown statusLine keys.
@@ -76,8 +86,8 @@ _HARNESS_NATIVE_NOTE = {
              "— Aider has NO native slash-command files",
 }
 
-# The MCP server key + command (mirrors .claude-plugin/plugin.json's mcpServers entry).
-MCP_SERVER_NAME = "mokata"
+# The MCP server command (mirrors .claude-plugin/plugin.json's mcpServers entry). The
+# companion `MCP_SERVER_NAME` now lives in `harness_paths` and is re-exported at the top.
 MCP_COMMAND = "mokata-mcp"
 
 # PreToolUse matcher (mirrors hooks/hooks.json).
@@ -85,12 +95,14 @@ HOOK_PRETOOL_MATCHER = "Write|Edit|MultiEdit|Bash"
 
 
 def repo_root() -> Path:
-    """The mokata checkout / plugin root that holds templates/ and hooks/.
+    """The directory that holds the packaged artifacts — ``templates/`` and ``hooks/``.
 
-    For the documented no-plugin install (``pip install -e .`` from a clone), the package
-    imports from ``<clone>/src/mokata``, so the artifacts live two parents up.
-    """
-    return Path(__file__).resolve().parents[2]
+    Stage 3: these live INSIDE the package, so this resolves to the ``mokata`` package
+    directory for BOTH a pip-installed wheel (site-packages/mokata) and a clone/editable
+    install (``<clone>/src/mokata``) — no manual clone required. It is a real directory
+    containing the data in either case, which is what the ``--plugin-root`` embedding and
+    the SessionStart hook need to locate the bundled engine."""
+    return package_data_root()
 
 
 def _templates_dir() -> Path:
@@ -125,8 +137,7 @@ def resolve_targets(scope: str, root: str, home: Optional[str] = None,
         raise ValueError(f"unknown scope '{scope}'; choose one of {SCOPES}")
     if harness not in HARNESSES:
         raise ValueError(f"unknown harness '{harness}'; choose one of {HARNESSES}")
-    base = Path(root).resolve() if scope == "project" else (
-        Path(home).resolve() if home else Path.home())
+    base = scope_base(scope, root, home)
     hdir = _HARNESS_DIR[harness]
     commands_dir = base / hdir / _HARNESS_COMMANDS_SUBDIR[harness]
     settings_path = base / hdir / "settings.json"
@@ -134,7 +145,8 @@ def resolve_targets(scope: str, root: str, home: Optional[str] = None,
         if harness == "claude":
             # Claude Code's user-scoped MCP config lives in ~/.claude.json (where
             # `claude mcp add --scope user` writes); project scope uses .mcp.json.
-            mcp_path = (base / ".mcp.json") if scope == "project" else (base / ".claude.json")
+            # Delegated to the neutral leaf so mcp_admin resolves the SAME path.
+            mcp_path = claude_mcp_config_path(scope, root, home)
         elif harness == "cursor":
             mcp_path = base / ".cursor" / "mcp.json"        # `mcpServers` schema
         elif harness == "gemini":
@@ -168,7 +180,7 @@ class SetupPlan:
     mcp_auto: bool = True             # auto-register the MCP server (claude); else manual
     unsupported: List[str] = field(default_factory=list)  # capabilities this harness lacks
     skill_names: List[str] = field(default_factory=list)  # Agent Skills to install (claude)
-    plugin_provides_skills: bool = False  # plugin detected → skills suppressed to avoid dupes
+    skill_orphans: List[str] = field(default_factory=list)  # stale mokata skills to PRUNE (sync)
 
 
 # The hook scripts (kept as standalone shims) map to `mokata-hook` subcommands.
@@ -210,28 +222,6 @@ def _is_mokata_statusline(block: Dict) -> bool:
     return "mokata-hook" in cmd and "statusline" in cmd
 
 
-def _mokata_plugin_installed(home: Optional[str] = None) -> bool:
-    """True if the mokata Claude Code PLUGIN appears installed. The plugin already provides the
-    Agent Skills (as ``mokata:<name>``), so the no-plugin ``mokata setup`` path must NOT also
-    write a project-scope copy — otherwise Claude Code lists every mokata skill TWICE. Detected
-    by a ``plugin.json`` named ``mokata`` anywhere under ``~/.claude/plugins/``. Best-effort and
-    quiet: any error → False (we simply don't suppress)."""
-    base = Path(home) if home is not None else Path.home()
-    plugins = base / ".claude" / "plugins"
-    try:
-        if not plugins.is_dir():
-            return False
-        for pj in plugins.rglob("plugin.json"):
-            try:
-                if json.loads(pj.read_text(encoding="utf-8")).get("name") == "mokata":
-                    return True
-            except Exception:
-                continue
-    except Exception:
-        return False
-    return False
-
-
 def plan_setup(
     harness: str,
     root: str = ".",
@@ -262,8 +252,11 @@ def plan_setup(
     with_hooks = with_hooks and hooks_ok
     mcp_auto = _HARNESS_MCP_AUTO[harness]
 
-    if with_hooks and not _hooks_dir().is_dir():
-        raise SetupError(f"hook scripts not found at {_hooks_dir()}.")
+    # NOTE (Stage 3): do NOT hard-fail on a missing source ``hooks/`` dir. The hooks RUN via
+    # the ``mokata-hook`` console entry point (pip-installed, Stage 53b) — the standalone
+    # ``hooks/*.py`` shims + ``launch.sh`` are only the legacy pure-plugin fallback. So an
+    # installed wheel wires working hooks from the entry point whether or not the source dir
+    # is present; the dir requirement was a spurious pip-blocker and is gone.
 
     targets = resolve_targets(scope, root, home, harness)
     manifest_path = Path(root).resolve() / MOKATA_DIR / MANIFEST_FILENAME
@@ -276,17 +269,24 @@ def plan_setup(
             "PreToolUse": _hook_command("secret_guard.py"),
         }
 
-    # Agent Skills — the model-invocable twin of the slash commands. Only where the harness
-    # has that surface (claude); degrade-clean (empty list) everywhere else. The curated set
-    # renders from the SAME command templates, so it can't drift from the commands.
-    from .agent_skills import CURATED_SKILLS
+    # Agent Skills — the model-invocable twin of the slash commands. Only where the harness has
+    # that surface (claude); degrade-clean (empty list) everywhere else. The curated set renders
+    # from the SAME command templates, so it can't drift from the commands. mokata setup is a
+    # REPLACE (Stage 5): it ALWAYS (over)writes the current curated skills into the project — the
+    # project copy is authoritative — with NO plugin-based suppression. A reinstall therefore always
+    # delivers the current, non-stale set. (If the mokata plugin is ALSO installed, Claude Code may
+    # list a skill twice — `mokata:<name>` + `<name>` — which is accepted: reliably current beats
+    # deduped-but-stale, and plugin detection was never dependable.)
+    from .agent_skills import CURATED_SKILLS, find_orphan_skills
     skill_names = list(CURATED_SKILLS) if targets.skills_dir is not None else []
-    plugin_provides_skills = False
-    if skill_names and _mokata_plugin_installed(home=home):
-        # The plugin already ships these skills (as `mokata:<name>`); a project-scope copy would
-        # make Claude Code list each skill twice. Suppress the write and say so in the plan.
-        skill_names = []
-        plugin_provides_skills = True
+
+    # Stage 5 — SYNC: after (re)writing the current set, setup PRUNES any mokata-authored skill
+    # DROPPED from it, so `.claude/skills/` matches the curated set exactly and users stop seeing
+    # old/removed skills after an update. Compute the orphans now (read-only) so the human-gated
+    # plan can show the removal BEFORE approval — pruning is a durable delete. A user's own
+    # (non-marker) skill is never an orphan.
+    skill_orphans = [p.parent.name for p in
+                     find_orphan_skills(targets.skills_dir, skill_names)]
 
     return SetupPlan(
         harness=harness,
@@ -301,7 +301,7 @@ def plan_setup(
         mcp_auto=mcp_auto,
         unsupported=unsupported,
         skill_names=skill_names,
-        plugin_provides_skills=plugin_provides_skills,
+        skill_orphans=skill_orphans,
     )
 
 
@@ -327,9 +327,12 @@ def render_setup_plan(plan: SetupPlan) -> str:
         lines.append("  " + "  ".join(plan.skill_names))
         lines.append("  (model-invocable twin of the commands; Claude may auto-engage these)")
         lines.append("")
-    elif plan.plugin_provides_skills and t.skills_dir is not None:
-        lines.append("Agent Skills: SKIPPED — the mokata plugin is installed and already "
-                     "provides them; a project copy would duplicate every skill in Claude Code.")
+    if plan.skill_orphans and t.skills_dir is not None:
+        # A durable delete → it MUST be visible before approval (P2). Only mokata-authored
+        # (marker-bearing) skills no longer in the curated set; user skills are never touched.
+        lines.append(f"Removing {len(plan.skill_orphans)} stale mokata skill(s) no longer "
+                     f"curated -> {t.skills_dir}/<name>/ (your own skills are left untouched):")
+        lines.append("  " + "  ".join(plan.skill_orphans))
         lines.append("")
     if plan.mcp_auto:
         lines.append(f"Will register the MCP server '{MCP_SERVER_NAME}' (command: "
@@ -366,31 +369,99 @@ def render_setup_plan(plan: SetupPlan) -> str:
 # --------------------------------------------------------------------------------------
 
 def _load_json(path: Path) -> Dict:
+    """Read a JSON-object config for merging. FAIL-CLOSED (P2): a file that doesn't exist is
+    fresh (`{}` — we'll create it), but a file that EXISTS and can't be understood is NEVER
+    silently treated as empty — that would let `_write_json` overwrite it and destroy the
+    user's other servers/keys. So an existing-but-unparseable / unreadable / non-object file
+    RAISES `SetupError` naming the file and the fix. Merge-safety only holds for files that
+    parse; anything else we refuse to touch."""
     if not path.exists():
         return {}
     try:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
-        return data if isinstance(data, dict) else {}
-    except (json.JSONDecodeError, OSError):
-        return {}
+    except json.JSONDecodeError as exc:
+        raise SetupError(
+            f"{path} exists but isn't valid JSON ({exc}) — mokata won't overwrite a config it "
+            f"can't parse (it would destroy your other entries). Fix or remove the file, then "
+            f"re-run."
+        ) from exc
+    except OSError as exc:
+        raise SetupError(
+            f"{path} exists but can't be read ({exc}) — mokata won't overwrite a config it "
+            f"can't read. Fix the permissions or remove the file, then re-run."
+        ) from exc
+    if not isinstance(data, dict):
+        raise SetupError(
+            f"{path} exists but isn't a JSON object (found {type(data).__name__}) — mokata "
+            f"merges into an object and won't overwrite this. Fix or remove the file, then "
+            f"re-run."
+        )
+    return data
 
 
 def _write_json(path: Path, data: Dict) -> None:
+    # ATOMIC write (P2): render to a temp file in the SAME directory, then `os.replace` it onto
+    # the target — a crash mid-write leaves the old config intact rather than a truncated/
+    # half-written one. Same-dir temp keeps the rename atomic (no cross-filesystem move).
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2)
-        fh.write("\n")
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+            fh.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        # Never leave a stray temp file behind if the write/rename fails.
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
-def _merge_mcp(path: Path) -> None:
+def resolved_mcp_command() -> str:
+    """The `mokata-mcp` command an installed registration should launch — resolved to an
+    ABSOLUTE path so auto-start survives the GUI-launched PATH (the classic silent killer).
+    Resolution order: (1) `shutil.which` on the current PATH; (2) a console-script sibling of
+    the running interpreter (`<sys.executable dir>/mokata-mcp[.exe]`) — this covers a venv/
+    install whose bin dir isn't on PATH, which is precisely the silent-killer case `which`
+    can't see; (3) the bare name as a last resort (e.g. `-e` source runs). Mirrors how the
+    hooks resolve `mokata-hook`."""
+    found = shutil.which(MCP_COMMAND)
+    if found:
+        return found
+    bindir = Path(sys.executable).parent
+    for candidate in (bindir / MCP_COMMAND, bindir / f"{MCP_COMMAND}.exe"):
+        if candidate.is_file():
+            return str(candidate)
+    return MCP_COMMAND
+
+
+def _merge_mcp(path: Path, command: str = MCP_COMMAND) -> None:
+    # Single source of MCP-merge truth: NEVER clobber other servers or unrelated keys.
+    # `command` is a parameter so `mcp install` can opt into the resolved absolute path
+    # (see `resolved_mcp_command`) while the default keeps `setup`'s existing behaviour —
+    # one merge implementation, no fork that can drift.
     data = _load_json(path)
     servers = data.get("mcpServers")
     if not isinstance(servers, dict):
         servers = {}
-    servers[MCP_SERVER_NAME] = {"command": MCP_COMMAND, "args": []}
+    servers[MCP_SERVER_NAME] = {"command": command, "args": []}
     data["mcpServers"] = servers
     _write_json(path, data)
+
+
+def mcp_install(scope: str, root: str = ".", home: Optional[str] = None) -> Path:
+    """Write/repair the Claude Code registration for the bundled mokata MCP server,
+    resolving `mokata-mcp` to an absolute path. Reuses the shared `_merge_mcp` (merge-safe,
+    idempotent). Returns the registration file path. Same scopes as the `setup` path:
+    project → `<root>/.mcp.json`, user → `<home>/.claude.json`."""
+    targets = resolve_targets(scope, root, home, "claude")
+    if targets.mcp_path is None:                       # pragma: no cover - claude always auto
+        raise SetupError("the claude harness has no auto-wired MCP config path.")
+    _merge_mcp(targets.mcp_path, resolved_mcp_command())
+    return targets.mcp_path
 
 
 def _is_mokata_hook(entry: Dict) -> bool:
@@ -551,9 +622,22 @@ def apply_setup(plan: SetupPlan, *, assume_yes: bool = False, force: bool = Fals
         for p in write_skill_files(t.skills_dir, files):
             touched.append(str(p))
 
-    # 3. MCP server (auto-registered only where the harness supports it; else manual)
+    # 2c. SYNC (Stage 5) — after writing the current set, PRUNE any mokata-authored skill dropped
+    # from it, so the tree matches the curated set exactly (users stop seeing old/removed skills
+    # after an update). Marker-guarded: a user's own skill is NEVER removed. `plan.skill_names`
+    # is the set we keep (the intended project set — empty when the plugin is the sole source).
+    if t.skills_dir is not None:
+        from .agent_skills import prune_orphan_skills
+        for p in prune_orphan_skills(t.skills_dir, plan.skill_names):
+            touched.append(str(p))
+
+    # 3. MCP server (auto-registered only where the harness supports it; else manual).
+    # Stage 3b.3: claude registers the RESOLVED absolute command (the SAME resolver as
+    # `mokata mcp install` — one registration path, no fork) so auto-start survives the
+    # GUI-launched PATH; other harnesses keep the bare command.
     if plan.mcp_auto and t.mcp_path is not None:
-        _merge_mcp(t.mcp_path)
+        command = resolved_mcp_command() if plan.harness == "claude" else MCP_COMMAND
+        _merge_mcp(t.mcp_path, command)
         touched.append(str(t.mcp_path))
 
     # 4. hooks (only if the harness supports them — capability-gated in plan_setup)
@@ -619,6 +703,18 @@ def setup_harness(
                  f"({', '.join(plan.skill_names)}) alongside the /commands — Claude can now "
                  f"auto-engage them, and they show in the Agent Skills list.")
         emit("Restart Claude Code, then try /brainstorm or ask it to \"run mokata doctor\".")
+        # Stage 3b.3 — CONNECTED verification. Run the SAME `initialize` handshake as
+        # `mokata mcp status` and report the result so the user knows the server is actually
+        # reachable (not just registered). INFORMATIONAL ONLY: bounded, never raises, and
+        # never gates setup success — a broken server prints its specific fix, setup still ok.
+        if plan.mcp_auto and plan.targets.mcp_path is not None:
+            try:
+                _connected, lines = status_lines(root=root, home=home)
+                emit("")
+                for line in lines:
+                    emit(line)
+            except Exception:
+                pass
     else:
         emit(f"Native surface: {_HARNESS_NATIVE_NOTE[harness]}.")
         emit(f"Point {harness} at the commands in {plan.targets.commands_dir}.")
@@ -687,19 +783,12 @@ def apply_unsetup(plan: UnsetupPlan) -> List[str]:
     # banner marker), then their now-empty <name>/ dirs, and the skills/ dir if we emptied it.
     # Never touch a user's own skills; leave no mokata residue even if the curated set drifted.
     if plan.has_skills and t.skills_dir is not None and t.skills_dir.is_dir():
-        from .agent_skills import SKILL_MARKER
-        for sk in sorted(t.skills_dir.glob("*/SKILL.md")):
-            try:
-                if SKILL_MARKER not in sk.read_text(encoding="utf-8"):
-                    continue
-            except OSError:
-                continue
-            sk.unlink()
-            removed.append(str(sk))
-            if not any(sk.parent.iterdir()):
-                sk.parent.rmdir()
-        if t.skills_dir.exists() and not any(t.skills_dir.iterdir()):
-            t.skills_dir.rmdir()
+        # keep=() → every mokata-authored (marker-bearing) skill is an orphan here; the same
+        # shared, marker-guarded prune setup uses, so a user's own skills still survive unsetup
+        # and no mokata residue is left even if the curated set drifted.
+        from .agent_skills import prune_orphan_skills
+        for p in prune_orphan_skills(t.skills_dir, ()):
+            removed.append(str(p))
 
     # 2. MCP server entry
     if t.mcp_path is not None and t.mcp_path.exists():

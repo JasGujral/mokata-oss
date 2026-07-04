@@ -29,7 +29,7 @@ from mokata.plugin_cache import read_plugin_root, record_plugin_root
 from mokata.profiles import profile_names
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-HOOK = os.path.join(ROOT, "hooks", "session_start.py")
+HOOK = os.path.join(ROOT, "src", "mokata", "hooks", "session_start.py")
 
 
 def _run_cli(argv):
@@ -232,7 +232,7 @@ class TestMcpInitTool(unittest.TestCase):
 
 class TestInitCommandTemplate(unittest.TestCase):
     def _body(self):
-        with open(os.path.join(ROOT, "templates", "commands", "init.md"),
+        with open(os.path.join(ROOT, "src", "mokata", "templates", "commands", "init.md"),
                   encoding="utf-8") as fh:
             return fh.read()
 

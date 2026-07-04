@@ -10,7 +10,7 @@
 #   - A5 unified config + constitution surface     -> config.py
 #   - A7 `mokata init` onboarding                  -> init.py, profiles.py, cli.py
 
-__version__ = "0.0.8"
+__version__ = "0.0.9rc1"
 
 # The directory, relative to a repo root, that holds mokata's committed config.
 MOKATA_DIR = ".mokata"
@@ -24,6 +24,28 @@ CONSTITUTION_FILENAME = "constitution.md"
 # SQLite memory store + vault, and — by default — the audit ledger) lives under
 # .mokata/temp_local/, which a committed .mokata/.gitignore keeps out of version control.
 TEMP_LOCAL_DIRNAME = "temp_local"
+
+
+def package_data_root():
+    """The directory that holds mokata's packaged data — ``templates/``, ``hooks/``,
+    ``skills/`` (and ``stacks/``).
+
+    Stage 3 relocated that data INSIDE the installed package (``src/mokata/…``), so it
+    resolves the SAME way for a pip-installed wheel and for an editable/clone install:
+    ``importlib.resources.files("mokata")`` is the package directory in both cases (site-
+    packages for a wheel, ``<clone>/src/mokata`` for ``-e .``). This removes the old
+    ``parents[2]`` clone assumption that made ``pip install <wheel>`` unable to run
+    ``mokata setup``. Falls back to this module's own directory if importlib.resources
+    can't hand back a concrete filesystem path (never raises)."""
+    from pathlib import Path
+    try:
+        from importlib.resources import files
+        root = Path(str(files("mokata")))
+        if root.is_dir():
+            return root
+    except Exception:
+        pass
+    return Path(__file__).resolve().parent
 
 
 def _force_utf8_io() -> None:

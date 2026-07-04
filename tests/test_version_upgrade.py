@@ -158,8 +158,8 @@ class TestVersionSkill(unittest.TestCase):
     def test_version_skill_registered_and_template_in_sync(self):
         from mokata.skills import command_markdown, get_skill
         skill = get_skill("version")
-        path = os.path.join(os.path.dirname(__file__), "..", "templates",
-                            "commands", "version.md")
+        path = os.path.join(os.path.dirname(__file__), "..", "src", "mokata",
+                            "templates", "commands", "version.md")
         self.assertTrue(os.path.exists(path))
         with open(path, encoding="utf-8") as fh:
             self.assertEqual(fh.read(), command_markdown(skill))

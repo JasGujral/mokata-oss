@@ -11,6 +11,7 @@ asker is given (non-interactive), the default is used — sequential.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
@@ -50,17 +51,25 @@ def select_execution_mode(ask: Optional[Callable[[str, str], str]] = None,
     if ask is None:
         choice = ExecutionChoice(mode=default_mode)
     else:
-        answer = (ask("Execution mode — sequential or parallel?", default_mode)
-                  or default_mode).strip().lower()
-        if answer.startswith("p"):
-            isolation = _yes(ask("Fresh-subagent isolation (clean context + two-stage "
-                                 "review)? [y/n]", "y"))
-            fanout = _yes(ask("Concurrent fan-out (run tasks at once)? [y/n]", "n"))
-            if not isolation and not fanout:
-                isolation = True   # parallel implies at least isolation
-            choice = ExecutionChoice(PARALLEL, isolation=isolation, fanout=fanout)
-        else:
-            choice = ExecutionChoice(SEQUENTIAL)
+        try:
+            answer = (ask("Execution mode — sequential or parallel?", default_mode)
+                      or default_mode).strip().lower()
+            if answer.startswith("p"):
+                isolation = _yes(ask("Fresh-subagent isolation (clean context + two-stage "
+                                     "review)? [y/n]", "y"))
+                fanout = _yes(ask("Concurrent fan-out (run tasks at once)? [y/n]", "n"))
+                if not isolation and not fanout:
+                    isolation = True   # parallel implies at least isolation
+                choice = ExecutionChoice(PARALLEL, isolation=isolation, fanout=fanout)
+            else:
+                choice = ExecutionChoice(SEQUENTIAL)
+        except (EOFError, OSError):
+            # Stage 1b (E8/P2) — the injected asker hit a non-interactive/dead stdin.
+            # Fail closed to the safe default (sequential) and log; never let the error
+            # propagate and crash the run.
+            print(f"execution: stdin is not interactive — defaulting to "
+                  f"'{default_mode}'.", file=sys.stderr)
+            choice = ExecutionChoice(mode=default_mode)
 
     return _record(choice, ledger)
 

@@ -517,11 +517,38 @@ def build_anchor_brief(session: BrainstormSession) -> str:
 
 
 # --------------------------------------------------------------------------- persist
-def persist_approach(session: BrainstormSession, store: Any) -> str:
+def save_approach_plan(session: BrainstormSession, plans_dir: str) -> Optional[str]:
+    """Stage 6p — save the approved design as a durable, reviewable FILE at approval, BEFORE the
+    spec. Content is the session's `design_writeup()` (the SINGLE source — topic, grounding, the
+    Q&A, the approaches, and the approved one), written to `<plans_dir>/<slug>.md`.
+
+    HARD-GATE: refuses on an unapproved session (nothing is written). DEGRADE-CLEAN: any write
+    failure logs to the session and returns None — it must NEVER break the approval, whose
+    run-state hand-off remains the source of truth."""
+    if not session.approved or session.chosen is None:
+        raise BrainstormGateError(
+            "HARD-GATE: no plan file until an approach is explicitly approved."
+        )
+    from .plans import plan_slug, write_plan_file
+    slug = plan_slug(session.topic)
+    path = write_plan_file(plans_dir, slug, session.design_writeup())
+    session._log(f"plan saved: {path}" if path else "plan save FAILED (continuing)")
+    return path
+
+
+def persist_approach(session: BrainstormSession, store: Any,
+                     plans_dir: Optional[str] = None) -> str:
     """Persist the approved approach via a StateStore. Calls `handoff()`, so the
-    HARD-GATE is enforced here too — an unapproved session cannot be written."""
+    HARD-GATE is enforced here too — an unapproved session cannot be written.
+
+    Stage 6p — when `plans_dir` is given, ALSO save the plan as a durable file (see
+    `save_approach_plan`) BEFORE the spec pipeline. That write is degrade-clean: a failure never
+    breaks the approval (the run-state hand-off this returns is still authoritative)."""
     handoff = session.handoff()
-    return store.write(APPROACH_STATE_KEY, handoff.to_dict())
+    path = store.write(APPROACH_STATE_KEY, handoff.to_dict())
+    if plans_dir is not None:
+        save_approach_plan(session, plans_dir)
+    return path
 
 
 def load_approved_approach(store: Any) -> Optional[Handoff]:

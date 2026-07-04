@@ -33,7 +33,8 @@ EXPECTED_READ = {"query", "recall", "doctor", "coverage", "budget", "audit",
                  "tour",                                # Stage 56 — read-only first-run demo
                  "ci_check",                            # Stage 58 — mokata-as-a-PR-check (read)
                  "stacks_list", "stacks_search",        # Stage 70 — community stacks (read)
-                 "stacks_show"}
+                 "stacks_show",
+                 "plan_list", "plan_show"}               # Stage 6p — brainstorm plan file (read)
 EXPECTED_WRITE = {"remember", "import_stack", "reset", "apply_proposal", "init",
                   "memory_export", "memory_import", "vault_push", "spec_check",
                   "config_set", "export_stack",       # Stage 54e — command-parity write tools

@@ -26,7 +26,7 @@ from mokata import hook_cli
 from mokata import harness_setup
 
 ROOT = Path(__file__).resolve().parents[1]
-HOOKS_JSON = ROOT / "hooks" / "hooks.json"
+HOOKS_JSON = ROOT / "src" / "mokata" / "hooks" / "hooks.json"
 
 FAKE_SECRET = "AKIAIOSFODNN7EXAMPLE"
 CLEAN = "just some ordinary code"

@@ -151,6 +151,12 @@ def _surfaces() -> List[CommandSurface]:
                             "`decompose --run` / exec flow (Stage 54f)"),
         CommandSurface("watch", slash=("watch",), mcp_read=("watch",),
                        note="self-contained run dashboard → read tool + slash (Stage 54d)"),
+        CommandSurface("plan", mcp_read=("plan_list", "plan_show"),
+                       note="saved brainstorm plan files (Stage 6p): list/show the internal "
+                            ".mokata/plans/<slug>.md → read tools. `plan export` is the "
+                            "user-initiated CLI copy into a committable plans/ — no gate (the "
+                            "USER runs it) and never a silent clobber, so it needs no in-harness "
+                            "write tool."),
         CommandSurface("govern", slash=("govern",), mcp_read=("govern",),
                        note="governed-state view → read tool + slash (Stage 54d)"),
 
@@ -202,9 +208,17 @@ def _surfaces() -> List[CommandSurface]:
         CommandSurface("unsetup", exempt=(
             "install plumbing — reverses `setup`; a harness-config + filesystem teardown "
             "run from the shell, the mirror of `setup`.")),
-        CommandSurface("mcp", exempt=(
-            "diagnostic plumbing — discovers external MCP servers from .mokata/mcp.json and "
-            "maps them to roles; introspects the harness wiring itself.")),
+        CommandSurface("mcp", slash=("mcp",),
+                       note="MCP server management — a command GROUP (discover/start/status/"
+                            "install) that introspects or repairs the host↔server wiring from "
+                            "the shell. Its USER-FACING need — 'mokata's tools aren't "
+                            "connecting' — now has an in-harness surface (Stage 3b.4): the "
+                            "/mokata:mcp slash command + auto-triggering skill run the CLI "
+                            "repair flow (status → install → re-check) from inside Claude Code "
+                            "and tell the user to restart. No new MCP tool: repair is "
+                            "CLI-driven (reuses the Stage 3b.2/3b.3 status/install), and a "
+                            "self-repair server tool would be a chicken-and-egg surface (it "
+                            "can't run when the server is the thing that's down)."),
         CommandSurface("harness", exempt=(
             "diagnostic plumbing — prints the harness capability matrix (the boundary mokata "
             "runs inside); host introspection, not a user workflow.")),

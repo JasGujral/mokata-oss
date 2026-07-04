@@ -227,6 +227,65 @@ class TestReleaseShHardening(unittest.TestCase):
         self.assertLess(check_pos, real_tag,
                         "the version-consistency check must run BEFORE tagging")
 
+    # --- Stage 2 (0.0.9): the release must be unreachable while any test is red ----------
+    def test_local_test_preflight_runs_both_jsonschema_states_and_aborts(self):
+        # A fail-closed LOCAL preflight runs the unit + integration suites the way CI does —
+        # with jsonschema PRESENT and again ABSENT — up front, aborting on any failure, so a
+        # locally-red suite never reaches a push/tag. (The cross-platform matrix is covered by
+        # the wait-for-CI-green gate; this is the cheap first line of defence.)
+        self.assertIn("run_test_preflight", self.sh,
+                      "release.sh must define a local test preflight")
+        # it runs the actual suites (unit + integration), mirroring CI's discover invocations
+        self.assertRegex(self.sh, r"unittest discover -s tests\b",
+                         "the preflight must run the unit suite")
+        self.assertRegex(self.sh, r"unittest discover -s tests/integration",
+                         "the preflight must run the integration suite")
+        # both jsonschema legs are exercised — jsonschema installed for one, uninstalled for the other
+        self.assertRegex(self.sh, r"pip install[^\n]*jsonschema",
+                         "the preflight must run a jsonschema-PRESENT leg")
+        self.assertRegex(self.sh, r"pip uninstall -y jsonschema",
+                         "the preflight must run a jsonschema-ABSENT leg")
+        # aborts on failure
+        self.assertIn("REFUSING TO RELEASE", self.sh,
+                      "the preflight must abort (fail-closed) on a red suite")
+        # and it is actually invoked BEFORE the master push (no push on a locally-red tree)
+        call_pos = self.sh.rfind("run_test_preflight")   # the call site (after the definition)
+        push_pos = self.sh.find("git push origin master")
+        self.assertNotEqual(call_pos, -1)
+        self.assertNotEqual(push_pos, -1)
+        self.assertLess(call_pos, push_pos,
+                        "the local test preflight must run BEFORE pushing master")
+
+    def test_ci_green_wait_for_both_repos_before_any_tag(self):
+        # After each push, release.sh resolves that exact commit's `CI` run and BLOCKS until it
+        # concludes, aborting unless the conclusion is `success` — on BOTH the dev repo and the
+        # public mirror, BEFORE the tag. A red CI on either repo can never reach a tag.
+        self.assertIn("wait_for_ci_green", self.sh,
+                      "release.sh must define a CI-green wait helper")
+        # uses gh to resolve the commit's CI run and watch it fail-closed
+        self.assertRegex(self.sh, r"gh run watch[^\n]*--exit-status",
+                         "the wait must use `gh run watch --exit-status` (fail-closed)")
+        self.assertRegex(self.sh, r"gh run list[^\n]*--workflow CI",
+                         "the wait must resolve the run via `gh run list ... --workflow CI`")
+        self.assertRegex(self.sh, r"--commit",
+                         "the wait must resolve the run for the EXACT commit")
+        self.assertIn("REFUSING TO TAG", self.sh,
+                      "a non-success / missing / timed-out CI run must abort before tagging")
+        # invoked for BOTH repos
+        self.assertRegex(self.sh, r'wait_for_ci_green\s+"\$DEV_REPO"',
+                         "the dev repo's CI must be waited on before tagging")
+        self.assertRegex(self.sh, r'wait_for_ci_green\s+"\$PUB_REPO"',
+                         "the public mirror's CI must be waited on before tagging")
+        # both waits are positioned BEFORE the real tag step (a red CI can't reach a tag)
+        real_tag = self.sh.find('git tag -a "$TAG"')
+        self.assertNotEqual(real_tag, -1)
+        dev_wait = self.sh.find('wait_for_ci_green "$DEV_REPO"')
+        pub_wait = self.sh.find('wait_for_ci_green "$PUB_REPO"')
+        self.assertNotEqual(dev_wait, -1)
+        self.assertNotEqual(pub_wait, -1)
+        self.assertLess(dev_wait, real_tag, "the dev-repo CI-green wait must precede the tag")
+        self.assertLess(pub_wait, real_tag, "the public-repo CI-green wait must precede the tag")
+
 
 class TestParityStaysGreen(unittest.TestCase):
     def test_release_check_is_declared_in_the_matrix(self):

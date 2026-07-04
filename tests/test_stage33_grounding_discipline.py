@@ -30,7 +30,7 @@ GENERATED = ("refine", "spec", "test", "develop", "review", "debug", "optimize",
 
 
 def _template(name):
-    with open(os.path.join(ROOT, "templates", "commands", f"{name}.md"),
+    with open(os.path.join(ROOT, "src", "mokata", "templates", "commands", f"{name}.md"),
               encoding="utf-8") as fh:
         return fh.read()
 

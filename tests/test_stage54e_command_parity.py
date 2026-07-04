@@ -26,13 +26,13 @@ from mokata import parity
 from mokata.config import Surface
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-COMMANDS_DIR = os.path.join(ROOT, "templates", "commands")
+COMMANDS_DIR = os.path.join(ROOT, "src", "mokata", "templates", "commands")
 
 # The install/diagnostic plumbing intentionally CLI-or-hook. `setup` was here at Stage 54e but
 # gained an in-harness surface (the /mokata:setup guided wizard) at Stage 56, so it's no longer
 # exempt — the rest remain shell/hook-only plumbing. `release-check` (Stage 61b) is release
 # plumbing run from the shell/CI during a release cut — the version mirror of `validate`.
-EXEMPT = {"unsetup", "mcp", "harness", "route", "detect", "validate", "bootstrap",
+EXEMPT = {"unsetup", "harness", "route", "detect", "validate", "bootstrap",
           "release-check", "bench"}
 # The new in-harness surfaces this stage adds.
 NEW_READ_TOOLS = ("rules", "skills", "suggest", "lat_check", "index_status",

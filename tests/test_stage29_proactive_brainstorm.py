@@ -61,7 +61,7 @@ class TestModelInvocable(unittest.TestCase):
         self.assertIn("when_to_use:", command_markdown(skill))
 
     def test_shipped_brainstorm_template_carries_trigger(self):
-        with open(os.path.join(ROOT, "templates", "commands", "brainstorm.md"),
+        with open(os.path.join(ROOT, "src", "mokata", "templates", "commands", "brainstorm.md"),
                   encoding="utf-8") as fh:
             text = fh.read()
         head = text.split("---", 2)[1]

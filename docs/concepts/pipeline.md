@@ -216,13 +216,16 @@ a counter.
 Like glancing at Claude Code's own "plan mode on" indicator, you always know **which stage
 mokata is in** — without asking. mokata ships **its own Claude Code statusLine**, wired **on
 by default** during `mokata setup`, that renders a one-line **mode badge** of the five
-user-facing stages with the active one highlighted:
+user-facing stages, each glyph-marked done (`✓`) / current (`▶`, also `›bracketed‹`) /
+pending (`○`) so you see at a glance what's finished, what's live, and what's still ahead:
 
 ```text
-mokata ▸ [brainstorm · spec · ›develop‹ · review · ship]
-mokata ▸ auth-refactor · [brainstorm · ›spec‹ · develop · review · ship] · 3/7
-mokata ▸ [brainstorm · spec · ›develop‹ · review · ship] · 2 running · 1 blocked
+mokata ▸ [✓brainstorm · ✓spec · ▶›develop‹ · ○review · ○ship]
+mokata ▸ auth-refactor · [✓brainstorm · ▶›spec‹ · ○develop · ○review · ○ship] · 3/7
+mokata ▸ [✓brainstorm · ✓spec · ▶›develop‹ · ○review · ○ship] · 2 running · 1 blocked
 ```
+
+(In ASCII terminals the same distinction renders `[x]` / `[>]` / `[ ]`.)
 
 During a parallel fan-out the badge appends a compact **agents summary** (`2 running · 1
 blocked`), derived from the same lane view (Stage 54d) and omitted when the run is sequential
@@ -235,6 +238,24 @@ emitted. The session name (shown when present) comes straight from Claude Code's
 payload. It's **deterministic**, costs the model **no tokens** (it's a status command, not
 injected context), and **degrades clean**: no run → a minimal `mokata`; in a non-mokata repo
 → nothing at all; it **always exits 0** and never blocks the harness.
+
+The badge is **always on** — it shows the full five-stage arc every render, marking each stage
+done (`✓`) / current (`▶`, also `›bracketed‹`) / pending (`○`). It adds the extras **only when
+real state exists, never fabricated**: the `spec` phase counter while the 7-phase engine runs,
+the `develop [<done>/<total>]` task counter once a real decomposition batch is on record, and
+the compact agents summary during a parallel fan-out. If none of that state exists yet, those
+pieces are simply absent.
+
+**Dial the badge down — `settings.ux.badge_verbosity`.** The badge is **opt-DOWN**, mirroring
+the `settings.ux.statusline` opt-out: `full` (the default) shows everything above; `minimal`
+collapses it to just the current stage. Any absent, broken, or unrecognised value reads as
+`full`, so the complete picture is never silently lost — you have to *deliberately* choose
+`minimal`.
+
+```bash
+mokata config set settings.ux.badge_verbosity minimal   # collapse to just the current stage
+mokata config set settings.ux.badge_verbosity full      # everything on (the default)
+```
 
 It's **opt-out**, never opt-in. Turn it off any time and the line goes quiet (your own
 statusline, if any, keeps working):

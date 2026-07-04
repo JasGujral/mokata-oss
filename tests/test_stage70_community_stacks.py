@@ -35,7 +35,7 @@ from mokata.skills import SKILL_NAMES
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STACKS_DIR = os.path.join(ROOT, "src", "mokata", "stacks")
-COMMANDS_DIR = os.path.join(ROOT, "templates", "commands")
+COMMANDS_DIR = os.path.join(ROOT, "src", "mokata", "templates", "commands")
 DOCS = os.path.join(ROOT, "docs")
 
 # A fake DSN VALUE assembled from fragments so no literal credential lives in this file (mokata's

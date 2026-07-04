@@ -65,7 +65,7 @@ class TestDocsConsistency(unittest.TestCase):
                          f"reference/cli.md documents commands that don't exist: {stale}")
 
     def test_every_slash_command_template_is_mentioned_in_docs(self):
-        cmds_dir = os.path.join(ROOT, "templates", "commands")
+        cmds_dir = os.path.join(ROOT, "src", "mokata", "templates", "commands")
         stems = sorted(os.path.splitext(f)[0]
                        for f in os.listdir(cmds_dir) if f.endswith(".md"))
         self.assertTrue(stems, "no command templates found?")

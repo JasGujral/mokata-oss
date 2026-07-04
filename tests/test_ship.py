@@ -53,22 +53,27 @@ class TestPluginReferences(unittest.TestCase):
                 f"missing command template {cmd}.md")
 
     def test_plugin_references_both_hooks(self):
-        # Claude Code auto-loads the standard hooks/hooks.json, so the manifest must
-        # NOT re-reference it via a "hooks" key — doing so triggers a "Duplicate hooks
-        # file detected" error on plugin load. The hooks still load; we validate the
-        # auto-loaded file directly here.
+        # Stage 3: the hooks tree moved INTO the package (src/mokata/hooks/) so it ships in
+        # the wheel, so it is NO LONGER at the plugin root where Claude Code auto-loads
+        # `hooks/hooks.json`. The manifest MUST therefore reference it explicitly via the
+        # "hooks" key (a relative-to-plugin-root path). Because there is no root
+        # `hooks/hooks.json` to auto-load, this does NOT trigger the "Duplicate hooks file
+        # detected" error (that fires only when BOTH the root file AND the key exist).
         data = json.loads(read(".claude-plugin/plugin.json"))
-        self.assertNotIn(
+        self.assertIn(
             "hooks", data,
-            "manifest must not reference hooks/hooks.json (it auto-loads)")
-        hooks_json = json.loads(read("hooks/hooks.json"))
+            "manifest must reference the packaged hooks.json (no root auto-load after Stage 3)")
+        hooks_rel = data["hooks"].lstrip("./")
+        self.assertTrue(os.path.exists(os.path.join(ROOT, hooks_rel)),
+                        f"declared hooks path {data['hooks']} does not resolve to a file")
+        hooks_json = json.loads(read(hooks_rel))
         blob = json.dumps(hooks_json)
         # Stage 53b: wired via the `mokata-hook` console entry point (no bare python3/sh).
         for sub in HOOK_SUBCOMMANDS:
             self.assertIn(f"mokata-hook {sub}", blob,
                           f"hooks.json does not wire `mokata-hook {sub}`")
         for shim in HOOK_SHIMS:                 # the fallback shims still ship
-            self.assertTrue(os.path.exists(os.path.join(ROOT, "hooks", shim)))
+            self.assertTrue(os.path.exists(os.path.join(ROOT, "src", "mokata", "hooks", shim)))
         # the security hook is wired on a tool-use event; session-start on session start
         self.assertIn("PreToolUse", blob)
         self.assertIn("SessionStart", blob)

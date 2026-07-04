@@ -5,16 +5,14 @@ you'll have seen the HARD-GATE, the completeness gate blocking and passing, RED-
 the two-stage review, and the audit trail.
 
 > This tutorial drives the **CLI** so each gate is visible step by step. For real day-to-day
-> work the primary path is Claude Code — the [plugin](../how-to/use-the-plugin.md) or
-> [`mokata setup claude`](../how-to/use-without-plugin.md) — where Claude runs these same
-> phases for you. The CLI here is the engine's mechanics, shown to make the flow concrete.
+> work the primary path is Claude Code — [`mokata setup claude`](../how-to/use-without-plugin.md)
+> (see [Getting started](../getting-started.md)) — where Claude runs these same phases for you.
+> The CLI here is the engine's mechanics, shown to make the flow concrete.
 
 ## 1. Set up
 
 ```bash
-git clone https://github.com/JasGujral/mokata-oss.git
-cd mokata-oss
-pip install -e ".[mcp]"          # the recommended install (CLI + MCP server)
+pip install mokata               # from PyPI, no clone; MCP server included on Python ≥ 3.10
 mkdir demo && cd demo
 mokata init --profile standard --yes
 mokata status

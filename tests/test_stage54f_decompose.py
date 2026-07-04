@@ -35,7 +35,7 @@ from mokata.govern import AuditLedger
 from mokata.knowledge.query import QueryResult, Reference
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-COMMANDS_DIR = os.path.join(ROOT, "templates", "commands")
+COMMANDS_DIR = os.path.join(ROOT, "src", "mokata", "templates", "commands")
 
 
 def _spec(*pairs):

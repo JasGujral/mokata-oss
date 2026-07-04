@@ -24,27 +24,29 @@ CI_YML = os.path.join(os.path.dirname(__file__), "..", ".github", "workflows", "
 
 
 class TestCIMatrixCoversAllOSes(unittest.TestCase):
-    """ci.yml runs the unit suite on windows + macos + ubuntu (× the Python/jsonschema axes)."""
+    """ci.yml runs the unit suite on windows + ubuntu (× the jsonschema axis, on py3.12).
+    macOS was dropped and the Python axis trimmed to 3.12 (0.0.9rc1) to keep the private repo's
+    monthly Actions allotment from being exhausted — macOS runners bill at 10x."""
 
     def _ci(self):
         with open(CI_YML, encoding="utf-8") as fh:
             return fh.read()
 
-    def test_matrix_lists_all_three_oses(self):
+    def test_matrix_lists_windows_and_linux(self):
         text = self._ci()
         try:
             import yaml
         except ImportError:
             # core stays dependency-free — fall back to a structural text assertion
-            for os_name in ("ubuntu-latest", "windows-latest", "macos-latest"):
+            for os_name in ("ubuntu-latest", "windows-latest"):
                 self.assertIn(os_name, text, f"{os_name} missing from ci.yml")
             return
         doc = yaml.safe_load(text)
         matrix = doc["jobs"]["test"]["strategy"]["matrix"]
         self.assertIn("os", matrix, "the test matrix has no `os` axis")
         self.assertEqual(set(matrix["os"]),
-                         {"ubuntu-latest", "windows-latest", "macos-latest"})
-        # still spans the existing axes (no regression of coverage)
+                         {"ubuntu-latest", "windows-latest"})
+        # both jsonschema legs stay (that axis caught the 0.0.8-red bug); Python trimmed to 3.12
         self.assertEqual(set(matrix["jsonschema"]), {"absent", "present"})
         self.assertIn("3.12", [str(v) for v in matrix["python"]])
 

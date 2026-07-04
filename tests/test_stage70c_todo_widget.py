@@ -139,11 +139,24 @@ class TestSingleProgressInstruction(unittest.TestCase):
         self.assertIn("cannot call the to-do tool itself", text)   # honest: agent renders it
 
     def test_still_exactly_one_instruction_constant(self):
-        """No parallel to-do instruction — one driver, one progress path."""
-        inst = [n for n in dir(skills)
-                if n.endswith("_INSTRUCTION") and isinstance(getattr(skills, n), str)]
-        self.assertEqual(inst, ["PROGRESS_INSTRUCTION"])
+        """No parallel to-do instruction — one driver, one progress path.
+
+        `PROGRESS_INSTRUCTION` is the sole progress/to-do RENDERING instruction. The other
+        `_INSTRUCTION` constants are DISTINCT concerns, not renderers:
+        `STAGE_MARK_INSTRUCTION` (6b) records a user-stage ENTRY in the progress log;
+        `RECORD_VERDICT_INSTRUCTION` (6r) records the review VERDICT in that same log;
+        `DEVELOP_NEXT_STEP_INSTRUCTION` (6r) names develop's explicit next step. The set stays
+        CLOSED so no *new* parallel renderer can creep in — and none of the non-render ones may
+        render the to-do widget (only `PROGRESS_INSTRUCTION` mentions it)."""
+        inst = sorted(n for n in dir(skills)
+                      if n.endswith("_INSTRUCTION") and isinstance(getattr(skills, n), str))
+        self.assertEqual(inst, ["DEVELOP_NEXT_STEP_INSTRUCTION", "PROGRESS_INSTRUCTION",
+                                "RECORD_VERDICT_INSTRUCTION", "STAGE_MARK_INSTRUCTION"])
         self.assertFalse([n for n in dir(skills) if "TODO" in n.upper()])
+        for n in inst:
+            if n == "PROGRESS_INSTRUCTION":
+                continue
+            self.assertNotIn("to-do", getattr(skills, n).lower(), n)   # not a renderer
 
     def test_instruction_flows_into_pipeline_skills(self):
         for name in ("spec", "test", "develop", "review", "ship"):
@@ -155,8 +168,8 @@ class TestSingleProgressInstruction(unittest.TestCase):
 # ------------------------------------------------------------------- drift guard
 class TestTemplatesRegenerated(unittest.TestCase):
     def _path(self, name):
-        return os.path.join(os.path.dirname(__file__), "..", "templates",
-                            "commands", f"{name}.md")
+        return os.path.join(os.path.dirname(__file__), "..", "src", "mokata",
+                            "templates", "commands", f"{name}.md")
 
     def test_pipeline_templates_match_source(self):
         for name in ("refine", "spec", "test", "develop", "review", "ship"):

@@ -112,6 +112,21 @@ jobs:
           # (metadata-only; contents untouched). The wheel is already reproducible.
           python scripts/normalize_sdist.py dist/*.tar.gz
           ls -l dist
+      - name: Verify the wheel contains the packaged data (Stage 3)
+        # A packaging regression that drops templates/, hooks/ or skills/ from the wheel would
+        # ship a `pip install mokata` that can't run `mokata setup` — proven complete here, not
+        # trusted blind. Fail the release at build time if any of the three data trees is absent.
+        run: |
+          whl=$(ls dist/*.whl | head -1)
+          echo "Inspecting $whl"
+          listing=$(python -m zipfile -l "$whl")
+          for tree in mokata/templates/ mokata/hooks/ mokata/skills/; do
+            if ! grep -q "$tree" <<<"$listing"; then
+              echo "ABORT: wheel is missing packaged data tree '$tree' — mokata setup would fail on a clean pip install."
+              exit 1
+            fi
+            echo "ok: $tree present"
+          done
       - name: Generate the CycloneDX SBOM
         # Scope the SBOM to a clean venv that has ONLY the built wheel installed, so it describes
         # the published package (mokata has no required runtime deps) + the install baseline.
@@ -168,19 +183,40 @@ jobs:
             dist/sbom.cdx.json
 
   # ---------------------------------------------------------------------------------------
-  # OPTIONAL — publish the `mokata` CLI to PyPI on release (so `pip install mokata` works).
-  # Requires a PyPI project + Trusted Publishing (OIDC) configured for this repo, OR a
-  # PYPI_API_TOKEN secret. Left disabled until you decide to ship to PyPI.
+  # Publish the `mokata` CLI to PyPI on a version-tag release (so `pip install mokata` works).
+  # This publishes the EXACT reproducible wheel+sdist the `build` job produced and
+  # Sigstore-attested — NOT a fresh rebuild — via OIDC Trusted Publishing (no API-token secret).
+  # A PEP 440 pre-release tag (e.g. v0.0.9rc1) needs no special handling: PyPI marks it a
+  # pre-release automatically from the version string.
+  #
+  # ONE-TIME maintainer setup on PyPI (code can't do this): create the `mokata` project and
+  # add a Trusted Publisher pointing at —
+  #     Owner / repository:  JasGujral/mokata-oss
+  #     Workflow name:       release.yml
+  #     Environment name:    pypi        (must match `environment: pypi` below)
   # ---------------------------------------------------------------------------------------
-  # pypi:
-  #   needs: [test, validate]
-  #   runs-on: ubuntu-latest
-  #   permissions:
-  #     id-token: write   # OIDC trusted publishing (no token needed)
-  #   steps:
-  #     - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-  #     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-  #       with:
-  #         python-version: "3.12"
-  #     - run: python -m pip install build && python -m build
-  #     - uses: pypa/gh-action-pypi-publish@release/v1
+  pypi:
+    needs: [build]        # publish ONLY after the full matrix + validate + reproducible build pass
+    if: github.repository == 'JasGujral/mokata-oss'
+    runs-on: ubuntu-latest
+    # TODO(maintainer): must match the Trusted Publisher's "environment" configured on PyPI.
+    # If you set up the publisher WITHOUT an environment, delete this line.
+    environment: pypi
+    permissions:
+      id-token: write     # OIDC trusted publishing (no token secret); scoped to THIS job only
+    steps:
+      - name: Download the built distributions (the SAME artifact the release attached)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: mokata-dist
+          path: dist
+      - name: Keep only the wheel + sdist (PyPI takes distributions, not the SBOM)
+        # The mokata-dist bundle also carries dist/sbom.cdx.json; drop it so twine uploads
+        # ONLY dist/*.whl + dist/*.tar.gz. The SBOM stays on the GitHub Release.
+        run: rm -f dist/sbom.cdx.json
+      - name: Publish to PyPI (Trusted Publishing) — the reproducible, attested artifact
+        # No `python -m build` here BY DESIGN: a rebuild would yield a DIFFERENT, unsigned wheel
+        # than the one attached to the GitHub Release. We upload the downloaded dist verbatim.
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        with:
+          packages-dir: dist

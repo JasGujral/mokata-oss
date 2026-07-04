@@ -111,6 +111,59 @@ class TestBuildStageBadge(unittest.TestCase):
             self.assertIn(">spec<", badge)
             self.assertNotIn("›", badge)
 
+    def test_past_cells_show_done_glyph(self):
+        # Stage 6a: once the pipeline has moved on, earlier cells must render DONE (✓),
+        # not stay flat-and-indistinguishable from cells not yet reached.
+        with tempfile.TemporaryDirectory() as d:
+            surface = _repo(d)
+            cp = PipelineCheckpoint(surface.state, "run-a")
+            for p in PHASES:
+                cp.mark_passed(p)                     # spec emitted -> active is develop
+            badge = progress.build_stage_badge(surface)
+            done = progress._GLYPHS[progress.DONE]
+            cur = progress._GLYPHS[progress.CURRENT]
+            pend = progress._GLYPHS[progress.PENDING]
+            self.assertIn(f"{done}brainstorm", badge)     # past  -> done ✓
+            self.assertIn(f"{done}spec", badge)           # past  -> done ✓
+            self.assertIn(f"{cur}›develop‹", badge)       # active -> glyph AND emphasis
+            self.assertIn(f"{pend}review", badge)         # future -> pending ○
+            self.assertIn(f"{pend}ship", badge)           # future -> pending ○
+
+    def test_fresh_run_shows_no_done_only_current_and_pending(self):
+        # Stage 6a: a run still in brainstorm has nothing completed — no ✓ anywhere,
+        # brainstorm current, every later cell pending.
+        with tempfile.TemporaryDirectory() as d:
+            surface = _repo(d)
+            save_brainstorm_progress(_in_progress_brainstorm(), surface.state)
+            badge = progress.build_stage_badge(surface)
+            done = progress._GLYPHS[progress.DONE]
+            cur = progress._GLYPHS[progress.CURRENT]
+            pend = progress._GLYPHS[progress.PENDING]
+            self.assertNotIn(done, badge)                 # nothing completed yet
+            self.assertIn(f"{cur}›brainstorm‹", badge)    # active -> glyph AND emphasis
+            self.assertIn(f"{pend}spec", badge)
+            self.assertIn(f"{pend}develop", badge)
+            self.assertIn(f"{pend}review", badge)
+            self.assertIn(f"{pend}ship", badge)
+
+    def test_past_and_future_glyphs_in_ascii_mode(self):
+        with tempfile.TemporaryDirectory() as d:
+            surface = _repo(d)
+            cp = PipelineCheckpoint(surface.state, "run-a")
+            for p in PHASES:
+                cp.mark_passed(p)                     # active is develop
+            badge = progress.build_stage_badge(surface, ascii_only=True)
+            done = progress._ASCII_GLYPHS[progress.DONE]      # [x]
+            cur = progress._ASCII_GLYPHS[progress.CURRENT]    # [>]
+            pend = progress._ASCII_GLYPHS[progress.PENDING]   # [ ]
+            self.assertIn(f"{done}brainstorm", badge)
+            self.assertIn(f"{done}spec", badge)
+            self.assertIn(f"{cur}>develop<", badge)           # glyph + ascii emphasis
+            self.assertIn(f"{pend}review", badge)
+            self.assertIn(f"{pend}ship", badge)
+            self.assertNotIn("✓", badge)                      # no unicode leaked in
+            self.assertNotIn("○", badge)
+
     def test_deterministic_and_read_only(self):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)

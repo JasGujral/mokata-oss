@@ -391,7 +391,7 @@ class TestMcpSurfaces(unittest.TestCase):
 class TestSlashTemplate(unittest.TestCase):
     def test_session_template_exists_and_is_namespaced(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        path = os.path.join(root, "templates", "commands", "session.md")
+        path = os.path.join(root, "src", "mokata", "templates", "commands", "session.md")
         self.assertTrue(os.path.exists(path), "session.md slash template missing")
         with open(path, encoding="utf-8") as fh:
             md = fh.read()

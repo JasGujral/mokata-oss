@@ -250,7 +250,7 @@ class TestSurfacesAndParity(unittest.TestCase):
     def test_new_slash_templates_exist_and_are_namespaced(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         for name in ("setup", "tour"):
-            path = os.path.join(root, "templates", "commands", f"{name}.md")
+            path = os.path.join(root, "src", "mokata", "templates", "commands", f"{name}.md")
             self.assertTrue(os.path.exists(path), f"{name}.md missing")
             with open(path, encoding="utf-8") as fh:
                 md = fh.read()

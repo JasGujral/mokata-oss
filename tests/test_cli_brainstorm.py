@@ -55,7 +55,7 @@ class TestBrainstormCLI(unittest.TestCase):
 class TestBrainstormCommandTemplate(unittest.TestCase):
     def test_command_template_carries_the_devices(self):
         here = os.path.dirname(__file__)
-        path = os.path.join(here, "..", "templates", "commands", "brainstorm.md")
+        path = os.path.join(here, "..", "src", "mokata", "templates", "commands", "brainstorm.md")
         self.assertTrue(os.path.exists(path), "brainstorm command template missing")
         with open(path, encoding="utf-8") as fh:
             text = fh.read()

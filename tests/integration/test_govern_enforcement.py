@@ -29,7 +29,7 @@ CLEAN = "print('hello world')"
 def _hook_main():
     """Load hooks/secret_guard.py by path and return its main()."""
     here = os.path.dirname(os.path.abspath(__file__))
-    path = os.path.join(here, "..", "..", "hooks", "secret_guard.py")
+    path = os.path.join(here, "..", "..", "src", "mokata", "hooks", "secret_guard.py")
     spec = importlib.util.spec_from_file_location("_mokata_secret_guard", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

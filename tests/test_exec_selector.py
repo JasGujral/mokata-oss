@@ -45,6 +45,23 @@ class TestSelector(unittest.TestCase):
         select_execution_mode(ask=lambda q, d: calls.append(q) or "")
         self.assertGreaterEqual(len(calls), 1)    # it asked
 
+    def test_non_tty_asker_error_defaults_to_sequential(self):
+        # Stage 1b — a dead/non-interactive stdin makes the asker raise OSError (pytest
+        # capture) or EOFError (closed stdin). The selector must fail closed to the safe
+        # default (sequential), never propagate the error and crash the run.
+        def boom(question, default):
+            raise OSError("stdin is not interactive")
+
+        choice = select_execution_mode(ask=boom)
+        self.assertEqual(choice.mode, SEQUENTIAL)
+        self.assertFalse(choice.is_parallel)
+
+    def test_eof_asker_defaults_to_sequential(self):
+        def boom(question, default):
+            raise EOFError
+
+        self.assertEqual(select_execution_mode(ask=boom).mode, SEQUENTIAL)
+
     def test_choice_logged_to_ledger(self):
         with tempfile.TemporaryDirectory() as d:
             led = AuditLedger(os.path.join(d, "l.jsonl"))

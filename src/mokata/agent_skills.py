@@ -49,6 +49,8 @@ CURATED_SKILLS: tuple = (
     "govern",
     "session",
     "playbook",
+    # harness repair (Stage 3b.4) — auto-engages when the MCP server/tools aren't connecting
+    "mcp",
 )
 
 # A stable marker every rendered SKILL.md carries (in the banner). unsetup uses it to identify
@@ -180,14 +182,68 @@ def write_skill_files(skills_dir: Path, files: Dict[str, str]) -> List[Path]:
     return written
 
 
+def find_orphan_skills(skills_dir: Optional[Path], keep) -> List[Path]:
+    """The mokata-AUTHORED (``SKILL_MARKER``-bearing) ``<skills_dir>/<name>/SKILL.md`` paths whose
+    dir name is NOT in ``keep``. READ-ONLY — this is what the setup PLAN previews and what
+    :func:`prune_orphan_skills` deletes, sharing ONE marker check so plan and apply can't diverge.
+    A skill WITHOUT the marker (a user's own) or an unreadable file is skipped — never flagged."""
+    keep = set(keep)
+    found: List[Path] = []
+    if skills_dir is None:
+        return found
+    d = Path(skills_dir)
+    if not d.is_dir():
+        return found
+    for sk in sorted(d.glob("*/SKILL.md")):
+        if sk.parent.name in keep:
+            continue
+        try:
+            if SKILL_MARKER not in sk.read_text(encoding="utf-8"):
+                continue                         # a user's own skill — never touch it
+        except OSError:
+            continue                             # unreadable → leave it alone, don't crash
+        found.append(sk)
+    return found
+
+
+def prune_orphan_skills(skills_dir: Optional[Path], keep) -> List[Path]:
+    """SYNC the on-disk skills tree to the current curated set: remove every mokata-authored
+    (marker-bearing) skill dir whose name is NOT in ``keep`` — the counterpart to
+    :func:`write_skill_files`, which only writes the current set and never removes a dropped one.
+    Cleans the now-empty ``<name>/`` dir, and the ``skills/`` dir itself if it ends up empty (so
+    ``unsetup``, which passes ``keep=()``, leaves no residue). NEVER removes a non-marker (user)
+    skill; an unreadable/undeletable file is skipped (degrade-clean). Returns the removed paths."""
+    removed: List[Path] = []
+    for sk in find_orphan_skills(skills_dir, keep):
+        try:
+            sk.unlink()
+            removed.append(sk)
+            if not any(sk.parent.iterdir()):
+                sk.parent.rmdir()
+        except OSError:
+            continue                             # can't delete it → leave it, don't crash
+    try:
+        d = Path(skills_dir) if skills_dir is not None else None
+        if d is not None and d.is_dir() and not any(d.iterdir()):
+            d.rmdir()
+    except OSError:
+        pass
+    return removed
+
+
 def _regenerate_plugin_skills() -> List[Path]:
     """Regenerate the shipped plugin-root `skills/` tree from the command templates. Run this
     (``python -m mokata.agent_skills``) whenever a curated command's frontmatter changes; the
     drift-guard test then goes GREEN. This module is the single source — never hand-edit a
-    SKILL.md."""
-    root = Path(__file__).resolve().parents[2]          # <repo>/src/mokata/…  -> <repo>
+    SKILL.md. It's a SYNC: writes the current curated set, then prunes any marker-bearing skill
+    dir no longer curated, so a removed skill can't ship stale in the wheel/plugin."""
+    from . import package_data_root
+    root = package_data_root()                          # the mokata package dir (holds the data)
     templates_dir = root / "templates" / "commands"
-    return write_skill_files(root / "skills", generate_skill_files(templates_dir))
+    skills_dir = root / "skills"
+    written = write_skill_files(skills_dir, generate_skill_files(templates_dir))
+    prune_orphan_skills(skills_dir, CURATED_SKILLS)     # drop any skill dropped from the curated set
+    return written
 
 
 if __name__ == "__main__":                              # pragma: no cover

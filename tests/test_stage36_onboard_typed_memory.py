@@ -188,7 +188,7 @@ class TestOnboardSkill(unittest.TestCase):
     def test_command_template_exists(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.assertTrue(os.path.exists(
-            os.path.join(root, "templates", "commands", "onboard.md")))
+            os.path.join(root, "src", "mokata", "templates", "commands", "onboard.md")))
 
     def test_mcp_remember_typed_is_gated(self):
         from mokata import mcp_server as M

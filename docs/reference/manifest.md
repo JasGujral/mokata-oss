@@ -128,6 +128,9 @@ elsewhere; that's the user's explicit choice, overriding the default location.)
 | `memory` | `{persistent: bool, decision: bool, episodic: bool}` | all on | per-type memory toggles (C9) |
 | `ux.progress` | `"terminal"`/`"dashboard"`/`"both"` | `terminal` | run-observability tier (Stage 40) |
 | `ux.statusline` | bool | `true` | the always-on pipeline-stage badge (Stage 54b) — opt-out |
+| `ux.badge_verbosity` | `"full"`/`"minimal"` | `full` | badge detail: `full` (everything on) or `minimal` (just the current stage) — opt-DOWN; any other value reads as `full` |
+| `review.independent` | `"on"`/`"off"` | `on` | run the closing `/mokata:review` as a fresh-context subagent (`on`) or the inline two-pass (`off`); any other value reads as `on` |
+| `brainstorm.auto` | `"on"`/`"off"`/`"ask"` | `on` | auto-engage brainstorm when exploring: `on` (dive in), `ask` (offer first), `off` (never) |
 | `governance.output_density` | bool | `false` | output-density compression (F4) |
 | `governance.karpathy.<id>` | bool per gate id | all on | Karpathy gate toggles (G3) — ids: `think-first`, `simplicity`, `surgical-scope`, `verify` |
 | `trust.<tool>` | `"read-only"`/`"propose-only"`/`"gated-write"` | `gated-write` | per-adapter trust dial (K3) |

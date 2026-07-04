@@ -140,6 +140,13 @@ One-line stack summary: version, profile, and what each capability resolves to r
 Launch the Socratic pre-spec brainstorm (the clean-room protocol + live grounding).
 `--status` instead reports whether an approved approach is persisted.
 
+### `mokata plan [list | show [<slug>] | export [<slug>] [--to <dir>] [--force]]`
+Browse the brainstorm **plan files**. On approach approval mokata saves the design write-up to
+an internal `.mokata/temp_local/plans/<slug>.md` (before any spec). `list` shows the saved plans;
+`show` prints one (defaults to the sole plan); `export` copies it to a project-visible
+`plans/<slug>.md` you can commit (default dir `plans/`, override with `--to`). Export is
+user-initiated — it never silently clobbers an existing copy; pass `--force` to overwrite.
+
 ### `mokata enter <phase> [--to <phase>]`
 Enter the pipeline at `<phase>` (one of the 7 `PIPELINE_PHASES`); `--to` extends to a
 slice. Applies only the run phases' gates; upstream phases are skipped explicitly.

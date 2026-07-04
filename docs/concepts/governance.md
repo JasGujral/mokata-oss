@@ -83,6 +83,34 @@ This is the **forward** guardrail. The backstop already exists: the two-pass `re
 any implementation that diverges from the approved plan, so an unapproved deviation fails
 review. Together: *mokata did exactly what you approved — or it asked.*
 
+## Independent review — a fresh pair of eyes, not a self-check
+
+The closing `/mokata:review` is the gate before you land — so by default it runs as a
+**fresh-context subagent**, not as the builder re-reading its own work. mokata hands that
+subagent a **self-contained brief** — the emitted spec + its acceptance criteria, the approved
+approach/refinement set, the **diff** under review, and how to run the tests — and *no* builder
+conclusions. The subagent re-derives the verdict from the code and its **own** test runs; it
+must reach the two-pass verdict on its own, not ratify the builder's.
+
+Where a harness has **no subagents** (or you set `settings.review.independent = off`), review
+**degrades cleanly** to the inline two-pass and **says so honestly** — it prints
+`review: inline — this harness has no subagents, so this review shares the builder's context`
+(or the equivalent config note) and continues. Independence is the **default**, never a hard
+requirement — mokata never blocks just because a harness can't spawn a subagent.
+
+The verdict is **persisted as evidence**, and `/mokata:ship` reads it: ship **blocks** unless a
+**passing** review is on record (no verdict, or a failed one, stops the finish), and it surfaces
+whether that review was `independent ✓` or merely `inline` so the strength of the signal is
+always visible and logged. Turn independence off (or back on) with:
+
+```bash
+mokata config set settings.review.independent off   # inline two-pass (default is on)
+mokata config set settings.review.independent on
+```
+
+An absent, broken, or unrecognised value reads as `on`, so the stronger independent review is
+never silently lost.
+
 ## Spec-awareness — don't break a saved spec by mistake (Stage 37)
 
 The deviation guard protects *this* story's plan; spec-awareness protects *previously-approved*

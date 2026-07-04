@@ -82,7 +82,7 @@ class TestShipSkill(unittest.TestCase):
         self.assertIn("explicit confirmation", low)
         self.assertIn("let the human choose", low)
         # the generated template carries the same (single source)
-        with open(os.path.join(ROOT, "templates", "commands", "ship.md"),
+        with open(os.path.join(ROOT, "src", "mokata", "templates", "commands", "ship.md"),
                   encoding="utf-8") as fh:
             self.assertEqual(fh.read(), command_markdown(get_skill("ship")))
 

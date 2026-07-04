@@ -36,15 +36,20 @@ START = "<!-- mokata:directory-listing:start -->"
 END = "<!-- mokata:directory-listing:end -->"
 
 PENDING = (
-    "> ⏳ **Pending Claude plugin-directory approval.** mokata isn't in Claude's in-app\n"
-    "> \"Browse plugins\" directory **yet** — install it via `/plugin marketplace add` (you get\n"
-    "> the same in-Claude-Code experience). _(This notice auto-flips once the listing is\n"
-    "> approved — single source: `scripts/directory_listing.py`.)_"
+    "> ⏳ **Pending Claude plugin-directory approval.** A one-click Claude Code **plugin** is\n"
+    "> **planned, not yet available** — mokata isn't registered on any Claude Code marketplace.\n"
+    "> The supported way to run mokata inside Claude Code today is the pip-first path:\n"
+    "> `pip install mokata` → `mokata setup claude`\n"
+    "> (see [Getting started](https://jasgujral.github.io/mokata-oss/getting-started/)).\n"
+    "> _(This notice auto-flips once the listing is approved — single source:\n"
+    "> `scripts/directory_listing.py`.)_"
 )
 
 LIVE = (
     "> ✅ **mokata is in the Claude plugin directory.** Install it straight from Claude Code's\n"
-    "> in-app **\"Browse plugins\"**, or use the `/plugin marketplace add` command below."
+    "> in-app **\"Browse plugins\"** — or use the pip-first path (`pip install mokata` →\n"
+    "> `mokata setup claude`), which still works and wires the same commands, skills, MCP\n"
+    "> tools, and hooks."
 )
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

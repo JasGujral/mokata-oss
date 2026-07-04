@@ -31,6 +31,10 @@ import os
 import sys
 from typing import List, Optional
 
+# Stage 3d.1: with the mcp_admin ↔ harness_setup cycle broken (shared pieces extracted to
+# harness_paths), this import — previously lazy inside `_mcp_reachability_warning` — is top-level.
+from .mcp_admin import unreachable_registration
+
 # Security-block exit code (PreToolUse): a non-zero exit blocks the tool call.
 BLOCK_EXIT = 2
 
@@ -176,6 +180,20 @@ def _record_plugin_root(plugin_root: Optional[str]) -> None:
         pass
 
 
+def _mcp_reachability_warning(root: str) -> Optional[str]:
+    """One-line SessionStart warning when mokata's MCP server is registered but its command
+    can't be resolved. Fast local lookup (no subprocess); None (silent) on reachable/absent
+    or any error — never blocks or breaks the session."""
+    try:
+        reg = unreachable_registration(root=root)
+        if reg is None:
+            return None
+        return (f"⚠ mokata-mcp: registered but its command isn't reachable ({reg.command}) — "
+                "run `mokata mcp install` to repair, then restart Claude Code.")
+    except Exception:
+        return None
+
+
 def session_start_main(argv: Optional[List[str]] = None) -> int:
     """Inject mokata's sub-2k-token bootstrap (A4). Async/observability hook: only adds
     context and ALWAYS exits 0 — a broken config degrades to a one-line note, never blocks
@@ -213,7 +231,15 @@ def session_start_main(argv: Optional[List[str]] = None) -> int:
         _emit(f"mokata: bootstrap skipped ({exc}).")
         return 0
 
-    _emit(build_bootstrap(surface).text)
+    context = build_bootstrap(surface).text
+    # Stage 3b.3 — minimal MCP reachability warning. If mokata's MCP server is registered but
+    # its command can't be resolved (a broken auto-start), append ONE warning line + the fix.
+    # A fast LOCAL lookup only (no handshake subprocess): SessionStart is async/observability
+    # and must never block or slow the session. Degrade-clean: any doubt → say nothing.
+    warning = _mcp_reachability_warning(root)
+    if warning:
+        context = context + "\n\n" + warning
+    _emit(context)
 
     # Stage 60 — advance the "since last session" baseline at the session boundary. The briefing
     # above already DERIVED its diff against the OLD snapshot (read-only); now capture the new

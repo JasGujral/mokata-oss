@@ -58,7 +58,8 @@ exclude_docs: |
 
 nav:
   - Home: index.md
-  - Getting started: quickstart.md
+  - Get started: getting-started.md
+  - Quickstart: quickstart.md
   - Tutorials:
       - Catches a bad change (60s): tutorials/catches-a-bad-change.md
       - Differentiators in action: tutorials/differentiators-in-action.md
@@ -80,7 +81,9 @@ nav:
       - Use a codebase graph: how-to/use-a-codebase-graph.md
       - Set the execution mode: how-to/set-execution-mode.md
       - Watch a run (lanes + dashboard): how-to/watch-a-run.md
-      - Use mokata in VS Code: how-to/use-mokata-in-vs-code.md
+      # TODO(0.0.9): VS Code extension is roadmap/not-in-0.0.9 — page banner-marked "Planned".
+      # Consider moving under a "Roadmap" section post-release.
+      - Use mokata in VS Code (roadmap): how-to/use-mokata-in-vs-code.md
       - Use & heal memory: how-to/use-memory.md
       - Capture project rules & context: how-to/capture-project-rules-and-context.md
       - Share a design vault: how-to/share-a-design-vault.md

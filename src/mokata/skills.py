@@ -41,9 +41,12 @@ class Skill:
     standalone: bool = True
     argument_hint: Optional[str] = None   # optional `/` autocomplete hint (frontmatter)
     show_progress: bool = False           # Stage 27 — print the run-progress block + banner
+    mark_stage: bool = False              # Stage 6b — append a stage_enter to the progress log
     when_to_use: Optional[str] = None     # Stage 29 — model-invocation trigger (frontmatter)
     requires_spec: bool = False           # Stage 32 — spec-persisted precondition (impl entry)
     ground: bool = True                   # Stage 33 — append the anti-assumption discipline
+    record_verdict: bool = False          # Stage 6r — persist a review_verdict to the 6b log
+    next_step: Optional[str] = None       # Stage 6r — explicit next-step section (no generic <next>)
 
 
 # Stage 32 — the precondition surfaced on implementation skills: a persisted, complete spec
@@ -117,6 +120,88 @@ PROGRESS_INSTRUCTION = (
     "pre-fill the prompt box or rebind Tab, so never imply you can; just NAME the command and "
     "offer to proceed. If a gate fired, print its one-line verdict and, on a block, the single "
     "action that clears it (`→ to unblock: …`)."
+)
+
+
+# Stage 6b — the instruction appended to develop/review/ship so each records ENTERING its
+# user-stage in the append-only progress-event log. develop/review/ship are separate skills
+# with no shared pipeline checkpoint, so without this the always-on badge can't tell them
+# apart (it collapsed all three to "develop"). The mark is OBSERVABILITY — append-only and
+# UNGATED (same trust tier as the audit ledger, NOT a P2 durable write, so it never prompts).
+# Single source so it can't drift.
+STAGE_MARK_INSTRUCTION = (
+    "On ENTRY to this phase — before anything else — record the stage transition so the "
+    "always-on mokata badge can tell develop/review/ship apart: run "
+    "`mokata progress mark {name}`. This appends a single `stage_enter` event to the "
+    "append-only progress-event log — OBSERVABILITY, like the audit ledger: it is UNGATED "
+    "(it writes no durable code/memory/config, so it never prompts for approval) and "
+    "best-effort (if it fails, keep going — it must never block the phase). It exists so the "
+    "badge shows the true current stage instead of guessing; it fabricates nothing."
+)
+
+
+# Stage 6r — the CLOSING review's two-pass CONTENT, factored out VERBATIM so it stays the
+# single source of WHAT the review checks. Stage 6r changes WHO runs it (a fresh-context
+# subagent), never this — the constant is reused unchanged by both the inline and the
+# independent paths, and a test asserts review.md still carries it word-for-word.
+REVIEW_TWO_PASS_CONTENT = (
+    "Review a diff in two passes. (1) Against the approved plan: does it do "
+    "EXACTLY what was specified and approved — the approved acceptance criteria "
+    "and the approved approach/refinements, nothing more? Flag any UNAPPROVED "
+    "divergence (added scope, a changed approach, a changed or dropped AC, a "
+    "redesign) as a finding — never a silent pass. Check the diff against the "
+    "ACTUAL code it touches — do the calls, signatures, contracts, and conventions "
+    "match the real symbols (verify with the structural queries)? Flag anything that "
+    "looks ASSUMED rather than verified. (2) Quality: correctness, "
+    "clarity, simplicity. Surface findings clearly; any fix is human-gated."
+)
+
+
+# Stage 6r — run the closing review as a FRESH-CONTEXT subagent by default. The reviewer that
+# inherited the builder's context tends to CONFIRM claims rather than re-derive them (the exact
+# failure the 0.0.9 pre-release audit exposed: inline stage-by-stage validation passed blockers
+# an independent pass caught). This changes WHO runs the two-pass above, not WHAT it checks.
+INDEPENDENT_REVIEW_CLAUSE = (
+    "\n\nRun this review INDEPENDENTLY by default (this is the closing gate, not a self-check). "
+    "Spawn a FRESH-CONTEXT subagent and hand it a SELF-CONTAINED brief — the emitted spec + its "
+    "acceptance criteria, the approved approach/refinement set, the DIFF under review, and how "
+    "to run the tests — and explicitly NO builder conclusions or claims. The subagent re-derives "
+    "its verdict from the code and its OWN test runs (the doc-00 release-gate pattern applied "
+    "per-feature); it must reach the two-pass verdict above on its own, not ratify yours. "
+    "Degrade-clean: where the harness has NO subagents (or `settings.review.independent=off`), "
+    "fall back to the inline two-pass review and SAY SO honestly — print `review: inline — this "
+    "harness has no subagents, so this review shares the builder's context` (or the config note) "
+    "and continue. NEVER block on a missing subagent capability; independence is the default, not "
+    "a requirement."
+)
+
+
+# Stage 6r — persist the verdict so ship verifies the RECORD, not conversation vibes. One
+# persistence layer: the SAME Stage-6b progress log, as a `review_verdict` event. UNGATED
+# observability, like the stage_enter mark.
+RECORD_VERDICT_INSTRUCTION = (
+    "When the review reaches its verdict, PERSIST it so `/mokata:ship` can verify the record "
+    "(evidence over vibes): run "
+    "`mokata progress record-review --passed` (or `--failed`), adding `--independent` when it "
+    "ran as a fresh-context subagent and OMITTING it when it degraded to the inline two-pass. "
+    "This appends a single `review_verdict` event to the append-only progress-event log — "
+    "OBSERVABILITY, like the stage-entry mark: UNGATED (no durable code/memory/config write, so "
+    "no approval prompt) and best-effort (if it fails, keep going). Ship reads this record and "
+    "BLOCKS when it is absent, so recording the verdict is what closes the pipeline."
+)
+
+
+# Stage 6r — develop's finish names the next step EXPLICITLY. The generic PROGRESS_INSTRUCTION
+# ends with a `/mokata:<next>` placeholder; for the develop→review transition that is exactly
+# the advisory hand-off that let 0.0.8 skip review. Name it, mark it required, offer to run it.
+DEVELOP_NEXT_STEP_INSTRUCTION = (
+    "When develop completes, name the next step EXPLICITLY — do NOT use the generic "
+    "`/mokata:<next>` placeholder for this transition. Print `✓ develop done — <one-line "
+    "recap>. Next: `/mokata:review` (required before ship)` and OFFER to run it right now. "
+    "Review is the closing gate: ship BLOCKS until an (independent) review verdict is recorded, "
+    "so routing straight into review is the default path, not an optional suggestion. You can't "
+    "pre-fill the prompt box — NAME the command (it reaches the user through `/` autocomplete) "
+    "and offer to proceed."
 )
 
 
@@ -252,27 +337,27 @@ _SKILLS: List[Skill] = [
                   "change stays minimal.",
                   "check"),
         show_progress=True,
+        mark_stage=True,
         requires_spec=True,
+        next_step=DEVELOP_NEXT_STEP_INSTRUCTION,
     ),
     Skill(
         name="review",
         summary="mokata · Two-pass review: against the spec, then quality.",
-        prompt=(
-            "Review a diff in two passes. (1) Against the approved plan: does it do "
-            "EXACTLY what was specified and approved — the approved acceptance criteria "
-            "and the approved approach/refinements, nothing more? Flag any UNAPPROVED "
-            "divergence (added scope, a changed approach, a changed or dropped AC, a "
-            "redesign) as a finding — never a silent pass. Check the diff against the "
-            "ACTUAL code it touches — do the calls, signatures, contracts, and conventions "
-            "match the real symbols (verify with the structural queries)? Flag anything that "
-            "looks ASSUMED rather than verified. (2) Quality: correctness, "
-            "clarity, simplicity. Surface findings clearly; any fix is human-gated."
-        ),
+        prompt=REVIEW_TWO_PASS_CONTENT + INDEPENDENT_REVIEW_CLAUSE,
         gate=Gate("spec-then-quality",
                   "Review checks the diff against the spec (no extra features) first, "
                   "then quality. Findings are surfaced for human-gated fixes.",
                   "human"),
         show_progress=True,
+        mark_stage=True,
+        record_verdict=True,
+        when_to_use=(
+            "Engage when an implementation has just finished and its tests are GREEN, when the "
+            "user asks to check/review a diff or change, or before merging/shipping — review is "
+            "the closing gate of the mokata pipeline. Do NOT engage mid-implementation, or for a "
+            "brand-new problem with no code yet (that's brainstorm)."
+        ),
     ),
     Skill(
         name="debug",
@@ -328,8 +413,17 @@ _SKILLS: List[Skill] = [
             "suite is GREEN (re-run it; compare against the green baseline you confirmed "
             "before starting, so any new failure is attributable to this change), every "
             "acceptance criterion in the emitted spec is met (completeness), and `review` "
-            "passed. If ANYTHING is red or unmet, STOP and report exactly what's missing — "
-            "do not present landing options for unfinished work.\n"
+            "passed — checked from the PERSISTED RECORD, not conversation memory: run "
+            "`mokata progress review-status`. If it reports `review hasn't run — run "
+            "/mokata:review first` (no verdict recorded) or that review FAILED, STOP and route "
+            "the human to review — do NOT present landing options. On a pass, SURFACE which kind "
+            "it was: `review passed (independent ✓)` when it ran as a fresh-context subagent, or "
+            "`review passed (inline — not independent)` when it degraded to the inline two-pass. "
+            "Do NOT hard-block on inline — a capability-degraded harness must still ship — but "
+            "make the difference visible and LOG the inline note to the audit ledger so the human "
+            "lands the change knowing which review it got. If tests are red or an AC is unmet, "
+            "STOP and report exactly what's missing — do not present landing options for "
+            "unfinished work.\n"
             "2. SUMMARIZE what shipped: the spec and its acceptance-criteria-to-tests "
             "mapping, the diff surface (files/symbols changed), the decisions captured to "
             "memory, and the audit trail — so landing it is a reviewed decision.\n"
@@ -350,6 +444,7 @@ _SKILLS: List[Skill] = [
                   "human"),
         phase="ship",
         show_progress=True,
+        mark_stage=True,
     ),
     Skill(
         name="version",
@@ -418,6 +513,13 @@ def render_skill(skill: Skill, grounding=None) -> str:
         lines += ["", "## Precondition", SPEC_PERSISTED_PRECONDITION]
     if skill.show_progress:
         lines += ["", "## Progress", PROGRESS_INSTRUCTION.format(name=skill.name)]
+    if skill.mark_stage:
+        lines += ["", "## Record stage entry",
+                  STAGE_MARK_INSTRUCTION.format(name=skill.name)]
+    if skill.next_step:
+        lines += ["", "## Next step", skill.next_step]
+    if skill.record_verdict:
+        lines += ["", "## Record verdict", RECORD_VERDICT_INSTRUCTION]
     if grounding is not None:
         lines += ["", "## Grounding (resolved now)", grounding.summary_line()]
     return "\n".join(lines) + "\n"
@@ -447,6 +549,18 @@ def command_markdown(skill: Skill) -> str:
         f"\n## Progress\n{PROGRESS_INSTRUCTION.format(name=skill.name)}\n"
         if skill.show_progress else ""
     )
+    mark_stage_section = (
+        f"\n## Record stage entry\n{STAGE_MARK_INSTRUCTION.format(name=skill.name)}\n"
+        if skill.mark_stage else ""
+    )
+    next_step_section = (
+        f"\n## Next step\n{skill.next_step}\n"
+        if skill.next_step else ""
+    )
+    record_verdict_section = (
+        f"\n## Record verdict\n{RECORD_VERDICT_INSTRUCTION}\n"
+        if skill.record_verdict else ""
+    )
     return (
         f"---\n"
         f"name: {skill.name}\n"
@@ -466,4 +580,7 @@ def command_markdown(skill: Skill) -> str:
         f"{grounding_section}"
         f"{precondition_section}"
         f"{progress_section}"
+        f"{mark_stage_section}"
+        f"{next_step_section}"
+        f"{record_verdict_section}"
     )

@@ -9,6 +9,12 @@
 __pycache__/
 *.pyc
 *.egg-info/
+# Wheel/sdist build output (regenerable via `python -m build`; never track it).
+# ANCHORED to the repo root (leading slash) so these do NOT also match docs/build/ —
+# the internal build-docs dir (STATUS, plans) that MUST stay tracked. An unanchored
+# `build/` matches a `build` dir at ANY depth, which silently ignored new docs/build files.
+/build/
+/dist/
 
 # Local helper script (one-off; not part of the framework)
 push-to-github.command
@@ -24,6 +30,10 @@ docs/tutorials/mokata-complete-guide.pdf
 # Runtime artifact: mokata creates .mokata/ at a repo root when run there (tests/commands).
 # The framework source repo is not itself a mokata project, so never track it.
 .mokata/
+# Exported brainstorm plan copies — test/run artifacts, never source. Backstops the
+# test-isolation guard so a stray plans/<slug>.md can never sneak into the tree.
+/plans/
+tests/plans/
 # Release script backups (scripts/release-*.sh) — local safety copies, not source.
 release-backup-*/
 
@@ -35,3 +45,7 @@ mokata-ad-features.md
 # Large launch/marketing media — hosted elsewhere (or Git LFS), never in git history.
 mokata_ad_60s_memory_vertical.mp4
 docs/launch/assets/
+
+# VS Code extension build artifacts (editors/vscode — future 0.8.0/0.9.0 work)
+editors/vscode/node_modules/
+editors/vscode/out/

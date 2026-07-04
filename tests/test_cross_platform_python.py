@@ -26,8 +26,8 @@ import _support  # noqa: F401  (puts src/ on the path)
 from mokata import harness_setup
 
 ROOT = Path(__file__).resolve().parents[1]
-LAUNCH = ROOT / "hooks" / "launch.sh"
-HOOKS_JSON = ROOT / "hooks" / "hooks.json"
+LAUNCH = ROOT / "src" / "mokata" / "hooks" / "launch.sh"
+HOOKS_JSON = ROOT / "src" / "mokata" / "hooks" / "hooks.json"
 
 import shutil
 
@@ -87,8 +87,8 @@ class TestHooksJsonUsesConsoleEntryPoint(unittest.TestCase):
         # launch.sh remains for the pure-plugin-without-pip last resort.
         self.assertTrue(LAUNCH.exists(), "hooks/launch.sh must still ship")
         # and the standalone shim scripts it would launch still exist.
-        self.assertTrue((ROOT / "hooks" / "session_start.py").exists())
-        self.assertTrue((ROOT / "hooks" / "secret_guard.py").exists())
+        self.assertTrue((ROOT / "src" / "mokata" / "hooks" / "session_start.py").exists())
+        self.assertTrue((ROOT / "src" / "mokata" / "hooks" / "secret_guard.py").exists())
 
 
 # ---------------------------------------------------------------------------

@@ -1,9 +1,14 @@
 # Install mokata (pip / pipx / uv / brew)
 
-mokata is a pure-Python CLI with **no required runtime dependencies**, so it installs anywhere
-Python ≥ 3.9 runs. Pick the path that fits how you work. This page covers the **CLI**; to drive
-the governed workflow *inside* Claude Code, also install the
-[Claude Code plugin](use-the-plugin.md) or run [`mokata setup`](use-without-plugin.md).
+mokata is a pure-Python CLI whose **core has no required runtime dependencies**, so it installs
+anywhere Python ≥ 3.9 runs. On **Python ≥ 3.10** a plain `pip install mokata` also pulls the one
+default dependency — the **MCP SDK** — so the in-harness **`mokata-mcp` server works out of the
+box**, no extra needed. On **Python 3.9** the SDK can't install (it needs ≥ 3.10): the CLI and
+everything else still work, but the MCP server is unavailable (`mokata-mcp` exits with a clear
+message pointing you to 3.10+). The SDK is still *lazily* imported, so the CLI runs fine even if
+it's absent. Pick the path that fits how you work. This page covers the **CLI**; to drive the
+governed workflow *inside* Claude Code, follow the pip-first [Getting started](../getting-started.md)
+path (`pip install mokata` → [`mokata setup claude`](use-without-plugin.md)).
 
 ## At a glance
 
@@ -43,10 +48,14 @@ pip install mokata            # into the active environment
 uv pip install mokata         # the uv equivalent
 ```
 
+On Python ≥ 3.10 that already installs the MCP SDK, so `mokata-mcp` works with no extra step —
+you do **not** need a `[mcp]` extra (it's a no-op alias kept only for backwards compatibility).
+On **Python 3.9** the MCP server is unavailable (the SDK needs ≥ 3.10); the CLI and everything
+else still work, and `mokata-mcp` prints a clear message pointing you to 3.10+.
+
 Optional extras (each is degrade-clean when absent — never required):
 
 ```bash
-pip install "mokata[mcp]"       # the in-harness MCP server (Python ≥ 3.10)
 pip install "mokata[postgres]"  # optional shared-memory / session Postgres backend
 pip install "mokata[neo4j]"     # optional external code-graph backend
 pip install "mokata[schema]"    # richer manifest validation messages (jsonschema)
@@ -85,4 +94,5 @@ mokata stacks list             # browse ready-made governed stacks for your fram
 ```
 
 See [Community stacks](community-stacks.md) to adopt a ready-made governed stack, and
-[Use the plugin in Claude Code](use-the-plugin.md) to drive the workflow inside the harness.
+[Getting started](../getting-started.md) to wire mokata into Claude Code with
+`mokata setup claude`.

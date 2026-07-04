@@ -13,7 +13,7 @@ from mokata.skills import command_markdown, get_skill, list_skills, skill_names
 
 MARKER = "mokata ·"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-COMMANDS_DIR = os.path.join(ROOT, "templates", "commands")
+COMMANDS_DIR = os.path.join(ROOT, "src", "mokata", "templates", "commands")
 
 
 class TestSkillSummariesPrefixed(unittest.TestCase):

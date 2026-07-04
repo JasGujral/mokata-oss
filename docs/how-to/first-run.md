@@ -4,6 +4,9 @@ mokata is the **memory + seatbelt for your AI coding agent**. This is the fastes
 nothing to a wired, personalized setup — and a 60-second demo if you'd rather look before you
 leap.
 
+> Already have mokata installed? If not, start with [Getting started](../getting-started.md)
+> (`pip install mokata` → `mokata setup claude`), then come back here.
+
 ## See it work first — `mokata tour` (read-only)
 
 ```bash
@@ -83,6 +86,22 @@ changes), and **reversible** (`--remove` leaves no residue — gone from the cap
 the tools table). Like first-run, it **detects → recommends → runs with approval** — an absent
 `--add` tool is recommended, never installed. Integrations grow with your project instead of
 requiring a manual teardown.
+
+## Your brainstorm design, saved as a plan file
+
+When you approve a brainstorm approach — **before** any spec — mokata saves the design write-up
+as an internal **plan file** under `.mokata/temp_local/plans/<slug>.md`, so the reasoning behind
+the approach isn't lost. Browse and share it with `mokata plan`:
+
+```bash
+mokata plan list                       # the saved plans
+mokata plan show [<slug>]              # print one (defaults to the sole plan)
+mokata plan export [<slug>]           # copy it to a committable plans/<slug>.md
+mokata plan export <slug> --to docs   # choose the destination dir
+```
+
+`export` is user-initiated and **never silently overwrites** an existing copy — pass `--force`
+to replace one. (Full flags: the [CLI reference](../reference/cli.md).)
 
 ## Next
 

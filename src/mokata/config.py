@@ -118,6 +118,15 @@ class Surface:
         return os.path.join(self.mokata_dir, TEMP_LOCAL_DIRNAME)
 
     @property
+    def plans_dir(self) -> str:
+        """Stage 6p — the INTERNAL brainstorm plan-file area. The approved design is saved here at
+        approval; `mokata plan export` copies a plan into the project-root `plans/` (the committable
+        copy). It's internal runtime data, so it lives under the gitignored `temp_local/` (24D) —
+        the same split as the memory store and audit ledger — NOT the committable `.mokata/` root."""
+        from .plans import PLANS_DIRNAME
+        return os.path.join(self.temp_local_dir, PLANS_DIRNAME)
+
+    @property
     def state(self) -> StateStore:
         """The governed store for transient pipeline state under
         .mokata/temp_local/state/. Downstream phases read the brainstorm phase's approved

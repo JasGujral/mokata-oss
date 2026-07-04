@@ -35,8 +35,8 @@ from mokata.harness_setup import (
 )
 
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-_SKILLS_DIR = os.path.join(_REPO, "skills")
-_TEMPLATES = os.path.join(_REPO, "templates", "commands")
+_SKILLS_DIR = os.path.join(_REPO, "src", "mokata", "skills")
+_TEMPLATES = os.path.join(_REPO, "src", "mokata", "templates", "commands")
 
 
 def _read(path):
@@ -120,8 +120,8 @@ class TestDriftGuard(unittest.TestCase):
 
 
 class TestSetupWiresSkills(unittest.TestCase):
-    # home=d → a plugin-free HOME so the plugin-dedup guard doesn't suppress skills; keeps these
-    # deterministic on machines where the mokata plugin IS installed (see TestPluginDedup).
+    # home=d is an isolated HOME (harmless leftover from the old plugin-dedup era). Setup now
+    # ALWAYS writes the skills regardless of any installed plugin — see TestPluginCoexistReplace.
     def test_setup_claude_writes_skill_files(self):
         with tempfile.TemporaryDirectory() as d:
             setup_harness("claude", root=d, scope="project", profile="standard",
@@ -169,10 +169,11 @@ class TestSetupWiresSkills(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(d, ".claude", "skills")))
 
 
-class TestPluginDedup(unittest.TestCase):
-    """When the mokata PLUGIN is installed it already provides the Agent Skills, so
-    `mokata setup claude` must NOT write a project-scope copy — otherwise Claude Code lists
-    every skill twice. The guard detects the plugin under ~/.claude/plugins/ and suppresses."""
+class TestPluginCoexistReplace(unittest.TestCase):
+    """Stage 5 (design change): mokata setup is a REPLACE, not a dedup. It ALWAYS (over)writes the
+    current curated skills into the project — the project copy is authoritative — regardless of
+    whether the mokata PLUGIN is also installed. A reinstall thus always delivers the current,
+    non-stale set (reliably-current beats deduped-but-stale). The old plugin-suppression is gone."""
 
     def _make_home_with_plugin(self, home, named="mokata"):
         # a realistic plugin layout: ~/.claude/plugins/<anything>/.claude-plugin/plugin.json
@@ -182,30 +183,55 @@ class TestPluginDedup(unittest.TestCase):
         with open(pj, "w", encoding="utf-8") as fh:
             fh.write('{"name": "%s", "version": "0.0.7"}' % named)
 
-    def test_plugin_present_suppresses_skills(self):
+    def test_plugin_present_still_writes_skills(self):
+        # plugin installed → we STILL write the project skills (no suppression); plan says so.
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as d:
             self._make_home_with_plugin(home)
             plan = plan_setup("claude", root=d, scope="project", home=home)
-            self.assertEqual(list(plan.skill_names), [], "skills must be suppressed")
-            self.assertTrue(plan.plugin_provides_skills)
+            self.assertEqual(list(plan.skill_names), list(CURATED_SKILLS),
+                             "skills must be written even when the plugin is present (replace)")
             from mokata.harness_setup import render_setup_plan
-            self.assertIn("SKIPPED", render_setup_plan(plan))
+            render = render_setup_plan(plan)
+            self.assertIn("Will write", render)
+            self.assertNotIn("SKIPPED", render)
 
-    def test_setup_writes_no_skill_files_when_plugin_present(self):
+    def test_setup_writes_skill_files_even_when_plugin_present(self):
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as d:
             self._make_home_with_plugin(home)
             setup_harness("claude", root=d, scope="project", profile="standard",
                           assume_yes=True, home=home, out=lambda _: None)
-            self.assertFalse(os.path.exists(os.path.join(d, ".claude", "skills")),
-                             "no project skills should be written when the plugin is present")
+            for name in CURATED_SKILLS:
+                self.assertTrue(
+                    os.path.isfile(os.path.join(d, ".claude", "skills", name, "SKILL.md")),
+                    f"project skill '{name}' must be written even with the plugin present")
 
     def test_no_plugin_writes_skills(self):
-        # a HOME with an UNRELATED plugin must NOT suppress mokata's skills
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as d:
             self._make_home_with_plugin(home, named="somethingelse")
             plan = plan_setup("claude", root=d, scope="project", home=home)
             self.assertEqual(list(plan.skill_names), list(CURATED_SKILLS))
-            self.assertFalse(plan.plugin_provides_skills)
+
+    def test_existing_project_skills_are_refreshed(self):
+        # A project that ALREADY carries mokata skill copies must be REFRESHED (overwritten) on
+        # re-setup — the whole point of replace: a reinstall never leaves stale content behind.
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as d:
+            self._make_home_with_plugin(home)
+            stale = os.path.join(d, ".claude", "skills", CURATED_SKILLS[0], "SKILL.md")
+            os.makedirs(os.path.dirname(stale), exist_ok=True)
+            with open(stale, "w", encoding="utf-8") as fh:
+                fh.write("STALE OLD CONTENT")
+            plan = plan_setup("claude", root=d, scope="project", home=home)
+            self.assertEqual(list(plan.skill_names), list(CURATED_SKILLS),
+                             "existing project skills must be refreshed (replaced)")
+            setup_harness("claude", root=d, scope="project", profile="standard",
+                          assume_yes=True, home=home, out=lambda _: None)
+            with open(stale, encoding="utf-8") as fh:
+                self.assertNotIn("STALE OLD CONTENT", fh.read(),
+                                 "the stale copy must be overwritten")
+            for name in CURATED_SKILLS:
+                self.assertTrue(
+                    os.path.isfile(os.path.join(d, ".claude", "skills", name, "SKILL.md")),
+                    f"skill '{name}' must be (re)written on refresh")
 
 
 class TestNonClaudeDegradesClean(unittest.TestCase):
@@ -232,6 +258,93 @@ class TestGeneratorParity(unittest.TestCase):
         self.assertEqual(set(files), set(CURATED_SKILLS))
         for name, content in files.items():
             self.assertEqual(content, _read(os.path.join(_SKILLS_DIR, name, "SKILL.md")))
+
+
+class TestSkillsSyncPrune(unittest.TestCase):
+    """Stage 5 — setup/update is a SYNC: after writing the current curated skills it PRUNES any
+    mokata-authored (marker-bearing) skill dropped from the set, so users stop seeing old/removed
+    skills. A user's own (non-marker) skill is NEVER removed; the removal is shown in the plan."""
+
+    def test_setup_prunes_orphan_mokata_skill_keeps_user_skill(self):
+        with tempfile.TemporaryDirectory() as d:
+            sk = os.path.join(d, ".claude", "skills")
+            os.makedirs(os.path.join(sk, "oldremoved"))
+            with open(os.path.join(sk, "oldremoved", "SKILL.md"), "w", encoding="utf-8") as fh:
+                fh.write("--- " + SKILL_MARKER + " ---\nstale body")   # a mokata skill, not curated
+            os.makedirs(os.path.join(sk, "myskill"))
+            with open(os.path.join(sk, "myskill", "SKILL.md"), "w", encoding="utf-8") as fh:
+                fh.write("my own skill, no marker")                     # a user's own skill
+            res = setup_harness("claude", root=d, scope="project", assume_yes=True,
+                                out=lambda _: None)
+            self.assertFalse(os.path.exists(os.path.join(sk, "oldremoved")),
+                             "the orphan mokata skill dir must be pruned")
+            self.assertTrue(os.path.isfile(os.path.join(sk, "myskill", "SKILL.md")),
+                            "a user's own (non-marker) skill must be preserved")
+            for name in CURATED_SKILLS:
+                self.assertTrue(os.path.isfile(os.path.join(sk, name, "SKILL.md")),
+                                f"current curated skill '{name}' must be present after sync")
+            self.assertTrue(
+                any(os.path.join("oldremoved", "SKILL.md") in p for p in res.touched),
+                "the pruned skill path must be recorded in the setup result")
+
+    def test_plan_shows_the_removal_before_approval(self):
+        with tempfile.TemporaryDirectory() as d:
+            sk = os.path.join(d, ".claude", "skills")
+            os.makedirs(os.path.join(sk, "oldremoved"))
+            with open(os.path.join(sk, "oldremoved", "SKILL.md"), "w", encoding="utf-8") as fh:
+                fh.write(SKILL_MARKER + "\nold")
+            plan = plan_setup("claude", root=d, scope="project")
+            self.assertEqual(plan.skill_orphans, ["oldremoved"])
+            from mokata.harness_setup import render_setup_plan
+            render = render_setup_plan(plan)
+            self.assertIn("oldremoved", render)
+            self.assertRegex(render.lower(), r"removing|stale")
+
+    def test_prune_never_touches_a_non_marker_user_skill(self):
+        from pathlib import Path
+        from mokata.agent_skills import prune_orphan_skills
+        with tempfile.TemporaryDirectory() as d:
+            sk = Path(d) / "skills"
+            (sk / "mine").mkdir(parents=True)
+            (sk / "mine" / "SKILL.md").write_text("no marker here", encoding="utf-8")
+            removed = prune_orphan_skills(sk, keep=())   # keep NOTHING → a user skill still survives
+            self.assertEqual(removed, [])
+            self.assertTrue((sk / "mine" / "SKILL.md").is_file())
+
+    def test_prune_skips_unreadable_skill_without_crashing(self):
+        # A SKILL.md that can't be read (here: it's a directory → IsADirectoryError, an OSError)
+        # must be skipped, not crash the sync.
+        from pathlib import Path
+        from mokata.agent_skills import prune_orphan_skills
+        with tempfile.TemporaryDirectory() as d:
+            sk = Path(d) / "skills"
+            (sk / "weird" / "SKILL.md").mkdir(parents=True)   # SKILL.md is a dir → unreadable
+            removed = prune_orphan_skills(sk, keep=())         # must not raise
+            self.assertEqual(removed, [])
+            self.assertTrue((sk / "weird" / "SKILL.md").is_dir(), "the unreadable entry is left alone")
+
+    def test_regen_prunes_marker_bearing_skill_no_longer_curated(self):
+        # The shipped-tree self-heal: regen writes the curated set then prunes dropped ones. Test
+        # the shared helper the way `_regenerate_plugin_skills` uses it (keep=CURATED_SKILLS).
+        from pathlib import Path
+        from mokata.agent_skills import prune_orphan_skills
+        with tempfile.TemporaryDirectory() as d:
+            sk = Path(d) / "skills"
+            (sk / "dropped").mkdir(parents=True)              # a removed/renamed mokata skill
+            (sk / "dropped" / "SKILL.md").write_text("--- " + SKILL_MARKER + " ---\nx", encoding="utf-8")
+            keep_name = CURATED_SKILLS[0]
+            (sk / keep_name).mkdir(parents=True)              # a real curated skill (kept)
+            (sk / keep_name / "SKILL.md").write_text("--- " + SKILL_MARKER + " ---\ny", encoding="utf-8")
+            removed = prune_orphan_skills(sk, CURATED_SKILLS)
+            self.assertEqual([p.parent.name for p in removed], ["dropped"])
+            self.assertFalse((sk / "dropped").exists())
+            self.assertTrue((sk / keep_name / "SKILL.md").is_file())
+
+    def test_shipped_src_skills_have_no_orphans(self):
+        # After regen, the shipped tree matches CURATED exactly — no marker-bearing orphan ships.
+        from pathlib import Path
+        from mokata.agent_skills import find_orphan_skills
+        self.assertEqual(find_orphan_skills(Path(_SKILLS_DIR), CURATED_SKILLS), [])
 
 
 if __name__ == "__main__":

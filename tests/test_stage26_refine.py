@@ -187,7 +187,7 @@ class TestRefineCLIAndTemplate(unittest.TestCase):
         self.assertIn("refine", out)
 
     def test_template_frontmatter_conforms_and_carries_prefix(self):
-        path = os.path.join(ROOT, "templates", "commands", "refine.md")
+        path = os.path.join(ROOT, "src", "mokata", "templates", "commands", "refine.md")
         self.assertTrue(os.path.exists(path))
         with open(path, encoding="utf-8") as fh:
             text = fh.read()

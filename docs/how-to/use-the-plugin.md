@@ -1,31 +1,42 @@
 # Using mokata in Claude Code (the plugin)
 
-mokata is **primarily a Claude Code plugin**. Once installed, you drive the whole
-spec-driven TDD workflow from inside Claude Code — slash commands for the workflow and
-hooks that run automatically. If you'd rather not use the marketplace, you get the same
-in-Claude-Code experience with one command from a checkout —
-[`mokata setup claude`](use-without-plugin.md). The [CLI](../reference/cli.md) comes last:
-it's the engine's mechanics for scripting and inspection outside any harness, not the
-primary way to build. (Inside Claude Code, **Claude is the brain**; mokata never calls a
-model itself — see [How mokata uses an LLM](../concepts/execution-model.md).)
+mokata runs the whole spec-driven TDD workflow **inside Claude Code** — slash commands for the
+workflow and hooks that run automatically. Today you wire it in with the pip-first path
+([`mokata setup claude`](use-without-plugin.md)); a one-click Claude Code **plugin** is planned
+but **not yet available**. The [CLI](../reference/cli.md) comes last: it's the engine's
+mechanics for scripting and inspection outside any harness, not the primary way to build.
+(Inside Claude Code, **Claude is the brain**; mokata never calls a model itself — see
+[How mokata uses an LLM](../concepts/execution-model.md).)
 
 ## Install
 
 <!-- mokata:directory-listing:start -->
-> ⏳ **Pending Claude plugin-directory approval.** mokata isn't in Claude's in-app
-> "Browse plugins" directory **yet** — install it via `/plugin marketplace add` (you get
-> the same in-Claude-Code experience). _(This notice auto-flips once the listing is
-> approved — single source: `scripts/directory_listing.py`.)_
+> ⏳ **Pending Claude plugin-directory approval.** A one-click Claude Code **plugin** is
+> **planned, not yet available** — mokata isn't registered on any Claude Code marketplace.
+> The supported way to run mokata inside Claude Code today is the pip-first path:
+> `pip install mokata` → `mokata setup claude`
+> (see [Getting started](https://jasgujral.github.io/mokata-oss/getting-started/)).
+> _(This notice auto-flips once the listing is approved — single source:
+> `scripts/directory_listing.py`.)_
 <!-- mokata:directory-listing:end -->
 
-```text
-/plugin marketplace add https://github.com/JasGujral/mokata-oss.git
-/plugin install mokata@mostack
+```bash
+pip install mokata               # MCP server works out of the box on Python ≥ 3.10
+mokata setup claude              # wires commands + skills + MCP + statusline — human-gated
+# restart Claude Code, then:
+mokata mcp status                # expect: mokata-mcp: CONNECTED ✓
 ```
 
-Then **restart Claude Code** so the commands and hooks load. Confirm with `/plugin` —
-`mokata` should appear under the `mostack` marketplace. (Full detail:
-[Install the Claude plugin](install-plugin.md).)
+This wires the *same* slash commands, Agent Skills, MCP tools, and hooks the plugin would. Full
+narrative: **[Getting started](../getting-started.md)** · full detail:
+[Use mokata without the plugin](use-without-plugin.md).
+
+> **Skills stay fresh on update.** Re-running `mokata setup claude` after upgrading mokata is a
+> **sync**: it (over)writes the current mokata Agent Skills **and prunes any old/removed mokata
+> skills** so you don't keep seeing stale ones. The prune is **marker-based** — only
+> mokata-authored skills are touched, so **your own skills are never removed** — and, because a
+> durable delete is human-gated, the removal is shown for approval first. Note: Claude Code
+> **caches the skill list**, so **restart Claude Code** after the sync to see the change.
 
 ## What you get
 

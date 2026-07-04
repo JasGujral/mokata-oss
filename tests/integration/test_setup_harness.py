@@ -16,6 +16,7 @@ import _support  # noqa: F401  (puts src/ on the path)
 
 from mokata import MOKATA_DIR
 from mokata.cli import main
+from mokata.harness_setup import resolved_mcp_command
 
 
 def run_cli(argv):
@@ -42,7 +43,10 @@ class TestSetupHarnessE2E(unittest.TestCase):
             # MCP server registered
             with open(os.path.join(d, ".mcp.json"), encoding="utf-8") as fh:
                 mcp = json.load(fh)
-            self.assertEqual(mcp["mcpServers"]["mokata"]["command"], "mokata-mcp")
+            # Registered command is the resolved one (absolute path when pip-installed,
+            # bare name in a source sandbox) — assert against the resolver, not a literal.
+            self.assertEqual(mcp["mcpServers"]["mokata"]["command"],
+                             resolved_mcp_command())
             # hooks wired
             with open(os.path.join(d, ".claude", "settings.json"), encoding="utf-8") as fh:
                 settings = json.load(fh)

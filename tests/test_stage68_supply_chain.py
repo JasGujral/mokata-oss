@@ -29,6 +29,7 @@ RELEASE_YML = os.path.join(ROOT, ".github", "workflows", "release.yml")
 REPRO_SH = os.path.join(ROOT, "scripts", "check-reproducible.sh")
 SECURITY_MD = os.path.join(ROOT, "SECURITY.md")
 RELEASE_SH = os.path.join(ROOT, "scripts", "release.sh")
+SYNC_SH = os.path.join(ROOT, "scripts", "sync-public.sh")
 REAL_REPO = "JasGujral/mokata-oss"
 
 
@@ -82,18 +83,158 @@ class TestReleaseWorkflowSigningAndSBOM(unittest.TestCase):
         # id-token:write must be scoped to a job, NOT granted workspace-wide at the top level
         self.assertNotEqual(top.get("id-token"), "write",
                             "id-token: write must be per-job, not a top-level default")
+        idtoken = [n for n, j in doc["jobs"].items()
+                   if (j.get("permissions") or {}).get("id-token") == "write"]
+        self.assertTrue(idtoken, "no job declares the scoped id-token: write")
+        # Any job that ATTESTS build provenance must ALSO hold id-token: write (Sigstore needs
+        # OIDC). The reverse does not hold: a job may hold id-token: write WITHOUT attesting —
+        # e.g. the Stage-4 `pypi` job uses OIDC purely for PyPI Trusted Publishing.
         attesting = [n for n, j in doc["jobs"].items()
-                     if (j.get("permissions") or {}).get("id-token") == "write"]
-        self.assertTrue(attesting, "no job declares the scoped id-token: write for attestation")
+                     if (j.get("permissions") or {}).get("attestations") == "write"]
+        self.assertTrue(attesting, "no job declares the scoped attestations: write for provenance")
         for n in attesting:
             perms = doc["jobs"][n]["permissions"]
-            self.assertEqual(perms.get("attestations"), "write",
-                             "job '" + n + "' attests but lacks attestations: write")
+            self.assertEqual(perms.get("id-token"), "write",
+                             "job '" + n + "' attests but lacks the id-token: write it needs")
 
     def test_artifacts_and_sbom_attached_to_release(self):
         # The release publishes the built dist + the SBOM (not just notes).
         self.assertIn("dist/", self.text)
         self.assertIn("files:", self.text)
+
+
+class TestEveryReleaseJobIsRepoGated(unittest.TestCase):
+    """Stage 4g — the release/publish pipeline is OSS-only, un-regressably.
+
+    The other guards (above, and test_repo_hardening.py) assert the gate string
+    `github.repository == 'JasGujral/mokata-oss'` appears SOMEWHERE in release.yml, and the
+    YAML leg of test_signing_steps_are_gated_to_the_real_repo loops the jobs — but that leg
+    is skipped when PyYAML is absent, and it matches only the bare repo NAME. Neither makes
+    it impossible to add a NEW job with no `if:` that would run the GitHub release / OIDC
+    PyPI publish from the PRIVATE `JasGujral/mokata` repo.
+
+    This asserts EVERY job under `jobs:` carries an `if:` containing the full
+    `github.repository == 'JasGujral/mokata-oss'` equality — with a real plain-text fallback
+    (an indentation parse of the `jobs:` block) for the PyYAML-absent leg, so the invariant
+    holds in CI's jsonschema/pyyaml-absent matrix legs too. If some job legitimately should
+    NOT be gated, this test must FAIL and name it (update the test to exempt it explicitly) —
+    never a silent exemption.
+    """
+
+    GUARD = "github.repository == '" + REAL_REPO + "'"
+
+    def setUp(self):
+        self.text = _read(RELEASE_YML)
+
+    def _job_if_conditions(self):
+        """Map {job_name: its `if:` text}. PyYAML when present; an indentation parse otherwise.
+
+        The fallback splits the top-level `jobs:` block by indentation into one text blob per
+        job, so the guard is attributed to the job it actually sits under (not merely present
+        somewhere in the file).
+        """
+        if _HAVE_YAML:
+            doc = yaml.safe_load(self.text)
+            return {name: str(job.get("if", "")) for name, job in doc["jobs"].items()}
+        return self._job_blocks_textual()
+
+    def _job_blocks_textual(self):
+        lines = self.text.splitlines()
+        # Find the top-level `jobs:` key.
+        i = 0
+        while i < len(lines) and lines[i].rstrip() != "jobs:":
+            i += 1
+        i += 1
+        blocks, current, child_indent = {}, None, None
+        for line in lines[i:]:
+            if not line.strip() or line.lstrip().startswith("#"):
+                if current is not None:
+                    blocks[current] += line + "\n"
+                continue
+            indent = len(line) - len(line.lstrip())
+            if child_indent is None:
+                child_indent = indent
+            if indent < child_indent:
+                break                                   # dedented out of the `jobs:` block
+            if indent == child_indent and line.rstrip().endswith(":"):
+                current = line.strip().rstrip(":")      # a top-level job header
+                blocks[current] = ""
+            elif current is not None:
+                blocks[current] += line + "\n"
+        return blocks
+
+    def test_every_job_is_gated_to_the_oss_repo(self):
+        conditions = self._job_if_conditions()
+        self.assertTrue(conditions, "release.yml has no jobs — parse failed")
+        ungated = sorted(name for name, cond in conditions.items() if self.GUARD not in cond)
+        self.assertEqual(
+            ungated, [],
+            "release.yml job(s) not gated to " + REAL_REPO + " — they could run the release / "
+            "OIDC PyPI publish from the PRIVATE repo: " + ", ".join(ungated) + ". Every job's "
+            "`if:` must contain \"" + self.GUARD + "\". If a job legitimately must NOT be gated, "
+            "update this test to name the exemption explicitly.")
+
+
+class TestPyPIPublishJob(unittest.TestCase):
+    """Stage 4 — the tag-triggered PyPI publish job. It must publish the SAME reproducible,
+    Sigstore-attested wheel+sdist the `build` job produced (via OIDC Trusted Publishing), never
+    a fresh rebuild, and only after the whole matrix+validate+build is green. This freezes that
+    CI/CD-linked design so a later edit can't silently rebuild or publish on a red gate."""
+
+    def setUp(self):
+        self.text = _read(RELEASE_YML)
+
+    def _job(self):
+        return yaml.safe_load(self.text)["jobs"].get("pypi")
+
+    def test_pypi_job_exists_gated_and_oidc(self):
+        if not _HAVE_YAML:
+            self.skipTest("PyYAML not installed (not a mokata dependency); run in CI")
+        job = self._job()
+        self.assertIsNotNone(job, "release.yml has no `pypi` publish job")
+        # runs ONLY after the reproducible-build job — a red matrix/validate/build never publishes
+        self.assertEqual(job.get("needs"), ["build"],
+                         "pypi must `needs: [build]` (publish only on a successful version)")
+        # gated to the real repo like the sibling jobs (no publish from a fork/mirror)
+        self.assertIn(REAL_REPO, str(job.get("if", "")),
+                      "the pypi job is not gated to the real repo")
+        # OIDC trusted publishing — id-token scoped to THIS job, no token secret
+        self.assertEqual((job.get("permissions") or {}).get("id-token"), "write",
+                         "pypi needs id-token: write for OIDC trusted publishing")
+
+    def test_pypi_publishes_the_built_artifact_not_a_rebuild(self):
+        if not _HAVE_YAML:
+            # text-level fallback still proves the two load-bearing invariants
+            self.assertIn("gh-action-pypi-publish", self.text)
+            self.assertIn("mokata-dist", self.text)
+            return
+        steps = self._job()["steps"]
+        uses = [str(s.get("uses", "")) for s in steps]
+        runs = [str(s.get("run", "")) for s in steps]
+        # publishes via the official PyPA action...
+        self.assertTrue(any("pypa/gh-action-pypi-publish" in u for u in uses),
+                        "pypi must publish via pypa/gh-action-pypi-publish")
+        # ...reusing the SAME artifact the build job produced (download-artifact, mokata-dist)...
+        self.assertTrue(any("actions/download-artifact" in u for u in uses),
+                        "pypi must download the built artifact, not rebuild")
+        self.assertIn("mokata-dist", str(steps),
+                      "pypi must reuse the `mokata-dist` bundle the build job uploaded")
+        # ...and MUST NOT re-run `python -m build` (a rebuild ≠ the signed, attested wheel).
+        self.assertTrue(all("python -m build" not in r for r in runs),
+                        "pypi must NOT rebuild — publish the reproducible, attested artifact")
+
+    def test_pypi_actions_are_sha_pinned(self):
+        # Supply-chain hygiene: third-party actions pinned to a 40-hex commit SHA, like the rest.
+        import re
+        if not _HAVE_YAML:
+            self.skipTest("PyYAML not installed (not a mokata dependency); run in CI")
+        for s in self._job()["steps"]:
+            u = str(s.get("uses", ""))
+            if not u:
+                continue
+            ref = u.split("@", 1)[1] if "@" in u else ""
+            self.assertRegex(ref, r"^[0-9a-f]{40}$",
+                             "action '" + u + "' must be pinned to a 40-char commit SHA")
 
 
 class TestReproducibleBuild(unittest.TestCase):
@@ -228,6 +369,48 @@ class TestReleaseOrderIntact(unittest.TestCase):
         text = _read(RELEASE_YML)
         self.assertIn("validate", text)
         self.assertIn("Version consistency", text)
+
+
+@unittest.skipUnless(os.path.exists(SYNC_SH),
+                     "sync-public.sh is dev-only, excluded from the public mirror")
+class TestSyncPublicBoundaryHardened(unittest.TestCase):
+    """The public mirror is an rsync of the WORKING TREE — .gitignore does not protect it, so
+    regenerable/internal artifacts (build/, dist/, release-backup-*) would leak if they reappear.
+    Both the --exclude list AND the INTERNAL_PATHS hard-guard must cover every internal path; a
+    future edit that drops one from either place fails here (the guard's comment requires them to
+    stay in step)."""
+
+    # The seven long-standing internal paths + the three regenerable/backup artifacts added in
+    # Stage 3c.2. Each must appear in BOTH the rsync --exclude list and the INTERNAL_PATHS guard.
+    REQUIRED = (
+        "docs/build", "docs/launch", "docs/marketing", "CLAUDE.md",
+        "scripts/sync-public.sh", "scripts/release.sh", "scripts/release-0.0.1.sh",
+        "build", "dist", "release-backup-*",
+    )
+
+    def setUp(self):
+        self.sh = _read(SYNC_SH)
+        # Isolate the two controls so we assert against each independently.
+        guard_start = self.sh.find("INTERNAL_PATHS=(")
+        self.assertNotEqual(guard_start, -1, "sync-public.sh lost its INTERNAL_PATHS guard")
+        self.exclude_block = self.sh[:guard_start]
+        self.guard_block = self.sh[guard_start:]
+
+    def test_exclude_list_covers_every_internal_path(self):
+        for p in self.REQUIRED:
+            self.assertIn(p, self.exclude_block,
+                          "rsync --exclude list is missing internal path '" + p + "'")
+
+    def test_guard_covers_every_internal_path(self):
+        for p in self.REQUIRED:
+            self.assertIn(p, self.guard_block,
+                          "INTERNAL_PATHS hard-guard is missing internal path '" + p + "'")
+
+    def test_regenerable_artifacts_are_new_this_stage(self):
+        # Stage 3c.2 specifically: these must never leak even though .gitignore covers them.
+        for p in ("build", "dist", "release-backup-*"):
+            self.assertIn(p, self.exclude_block, "missing --exclude for '" + p + "'")
+            self.assertIn(p, self.guard_block, "missing INTERNAL_PATHS entry for '" + p + "'")
 
 
 if __name__ == "__main__":

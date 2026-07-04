@@ -8,7 +8,7 @@ import unittest
 
 from _support import sample_manifest_data  # noqa: F401  (path fix side-effect)
 
-HOOK = os.path.join(os.path.dirname(__file__), "..", "hooks", "secret_guard.py")
+HOOK = os.path.join(os.path.dirname(__file__), "..", "src", "mokata", "hooks", "secret_guard.py")
 
 
 class TestSecretGuardHook(unittest.TestCase):

@@ -156,8 +156,17 @@ def list_sessions(store: Any, phases=PIPELINE_PHASES) -> List["SessionInfo"]:
 
 
 # --------------------------------------------------------------- renderers
-def render_progress(progress: RunProgress, ascii_only: bool = False) -> str:
-    """The compact, glanceable block. No run → the friendly message (degrade-clean)."""
+def render_progress(progress: RunProgress, ascii_only: bool = False,
+                    surface: Any = None) -> str:
+    """The run-progress block. No run → the friendly message (degrade-clean).
+
+    Stage 6d — when a `surface` is passed (the `/progress` command's MAX-detail view), the
+    detailed 7-phase tracker is FOLLOWED by the 5 user-stage arc (brainstorm→spec→develop→
+    review→ship, done/current/pending) with the 6c develop sub-counter and an explicit
+    "what's pending this session". That arc is DERIVED from `_badge_state` — the SAME single
+    source the always-on badge uses, never a second progress model. With no surface (the CLI
+    `--lanes`-less default callers that don't pass one, and every existing caller) the block
+    is byte-identical to before, so nothing regresses."""
     if not progress.active:
         return progress.message
     glyphs = _ASCII_GLYPHS if ascii_only else _GLYPHS
@@ -177,7 +186,39 @@ def render_progress(progress: RunProgress, ascii_only: bool = False) -> str:
         nxt = progress.next_phase or "—"
         lines.append(f"next: {nxt}     ·     pending: {progress.pending}/"
                      f"{progress.total}")
+    lines.extend(_user_stage_arc_lines(surface, ascii_only))   # 6d — MAX detail, degrade-clean
     return "\n".join(lines)
+
+
+def _user_stage_arc_lines(surface: Any, ascii_only: bool = False) -> List[str]:
+    """The 5 user-stage arc (done/current/pending) + the 6c develop sub-counter + an explicit
+    "what's pending this session" (the stages after the active one), DERIVED from `_badge_state`
+    — the SAME source the always-on badge reads (the 6b log + the checkpoint), never a new model.
+    Returns `[]` (nothing appended) with no surface or on ANY derivation problem, so the block
+    degrades clean to today's phase-only view."""
+    if surface is None:
+        return []
+    try:
+        active, counter = _badge_state(surface)
+    except Exception:
+        return []
+    if active is None:
+        return []
+    glyphs = _ASCII_GLYPHS if ascii_only else _GLYPHS
+    active_idx = STAGE_BADGE_STAGES.index(active)
+    cells = []
+    for i, s in enumerate(STAGE_BADGE_STAGES):
+        if i < active_idx:
+            cells.append(f"{glyphs[DONE]} {s}")
+        elif i == active_idx:
+            label = f"{s} [{counter}]" if counter else s     # 6c develop / spec sub-counter
+            cells.append(f"{glyphs[CURRENT]} {label}")
+        else:
+            cells.append(f"{glyphs[PENDING]} {s}")
+    pending = list(STAGE_BADGE_STAGES[active_idx + 1:])
+    return ["",
+            "user stages:  " + "  ·  ".join(cells),
+            "pending this session: " + (", ".join(pending) if pending else "—")]
 
 
 # =============================================================== Stage 70c — native to-do widget
@@ -234,9 +275,37 @@ STAGE_BADGE_STAGES = ("brainstorm", "spec", "develop", "review", "ship")
 #   brainstorm phase / in-progress brainstorm -> "brainstorm"
 #   analysis..emit (building + emitting the spec) -> "spec"
 #   the pipeline is complete (spec emitted) -> "develop" (the next thing the user does)
-# develop/review/ship beyond "spec emitted -> develop" are separate skills with no shared
-# run-state checkpoint, so they aren't distinguishable from the pipeline run alone — those
-# cells simply render un-highlighted (honest; we never invent state we don't have).
+# develop/review/ship are separate skills with no shared pipeline checkpoint, so the run
+# checkpoint alone can't tell them apart. Stage 6b closes that: the develop/review/ship
+# skills append a `stage_enter` to the append-only progress-event log, and _badge_state
+# reads it to advance the badge across ALL FIVE stages. The log is a COMPATIBLE SUBSET of
+# 0.1.0's R1.S1a event stream (one persistence layer, not two). Zero fabrication — the
+# badge only claims a stage the log actually recorded; absent/corrupt log -> the
+# checkpoint-derived default (today's behaviour), never an error.
+
+
+def _logged_user_stage(surface: Any, run_id: Optional[str]):
+    """The furthest user-stage the Stage-6b progress log recorded (its most recent
+    `stage_enter`), or None when the log is absent/empty/unreadable. When `run_id` is
+    given (an active pipeline run exists) only that run's events count, so a NEW run's
+    fresh brainstorm is never shadowed by a PRIOR run's stale ship event; with no active
+    run the whole log is the only signal, so its latest transition is used. Degrade-clean:
+    any problem -> None (the caller falls back to the checkpoint-derived default)."""
+    try:
+        from .progress_events import ProgressLog, STAGE_ENTER
+        events = ProgressLog.from_surface(surface).read_events()
+    except Exception:
+        return None
+    stage = None
+    for e in events:
+        if e.get("type") != STAGE_ENTER:
+            continue
+        if e.get("stage") not in STAGE_BADGE_STAGES:
+            continue
+        if run_id is not None and e.get("run_id") not in (run_id, None):
+            continue
+        stage = e.get("stage")          # forward-appended; the last match is "where we are"
+    return stage
 
 
 def statusline_enabled(surface: Any) -> bool:
@@ -248,9 +317,36 @@ def statusline_enabled(surface: Any) -> bool:
         return True
 
 
+# Stage 6d — the badge is EVERYTHING-ON by default. `full` renders the complete arc (per-stage
+# glyphs + the spec/develop counters + the fan-out agents summary); `minimal` dials DOWN to the
+# active cell alone. Opt-DOWN and degrade-clean, read EXACTLY like `statusline_enabled`: any
+# absent / broken / unrecognised value reads as `full`, so the complete picture is never silently
+# lost — the user must deliberately choose `minimal`.
+BADGE_FULL, BADGE_MINIMAL = "full", "minimal"
+
+
+def badge_verbosity(surface: Any) -> str:
+    """settings.ux.badge_verbosity — `full` (default, everything on) | `minimal` (active cell
+    only). Opt-DOWN, degrade-clean: an absent/broken/unrecognised value reads as `full`, mirroring
+    statusline_enabled's opt-out default so the full badge is never silently lost."""
+    try:
+        v = (surface.manifest.setting("ux", {}) or {}).get("badge_verbosity", BADGE_FULL)
+        return BADGE_MINIMAL if v == BADGE_MINIMAL else BADGE_FULL
+    except Exception:
+        return BADGE_FULL
+
+
 def _badge_state(surface: Any):
-    """(active_user_stage, counter) derived read-only from run-state — (None, "") with no
-    run. `counter` is the pipeline phase fraction shown only during the spec stage."""
+    """(active_user_stage, counter) derived read-only from run-state + the Stage-6b progress
+    log — (None, "") with no run and no log. `counter` is the pipeline phase fraction shown
+    only during the spec stage.
+
+    Two sources, combined as FURTHEST-FORWARD (honest, forward-only): the pipeline checkpoint
+    tells brainstorm/spec/develop; the append-only progress log advances the badge into
+    develop/review/ship (the transitions the checkpoint can't see). The log can only move the
+    badge FORWARD past the checkpoint-derived stage, never backward — a stage is claimed only
+    if one source genuinely recorded it. Degrade-clean: no log -> the checkpoint default; no
+    checkpoint but a log -> the log's stage (the user did enter it)."""
     store = surface.state                       # may raise on a broken surface -> caller guards
     try:
         from .brainstorm import restore_brainstorm_progress
@@ -258,14 +354,39 @@ def _badge_state(surface: Any):
             return "brainstorm", ""             # mid-stream exploration (HARD-GATE still holds)
     except Exception:
         pass
+
     prog = build_progress(store)
+    # checkpoint-derived candidate (today's behaviour) + the active run id to scope the log.
     if not prog.active:
-        return None, ""
-    if prog.complete:
-        return "develop", ""                    # spec emitted -> the user moves to develop
-    if prog.current == "brainstorm":
-        return "brainstorm", ""
-    return "spec", f"{prog.done}/{prog.total}"  # building the spec (analysis..emit)
+        ckpt_stage, counter, run_id = None, "", None
+    elif prog.complete:
+        ckpt_stage, counter, run_id = "develop", "", prog.run_id  # spec emitted -> develop
+    elif prog.current == "brainstorm":
+        ckpt_stage, counter, run_id = "brainstorm", "", prog.run_id
+    else:
+        ckpt_stage, counter, run_id = "spec", f"{prog.done}/{prog.total}", prog.run_id
+
+    logged = _logged_user_stage(surface, run_id)
+    if logged is None:
+        stage = ckpt_stage                      # degrade-clean -> checkpoint default
+    elif ckpt_stage is None:
+        stage, counter = logged, ""             # no checkpoint, but the log recorded a stage
+    else:
+        # furthest-forward: the log only advances the badge PAST the checkpoint stage.
+        ck_i = STAGE_BADGE_STAGES.index(ckpt_stage)
+        lg_i = STAGE_BADGE_STAGES.index(logged)
+        if lg_i > ck_i:
+            stage, counter = logged, ""         # advanced into develop/review/ship
+        else:
+            stage = ckpt_stage
+
+    # Stage 6c — at develop, surface the REAL develop task counter (done/total) mirroring
+    # the spec `[n/m]` counter, DERIVED from the same build_run_lanes fan-out view (single
+    # source). Only when a real decomposition/execmode batch is on record; no batch / a
+    # sequential run / unreadable ledger -> no counter, exactly like review/ship (honesty).
+    if stage == "develop":
+        counter = _develop_counter(surface)
+    return stage, counter
 
 
 def build_stage_badge(surface: Any, *, session_name: Optional[str] = None,
@@ -285,9 +406,33 @@ def build_stage_badge(surface: Any, *, session_name: Optional[str] = None,
         return "mokata"
     lo, hi = (">", "<") if ascii_only else ("›", "‹")
     arrow = ">" if ascii_only else "▸"
-    cells = [f"{lo}{s}{hi}" if s == active else s for s in STAGE_BADGE_STAGES]
-    strip = "[" + " · ".join(cells) + "]"
     name = f"{session_name} · " if session_name else ""
+
+    # Stage 6d — opt-DOWN verbosity. `minimal` collapses to the active cell alone (no per-stage
+    # glyphs, no spec/develop counter, no agents summary); `full` (the degrade-clean default)
+    # renders today's complete badge below. Never raises — a bad config reads as full.
+    try:
+        verbosity = badge_verbosity(surface)
+    except Exception:
+        verbosity = BADGE_FULL
+    if verbosity == BADGE_MINIMAL:
+        ell = "..." if ascii_only else "…"
+        return f"mokata {arrow} {name}{ell}{lo}{active}{hi}{ell}"
+
+    glyphs = _ASCII_GLYPHS if ascii_only else _GLYPHS
+    active_idx = STAGE_BADGE_STAGES.index(active)
+    # Every cell carries a done/current/pending glyph (reusing the on-demand block's
+    # vocabulary) so a passed stage reads as ✓ done, not flat-and-indistinguishable from a
+    # not-yet-reached one; the active cell keeps its ›bracket‹ emphasis ON TOP of its glyph.
+    cells = []
+    for i, s in enumerate(STAGE_BADGE_STAGES):
+        if i < active_idx:
+            cells.append(f"{glyphs[DONE]}{s}")
+        elif i == active_idx:
+            cells.append(f"{glyphs[CURRENT]}{lo}{s}{hi}")
+        else:
+            cells.append(f"{glyphs[PENDING]}{s}")
+    strip = "[" + " · ".join(cells) + "]"
     badge = f"mokata {arrow} {name}{strip}"
     if counter:
         badge += f" · {counter}"
@@ -345,6 +490,7 @@ class RunLanes:
     degraded: bool = False
     progress: Optional[RunProgress] = None
     message: str = ""
+    tasks: int = 0                   # the batch's task total (exec_estimate.tasks); 0 = no batch
 
     @property
     def header(self) -> str:
@@ -356,6 +502,7 @@ class RunLanes:
 
     def to_dict(self) -> dict:
         return {"active": self.active, "mode": self.mode, "degraded": self.degraded,
+                "tasks": self.tasks,
                 "lanes": [ln.to_dict() for ln in self.lanes],
                 "progress": self.progress.to_dict() if self.progress else None,
                 "message": self.message}
@@ -425,7 +572,8 @@ def build_run_lanes(store: Any, ledger: Any = None, run_id: Optional[str] = None
         # tasks estimated but not yet reported are still running (live mid-flight view).
         for i in range(max(tasks_n - len(lanes), 0)):
             lanes.append(Lane(name=f"task[{len(lanes)}]", state=L_RUNNING))
-        return RunLanes(active=True, mode=mode, lanes=lanes, progress=progress)
+        return RunLanes(active=True, mode=mode, lanes=lanes, progress=progress,
+                        tasks=tasks_n)
 
     # sequential, or a parallel run that degraded to sequential — a single lane.
     seqs = [e for e in batch if e.get("kind") == "sequential"]
@@ -439,7 +587,8 @@ def build_run_lanes(store: Any, ledger: Any = None, run_id: Optional[str] = None
     note = ("degraded to sequential" if degraded else f"{len(seqs)} task(s)")
     at = seqs[-1].get("at", "") if seqs else est.get("at", "")
     return RunLanes(active=True, mode="sequential", degraded=degraded, progress=progress,
-                    lanes=[Lane(name="sequential", state=state, note=note, at=at)])
+                    lanes=[Lane(name="sequential", state=state, note=note, at=at)],
+                    tasks=tasks_n)
 
 
 def render_lanes(rl: RunLanes, ascii_only: bool = False) -> str:
@@ -482,5 +631,41 @@ def _badge_agents(surface: Any) -> str:
         from .govern import AuditLedger
         ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
         return agents_summary(build_run_lanes(surface.state, ledger=ledger))
+    except Exception:
+        return ""
+
+
+# =============================================================== Stage 6c — develop task counter
+# When the badge is at `develop` AND a real decomposition/execmode batch exists, the badge shows
+# a REAL `<done>/<total>` task counter — the develop analogue of the spec `[n/m]` phase counter.
+# It is DERIVED from the SAME build_run_lanes fan-out view the agents summary uses (one source,
+# no independent task tracking, no second ledger read of its own): total = the batch's task count
+# (exec_estimate.tasks, carried on RunLanes.tasks); done = the `done` lanes. Zero fabrication —
+# no real per-task batch on record → NO counter (exactly as review/ship show none today), never
+# a fabricated `0/0`. Changing the ledger's per-task state changes ONLY this number.
+
+def develop_counter(rl: "RunLanes") -> str:
+    """`<done>/<total>` from a RunLanes fan-out view, or "" when no real per-task batch exists.
+    total = the batch's task count (`rl.tasks`, from exec_estimate.tasks); done = the `done`
+    lanes. Only a parallel/fanout batch carries genuine per-task lanes, so a sequential run, a
+    degraded-to-sequential run, a no-batch run, or a run with no task total yields "" — never an
+    invented count where no real per-item state exists (the honesty rule)."""
+    if rl is None or not rl.active or rl.mode not in _PARALLEL_MODES:
+        return ""
+    total = rl.tasks
+    if total <= 0:
+        return ""
+    done = sum(1 for ln in rl.lanes if ln.state == L_DONE)
+    return f"{done}/{total}"
+
+
+def _develop_counter(surface: Any) -> str:
+    """The develop task counter for `surface`'s active run — the single-source read the badge
+    uses at the develop stage. Reuses build_run_lanes (never re-derives task state); `""` on any
+    read problem / no real batch, so the badge degrades clean and never fabricates a count."""
+    try:
+        from .govern import AuditLedger
+        ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+        return develop_counter(build_run_lanes(surface.state, ledger=ledger))
     except Exception:
         return ""

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import sys
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
@@ -110,10 +111,17 @@ class WizardResult:
 
 
 def _default_ask(prompt: str, choices: Any, default: str) -> str:
-    """The live choice reader (one line, default-on-blank). Injectable for tests."""
+    """The live choice reader (one line, default-on-blank). Injectable for tests.
+
+    Stage 1d (P2) — fail closed on a non-interactive stdin, mirroring `_cli_ask`: when
+    stdin isn't a TTY, skip the prompt and take the default, logging so it's not silent;
+    an EOF or OSError from a captured/redirected stream also falls back to the default."""
+    if not sys.stdin.isatty():
+        print(f"mokata: non-interactive stdin — defaulting to '{default}'", file=sys.stderr)
+        return default
     try:
         ans = input(f"{prompt} [{'/'.join(choices)}] (default {default}): ").strip()
-    except EOFError:
+    except (EOFError, OSError):
         return default
     return ans or default
 

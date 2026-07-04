@@ -39,6 +39,16 @@ audit ledger — 2 entries:
 
 ---
 
+## See mokata in action
+
+A quick tour of the workflow and skills — brainstorm → spec → test → develop → review → ship, with governance, memory, and the always-on status badge.
+
+https://github.com/user-attachments/assets/a6940119-1edb-4017-b935-cd48b80b4ea9
+
+> ▶ Video not playing inline? [Watch it here](https://github.com/user-attachments/assets/a6940119-1edb-4017-b935-cd48b80b4ea9).
+
+---
+
 **mokata** is an open-source framework for Claude Code that brings the best ideas in AI-assisted coding into one governed, knowledge-aware engine. At its core is a spec-driven TDD engine that starts by **brainstorming the problem with you** — one question at a time, weighing two or three real approaches grounded in your actual codebase before committing to anything. Only then does it draft a spec, and no code is written until that specification passes a *provable completeness gate*, every acceptance criterion is statically mapped to a test (RED before GREEN), and the finished code is reviewed back against the spec. Around that engine, mokata builds in the layers a single tool usually leaves out — a **persistent codebase knowledge graph** so the agent navigates by structure instead of guessing, **persistent, self-healing memory** (decisions, conventions, and past conversations that survive across sessions and surface their own contradictions instead of silently rotting), and **active token-and-cost governance** that retrieves just what's needed rather than dumping files into context. **Memory and its self-healing ship as part of the framework, on by default — not an add-on you wire up.** It can also orchestrate the external tools you already trust — like code graphs — under one set of gates with a full audit trail, and every durable write, whether to code, memory, or config, is **human-gated**: nothing silent, nothing autonomous. And it's **fully configurable and composable** — switch any layer or tool on or off, pick a profile, or reach for a single capability on its own: generate tests, debug a failure, or review a diff as a standalone command or directly-invoked skill, entering the pipeline wherever you need rather than running the whole thing. mokata is local-first, phones home nothing by default, is Apache-2.0 licensed, and is built so you can review every decision it makes.
 
 > **Naming:** **mokata** = the framework · **MoStack** = the brand it ships under.
@@ -50,56 +60,53 @@ audit ledger — 2 entries:
 - **Governed by default.** Every durable write (code, memory, config) is human-gated; sync hooks block only for security (exit 2), async hooks observe; every gate decision and tool call lands in an append-only audit ledger.
 - **Local-first, no telemetry.** Nothing leaves your machine unless you explicitly wire an external service. The `minimal` profile performs zero network egress.
 - **Configurable & composable.** Toggle any layer/tool, pick a profile, run any capability standalone, and enter the pipeline from any phase.
-- **Meets you where you work, ships trustworthy.** Runs under Claude Code, Cursor, Copilot, Windsurf, Codex, Gemini CLI, and Aider, plus a VS Code extension; sessions travel between machines; teams share one governed backend safely; and releases carry an SBOM + Sigstore provenance — no telemetry, ever.
+- **Meets you where you work, ships trustworthy.** Runs under Claude Code, Cursor, Copilot, Windsurf, Codex, Gemini CLI, and Aider (a VS Code extension is planned, not in 0.0.9); sessions travel between machines; teams share one governed backend safely; and releases carry an SBOM + Sigstore provenance — no telemetry, ever.
 
 ## Install
 
-<!-- mokata:directory-listing:start -->
-> ⏳ **Pending Claude plugin-directory approval.** mokata isn't in Claude's in-app
-> "Browse plugins" directory **yet** — install it via `/plugin marketplace add` (you get
-> the same in-Claude-Code experience). _(This notice auto-flips once the listing is
-> approved — single source: `scripts/directory_listing.py`.)_
-<!-- mokata:directory-listing:end -->
+**Start here → [Getting started](docs/getting-started.md).** The canonical, pip-first path.
 
-**1. As a Claude Code plugin (recommended)** — the standard install, from the public marketplace:
-
-```text
-/plugin marketplace add https://github.com/JasGujral/mokata-oss.git
-/plugin install mokata@mostack
-```
-
-> If you hit an SSH `Host key verification failed` error, your git is rewriting HTTPS→SSH; the
-> `https://…​.git` URL above avoids it (or run `ssh -T git@github.com` once to cache GitHub's key).
-
-**2. In Claude Code without the public marketplace** (no registration needed) — two no-marketplace ways to get the same in-Claude-Code experience:
-
-```text
-# 2a. the plugin, from a local clone:
-/plugin marketplace add ~/path/to/mokata-oss
-/plugin install mokata@mostack
-```
+**In Claude Code (recommended)** — one install, then one command wires the full workflow
+(slash commands + Agent Skills + MCP server + status line), on your existing Claude Code
+sign-in — no API key:
 
 ```bash
-# 2b. or one command wires it in (commands + MCP + hooks), on your existing Claude Code sign-in — no API key:
-pip install -e ".[mcp]"          # from a clone; installs `mokata` + `mokata-mcp`
-mokata setup claude              # --profile/--scope options; reverse with `mokata unsetup claude`
+pip install mokata               # MCP server works out of the box on Python ≥ 3.10 (SDK is a default dep)
+mokata setup claude              # wires commands + skills + MCP + statusline — human-gated
+# restart Claude Code, then:
+mokata mcp status                # expect: mokata-mcp: CONNECTED ✓
 ```
 
-See [Use mokata without the plugin](docs/how-to/use-without-plugin.md).
+> On **Python 3.9** the MCP server is unavailable (it needs ≥ 3.10) — the CLI and everything
+> else still work.
 
-**3. As a CLI, with any AI tool** — harness-agnostic (Gemini, Codex, scripts, CI). The CLI is the engine's mechanics (no LLM of its own); wire it into any shell- or MCP-capable assistant:
+**As a CLI, with any AI tool** — harness-agnostic (Gemini, Codex, scripts, CI). The CLI is the
+engine's mechanics (no LLM of its own); wire it into any shell- or MCP-capable assistant:
 
 ```bash
-git clone https://github.com/JasGujral/mokata-oss.git && cd mokata-oss
-pip install -e .                 # core (Python ≥ 3.9, no required deps)
-# pip install -e ".[schema]"     # optional: richer manifest validation via jsonschema
+pip install mokata
+mokata init
 ```
 
 See [Integrate with other AI tools](docs/how-to/integrate-other-ai-tools.md).
 
+<!-- mokata:directory-listing:start -->
+> ⏳ **Pending Claude plugin-directory approval.** A one-click Claude Code **plugin** is
+> **planned, not yet available** — mokata isn't registered on any Claude Code marketplace.
+> The supported way to run mokata inside Claude Code today is the pip-first path:
+> `pip install mokata` → `mokata setup claude`
+> (see [Getting started](https://jasgujral.github.io/mokata-oss/getting-started/)).
+> _(This notice auto-flips once the listing is approved — single source:
+> `scripts/directory_listing.py`.)_
+<!-- mokata:directory-listing:end -->
+
+> **Contributing (developers).** Only clone if you're working on mokata itself — end users never
+> need to: `git clone https://github.com/JasGujral/mokata-oss.git && cd mokata-oss && pip install -e .`
+> (on Python ≥ 3.10 this also pulls the MCP SDK). See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Quickstart
 
-**In Claude Code (primary)** — after installing the plugin, drive the workflow with slash commands:
+**In Claude Code (primary)** — after `mokata setup claude`, drive the workflow with slash commands:
 
 ```text
 /mokata:brainstorm        # Socratic pre-spec exploration (HARD-GATE before any spec)
@@ -131,7 +138,7 @@ Full walkthrough: [`docs/quickstart.md`](docs/quickstart.md) · full hands-on gu
 - **Governance & audit** — 4-tier rules, Karpathy gates, 4-layer secret protection, per-task model routing, reversible writes, full audit ledger. See the governed state at a glance with `mokata govern` (a read-only dashboard) and the *what-it-did-and-why* timeline with `mokata audit --why`.
 - **Session lifecycle & portable sessions** — list runs (`mokata sessions`), resume from the last passed gate (`mokata resume`), pause/resume a mid-brainstorm (the HARD-GATE still holds), and **carry a session across machines or hand it to a teammate**: `mokata session push <tag>` / `pull <tag>` packages checkpoints + approach + in-progress brainstorm + relevant memory into a machine-path-free, versioned, **secret-scanned + human-gated** bundle. Sessions carry a human-friendly name you can `rename`.
 - **Progress & visibility, one model** — one `RunProgress` drives every surface: an always-on **stage badge** (statusline, on by default, merge-safe), the native **to-do widget** where the harness has one, the printed run-progress block, and the per-subagent **lanes** in `mokata watch` / `progress --lanes`. No duplicated progress logic — channel-specific renderers over one source of truth.
-- **Runs under every agent, shows up in your editor** — the engine runs behind a thin boundary (`mokata harness` shows the capability matrix) with in-harness surfaces for **Claude Code, Cursor, GitHub Copilot, Windsurf, Codex, Gemini CLI, and Aider**, each degrading clearly where it lacks a capability. Plus a **VS Code extension** (`editors/vscode`) and a read-only **Copilot Chat `@mokata` participant** — governance, memory, and run-progress where you already work.
+- **Runs under every agent, shows up in your editor** — the engine runs behind a thin boundary (`mokata harness` shows the capability matrix) with in-harness surfaces for **Claude Code, Cursor, GitHub Copilot, Windsurf, Codex, Gemini CLI, and Aider**, each degrading clearly where it lacks a capability. A **VS Code extension** (`editors/vscode`) with a read-only Copilot Chat `@mokata` participant — governance, memory, and run-progress in your editor — is **planned (not in 0.0.9)**.
 - **Team & sharing** — one guided `mokata team join` chains adopt → shared memory (BYO Postgres) → vault pull → onboard → doctor (each human-gated, secret-scanned, reversible); publish/adopt governed per-framework **community stacks** (`mokata stacks`); and the team's **audit/activity logs** can live shared or local, conflict-free — **no telemetry, nothing phoned home**. One shared backend safely hosts **many projects**: every shared row is scoped by a stable project key, so review defaults to your project (`--all` / `--project` to span or pick).
 - **Supply-chain trust** — releases ship a reproducible sdist+wheel, a **CycloneDX SBOM**, and a **Sigstore build-provenance attestation** generated at tag-time in CI (the repo ships no pre-signed artifacts); all five CI workflows are least-privilege and SHA-pinned.
 

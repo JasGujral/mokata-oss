@@ -130,7 +130,9 @@ def run_playbook(surface: Any, exec_choice: Optional[ExecutionChoice] = None,
     session.answer(STORY["answer"])
     session.propose_approaches([Approach(**a) for a in STORY["approaches"]])
     session.approve("playbook", STORY["chosen"])
-    persist_approach(session, surface.state)
+    # Stage 6p — approval ALSO saves the plan as a durable file under .mokata/plans/ (BEFORE the
+    # spec). Degrade-clean: a plan-write failure never breaks this hand-off.
+    persist_approach(session, surface.state, plans_dir=surface.plans_dir)
     led.record("playbook", step="brainstorm", approved=session.can_emit_spec)
     checks["brainstorm_approved"] = session.can_emit_spec
     checks["knowledge_layer_on"] = surface.manifest.layer_enabled("knowledge")

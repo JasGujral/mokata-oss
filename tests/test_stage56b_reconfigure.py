@@ -314,7 +314,7 @@ class TestParityAndTemplate(unittest.TestCase):
 
     def test_slash_template_exists_and_is_namespaced(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        path = os.path.join(root, "templates", "commands", "reconfigure.md")
+        path = os.path.join(root, "src", "mokata", "templates", "commands", "reconfigure.md")
         self.assertTrue(os.path.exists(path), "reconfigure.md missing")
         with open(path, encoding="utf-8") as fh:
             md = fh.read()

@@ -18,6 +18,7 @@ from mokata.harness_setup import (
     plan_setup,
     plan_unsetup,
     resolve_targets,
+    resolved_mcp_command,
     setup_harness,
     unsetup_harness,
 )
@@ -50,7 +51,11 @@ class TestSetupProject(unittest.TestCase):
             # mcp
             mcp = _read(os.path.join(d, ".mcp.json"))
             self.assertIn(MCP_SERVER_NAME, mcp["mcpServers"])
-            self.assertEqual(mcp["mcpServers"][MCP_SERVER_NAME]["command"], "mokata-mcp")
+            # Stage 3b.3 registers the resolved command (absolute path when the console
+            # script is installed; bare name otherwise). Assert against the resolver so this
+            # holds in both a bare sandbox and a pip-installed env — the actual contract.
+            self.assertEqual(mcp["mcpServers"][MCP_SERVER_NAME]["command"],
+                             resolved_mcp_command())
             # hooks
             settings = _read(os.path.join(d, ".claude", "settings.json"))
             self.assertIn("SessionStart", settings["hooks"])

@@ -34,7 +34,7 @@ class TestPlanAdherenceClause(unittest.TestCase):
     def _both(self, name):
         """Return (skill prompt, shipped template) for `name`."""
         prompt = get_skill(name).prompt
-        with open(os.path.join(ROOT, "templates", "commands", f"{name}.md"),
+        with open(os.path.join(ROOT, "src", "mokata", "templates", "commands", f"{name}.md"),
                   encoding="utf-8") as fh:
             template = fh.read()
         return prompt, template
@@ -71,7 +71,7 @@ class TestPlanAdherenceClause(unittest.TestCase):
     def test_clause_is_single_source(self):
         # generated template == command_markdown(skill) — the clause can't drift
         for name in ("develop", "test", "review", "refine"):
-            with open(os.path.join(ROOT, "templates", "commands", f"{name}.md"),
+            with open(os.path.join(ROOT, "src", "mokata", "templates", "commands", f"{name}.md"),
                       encoding="utf-8") as fh:
                 self.assertEqual(fh.read(), command_markdown(get_skill(name)))
 

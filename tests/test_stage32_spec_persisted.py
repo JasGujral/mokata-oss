@@ -100,7 +100,7 @@ class TestSpecPersistedGate(unittest.TestCase):
 class TestImplementationPromptsClause(unittest.TestCase):
     def _both(self, name):
         prompt = get_skill(name).prompt
-        with open(os.path.join(ROOT, "templates", "commands", f"{name}.md"),
+        with open(os.path.join(ROOT, "src", "mokata", "templates", "commands", f"{name}.md"),
                   encoding="utf-8") as fh:
             template = fh.read()
         return prompt, template
@@ -124,7 +124,7 @@ class TestImplementationPromptsClause(unittest.TestCase):
 
     def test_clause_is_single_source(self):
         for name in ("develop", "test"):
-            with open(os.path.join(ROOT, "templates", "commands", f"{name}.md"),
+            with open(os.path.join(ROOT, "src", "mokata", "templates", "commands", f"{name}.md"),
                       encoding="utf-8") as fh:
                 self.assertEqual(fh.read(), command_markdown(get_skill(name)))
 

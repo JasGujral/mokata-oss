@@ -497,7 +497,7 @@ class TestMcpSurfaces(unittest.TestCase):
 class TestSlashTemplate(unittest.TestCase):
     def test_session_template_documents_name_and_transports(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        with open(os.path.join(root, "templates", "commands", "session.md"),
+        with open(os.path.join(root, "src", "mokata", "templates", "commands", "session.md"),
                   encoding="utf-8") as fh:
             md = fh.read()
         self.assertIn("name <tag>", md)

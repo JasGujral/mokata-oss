@@ -12,22 +12,24 @@ permissions:
 jobs:
   test:
     name: ${{ matrix.os }} · py${{ matrix.python }} · jsonschema=${{ matrix.jsonschema }}
-    # Stage 66 — cross-platform parity: the unit + integration suite runs on Windows, macOS,
-    # and Linux (× the existing Python / jsonschema axes). Least-privilege; mirrors the prior
-    # Linux job. The live-db job below stays Linux-only (its services are Linux containers).
+    # Stage 66 — cross-platform parity across Windows + Linux. Trimmed (0.0.9rc1) to a light
+    # matrix: py3.12 only, and macOS dropped, because macOS runners bill at 10x and the full
+    # matrix exhausts the private repo's monthly Actions allotment. Both jsonschema legs are
+    # kept (absent/present) — that axis caught the 0.0.8-red bug, so it stays. The live-db job
+    # below stays Linux-only (its services are Linux containers).
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
-    # Every `run:` step uses bash on all three OSes — windows-latest defaults to pwsh, which
-    # would break the `mktemp -d` / `|| true` POSIX steps. windows-latest ships Git Bash.
+    # Every `run:` step uses bash on both OSes — windows-latest defaults to pwsh, which would
+    # break the `mktemp -d` / `|| true` POSIX steps. windows-latest ships Git Bash.
     defaults:
       run:
         shell: bash
     strategy:
       fail-fast: false
       matrix:
-        os: ["ubuntu-latest", "windows-latest", "macos-latest"]
-        python: ["3.9", "3.10", "3.11", "3.12"]
+        os: ["ubuntu-latest", "windows-latest"]
+        python: ["3.12"]
         jsonschema: ["absent", "present"]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
