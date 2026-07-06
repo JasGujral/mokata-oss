@@ -58,6 +58,8 @@ exclude_docs: |
   build/
   launch/
   marketing/
+  # Brand asset doc, not a site page — keeps it out of nav (no "exists but not in nav" INFO).
+  assets/brand/BRAND.md
 
 nav:
   - Home: index.md

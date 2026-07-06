@@ -10,7 +10,7 @@ extension is a **thin, read-only client** over the mokata CLI: it renders what m
 knows, and it **never performs a durable write** (every change stays human-gated in the CLI).
 
 > **Honest scope:** the editor extension is **VS Code only** today. JetBrains and Neovim are on
-> the [roadmap](#roadmap-jetbrains--neovim) — not built yet, and intentionally not stubbed.
+> the [roadmap](#roadmap-jetbrains-neovim) — not built yet, and intentionally not stubbed.
 
 ## Install
 
