@@ -78,15 +78,19 @@ class TestSessionStartRuntime(unittest.TestCase):
             self.assertEqual(hook_cli.main(["session-start"]), 0)
 
 
-# --- the dispatcher degrades clean ---------------------------------------------------
-class TestDispatcherDegradesClean(unittest.TestCase):
-    def test_unknown_subcommand_exits_zero(self):
+# --- the dispatcher fails VISIBLY on a routing mistake (bug 5a) -----------------------
+# A missing/unknown subcommand is a MISCONFIGURATION, so it exits 1 (visible failure) — the
+# old silent exit 0 made a mis-wired hook look successful. It must NOT exit 2: exit 2 is the
+# reserved security-block code (only exit 2 blocks a PreToolUse call), so exit 1 still honors
+# "hooks never block a session on a routing mistake". See RT.S0 / doc 07 §5a.
+class TestDispatcherFailsVisibly(unittest.TestCase):
+    def test_unknown_subcommand_exits_one(self):
         with contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(hook_cli.main(["bogus"]), 0)
+            self.assertEqual(hook_cli.main(["bogus"]), 1)
 
-    def test_missing_subcommand_exits_zero(self):
+    def test_missing_subcommand_exits_one(self):
         with contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(hook_cli.main([]), 0)
+            self.assertEqual(hook_cli.main([]), 1)
 
 
 # --- the entry point is declared -----------------------------------------------------

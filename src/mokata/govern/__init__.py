@@ -44,7 +44,14 @@ from .cache import (
     stable_prefix_for,
 )
 from .compaction import Handback, cap_summary
-from .doctor import DoctorFinding, DoctorReport, diagnose
+from .doctor import (
+    CoverageMatrix,
+    CoverageRow,
+    DoctorFinding,
+    DoctorReport,
+    coverage_matrix,
+    diagnose,
+)
 from .lifecycle import ResetPlan, ResetResult, plan_reset, reset_state
 from .trust import (
     DEFAULT_TRUST,
@@ -86,11 +93,23 @@ from .rules import (
 from .secrets import Finding, has_secrets, scan
 from .tdd import GATE_ID as TDD_GATE_ID
 from .tdd import RedBeforeGreenError, TddGuard
-from .tokens import TokenTracker, UsageEntry
+from .tokens import (
+    CALIBRATION_KIND,
+    CALIBRATION_MARGIN_RATIO,
+    CalibrationRecord,
+    TokenTracker,
+    UsageEntry,
+    calibration_record,
+    log_bootstrap_calibration,
+    log_calibration,
+)
 
 __all__ = [
     # F1/F2
     "TokenTracker", "UsageEntry", "jit_retrieve", "RetrievalResult",
+    # R11 — token-estimate calibration logging
+    "CalibrationRecord", "calibration_record", "log_calibration",
+    "log_bootstrap_calibration", "CALIBRATION_KIND", "CALIBRATION_MARGIN_RATIO",
     # F3 — handback cap
     "Handback", "cap_summary",
     # F4 — output density
@@ -129,6 +148,8 @@ __all__ = [
     "TRUST_LEVELS", "DEFAULT_TRUST",
     # K5 — doctor
     "diagnose", "DoctorReport", "DoctorFinding",
+    # R13 — doctor coverage matrix
+    "coverage_matrix", "CoverageMatrix", "CoverageRow",
     # K6 — lifecycle
     "plan_reset", "reset_state", "ResetPlan", "ResetResult",
     # Stage 31 — plan-adherence deviation gate

@@ -38,18 +38,142 @@ class DoctorReport:
     def ok(self) -> bool:
         return not self.errors
 
-    def render(self) -> str:
+    def render(self, *, ascii_only: bool = False, color: bool = False) -> str:
+        """Presentation only — the same findings, laid out through the shared box/table + colour
+        helpers so doctor reads like every other mokata surface. `ascii_only` swaps the Unicode
+        box for a pure-ASCII one; `color` (opt-in, gated) tints the pass/fail status line. The
+        content (every finding's severity/code/detail, the graph hint) and `ok`/exit are unchanged.
+        Both default OFF so existing callers (and MCP/JSON consumers) get deterministic plain text."""
+        from ..legibility import green, red, table
         if not self.findings:
-            body = "mokata doctor: all checks passed."
+            body = green("mokata doctor: all checks passed.", color=color)
         else:
-            lines = [f"mokata doctor: {len(self.findings)} finding(s):"]
-            for f in self.findings:
-                lines.append(f"  [{f.severity}] {f.code}: {f.detail}")
-            lines.append("OK" if self.ok else "PROBLEMS FOUND")
-            body = "\n".join(lines)
+            rows = [(f.severity, f.code, f.detail) for f in self.findings]
+            grid = table(("severity", "code", "detail"), rows, ascii_only=ascii_only)
+            status = (green("OK", color=color) if self.ok
+                      else red("PROBLEMS FOUND", color=color))
+            body = "\n".join([f"mokata doctor: {len(self.findings)} finding(s):", grid, status])
         if self.graph_hint:
             body += f"\n{self.graph_hint}"
         return body
+
+
+@dataclass
+class CoverageRow:
+    kind: str        # "wiring" (harness capability) | "capability" (declared manifest need)
+    name: str        # the harness capability, or the capability need
+    status: str      # "pass" | "degraded" | "fail"
+    detail: str
+
+
+@dataclass
+class CoverageMatrix:
+    """R13 — the COMPLETE coverage matrix: every harness wiring point + every declared
+    capability, each classified pass / degraded / fail. Read-only and presentation-only; it
+    reuses the SAME `router.resolve()` diagnose() uses (one source of truth — never a second,
+    divergent derivation of capability status)."""
+
+    rows: List[CoverageRow] = field(default_factory=list)
+
+    def render(self, *, ascii_only: bool = False, color: bool = False) -> str:
+        """Render through the A4 legibility.table() layer, colour-gated (green pass / dim
+        degraded / red fail). `ascii_only` gives a pure-ASCII, zero-escape table when piped."""
+        from ..legibility import dim, green, red, table
+        color = color and not ascii_only
+
+        def paint(status: str) -> str:
+            if status == "pass":
+                return green(status, color=color)
+            if status == "fail":
+                return red(status, color=color)
+            return dim(status, color=color)
+
+        rows = [(r.kind, r.name, paint(r.status), r.detail) for r in self.rows]
+        grid = table(("kind", "capability", "status", "detail"), rows, ascii_only=ascii_only)
+        n_fail = sum(1 for r in self.rows if r.status == "fail")
+        n_deg = sum(1 for r in self.rows if r.status == "degraded")
+        header = (f"mokata doctor — coverage matrix "
+                  f"({len(self.rows)} checks, {n_fail} fail, {n_deg} degraded):")
+        return "\n".join([header, grid])
+
+
+def _classify_capability(surface: Any, need: str) -> tuple:
+    """Classify one declared capability need using the SAME `router.resolve()` diagnose() uses
+    — the (status, detail) is READ from the resolver's own Resolution, never re-derived a second
+    way (the T2 'no re-derivation' lesson). Degrades clean: an unroutable/bad capability is
+    'fail', never a crash. The 'fail' case is exactly what diagnose() flags missing-provider /
+    bad-capability for, so the two can never diverge."""
+    try:
+        res = surface.router.resolve(need)
+    except ManifestError as exc:
+        return "fail", str(exc)                      # diagnose(): "bad-capability"
+    if not res.available:
+        tried = ", ".join(t for t, _ in res.attempted) or "none"
+        return "fail", f"no present provider (tried: {tried})"   # diagnose(): "missing-provider"
+    if res.degraded:
+        return "degraded", res.summary()             # available via a fallback — observable degrade
+    return "pass", res.summary()
+
+
+def coverage_matrix(surface: Any) -> CoverageMatrix:
+    """Build the R13 coverage matrix: every declared harness wiring point (HARNESS_CAPABILITIES)
+    + every declared capability need, classified pass / degraded / fail. Capability rows reuse
+    `_classify_capability` (the same resolver diagnose() uses), so the matrix and diagnose() are
+    one source of truth. Read-only; degrades clean (never crashes on an unresolvable capability)."""
+    from ..harness import HARNESS_CAPABILITIES, claude_code_harness
+
+    rows: List[CoverageRow] = []
+
+    # 1) harness wiring points — the reference harness supports all four; a harness LACKING one
+    #    degrades clean (the boundary returns degraded, never a crash), so absent -> 'degraded'.
+    h = claude_code_harness()
+    for cap in HARNESS_CAPABILITIES:
+        supported = h.supports(cap)
+        rows.append(CoverageRow(
+            "wiring", cap,
+            "pass" if supported else "degraded",
+            f"harness '{h.name}' " + ("wires" if supported
+                                      else "lacks — degrades clean") + f" '{cap}'"))
+
+    # 2) capability needs — SAME resolver diagnose() uses (one source of truth).
+    for need in surface.manifest.capabilities:
+        status, detail = _classify_capability(surface, need)
+        rows.append(CoverageRow("capability", need, status, detail))
+
+    return CoverageMatrix(rows)
+
+
+def calibration_drift_findings(surface: Any) -> List[DoctorFinding]:
+    """R11 — surface any logged token-estimate calibration DRIFT: a real `actual` that exceeded
+    the chars/4 estimate's safety margin (the estimate under-counted, threatening the 2k budget
+    claim). Read-only and guarded: any ledger issue -> no findings, never an exception, and no
+    ledger dirs are created (only reads an existing ledger). A 'warning' (observability, not a
+    setup-breaking error) so doctor's ok/exit semantics stay reserved for real blockers."""
+    try:
+        import os
+
+        from .. import TEMP_LOCAL_DIRNAME
+        from .ledger import AUDIT_DIRNAME, LEDGER_FILENAME, AuditLedger
+        from .tokens import CALIBRATION_KIND
+        path = os.path.join(surface.mokata_dir, TEMP_LOCAL_DIRNAME, AUDIT_DIRNAME,
+                            LEDGER_FILENAME)
+        if not os.path.exists(path):
+            return []                       # nothing logged yet — no drift to report
+        entries = AuditLedger(path).entries()
+    except Exception:
+        return []
+    out: List[DoctorFinding] = []
+    for e in entries:
+        if e.get("kind") != CALIBRATION_KIND or not e.get("over_margin"):
+            continue
+        ctx = e.get("context", "?")
+        ratio = e.get("ratio")
+        ratio_txt = f"{ratio:.2f}" if isinstance(ratio, (int, float)) else str(ratio)
+        out.append(DoctorFinding(
+            "warning", "calibration-drift",
+            f"token estimate under-counted in '{ctx}': actual {e.get('actual')} > "
+            f"estimate {e.get('estimate')} (ratio {ratio_txt}) — chars/4 safety margin blown"))
+    return out
 
 
 def diagnose(surface: Any) -> DoctorReport:
@@ -97,6 +221,9 @@ def diagnose(surface: Any) -> DoctorReport:
             findings.append(DoctorFinding(
                 "error", "bad-trust",
                 f"tool '{tool}' has invalid trust level '{level}'"))
+
+    # 6b) R11 — token-estimate calibration drift (a logged actual that blew the chars/4 margin).
+    findings.extend(calibration_drift_findings(surface))
 
     # 6) code-graph guidance (Stage 25 Part B) — actionable, not just status.
     hint = ""

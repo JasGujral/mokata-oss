@@ -266,6 +266,130 @@ class TestCounters(unittest.TestCase):
             self.assertEqual(legibility.stage_counter(prog), "")
 
 
+# ============================================================= RT.S2 A4 — presentation layer
+class _FakeStream:
+    """A stdout stand-in whose TTY-ness is forced, for _color_enabled() tests."""
+    def __init__(self, tty):
+        self._tty = tty
+
+    def isatty(self):
+        return self._tty
+
+
+def _no_env():
+    """os.environ with NO_COLOR guaranteed UNSET (forced-TTY colour path)."""
+    env = {k: v for k, v in os.environ.items() if k != "NO_COLOR"}
+    return mock.patch.dict(os.environ, env, clear=True)
+
+
+ESC = "\x1b["
+
+
+class TestColorGate(unittest.TestCase):
+    def test_enabled_only_on_forced_tty_without_no_color(self):
+        with _no_env():
+            self.assertTrue(legibility._color_enabled(stream=_FakeStream(True)))
+
+    def test_disabled_when_no_color_set(self):
+        with mock.patch.dict(os.environ, {"NO_COLOR": "1"}):
+            self.assertFalse(legibility._color_enabled(stream=_FakeStream(True)))
+
+    def test_disabled_when_not_a_tty(self):
+        with _no_env():
+            self.assertFalse(legibility._color_enabled(stream=_FakeStream(False)))
+
+    def test_disabled_in_ascii_only_even_on_a_tty(self):
+        with _no_env():
+            self.assertFalse(
+                legibility._color_enabled(ascii_only=True, stream=_FakeStream(True)))
+
+    def test_broken_stream_degrades_to_disabled(self):
+        class _Boom:
+            def isatty(self):
+                raise OSError("no fd")
+        with _no_env():
+            self.assertFalse(legibility._color_enabled(stream=_Boom()))
+
+
+class TestColoredVerdicts(unittest.TestCase):
+    def test_gate_verdict_colorized_only_when_color_true(self):
+        colored = legibility.gate_verdict("completeness", True, "ok", color=True)
+        self.assertIn(ESC, colored)                         # green accent present
+        plain = legibility.gate_verdict("completeness", True, "ok", color=False)
+        self.assertNotIn(ESC, plain)
+
+    def test_color_off_is_byte_identical_to_default(self):
+        # the uncolored string must match today's output exactly (color is opt-in)
+        self.assertEqual(legibility.gate_verdict("completeness", True, "ok"),
+                         "✓ completeness passed (ok)")
+        self.assertEqual(legibility.gate_verdict("completeness", True, "ok", color=False),
+                         "✓ completeness passed (ok)")
+
+    def test_ascii_only_never_emits_escapes_even_if_color_asked(self):
+        line = legibility.gate_verdict("completeness", False, "no", action="fix it",
+                                       ascii_only=True, color=True)
+        self.assertNotIn(ESC, line)                         # ascii_only forces plain
+        self.assertTrue(line.startswith("[BLOCK]"))
+        self.assertIn("-> to unblock: fix it", line)
+
+    def test_blocked_verdict_uses_red_when_colored(self):
+        line = legibility.gate_verdict("completeness", False, "no", color=True)
+        self.assertIn("\x1b[31m", line)                     # red for a block
+
+    def test_verdict_passes_color_through(self):
+        res = run_completeness_gate(_spec(), [TestRef("t1", ["AC-1"])])   # blocked
+        self.assertIn(ESC, legibility.verdict(res, color=True))
+        self.assertNotIn(ESC, legibility.verdict(res, color=False))
+
+    def test_stage_recap_colorizes_only_when_asked(self):
+        self.assertIn(ESC, legibility.stage_recap("spec", "done", color=True))
+        self.assertNotIn(ESC, legibility.stage_recap("spec", "done"))
+        # plain is byte-identical to before
+        self.assertEqual(legibility.stage_recap("spec", "5 ACs written"),
+                         "✓ spec done — 5 ACs written. Next: `/mokata:develop`")
+
+
+class TestBoxAndTable(unittest.TestCase):
+    def test_box_wraps_content_in_unicode_borders(self):
+        out = legibility.box(["hello", "a longer line"])
+        self.assertIn("hello", out)
+        self.assertIn("a longer line", out)
+        self.assertIn("┌", out)
+        self.assertIn("│", out)
+
+    def test_box_ascii_fallback_has_no_unicode_drawing(self):
+        out = legibility.box(["hello"], ascii_only=True)
+        self.assertIn("hello", out)
+        self.assertIn("+", out)
+        self.assertIn("|", out)
+        for ch in "┌┐└┘─│":
+            self.assertNotIn(ch, out)
+
+    def test_box_title_row(self):
+        out = legibility.box(["body"], title="doctor")
+        self.assertIn("doctor", out)
+        self.assertIn("body", out)
+
+    def test_table_renders_headers_and_rows(self):
+        out = legibility.table(("code", "detail"),
+                               [("missing-provider", "no provider"), ("bad-trust", "oops")])
+        for token in ("code", "detail", "missing-provider", "no provider", "bad-trust"):
+            self.assertIn(token, out)
+        self.assertIn("│", out)                             # unicode column separator
+
+    def test_table_ascii_fallback(self):
+        out = legibility.table(("a", "b"), [("1", "2")], ascii_only=True)
+        self.assertIn("|", out)
+        for ch in "┌┐└┘─│┼┬┴├┤":
+            self.assertNotIn(ch, out)
+
+    def test_table_columns_are_aligned(self):
+        out = legibility.table(("k", "v"), [("x", "1"), ("longkey", "2")])
+        # every rendered row is the same visible width (padded columns)
+        widths = {len(ln) for ln in out.splitlines()}
+        self.assertEqual(len(widths), 1, out)
+
+
 # ============================================================= read-only / deterministic
 class TestReadOnlyDeterministic(unittest.TestCase):
     def test_helpers_are_deterministic(self):

@@ -29,6 +29,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 from typing import List, Optional
 
 # Stage 3d.1: with the mcp_admin ↔ harness_setup cycle broken (shared pieces extracted to
@@ -40,6 +41,40 @@ BLOCK_EXIT = 2
 
 # Keys inside tool_input that name the target path (for path-based detection, e.g. .env).
 _PATH_KEYS = ("file_path", "path", "notebook_path", "target_file")
+
+# How long a hook waits for stdin before giving up and using its default. Claude Code's real
+# invocation writes its JSON payload and closes stdin, so the read returns instantly at EOF —
+# this is pure headroom, not truncation. It only bites when stdin is an OPEN non-TTY pipe with
+# no writer, where a bare read() would block forever and hang the session.
+_STDIN_READ_TIMEOUT_SECS = 2.0
+
+
+def _read_stdin_bounded(timeout: float = _STDIN_READ_TIMEOUT_SECS) -> Optional[str]:
+    """Read all of stdin, but never block a session longer than ``timeout`` seconds.
+
+    A bare ``sys.stdin.read()`` blocks FOREVER when stdin is an OPEN non-TTY pipe with no
+    writer (a mis-wired launcher, a shell that leaves the write end open) — violating the
+    "hooks never block a session" contract. So we read on a daemon thread and give up after
+    ``timeout``, returning None (the caller falls back to its own default). Reuses the
+    ``mcp_admin.handshake`` bounded-reader pattern: cross-platform (no SIGALRM), Windows-safe.
+    Never raises. The normal path (payload + EOF) returns instantly, well inside ``timeout``."""
+    stream = sys.stdin
+    if stream is None:
+        return None
+    holder: dict = {}
+
+    def _reader() -> None:
+        try:
+            holder["raw"] = stream.read()
+        except Exception:            # torn-down/errored stream → treat as no input
+            holder["raw"] = None
+
+    thread = threading.Thread(target=_reader, daemon=True)
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        return None                  # timed out: an open pipe with no writer — don't block
+    return holder.get("raw")
 
 
 # ======================================================================================
@@ -142,11 +177,8 @@ def _read_cwd_from_stdin() -> str:
     """Claude Code passes a JSON payload on stdin; honour its cwd if present."""
     if sys.stdin is None or sys.stdin.isatty():
         return os.getcwd()
-    try:
-        raw = sys.stdin.read()
-    except Exception:
-        return os.getcwd()
-    if not raw.strip():
+    raw = _read_stdin_bounded(_STDIN_READ_TIMEOUT_SECS)
+    if not raw or not raw.strip():
         return os.getcwd()
     try:
         payload = json.loads(raw)
@@ -231,7 +263,17 @@ def session_start_main(argv: Optional[List[str]] = None) -> int:
         _emit(f"mokata: bootstrap skipped ({exc}).")
         return 0
 
-    context = build_bootstrap(surface).text
+    briefing = build_bootstrap(surface)
+    context = briefing.text
+    # R11 — log the briefing's tokenizer-free chars/4 estimate so its safety margin is MEASURED.
+    # Claude Code reports no real token count at inject time, so we log the ESTIMATE alone and
+    # wire the comparison point for when an actual arrives (never fabricate one). Fully guarded:
+    # observability that never blocks, slows, or raises in the SessionStart path.
+    try:
+        from .govern import log_bootstrap_calibration
+        log_bootstrap_calibration(surface, briefing.token_estimate)
+    except Exception:
+        pass
     # Stage 3b.3 — minimal MCP reachability warning. If mokata's MCP server is registered but
     # its command can't be resolved (a broken auto-start), append ONE warning line + the fix.
     # A fast LOCAL lookup only (no handshake subprocess): SessionStart is async/observability
@@ -277,10 +319,8 @@ def _read_statusline_stdin() -> str:
             return ""
     except Exception:
         pass
-    try:
-        return sys.stdin.read()
-    except Exception:
-        return ""
+    raw = _read_stdin_bounded(_STDIN_READ_TIMEOUT_SECS)
+    return raw if raw is not None else ""
 
 
 def _cwd_and_session_name(raw: str):
@@ -379,20 +419,24 @@ _SUBCOMMANDS = {
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """`mokata-hook <subcommand> [args…]`. An unknown/missing subcommand degrades to a
-    clean no-op (exit 0) — a hook must never block a session on a routing mistake."""
+    """`mokata-hook <subcommand> [args…]`. A missing or unknown subcommand is a
+    MISCONFIGURATION (a mis-wired hook command), so it fails VISIBLY with exit 1 rather than
+    a silent no-op — otherwise a mis-wired hook looks successful to Claude Code and scripts.
+    It must NOT use exit 2: exit 2 is mokata's reserved SECURITY-BLOCK code, and only exit 2
+    blocks a PreToolUse tool call — so exit 1 still honors "hooks never block a session on a
+    routing mistake" (it fails loud without tripping the security-block path)."""
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
         sys.stderr.write(
             "mokata-hook: missing subcommand (session-start | secret-guard | statusline)\n")
-        return 0
+        return 1  # misconfiguration → visible exit 1 (NOT 0=silent, NOT 2=security-block)
     sub, rest = argv[0], argv[1:]
     handler = _SUBCOMMANDS.get(sub)
     if handler is None:
         sys.stderr.write(
             f"mokata-hook: unknown subcommand {sub!r} "
             f"(expected session-start | secret-guard | statusline)\n")
-        return 0
+        return 1  # misconfiguration → visible exit 1 (NOT 0=silent, NOT 2=security-block)
     return handler(rest)
 
 

@@ -15,9 +15,19 @@ from ._common import (
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
+    from ..legibility import _color_enabled
     surface = _load_surface(args.path)
     report = diagnose(surface)
-    print(report.render())
+    # Colour + a Unicode box only on a real TTY (NO_COLOR unset); a piped / redirected /
+    # NO_COLOR run degrades to a clean plain-ASCII table with zero escape codes.
+    color = _color_enabled()
+    print(report.render(ascii_only=not color, color=color))
+    # R13 — the full pass/degraded/fail coverage matrix is opt-in (`--matrix`) so the default
+    # problem summary stays lean. It's informational: doctor's ok/exit stays derived from
+    # `report.ok` above, never from the matrix. Read-only, degrade-clean.
+    if getattr(args, "matrix", False):
+        from ..govern import coverage_matrix
+        print(coverage_matrix(surface).render(ascii_only=not color, color=color))
     return 0 if report.ok else 1
 
 
@@ -41,7 +51,16 @@ def cmd_baseline(args: argparse.Namespace) -> int:
 def cmd_config(args: argparse.Namespace) -> int:
     # Stage 24A — read/update backend config in the committed manifest. `get` is
     # read-only; `set` is human-gated (preview + confirm; secrets are a hard block).
+    # RT.S3 A3 — `wizard` is an interactive, gated walk that routes every change through
+    # the SAME `config_set` write path (never a second authority).
     try:
+        if args.action == "wizard":
+            from ..config_wizard import run_wizard
+            run_wizard(args.path)
+            return 0
+        if args.action in ("get", "set") and not args.key:
+            print(f"error: `config {args.action} <key>` requires a key", file=sys.stderr)
+            return 2
         if args.action == "get":
             found, val = config_cmd.config_get(args.path, args.key)
             if not found:
@@ -72,6 +91,9 @@ def register(sub, common):
         "doctor", parents=[common],
         help="diagnose the manifest/config (missing deps, conflicts, bad trust)",
     )
+    p_doc.add_argument("--matrix", action="store_true",
+                       help="also print the full capability coverage matrix "
+                            "(pass/degraded/fail); read-only, does not change the exit code")
     p_doc.set_defaults(func=cmd_doctor)
 
     p_base = sub.add_parser(
@@ -84,11 +106,12 @@ def register(sub, common):
 
     p_config = sub.add_parser(
         "config", parents=[common],
-        help="get/set backend config in the manifest (set is human-gated; Stage 24A)",
+        help="get/set config, or run the gated settings wizard (set/wizard are human-gated)",
     )
-    p_config.add_argument("action", choices=("get", "set"),
-                          help="read a key, or set one (preview + confirm)")
-    p_config.add_argument("key", help="dotted manifest key, e.g. tools.sqlite.config.path")
+    p_config.add_argument("action", choices=("get", "set", "wizard"),
+                          help="read a key, set one (preview + confirm), or walk the settings wizard")
+    p_config.add_argument("key", nargs="?", default=None,
+                          help="dotted manifest key, e.g. tools.sqlite.config.path (get/set)")
     p_config.add_argument("value", nargs="?", default=None,
                           help="value to set (required for 'set')")
     p_config.add_argument("--yes", action="store_true",

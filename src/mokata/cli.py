@@ -54,7 +54,7 @@ from .config import Surface
 # ---------------------------------------------------------------------------
 from .cli_commands import (
     setup, core, knowledge, memory, collab, skills, rules, index, mcp, diagnostics,
-    distribution, reset, pipeline, runviews, plan,
+    distribution, reset, pipeline, runviews, plan, menu, docs,
 )
 from .cli_commands._common import (
     _load_surface, _review_scope, _backend_projects, _SCOPE_CURRENT, _cli_ask, _profile_for,
@@ -144,6 +144,8 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline.register(sub, common)
     runviews.register(sub, common)
     plan.register(sub, common)
+    menu.register(sub, common)
+    docs.register(sub, common)
 
     return parser
 

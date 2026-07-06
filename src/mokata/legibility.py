@@ -12,9 +12,114 @@ this module is the read-only formatting layer.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+import os
+import re
+import sys
+from typing import Any, Iterable, List, Optional, Sequence
 
 from .progress import STAGE_BADGE_STAGES
+
+# ================================================================= 0. shared presentation layer
+# A SMALL, dependency-free look-and-feel used by every verdict / recap / table surface, so the
+# CLI (and later the TUI) read the same way. ANSI escape codes only — NO rich, NO textual. Still
+# pure/read-only: these format values the caller already has; they never touch state.
+#
+# Two independent gates, both degrade-clean:
+#   * colour (ANSI)  — on ONLY when _color_enabled(): a real TTY, `NO_COLOR` unset, not ascii_only.
+#   * box charset    — Unicode box-drawing, with an ASCII fallback (chosen by the caller's
+#                      ascii_only flag). Callers tie ascii_only to `not _color_enabled()` so a
+#                      piped / NO_COLOR / ascii_only surface gets a plain-ASCII table, zero escapes.
+_ANSI_GREEN, _ANSI_RED, _ANSI_DIM, _ANSI_RESET = "\033[32m", "\033[31m", "\033[2m", "\033[0m"
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _color_enabled(*, ascii_only: bool = False, stream: Any = None) -> bool:
+    """The single colour gate: True only when output is a real TTY AND `NO_COLOR` is unset AND
+    not ascii_only. Anything else (piped/redirected, NO_COLOR, ascii, a broken stream) -> False,
+    so ANSI never reaches a non-terminal. `stream` defaults to sys.stdout (injectable for tests)."""
+    if ascii_only:
+        return False
+    if os.environ.get("NO_COLOR") is not None:
+        return False
+    st = sys.stdout if stream is None else stream
+    try:
+        return bool(st.isatty())
+    except Exception:
+        return False
+
+
+def _paint(text: str, code: str, color: bool) -> str:
+    """Wrap `text` in an ANSI colour when `color`; otherwise return it untouched (byte-identical)."""
+    return f"{code}{text}{_ANSI_RESET}" if color else text
+
+
+def green(text: str, *, color: bool) -> str:
+    """mokata's accent (BRAND.md) for pass/ok — colour-gated by the caller."""
+    return _paint(text, _ANSI_GREEN, color)
+
+
+def red(text: str, *, color: bool) -> str:
+    """Red for block/fail — colour-gated by the caller."""
+    return _paint(text, _ANSI_RED, color)
+
+
+def dim(text: str, *, color: bool) -> str:
+    """Dim for secondary detail (e.g. the unblock hint) — colour-gated by the caller."""
+    return _paint(text, _ANSI_DIM, color)
+
+
+def _visible_len(s: str) -> int:
+    """The display width of `s` with any ANSI colour stripped (so padding stays aligned)."""
+    return len(_ANSI_RE.sub("", s))
+
+
+# Unicode box-drawing set + a pure-ASCII fallback with the same keys.
+_BOX = {"tl": "┌", "tr": "┐", "bl": "└", "br": "┘", "h": "─", "v": "│",
+        "ml": "├", "mr": "┤", "mt": "┬", "mb": "┴", "x": "┼"}
+_BOX_ASCII = {"tl": "+", "tr": "+", "bl": "+", "br": "+", "h": "-", "v": "|",
+              "ml": "+", "mr": "+", "mt": "+", "mb": "+", "x": "+"}
+
+
+def box(lines: Iterable[str], *, title: Optional[str] = None,
+        ascii_only: bool = False) -> str:
+    """A bordered box around already-formatted `lines`, with an optional title row. Unicode
+    box-drawing, ASCII fallback when `ascii_only`. Padding is ANSI-aware (visible width)."""
+    b = _BOX_ASCII if ascii_only else _BOX
+    rows = [str(x) for x in lines]
+    inner = max([_visible_len(r) for r in rows] + ([_visible_len(title)] if title else []) + [0])
+    bar = lambda l, r: l + b["h"] * (inner + 2) + r          # noqa: E731
+    cell = lambda s: f'{b["v"]} {s}{" " * (inner - _visible_len(s))} {b["v"]}'  # noqa: E731
+    out = [bar(b["tl"], b["tr"])]
+    if title is not None:
+        out.append(cell(title))
+        out.append(bar(b["ml"], b["mr"]))
+    out.extend(cell(r) for r in rows)
+    out.append(bar(b["bl"], b["br"]))
+    return "\n".join(out)
+
+
+def table(headers: Sequence[Any], rows: Iterable[Sequence[Any]], *,
+          ascii_only: bool = False) -> str:
+    """A simple aligned table with a header rule. Unicode box-drawing, ASCII fallback when
+    `ascii_only`. Column widths are ANSI-aware so a coloured cell still lines up. No truncation
+    — the full cell text is always shown."""
+    b = _BOX_ASCII if ascii_only else _BOX
+    head = [str(h) for h in headers]
+    body = [[str(c) for c in row] for row in rows]
+    cols = len(head)
+    widths = [_visible_len(head[i]) for i in range(cols)]
+    for row in body:
+        for i in range(cols):
+            widths[i] = max(widths[i], _visible_len(row[i]))
+    rule = lambda l, m, r: l + m.join(b["h"] * (w + 2) for w in widths) + r   # noqa: E731
+    line = lambda cells: b["v"] + b["v"].join(                                 # noqa: E731
+        f' {c}{" " * (widths[i] - _visible_len(c))} ' for i, c in enumerate(cells)) + b["v"]
+    out: List[str] = [rule(b["tl"], b["mt"], b["tr"]), line(head),
+                      rule(b["ml"], b["x"], b["mr"])]
+    out.extend(line(row) for row in body)
+    out.append(rule(b["bl"], b["mb"], b["br"]))
+    return "\n".join(out)
+
 
 # ----------------------------------------------------------------- 1. gate-verdict legibility
 # A SHARED one-line verdict for ANY gate decision, so completeness / spec-persisted / deviation
@@ -24,19 +129,24 @@ _PASS_ASCII, _BLOCK_ASCII = "[PASS]", "[BLOCK]"
 
 
 def gate_verdict(name: str, passed: bool, reason: str, *, action: Optional[str] = None,
-                 ascii_only: bool = False) -> str:
+                 ascii_only: bool = False, color: bool = False) -> str:
     """One legible line for a gate decision:
         ✓ <name> passed (<reason>)
         ✗ <name> blocked — <reason>
-    A blocked verdict with an `action` adds a second `→ to unblock: …` line (touch 2)."""
+    A blocked verdict with an `action` adds a second `→ to unblock: …` line (touch 2).
+
+    `color` is opt-in and gated: green ✓ for a pass, red ✗ for a block, dim unblock line. It
+    never fires in `ascii_only` mode, so the plain string stays byte-identical to today. Callers
+    pass `color=_color_enabled(...)` so ANSI only reaches a real terminal."""
+    color = color and not ascii_only
     if passed:
         head = _PASS_ASCII if ascii_only else _PASS_GLYPH
-        return f"{head} {name} passed ({reason})"
+        return f"{green(head, color=color)} {name} passed ({reason})"
     head = _BLOCK_ASCII if ascii_only else _BLOCK_GLYPH
-    line = f"{head} {name} blocked — {reason}"
+    line = f"{red(head, color=color)} {name} blocked — {reason}"
     if action:
         arrow = "->" if ascii_only else "→"
-        line += f"\n  {arrow} to unblock: {action}"
+        line += "\n  " + dim(f"{arrow} to unblock: {action}", color=color)
     return line
 
 
@@ -88,9 +198,10 @@ def _result_gate_id(result: Any) -> str:
     return "gate"
 
 
-def verdict(result: Any, *, ascii_only: bool = False) -> str:
+def verdict(result: Any, *, ascii_only: bool = False, color: bool = False) -> str:
     """The shared one-liner for a real gate-result object (read-only). Pulls `.passed`/`.reason`
-    /`.gate_id` (duck-typed across the gates) and, on a block, the canonical unblock action."""
+    /`.gate_id` (duck-typed across the gates) and, on a block, the canonical unblock action.
+    `color` is passed through to gate_verdict (opt-in, gate-checked)."""
     passed = _result_passed(result)
     gate_id = _result_gate_id(result)
     reason = str(getattr(result, "reason", "") or "")
@@ -100,7 +211,8 @@ def verdict(result: Any, *, ascii_only: bool = False) -> str:
             action = unblock_hint("write-secret")   # a secret block — security, not approvable
         else:
             action = unblock_hint(gate_id)
-    return gate_verdict(gate_id, passed, reason, action=action, ascii_only=ascii_only)
+    return gate_verdict(gate_id, passed, reason, action=action, ascii_only=ascii_only,
+                        color=color)
 
 
 # ----------------------------------------------------------------- 3. stage recap + next-step
@@ -122,10 +234,14 @@ def next_command(stage: str) -> Optional[str]:
     return f"/mokata:{nxt}" if nxt else None
 
 
-def stage_recap(stage: str, recap: str, *, ascii_only: bool = False) -> str:
+def stage_recap(stage: str, recap: str, *, ascii_only: bool = False,
+                color: bool = False) -> str:
     """`✓ <stage> done — <recap>. Next: \\`/mokata:<next>\\`` (the Next clause is omitted at the
-    terminal stage). Read-only; the recap text is supplied by the caller."""
+    terminal stage). Read-only; the recap text is supplied by the caller. `color` (opt-in, gated)
+    tints the ✓ green — the plain string is unchanged."""
+    color = color and not ascii_only
     head = _PASS_ASCII if ascii_only else _PASS_GLYPH
+    head = green(head, color=color)
     line = f"{head} {stage} done — {recap}."
     nxt = next_command(stage)
     if nxt:

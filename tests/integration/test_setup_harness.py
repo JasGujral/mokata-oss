@@ -57,8 +57,8 @@ class TestSetupHarnessE2E(unittest.TestCase):
             rc, _ = run_cli(["unsetup", "claude", "--yes", "--path", d])
             self.assertEqual(rc, 0)
             self.assertEqual(os.listdir(os.path.join(d, ".claude", "commands")), [])
-            with open(os.path.join(d, ".mcp.json"), encoding="utf-8") as fh:
-                self.assertNotIn("mokata", json.load(fh).get("mcpServers", {}))
+            # .mcp.json held only mokata's server → unsetup removes it byte-clean (5b: no {} husk)
+            self.assertFalse(os.path.exists(os.path.join(d, ".mcp.json")))
             # config preserved across unsetup
             self.assertTrue(os.path.exists(os.path.join(d, MOKATA_DIR, "manifest.json")))
 

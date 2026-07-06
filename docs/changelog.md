@@ -8,6 +8,38 @@ The full, versioned changelog lives in the repository's
 > a stabilizing phase and are collapsed into this entry; 0.0.1 is the honest starting point for an
 > early, fast-moving project.
 
+## 0.0.10
+
+**"Inside Claude Code" — richer in-terminal UX, a gated settings wizard, a `doctor` coverage
+matrix, and three hook/setup fixes. No breaking changes; additive; no new dependencies.** A new
+command palette (`mokata menu` / `/mokata:menu`) lists every mokata command and skill on one screen
+with gate markers, derived from the shipped files (single source, no drift). `/mokata:docs [topic]`
+points to the published docs — listing topics with their URLs and resolving a topic to its page
+(read online; not bundled in the wheel; never fetches at runtime). An interactive, gated settings
+wizard (`mokata config wizard`) walks you through mokata's settings, routing every change through the
+same human-gated write path (secret-scan + schema validation + write gate + audit ledger) and
+failing closed when non-interactive. Output is now consistent across verdicts, progress, and doctor
+tables (colour on a TTY, clean ASCII when piped or under `NO_COLOR`), and `mokata doctor` gains an
+opt-in capability coverage matrix (`mokata doctor --matrix`) — pass / degraded / fail per capability,
+single-sourced from the resolver. Under the hood, the tokenizer-free chars÷4 token estimate now logs
+estimate-vs-actual to the ledger so the ~2k briefing budget's safety margin is measured. **Fixes:**
+hooks no longer hang when stdin is an open pipe with no writer (bounded read + safe fallback);
+`mokata-hook` with a missing/unknown subcommand now exits non-zero (exit 1, never the reserved
+security-block code) so a mis-wired hook is visible; and `mokata unsetup claude` removes config files
+it created once they're empty instead of leaving `{}` husks (files with your own content are preserved).
+
+## 0.0.9
+
+**Installs from PyPI, no clone — and the MCP server works out of the box. No breaking changes.**
+`pip install mokata` now ships everything (command templates, hooks, and Agent Skills are packaged in
+the wheel) — no repo clone needed; the bundled MCP server's SDK is a default dependency on Python
+3.10+, so `mokata-mcp` runs out of the box (on 3.9 the CLI still works and the MCP server prints a
+clear upgrade message). `mokata setup claude` registers the MCP server at an absolute path, verifies
+the connection (`CONNECTED ✓`), and wires commands + skills + the status line; new `mokata mcp start |
+status | install` plus a `/mokata:mcp` repair skill re-register the server from inside Claude Code.
+Re-running `mokata setup claude` now syncs the Agent Skills and prunes stale/removed mokata skills
+(your own skills are never touched).
+
 ## 0.0.8
 
 **Fix: no duplicate Agent Skills when the plugin is installed.** `mokata setup claude` now detects

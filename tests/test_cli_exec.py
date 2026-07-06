@@ -3,6 +3,7 @@
 import io
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 
 from _support import sample_manifest_data  # noqa: F401  (path fix side-effect)
 
@@ -27,7 +28,10 @@ class TestExecCLI(unittest.TestCase):
         # `mokata exec` must not prompt; it silently defaults to sequential BUT logs
         # to stderr that the default was taken, so the decision is visible not silent.
         out_buf, err_buf = io.StringIO(), io.StringIO()
-        with redirect_stdout(out_buf), redirect_stderr(err_buf):
+        # Force a non-TTY / EOF stdin (StringIO reports isatty()==False and yields EOF)
+        # so the non-TTY decision is exercised regardless of the ambient terminal.
+        with redirect_stdout(out_buf), redirect_stderr(err_buf), \
+                mock.patch("sys.stdin", io.StringIO("")):
             rc = main(["exec"])
         self.assertEqual(rc, 0)
         err = err_buf.getvalue().lower()

@@ -4,8 +4,10 @@ Both jsonschema states. Asserts the Part A remediation behaviours and the Part B
 frugality invariants hold together (evidence, not claims).
 """
 
+import io
 import tempfile
 import unittest
+from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
 
@@ -95,8 +97,11 @@ class TestUnifiedGate(unittest.TestCase):
 class TestSharedConfirm(unittest.TestCase):
     def test_read_yes_no_defaults_to_no_on_eof(self):
         from mokata.prompt import read_yes_no
-        # no stdin → EOFError → False (never auto-approve)
-        self.assertFalse(read_yes_no("approve?", "really?"))
+        # Force a non-TTY / EOF stdin (StringIO reports isatty()==False and yields EOF)
+        # so this deterministically exercises the fail-closed path in any environment.
+        with mock.patch("sys.stdin", io.StringIO("")):
+            # no stdin → EOFError → False (never auto-approve)
+            self.assertFalse(read_yes_no("approve?", "really?"))
 
 
 # ----------------------------------------------------------------- M6: memory_type on MCP

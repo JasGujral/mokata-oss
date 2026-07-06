@@ -10,6 +10,37 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.10] — 2026-07-06
+
+**"Inside Claude Code" — richer in-terminal UX, a gated settings wizard, a `doctor` coverage
+matrix, and three hook/setup fixes. No breaking changes; additive; no new dependencies.**
+
+- **`/mokata:menu` command palette:** `mokata menu` shows every mokata command and skill on one
+  screen with gate markers, derived from the shipped command/skill files (single source — no drift).
+- **`/mokata:docs [topic]`:** points to the published docs — lists topics with their URLs and
+  resolves a topic to its page. Docs are read online, not bundled in the wheel; local-first (never
+  fetches at runtime).
+- **Gated settings wizard:** `mokata config wizard` walks you through mokata's settings
+  interactively — every change routed through the same human-gated write path (secret-scan + schema
+  validation + write gate + audit ledger), and fail-closed when non-interactive. It's a front-end,
+  never a second write path.
+- **Consistent output + `mokata doctor --matrix`:** verdicts, progress, and doctor tables now share
+  one look (colour on a TTY; clean ASCII when piped or under `NO_COLOR`). `mokata doctor` gains an
+  opt-in capability **coverage matrix** — pass / degraded / fail for every capability, single-sourced
+  from the resolver.
+- **Token-estimate calibration:** the tokenizer-free chars÷4 estimate now logs estimate-vs-actual to
+  the ledger, so the ~2k briefing budget's safety margin is measured, not merely asserted.
+
+**Fixes:**
+
+- **Hooks never hang.** `mokata-hook statusline` / `session-start` no longer block if stdin is an
+  open pipe with no writer — a bounded read falls back to defaults (the "hooks never block a
+  session" contract).
+- **Mis-wired hooks are visible.** `mokata-hook` with a missing or unknown subcommand now exits
+  non-zero (exit 1) instead of looking successful — and never uses the reserved security-block code.
+- **Clean uninstall.** `mokata unsetup claude` removes config files it created once they become
+  empty instead of leaving `{}` husks; files that still hold your own content are preserved.
+
 ## [0.0.9] — 2026-07-04
 
 Promotes `0.0.9rc1` unchanged (same code; version fields and notes only). Install with

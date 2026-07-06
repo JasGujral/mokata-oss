@@ -103,6 +103,13 @@ def _surfaces() -> List[CommandSurface]:
         CommandSurface("tour", slash=("tour",), mcp_read=("tour",),
                        note="60-second read-only demo (graph query, memory recall, gate catch) "
                             "→ read tool + slash (Stage 56)"),
+        CommandSurface("menu", slash=("menu",),
+                       note="read-only command palette — every /mokata command + skill on one "
+                            "screen with gate markers → slash (RT.S2 A1)"),
+        CommandSurface("docs", slash=("docs",),
+                       note="read-only docs pointer — no topic lists the published topics with "
+                            "their site URLs, a topic prints its URL (local-first, no fetch, no "
+                            "bundled content) → slash (RT.S3 A2)"),
         CommandSurface("reconfigure", slash=("reconfigure",), mcp_write=("reconfigure",),
                        note="re-runnable reconfigure wizard — change what's wired later "
                             "(add/remove integration, switch backend, change profile); gated + "
@@ -163,7 +170,8 @@ def _surfaces() -> List[CommandSurface]:
         # --- read + durable write → MCP read tool(s) + human-gated MCP write tool(s) ----
         CommandSurface("config", mcp_read=("config_get",), mcp_write=("config_set",),
                        note="config get → read tool; config set → gated write (secret "
-                            "hard-block in the manifest is absolute)"),
+                            "hard-block in the manifest is absolute); config wizard → the same "
+                            "gated write path, walked interactively (RT.S3 A3)"),
         CommandSurface("memory", mcp_read=("recall",),
                        mcp_write=("remember", "memory_export", "memory_import",
                                   "apply_proposal"),

@@ -394,15 +394,18 @@ class TestHookCliDegradesClean(unittest.TestCase):
                                          "old_string": "a", "new_string": "b"}})
         self.assertEqual(self._quiet_guard(env), 0)
 
-    def test_hook_dispatcher_unknown_subcommand_is_a_clean_noop(self):
+    def test_hook_dispatcher_routing_mistake_fails_visibly(self):
+        # Bug 5a: a missing/unknown subcommand is a MISCONFIGURATION → visible exit 1 (the
+        # old silent exit 0 made a mis-wired hook look successful). NOT exit 2: that is the
+        # reserved security-block code, so exit 1 still honors "hooks never block a session".
         import contextlib
         import io
 
         from mokata.hook_cli import main
         with contextlib.redirect_stderr(io.StringIO()), \
                 contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(main([]), 0)                    # missing subcommand
-            self.assertEqual(main(["bogus-subcommand"]), 0)  # unknown subcommand
+            self.assertEqual(main([]), 1)                    # missing subcommand → visible
+            self.assertEqual(main(["bogus-subcommand"]), 1)  # unknown subcommand → visible
             self.assertEqual(main(["statusline"]), 0)        # known, read-only, exits 0
 
 

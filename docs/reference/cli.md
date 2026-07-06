@@ -462,9 +462,31 @@ env-var DSN (the DSN value is **never stored** — only the env-var name); `disc
 
 ## Lifecycle (Part K)
 
-### `mokata doctor`
+### `mokata menu`
+The **command palette** — every shipped `/mokata:` command and every bundled skill on one
+screen, each with a one-line description and a `✓` marker for the ones that carry a gate.
+Read-only; enumerated from the installed command/skill files (single source, never a
+hand-maintained list). Colour + a Unicode box on a real terminal; plain-ASCII with zero
+escape codes when piped, redirected, or `NO_COLOR` is set. Backs `/mokata:menu`.
+
+### `mokata docs [topic]`
+A **pointer to the published docs site** (<https://jasgujral.github.io/mokata-oss/>). With no
+topic it lists the top-level topics with their site URLs; with a topic (e.g. `getting-started`,
+`concepts/execution-model`) it prints that page's URL and title. **Read-only and local-first** —
+it resolves and prints URLs, it **never fetches** the page, and **no doc content ships in the
+package** (the docs live at the repo-root `docs/` tree that mkdocs builds into the site). An
+unknown topic re-lists the topics with a hint and exits non-zero. Colour + a Unicode box on a
+real terminal; plain-ASCII with zero escape codes when piped, redirected, or `NO_COLOR` is set.
+Backs `/mokata:docs`.
+
+### `mokata doctor [--matrix]`
 Diagnose the manifest/config: missing providers, broken adapters, role conflicts, bad
 trust levels, oversized rule tiers. Exit non-zero if any error.
+
+`--matrix` additionally prints the full **capability coverage matrix** — every harness
+wiring point and every declared capability classified **pass / degraded / fail** (degraded =
+resolved via a fallback; fail = no present provider). It reuses the same resolver the diagnosis
+does (one source of truth), is read-only, and does **not** change the exit code.
 
 ### `mokata baseline [--cmd <test command>]`
 Report whether the test suite is **green or red at baseline** before you start — so any new
@@ -478,6 +500,15 @@ Read or update a dotted manifest key — e.g. backend paths (`tools.sqlite.confi
 (preview → confirm; `--yes` skips), validates the result, and **hard-blocks any secret**
 (an inline DSN/credential is refused — use an env-var reference). `get` exits non-zero if
 the key is unset. See [configure storage backends & paths](../how-to/configure-storage-backends.md).
+
+### `mokata config wizard`
+An **interactive, gated walk** through mokata's user-facing settings. For each setting it shows
+the current value, a one-line description, the allowed values, and the default; you can keep,
+skip, or edit it. Every change is routed through the **same human-gated write path** as `config
+set` (preview → confirm → secret-scan → schema-validate → ledger) — the wizard is a front-end,
+never a second write authority. **Fail-closed**: on a non-TTY / unreadable stdin it makes no
+change and says so (it never hangs or silently writes). Reject leaves the manifest byte-unchanged;
+each committed change is recorded in the audit ledger.
 
 ### `mokata reset [--keep-config] [--backup DIR] [--yes]`
 Remove mokata state (`.mokata/`). `--keep-config` keeps `manifest.json` + `constitution.md`

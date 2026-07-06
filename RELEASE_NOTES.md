@@ -1,40 +1,33 @@
 
-Promotes `0.0.9rc1` unchanged (same code; version fields and notes only). Install with
-`pip install mokata`.
+mokata **0.0.10 — "Inside Claude Code."** Upgrade with `pip install -U mokata`. Additive; no
+breaking changes; no new dependencies.
 
-**Installs from PyPI, no clone — and the MCP server works out of the box.**
+**Richer in-terminal UX.**
 
-- **pip-installable:** `pip install mokata` now ships everything (command templates, hooks, and
-  Agent Skills are packaged in the wheel) — no repo clone needed. The bundled MCP server's SDK is a
-  default dependency on **Python 3.10+**, so `mokata-mcp` runs out of the box (on 3.9 the CLI still
-  works; the MCP server prints a clear upgrade message).
-- **One-command wiring:** `mokata setup claude` registers the MCP server at an absolute path,
-  verifies the connection (`CONNECTED ✓`), and wires commands + skills + the status line. New
-  `mokata mcp start | status | install`, and a `/mokata:mcp` repair skill that re-registers the
-  server from inside Claude Code.
-- **Skills stay fresh on update:** re-running `mokata setup claude` now syncs the Agent Skills and
-  prunes stale/removed mokata skills (your own skills are never touched).
+- **Command palette — `/mokata:menu`:** `mokata menu` lists every mokata command and skill on one
+  screen with gate markers, derived from the shipped command/skill files (single source — no drift).
+- **Docs at your fingertips — `/mokata:docs [topic]`:** lists topics with their published-docs URLs
+  and resolves a topic to its page. Docs are read online — not bundled in the wheel, and the command
+  never fetches at runtime (local-first).
+- **Gated settings wizard — `mokata config wizard`:** walks you through mokata's settings
+  interactively, routing every change through the same human-gated write path (secret-scan + schema
+  validation + write gate + audit ledger), and failing closed when run non-interactively. It's a
+  front-end, never a second write path.
+- **Consistent output + `mokata doctor --matrix`:** verdicts, progress, and doctor tables now share
+  one look — colour on a TTY, clean ASCII when piped or under `NO_COLOR`. `mokata doctor` gains an
+  opt-in capability **coverage matrix**: pass / degraded / fail for every capability, single-sourced
+  from the resolver.
 
-**Progress you can see, and a review you can trust.**
+**Fixes.**
 
-- **Redesigned always-on status badge:** the full brainstorm → spec → develop → review → ship arc,
-  each stage marked done/current/pending, with a live `develop [done/total]` counter. Configure via
-  `settings.ux.badge_verbosity` (`full` default | `minimal`). `/mokata:progress` now shows the
-  user-stage arc and what's pending this session.
-- **Independent review closes the pipeline:** `/mokata:review` runs as a **fresh-context subagent**
-  by default (re-deriving its verdict from a self-contained brief, not the builder's context), and
-  `/mokata:ship` now **blocks unless a passing review is on record** for the run — evidence over
-  claims. Degrades cleanly to inline review where a harness has no subagents; toggle with
-  `settings.review.independent`. Fixes review not reliably firing after `develop`.
-- **Brainstorm saves a plan:** when you approve an approach, the design write-up is saved as a plan
-  file; `mokata plan list | show | export` keeps an editable copy in your repo.
+- **Hooks never hang** *(fixes the 0.0.9 known issue):* `mokata-hook statusline` / `session-start` no
+  longer block when stdin is an open pipe with no writer — a bounded read falls back to defaults (the
+  "hooks never block a session" contract).
+- **Mis-wired hooks are visible:** `mokata-hook` with a missing or unknown subcommand now exits
+  non-zero (exit 1) instead of looking successful — and never uses the reserved security-block code.
+- **Clean uninstall:** `mokata unsetup claude` removes config files it created once they become empty
+  instead of leaving `{}` husks; files that still hold your own content are preserved.
 
-**Under the hood.** Reproducible, Sigstore-signed wheels published to PyPI from CI via OIDC Trusted
-Publishing (public repo only), a fail-closed release pipeline that won't tag on a red matrix, and
-internal refactors (`cli`/`mcp` split into packages) with no behavior change. Local-first, no
-telemetry, Apache-2.0.
-
-**Known issue** (fix scheduled for the next release): invoking `mokata-hook statusline` /
-`session-start` by hand with stdin attached to a pipe that never closes can block until the pipe
-does. Claude Code's own hook invocation (payload + EOF) is unaffected — normal use never hits this.
-
+**Under the hood.** The tokenizer-free chars÷4 briefing estimate now logs estimate-vs-actual to the
+ledger so the ~2k budget's safety margin is measured, not merely asserted. Local-first, no telemetry,
+Apache-2.0.

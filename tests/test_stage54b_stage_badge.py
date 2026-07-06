@@ -355,7 +355,10 @@ class TestSetupWiring(unittest.TestCase):
             self.assertIn("statusLine", _read_json(sp))
             unsetup_harness("claude", root=d, scope="project",
                             assume_yes=True, out=lambda _: None)
-            self.assertNotIn("statusLine", _read_json(sp))
+            # Byte-clean reversal (bug 5b): the file held nothing but mokata's entries, so
+            # unsetup deletes it rather than leaving an empty `{}` husk — mokata's statusLine
+            # is gone a fortiori.
+            self.assertFalse(sp.exists())
 
     def test_setup_respects_disabled_setting(self):
         with tempfile.TemporaryDirectory() as d:

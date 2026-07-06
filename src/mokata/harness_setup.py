@@ -420,6 +420,17 @@ def _write_json(path: Path, data: Dict) -> None:
         raise
 
 
+def _write_or_remove_json(path: Path, data: Dict) -> None:
+    """Persist a merged config, or DELETE the file when nothing's left. If stripping mokata's
+    entries emptied `data` (`not data`), the file is removed for a byte-clean reversal rather
+    than left as an empty `{}` husk. This is safe by construction: any surviving non-mokata key
+    keeps `data` non-empty, so the file is written, never deleted — user content is preserved."""
+    if data:
+        _write_json(path, data)
+    else:
+        path.unlink(missing_ok=True)
+
+
 def resolved_mcp_command() -> str:
     """The `mokata-mcp` command an installed registration should launch — resolved to an
     ABSOLUTE path so auto-start survives the GUI-launched PATH (the classic silent killer).
@@ -800,7 +811,7 @@ def apply_unsetup(plan: UnsetupPlan) -> List[str]:
                 data["mcpServers"] = servers
             else:
                 data.pop("mcpServers", None)
-            _write_json(t.mcp_path, data)
+            _write_or_remove_json(t.mcp_path, data)
             removed.append(str(t.mcp_path))
 
     # 3. hook entries + the statusLine badge (Stage 54b) — one read/write of settings.json
@@ -839,7 +850,7 @@ def apply_unsetup(plan: UnsetupPlan) -> List[str]:
             changed = True
 
         if changed:
-            _write_json(t.settings_path, data)
+            _write_or_remove_json(t.settings_path, data)
             removed.append(str(t.settings_path))
 
     return removed
