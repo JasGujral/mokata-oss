@@ -160,7 +160,10 @@ class ReleaseScriptWiring(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        with open(os.path.join(ROOT, "scripts", "release.sh"), encoding="utf-8") as fh:
+        path = os.path.join(ROOT, "scripts", "release.sh")
+        if not os.path.exists(path):
+            raise unittest.SkipTest("scripts/release.sh is dev-only — not shipped to the public mirror")
+        with open(path, encoding="utf-8") as fh:
             cls.sh = fh.read()
 
     def test_invokes_the_branch_protection_check(self):
@@ -175,6 +178,20 @@ class ReleaseScriptWiring(unittest.TestCase):
         self.assertLess(check_at, tag_at,
                         "branch protection must be verified BEFORE any tag is created")
 
+    def test_runs_shipped_suite_against_public_subset_before_tagging(self):
+        """PROCESS GUARDRAIL: a shipped test that reads an internal-only file passes on the
+        private tree but ERRORS on the public mirror (FileNotFoundError) — reddening release-gate
+        CI *after* the push. So the preflight must ALSO run the shipped suite against the exact
+        public-synced subset, catching that class of bug BEFORE anything is pushed/tagged."""
+        check_at = self.sh.find("run_public_subset_preflight")
+        self.assertNotEqual(check_at, -1,
+                            "release.sh must run the shipped suite against the public-synced subset")
+        # It must be reached in the preflight, before the first tag is ever created.
+        tag_at = self.sh.find("git tag -a")
+        self.assertNotEqual(tag_at, -1)
+        self.assertLess(check_at, tag_at,
+                        "the public-subset preflight must run BEFORE any tag is created")
+
 
 class SyncBoundaryEnvHardening(unittest.TestCase):
     """scripts/sync-public.sh: a real `.env` is EXCLUDED (would carry live creds) but `.env.example`
@@ -182,7 +199,10 @@ class SyncBoundaryEnvHardening(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        with open(os.path.join(ROOT, "scripts", "sync-public.sh"), encoding="utf-8") as fh:
+        path = os.path.join(ROOT, "scripts", "sync-public.sh")
+        if not os.path.exists(path):
+            raise unittest.SkipTest("scripts/sync-public.sh is dev-only — not shipped to the public mirror")
+        with open(path, encoding="utf-8") as fh:
             cls.sh = fh.read()
 
     def test_env_example_is_included_before_env_exclude(self):
