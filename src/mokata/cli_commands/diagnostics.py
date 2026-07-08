@@ -22,6 +22,15 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     # NO_COLOR run degrades to a clean plain-ASCII table with zero escape codes.
     color = _color_enabled()
     print(report.render(ascii_only=not color, color=color))
+    # MCP wiring — registered? enabled? permitted? CONNECTED? — via the SAME shared reporter as
+    # `mokata mcp status` (mcp_admin.full_status) so the two can't drift. Informational: it never
+    # changes doctor's ok/exit (derived from `report.ok`); a broken/ungranted server prints its
+    # named fix (`mokata mcp install`) but doesn't fail doctor.
+    from .. import mcp_admin
+    print("")
+    for line in mcp_admin.full_status(root=args.path,
+                                      home=getattr(args, "home", None)).lines:
+        print(line)
     # R13 — the full pass/degraded/fail coverage matrix is opt-in (`--matrix`) so the default
     # problem summary stays lean. It's informational: doctor's ok/exit stays derived from
     # `report.ok` above, never from the matrix. Read-only, degrade-clean.

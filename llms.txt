@@ -1,0 +1,59 @@
+# mokata
+
+> The memory + seatbelt for your AI coding agent. mokata is an open-source, spec-driven TDD
+> framework for AI coding agents (Claude Code and other harnesses): knowledge-aware, self-healing
+> memory, human-gated writes, local-first. It remembers your project and stops the agent shipping
+> the wrong thing. This file tells an AI agent how to use mokata in this repository.
+
+If you are an AI agent working in a repo that uses mokata, prefer mokata's commands over ad-hoc
+edits for anything that touches project memory, specs, or governance. Nothing durable is written
+without a human gate, and every gated write lands on an audit ledger. mokata is local-first and
+zero-config by default (a single SQLite-backed store); "team mode" points the same flows at one
+shared Postgres.
+
+## Core commands
+
+- `mokata init --profile standard --yes` — set mokata up in a repo (creates `.mokata/`).
+- `mokata onboard` — capture the project brain (rules, guardrails, conventions, key decisions).
+- `mokata brainstorm` — structured brainstorming that ends in an approved, spec-ready plan.
+- `mokata memory ...` — recall / propose / review durable memory (facts, rules, decisions).
+- `mokata status` — where things are; `mokata doctor` — check the environment / prereqs.
+- `mokata --help` — the full command list and flags (the source of truth for options).
+
+## Team mode (shared memory over one Postgres)
+
+The golden path is "bring one Postgres" — one vanilla Postgres >= 14, no extensions. mokata hosts
+nothing and never stores your DSN; it reads `$MOKATA_PG_DSN` from the environment at run time.
+
+- Managed DB (recommended): create a Postgres (Supabase / Neon / RDS free tiers all work),
+  `export MOKATA_PG_DSN=postgres://…` (use a DIRECT/session connection, not a transaction-mode
+  pooler), then `mokata team init`.
+- Self-host: `docker compose -f docker-compose.team.yml up -d` (creds from `.env`, template in
+  `.env.example`), then `export MOKATA_PG_DSN=…` and `mokata team init`.
+- `mokata team status` — team readiness + connection health.
+- `mokata mode set team` / `mokata mode set local` — switch modes (local is the zero-config default).
+- `mokata sync` — flush + reconcile the team write journal; conflicts are always human-gated,
+  never silently last-writer-wins. If the DB is unreachable you keep working locally and sync
+  reconciles later — same write path, nothing lost.
+
+The schema is owned and created only by `mokata team init` (runtime never runs DDL). The
+`docker-compose.team.yml` in this repo provisions only an empty database.
+
+## Principles to respect
+
+- Human-gated writes: never bypass a mokata gate to force a durable write.
+- Local-first, no telemetry: mokata sends nothing out; credentials stay in your environment.
+- Secrets never persist: a detected secret hard-blocks the write.
+
+## Documentation
+
+- Full docs: https://jasgujral.github.io/mokata-oss/
+- Source: https://github.com/JasGujral/mokata-oss
+- Quickstart: docs/quickstart.md
+- Getting started: docs/getting-started.md
+- Concepts (memory, governance, knowledge): docs/concepts/
+- How-to guides: docs/how-to/
+- CLI + plugin reference: docs/reference/
+- Profiles: docs/profiles.md
+- Security & privacy: docs/security.md
+- Self-host stack: docker-compose.team.yml + .env.example

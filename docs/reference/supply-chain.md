@@ -59,7 +59,7 @@ is available. Supported versions, scope, response targets, and the reporting lin
 
 ## Release ordering (unchanged)
 
-These supply-chain steps **do not weaken** the fail-closed release order: `scripts/release.sh`
-still verifies version-consistency at the exact commit being tagged and tags **only after** the
-public mirror sync + a passing `release-check` (the tag-triggered workflow above then builds,
-signs, and publishes).
+These supply-chain steps **do not weaken** the fail-closed release order: a passing
+`mokata release-check` (version-consistency at the exact commit being tagged) and a passing
+`mokata branch-protection-check` (the default branch is protected) gate the tag — the
+tag-triggered workflow above then builds, signs, and publishes.

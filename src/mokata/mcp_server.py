@@ -8,7 +8,8 @@ stay monkeypatchable on `mokata.mcp_server` exactly as before (server.main resol
 this module).
 
 The MCP SDK is still imported LAZILY (inside `mokata.mcp.server.build_server`), so importing this
-shim never imports the SDK — the core and CLI keep importing it with the SDK absent (Python 3.9).
+shim never imports the SDK — the core and CLI keep importing it even in a stripped/broken env
+where the SDK is absent.
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """

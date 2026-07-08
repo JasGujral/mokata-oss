@@ -147,6 +147,16 @@ def cmd_team(args: argparse.Namespace) -> int:
         print(T.honest_note())
         return 0
 
+    if action == "init":
+        # TM.S3 — first-time team setup: pick backend (guidance) → fail-closed prereqs →
+        # ONE idempotent DDL provision pass (the sole DDL owner) → pin project.id → live
+        # CONNECTED test. Then `mokata mode set team` activates.
+        surface = _load_surface(args.path)
+        res = T.team_init(args.path, surface, backend=getattr(args, "backend", None) or "managed",
+                          dsn_env=getattr(args, "dsn_env", None) or T.DEFAULT_DSN_ENV,
+                          assume_yes=args.yes, ledger=ledger, out=print)
+        return 0 if res.ok else 1
+
     if action == "join":
         # Stage 70b — the ONE guided path: adopt → connect → vault → onboard → verify. Each step
         # is confirmable + degrade-clean; reuses the primitives below (no new engine).
@@ -177,8 +187,8 @@ def cmd_team(args: argparse.Namespace) -> int:
         res = T.team_disconnect(args.path, surface, assume_yes=args.yes, ledger=ledger, out=print)
         return 0 if res.changed or not res.aborted else 1
 
-    print(f"team: unknown action '{action}' (use join | status | adopt | connect | disconnect).",
-          file=sys.stderr)
+    print(f"team: unknown action '{action}' (use init | join | status | adopt | connect | "
+          f"disconnect).", file=sys.stderr)
     return 2
 
 
@@ -247,11 +257,16 @@ def register(sub, common):
              "memory/sessions at your OWN managed Postgres (mokata hosts nothing)",
     )
     p_team.add_argument("action", nargs="?", default="status",
-                        choices=("join", "status", "adopt", "connect", "disconnect"),
-                        help="join <source> (guided onboarding) | status (default) | "
-                             "adopt <source> | connect --dsn-env <ENV> | disconnect")
+                        choices=("init", "join", "status", "adopt", "connect", "disconnect"),
+                        help="init (first-time setup: provision + CONNECTED test) | join <source> "
+                             "(guided onboarding) | status (default) | adopt <source> | "
+                             "connect --dsn-env <ENV> | disconnect")
     p_team.add_argument("source", nargs="?", default=None,
                         help="join/adopt: a teammate's stack file or repo dir")
+    p_team.add_argument("--backend", dest="backend", default=None,
+                        choices=("managed", "compose", "local"),
+                        help="init: which backend to guide toward — managed DSN (golden path, "
+                             "default), compose self-host, or local")
     p_team.add_argument("--dsn-env", dest="dsn_env", default=None,
                         help="join/connect: the env-var NAME holding your managed-Postgres DSN "
                              "(default MOKATA_PG_DSN); the DSN value is never stored")

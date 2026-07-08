@@ -97,5 +97,5 @@ rationale, and the parity test asserts they carry an exemption:
 | `route` | Diagnostic plumbing — resolves a capability to its concrete tool + fallback chain; internal routing introspection. |
 | `detect` | Diagnostic plumbing — probes tool presence on the host; an environment scan. |
 | `validate` | Diagnostic plumbing — parses + validates the committed manifest; a lint/CI check. |
-| `release-check` | Release plumbing — a pure/offline preflight asserting every version field equals the intended tag; run from the shell by `release.sh` (and CI) during a release cut, the version mirror of `validate`. |
+| `release-check` | Release plumbing — a pure/offline preflight asserting every version field equals the intended tag; run in CI during a release cut, the version mirror of `validate`. |
 | `bootstrap` | Hook plumbing — prints the SessionStart briefing; invoked *by* the SessionStart hook, never typed by a user. |

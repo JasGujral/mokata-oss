@@ -5,11 +5,16 @@ name: Scorecard supply-chain security
 # OpenSSF API); on the private dev mirror the job is skipped, so this is a no-op there.
 
 on:
+  workflow_dispatch:        # manual / release-pipeline on-demand kick
   branch_protection_rule:
   schedule:
-    - cron: "32 4 * * 2"   # 04:32 UTC every Tuesday
+    - cron: "32 4 * * 2"   # 04:32 UTC every Tuesday (backstop)
   push:
-    branches: [master]
+    # The PUBLIC mirror's default branch is `main` (sync-public.sh pushes `origin main`); the
+    # private dev mirror is `master`. The old master-only trigger NEVER fired on the public repo,
+    # so the score only refreshed on the weekly cron and lagged every release (the stale-5.5 bug).
+    # Listing both makes Scorecard re-run automatically on every release sync-to-public.
+    branches: [main, master]
 
 permissions: read-all
 
@@ -29,12 +34,18 @@ jobs:
         with:
           persist-credentials: false
       - name: Run analysis
-        uses: ossf/scorecard-action@ff5dd8929f96a8a4dc67d13f32b8c75057829621 # v2.4.0
+        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
         with:
           results_file: results.sarif
           results_format: sarif
+          # Fine-grained PAT (Administration:read + Contents:read on mokata-oss) so the
+          # Branch-Protection check can READ protection settings. The action's default token
+          # can't (top-level `permissions: read-all` doesn't include repo administration), which
+          # is why that check scored 0 with "Resource not accessible by integration". The secret
+          # is set by the maintainer via `gh secret set SCORECARD_PAT -R JasGujral/mokata-oss`.
+          repo_token: ${{ secrets.SCORECARD_PAT }}
           publish_results: true
       - name: Upload SARIF to code-scanning
-        uses: github/codeql-action/upload-sarif@8272c299f21ca24af15dfe9ac0971ba969e5e0d5 # v3.36.2
+        uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3.36.2
         with:
           sarif_file: results.sarif

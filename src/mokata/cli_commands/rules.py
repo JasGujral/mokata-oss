@@ -75,6 +75,8 @@ def cmd_bench(args: argparse.Namespace) -> int:
 
 def cmd_audit(args: argparse.Namespace) -> int:
     # Stage 71 — team audit / shared activity log (shared OR local, conflict-free, NO telemetry).
+    if getattr(args, "consent", None):
+        return _cmd_audit_consent(args)
     if getattr(args, "share", False):
         return _cmd_audit_share(args)
     if getattr(args, "team", False) or getattr(args, "list_projects", False):
@@ -172,6 +174,34 @@ def _cmd_audit_share(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_audit_consent(args: argparse.Namespace) -> int:
+    # TM.S4 — the standing audit-publish consent (doc 48 C5/P-10): show | grant | revoke. Grant/
+    # revoke are human-gated + ledgered; the batched publish inherits the grant WITHOUT weakening
+    # the per-publish secret-scan gate. Revocable any time.
+    from ..team_audit import (grant_standing_consent, has_standing_consent,
+                              revoke_standing_consent)
+    surface = _audit_surface_or_none(args.path)
+    if surface is None:
+        print("mokata is not initialized here — run `mokata init` first.")
+        return 0
+    action = args.consent
+    if action == "show":
+        on = has_standing_consent(surface.manifest.data)
+        print("standing audit-publish consent: "
+              + ("GRANTED (revoke: `mokata audit --consent revoke`)." if on
+                 else "not granted — batched publish stays per-batch human-gated "
+                      "(grant: `mokata audit --consent grant`)."))
+        return 0
+    ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+    if action == "grant":
+        res = grant_standing_consent(args.path, surface, assume_yes=args.yes, out=print,
+                                     ledger=ledger)
+        return 0 if res.granted else 1
+    res = revoke_standing_consent(args.path, surface, assume_yes=args.yes, out=print,
+                                  ledger=ledger)
+    return 0 if res.changed or not res.granted else 1
+
+
 def register(sub, common):
     p_rules = sub.add_parser(
         "rules", parents=[common],
@@ -195,6 +225,10 @@ def register(sub, common):
                               "(opt-in; human-gated + secret-scanned; append-only, per-actor)")
     p_audit.add_argument("--yes", action="store_true",
                          help="non-interactive; approve a --share publish (still secret-scanned)")
+    p_audit.add_argument("--consent", choices=("show", "grant", "revoke"), default=None,
+                         help="TM.S4: the standing audit-publish consent (doc 48 C5/P-10) — show "
+                              "| grant | revoke (human-gated + ledgered; revocable; never weakens "
+                              "the per-publish secret-scan gate)")
     # Stage 71a — scope the --team read over a shared backend (default: the current project only).
     p_audit.add_argument("--all", action="store_true",
                          help="with --team: span ALL projects on the shared log (default: this one)")

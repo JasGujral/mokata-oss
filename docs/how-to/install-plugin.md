@@ -20,7 +20,7 @@ registers it as a local marketplace named `mostack`:
 
 ```text
 # experimental / advanced — from a local clone:
-/plugin marketplace add ~/Documents/Development/claude/cowork/mokata
+/plugin marketplace add ~/path/to/mokata-oss
 /plugin install mokata@mostack
 ```
 

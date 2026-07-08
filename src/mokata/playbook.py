@@ -129,6 +129,24 @@ def run_playbook(surface: Any, exec_choice: Optional[ExecutionChoice] = None,
     session.ask(STORY["question"])
     session.answer(STORY["answer"])
     session.propose_approaches([Approach(**a) for a in STORY["approaches"]])
+    # TM.S11a — both pre-spec decision lenses BEFORE approval (the P21 hard-gate). Lens 1 (blast
+    # radius) is computed over the wired knowledge layer + memory (degrade-clean when absent);
+    # Lens 2 (architectural fit) is the golden-path's own honest verdict (this is a self-test).
+    from .brainstorm_impact import DesignFitVerdict, FITS
+    try:
+        from .knowledge import KnowledgeLayer
+        _layer = KnowledgeLayer.from_surface(surface)
+    except Exception:
+        _layer = None
+    try:
+        from .memory import MemoryStore
+        _mem_items = MemoryStore.from_surface(surface).peek_active()
+    except Exception:
+        _mem_items = []
+    session.assess_impacts(layer=_layer, memory_items=_mem_items)
+    for _a in session.approaches:
+        session.record_design_fit(_a.name, DesignFitVerdict(_a.name, FITS, [],
+                                  rationale="golden-path self-test approach"))
     session.approve("playbook", STORY["chosen"])
     # Stage 6p — approval ALSO saves the plan as a durable file under .mokata/plans/ (BEFORE the
     # spec). Degrade-clean: a plan-write failure never breaks this hand-off.

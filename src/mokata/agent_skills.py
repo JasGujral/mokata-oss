@@ -50,7 +50,9 @@ CURATED_SKILLS: tuple = (
     "session",
     "playbook",
     # harness repair (Stage 3b.4) — auto-engages when the MCP server/tools aren't connecting
-    "mcp",
+    # (named `mcp-repair`, not `mcp`, to avoid colliding with Claude Code's built-in /mcp and
+    # the mcp-builder skill — its repair identity is distinctive).
+    "mcp-repair",
 )
 
 # A stable marker every rendered SKILL.md carries (in the banner). unsetup uses it to identify

@@ -3,7 +3,7 @@ HARD-GATE that blocks the spec until an approach is explicitly approved."""
 
 import unittest
 
-from _support import sample_manifest_data  # noqa: F401  (path fix side-effect)
+from _support import sample_manifest_data, approve_with_lenses  # noqa: F401  (path fix side-effect)
 
 from mokata.brainstorm import (
     PIPELINE_PHASES,
@@ -123,7 +123,7 @@ class TestHardGate(unittest.TestCase):
             fresh.approve("jas", "anything")
 
     def test_approval_opens_the_gate_and_handoff_carries_the_choice(self):
-        self.s.approve("jas", "write-through")
+        approve_with_lenses(self.s, "jas", "write-through")
         self.assertTrue(self.s.can_emit_spec)
         h = self.s.handoff()
         self.assertEqual(h.approach.name, "write-through")
@@ -134,7 +134,7 @@ class TestHardGate(unittest.TestCase):
     def test_handoff_feeds_next_phase_with_answered_questions(self):
         self.s.ask("consistency need?")
         self.s.answer("eventual is fine")
-        self.s.approve("jas", "cache-aside")
+        approve_with_lenses(self.s, "jas", "cache-aside")
         h = self.s.handoff()
         self.assertIn(
             ("consistency need?", "eventual is fine"),

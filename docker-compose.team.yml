@@ -1,0 +1,63 @@
+# mokata — team shared-DB stack (self-host path)
+#
+# The "bring one Postgres" golden path (ADR-54): ONE vanilla Postgres >= 14, NO extensions.
+# This file stands that up in one command for teams who prefer self-hosting over a managed DSN
+# (Supabase / Neon / RDS free tiers all work too — same green preflight either way).
+#
+#   1. cp .env.example .env        # then set a strong POSTGRES_PASSWORD in .env
+#   2. docker compose -f docker-compose.team.yml up -d
+#   3. export MOKATA_PG_DSN="postgres://<user>:<pass>@localhost:<port>/<db>"   # from your .env
+#   4. mokata team init            # provisions the shared schema + runs the CONNECTED test
+#
+# IMPORTANT: this compose provisions ONLY an empty database. It bakes in NO schema / DDL — the
+# shared tables + the schema-version row are owned and created solely by `mokata team init`
+# (runtime/server-start never runs DDL). So there is deliberately no init-SQL mount here.
+#
+# Credentials come from environment variables (read from .env by `docker compose`); nothing is
+# hard-coded and no secret lives in this file. mokata itself hosts nothing and never stores your
+# DSN — it reads $MOKATA_PG_DSN from your environment at run time.
+
+services:
+  # The one service on the golden path: a plain Postgres with a healthcheck + a durable volume.
+  postgres:
+    image: postgres:16              # any vanilla Postgres >= 14 works; no extensions required
+    container_name: mokata-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mokata}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+      POSTGRES_DB: ${POSTGRES_DB:-mokata}
+    ports:
+      # host:container — override the host port in .env if 5432 is taken locally.
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - mokata_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # `docker compose up --wait` blocks until this passes → a clean, ready DB before team init.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mokata} -d ${POSTGRES_DB:-mokata}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # OPT-IN observability (doc 48 §7b) — OFF by default, NEVER on the golden path. It only starts
+  # with an explicit `--profile observability`, so a plain `up` brings up Postgres alone.
+  #   docker compose -f docker-compose.team.yml --profile observability up -d
+  # A single lightweight Postgres metrics exporter (Apache-2.0). Point a Prometheus/Grafana stack
+  # at :9187/metrics if you want dashboards; the exporter itself adds no service to the base path.
+  metrics:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: mokata-postgres-metrics
+    profiles: ["observability"]
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:-mokata}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-mokata}?sslmode=disable"
+    ports:
+      - "${METRICS_PORT:-9187}:9187"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  # Named volume so `docker compose down` (without -v) keeps your shared data across restarts.
+  mokata_pgdata:

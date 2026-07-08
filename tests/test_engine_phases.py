@@ -6,7 +6,7 @@ import os
 import tempfile
 import unittest
 
-from _support import sample_manifest_data  # noqa: F401  (path fix side-effect)
+from _support import sample_manifest_data, approve_with_lenses  # noqa: F401  (path fix side-effect)
 
 from mokata.brainstorm import PIPELINE_PHASES, Approach, BrainstormSession
 from mokata.engine import (
@@ -27,7 +27,7 @@ def handoff():
         Approach("regex", "strip via regex", pros=["tiny"], cons=["unicode edge cases"]),
         Approach("library", "use a slug lib", pros=["robust"], cons=["dependency"]),
     ])
-    s.approve("jas", "regex")
+    approve_with_lenses(s, "jas", "regex")
     return s.handoff()
 
 

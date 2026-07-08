@@ -4,31 +4,37 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mokata"
-version = "0.0.10"
+version = "0.0.11"
 description = "The memory + seatbelt for your AI coding agent. Spec-driven TDD for Claude Code — knowledge-aware, human-gated, local-first."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 authors = [{ name = "MoStack" }]
 keywords = ["claude-code", "tdd", "spec-driven", "framework", "ai-assisted-coding"]
+classifiers = [
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
 
-# The MCP SDK is the ONE default dependency (Stage 3b.1). mokata is plugin-first (Stage 21),
-# so its primary surface — the `mokata-mcp` server that exposes mokata as native Claude Code
-# tools — must work from a plain `pip install mokata`, not only from the `[mcp]` extra. The
-# environment marker keeps this a clean no-op on Python 3.9 (the SDK needs >= 3.10) instead of
-# a resolution error: on 3.9 the MCP server is unavailable and `mokata-mcp` fails LOUD with a
-# fix, while the CLI + everything else still run. The SDK stays LAZILY imported
-# (mcp_server.build_server), so the core and CLI still import and run with it absent (3.9, or a
-# stripped env). Every OTHER external tool mokata orchestrates remains optional with a built-in
-# fallback (see capability router / graceful degradation).
-dependencies = ['mcp>=1.2; python_version >= "3.10"']
+# The MCP SDK is the ONE unconditional runtime dependency (Stage 3b.1). mokata is plugin-first
+# (Stage 21), so its primary surface — the `mokata-mcp` server that exposes mokata as native
+# Claude Code tools — must work from a plain `pip install mokata`, not only from the `[mcp]`
+# extra. With the Python >= 3.10 floor (TM.S0) the SDK installs everywhere mokata does, so the
+# old `python_version >= "3.10"` env marker is gone. The SDK stays LAZILY imported
+# (mcp_server.build_server), so the core and CLI still import and run in a stripped/broken env
+# with it absent — where `mokata-mcp` then fails LOUD with a fix. Every OTHER external tool
+# mokata orchestrates remains optional with a built-in fallback (see capability router /
+# graceful degradation).
+dependencies = ['mcp>=1.2']
 
 [project.optional-dependencies]
 # Optional upgrades. Absence is detected and degraded over, never fatal.
 schema = ["jsonschema>=4.0"]
-# `[mcp]` is now a no-op ALIAS of the default MCP SDK dependency above (same spec + marker),
-# kept so an existing `pip install "mokata[mcp]"` still resolves cleanly.
-mcp = ['mcp>=1.2; python_version >= "3.10"']
+# `[mcp]` is a no-op ALIAS of the default MCP SDK dependency above (same spec), kept so an
+# existing `pip install "mokata[mcp]"` still resolves cleanly.
+mcp = ['mcp>=1.2']
 # Optional hosted/remote memory backend (Stage 24A): the Postgres store. Lazy-imported;
 # the core, the CLI, and every default profile run with this absent (memory degrades to
 # the SQLite floor). Opt-in only — a remote store is explicit user wiring (local-first).
@@ -41,8 +47,8 @@ neo4j = ["neo4j>=5.0"]
 
 [project.scripts]
 mokata = "mokata.cli:main"
-# The MCP server entry point (plugin-launched stdio). Importing the server needs the
-# optional [mcp] extra; the entry point itself is always installed.
+# The MCP server entry point (plugin-launched stdio). The MCP SDK it imports is an
+# unconditional dependency, so a plain `pip install mokata` makes this runnable.
 mokata-mcp = "mokata.mcp_server:main"
 # The hook entry point (Stage 53b). Claude Code launches the SessionStart briefing +
 # PreToolUse secret-guard as `mokata-hook <subcommand>` — resolved on PATH exactly like

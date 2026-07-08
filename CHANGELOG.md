@@ -10,6 +10,56 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.11] — 2026-07-07
+
+**Team mode — a shared, governed team brain over your own Postgres. No breaking changes; additive;
+local stays the zero-config default.** mokata gains an explicit **run mode** and the infrastructure
+to share a governed brain across a team — on the team's own database, with nothing ever phoned home.
+
+- **Run mode, first-class and visible:** `mokata mode` shows the current mode plus a team-readiness
+  preflight; `mokata mode set local|team` switches it through the human-gated write path. `local`
+  is the zero-config default (a no-op that writes nothing on an already-local repo); `set team`
+  runs a **fail-closed** preflight — a usable run identity, `$MOKATA_PG_DSN` present, the DB
+  reachable within a ≤500ms probe, and a compatible schema version — and only then activates. Team
+  mode is **never half-activated**, and the mode is surfaced in the status badge, the SessionStart
+  briefing, and `mokata doctor`.
+- **Team setup on your own backend:** `mokata team init` is first-time setup and the **sole owner
+  of DDL** — it guides a backend pick (`--backend managed|compose|local`, managed DSN the golden
+  path), fails closed with a named fix when `$MOKATA_PG_DSN` is unset, provisions the shared tables
+  idempotently on **vanilla Postgres ≥14 (no extensions)**, pins the team project identity, and runs
+  a live CONNECTED test. `mokata team join <source>` is the new-member onboarding path (a joiner
+  never runs DDL): it chains **adopt → connect → activate → vault pull → onboard → consent → doctor**,
+  each a confirmable step, inheriting the pinned team project id. The individual steps ship too —
+  `status`, `adopt`, `connect --dsn-env <ENV>`, `disconnect`. The DSN **value is never stored** (only
+  the env-var name), and **mokata hosts nothing**.
+- **Shared memory over Postgres:** a team-shared store with a **scope hierarchy** (personal →
+  project → team → global), **typed items** (rule / guardrail / best-practice / context / reference
+  / decision) each carrying an **enforcement binding** (advisory / soft / hard), **in-run hard-rule
+  enforcement**, and shared **formulas** (typed domain facts). `mokata memory promote` moves a rule's
+  enforcement binding (human-gated); `mokata memory review` runs the proposal workflow (Draft →
+  In-Review → Approved, proposer ≠ approver).
+- **Journal-first team writes, conflict-safe:** every durable team write lands in a **crash-safe
+  local journal first**, so **offline never blocks** and nothing is lost. `mokata sync` flushes and
+  reconciles — each flushed write **inherits the ledger id of its original human approval** (never a
+  governance bypass) and is re-**secret-scanned**, and each memory write is **compare-and-set** on a
+  revision column so a concurrent-writer conflict **surfaces through the human gate**, never a silent
+  last-writer-wins.
+- **Scoped-consent access + audit-publish consent:** access to the shared brain is governed by
+  **scoped consent**; `mokata audit --consent show|grant|revoke` manages a **revocable standing
+  consent** for the batched audit-publish (captured during `team join`), while the per-publish
+  secret-scan still hard-blocks — never a governance bypass.
+- **Release safety:** `mokata branch-protection-check` verifies the public default branch is
+  protected — no force-push, no deletion, required checks — **fail-closed** (exit 1 if unprotected or
+  unverifiable), auth supplied by the `gh` CLI (no token hard-coded or accepted).
+- **Team ops kit:** a `docker-compose.team.yml` + `.env.example` for self-hosting the shared
+  Postgres, and an `llms.txt` at the docs root.
+
+**Also:**
+
+- The in-Claude-Code MCP repair skill is renamed to **`/mokata:mcp-repair`**.
+- `mokata setup claude` surfaces an explicit **permission-grant** step when wiring the MCP server.
+- **Python ≥ 3.10** is the supported floor.
+
 ## [0.0.10] — 2026-07-06
 
 **"Inside Claude Code" — richer in-terminal UX, a gated settings wizard, a `doctor` coverage
@@ -54,7 +104,7 @@ Promotes `0.0.9rc1` unchanged (same code; version fields and notes only). Instal
   works; the MCP server prints a clear upgrade message).
 - **One-command wiring:** `mokata setup claude` registers the MCP server at an absolute path,
   verifies the connection (`CONNECTED ✓`), and wires commands + skills + the status line. New
-  `mokata mcp start | status | install`, and a `/mokata:mcp` repair skill that re-registers the
+  `mokata mcp start | status | install`, and a `/mokata:mcp-repair` repair skill that re-registers the
   server from inside Claude Code.
 - **Skills stay fresh on update:** re-running `mokata setup claude` now syncs the Agent Skills and
   prunes stale/removed mokata skills (your own skills are never touched).
@@ -132,7 +182,7 @@ Guarded:
 
 ## [0.0.5] — 2026-07-01
 
-**Portable sessions, in-Claude-Code UX, every-agent reach, team sharing & supply-chain trust.
+**Portable sessions, in-Claude-Code UX, every-agent reach & supply-chain trust.
 No breaking changes.**
 
 Fixed:
@@ -160,24 +210,22 @@ Added:
   (proposal-only, human-gated).
 - **CI / PR check** — the completeness + spec-awareness gate as a reusable GitHub Action; a
   `/mokata:review` PR comment. Opt-in, degrade-clean.
-- **Every agent, in your editor** — in-harness surfaces for **Cursor, GitHub Copilot, Windsurf,
-  Codex, Gemini CLI, and Aider** (not just Claude Code); a **VS Code extension**; and a read-only
-  **Copilot Chat `@mokata`** participant. Language coverage (Python/JS-TS/Go/Rust/Java) +
-  Windows/macOS/Linux CI matrix.
-- **Team & sharing** — one guided `mokata team join` (adopt → shared memory → vault → onboard →
-  doctor, each human-gated); publishable governed **community stacks** (`mokata stacks`); and
-  team **audit/activity logs** shared or local, conflict-free — **no telemetry**. One shared
-  backend safely hosts **many projects**: every shared row scoped by a stable project key
-  (review defaults to your project; `--all` / `--project` to span or pick).
+- **Every agent** — in-harness surfaces for **Cursor, GitHub Copilot, Windsurf, Codex, Gemini CLI,
+  and Aider** (not just Claude Code). Language coverage (Python/JS-TS/Go/Rust/Java) +
+  Windows/macOS/Linux CI matrix. (A **VS Code extension** and a read-only **Copilot Chat `@mokata`**
+  participant are **planned — not available**.)
+- **Sharing** — publishable governed **community stacks** (`mokata stacks`): publish over git or
+  the design vault, discover a reviewable versioned index, and adopt via the gated install path —
+  **no telemetry**. (Team mode over a shared backend — `mokata team join`, shared memory, and the
+  shared audit log — lands in 0.0.11.)
 
 Hardened:
 - **Supply-chain trust** — reproducible sdist+wheel, a **CycloneDX SBOM**, and a **Sigstore
   build-provenance attestation** at tag-time; all five CI workflows least-privilege + SHA-pinned.
 - **Reliability** — a seeded fuzz/edge pass across the hot paths (no false-blocks); a
   **performance budget** (`mokata lat-check`) with measured per-operation latencies.
-- **Release process** — `scripts/release.sh` tags only after the public sync and **verifies
-  version-consistency at the exact commit** (`mokata release-check`); Pages deploy restricted to
-  `main`.
+- **Release process** — `mokata release-check` **verifies version-consistency at the exact commit**
+  before any tag; Pages deploy restricted to `main`.
 
 ## [0.0.4] — 2026-06-28
 
@@ -297,4 +345,5 @@ spine.
 - Clean-room throughout: no dependency on, or text copied from, any other framework
   (Apache-2.0, under MoStack).
 
+[0.0.11]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.11
 [0.0.1]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.1

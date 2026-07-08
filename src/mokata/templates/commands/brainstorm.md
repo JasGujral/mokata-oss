@@ -45,6 +45,36 @@ skipped, softened, or assumed. If you are unsure whether approval was given, it 
 5. Write the design up in digestible sections (problem, what we learned, the approaches
    and their tradeoffs, your recommendation), then ask for explicit approval of one.
 
+## Two decision lenses before you approve (blast radius + architectural fit)
+
+Before ANY approach can be approved, put BOTH pre-spec decision lenses on the table for EACH
+candidate — correctness is designed IN at brainstorm, not reviewed in after code (P21). They run
+in the SAME pre-spec pass:
+
+1. **Lens 1 — blast radius (code impact).** For each approach, name the symbols/files it would
+   touch and compute its impact: `mokata query blast_radius <symbol>` for the transitive
+   callers/dependents (the grep floor answers when no graph is wired — it still scores), then
+   UNION that with the team decisions it disturbs (memory items whose `about_code` names those
+   symbols → "affected team decisions"). Show, per approach, how much it moves —
+   callers/tests/docs/configs touched — and which prior team decisions it affects, and COMPARE
+   the approaches on it.
+2. **Lens 2 — architectural fit (design-fit review).** For each approach, assess how it sits in
+   the architecture — module boundaries, layering, import direction, ownership — grounded in the
+   knowledge layer (package/module structure, import direction) and memory (who owns what, prior
+   decisions). Give a NAMED verdict — **fits / risk / misfit** — and NAME the boundary/layering/
+   ownership risks. A mis-layered approach is flagged HERE, before the spec, not discovered after
+   the code. This is a prompt-driven review, not a boundary engine — reason it out from the graph
+   + memory.
+
+The HARD-GATE now has TWO conditions: you **cannot approve an approach until BOTH its blast radius
+AND its design-fit verdict are on the table.** No lenses, no approval. Record both in the plan
+file — they carry into the spec as constraints, and the develop/CI deviation guard stays only as
+the backstop.
+
+If the change looks high-impact (a wide blast radius, or a design MISFIT), **OFFER — do not run —**
+the deep whole-codebase architectural review (a separate, user-invoked review). mokata offers it;
+the user decides. Never launch it unasked.
+
 ## Stay anchored (so a long brainstorm never drifts off-thread)
 
 A long exploration loses the plot if the original ask scrolls out of view. Hold it down:
@@ -67,6 +97,7 @@ A long exploration loses the plot if the original ask scrolls out of view. Hold 
 | "I'll ask everything up front to save time." | One question at a time. A wall is a failure. |
 | "Two of these are weak, but I'll list them as options." | Foils aren't options. Offer real, defensible alternatives. |
 | "They seemed happy — that's basically approval." | Seeming happy is not approval. Ask for it explicitly. |
+| "I'll approve now and check the impact/architecture later." | Both lenses are a HARD-GATE. No blast radius + design-fit, no approval. |
 | "No graph/memory, so I'll assume the structure." | Absence means read/grep and state assumptions, never guess silently. |
 | "We've wandered, but I'll keep following this thread." | Drift-check against the anchor and re-ground — the original ask is the thread. |
 | "I'll rewrite the original ask to match where we ended up." | The anchor is immutable. Update the synthesis, never the anchor. |

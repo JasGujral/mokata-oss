@@ -12,7 +12,7 @@ stops the agent shipping the wrong thing.
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/JasGujral/mokata-oss/actions/workflows/ci.yml/badge.svg)](https://github.com/JasGujral/mokata-oss/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/github/v/release/JasGujral/mokata-oss?label=version)](https://github.com/JasGujral/mokata-oss/releases/latest)
-[![Python](https://img.shields.io/badge/python-3.9%E2%80%933.12-blue.svg)](pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue.svg)](pyproject.toml)
 [![Docs](https://img.shields.io/badge/docs-mkdocs-blue.svg)](https://jasgujral.github.io/mokata-oss/)
 [![local-first](https://img.shields.io/badge/local--first-no%20telemetry-success.svg)](docs/concepts/governance.md)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/JasGujral/mokata-oss/badge)](https://securityscorecards.dev/viewer/?uri=github.com/JasGujral/mokata-oss)
@@ -65,7 +65,7 @@ https://github.com/user-attachments/assets/a6940119-1edb-4017-b935-cd48b80b4ea9
 - **Governed by default.** Every durable write (code, memory, config) is human-gated; sync hooks block only for security (exit 2), async hooks observe; every gate decision and tool call lands in an append-only audit ledger.
 - **Local-first, no telemetry.** Nothing leaves your machine unless you explicitly wire an external service. The `minimal` profile performs zero network egress.
 - **Configurable & composable.** Toggle any layer/tool, pick a profile, run any capability standalone, and enter the pipeline from any phase.
-- **Meets you where you work, ships trustworthy.** Runs under Claude Code, Cursor, Copilot, Windsurf, Codex, Gemini CLI, and Aider (a VS Code extension is planned, not in 0.0.9); sessions travel between machines; teams share one governed backend safely; and releases carry an SBOM + Sigstore provenance — no telemetry, ever.
+- **Meets you where you work, ships trustworthy.** Runs under Claude Code, Cursor, Copilot, Windsurf, Codex, Gemini CLI, and Aider (a VS Code extension is planned, not yet available); sessions travel between machines; teams share one governed backend safely; and releases carry an SBOM + Sigstore provenance — no telemetry, ever.
 
 ## Install
 
@@ -76,14 +76,13 @@ https://github.com/user-attachments/assets/a6940119-1edb-4017-b935-cd48b80b4ea9
 sign-in — no API key:
 
 ```bash
-pip install mokata               # MCP server works out of the box on Python ≥ 3.10 (SDK is a default dep)
+pip install mokata               # MCP server works out of the box (the SDK is a default dep)
 mokata setup claude              # wires commands + skills + MCP + statusline — human-gated
 # restart Claude Code, then:
 mokata mcp status                # expect: mokata-mcp: CONNECTED ✓
 ```
 
-> On **Python 3.9** the MCP server is unavailable (it needs ≥ 3.10) — the CLI and everything
-> else still work.
+> Requires **Python ≥ 3.10**.
 
 **As a CLI, with any AI tool** — harness-agnostic (Gemini, Codex, scripts, CI). The CLI is the
 engine's mechanics (no LLM of its own); wire it into any shell- or MCP-capable assistant:
@@ -143,7 +142,7 @@ Full walkthrough: [`docs/quickstart.md`](docs/quickstart.md) · full hands-on gu
 - **Governance & audit** — 4-tier rules, Karpathy gates, 4-layer secret protection, per-task model routing, reversible writes, full audit ledger. See the governed state at a glance with `mokata govern` (a read-only dashboard) and the *what-it-did-and-why* timeline with `mokata audit --why`.
 - **Session lifecycle & portable sessions** — list runs (`mokata sessions`), resume from the last passed gate (`mokata resume`), pause/resume a mid-brainstorm (the HARD-GATE still holds), and **carry a session across machines or hand it to a teammate**: `mokata session push <tag>` / `pull <tag>` packages checkpoints + approach + in-progress brainstorm + relevant memory into a machine-path-free, versioned, **secret-scanned + human-gated** bundle. Sessions carry a human-friendly name you can `rename`.
 - **Progress & visibility, one model** — one `RunProgress` drives every surface: an always-on **stage badge** (statusline, on by default, merge-safe), the native **to-do widget** where the harness has one, the printed run-progress block, and the per-subagent **lanes** in `mokata watch` / `progress --lanes`. No duplicated progress logic — channel-specific renderers over one source of truth.
-- **Runs under every agent, shows up in your editor** — the engine runs behind a thin boundary (`mokata harness` shows the capability matrix) with in-harness surfaces for **Claude Code, Cursor, GitHub Copilot, Windsurf, Codex, Gemini CLI, and Aider**, each degrading clearly where it lacks a capability. A **VS Code extension** (`editors/vscode`) with a read-only Copilot Chat `@mokata` participant — governance, memory, and run-progress in your editor — is **planned (not in 0.0.9)**.
+- **Runs under every agent, shows up in your editor** — the engine runs behind a thin boundary (`mokata harness` shows the capability matrix) with in-harness surfaces for **Claude Code, Cursor, GitHub Copilot, Windsurf, Codex, Gemini CLI, and Aider**, each degrading clearly where it lacks a capability. A **VS Code extension** (`editors/vscode`) with a read-only Copilot Chat `@mokata` participant — governance, memory, and run-progress in your editor — is **planned (not yet available)**.
 - **Team & sharing** — one guided `mokata team join` chains adopt → shared memory (BYO Postgres) → vault pull → onboard → doctor (each human-gated, secret-scanned, reversible); publish/adopt governed per-framework **community stacks** (`mokata stacks`); and the team's **audit/activity logs** can live shared or local, conflict-free — **no telemetry, nothing phoned home**. One shared backend safely hosts **many projects**: every shared row is scoped by a stable project key, so review defaults to your project (`--all` / `--project` to span or pick).
 - **Supply-chain trust** — releases ship a reproducible sdist+wheel, a **CycloneDX SBOM**, and a **Sigstore build-provenance attestation** generated at tag-time in CI (the repo ships no pre-signed artifacts); all five CI workflows are least-privilege and SHA-pinned.
 
@@ -167,7 +166,7 @@ The CLI exposes 40+ subcommands, including:
 - **Inspection (read-only)** — `status`, `query`, `rules`, `audit` (`--why`), `budget`, `coverage`, `lat-check`, `index`, `doctor`, `baseline`, `harness`, `progress` (`--lanes`), `watch`, `govern`, `sessions`.
 - **Memory & knowledge** — `memory` (`edit`/`export`/`import`/`migrate`/`consolidate`), `govern`.
 - **Session lifecycle & portability** — `sessions`, `resume`, `enter`, `session` (`push`/`pull`/`list`/`name`).
-- **Team, stacks & sharing** — `team` (`join`/`adopt`/`connect`), `stacks` (`list`/`search`/`show`/`install`), `vault`, `marketplace`.
+- **Team, stacks & sharing** — `team` (`init`/`join`/`adopt`/`connect`/`disconnect`), `mode`, `sync`, `stacks` (`list`/`search`/`show`/`install`), `vault`.
 - **Setup, config & distribution** — `init`, `setup`/`unsetup`, `reconfigure`, `tour`, `config`, `bootstrap`, `validate`, `route`, `detect`, `reset`, `suggest`, `mcp`, `ci-check`, `export`/`import`, `version`/`upgrade`, `release-check`.
 
 Full list with flags: the [CLI reference](https://jasgujral.github.io/mokata-oss/reference/cli/).

@@ -33,7 +33,7 @@ COMMANDS_DIR = os.path.join(ROOT, "src", "mokata", "templates", "commands")
 # exempt — the rest remain shell/hook-only plumbing. `release-check` (Stage 61b) is release
 # plumbing run from the shell/CI during a release cut — the version mirror of `validate`.
 EXEMPT = {"unsetup", "harness", "route", "detect", "validate", "bootstrap",
-          "release-check", "bench"}
+          "release-check", "branch-protection-check", "bench"}
 # The new in-harness surfaces this stage adds.
 NEW_READ_TOOLS = ("rules", "skills", "suggest", "lat_check", "index_status",
                   "baseline", "sessions", "config_get", "export_preview")

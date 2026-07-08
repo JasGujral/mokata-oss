@@ -1,11 +1,11 @@
 ---
-name: mcp
+name: mcp-repair
 description: mokata · Repair the mokata MCP server when its tools aren't connecting — check the registration, fix it, and tell you the one step left (restart Claude Code). Repair, not first-time setup.
 when_to_use: Engage when the user reports mokata's MCP server or tools aren't working — e.g. "mokata mcp isn't working / isn't connected / failed to start", "the mokata MCP server won't start", "mokata's tools are missing / don't show up / aren't available", or "/mcp doesn't list mokata". This REPAIRS an already-installed mokata by re-checking and re-writing its Claude Code registration, then tells the user to restart Claude Code. Do NOT engage for first-time setup or initial wiring — use /mokata:setup for that; this is repair of an existing install, not initial installation.
 ---
 
-> **mokata Agent Skill.** This is mokata's `mcp` capability, surfaced so Claude can engage it
-> automatically when the moment fits. It runs the SAME protocol as the `/mokata:mcp` command,
+> **mokata Agent Skill.** This is mokata's `mcp-repair` capability, surfaced so Claude can engage it
+> automatically when the moment fits. It runs the SAME protocol as the `/mokata:mcp-repair` command,
 > from one shared source — follow that protocol directly here; do not hand off to a parallel
 > flow. mokata's non-negotiables still hold: durable writes are **human-gated** (preview, then
 > explicit approval), and this capability's own gate is never silently skipped.

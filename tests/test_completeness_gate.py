@@ -6,7 +6,7 @@ import os
 import tempfile
 import unittest
 
-from _support import sample_manifest_data  # noqa: F401  (path fix side-effect)
+from _support import sample_manifest_data, approve_with_lenses  # noqa: F401  (path fix side-effect)
 
 from mokata.brainstorm import Approach, BrainstormSession, persist_approach
 from mokata.engine import (
@@ -33,7 +33,7 @@ def approved_handoff():
         Approach("sessions", "server sessions", pros=["simple"], cons=["server state"]),
         Approach("jwt", "stateless tokens", pros=["stateless"], cons=["revocation"]),
     ])
-    s.approve("jas", "jwt")
+    approve_with_lenses(s, "jas", "jwt")
     return s.handoff()
 
 
@@ -72,7 +72,7 @@ class TestGateReadsApprovedApproach(unittest.TestCase):
                 Approach("sessions", "x", pros=["a"], cons=["b"]),
                 Approach("jwt", "y", pros=["c"], cons=["d"]),
             ])
-            session.approve("jas", "jwt")
+            approve_with_lenses(session, "jas", "jwt")
             persist_approach(session, store)
 
             res = run_completeness_gate(

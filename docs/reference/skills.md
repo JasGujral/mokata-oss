@@ -20,6 +20,8 @@ and the CLI never drift.
 | `debug` | `repro-first` | check | reproduce first, find the root cause (N-strikes escalation), then fix |
 | `optimize` | `measure-first` | check | measure before/after; keep only proven, behavior-preserving wins |
 | `bug` | `reproducer-required` | check | start from a reproducer + failing test, then fix; labels reported→reproduced→fixing→verified |
+| `ship` | `finish-is-human-landed` | human | verify it's truly done (green tests + met ACs + a passed review), then YOU choose how to land it — mokata never merges/PRs/deletes without explicit confirmation |
+| `version` | `version-display` | check | show the installed version + how to update (offline; the update check is opt-in, the upgrade human-gated) |
 
 ## `refine` vs `review`
 

@@ -1,33 +1,59 @@
 
-mokata **0.0.10 — "Inside Claude Code."** Upgrade with `pip install -U mokata`. Additive; no
-breaking changes; no new dependencies.
+mokata **0.0.11 — "Team mode."** Upgrade with `pip install -U mokata`. Additive; no breaking
+changes; **local stays the zero-config default**. Requires **Python ≥ 3.10**.
 
-**Richer in-terminal UX.**
+A shared, governed team brain — on your team's **own** Postgres, with nothing ever phoned home.
 
-- **Command palette — `/mokata:menu`:** `mokata menu` lists every mokata command and skill on one
-  screen with gate markers, derived from the shipped command/skill files (single source — no drift).
-- **Docs at your fingertips — `/mokata:docs [topic]`:** lists topics with their published-docs URLs
-  and resolves a topic to its page. Docs are read online — not bundled in the wheel, and the command
-  never fetches at runtime (local-first).
-- **Gated settings wizard — `mokata config wizard`:** walks you through mokata's settings
-  interactively, routing every change through the same human-gated write path (secret-scan + schema
-  validation + write gate + audit ledger), and failing closed when run non-interactively. It's a
-  front-end, never a second write path.
-- **Consistent output + `mokata doctor --matrix`:** verdicts, progress, and doctor tables now share
-  one look — colour on a TTY, clean ASCII when piped or under `NO_COLOR`. `mokata doctor` gains an
-  opt-in capability **coverage matrix**: pass / degraded / fail for every capability, single-sourced
-  from the resolver.
+**Run mode, first-class and visible.**
 
-**Fixes.**
+- **`mokata mode` / `mokata mode set local|team`:** the run mode is now an explicit property of every
+  session. `mokata mode` shows it plus a **team-readiness preflight**; `set local` is a zero-config
+  no-op that writes nothing on an already-local repo; `set team` runs a **fail-closed** preflight — a
+  usable run identity, `$MOKATA_PG_DSN` present, the DB reachable within a ≤500ms probe, and a
+  compatible schema — and only then activates (never half-activated). The mode is surfaced in the
+  status badge, the SessionStart briefing, and `mokata doctor`.
 
-- **Hooks never hang** *(fixes the 0.0.9 known issue):* `mokata-hook statusline` / `session-start` no
-  longer block when stdin is an open pipe with no writer — a bounded read falls back to defaults (the
-  "hooks never block a session" contract).
-- **Mis-wired hooks are visible:** `mokata-hook` with a missing or unknown subcommand now exits
-  non-zero (exit 1) instead of looking successful — and never uses the reserved security-block code.
-- **Clean uninstall:** `mokata unsetup claude` removes config files it created once they become empty
-  instead of leaving `{}` husks; files that still hold your own content are preserved.
+**Team setup on your own backend.**
 
-**Under the hood.** The tokenizer-free chars÷4 briefing estimate now logs estimate-vs-actual to the
-ledger so the ~2k budget's safety margin is measured, not merely asserted. Local-first, no telemetry,
-Apache-2.0.
+- **`mokata team init`** is first-time setup and the **sole owner of DDL:** it guides a backend pick
+  (`--backend managed|compose|local`), fails closed with a named fix when `$MOKATA_PG_DSN` is unset,
+  provisions the shared tables idempotently on **vanilla Postgres ≥14 (no extensions)**, pins the
+  team project identity, and runs a live CONNECTED test.
+- **`mokata team join <source>`** is the new-member onboarding path (a joiner never runs DDL): it
+  chains **adopt → connect → activate → vault pull → onboard → consent → doctor**, each a confirmable
+  step, inheriting the pinned team project id. The steps ship individually too: `status`, `adopt`,
+  `connect --dsn-env <ENV>`, `disconnect`. The DSN **value is never stored** (only the env-var name),
+  and **mokata hosts nothing**.
+
+**Shared memory over Postgres.**
+
+- A team-shared store with a **scope hierarchy** (personal → project → team → global), **typed items**
+  (rule / guardrail / best-practice / context / reference / decision) each carrying an **enforcement
+  binding** (advisory / soft / hard), **in-run hard-rule enforcement**, and shared **formulas**.
+- **`mokata memory promote`** moves a rule's enforcement binding (human-gated); **`mokata memory
+  review`** runs the proposal workflow (Draft → In-Review → Approved, proposer ≠ approver).
+
+**Journal-first team writes, conflict-safe.**
+
+- Every durable team write lands in a **crash-safe local journal first**, so **offline never blocks**
+  and nothing is lost. **`mokata sync`** flushes + reconciles: each write **inherits the ledger id of
+  its original human approval** (never a governance bypass) and is re-secret-scanned, and each memory
+  write is **compare-and-set** on a revision column so a concurrent-writer conflict **surfaces through
+  the human gate** — never a silent last-writer-wins.
+
+**Governance & release safety.**
+
+- **Scoped-consent access** to the shared brain; **`mokata audit --consent show|grant|revoke`**
+  manages a revocable standing consent for the batched audit-publish (per-publish secret-scan still
+  hard-blocks).
+- **`mokata branch-protection-check`** verifies the public default branch is protected — no
+  force-push, no deletion, required checks — **fail-closed** (exit 1 if unprotected or unverifiable).
+- A **team ops kit:** `docker-compose.team.yml` + `.env.example` for self-hosting the shared Postgres,
+  and an `llms.txt` at the docs root.
+
+**Also.**
+
+- The in-Claude-Code MCP repair skill is renamed to **`/mokata:mcp-repair`**.
+- `mokata setup claude` surfaces an explicit **permission-grant** step when wiring the MCP server.
+
+Local-first, no telemetry, Apache-2.0.

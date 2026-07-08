@@ -16,7 +16,7 @@ knowledge graph, persistent self-healing memory (on by default), active token go
 and a full audit trail — with **every durable write human-gated** and **nothing leaving
 your machine** unless you wire it.
 
-mokata is pure Python (≥ 3.9), has **no required runtime dependencies**, is Apache-2.0
+mokata is pure Python (≥ 3.10), has **no required runtime dependencies**, is Apache-2.0
 under **MoStack**, and is built clean-room (no dependency on any other framework).
 
 **Start here → [Getting started](getting-started.md).** The canonical, pip-first path:
@@ -42,6 +42,7 @@ This site follows the [Diátaxis](https://diataxis.fr/) model:
   [write a skill](how-to/write-a-skill.md),
   [integrate other tools](how-to/integrate-other-ai-tools.md),
   [share a stack](how-to/share-a-stack.md),
+  [run mokata as a team (setup & operations)](how-to/team-setup.md),
   [install the Claude plugin](how-to/install-plugin.md),
   [use mokata without the plugin](how-to/use-without-plugin.md).
 - **Concepts** — how each layer works: the [pipeline & gates](concepts/pipeline.md),

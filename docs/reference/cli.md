@@ -120,9 +120,17 @@ invalid manifest.
 Release plumbing (pure/offline). Assert every version field — `pyproject.toml`,
 `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` (metadata + `plugins[0]`),
 and `src/mokata/__init__.py` `__version__` — equals the intended tag (default: this
-package's version; `--root` checks another checkout, e.g. the public mirror before tagging).
-Exits non-zero **naming each offender** — the `scripts/release.sh` preflight that refuses to
-tag a commit whose versions lag the tag (the 0.0.4 lesson).
+package's version; `--root` checks another checkout before you tag it).
+Exits non-zero **naming each offender** — the release preflight that refuses to tag a commit
+whose versions lag the tag (the 0.0.4 lesson).
+
+### `mokata branch-protection-check [--repo <owner/repo>] [--branch <name>]`
+Release plumbing (**fail-closed**). Verify the public mirror's default branch is protected —
+no force-push, no deletion, required status checks — by reading protection via the `gh` CLI
+(which supplies its own auth: your login locally, `GH_TOKEN` in CI). Exits non-zero on **any**
+inability to prove it: protection absent, `gh` unavailable/unauthed, the API errors, or unsafe
+settings. The release preflight runs this so no release proceeds onto an unprotected `main`.
+Defaults: `--repo JasGujral/mokata-oss --branch main`. No token is hard-coded or accepted.
 
 ### `mokata route [need]`
 Resolve a capability to its tool, showing the attempted fallback chain and the reason.
@@ -203,7 +211,7 @@ through the **universal human-gated WriteGate** (`--yes` approves non-interactiv
 (unmet requirements) writes nothing; on approval it lands at `.mokata/skills/<name>.md`.
 
 ### `mokata run <name>`
-Run a skill standalone (no pipeline prerequisite). `name` is one of the 8 skills. Works
+Run a skill standalone (no pipeline prerequisite). `name` is one of the 12 skills. Works
 with no init (grounding degrades cleanly).
 
 ### `mokata chain <skill> [<skill> …]`
@@ -367,7 +375,7 @@ sessions** — it asks you to choose `--all` / `--project` or run `--list-projec
 ### `mokata rules`
 Show the 4-tier rules and their line budgets; exit non-zero if a tier is over cap.
 
-### `mokata audit [--why] [--team] [--share] [--tail N] [--yes]`
+### `mokata audit [--why] [--team] [--share] [--consent show|grant|revoke] [--tail N] [--yes]`
 Show the append-only audit ledger (every gate decision, tool call, write, …). Add `--why`
 for a readable **what + decision + why** timeline of the run — for each entry, what happened,
 the decision, and the reason (the deviation's why, the spec-conflict's affected spec/decision,
@@ -396,6 +404,13 @@ phoned home** to mokata/Anthropic. The data is the team's, on the team's storage
 project key every shared backend uses, so `mokata audit --team` **defaults to the current project**.
 Add `--all` to span every project, `--project <id>` for a specific one, or `--list-projects` to see
 the projects present on the shared log.
+
+**Standing audit-publish consent (TM.S4).** `mokata audit --consent show|grant|revoke` manages the
+**revocable standing consent** for the batched publish. Granting it once (**human-gated + ledgered**,
+captured during `mokata team join`) lets the batched publish proceed **without re-prompting per
+batch** — while the **per-publish secret-scan still hard-blocks** (never a governance bypass). Revoke
+any time to return to per-batch human-gating. See
+[Team mode — setup & operations](../how-to/team-setup.md#security).
 
 ### `mokata budget`
 Show token savings — a live budget readout (aggregated from the ledger) + a statusline.
@@ -444,14 +459,30 @@ declining writes nothing; `--force` overwrites an existing config). The curated 
 recommended skills land in your manifest's `settings.stack` (reviewable). See
 [community stacks](../how-to/community-stacks.md) and [install mokata](../how-to/install-mokata.md).
 
-### `mokata team <join|status|adopt|connect|disconnect>`
-Zero-setup team sync. **`join <source>`** (Stage 70b) is the guided onboarding path: it runs
-`adopt` → `connect` → vault `pull` → `onboard` → `doctor` **in order**, each a confirmable step,
-and prints a "here's what you're now wired to" summary. Options: `--dsn-env <ENV>` (shared
-memory), `--vault <repo-or-dir>` (pull the shared design/spec vault), `--yes` (non-interactive),
-`--force` (overwrite config on adopt). Every writing step is **human-gated**, the untrusted pulls
-are **secret-scanned**, and a step whose source/backend/driver is absent is **skipped with a
-note** (never a blocker); it is **idempotent** and **reversible**. The individual steps still
+### `mokata team <init|join|status|adopt|connect|disconnect>`
+**`init`** (TM.S3) is first-time team setup — the **sole owner of DDL**. It guides a backend pick
+(`--backend managed|compose|local`; managed DSN is the golden path), **fails closed** with a named
+fix when `$MOKATA_PG_DSN` is unset (writing nothing), runs **one idempotent provision pass** that
+creates the shared tables (`mokata_memory`, `mokata_session_bundle`, `mokata_audit_log`,
+`mokata_events`) + the `mokata_schema_version` row on **vanilla Postgres ≥14, no extensions**,
+**pins** the team project identity (`settings.project.id`, human-gated) so clients don't split by
+path-hash, and runs the **live CONNECTED test** (the same probe `mode set team` uses). The DSN
+value is **never persisted** (env-var only, secret-scanned). Re-running is safe (idempotent). After
+a green init, `mokata mode set team` activates team mode. Zero-setup team sync. **`join <source>`**
+(the **new-member onboarding** path — a joiner never runs `init`/DDL) takes a teammate from a DSN to
+**CONNECTED without reading source**: it runs `adopt` → `connect` → **activate** → vault `pull` →
+`onboard` → **consent** → `doctor` **in order**, each a confirmable step, and prints a "here's what
+you're now wired to" summary. The joiner **INHERITS** the pinned team project id from the adopted
+stack (**never re-pins/forks it**); the **activate** step runs the TM.S2 preflight and reaches
+**CONNECTED** or **fails closed** with the S2 named fix (unreachable/pooler-trap, schema-absent → ask
+whoever ran `team init`, incompatible version), writing nothing on failure; and the **consent** step
+captures the revocable standing audit-publish consent. The **`--dsn-env`** value must be the env-var
+**NAME** (e.g. `MOKATA_PG_DSN`), **never an inline DSN** — an inline DSN is refused (fail-closed).
+Options: `--dsn-env <ENV>` (shared memory), `--vault <repo-or-dir>` (pull the shared design/spec
+vault), `--yes` (non-interactive), `--force` (overwrite config on adopt). Every writing step is
+**human-gated**, the untrusted pulls are **secret-scanned**, and a step whose source/backend/driver
+is absent is **skipped with a note** (never a blocker); it is **idempotent** and **reversible**. Every
+team-mode error links [Team mode — setup & operations](../how-to/team-setup.md). The individual steps still
 exist: `status` (read-only) shows whether shared memory/sessions are local-only or pointed at a
 managed Postgres; `adopt <source>` pulls a teammate's governed stack (shared manifest + vault +
 shared-memory pointer) in one **human-gated, secret-scanned** step (`--force` to overwrite);
@@ -459,6 +490,38 @@ shared-memory pointer) in one **human-gated, secret-scanned** step (`--force` to
 env-var DSN (the DSN value is **never stored** — only the env-var name); `disconnect` reverses it.
 **mokata hosts nothing**; degrade-clean with no driver/DSN. See
 [team setup](../how-to/team-setup.md).
+
+### `mokata mode` · `mokata mode set <local|team> [--yes]`
+Show or set the **run mode** — a first-class, visible property of every session. **`mokata mode`**
+(no argument) prints the current mode line + the **team-readiness preflight** (every prerequisite,
+each blocker with its actionable fix). **`mokata mode set local`** is the zero-config default: on an
+already-local repo it is a **no-op that writes nothing** (local stays byte-for-byte unchanged); it
+only writes — through the same **human-gated** `config set` WriteGate — when switching back from a
+non-local setting. **`mokata mode set team`** runs the **fail-closed** preflight — a usable run
+identity, `$MOKATA_PG_DSN` present, the shared DB reachable within a ≤500ms probe, and a compatible
+`mokata_schema_version` — and only then performs the human-gated mode write. Any failure is
+**fail-closed** with its own **named fix** (unreachable/pooler-trap, schema absent → `mokata team
+init`, incompatible version), links [Team mode — setup & operations](../how-to/team-setup.md), and
+writes nothing; team mode is **never half-activated**. The mode is also surfaced in the
+statusline badge, the SessionStart briefing, and `mokata doctor` — a session is never ambiguous
+about which mode it's in.
+
+### `mokata sync [--yes]`
+**Flush + reconcile** the team write journal (team mode only; a no-op in local). Every durable team
+write lands in a **crash-safe local journal first**, so **offline never blocks** and nothing is
+lost — `mokata sync` is the manual flush that pushes those writes to the shared database and
+reconciles conflicts. Three guarantees ride it: **(1)** each flushed write carries the **ledger id
+of its original human approval**, so the flush *inherits* that approval (never a governance bypass)
+and a **per-publish secret-scan** still applies; **(2)** each memory write is **compare-and-set** on
+a `revision` column — a concurrent-writer conflict **surfaces** and is resolved through the **human
+gate** (keep-local overwrites remote, keep-remote drops the local write), **never a silent
+last-writer-wins** (a conflict you don't decide stays *deferred* for a later interactive run); and
+**(3)** rows the old fallback stranded in the local floor are **recovered** through the same gated
+path. It leads with the **connection health** verdict — the SAME one shown in the statusline badge
+(⚠), `mokata mode`, `mokata doctor`, and the SessionStart briefing (one probe, cached). When the
+connection isn't healthy the flush is **skipped** (work-locally; nothing lost) and the state is
+reported. `--yes` is non-interactive (flush without prompting; conflicts are **deferred**, never
+silently overwritten). See [Team mode — setup & operations](../how-to/team-setup.md).
 
 ## Lifecycle (Part K)
 

@@ -82,15 +82,18 @@ _WHY_WHAT = {
     "healing_decision": "self-healing", "consolidation_proposal": "consolidation (proposed)",
     "consolidation_decision": "consolidation", "rule_promotion_proposed": "rule learning",
     "rule_promotion_decision": "rule promotion", "outbound": "outbound gate",
+    "rule_override": "rule override", "rule_block": "rule enforcement",
+    "enforcement_change": "enforcement promotion", "scope_promotion": "scope promotion",
+    "review_transition": "review workflow", "review_rollback": "review rollback",
     "model_route": "model routing", "phase": "pipeline phase", "subagent": "subagent",
     "sequential": "task", "finish": "ship", "spec_check": "spec-awareness",
     "revert": "revert", "reversible_write": "write",
 }
 # Where the human-readable rationale lives, in priority order (different layers named it
 # differently before this stage; we read them all so the WHY always surfaces if present).
-_WHY_REASON_KEYS = ("reason", "why", "rationale", "detail", "message")
+_WHY_REASON_KEYS = ("reason", "why", "rationale", "detail", "message", "diff")
 _WHY_SUBJECT_KEYS = ("target", "subject", "gate", "pattern", "action", "task", "phase")
-_WHY_DECISION_KEYS = ("decision", "passed", "allowed", "changed", "added", "ok")
+_WHY_DECISION_KEYS = ("decision", "passed", "allowed", "changed", "added", "ok", "to")
 
 
 def _why_pick(entry: Dict[str, Any], keys) -> str:

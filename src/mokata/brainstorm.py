@@ -22,6 +22,16 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from .manifest import ManifestError
+# TM.S11a — the two pre-spec decision lenses (blast radius + architectural fit). Pure/injected —
+# the engine holds + gates on them; the computation lives in brainstorm_impact.py (doc 63 §4, P21).
+from .brainstorm_impact import (
+    ApproachImpact,
+    DesignFitVerdict,
+    compute_impact,
+    deep_review_offer,
+    render_design_fits,
+    render_impacts,
+)
 
 # The 7 pipeline phases, in order. Brainstorm is first; its handoff feeds the strawman.
 PIPELINE_PHASES = (
@@ -96,6 +106,10 @@ class Approach:
     summary: str
     pros: List[str] = field(default_factory=list)
     cons: List[str] = field(default_factory=list)
+    # TM.S11a — the code symbols/files this approach would TOUCH (the model names them). They seed
+    # Lens 1 (blast radius): its impact is computed over these. Empty = the impact degrades to the
+    # about_code intersection only (still scores). Not a tradeoff input — pure impact seed.
+    targets: List[str] = field(default_factory=list)
 
     @property
     def has_tradeoff(self) -> bool:
@@ -103,12 +117,14 @@ class Approach:
 
     def to_dict(self) -> Dict[str, Any]:
         return {"name": self.name, "summary": self.summary,
-                "pros": list(self.pros), "cons": list(self.cons)}
+                "pros": list(self.pros), "cons": list(self.cons),
+                "targets": list(self.targets)}
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Approach":
         return cls(name=d["name"], summary=d.get("summary", ""),
-                   pros=list(d.get("pros", [])), cons=list(d.get("cons", [])))
+                   pros=list(d.get("pros", [])), cons=list(d.get("cons", [])),
+                   targets=list(d.get("targets", [])))
 
 
 @dataclass
@@ -252,6 +268,11 @@ class Handoff:
     grounding: Grounding
     approver: str
     approved_at: str
+    # TM.S11a — the chosen approach's two decision lenses, carried into the hand-off so they become
+    # DOWNSTREAM SPEC CONSTRAINTS (the spec/pre-mortem/completeness gate inherit the impact +
+    # design-fit the approach was approved under). None only on a legacy pre-S11a hand-off.
+    impact: Optional[ApproachImpact] = None
+    design_fit: Optional[DesignFitVerdict] = None
     schema_version: int = 1
 
     def to_dict(self) -> Dict[str, Any]:
@@ -264,10 +285,14 @@ class Handoff:
             "grounding": self.grounding.to_dict(),
             "approver": self.approver,
             "approved_at": self.approved_at,
+            "impact": self.impact.to_dict() if self.impact else None,
+            "design_fit": self.design_fit.to_dict() if self.design_fit else None,
         }
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Handoff":
+        imp = d.get("impact")
+        fit = d.get("design_fit")
         return cls(
             topic=d["topic"],
             approach=Approach.from_dict(d["approach"]),
@@ -276,6 +301,8 @@ class Handoff:
             grounding=Grounding.from_dict(d.get("grounding", {})),
             approver=d.get("approver", "unknown"),
             approved_at=d.get("approved_at", ""),
+            impact=ApproachImpact.from_dict(imp) if imp else None,
+            design_fit=DesignFitVerdict.from_dict(fit) if fit else None,
             schema_version=int(d.get("schema_version", 1)),
         )
 
@@ -291,6 +318,11 @@ class BrainstormSession:
         )
         self.questions: List[Question] = []
         self.approaches: List[Approach] = []
+        # TM.S11a — the two pre-spec decision lenses, per approach name. `impacts` = Lens 1 (blast
+        # radius, computed); `design_fit` = Lens 2 (architectural-fit verdict, model-supplied). The
+        # HARD-GATE (`approve`) refuses until BOTH are on the table for the chosen approach (P21).
+        self.impacts: Dict[str, ApproachImpact] = {}
+        self.design_fit: Dict[str, DesignFitVerdict] = {}
         self.chosen: Optional[Approach] = None
         self.approved: bool = False
         self.approver: Optional[str] = None
@@ -380,6 +412,55 @@ class BrainstormSession:
         self.approaches = list(approaches)
         self._log(f"propose: {[a.name for a in approaches]}")
 
+    # --- TM.S11a: the two pre-spec decision lenses (blast radius + architectural fit) --------
+    def assess_impacts(self, layer: Any = None, memory_items: Any = None,
+                       depth: int = 2) -> Dict[str, "ApproachImpact"]:
+        """LENS 1 — compute + record the blast-radius impact for EVERY proposed approach, over each
+        approach's `targets`, unioned with the `about_code` memory decisions it touches. Pure over
+        the injected `layer` (duck-typed `.blast_radius`, None → grep/heuristic degrade) + memory
+        items. Idempotent — safe to re-run as targets firm up. Returns the per-approach map."""
+        for a in self.approaches:
+            self.impacts[a.name] = compute_impact(
+                a.name, a.targets, layer=layer, memory_items=memory_items, depth=depth)
+        self._log(f"assess impacts: {sorted(self.impacts)}")
+        return self.impacts
+
+    def record_impact(self, approach_name: str, impact: "ApproachImpact") -> None:
+        """Record a pre-computed Lens-1 impact for one approach (when the caller computed it)."""
+        self.impacts[approach_name] = impact
+        self._log(f"impact recorded: {approach_name}")
+
+    def record_design_fit(self, approach_name: str, verdict: "DesignFitVerdict") -> None:
+        """LENS 2 — record the model's architectural-fit VERDICT for one approach. It must be VALID
+        (a known verdict; a risk/misfit must name ≥1 concrete risk) — a hand-waved flag is refused
+        so the gate can't be satisfied with an empty verdict (fail-closed)."""
+        if not isinstance(verdict, DesignFitVerdict) or not verdict.valid:
+            raise BrainstormError(
+                f"design-fit verdict for '{approach_name}' is not on the table — it must be one of "
+                "fits/risk/misfit, and a risk/misfit must name at least one boundary/layering/"
+                "ownership risk")
+        self.design_fit[approach_name] = verdict
+        self._log(f"design-fit recorded: {approach_name} = {verdict.verdict}")
+
+    def lenses_ready(self, approach_name: str) -> bool:
+        """True only when BOTH lenses are on the table for `approach_name` — the condition the
+        HARD-GATE requires before an approach can be approved (doc 63 §4 / P21)."""
+        return approach_name in self.impacts and approach_name in self.design_fit
+
+    def missing_lenses(self, approach_name: str) -> List[str]:
+        """Which lens(es) are NOT yet on the table for `approach_name` (for a legible gate refusal)."""
+        miss = []
+        if approach_name not in self.impacts:
+            miss.append("blast radius (Lens 1)")
+        if approach_name not in self.design_fit:
+            miss.append("architectural fit (Lens 2)")
+        return miss
+
+    def deep_review_offer(self) -> Optional[str]:
+        """Over a complexity/impact threshold, the OFFER of the deep whole-codebase review (R1.S4e,
+        user-invoked, 0.2.0) — never auto-run. None when under threshold. Read-only."""
+        return deep_review_offer(list(self.impacts.values()), list(self.design_fit.values()))
+
     def design_writeup(self) -> str:
         """A digestible, sectioned write-up of where the exploration landed."""
         lines: List[str] = []
@@ -400,6 +481,18 @@ class BrainstormSession:
                 lines.append(f"- pro: {p}")
             for c in a.cons:
                 lines.append(f"- con: {c}")
+            lines.append("")
+        # TM.S11a — the two pre-spec decision lenses, RECORDED in the plan file so the approval's
+        # impact + design-fit are durable + reviewable, and carry into the spec as constraints (P21).
+        if self.impacts or self.design_fit:
+            lines.append("## Decision inputs (pre-spec — blast radius + architectural fit)")
+            lines.append(render_impacts([self.impacts[a.name] for a in self.approaches
+                                         if a.name in self.impacts]))
+            lines.append(render_design_fits([self.design_fit[a.name] for a in self.approaches
+                                             if a.name in self.design_fit]))
+            offer = self.deep_review_offer()
+            if offer:
+                lines.append(f"· Deep review: {offer}")
             lines.append("")
         lines.append("## Decision")
         if self.approved and self.chosen is not None:
@@ -426,6 +519,17 @@ class BrainstormSession:
                 f"no approach named '{approach_name}'; choose one of "
                 f"{[a.name for a in self.approaches]}"
             )
+        # TM.S11a HARD-GATE — no approach is approved until BOTH decision lenses are on the table
+        # for it: the blast radius (Lens 1) AND the architectural-fit verdict (Lens 2). This is the
+        # P21 gate — correctness is designed in, so the impact + design fit are weighed BEFORE the
+        # spec, not discovered after code. Fail-closed: a missing lens refuses the approval.
+        if not self.lenses_ready(approach_name):
+            missing = " and ".join(self.missing_lenses(approach_name))
+            raise BrainstormGateError(
+                f"HARD-GATE: cannot approve '{approach_name}' — {missing} not yet on the table. "
+                "Both pre-spec decision lenses (blast radius + architectural fit) must be shown "
+                "for the chosen approach before it can be approved (P21)."
+            )
         self.chosen = chosen
         self.approved = True
         self.approver = approver
@@ -451,6 +555,9 @@ class BrainstormSession:
             grounding=self.grounding,
             approver=self.approver or "unknown",
             approved_at=self.approved_at or _now_iso(),
+            # TM.S11a — the chosen approach's lenses ride into the hand-off as spec constraints.
+            impact=self.impacts.get(self.chosen.name),
+            design_fit=self.design_fit.get(self.chosen.name),
         )
 
     # --- mid-brainstorm checkpoint (Stage 50): save/restore an IN-PROGRESS session --
@@ -464,6 +571,10 @@ class BrainstormSession:
             "grounding": self.grounding.to_dict(),
             "questions": [q.to_dict() for q in self.questions],
             "approaches": [a.to_dict() for a in self.approaches],
+            # TM.S11a — persist both lenses so a resumed/persisted brainstorm keeps its decision
+            # inputs (and the gate stays satisfied on restore).
+            "impacts": {k: v.to_dict() for k, v in self.impacts.items()},
+            "design_fit": {k: v.to_dict() for k, v in self.design_fit.items()},
             "chosen": self.chosen.name if self.chosen else None,
             "approved": self.approved,
             "approver": self.approver,
@@ -481,6 +592,11 @@ class BrainstormSession:
         s.synthesis = Synthesis.from_dict(syn) if syn else None
         s.questions = [Question.from_dict(q) for q in d.get("questions", [])]
         s.approaches = [Approach.from_dict(a) for a in d.get("approaches", [])]
+        # TM.S11a — restore both lenses straight into their slots (no re-derivation).
+        s.impacts = {k: ApproachImpact.from_dict(v)
+                     for k, v in (d.get("impacts", {}) or {}).items()}
+        s.design_fit = {k: DesignFitVerdict.from_dict(v)
+                        for k, v in (d.get("design_fit", {}) or {}).items()}
         name = d.get("chosen")
         s.chosen = next((a for a in s.approaches if a.name == name), None) if name else None
         s.approved = bool(d.get("approved", False))
@@ -677,6 +793,24 @@ skipped, softened, or assumed. If you are unsure whether approval was given, it 
 5. Write the design up in digestible sections (problem, what we learned, the approaches
    and their tradeoffs, your recommendation), then ask for explicit approval of one.
 
+## Two decision lenses before you approve (blast radius + architectural fit)
+Before ANY approach can be approved, put BOTH pre-spec decision lenses on the table for EACH
+candidate — correctness is designed IN at brainstorm, not reviewed in after code (P21):
+1. Lens 1 — BLAST RADIUS (code impact): name the symbols/files each approach touches and compute
+   its impact — `mokata query blast_radius <symbol>` for the transitive callers/dependents (the
+   grep floor still scores when no graph is wired) UNIONED with the team decisions it disturbs
+   (memory items whose `about_code` names those symbols → affected team decisions). Show
+   callers/tests/docs/configs touched + affected decisions per approach, and COMPARE them.
+2. Lens 2 — ARCHITECTURAL FIT (design-fit review): assess each approach's module boundaries,
+   layering, import direction, and ownership — grounded in the knowledge layer + memory — and give
+   a NAMED verdict (fits / risk / misfit) naming the boundary/layering/ownership risks. A
+   mis-layered approach is flagged HERE, before the spec. Prompt-driven, not a boundary engine.
+The HARD-GATE has TWO conditions: you cannot approve an approach until BOTH its blast radius AND
+its design-fit verdict are on the table. No lenses, no approval. Record both in the plan file —
+they become spec constraints; the develop/CI deviation guard stays only as the backstop. If the
+change looks high-impact (wide blast radius, or a design MISFIT), OFFER — do not run — the deep
+whole-codebase architectural review (user-invoked). mokata offers it; the user decides.
+
 ## Stay anchored (so a long brainstorm never drifts off-thread)
 A long exploration loses the plot if the original ask scrolls out of view. Hold it down:
 1. RECORD THE ANCHOR at the start — the user's original ask/goal, in one line. It is
@@ -696,6 +830,7 @@ A long exploration loses the plot if the original ask scrolls out of view. Hold 
 | "I'll ask everything up front to save time." | One question at a time. A wall is a failure. |
 | "Two of these are weak, but I'll list them as options." | Foils aren't options. Offer real, defensible alternatives. |
 | "They seemed happy — that's basically approval." | Seeming happy is not approval. Ask for it explicitly. |
+| "I'll approve now and check the impact/architecture later." | Both lenses are a HARD-GATE. No blast radius + design-fit, no approval. |
 | "No graph/memory, so I'll assume the structure." | Absence means read/grep and state assumptions, never guess silently. |
 | "We've wandered, but I'll keep following this thread." | Drift-check against the anchor and re-ground — the original ask is the thread. |
 | "I'll rewrite the original ask to match where we ended up." | The anchor is immutable. Update the synthesis, never the anchor. |

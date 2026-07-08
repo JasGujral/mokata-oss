@@ -1,8 +1,8 @@
 # Use mokata in VS Code
 
-> **Planned — not available in 0.0.9.** The VS Code extension (and its Copilot Chat integration)
-> is not part of the 0.0.9 release. It ships from source in the repo but is not published or
-> supported as a 0.0.9 feature; treat everything below as roadmap. The supported way to run
+> **Planned — not yet available.** The VS Code extension (and its Copilot Chat integration)
+> has not shipped in a release. It exists from source in the repo but is not published or
+> supported as a released feature; treat everything below as roadmap. The supported way to run
 > mokata today is the pip-first path — see [Getting started](../getting-started.md).
 
 mokata's governance and memory can show up **where you already work** — inside VS Code. The

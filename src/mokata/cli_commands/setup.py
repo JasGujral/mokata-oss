@@ -88,6 +88,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
             scope=args.scope,
             profile=args.profile,
             with_hooks=not args.no_hooks,
+            grant=not args.no_grant,
             assume_yes=args.yes,
             force=args.force,
         )
@@ -193,6 +194,10 @@ def register(sub, common):
                               f"(default: {DEFAULT_PROFILE})")
     p_setup.add_argument("--no-hooks", action="store_true",
                          help="skip wiring the SessionStart + secret-guard hooks")
+    p_setup.add_argument("--no-grant", action="store_true",
+                         help="don't grant Claude Code permission for mokata's MCP tools / "
+                              "enable the server in settings.json (default: grant, so Claude "
+                              "Code doesn't gate each mcp__mokata__* call)")
     p_setup.add_argument("--yes", action="store_true",
                          help="non-interactive; skip the confirmation prompt")
     p_setup.add_argument("--force", action="store_true",

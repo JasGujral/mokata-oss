@@ -5,7 +5,7 @@ import os
 import tempfile
 import unittest
 
-from _support import sample_manifest_data  # noqa: F401  (path fix side-effect)
+from _support import sample_manifest_data, approve_with_lenses  # noqa: F401  (path fix side-effect)
 
 from mokata.brainstorm import (
     Approach,
@@ -27,7 +27,7 @@ def approved_session():
         Approach("cache-aside", "read-through cache", pros=["simple"], cons=["stale"]),
         Approach("write-through", "writes via cache", pros=["fresh"], cons=["slow writes"]),
     ])
-    s.approve("jas", "cache-aside")
+    approve_with_lenses(s, "jas", "cache-aside")
     return s
 
 

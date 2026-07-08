@@ -34,6 +34,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Tuple
 
+from . import team_docs
 from .govern.gate import WriteGate, WriteRequest
 from .govern.ledger import AuditLedger
 from .govern.secrets import Finding
@@ -104,6 +105,130 @@ def resolve_dsn(dsn_env: Optional[str] = None) -> Optional[str]:
         if val:
             return val
     return None
+
+
+# ----------------------------------------------------- standing audit-publish consent (C5/P-10)
+# doc 48 C5/P-10 — the batched audit publish is deferred DURABILITY, never deferred CONSENT. An
+# EXPLICIT, revocable standing consent captured ONCE at onboarding (human-gated + ledgered) stands
+# in for the per-batch prompt WITHOUT weakening the gate: the per-publish secret-scan still hard-
+# blocks (P2 intact). The flag lives in `settings.audit.standing_consent`; the who/when of every
+# grant/revoke lives in the ledger (`audit_consent` events) — revocable any time.
+STANDING_CONSENT_KEY = "standing_consent"
+
+
+@dataclass
+class ConsentResult:
+    granted: bool
+    changed: bool = False
+    aborted: bool = False
+    message: str = ""
+
+
+@dataclass
+class ConsentCapture:
+    """The onboarding-capture verdict (mapped to a `team join` step by the caller)."""
+    status: str          # wired | skipped | declined
+    detail: str = ""
+
+
+def has_standing_consent(data: dict) -> bool:
+    """True when the team has granted the revocable standing audit-publish consent."""
+    return bool(_settings(data).get(STANDING_CONSENT_KEY))
+
+
+def _fresh_data(root: str) -> dict:
+    """The manifest as committed on disk (so a just-written grant/revoke is seen even when the
+    caller holds a stale surface)."""
+    from .config import Surface
+    return Surface.load(root).manifest.data
+
+
+def grant_standing_consent(root: str, surface: Any, *, assume_yes: bool = False,
+                           confirm: Optional[Callable[[str], bool]] = None,
+                           out: Optional[Callable[[str], None]] = None,
+                           ledger: Any = None) -> ConsentResult:
+    """Grant the standing audit-publish consent — human-gated (via the universal `config set`
+    WriteGate) + ledgered (an `audit_consent`/granted event). Idempotent: already-granted is a
+    clean no-op."""
+    from . import config_cmd
+    emit = out or (lambda *_a: None)
+    if has_standing_consent(_fresh_data(root)):
+        msg = "standing audit-publish consent already granted (revoke: `mokata audit --consent revoke`)."
+        emit(msg)
+        return ConsentResult(True, False, False, msg)
+    who = actor()
+    res = config_cmd.config_set(root, f"settings.{_AUDIT_SETTINGS_KEY}.{STANDING_CONSENT_KEY}",
+                                "true", assume_yes=assume_yes, confirm=confirm, out=emit,
+                                ledger=ledger)
+    if not getattr(res, "committed", False):
+        return ConsentResult(False, False, getattr(res, "aborted", False),
+                             getattr(res, "reason", "") or "standing consent not granted (declined).")
+    led = ledger or AuditLedger.from_mokata_dir(surface.mokata_dir)
+    led.record("audit_consent", decision="granted", actor=who, scope="team-audit-publish")
+    emit(f"standing audit-publish consent granted as {who} — batched publish won't re-prompt per "
+         f"batch (the secret-scan gate stays). Revoke: `mokata audit --consent revoke`.")
+    return ConsentResult(True, True, False, "granted")
+
+
+def revoke_standing_consent(root: str, surface: Any, *, assume_yes: bool = False,
+                            confirm: Optional[Callable[[str], bool]] = None,
+                            out: Optional[Callable[[str], None]] = None,
+                            ledger: Any = None) -> ConsentResult:
+    """Revoke the standing consent — human-gated + ledgered (`audit_consent`/revoked). Publishing
+    returns to per-batch human-gating. No-op (clean) when there is nothing to revoke."""
+    from . import config_cmd
+    emit = out or (lambda *_a: None)
+    if not has_standing_consent(_fresh_data(root)):
+        msg = "no standing audit-publish consent to revoke — per-batch human-gating is the default."
+        emit(msg)
+        return ConsentResult(False, False, False, msg)
+    who = actor()
+    res = config_cmd.config_set(root, f"settings.{_AUDIT_SETTINGS_KEY}.{STANDING_CONSENT_KEY}",
+                                "false", assume_yes=assume_yes, confirm=confirm, out=emit,
+                                ledger=ledger)
+    if not getattr(res, "committed", False):
+        return ConsentResult(True, False, getattr(res, "aborted", False),
+                             getattr(res, "reason", "") or "revoke declined.")
+    led = ledger or AuditLedger.from_mokata_dir(surface.mokata_dir)
+    led.record("audit_consent", decision="revoked", actor=who, scope="team-audit-publish")
+    emit(f"standing audit-publish consent revoked as {who} — publishing returns to per-batch "
+         f"human-gating.")
+    return ConsentResult(False, True, False, "revoked")
+
+
+def capture_standing_consent(root: str, surface: Any, dsn_env: str, environ: Optional[dict],
+                             *, assume_yes: bool = False,
+                             confirm: Optional[Callable[[str], bool]] = None,
+                             out: Optional[Callable[[str], None]] = None,
+                             ledger: Any = None) -> ConsentCapture:
+    """Onboarding capture of the standing consent (doc 48 C5/P-10). Context-gated: offered only
+    when a shared-audit context exists (a DSN is exported OR sharing is on); otherwise it points
+    at how to grant later. Never a governance bypass — the per-publish secret-scan gate stays."""
+    emit = out or (lambda *_a: None)
+    env = os.environ if environ is None else environ
+    data = _fresh_data(root)
+    if has_standing_consent(data):
+        return ConsentCapture("wired", team_docs.with_docs(
+            "standing audit-publish consent already granted — revoke any time with "
+            "`mokata audit --consent revoke`."))
+    dsn_set = bool((env.get(dsn_env) or "").strip())
+    if not (dsn_set or shared_enabled(data)):
+        return ConsentCapture("skipped",
+            "no shared-audit context yet — grant standing consent later with "
+            "`mokata audit --consent grant` once team audit sharing is on.")
+    res = grant_standing_consent(root, surface, assume_yes=assume_yes, confirm=confirm,
+                                 out=emit, ledger=ledger)
+    if res.granted and res.changed:
+        return ConsentCapture("wired", team_docs.with_docs(
+            "standing audit-publish consent granted (batched publish won't re-prompt per batch; "
+            "the secret-scan gate stays). Revoke: `mokata audit --consent revoke`."))
+    if res.granted:
+        return ConsentCapture("wired", "standing audit-publish consent already granted.")
+    if res.aborted:
+        return ConsentCapture("declined",
+            "standing consent declined — publishing stays per-batch human-gated; grant later "
+            "with `mokata audit --consent grant`.")
+    return ConsentCapture("skipped", res.message or "standing consent not captured.")
 
 
 # --------------------------------------------------------------------------------- shared backend
@@ -278,6 +403,14 @@ def share_audit(root: str, surface: Any, *, assume_yes: bool = False,
     plural = "y" if len(fresh) == 1 else "ies"
     prompt = (f"mokata · approve publishing {len(fresh)} audit entr{plural} to your team's shared "
               f"log (${dsn_env}, as {who}; append-only, the DSN is never stored)?")
+
+    # doc 48 C5/P-10 — an explicit STANDING consent (captured once at onboarding, revocable +
+    # ledgered) stands in for the per-batch prompt. It does NOT weaken the gate: the secret-scan
+    # below is a hard block a standing consent can't override (never a governance bypass).
+    gate_yes = assume_yes
+    if has_standing_consent(data) and not assume_yes:
+        gate_yes = True
+        emit("using your standing audit-publish consent (revoke: `mokata audit --consent revoke`).")
     box: dict = {}
 
     def _commit() -> None:
@@ -289,7 +422,7 @@ def share_audit(root: str, surface: Any, *, assume_yes: bool = False,
     outcome = gate.submit(
         WriteRequest(kind="send", target=f"team-audit:{dsn_env}/{ns}", content=payload,
                      actor=who),
-        commit=_commit, confirm=confirm, assume_yes=assume_yes, prompt=prompt)
+        commit=_commit, confirm=confirm, assume_yes=gate_yes, prompt=prompt)
     if not outcome.committed:
         emit(outcome.reason)
         return ShareResult(False, outcome.aborted, 0, pending=len(fresh),

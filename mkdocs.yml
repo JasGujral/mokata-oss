@@ -96,7 +96,7 @@ nav:
       - Write a skill: how-to/write-a-skill.md
       - Share a stack: how-to/share-a-stack.md
       - Community stacks (share & install): how-to/community-stacks.md
-      - Team setup (shared governed stack): how-to/team-setup.md
+      - Team mode (setup & operations): how-to/team-setup.md
       - Team audit / shared activity log: how-to/team-audit.md
       - Multi-project on one shared backend: how-to/multi-project-shared-backend.md
       - Profiles & toggles: profiles.md

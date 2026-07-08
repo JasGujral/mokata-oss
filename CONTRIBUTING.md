@@ -13,7 +13,7 @@ pip install -e ".[mcp,schema]" # editable install + both extras (MCP server + js
 ```
 
 mokata has **no required runtime dependencies**; `jsonschema` is optional and degraded
-over. Python 3.9–3.12 are supported.
+over. Python 3.10–3.13 are supported.
 
 ## Running the tests (in BOTH jsonschema states)
 
@@ -29,7 +29,7 @@ pip install "jsonschema>=4.0"
 python -m unittest discover -s tests -t tests
 ```
 
-CI runs both states across Python 3.9–3.12 plus a `mokata playbook` smoke run.
+CI runs both states across Python 3.10–3.13 plus a `mokata playbook` smoke run.
 
 ## The rules (non-negotiable)
 
@@ -45,7 +45,7 @@ CI runs both states across Python 3.9–3.12 plus a `mokata playbook` smoke run.
 
 ## Commit & PR flow
 
-- Branch from `master`; one focused change per PR.
+- Branch from `main`; one focused change per PR.
 - Commit messages: imperative summary line; explain *why* in the body when non-obvious.
 - Open a PR and fill in the template (the checklist mirrors the rules above).
 - CI must be green (both jsonschema states, all Python versions) and one review is required.

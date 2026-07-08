@@ -21,11 +21,10 @@ mokata mcp status           # expect: mokata-mcp: CONNECTED ✓
 
 Then, inside Claude Code, start with `/mokata:brainstorm` (a new problem) or `/mokata:refine`
 (existing code). If the MCP tools ever stop showing up, just tell Claude "mokata mcp isn't working"
-and the `/mokata:mcp` repair skill will re-register it (you'll need to restart Claude Code after).
+and the `/mokata:mcp-repair` repair skill will re-register it (you'll need to restart Claude Code after).
 
-> **Python version.** The MCP server ships and runs out of the box on **Python 3.10+**. On Python
-> 3.9 the CLI and everything else still work, but the MCP server is unavailable — `mokata-mcp` will
-> print a clear message telling you to upgrade.
+> **Python version.** mokata requires **Python ≥ 3.10**; the MCP server ships and runs out of the
+> box on a plain `pip install mokata`.
 
 ## Path B — Terminal CLI (any AI tool, CI, scripting)
 
@@ -36,6 +35,13 @@ pip install mokata
 mokata init                 # scaffold a governed config in the current repo
 mokata brainstorm           # or: mokata --help to see every command
 ```
+
+## Working as a team
+
+Everything above is **local mode** — the zero-config default. When you're ready to share memory,
+sessions, and a governed audit trail across a team, one person runs `mokata team init` and everyone
+else reaches **CONNECTED** with a single guided `mokata team join`. See
+[Team mode — setup & operations](how-to/team-setup.md) for the full path (and its security model).
 
 ## Path C — Contribute to mokata (developers only)
 

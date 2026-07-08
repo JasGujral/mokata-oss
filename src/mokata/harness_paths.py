@@ -23,6 +23,11 @@ from typing import Optional
 # The MCP server key (mirrors .claude-plugin/plugin.json's mcpServers entry).
 MCP_SERVER_NAME = "mokata"
 
+# The Claude Code permission pattern that trusts EVERY mokata MCP tool (`mcp__<server>__*`).
+# Without this in `permissions.allow`, Claude Code GATES each `mcp__mokata__*` call (the
+# approval-loop hang). The server segment must be literal; only the trailing tool is wild.
+MCP_TOOL_PERMISSION = f"mcp__{MCP_SERVER_NAME}__*"
+
 
 def scope_base(scope: str, root: str, home: Optional[str] = None) -> Path:
     """The base directory a (scope) choice resolves under: the project ``root`` for the
@@ -36,3 +41,11 @@ def claude_mcp_config_path(scope: str, root: str, home: Optional[str] = None) ->
     ``<home>/.claude.json`` (where ``claude mcp add --scope user`` writes)."""
     base = scope_base(scope, root, home)
     return (base / ".mcp.json") if scope == "project" else (base / ".claude.json")
+
+
+def claude_settings_path(scope: str, root: str, home: Optional[str] = None) -> Path:
+    """Claude Code's ``settings.json`` for a scope — the file mokata merges hooks, the
+    statusLine, AND the MCP tool grant (``enabledMcpjsonServers`` + ``permissions.allow``)
+    into: ``<scope base>/.claude/settings.json``. The single source of this path, shared by
+    ``harness_setup`` (which writes it) and ``mcp_admin`` (which reads the grant back)."""
+    return scope_base(scope, root, home) / ".claude" / "settings.json"

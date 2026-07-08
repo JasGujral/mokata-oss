@@ -2,7 +2,7 @@
 
 mokata is a pure-Python package under `src/mokata/`, with one capability model and **no
 required runtime dependencies**. `jsonschema` is the only optional dependency and is
-degraded over when absent. Supported Python: **3.9–3.12**.
+degraded over when absent. Supported Python: **3.10–3.13**.
 
 ## Architecture by package (Parts A–L)
 
@@ -80,7 +80,7 @@ pip install "jsonschema>=4.0"
 python -m unittest discover -s tests -t tests
 ```
 
-CI runs both states across Python 3.9–3.12 plus a `mokata playbook` smoke run. Tests are
+CI runs both states across Python 3.10–3.13 plus a `mokata playbook` smoke run. Tests are
 written RED-before-GREEN.
 
 ## Contributing

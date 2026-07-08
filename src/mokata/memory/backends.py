@@ -62,6 +62,11 @@ class SQLiteBackend(MemoryBackend):
                 os.makedirs(parent, exist_ok=True)
         self._mem_conn = sqlite3.connect(path) if self._memory else None
         with self._connect() as conn:
+            # TM.S6 — the local table gains the same scope + precedence fields as the shared
+            # Postgres schema (doc 62 §2–3). A fresh DB creates them here; an existing DB is
+            # migrated by `_ensure_scope_columns` (idempotent ADD COLUMN). The authoritative scope
+            # value lives in the `doc` JSON (reads use from_dict), so these columns are provisioned
+            # for future SQL-side filtering — no runtime read depends on them.
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS memory (
                        seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,10 +74,29 @@ class SQLiteBackend(MemoryBackend):
                        mtype TEXT,
                        subject TEXT,
                        status TEXT,
-                       doc TEXT
+                       doc TEXT,
+                       scope_level TEXT NOT NULL DEFAULT 'personal',
+                       scope_id TEXT,
+                       pin INTEGER NOT NULL DEFAULT 0,
+                       priority INTEGER NOT NULL DEFAULT 0
                    )"""
             )
+            self._ensure_scope_columns(conn)
             conn.commit()
+
+    @staticmethod
+    def _ensure_scope_columns(conn: Any) -> None:
+        """Idempotently add the TM.S6 scope columns to a pre-existing `memory` table. SQLite has
+        no ADD COLUMN IF NOT EXISTS, so we read PRAGMA table_info and ALTER only what's missing."""
+        have = {row[1] for row in conn.execute("PRAGMA table_info(memory)").fetchall()}
+        for col, ddl in (
+            ("scope_level", "scope_level TEXT NOT NULL DEFAULT 'personal'"),
+            ("scope_id", "scope_id TEXT"),
+            ("pin", "pin INTEGER NOT NULL DEFAULT 0"),
+            ("priority", "priority INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if col not in have:
+                conn.execute(f"ALTER TABLE memory ADD COLUMN {ddl}")
 
     @contextmanager
     def _connect(self):
@@ -243,6 +267,16 @@ class NativeMemoryBackend(MemoryBackend):
 
 
 # -------------------------------------------------------------------------- postgres
+def _with_revision(doc: str, revision: Any) -> MemoryItem:
+    """TM.S5c — rebuild an item from its `doc` and stamp the shared-row `revision` onto it as a
+    TRANSIENT attribute (`_revision`, NOT a model field, so it never enters `to_dict`/the stored
+    doc). The store reads it as the compare-and-set base for a subsequent gated update/delete;
+    an item from a backend that doesn't track revisions simply has no `_revision` (base=None)."""
+    item = MemoryItem.from_dict(json.loads(doc))
+    item._revision = revision
+    return item
+
+
 class PostgresUnavailable(Exception):
     """Raised when the Postgres backend can't be built — psycopg missing or the DB
     unreachable. The caller catches this and degrades to the SQLite floor (never a
@@ -291,11 +325,26 @@ class PostgresBackend(MemoryBackend):
 
     @classmethod
     def _setup_sql(cls) -> List[str]:
+        # IF-NOT-EXISTS mirrors of the shared schema `team init` owns (teamdb.provision_sql) —
+        # a no-op on a provisioned DB. TM.S6 (doc 62 §2–3) adds the scope + precedence columns;
+        # the authoritative scope value still lives in the item `doc` JSON, so runtime reads work
+        # regardless, and these columns are provisioned for future SQL-side scope filtering.
         return [
             f"CREATE TABLE IF NOT EXISTS {cls.TABLE} ("
             "  id TEXT PRIMARY KEY, mtype TEXT, subject TEXT,"
             "  status TEXT, doc TEXT, seq BIGSERIAL, project TEXT)",
             f"ALTER TABLE {cls.TABLE} ADD COLUMN IF NOT EXISTS project TEXT",
+            # TM.S5c — mirror the team-init-owned CAS columns (teamdb v2) so this backend's read
+            # path can surface the row `revision` (the compare-and-set base). Same idempotent
+            # IF-NOT-EXISTS mirror pattern as the scope columns below; DDL ownership stays team
+            # init's — this is a provisioned mirror, not a new migration.
+            f"ALTER TABLE {cls.TABLE} ADD COLUMN IF NOT EXISTS revision INT NOT NULL DEFAULT 1",
+            f"ALTER TABLE {cls.TABLE} ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ",
+            f"ALTER TABLE {cls.TABLE} ADD COLUMN IF NOT EXISTS scope_level "
+            "TEXT NOT NULL DEFAULT 'personal'",
+            f"ALTER TABLE {cls.TABLE} ADD COLUMN IF NOT EXISTS scope_id TEXT",
+            f"ALTER TABLE {cls.TABLE} ADD COLUMN IF NOT EXISTS pin BOOLEAN NOT NULL DEFAULT FALSE",
+            f"ALTER TABLE {cls.TABLE} ADD COLUMN IF NOT EXISTS priority INT NOT NULL DEFAULT 0",
         ]
 
     def _scope(self, prefix: str = "AND") -> Tuple[str, tuple]:
@@ -322,16 +371,17 @@ class PostgresBackend(MemoryBackend):
     def get(self, item_id: str) -> Optional[MemoryItem]:
         clause, params = self._scope()
         row = self._conn.execute(
-            f"SELECT doc FROM {self.TABLE} WHERE id=%s{clause}", (item_id, *params)  # nosec B608
-        ).fetchone()
-        return MemoryItem.from_dict(json.loads(row[0])) if row else None
+            f"SELECT doc, revision FROM {self.TABLE} WHERE id=%s{clause}",  # nosec B608
+            (item_id, *params)).fetchone()
+        return _with_revision(row[0], row[1]) if row else None
 
     def all(self, mtype: Optional[str] = None,
             statuses: Optional[Tuple[str, ...]] = None) -> List[MemoryItem]:
         clause, params = self._scope(prefix="WHERE")
         rows = self._conn.execute(
-            f"SELECT doc FROM {self.TABLE}{clause} ORDER BY seq", params).fetchall()  # nosec B608
-        items = [MemoryItem.from_dict(json.loads(r[0])) for r in rows]
+            f"SELECT doc, revision FROM {self.TABLE}{clause} ORDER BY seq",  # nosec B608
+            params).fetchall()
+        items = [_with_revision(r[0], r[1]) for r in rows]
         if mtype is not None:
             items = [i for i in items if i.mtype == mtype]
         if statuses is not None:

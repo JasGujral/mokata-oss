@@ -29,11 +29,16 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional
 
-from . import MANIFEST_FILENAME, MOKATA_DIR
+import re
+
+from . import MANIFEST_FILENAME, MOKATA_DIR, team_docs
 from .govern.gate import WriteGate, WriteRequest
 from .govern.secrets import Finding, scan
 from .manifest import Manifest
 from .profiles import TOOL_CATALOG
+
+# A valid env-var NAME (the ONLY form the DSN pointer may take — never an inline DSN value).
+_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # The conventional shared-Postgres env var (matches session_transport.PG_DSN_ENVS so memory AND
 # sessions resolve the SAME managed DB out of the box). A team may pick another NAME.
@@ -177,6 +182,132 @@ def team_connect(root: str, surface: Any, dsn_env: str = DEFAULT_DSN_ENV, *,
            + ("active now." if ready.active else "active once the driver + DSN are present."))
     emit(msg)
     return ConnectResult(True, True, False, dsn_env, ready, msg)
+
+
+# ============================================================ team init (TM.S3 — first-time setup)
+# The guided first-time setup that takes a team from nothing to CONNECTED. `team init` is the SOLE
+# owner of DDL (doc 48 C4): it provisions the shared schema + the `mokata_schema_version` row the
+# TM.S2 probe reads, so `mokata mode set team` then activates cleanly. Env-var creds only (the DSN
+# secret is never persisted); the project identity is pinned (C2); one idempotent pass (E5).
+
+# The guided backend choices (doc 48 §7b). All three end at the SAME green preflight — a managed
+# DSN (the golden path), a compose self-host, or local. The compose file itself (docker-
+# compose.team.yml + .env.example) ships later (TM.S12); here `compose` only POINTS at it.
+INIT_BACKENDS = ("managed", "compose", "local")
+
+_BACKEND_GUIDANCE = {
+    "managed": ("golden path — bring ONE managed Postgres ≥14 (Supabase / Neon / RDS; mokata "
+                "hosts nothing) and export its DSN as $%(env)s. On Supabase/Neon use a "
+                "DIRECT/session connection string, not the transaction-mode pooler (LISTEN/NOTIFY "
+                "dies behind it)."),
+    "compose": ("self-host — a one-command `docker-compose.team.yml` + `.env.example` ship in a "
+                "later step (TM.S12). For now, stand up any Postgres ≥14 and export its DSN as "
+                "$%(env)s; the rest of init is identical."),
+    "local": ("local trial — point $%(env)s at a local Postgres ≥14 (e.g. a dev container) to try "
+              "team mode on one machine. Everyday solo use needs none of this — that's `local` "
+              "mode (the zero-config default)."),
+}
+
+# The two-role model (doc 48 C3) — GUIDANCE only here; the REVOKE/least-privilege work is later.
+_ROLE_NOTE = ("two-role model (recommended, not enforced yet): run `team init` as a MIGRATION role "
+              "that owns DDL, and point everyday runtime at a DML-only role (REVOKE UPDATE, DELETE "
+              "ON mokata_audit_log for append-only). The deep role setup lands in a later stage.")
+
+
+@dataclass
+class InitResult:
+    ok: bool
+    connected: bool = False
+    aborted: bool = False
+    backend: str = "managed"
+    dsn_env: str = DEFAULT_DSN_ENV
+    project_id: str = ""
+    provisioned: List[str] = field(default_factory=list)
+    message: str = ""
+
+
+def team_init(root: str, surface: Any, *, backend: str = "managed",
+              dsn_env: str = DEFAULT_DSN_ENV, environ: Optional[dict] = None,
+              assume_yes: bool = False, confirm: Optional[Callable[[str], bool]] = None,
+              out: Optional[Callable[[str], None]] = None, ledger: Any = None) -> InitResult:
+    """Guided first-time team setup → CONNECTED. Picks the backend (guidance), FAILS CLOSED with a
+    named fix when $dsn_env is unset (nothing written), runs the ONE idempotent DDL provision pass
+    (the sole DDL owner — C4/E5), pins the team project identity into the shared manifest (C2,
+    human-gated + secret-scanned), then runs the TM.S2 probe as a live CONNECTED test. The DSN
+    VALUE is never persisted — only its env-var name matters, and that stays in the environment."""
+    from . import teamdb
+    from .project import project_id as _project_id
+    emit = out or (lambda *_a: None)
+    env = os.environ if environ is None else environ
+    backend = backend if backend in INIT_BACKENDS else "managed"
+
+    emit(honest_note())
+    emit("team init · backend — " + (_BACKEND_GUIDANCE[backend] % {"env": dsn_env}))
+
+    # 1) fail-closed prerequisites — a named fix, BEFORE anything is written.
+    if not driver_present():
+        msg = (f"team init — refused (fail-closed): the Postgres driver isn't installed. "
+               f"fix: `pip install 'mokata[postgres]'`, then re-run `mokata team init`.")
+        emit(msg)
+        return InitResult(False, backend=backend, dsn_env=dsn_env, message=msg)
+    dsn = (env.get(dsn_env) or "").strip()
+    if not dsn:
+        msg = (f"team init — refused (fail-closed): ${dsn_env} is not set. "
+               f"fix: `export {dsn_env}=postgres://…` (the DSN secret is NEVER stored — only the "
+               f"env-var name matters), then re-run `mokata team init`.")
+        emit(msg)
+        return InitResult(False, backend=backend, dsn_env=dsn_env, message=msg)
+
+    # 2) pin the team project identity (C2 / P-7) so clients don't split by path-hash. Compute the
+    #    id NOW (from the derived key or an existing override) and pin it into the SHARED manifest.
+    pid = _project_id(surface)
+
+    # 3) ONE idempotent provision pass — the SOLE DDL path (C4 / E5). NEVER runs at runtime.
+    try:
+        prov = teamdb.provision(dsn, project_id=pid)
+    except teamdb.ProvisionError as exc:
+        msg = f"team init — provisioning failed: {exc}. (the fail-closed fixes above apply.)"
+        emit(msg)
+        return InitResult(False, backend=backend, dsn_env=dsn_env, project_id=pid, message=msg)
+    emit(f"provisioned the shared schema (idempotent): {', '.join(prov.tables)} + "
+         f"schema-version v{prov.version}.")
+
+    # 4) pin project.id into the shared manifest — human-gated + secret-scanned (the DSN value is
+    #    never written; only the derived id, a machine-path-free hash). No-op when already pinned.
+    data = _load_data(root)
+    existing = ((data.get("settings") or {}).get("project") or {}).get("id")
+    if existing != pid:
+        new_data = copy.deepcopy(data)
+        new_data.setdefault("settings", {}).setdefault("project", {})["id"] = pid
+        prompt = (f"mokata · approve pinning this team's project id (settings.project.id={pid}) "
+                  f"into the shared manifest so clients don't split by path-hash?")
+        outcome = _gated_write(root, new_data, assume_yes=assume_yes, confirm=confirm,
+                               out=emit, ledger=ledger, prompt=prompt)
+        if not outcome.committed:
+            msg = outcome.reason or "project-id pin declined — team init did not finish."
+            emit(f"team init — {msg}")
+            return InitResult(False, connected=False, aborted=outcome.aborted, backend=backend,
+                              dsn_env=dsn_env, project_id=pid,
+                              provisioned=prov.tables, message=msg)
+    else:
+        emit(f"project id already pinned (settings.project.id={pid}) — no manifest change.")
+
+    # 5) live CONNECTED test — the TM.S2 probe (reachable + compatible). Same probe `mode set team`
+    #    uses, so a green result here means activation will succeed.
+    res = teamdb.probe(dsn)
+    if res.reachable and res.compatible:
+        emit(f"✓ CONNECTED — reachable ({res.elapsed_ms:.0f}ms) + schema v{res.schema_version} "
+             f"compatible. Next: `mokata mode set team` to activate team mode.")
+        emit(_ROLE_NOTE)
+        return InitResult(True, connected=True, backend=backend, dsn_env=dsn_env,
+                          project_id=pid, provisioned=prov.tables,
+                          message="connected")
+    # provisioned but the probe still isn't green → surface the S2 fail-closed verdict.
+    emit(f"team init provisioned the schema, but the CONNECTED test did not pass: {res.detail}")
+    from .run_mode import team_preflight
+    emit(team_preflight(surface, environ=env).render())
+    return InitResult(False, connected=False, backend=backend, dsn_env=dsn_env, project_id=pid,
+                      provisioned=prov.tables, message=res.detail or "not connected")
 
 
 def team_disconnect(root: str, surface: Any, *, assume_yes: bool = False,
@@ -342,7 +473,7 @@ _JOIN_GLYPHS = {"wired": "✓", "verified": "✓", "skipped": "–", "declined":
 # Steps that leave something for the teammate to finish (surfaced as pending/skipped).
 _JOIN_OPEN = {"skipped", "declined", "pending", "blocked", "problems"}
 
-JOIN_STEP_NAMES = ("adopt", "connect", "vault", "onboard", "verify")
+JOIN_STEP_NAMES = ("adopt", "connect", "activate", "vault", "onboard", "consent", "verify")
 
 
 @dataclass
@@ -437,6 +568,48 @@ def _join_connect(root: str, surface: Any, dsn_env: str, *, assume_yes, confirm,
     return JoinStep("connect", "skipped", res.message or "not connected — staying local.")
 
 
+def _activate_fix(report: Any) -> str:
+    """Build the joiner-facing fail-closed detail from the preflight blockers — the S2 named fix,
+    joiner-flavored for a missing schema (ask whoever ran `team init`; joiners never run DDL), and
+    the canonical docs link."""
+    parts = []
+    for c in getattr(report, "blockers", []):
+        fix = c.fix
+        if c.name == "team-schema" and "provision" in (c.detail + fix).lower():
+            fix = ("ask whoever ran `mokata team init` to provision the shared schema — "
+                   "joiners never run DDL")
+        parts.append(f"{c.name}: {c.detail} → {fix}")
+    detail = ("not CONNECTED (fail-closed) — " + "; ".join(parts) if parts
+              else "not CONNECTED (fail-closed)")
+    return team_docs.with_docs(detail)
+
+
+def _join_activate(root: str, surface: Any, dsn_env: str, environ: Optional[dict], *,
+                   assume_yes, confirm, out, ledger, probe=None) -> JoinStep:
+    """Reach CONNECTED — the fail-closed step taking a joiner from a pointed DSN to team mode.
+    Runs the TM.S2 preflight via `activate_team`; it NEVER runs DDL (that's `team init`). Skips
+    (stays local) when no DSN is exported; on any fail-closed verdict surfaces the S2 named fix
+    and writes no durable activation. The joiner INHERITS the pinned team project id — it never
+    re-pins/forks it (doc 48 C2/P-7)."""
+    from . import run_mode as RM
+    env = os.environ if environ is None else environ
+    if not (env.get(dsn_env) or "").strip():
+        return JoinStep("activate", "skipped",
+                        f"no ${dsn_env} exported — staying local; run `mokata mode set team` "
+                        f"once the shared DSN is set.")
+    pinned = ((_load_data(root).get("settings") or {}).get("project") or {}).get("id")
+    res = RM.activate_team(root, surface, environ=env, assume_yes=assume_yes, confirm=confirm,
+                           out=out, ledger=ledger, probe=probe)
+    if res.activated:
+        idnote = f" (inherited team project id {pinned}, never re-pinned)" if pinned else ""
+        return JoinStep("activate", "verified", f"CONNECTED — team mode active{idnote}.")
+    if res.connected:
+        return JoinStep("activate", "declined",
+                        team_docs.with_docs("CONNECTED, but activating team mode was declined — "
+                                            "run `mokata mode set team` when ready."))
+    return JoinStep("activate", "problems", _activate_fix(res.report))
+
+
 def _join_vault(root: str, vault_ref: Optional[str], *, assume_yes, confirm, out,
                 ledger: Any = None) -> JoinStep:
     emit = out or (lambda *_a: None)
@@ -527,6 +700,19 @@ def _join_onboard(out: Callable[[str], None]) -> JoinStep:
     return JoinStep("onboard", "pending", msg)
 
 
+def _join_consent(root: str, surface: Any, dsn_env: str, environ: Optional[dict], *,
+                  assume_yes, confirm, out, ledger) -> JoinStep:
+    """Capture the standing audit-publish consent ONCE at onboarding (doc 48 C5/P-10) — human-
+    gated + ledgered + revocable. Context-gated: only offered when a shared-audit context exists
+    (a DSN is exported or team audit sharing is on); otherwise it points at how to grant it
+    later. Never a governance bypass — the per-publish secret-scan gate stays intact."""
+    from . import team_audit as TA
+    cap = TA.capture_standing_consent(root, surface, dsn_env, environ,
+                                      assume_yes=assume_yes, confirm=confirm, out=out,
+                                      ledger=ledger)
+    return JoinStep("consent", cap.status, cap.detail)
+
+
 def _join_verify(root: str, out: Callable[[str], None]) -> JoinStep:
     # Reload a fresh surface so the check reflects what the join just wrote; reuse `mokata doctor`.
     try:
@@ -545,38 +731,60 @@ def _join_verify(root: str, out: Callable[[str], None]) -> JoinStep:
 
 def team_join(root: str, surface: Any, source: Optional[str], *,
               dsn_env: str = DEFAULT_DSN_ENV, vault_ref: Optional[str] = None,
+              environ: Optional[dict] = None,
               assume_yes: bool = False, confirm: Optional[Callable[[str], bool]] = None,
               out: Optional[Callable[[str], None]] = None,
-              ledger: Any = None, force: bool = False) -> JoinResult:
-    """Guided team onboarding — the ONE command a new teammate runs. Orchestrates the existing
-    primitives in order, each a confirmable step: (1) adopt the governed stack, (2) connect shared
-    memory at the team's managed Postgres, (3) pull the shared design/spec vault, (4) onboard the
-    project knowledge, (5) verify + summarize. Human-gated per writing step; secret-scanned on the
-    untrusted pulls; the DSN secret never stored; degrade-clean (skip-not-block); idempotent +
-    reversible. No new engine — pure orchestration."""
+              ledger: Any = None, force: bool = False, probe: Optional[Any] = None) -> JoinResult:
+    """Guided team onboarding — the ONE command a new teammate runs to reach CONNECTED without
+    reading source. Orchestrates the existing primitives in order, each a confirmable step:
+    (1) adopt the governed stack (INHERITING the pinned team project id — never re-pinned),
+    (2) connect shared memory at the team's managed Postgres, (3) ACTIVATE — run the TM.S2
+    preflight → CONNECTED (fail-closed with the S2 named fix; NEVER runs DDL), (4) pull the shared
+    design/spec vault, (5) onboard the project knowledge, (6) capture the standing audit-publish
+    consent, (7) verify + summarize. Human-gated per writing step; secret-scanned on the untrusted
+    pulls; the DSN pointer is an env-var NAME only (an inline DSN is refused); the DSN secret never
+    stored; degrade-clean (skip-not-block); idempotent + reversible. No new engine."""
     emit = out or (lambda *_a: None)
     result = JoinResult(dsn_env=dsn_env)
-    emit("mokata team join — one guided path: adopt stack → connect shared memory → pull vault "
-         "→ onboard knowledge → verify. Every writing step is human-gated; shared content is "
-         "secret-scanned; your DSN secret is never stored.")
+
+    # Fail-closed secret guard: the DSN pointer must be an env-var NAME, never an inline DSN VALUE.
+    if not _ENV_NAME_RE.match(dsn_env or ""):
+        emit(team_docs.with_docs(
+            "team join — refused (fail-closed): --dsn-env must be the env-var NAME holding your "
+            "DSN (e.g. MOKATA_PG_DSN), never the DSN value itself — the DSN secret stays in your "
+            "environment and is never stored."))
+        result.aborted = True
+        return result
+
+    emit("mokata team join — one guided path: adopt stack → connect shared memory → activate "
+         "(reach CONNECTED) → pull vault → onboard knowledge → consent → verify. Every writing "
+         "step is human-gated; shared content is secret-scanned; your DSN secret is never stored.")
     emit(honest_note())
 
-    emit("team join · step 1/5 — adopt the governed stack:")
+    emit("team join · step 1/7 — adopt the governed stack (inheriting the team project id):")
     result.steps.append(_join_adopt(root, source, assume_yes=assume_yes, confirm=confirm,
                                     out=emit, ledger=ledger, force=force))
 
-    emit("team join · step 2/5 — connect shared memory (your own managed Postgres):")
+    emit("team join · step 2/7 — connect shared memory (your own managed Postgres):")
     result.steps.append(_join_connect(root, surface, dsn_env, assume_yes=assume_yes,
                                        confirm=confirm, out=emit, ledger=ledger))
 
-    emit("team join · step 3/5 — pull the design/spec vault:")
+    emit("team join · step 3/7 — activate: run the preflight → CONNECTED (fail-closed; no DDL):")
+    result.steps.append(_join_activate(root, surface, dsn_env, environ, assume_yes=assume_yes,
+                                       confirm=confirm, out=emit, ledger=ledger, probe=probe))
+
+    emit("team join · step 4/7 — pull the design/spec vault:")
     result.steps.append(_join_vault(root, vault_ref, assume_yes=assume_yes, confirm=confirm,
                                     out=emit, ledger=ledger))
 
-    emit("team join · step 4/5 — onboard the project knowledge:")
+    emit("team join · step 5/7 — onboard the project knowledge:")
     result.steps.append(_join_onboard(emit))
 
-    emit("team join · step 5/5 — verify (mokata doctor):")
+    emit("team join · step 6/7 — standing audit-publish consent (revocable):")
+    result.steps.append(_join_consent(root, surface, dsn_env, environ, assume_yes=assume_yes,
+                                       confirm=confirm, out=emit, ledger=ledger))
+
+    emit("team join · step 7/7 — verify (mokata doctor):")
     result.steps.append(_join_verify(root, emit))
 
     emit(result.summary())

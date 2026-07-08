@@ -56,6 +56,10 @@ def cmd_memory(args: argparse.Namespace) -> int:
         return 1 if res.aborted else 0
     if action == "edit":
         return _memory_edit(store, args)
+    if action == "promote":
+        return _memory_promote(store, args)
+    if action == "review":
+        return _memory_review(store, args)
     if action == "consolidate":
         # C7 — surface PROPOSAL-ONLY consolidations (merge/summarize/prune). Reads only;
         # nothing is applied here (applying stays the gated `apply_consolidation` path).
@@ -150,10 +154,21 @@ def _memory_edit(store, args) -> int:
     old = existing[0]
     new_kind = (normalize_kind(args.kind) or args.kind) if getattr(args, "kind", None) else old.kind
     new = MemoryItem.create(subject, args.value, mtype=old.mtype, kind=new_kind,
-                            author=_current_user() or "user", source="memory-edit")
+                            author=_current_user() or "user", source="memory-edit",
+                            scope_level=old.scope_level, scope_id=old.scope_id)
     if old.value == new.value and new_kind == old.kind:
         print(f"memory: '{subject}' unchanged (no-op).")
         return 0
+    # TM.S11 — in TEAM mode an editor edit ENTERS the review workflow as a Draft (proposer ≠
+    # approver enforced downstream); it does not go live until a PM approves + publishes. In local
+    # mode (no policy) the edit applies directly via the self-healing supersede — byte-identical.
+    if store.review_required():
+        res = store.propose(new, base_id=old.id, change="edit",
+                            proposer=_current_user() or None, assume_yes=args.yes)
+        print(res.message)
+        if res.ok:
+            print("  → review it with `mokata memory review` (a PM must approve + publish).")
+        return 0 if res.ok or not res.aborted else 1
     proposal = HealingProposal(kind=CONTRADICTION, subject=subject, mtype=old.mtype,
                                old=old, new=new,
                                rationale="user edit via `mokata memory edit`")
@@ -179,25 +194,93 @@ def _memory_edit(store, args) -> int:
     return 0 if res.changed or not res.aborted else 1
 
 
+def _memory_promote(store, args) -> int:
+    """TM.S7 — `mokata memory promote <id> --to advisory|soft|hard`: the ONE gated moment that
+    changes a rule's ENFORCEMENT binding (doc 62 §4). Binding only — the rule text is untouched;
+    the change is human-gated + ledgered. A lower `--to` is a (still-gated) demotion, reported
+    honestly. The trailing positional carries the item id (like `edit` carries the subject)."""
+    from ..memory import ENFORCEMENT_LEVELS
+    item_id = args.file
+    to = args.to
+    if not item_id or not to:
+        print("error: `memory promote <id> --to advisory|soft|hard` requires an item id and "
+              "--to", file=sys.stderr)
+        return 2
+    if to not in ENFORCEMENT_LEVELS:
+        print(f"error: --to must be one of {', '.join(ENFORCEMENT_LEVELS)}", file=sys.stderr)
+        return 2
+    res = store.promote(item_id, to, assume_yes=args.yes, actor=_current_user() or "user")
+    print(res.message)
+    # unchanged / committed → success; declined / not-found / non-rule → non-zero.
+    return 0 if res.changed or (res.aborted is False) else 1
+
+
+def _memory_review(store, args) -> int:
+    """TM.S11 — `mokata memory review`: the PM review surface (CLI). With no op it LISTS the pending
+    proposals (Draft / In-Review / Approved) with a rendered "what changed" diff; `--submit`,
+    `--approve`, `--reject`, `--publish`, `--rollback <id>` act on one, each human-gated + ledgered
+    with separation of duties (proposer ≠ approver) enforced fail-closed. The rich visual dashboard
+    is the 0.0.12 cockpit (B6) — this is the mechanism + CLI (doc 63 §5)."""
+    from ..memory import diff_line, required_approvers
+
+    # An op flag carries the target item id (unambiguous — the trailing positional stays free).
+    # The actor is the store's own run identity (S10 team_audit.actor()); the ops default to it, so
+    # the PM acts AS themselves and separation of duties (proposer ≠ approver) is real.
+    ops = [("submit", store.submit_for_review), ("approve", store.approve),
+           ("reject", store.reject), ("publish", store.publish), ("rollback", store.rollback)]
+    for name, fn in ops:
+        item_id = getattr(args, name, None)
+        if item_id:
+            res = fn(item_id, assume_yes=args.yes)
+            print(res.message)
+            return 0 if res.ok else 1
+
+    # Default: list the pending proposals with their diffs (read-only).
+    pending = store.pending_reviews()
+    if not pending:
+        print("memory review: no pending proposals (nothing awaiting review).")
+        if not store.review_required():
+            print("  (local mode — edits publish directly; no review is required.)")
+        return 0
+    print(f"memory review — {len(pending)} proposal(s) awaiting a decision "
+          f"(nothing is live until PUBLISHED):")
+    for it in pending:
+        rv = it.review or {}
+        state = rv.get("state", "?")
+        base = store.get(rv.get("base_id", "")) if rv.get("base_id") else None
+        scope, cat, _o = store._item_scope_cat(it)
+        req = required_approvers(store.access, scope, cat)
+        req_str = f" · approver(s): {', '.join(sorted(req))}" if req else ""
+        print(f"  [{state}] {it.subject} ({it.id})  by {rv.get('proposer', '?')}{req_str}")
+        print(f"      what changed: {diff_line(base, it)}")
+    print("\nAct with: `mokata memory review --approve|--reject|--publish|--submit|--rollback "
+          "<id>` (each gated + ledgered; the proposer cannot self-approve).")
+    return 0
+
+
 def register(sub, common):
     p_mem = sub.add_parser(
         "memory", parents=[common],
         help="surface memory (read-only); `export`/`import` to share it across repos",
     )
     p_mem.add_argument("action", nargs="?",
-                       choices=("export", "import", "migrate", "edit", "consolidate"),
+                       choices=("export", "import", "migrate", "edit", "consolidate",
+                                "promote", "review"),
                        default=None,
                        help="export/import a share file, migrate the store, edit an entry, "
-                            "or consolidate (propose-only merges/prunes)")
+                            "consolidate (propose-only), promote a rule's enforcement binding, or "
+                            "review pending memory proposals (PM workflow)")
     p_mem.add_argument("file", nargs="?", default=None,
-                       help="share file (export/import), or the subject to edit (with `edit`)")
+                       help="share file (export/import), the subject to edit, or the item id "
+                            "to promote")
     p_mem.add_argument("--kind", default=None,
                        help="filter the view to one kind (rule/guardrail/best-practice/"
                             "context/reference/decision), or retype an entry on `edit`")
     p_mem.add_argument("--value", default=None,
                        help="new value (with `edit`)")
     p_mem.add_argument("--to", default=None,
-                       help="migrate destination backend (sqlite|obsidian|postgres)")
+                       help="migrate destination backend (sqlite|obsidian|postgres), or the "
+                            "target enforcement (advisory|soft|hard) with `promote`")
     p_mem.add_argument("--from", dest="from_backend", default=None,
                        help="migrate source backend (default: the resolved store)")
     p_mem.add_argument("--drop-source", action="store_true",
@@ -211,6 +294,18 @@ def register(sub, common):
                        help="review a specific project id on a shared backend")
     p_mem.add_argument("--list-projects", dest="list_projects", action="store_true",
                        help="list the projects present on the shared backend, then exit")
+    # TM.S11 — review-workflow ops (each carries the target proposal id): `memory review --approve
+    # <id>` etc. Kept as options so the id is unambiguous and the trailing positional stays free.
+    p_mem.add_argument("--submit", metavar="ID", default=None,
+                       help="(review) submit a Draft for review: Draft → In-Review")
+    p_mem.add_argument("--approve", metavar="ID", default=None,
+                       help="(review) approve a proposal: In-Review → Approved (proposer≠approver)")
+    p_mem.add_argument("--reject", metavar="ID", default=None,
+                       help="(review) reject a proposal (terminal)")
+    p_mem.add_argument("--publish", metavar="ID", default=None,
+                       help="(review) publish an Approved proposal: Approved → Published (live)")
+    p_mem.add_argument("--rollback", metavar="ID", default=None,
+                       help="(review) roll back a published change, restoring the prior")
     p_mem.set_defaults(func=cmd_memory)
 
 

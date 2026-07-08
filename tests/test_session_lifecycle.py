@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 
-from _support import sample_manifest_data  # noqa: F401  (path fix side-effect)
+from _support import sample_manifest_data, approve_with_lenses  # noqa: F401  (path fix side-effect)
 
 from mokata import MOKATA_DIR
 from mokata.brainstorm import (
@@ -94,7 +94,7 @@ class TestBrainstormCheckpoint(unittest.TestCase):
 
     def test_approved_session_round_trips_with_choice(self):
         s = _in_progress_session()
-        s.approve("jas", "regex")
+        approve_with_lenses(s, "jas", "regex")
         restored = BrainstormSession.from_dict(s.to_dict())
         self.assertTrue(restored.approved)
         self.assertEqual(restored.chosen.name, "regex")

@@ -442,6 +442,26 @@ def build_stage_badge(surface: Any, *, session_name: Optional[str] = None,
     return badge
 
 
+def statusline_badge(surface: Any, *, session_name: Optional[str] = None,
+                     ascii_only: bool = False) -> str:
+    """The full statusline segment: the run-mode badge + the pipeline-stage badge, e.g.
+    `local · mokata ▸ [brainstorm · ›spec‹ · develop · review · ship]`.
+
+    TM.S1 — the run mode (local|team) ALWAYS prefixes the badge so a session is never
+    ambiguous about which mode it's in. The stage badge is left byte-for-byte as
+    `build_stage_badge` produces it (it degrades to a plain `mokata` with no run); the mode
+    is a SEPARATE segment, not folded into the stage strip. Pure, read-only, degrade-clean:
+    a broken surface reads as `local`, never an error."""
+    from .run_mode import mode_badge
+    try:
+        mode = mode_badge(surface, ascii_only=ascii_only)
+    except Exception:
+        from .run_mode import LOCAL
+        mode = LOCAL
+    stage = build_stage_badge(surface, session_name=session_name, ascii_only=ascii_only)
+    return f"{mode} · {stage}"
+
+
 def active_banner(label: str, running: bool = True,
                   sub_done: Optional[int] = None,
                   sub_total: Optional[int] = None,

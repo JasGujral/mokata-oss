@@ -76,6 +76,19 @@ class _FakeMemPg:
             return _Cur(rowcount=1)
         if h.startswith("SELECT DISTINCT PROJECT"):
             return _Cur([(p,) for p in {pr for _d, pr in self.rows.values()}])
+        if h.startswith("SELECT DOC, REVISION"):   # TM.S5c: memory get/all now read the CAS base
+            synth = 1                              # this fake tracks no revision → a stable base
+            if "WHERE ID=" in h:
+                id_ = params[0]
+                scoped = "PROJECT=" in h
+                row = self.rows.get(id_)
+                if row and (not scoped or row[1] == params[1]):
+                    return _Cur([(row[0], synth)])
+                return _Cur([])
+            scoped = "WHERE PROJECT=" in h
+            proj = params[0] if scoped else None
+            return _Cur([(doc, synth) for _id, (doc, pr) in self.rows.items()
+                         if not scoped or pr == proj])
         if h.startswith("SELECT DOC,"):            # semantic_search: doc + score
             scoped = " WHERE PROJECT=" in h
             proj = params[1] if scoped else None

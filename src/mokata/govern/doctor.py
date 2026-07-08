@@ -29,6 +29,7 @@ class DoctorFinding:
 class DoctorReport:
     findings: List[DoctorFinding] = field(default_factory=list)
     graph_hint: str = ""          # Stage 25 Part B — actionable code-graph guidance
+    mode_report: str = ""         # TM.S1 — run mode + the team-readiness preflight
 
     @property
     def errors(self) -> List[DoctorFinding]:
@@ -53,6 +54,8 @@ class DoctorReport:
             status = (green("OK", color=color) if self.ok
                       else red("PROBLEMS FOUND", color=color))
             body = "\n".join([f"mokata doctor: {len(self.findings)} finding(s):", grid, status])
+        if self.mode_report:
+            body += f"\n\n{self.mode_report}"
         if self.graph_hint:
             body += f"\n{self.graph_hint}"
         return body
@@ -225,6 +228,34 @@ def diagnose(surface: Any) -> DoctorReport:
     # 6b) R11 — token-estimate calibration drift (a logged actual that blew the chars/4 margin).
     findings.extend(calibration_drift_findings(surface))
 
+    # 6c) TM.S1 — run mode. Flag a hand-edited invalid `settings.mode` (read_mode stays safe/
+    # local, but doctor must SEE it); the local default is never an error.
+    try:
+        from ..run_mode import is_valid_mode, stored_mode
+        raw = stored_mode(surface)
+        if raw is not None and not is_valid_mode(raw):
+            findings.append(DoctorFinding(
+                "error", "bad-mode",
+                f"settings.mode is '{raw}' — not a valid run mode; expected local|team "
+                f"(reading as local)"))
+    except Exception:
+        pass
+
+    # the run-mode surface: the current mode + the same team-readiness preflight `mode` shows,
+    # plus (TM.S5) the ONE health verdict the badge/mode/in-chat use — a broken team connection
+    # is never silent in doctor, and trouble carries the work-locally offer.
+    mode_report = ""
+    try:
+        from ..run_mode import mode_line, read_mode, team_preflight, TEAM
+        mode_report = mode_line(surface) + "\n" + team_preflight(surface).render()
+        if read_mode(surface) == TEAM:
+            import os as _os
+            from .. import team_health
+            verdict = team_health.check(surface, environ=_os.environ)
+            mode_report += "\n" + team_health.status_block(verdict)
+    except Exception:
+        mode_report = ""
+
     # 6) code-graph guidance (Stage 25 Part B) — actionable, not just status.
     hint = ""
     try:
@@ -233,4 +264,4 @@ def diagnose(surface: Any) -> DoctorReport:
     except Exception:
         hint = ""
 
-    return DoctorReport(findings, graph_hint=hint)
+    return DoctorReport(findings, graph_hint=hint, mode_report=mode_report)

@@ -51,6 +51,17 @@ def cmd_release_check(args: argparse.Namespace) -> int:
     return 0 if res.consistent else 1
 
 
+def cmd_branch_protection_check(args: argparse.Namespace) -> int:
+    """TM.S12a — FAIL-CLOSED: verify the public mirror's default branch is protected (no
+    force-push, no deletion, required status checks). Exit 1 on any inability to prove it so
+    `release.sh` REFUSES to release onto an unprotected `main`. No token hard-coded (gh supplies
+    auth: login locally / GH_TOKEN in CI)."""
+    from ..branch_protection import check_branch_protection
+    verdict = check_branch_protection(repo=args.repo, branch=args.branch)
+    print(verdict.render())
+    return 0 if verdict.ok else 1
+
+
 def cmd_route(args: argparse.Namespace) -> int:
     surface = _load_surface(args.path)
     try:
@@ -82,7 +93,8 @@ def cmd_status(args: argparse.Namespace) -> int:
     surface = _load_surface(args.path)
     m = surface.manifest
     live = [r.summary() for r in surface.router.resolve_all()]
-    print(f"mokata {m.mokata_version} · profile '{m.profile}'")
+    from ..run_mode import read_mode
+    print(f"mokata {m.mokata_version} · profile '{m.profile}' · mode: {read_mode(surface)}")
     for line in live:
         print(f"  {line}")
     # Stage 25 Part B — actionable code-graph hint (active queries, or how to wire one).
@@ -167,6 +179,21 @@ def register(sub, common):
     )
     p_relchk.set_defaults(func=cmd_release_check)
 
+    p_bpc = sub.add_parser(
+        "branch-protection-check",
+        help="verify the public mirror's default branch is protected "
+             "(fail-closed; exit 1 if unprotected/unverifiable)",
+    )
+    p_bpc.add_argument(
+        "--repo", default="JasGujral/mokata-oss",
+        help="owner/repo to verify (default: the public mirror JasGujral/mokata-oss)",
+    )
+    p_bpc.add_argument(
+        "--branch", default="main",
+        help="the default branch to verify (default: main)",
+    )
+    p_bpc.set_defaults(func=cmd_branch_protection_check)
+
     p_route = sub.add_parser(
         "route", parents=[common], help="resolve a capability to its tool"
     )
@@ -210,6 +237,7 @@ __all__ = [
     "cmd_bootstrap",
     "cmd_validate",
     "cmd_release_check",
+    "cmd_branch_protection_check",
     "cmd_route",
     "cmd_detect",
     "cmd_status",

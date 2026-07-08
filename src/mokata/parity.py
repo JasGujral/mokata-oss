@@ -114,6 +114,25 @@ def _surfaces() -> List[CommandSurface]:
                        note="re-runnable reconfigure wizard — change what's wired later "
                             "(add/remove integration, switch backend, change profile); gated + "
                             "idempotent + reversible → slash + gated MCP write (Stage 56b)"),
+        CommandSurface("mode", slash=("mode",),
+                       note="run mode (local|team) — show the current mode + the fail-closed "
+                            "team-readiness preflight, or `set local|team` (TM.S1). Choosing a "
+                            "mode is an interactive, session-scoped decision → slash drives the "
+                            "SAME gated CLI path (`set team` refuses fail-closed until TM.S2; "
+                            "`set local` back is a human-gated config write). The mode itself is "
+                            "ALSO surfaced identically across every harness via the SessionStart "
+                            "bootstrap line (context injection) + the statusline badge — never a "
+                            "single-harness surface."),
+
+        CommandSurface("sync", slash=("sync",),
+                       note="team write reconcile (TM.S5) — flush the crash-safe local journal to "
+                            "the shared DB + reconcile CAS conflicts. Interactive + session-scoped "
+                            "(conflict resolution is a human decision, never silent LWW) → slash "
+                            "drives the SAME gated CLI path. Team-mode only (no-op in local); each "
+                            "flush inherits its original approval ledger id (P2), per-publish "
+                            "secret-scan applies. The connection HEALTH it reports is also surfaced "
+                            "identically in the badge/`mode`/doctor/in-chat — never a single-harness "
+                            "surface."),
 
         # --- read-only inspection → MCP read tools -------------------------------------
         CommandSurface("query", mcp_read=("query",),
@@ -216,12 +235,12 @@ def _surfaces() -> List[CommandSurface]:
         CommandSurface("unsetup", exempt=(
             "install plumbing — reverses `setup`; a harness-config + filesystem teardown "
             "run from the shell, the mirror of `setup`.")),
-        CommandSurface("mcp", slash=("mcp",),
+        CommandSurface("mcp", slash=("mcp-repair",),
                        note="MCP server management — a command GROUP (discover/start/status/"
                             "install) that introspects or repairs the host↔server wiring from "
                             "the shell. Its USER-FACING need — 'mokata's tools aren't "
                             "connecting' — now has an in-harness surface (Stage 3b.4): the "
-                            "/mokata:mcp slash command + auto-triggering skill run the CLI "
+                            "/mokata:mcp-repair slash command + auto-triggering skill run the CLI "
                             "repair flow (status → install → re-check) from inside Claude Code "
                             "and tell the user to restart. No new MCP tool: repair is "
                             "CLI-driven (reuses the Stage 3b.2/3b.3 status/install), and a "
@@ -248,6 +267,10 @@ def _surfaces() -> List[CommandSurface]:
             "release plumbing — a pure/offline preflight asserting every version field == "
             "the intended tag; run from the shell by `release.sh` (and CI) during a release "
             "cut, the version mirror of `validate`. Not a user workflow.")),
+        CommandSurface("branch-protection-check", exempt=(
+            "release plumbing — a FAIL-CLOSED preflight (TM.S12a) asserting the public mirror's "
+            "default branch is protected (no force-push/deletion, required status checks) before a "
+            "cut; run from the shell by `release.sh` via `gh`. Not a user workflow.")),
         CommandSurface("bootstrap", exempt=(
             "hook plumbing — prints the SessionStart briefing; invoked BY the SessionStart "
             "hook, never typed by a user.")),

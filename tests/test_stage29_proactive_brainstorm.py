@@ -146,7 +146,7 @@ class TestHardGateStillHolds(unittest.TestCase):
         with self.assertRaises(BrainstormGateError):
             session.handoff()
         # only an explicit approval opens the gate
-        session.approve("jas", "a")
+        _support.approve_with_lenses(session, "jas", "a")
         self.assertTrue(session.can_emit_spec)
         self.assertEqual(session.handoff().approach.name, "a")
 

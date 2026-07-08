@@ -8,7 +8,7 @@ Two concerns, both CLIENT-side (distinct from ``mcp_server.py``, which IS the se
 * ``handshake`` — spawn that command over stdio, send a REAL MCP ``initialize`` JSON-RPC
   request, read the response bounded by a timeout, and classify the outcome. This speaks
   MCP's newline-delimited JSON-RPC directly and needs NO client SDK, so ``mokata mcp
-  status`` works on EVERY Python — including 3.9, where it must be able to diagnose an
+  status`` works even against a broken server install — it must be able to diagnose an
   SDK-absent server that can't even start (the classic silent-dead-server case). It fails
   CLOSED: any doubt is a specific failure + a one-line fix, never a false CONNECTED and
   never an escaping traceback.
@@ -28,7 +28,8 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from . import __version__
-from .harness_paths import MCP_SERVER_NAME, claude_mcp_config_path
+from .harness_paths import (MCP_SERVER_NAME, MCP_TOOL_PERMISSION,
+                            claude_mcp_config_path, claude_settings_path)
 
 
 # --------------------------------------------------------------------------------------
@@ -175,8 +176,8 @@ def handshake(command: str, args: Optional[List[str]] = None,
         if "No module named 'mcp'" in err or "MCP SDK is not installed" in err:
             return HandshakeResult(
                 False, "sdk_absent",
-                "the server exited: the MCP SDK is not installed (needs Python >= 3.10)",
-                "on Python >= 3.10 run `pip install -U mokata` (the SDK ships by default)")
+                "the server exited: the MCP SDK is not installed (a required dependency)",
+                "reinstall mokata — `pip install -U mokata` — to restore the SDK")
         tail = err.splitlines()[-1] if err else ""
         return HandshakeResult(
             False, "error",
@@ -223,6 +224,124 @@ def status_lines(root: str = ".", home: Optional[str] = None,
                        f"  Fix:   {res.fix}"]
     except Exception as exc:                 # informational path — never raise
         return False, [f"mokata-mcp: status check skipped ({exc})."]
+
+
+# --------------------------------------------------------------------------------------
+# Grant status — did setup enable + permit mokata's MCP tools? (the "stuck-loop" gate)
+# --------------------------------------------------------------------------------------
+@dataclass
+class GrantStatus:
+    enabled: bool                       # server trusted (enabledMcpjsonServers / enableAll…)
+    permitted: bool                     # mcp__mokata__* in permissions.allow
+    enabled_source: Optional[Path] = None
+    permitted_source: Optional[Path] = None
+
+
+def _read_settings(path: Path) -> Optional[dict]:
+    """Read a Claude `settings.json` as a dict, or None on any problem (missing / unparseable
+    / not an object). Read-only diagnosis — never raises, never a false positive."""
+    try:
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def grant_status(root: str = ".", home: Optional[str] = None) -> GrantStatus:
+    """Read `.claude/settings.json` (project then user — the same scopes setup writes) and
+    report whether the mokata MCP server is ENABLED (`enabledMcpjsonServers` contains
+    `mokata`, or `enableAllProjectMcpServers` is true) and whether its tools are PERMITTED
+    (`mcp__mokata__*` — or the whole-server `mcp__mokata` — in `permissions.allow`). A grant in
+    EITHER scope counts (Claude Code merges them). Never raises."""
+    enabled = permitted = False
+    en_src = pm_src = None
+    server_wide = f"mcp__{MCP_SERVER_NAME}"          # allow-all-tools form of the grant
+    for scope in ("project", "user"):
+        try:
+            path = claude_settings_path(scope, root, home)
+        except Exception:
+            continue
+        data = _read_settings(path)
+        if not data:
+            continue
+        if not enabled:
+            servers = data.get("enabledMcpjsonServers")
+            if data.get("enableAllProjectMcpServers") is True or (
+                    isinstance(servers, list) and MCP_SERVER_NAME in servers):
+                enabled, en_src = True, path
+        if not permitted:
+            perms = data.get("permissions")
+            allow = perms.get("allow") if isinstance(perms, dict) else None
+            if isinstance(allow, list) and (
+                    MCP_TOOL_PERMISSION in allow or server_wide in allow):
+                permitted, pm_src = True, path
+    return GrantStatus(enabled, permitted, en_src, pm_src)
+
+
+# --------------------------------------------------------------------------------------
+# Full status — the shared reporter for `mokata mcp status` AND `mokata doctor`
+# --------------------------------------------------------------------------------------
+@dataclass
+class FullStatus:
+    registered: bool
+    enabled: bool
+    permitted: bool
+    connected: bool
+    lines: List[str]
+
+    @property
+    def ok(self) -> bool:
+        return self.registered and self.enabled and self.permitted and self.connected
+
+
+_INSTALL_FIX = "mokata mcp install"
+
+
+def full_status(root: str = ".", home: Optional[str] = None,
+                timeout: float = 10.0) -> FullStatus:
+    """The complete MCP wiring check — registered? enabled? permitted? CONNECTED? — each with
+    the one-line fix when missing. The SINGLE source shared by `mokata mcp status` and
+    `mokata doctor` so the two can't drift. Fail-closed and never raises."""
+    lines: List[str] = []
+    try:
+        reg = resolve_registered(root, home)
+        registered = reg is not None
+        if registered:
+            lines.append("mokata-mcp: REGISTERED ✓")
+        else:
+            lines.append("mokata-mcp: NOT REGISTERED ✗")
+            lines.append(f"  Fix: run `{_INSTALL_FIX}` to register the server.")
+
+        g = grant_status(root, home)
+        if g.enabled:
+            lines.append("  enabled ✓   (mokata trusted in enabledMcpjsonServers)")
+        else:
+            lines.append("  enabled ✗   Claude Code will prompt to trust the server")
+            lines.append(f"    Fix: run `{_INSTALL_FIX}` "
+                         f"(adds enabledMcpjsonServers: [\"{MCP_SERVER_NAME}\"]).")
+        if g.permitted:
+            lines.append(f"  permitted ✓ ({MCP_TOOL_PERMISSION} in permissions.allow)")
+        else:
+            lines.append("  permitted ✗ Claude Code will gate each mcp__mokata__* call "
+                         "(the stuck-loop)")
+            lines.append(f"    Fix: run `{_INSTALL_FIX}` "
+                         f"(adds {MCP_TOOL_PERMISSION} to permissions.allow).")
+
+        connected = False
+        if registered:
+            res = handshake(reg.command, reg.args, timeout=timeout)
+            if res.ok:
+                connected = True
+                lines.append("  connected ✓")
+            else:
+                lines.append(f"  connected ✗ ({res.code}) — {res.detail}")
+                lines.append(f"    Fix: {res.fix}")
+        return FullStatus(registered, g.enabled, g.permitted, connected, lines)
+    except Exception as exc:                 # informational path — never raise
+        return FullStatus(False, False, False, False,
+                          [f"mokata-mcp: status check skipped ({exc})."])
 
 
 def _command_resolves(command: str) -> bool:

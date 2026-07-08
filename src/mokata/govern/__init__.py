@@ -72,6 +72,20 @@ from .deviation import (
     render_deviation,
 )
 from .gate import WRITE_KINDS, WriteGate, WriteOutcome, WriteRequest
+# TM.S8 imports `..memory.item`, which loads the memory package (→ migrate → govern.WriteGate),
+# so it must come AFTER `.gate` binds WriteGate to avoid a partially-initialized-module cycle.
+from .enforce import (
+    RULE_BLOCK_KIND,
+    RULE_OVERRIDE_KIND,
+    EnforcementGate,
+    EnforcementOutcome,
+    EnforcementVerdict,
+    PendingAction,
+    RuleViolation,
+    evaluate as evaluate_enforcement,
+    in_scope_rules,
+    render_verdict,
+)
 from .hooks import HookResult, run_async_hook, run_sync_hook
 from .ledger import AuditLedger
 from .retrieval import RetrievalResult, jit_retrieve
@@ -128,6 +142,10 @@ __all__ = [
     # I
     "scan", "has_secrets", "Finding", "WriteGate", "WriteRequest", "WriteOutcome",
     "WRITE_KINDS", "AuditLedger",
+    # TM.S8 — in-run hard-rule enforcement (doc 62 §4, Sentinel)
+    "PendingAction", "RuleViolation", "EnforcementVerdict", "EnforcementOutcome",
+    "EnforcementGate", "evaluate_enforcement", "in_scope_rules", "render_verdict",
+    "RULE_OVERRIDE_KIND", "RULE_BLOCK_KIND",
     # G3 — Karpathy gates (hybrid)
     "KARPATHY_GATES", "KarpathyGate", "KarpathyContext", "GateFire",
     "karpathy_enabled", "run_karpathy_gate", "run_karpathy_for_phase",

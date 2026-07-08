@@ -53,6 +53,19 @@ def write_sample_repo(root):
     return root
 
 
+# --- TM.S11a: satisfy the brainstorm decision-lens HARD-GATE in fixtures ----------------
+# `session.approve()` now refuses until BOTH pre-spec lenses (blast radius + architectural fit)
+# are on the table. For fixtures whose focus is a DOWNSTREAM phase (engine/premortem/completeness/
+# lifecycle), this records both lenses (degraded Lens 1, a neutral "fits" Lens 2) then approves —
+# so those tests exercise their real subject without re-deriving the lenses themselves.
+def approve_with_lenses(session, approver, name, **kw):
+    from mokata.brainstorm_impact import DesignFitVerdict, FITS
+    session.assess_impacts()                    # Lens 1 (no layer → degraded, but on the table)
+    for a in session.approaches:
+        session.record_design_fit(a.name, DesignFitVerdict(a.name, FITS, []))   # Lens 2 (neutral)
+    return session.approve(approver, name, **kw)
+
+
 # --- Stage 65: a tiny polyglot repo, one file per language, same relationships ---------
 # In every language: helper() <- called by compute(); compute() <- called by caller();
 # a type Impl implements/extends Base; a module mod_a is imported; one AC-1-tagged test.

@@ -349,7 +349,7 @@ def _mokata_segment(cwd: str, session_name: Optional[str]) -> str:
     disabled, or the engine is unavailable. Never raises."""
     try:
         from .config import Surface, find_project_root
-        from .progress import build_stage_badge, statusline_enabled
+        from .progress import statusline_badge, statusline_enabled
     except Exception:
         return ""
     try:
@@ -359,7 +359,9 @@ def _mokata_segment(cwd: str, session_name: Optional[str]) -> str:
         surface = Surface.load(root)
         if not statusline_enabled(surface):
             return ""
-        return build_stage_badge(surface, session_name=session_name)
+        # TM.S1 — the statusline segment prefixes the run mode (local|team) so a session is
+        # never ambiguous about which mode it's in, then the pipeline-stage badge.
+        return statusline_badge(surface, session_name=session_name)
     except Exception:
         return ""
 

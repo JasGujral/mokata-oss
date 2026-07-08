@@ -77,6 +77,25 @@ def _render(surface: Surface) -> str:
     lines: List[str] = []
     lines.append(f"# mokata {m.mokata_version} · profile: {m.profile}")
     lines.append("")
+    # TM.S1 — the run mode (local|team) leads the live briefing so a session is never
+    # ambiguous about which mode it's in. Degrade-clean (→ local); one line (token budget).
+    from .run_mode import mode_line, read_mode, TEAM
+    lines.append(mode_line(surface))
+    # TM.S5 — in team mode the in-chat briefing carries the ONE health verdict (same cached probe
+    # the badge/mode/doctor use): a broken connection is surfaced HERE, never silent, and trouble
+    # offers work-locally. The session-start probe also refreshes the shared cache the badge reads.
+    # Bounded (≤500ms) + degrade-clean; one compact line healthy, +offer on trouble (token budget).
+    if read_mode(surface) == TEAM:
+        try:
+            import os as _os
+            from . import team_health
+            verdict = team_health.check(surface, environ=_os.environ)
+            lines.append(team_health.summary_line(verdict))
+            if verdict.trouble:
+                lines.append(f"  → {team_health.work_locally_offer()}")
+        except Exception:
+            pass
+    lines.append("")
     lines.append("Active gates (inviolable):")
     for gate in _INVIOLABLE_GATES:
         lines.append(f"- {gate}")

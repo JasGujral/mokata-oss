@@ -29,10 +29,11 @@ Layout:
   * `tools_write`  — the WRITE / human-gated tool functions.
   * `server`       — `build_server()`, `main()`, `mcp_available()`, the fail-loud guard.
 
-The MCP SDK is an OPTIONAL, plugin-side dependency (`pip install "mokata[mcp]"`), imported
-LAZILY inside `server.build_server`, so the core package and CLI import and run with the SDK
-absent. The tool functions themselves are pure and SDK-free — fully usable and testable without
-`mcp` installed. This namespaced `mokata.mcp` package does NOT shadow the SDK's top-level `mcp`.
+The MCP SDK is an unconditional dependency (Python 3.10+ floor), imported LAZILY inside
+`server.build_server`, so the core package and CLI still import and run even in a stripped/broken
+env where the SDK is absent. The tool functions themselves are pure and SDK-free — fully usable
+and testable without `mcp` installed. This namespaced `mokata.mcp` package does NOT shadow the
+SDK's top-level `mcp`.
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """

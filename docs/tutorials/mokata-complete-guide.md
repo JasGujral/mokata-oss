@@ -103,7 +103,7 @@ mokata's defensible position is **integration + governance + local-first**, not 
 
 ## 1. What mokata actually is
 
-mokata is a **spec-driven, test-driven development engine for Claude Code** with four things bolted in that most tools leave as add-ons: a **codebase knowledge graph**, **persistent self-healing memory**, **active token/cost governance**, and a **human-gated governance + audit layer**. The whole thing is local-first (zero telemetry), pure Python (≥ 3.9, no required runtime dependencies), Apache-2.0, and built clean-room.
+mokata is a **spec-driven, test-driven development engine for Claude Code** with four things bolted in that most tools leave as add-ons: a **codebase knowledge graph**, **persistent self-healing memory**, **active token/cost governance**, and a **human-gated governance + audit layer**. The whole thing is local-first (zero telemetry), pure Python (≥ 3.10, no required runtime dependencies), Apache-2.0, and built clean-room.
 
 The defining behavior: **no code ships until every acceptance criterion maps to a test (RED before GREEN), and every durable write — to code, memory, or config — is human-gated.** The completeness gate *blocks* emit; it never silently passes.
 
@@ -155,11 +155,11 @@ The router binds the **first present** provider in each chain. Our goal in §2 i
 ### 2.1 Step 1 — base system (Python, git, a shell)
 
 ```bash
-python3 --version      # need ≥ 3.9 (≥ 3.10 also gets the bundled mokata-mcp server)
+python3 --version      # need ≥ 3.10 (the bundled mokata-mcp server ships by default)
 git --version
 ```
 
-If Python is older than 3.9, install a newer one (`pyenv install 3.12`, `brew install python@3.12`, or your distro's package) before continuing.
+If Python is older than 3.10, install a newer one (`pyenv install 3.12`, `brew install python@3.12`, or your distro's package) before continuing.
 
 ### 2.2 Step 2 — an isolated environment
 
@@ -172,7 +172,7 @@ pip install -U pip
 
 ### 2.3 Step 3 — install mokata
 
-On **Python ≥ 3.10** `pip install mokata` also pulls the MCP SDK (a default dep), so the bundled `mokata-mcp` server works out of the box; on **Python 3.9** the CLI still works but the MCP server is unavailable.
+`pip install mokata` also pulls the MCP SDK (a default dep), so the bundled `mokata-mcp` server works out of the box.
 
 ```bash
 pip install mokata                 # add "mokata[schema]" for richer manifest-validation messages

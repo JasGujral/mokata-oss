@@ -3,7 +3,7 @@ before the completeness gate."""
 
 import unittest
 
-from _support import sample_manifest_data  # noqa: F401  (path fix side-effect)
+from _support import sample_manifest_data, approve_with_lenses  # noqa: F401  (path fix side-effect)
 
 from mokata.brainstorm import Approach, BrainstormSession
 from mokata.engine import Probe, derive_probes, pre_mortem
@@ -16,7 +16,7 @@ def handoff_with_cons():
                  pros=["fast to ship"], cons=["vendor lock-in", "fees"]),
         Approach("inhouse", "build it", pros=["control"], cons=["PCI scope"]),
     ])
-    s.approve("jas", "stripe")
+    approve_with_lenses(s, "jas", "stripe")
     return s.handoff()
 
 
@@ -39,7 +39,7 @@ class TestProbeDerivation(unittest.TestCase):
             Approach("a", "x", pros=["p"], cons=["c"]),
             Approach("b", "y", pros=["p"], cons=["c"]),
         ])
-        s.approve("jas", "a")
+        approve_with_lenses(s, "jas", "a")
         probes = derive_probes(s.handoff())
         # at least the standard failure/scale/rollback angles are always there
         self.assertTrue(len(probes) >= 3)

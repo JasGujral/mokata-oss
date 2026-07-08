@@ -20,7 +20,7 @@ mokata setup claude              # --profile / --scope options; reverse with `mo
 mokata mcp status                # expect: mokata-mcp: CONNECTED ✓
 ```
 
-> On **Python 3.9** the MCP server is unavailable (it needs ≥ 3.10) — the CLI still works.
+> Requires **Python ≥ 3.10**.
 
 You now have the workflow commands — `/mokata:brainstorm`, `/mokata:refine`, `/mokata:spec`,
 `/mokata:test`, `/mokata:develop`, `/mokata:review`, `/mokata:debug`, `/mokata:optimize`, `/mokata:bug` — plus the SessionStart briefing

@@ -4,12 +4,13 @@ mokata is plugin-first (Stage 21), so its primary surface — the `mokata-mcp` s
 work from a plain `pip install mokata`, not only from the `[mcp]` extra. This guard freezes
 three guarantees so they can't silently regress:
 
-  1. the MCP SDK is a DEFAULT [project] dependency (with the `python_version >= "3.10"` marker
-     so 3.9 stays a clean no-op), and the `[mcp]` extra is kept as a compat alias;
+  1. the MCP SDK is an UNCONDITIONAL [project] dependency (no env marker — the Python >= 3.10
+     floor, TM.S0, means it installs everywhere mokata does), and the `[mcp]` extra is kept
+     as a compat alias;
   2. `mokata-mcp` fails LOUD, not dead, when the SDK is absent — a non-zero exit + an
      actionable stderr message, never an uncaught traceback / silent dead server;
   3. the SDK is still LAZILY imported — no top-level `import mcp` — so the core + CLI import
-     and run with it absent (the 3.9 degrade path).
+     and run even in a stripped/broken env where it is absent.
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
@@ -39,14 +40,15 @@ class TestMcpSdkIsDefaultDependency(unittest.TestCase):
 
     def test_mcp_is_a_default_project_dependency(self):
         # The top-level `dependencies = [...]` array (NOT an optional extra) must carry the SDK
-        # with the 3.10 environment marker, so a plain install pulls it on 3.10+ and no-ops on 3.9.
+        # UNCONDITIONALLY — no `python_version` env marker (dropped with the >= 3.10 floor), so a
+        # plain install always pulls it.
         m = re.search(r"(?m)^dependencies = \[(?P<body>.*)\]", self.pyproject)
         self.assertIsNotNone(m, "pyproject.toml has no top-level [project].dependencies array")
         deps = m.group("body")
         self.assertIn("mcp>=1.2", deps,
                       "the MCP SDK must be a DEFAULT dependency (plugin-first), not [mcp]-only")
-        self.assertIn('python_version >= "3.10"', deps,
-                      "the SDK dependency must keep the 3.10 marker so 3.9 stays a clean no-op")
+        self.assertNotIn("python_version", deps,
+                         "the SDK dependency must be unconditional — the 3.9 env marker is gone")
 
     def test_mcp_extra_kept_as_compat_alias(self):
         # `pip install "mokata[mcp]"` must still resolve — the extra stays as a no-op alias.
@@ -60,7 +62,7 @@ class TestFailLoudNotDead(unittest.TestCase):
 
     def test_main_exits_nonzero_with_actionable_stderr_when_sdk_absent(self):
         original = M.mcp_available
-        M.mcp_available = lambda: False        # simulate the 3.9 / stripped-env case
+        M.mcp_available = lambda: False        # simulate the stripped/broken-env case
         try:
             err = io.StringIO()
             with redirect_stderr(err):
@@ -70,7 +72,7 @@ class TestFailLoudNotDead(unittest.TestCase):
         self.assertNotEqual(rc, 0, "a missing SDK must be a non-zero exit, not a silent success")
         msg = err.getvalue()
         self.assertIn("mokata-mcp", msg, "the message must identify the failing server")
-        self.assertIn("3.10", msg, "the message must name the cause (needs Python >= 3.10)")
+        self.assertIn("MCP SDK", msg, "the message must name the cause (the MCP SDK is missing)")
         self.assertRegex(msg.lower(), r"install|upgrade|reinstall",
                          "the message must state the fix, not just the failure")
 

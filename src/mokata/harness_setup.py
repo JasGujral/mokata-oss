@@ -35,7 +35,8 @@ from . import MOKATA_DIR, MANIFEST_FILENAME, package_data_root
 # Stage 3d.1: the shared MCP name + Claude config-path resolution live in the neutral
 # `harness_paths` leaf so `mcp_admin` can depend on THEM instead of on this module (which
 # broke the mcp_admin ↔ harness_setup cycle). Re-exported below for back-compat importers.
-from .harness_paths import MCP_SERVER_NAME, claude_mcp_config_path, scope_base
+from .harness_paths import (MCP_SERVER_NAME, MCP_TOOL_PERMISSION,
+                            claude_mcp_config_path, scope_base)
 # Stage 3d.1: cycle gone → the `mcp_admin` import that used to be lazy (below, in
 # `setup_harness`) is now a plain module-level import.
 from .mcp_admin import status_lines
@@ -178,6 +179,7 @@ class SetupPlan:
     needs_init: bool                  # .mokata/manifest.json absent
     hook_commands: Dict[str, str] = field(default_factory=dict)  # event -> command string
     mcp_auto: bool = True             # auto-register the MCP server (claude); else manual
+    grant: bool = False               # grant CC permission for mokata's MCP tools (claude)
     unsupported: List[str] = field(default_factory=list)  # capabilities this harness lacks
     skill_names: List[str] = field(default_factory=list)  # Agent Skills to install (claude)
     skill_orphans: List[str] = field(default_factory=list)  # stale mokata skills to PRUNE (sync)
@@ -229,6 +231,7 @@ def plan_setup(
     profile: str = "standard",
     with_hooks: bool = True,
     home: Optional[str] = None,
+    grant: bool = True,
 ) -> SetupPlan:
     if harness not in HARNESSES:
         raise ValueError(f"unknown harness '{harness}'; choose one of {HARNESSES}")
@@ -251,6 +254,10 @@ def plan_setup(
     hooks_ok = h.supports("hooks")
     with_hooks = with_hooks and hooks_ok
     mcp_auto = _HARNESS_MCP_AUTO[harness]
+    # The MCP tool grant is a Claude Code concept and shares settings.json with the hooks, so
+    # it rides on `with_hooks` (—no-hooks = "leave my Claude settings alone" → no grant either)
+    # and only where mokata auto-registers the server (claude). Default ON; `--no-grant` opts out.
+    grant = grant and harness == "claude" and mcp_auto and with_hooks
 
     # NOTE (Stage 3): do NOT hard-fail on a missing source ``hooks/`` dir. The hooks RUN via
     # the ``mokata-hook`` console entry point (pip-installed, Stage 53b) — the standalone
@@ -299,6 +306,7 @@ def plan_setup(
         needs_init=needs_init,
         hook_commands=hook_commands,
         mcp_auto=mcp_auto,
+        grant=grant,
         unsupported=unsupported,
         skill_names=skill_names,
         skill_orphans=skill_orphans,
@@ -345,6 +353,14 @@ def render_setup_plan(plan: SetupPlan) -> str:
         lines.append("")
         lines.append("Will wire hooks (SessionStart briefing + secret-guard) in:")
         lines.append(f"  {t.settings_path}")
+    if plan.grant and t.settings_path is not None:
+        lines.append("")
+        lines.append("Will grant Claude Code permission for mokata's tools + enable the "
+                     "mokata MCP server (so Claude Code doesn't gate each mcp__mokata__* "
+                     "call) in:")
+        lines.append(f"  {t.settings_path}")
+        lines.append(f"  (enabledMcpjsonServers += {MCP_SERVER_NAME}; "
+                     f"permissions.allow += {MCP_TOOL_PERMISSION}; opt out with --no-grant)")
     if (plan.with_hooks and plan.harness == "claude" and t.settings_path is not None
             and _statusline_setting_on(plan.root)):
         lines.append("")
@@ -463,15 +479,23 @@ def _merge_mcp(path: Path, command: str = MCP_COMMAND) -> None:
     _write_json(path, data)
 
 
-def mcp_install(scope: str, root: str = ".", home: Optional[str] = None) -> Path:
+def mcp_install(scope: str, root: str = ".", home: Optional[str] = None,
+                grant: bool = True) -> Path:
     """Write/repair the Claude Code registration for the bundled mokata MCP server,
     resolving `mokata-mcp` to an absolute path. Reuses the shared `_merge_mcp` (merge-safe,
     idempotent). Returns the registration file path. Same scopes as the `setup` path:
-    project → `<root>/.mcp.json`, user → `<home>/.claude.json`."""
+    project → `<root>/.mcp.json`, user → `<home>/.claude.json`.
+
+    With `grant` (default), it ALSO grants Claude Code permission for mokata's MCP tools +
+    enables the server in `.claude/settings.json` (the "stuck-loop" fix — see `_merge_grant`),
+    so a repair install fixes BOTH the registration and the permission gate. `--no-grant`
+    (grant=False) leaves settings.json untouched (for teams that manage permissions)."""
     targets = resolve_targets(scope, root, home, "claude")
     if targets.mcp_path is None:                       # pragma: no cover - claude always auto
         raise SetupError("the claude harness has no auto-wired MCP config path.")
     _merge_mcp(targets.mcp_path, resolved_mcp_command())
+    if grant and targets.settings_path is not None:
+        _merge_grant(targets.settings_path)
     return targets.mcp_path
 
 
@@ -536,6 +560,73 @@ def _merge_statusline(path: Path) -> None:
         block[_WRAPPED_KEY] = wrapped
     data["statusLine"] = block
     _write_json(path, data)
+
+
+def _merge_grant(path: Path) -> None:
+    """Grant Claude Code permission for mokata's MCP tools + enable the mokata project server
+    — MERGE-SAFE (never clobber; dedup arrays). This is the fix for the "MCP tools get stuck"
+    hang: without these two keys Claude Code GATES every ``mcp__mokata__*`` call (approval
+    loop). Two keys in ``settings.json``:
+
+      * ``enabledMcpjsonServers`` += ``"mokata"`` — surgically trust mokata's project server
+        (NOT ``enableAllProjectMcpServers``, which would trust every project's server);
+      * ``permissions.allow`` += ``"mcp__mokata__*"`` — unioned into any existing allow list.
+
+    Idempotent (re-running converges) and reversible (``_strip_grant`` removes exactly these)."""
+    data = _load_json(path)
+
+    enabled = data.get("enabledMcpjsonServers")
+    if not isinstance(enabled, list):
+        enabled = []
+    if MCP_SERVER_NAME not in enabled:
+        enabled.append(MCP_SERVER_NAME)
+    data["enabledMcpjsonServers"] = enabled
+
+    perms = data.get("permissions")
+    if not isinstance(perms, dict):
+        perms = {}
+    allow = perms.get("allow")
+    if not isinstance(allow, list):
+        allow = []
+    if MCP_TOOL_PERMISSION not in allow:
+        allow.append(MCP_TOOL_PERMISSION)
+    perms["allow"] = allow
+    data["permissions"] = perms
+
+    _write_json(path, data)
+
+
+def _strip_grant(data: Dict) -> bool:
+    """Remove EXACTLY the keys `_merge_grant` added — mokata from `enabledMcpjsonServers` and
+    `mcp__mokata__*` from `permissions.allow` — preserving the user's own entries. Empties are
+    dropped for a byte-clean reversal. Returns True if anything changed. In-place on `data`."""
+    changed = False
+
+    enabled = data.get("enabledMcpjsonServers")
+    if isinstance(enabled, list) and MCP_SERVER_NAME in enabled:
+        kept = [s for s in enabled if s != MCP_SERVER_NAME]
+        if kept:
+            data["enabledMcpjsonServers"] = kept
+        else:
+            data.pop("enabledMcpjsonServers", None)
+        changed = True
+
+    perms = data.get("permissions")
+    if isinstance(perms, dict):
+        allow = perms.get("allow")
+        if isinstance(allow, list) and MCP_TOOL_PERMISSION in allow:
+            kept = [a for a in allow if a != MCP_TOOL_PERMISSION]
+            if kept:
+                perms["allow"] = kept
+            else:
+                perms.pop("allow", None)
+            if perms:
+                data["permissions"] = perms
+            else:
+                data.pop("permissions", None)
+            changed = True
+
+    return changed
 
 
 def _statusline_setting_on(root: str) -> bool:
@@ -665,6 +756,14 @@ def apply_setup(plan: SetupPlan, *, assume_yes: bool = False, force: bool = Fals
         if str(t.settings_path) not in touched:
             touched.append(str(t.settings_path))
 
+    # 6. MCP tool grant (the "stuck-loop" fix) — default-ON, merge-safe. Grants Claude Code
+    # permission for mokata's MCP tools + enables the server so it doesn't gate each call.
+    # Claude-only, shares settings.json (so `--no-hooks` skips it), opt out with `--no-grant`.
+    if plan.grant and t.settings_path is not None:
+        _merge_grant(t.settings_path)
+        if str(t.settings_path) not in touched:
+            touched.append(str(t.settings_path))
+
     return touched
 
 
@@ -689,12 +788,13 @@ def setup_harness(
     assume_yes: bool = False,
     force: bool = False,
     home: Optional[str] = None,
+    grant: bool = True,
     confirm: Optional[Callable[[str], bool]] = None,
     out: Optional[Callable[[str], None]] = None,
 ) -> SetupResult:
     """Plan + human-gate + apply the harness wiring end to end."""
     emit = out or print
-    plan = plan_setup(harness, root, scope, profile, with_hooks, home)
+    plan = plan_setup(harness, root, scope, profile, with_hooks, home, grant=grant)
 
     emit(render_setup_plan(plan))
 
@@ -713,6 +813,9 @@ def setup_harness(
             emit(f"Installed {len(plan.skill_names)} Agent Skills "
                  f"({', '.join(plan.skill_names)}) alongside the /commands — Claude can now "
                  f"auto-engage them, and they show in the Agent Skills list.")
+        if plan.grant:
+            emit("✓ Granted Claude Code permission for mokata's MCP tools + enabled the "
+                 "server.")
         emit("Restart Claude Code, then try /brainstorm or ask it to \"run mokata doctor\".")
         # Stage 3b.3 — CONNECTED verification. Run the SAME `initialize` handshake as
         # `mokata mcp status` and report the result so the user knows the server is actually
@@ -774,6 +877,8 @@ def render_unsetup_plan(plan: UnsetupPlan) -> str:
         lines.append(f"  mokata hook entries in {t.settings_path}")
         lines.append(f"  the mokata statusLine badge in {t.settings_path} "
                      f"(any composed-over statusLine is restored)")
+        lines.append(f"  the mokata MCP tool grant in {t.settings_path} "
+                     f"(enabledMcpjsonServers / permissions.allow; your own entries kept)")
     lines.append("")
     lines.append("Your .mokata/ config is left untouched (use `mokata reset` for that).")
     return "\n".join(lines)
@@ -847,6 +952,11 @@ def apply_unsetup(plan: UnsetupPlan) -> List[str]:
                 data["statusLine"] = wrapped
             else:
                 data.pop("statusLine", None)
+            changed = True
+
+        # MCP tool grant: remove exactly mokata's enabledMcpjsonServers + permissions.allow
+        # entries (the user's own entries survive).
+        if _strip_grant(data):
             changed = True
 
         if changed:

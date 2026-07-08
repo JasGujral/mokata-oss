@@ -11,7 +11,7 @@ from __future__ import annotations
 from ..prompt import read_yes_no
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List, Optional, Sequence
 
 from .secrets import Finding, scan
 from .trust import TrustPolicy
@@ -34,6 +34,11 @@ class WriteOutcome:
     aborted: bool
     reason: str
     findings: List[Finding] = field(default_factory=list)
+    # TM.S8 — the enforcement verdict when in-scope governance rules were evaluated (None when no
+    # rules/action were supplied, so every pre-S8 caller is byte-identical). `overridden` is True
+    # when a soft-rule block was cleared by an explicit, ledgered override.
+    enforcement: Any = None
+    overridden: bool = False
 
 
 def _default_confirm(text: str) -> bool:
@@ -53,7 +58,12 @@ class WriteGate:
 
     def submit(self, req: WriteRequest, commit: Optional[Callable[[], None]] = None,
                confirm: Optional[Callable[[str], bool]] = None,
-               assume_yes: bool = False, prompt: Optional[str] = None) -> WriteOutcome:
+               assume_yes: bool = False, prompt: Optional[str] = None,
+               rules: Optional[Sequence[Any]] = None, action: Any = None,
+               scope_context: Any = None,
+               override: Optional[Callable[[Any], bool]] = None,
+               matcher: Optional[Callable[[Any, Any], bool]] = None,
+               actor: Optional[str] = None) -> WriteOutcome:
         # K3 trust dial: a read-only tool cannot write at all; propose-only writes can
         # never be auto-approved (always surfaced for a human).
         if self.trust is not None and req.tool:
@@ -75,6 +85,19 @@ class WriteGate:
                                 "blocked: secret(s) detected — remove before writing",
                                 findings)
 
+        # Layer 2 (governance, TM.S8 / P14): in-scope hard rules block with no runtime override;
+        # a soft rule blocks unless an explicit override clears it (ledgered); advisory only flags.
+        # No rules/action supplied → this whole layer is skipped (local/zero-config unaffected).
+        enf = None
+        if action is not None and rules:
+            from .enforce import EnforcementGate
+            enf = EnforcementGate(ledger=self.ledger).check(
+                action, rules, context=scope_context, matcher=matcher,
+                override=override, actor=(actor or req.actor))
+            if not enf.allowed:
+                self._log(req, "blocked", "governance rule fired")
+                return WriteOutcome(False, True, enf.message, [], enforcement=enf.verdict)
+
         # Layer 2: human gate. A caller may supply a richer `prompt` surface (e.g. memory's
         # render_write / old→new healing diff) so unifying on this gate doesn't flatten it.
         if not assume_yes:
@@ -89,4 +112,6 @@ class WriteGate:
         if commit is not None:
             commit()
         self._log(req, "approved", "committed")
-        return WriteOutcome(True, False, "committed", [])
+        return WriteOutcome(True, False, "committed", [],
+                            enforcement=(enf.verdict if enf is not None else None),
+                            overridden=bool(enf is not None and enf.overridden))

@@ -43,6 +43,13 @@ MEMORY_SETTINGS_KEY = "memory"     # manifest.settings["memory"] = {type: bool}
 MEMORY_STATS_KEY = "memory_stats"  # StateStore key
 MEMORY_DIRNAME = "memory"
 
+# TM.S5c — the journal op labels (mirror team_journal.OP_*), passed per team-mode call site so the
+# flush's compare-and-set picks the right operation: put = believed-new INSERT, update = revision-
+# guarded UPDATE, delete = revision-guarded DELETE (a PRUNE never hard-deletes a shared row).
+_OP_PUT = "memory_put"
+_OP_UPDATE = "memory_update"
+_OP_DELETE = "memory_delete"
+
 # Stage 71a — sentinel: "scope to the CURRENT project" (the default). Distinct from ALL_PROJECTS
 # (None → span all) and from a concrete project-id string, so from_surface can tell them apart.
 _PROJECT_CURRENT = object()
@@ -122,6 +129,51 @@ def select_memory_backend(router: Any, root: str,
     return build_backend(tool, root, clients, config, project=project)
 
 
+def _scope_context_for(surface: Any, project: Any) -> Any:
+    """TM.S6 — the working scope context (doc 62 §2) for a store built from a surface.
+
+    LOCAL mode (the default) → None: NO scope filtering, so recall is byte-identical to
+    pre-TM.S6. TEAM mode → a shared context whose PROJECT element is the current project key
+    (mapping the Stage-71a project onto the project level); the personal element matches any
+    personal item (per-user identity is TM.S10) so existing personal items are never dropped.
+    Fail-closed + degrade-clean: any error reads as local (None)."""
+    try:
+        from .. import run_mode as _rm
+        if _rm.read_mode(surface) != _rm.TEAM:
+            return None
+        from .scope import ScopeContext
+        proj = project if isinstance(project, str) and project else None
+        category = (surface.manifest.setting("memory", {}) or {}).get("category")
+        return ScopeContext(project=proj, category=category or None, user=None)
+    except Exception:
+        return None
+
+
+def _identity_and_access_for(surface: Any) -> Tuple[Any, Any]:
+    """TM.S10 — the run identity + access policy for a store built from a surface (doc 52 M-1/M-2).
+
+    Identity is the run identity (`team_audit.actor()`) in BOTH modes — the real author is always
+    stamped (M-1, "no more `user` everywhere"). The access POLICY only ENFORCES in team mode (doc 62
+    §6): team mode → an enforcing policy from `settings.access.grants`; local mode → None (no
+    enforcement, byte-identical, single-user full personal access). Fail-safe + fail-closed: any
+    error reads as local (no policy), never crashes the store."""
+    try:
+        from ..team_audit import actor
+        identity = actor()
+    except Exception:
+        identity = None
+    access = None
+    try:
+        from .. import run_mode as _rm
+        if _rm.read_mode(surface) == _rm.TEAM:
+            from .access import AccessPolicy
+            settings = surface.manifest.data.get("settings") or {}
+            access = AccessPolicy.from_settings(settings, enforce=True)
+    except Exception:
+        access = None
+    return identity, access
+
+
 # -------------------------------------------------------------- instrumentation (C8)
 @dataclass
 class MemoryStats:
@@ -164,6 +216,42 @@ class HealingResult:
     blocked: bool = False        # True when a secret was detected and the change was hard-blocked
 
 
+@dataclass
+class PromoteResult:
+    """TM.S7 — the outcome of a gated enforcement PROMOTION/demotion (binding change only)."""
+    changed: bool
+    aborted: bool = False
+    message: str = ""
+    item: Optional[MemoryItem] = None
+    old: str = ""                # enforcement before
+    new: str = ""                # enforcement after
+    direction: str = ""          # "promote" | "demote" | "unchanged"
+
+
+@dataclass
+class ScopePromoteResult:
+    """TM.S10 — the outcome of a gated SCOPE promotion (broadening an item's audience, doc 52 M-2).
+    SEPARATE from the S7 enforcement-level promotion; both are human-gated + ledgered."""
+    changed: bool
+    aborted: bool = False
+    message: str = ""
+    item: Optional[MemoryItem] = None
+    old: str = ""                # scope level before (narrower)
+    new: str = ""                # scope level after (broader)
+
+
+@dataclass
+class ReviewResult:
+    """TM.S11 — the outcome of a review-workflow step (propose / transition / rollback, doc 62 §6).
+    `state` is the resulting review state; `item` is the proposal touched. Every step is human-gated
+    + ledgered; a refused step (illegal transition, self-approval, missing role) sets `aborted`."""
+    ok: bool
+    aborted: bool = False
+    message: str = ""
+    item: Optional[MemoryItem] = None
+    state: str = ""              # the review state after the step (draft|in-review|approved|…)
+
+
 def _default_confirm(text: str) -> bool:
     return read_yes_no(text, "Approve?")
 
@@ -175,14 +263,34 @@ class MemoryStore:
                  stats_key: str = MEMORY_STATS_KEY,
                  ledger: Any = None,
                  embedder: Any = None,
-                 knowledge_layer: Any = None) -> None:
+                 knowledge_layer: Any = None,
+                 surface: Any = None,
+                 scope_context: Any = None,
+                 identity: Any = None,
+                 access: Any = None) -> None:
         self.backend = backend
         self.enabled_types = tuple(enabled_types)
+        # TM.S10 — the REAL run identity (doc 52 M-1). None (direct/local construction) => the
+        # author placeholder is untouched (byte-identical). When set (from_surface), it stamps the
+        # real author on every durable write, replacing the "user" placeholder.
+        self.identity = identity
+        # TM.S10 — the config-derived access policy (doc 52 M-2). None (local/zero-config) => NO
+        # enforcement: every read/edit/scope-promotion is allowed, byte-identical to today. Set
+        # (team mode) => reads are filtered + non-permitted writes/promotions refused, fail-closed.
+        self.access = access
+        # TM.S6 — the working scope context for the UNION read (doc 62 §2). None (the default and
+        # every local/zero-config store) means NO scope filtering — recall is byte-identical to
+        # pre-TM.S6. When set (team mode), reads return the union of items across the scope path.
+        self.scope_context = scope_context
         self.embedder = embedder        # Stage 35e — None => semantic tier off (local-first)
         self.knowledge_layer = knowledge_layer   # Stage 35f — live graph-proximity tier
         self._stats_store = stats_store
         self._stats_key = stats_key
         self._ledger = ledger
+        # TM.S5b — the surface is present only when built via `from_surface`; it enables the
+        # team-mode journal-first write path. None (from_router / direct construction) => the
+        # local backend path only, byte-for-byte unchanged (zero-config default).
+        self._surface = surface
         self.stats = MemoryStats()
         if stats_store is not None:
             existing = stats_store.read(stats_key)
@@ -225,10 +333,34 @@ class MemoryStore:
             knowledge_layer = KnowledgeLayer.from_surface(surface)
         except Exception:
             knowledge_layer = None
+        # TM.S10 — the REAL run identity (doc 52 M-1 / doc 63 §5): stamp the actual author on every
+        # durable write, not the "user" placeholder. Reuses team_audit.actor() (the run identity —
+        # full session identity is 0.0.13). The access POLICY only enforces in TEAM mode (doc 62 §6);
+        # local/zero-config gets identity stamping but NO enforcement (byte-identical), so a single
+        # user keeps full personal access. Fail-safe: any error degrades to no identity / no policy.
+        identity, access = _identity_and_access_for(surface)
         return cls(backend, enabled_types=enabled_memory_types(surface.manifest),
                    stats_store=surface.state,
                    ledger=AuditLedger.from_mokata_dir(surface.mokata_dir),
-                   embedder=embedder, knowledge_layer=knowledge_layer)
+                   embedder=embedder, knowledge_layer=knowledge_layer, surface=surface,
+                   scope_context=_scope_context_for(surface, scope),
+                   identity=identity, access=access)
+
+    # --- scope (TM.S6, doc 62 §2) -------------------------------------------
+    def scoped_active(self, mtype: Optional[str] = None) -> List[MemoryItem]:
+        """The active items VISIBLE in the working scope: the UNION up the scope path, then filtered
+        to what the identity may READ (TM.S10). With no scope context AND no access policy
+        (local/zero-config) this is exactly `all_active` — byte-identical recall. Counts one read
+        (like `all_active`), so instrumentation is unchanged."""
+        items = self.all_active(mtype=mtype)
+        if self.scope_context is not None:
+            from .scope import union_read
+            items = union_read(items, self.scope_context)
+        # TM.S10 — drop items the identity can't see (a teammate's private items never leak, S-2).
+        # Fail-closed: an item whose readability can't be determined is filtered out (deny on doubt).
+        if self.access is not None and getattr(self.access, "enforce", False):
+            items = [it for it in items if self._can_read_item(it)]
+        return items
 
     # --- toggles ------------------------------------------------------------
     def type_enabled(self, mtype: str) -> bool:
@@ -264,6 +396,130 @@ class MemoryStore:
         return (f"mokata · propose to remember [{item.mtype}] {item.subject} = "
                 f"{item.value!r}\nNothing is stored unless you approve.")
 
+    # --- identity + access (TM.S10, doc 52 M-1/M-2) -------------------------
+    def _stamp_author(self, item: MemoryItem) -> None:
+        """M-1 — stamp the REAL author on a durable write. Only replaces the "user"/empty
+        placeholder (an explicit author, and every legacy item already on disk, is untouched);
+        a no-op when the store has no identity (local/direct construction — byte-identical)."""
+        if self.identity and item.provenance.get("author", "") in ("", "user"):
+            item.provenance["author"] = self.identity
+
+    @staticmethod
+    def _item_scope_cat(item: MemoryItem) -> "Tuple[str, Optional[str], Optional[str]]":
+        """(scope_level, category, owner) for access checks: `category` is the item's `scope_id`
+        for a category-scoped item (else None); `owner` is the `scope_id` for a personal item
+        (else None). Duck-typed over the item's scope fields."""
+        from .scope import CATEGORY as _CAT, DEFAULT_SCOPE_LEVEL, PERSONAL as _PERS
+        scope = getattr(item, "scope_level", "") or DEFAULT_SCOPE_LEVEL
+        sid = getattr(item, "scope_id", "") or ""
+        if scope == _CAT:
+            return scope, (sid or None), None
+        if scope == _PERS:
+            return scope, None, (sid or None)
+        return scope, None, None
+
+    def _can_read_item(self, item: MemoryItem) -> bool:
+        """Fail-closed read check (TM.S10): may the identity SEE this item? Any error → deny."""
+        try:
+            scope, cat, owner = self._item_scope_cat(item)
+            return self.access.can_read(self.identity, scope, cat, owner=owner)
+        except Exception:
+            return False
+
+    def _access_denied_edit(self, item: MemoryItem) -> Optional[str]:
+        """The refusal message when the identity may NOT write `item`, else None. Enforced only
+        when an enforcing policy is present (team mode); local/direct construction always allows.
+        Fail-closed: an undeterminable grant denies."""
+        if self.access is None or not getattr(self.access, "enforce", False):
+            return None
+        scope, cat, owner = self._item_scope_cat(item)
+        try:
+            allowed = self.access.can_edit(self.identity, scope, cat, owner=owner)
+        except Exception:
+            allowed = False
+        if allowed:
+            return None
+        return (f"access denied: {self.identity or 'unknown'} is not permitted to write "
+                f"[{scope}] items — nothing written (ask a project approver for the editor role)")
+
+    # --- team-mode journal-first routing (TM.S5b, doc 48 E3/C5) --------------
+    def _team_mode(self) -> bool:
+        """True only when this store was built from a surface AND that surface is in team mode.
+        Degrade-clean + fail-closed: no surface, or any error reading the mode, reads as local
+        (so the local backend path is always taken by default)."""
+        if self._surface is None:
+            return False
+        try:
+            from .. import run_mode as _rm
+            return _rm.read_mode(self._surface) == _rm.TEAM
+        except Exception:
+            return False
+
+    @staticmethod
+    def _base_revision(item: MemoryItem) -> Optional[int]:
+        """TM.S5c — the compare-and-set base for a gated UPDATE/DELETE: the shared-row `revision`
+        the item was READ at, stamped onto it by a revision-tracking backend (PostgresBackend). None
+        when the backend doesn't track revisions (the SQLite floor / a brand-new item) — the flush
+        then treats the write as believed-new (INSERT-or-conflict), never a silent overwrite."""
+        return getattr(item, "_revision", None)
+
+    def _durable_write(self, item: MemoryItem, *, op: str,
+                       backend_call: Callable[[], None], team: bool,
+                       base_revision: Optional[int] = None, ledger: Any = None) -> None:
+        """TM.S5c — the SINGLE durable-write fork every gated method uses. In TEAM mode the write is
+        journal-first + CAS-guarded (`op` + `base_revision`), NEVER direct-to-backend; in LOCAL mode
+        it is exactly today's `backend_call` (byte-identical). The captured `ledger_id` (the human
+        approval's ledger seq — the gate's `approved` entry is the next seq with no intervening
+        write) rides the entry so the deferred flush inherits the original consent (C5/P2)."""
+        if team:
+            led = ledger if ledger is not None else self._ledger
+            ledger_id = (len(led) + 1) if led is not None else None
+            self._journal_team_write(item, ledger_id, op=op, base_revision=base_revision)
+        else:
+            backend_call()
+
+    def _journal_team_write(self, item: MemoryItem, ledger_id: Any, *,
+                            op: str = _OP_PUT,
+                            base_revision: Optional[int] = None) -> None:
+        """Journal-first (doc 48 E3): buffer this durable write in the crash-safe local journal
+        instead of writing direct-to-backend. `ledger_id` is the gate's approval id (C5/P2): the
+        deferred flush re-records it, so deferred durability inherits the human decision. `op`
+        (put/update/delete) + `base_revision` drive the flush's compare-and-set (TM.S5/S5c), so a
+        concurrent change SURFACES as a conflict — never silently last-writer-wins."""
+        import json as _json
+        from .. import team_journal, teamdb
+        from ..project import project_id
+        try:
+            project = project_id(self._surface)
+        except Exception:
+            project = None
+        try:
+            from ..team_audit import actor as _actor
+            who = _actor()
+        except Exception:
+            who = "user"
+        payload = {"id": item.id, "mtype": item.mtype, "subject": item.subject,
+                   "status": item.status, "doc": _json.dumps(item.to_dict()),
+                   "project": project}
+        # base_revision None → a believed-new row (INSERT ... ON CONFLICT DO NOTHING at flush; a
+        # concurrent create SURFACES as a conflict); an int → the revision-guarded UPDATE/DELETE
+        # base. Either way, never a silent overwrite.
+        team_journal.record_team_write(
+            self._surface, op=op, table=teamdb.MEMORY_TABLE, key=item.id,
+            payload=payload, ledger_id=ledger_id, project=project, actor=who,
+            base_revision=base_revision)
+
+    def _best_effort_flush(self) -> None:
+        """After a healthy gated team write, flush the journal so the write reaches Postgres
+        immediately (doc 48 E3: 'flush when healthy'). NEVER blocks and NEVER raises — offline
+        returns skipped (the write stays journaled: work-locally, nothing lost; `mokata sync`
+        reconciles later). The committed gate decision is never undone by a flush hiccup."""
+        try:
+            from .. import team_journal
+            team_journal.flush(self._surface, ledger=self._ledger)
+        except Exception:  # pragma: no cover - flush is best-effort by construction
+            pass
+
     def remember(self, item: MemoryItem,
                  confirm: Optional[Callable[[str], bool]] = None,
                  assume_yes: bool = False) -> WriteResult:
@@ -272,13 +528,30 @@ class MemoryStore:
                 f"memory type '{item.mtype}' is disabled; enable it to remember this"
             )
 
+        # TM.S10 — refuse a write the identity isn't permitted for, BEFORE the gate (nothing is
+        # written, no gate prompt). Fail-closed. A no-op in local/zero-config (no policy).
+        denied = self._access_denied_edit(item)
+        if denied is not None:
+            return WriteResult(None, committed=False, aborted=True, message=denied)
+
+        team = self._team_mode()
+
         def _commit() -> None:
+            # TM.S10 — stamp the REAL author (M-1); a no-op without an identity (byte-identical).
+            self._stamp_author(item)
             # Stage 35e (frugal): compute the embedding once, on the gated write, so semantic
             # recall later embeds only the query. No-op when no embedder is configured.
             if self.embedder is not None and "_embedding" not in item.provenance:
                 item.provenance["_embedding"] = list(
                     self.embedder(f"{item.subject} {item.value}"))
-            self.backend.put(item)
+            if team:
+                # TM.S5b — journal-first, capturing the gate's approval ledger id AT this point.
+                # The WriteGate records its "approved" entry immediately AFTER this commit with no
+                # intervening ledger write, so the next seq (len+1) IS that approval's id (C5/P2).
+                ledger_id = (len(self._ledger) + 1) if self._ledger is not None else None
+                self._journal_team_write(item, ledger_id)
+            else:
+                self.backend.put(item)     # local: byte-for-byte the pre-TM.S5b path
             self._bump_write()
 
         # M2 (Stage 39): every memory write routes through the ONE universal WriteGate —
@@ -288,6 +561,8 @@ class MemoryStore:
                                      _commit, self.render_write(item),
                                      confirm=confirm, assume_yes=assume_yes)
         if outcome.committed:
+            if team:
+                self._best_effort_flush()   # flush when healthy; offline → journaled, not lost
             return WriteResult(item, committed=True, aborted=False, message="ok")
         if outcome.findings:
             return WriteResult(None, committed=False, aborted=True, blocked=True,
@@ -302,6 +577,419 @@ class MemoryStore:
         item = MemoryItem.create(subject, value, mtype=DECISION, **kw)
         return self.remember(item, confirm=confirm, assume_yes=assume_yes)
 
+    # --- enforcement promotion (TM.S7 — the human-gated moment, doc 62 §4 + P2) ----------
+    def render_promotion(self, item: MemoryItem, old: str, new: str, direction: str) -> str:
+        """The gate surface for an enforcement change — honest about what it does (and doesn't):
+        it moves the BINDING only, the rule text is untouched."""
+        verb = {"promote": "PROMOTE", "demote": "DEMOTE"}.get(direction, "CHANGE")
+        return (f"mokata · {verb} rule enforcement [{item.governance_kind}] {item.subject}: "
+                f"{old} → {new}\nThis changes ONLY the enforcement binding — the rule's condition "
+                f"({item.value!r}) is NOT rewritten.\nNothing changes unless you approve.")
+
+    def _record_enforcement_change(self, item: MemoryItem, old: str, new: str,
+                                   direction: str, actor: str) -> None:
+        """Audit the promotion (doc 62 §6 who/old→new/approval). The WriteGate's own `approved`
+        entry is the newest ledger row at this point, so its seq is the approval reference."""
+        if self._ledger is not None:
+            approval_seq = len(self._ledger)     # the gate's just-written "approved" entry
+            self._ledger.record("enforcement_change", subject=item.subject, item_id=item.id,
+                                 gkind=item.governance_kind, direction=direction,
+                                 old=old, new=new, actor=actor, approval_seq=approval_seq)
+
+    def promote(self, item_id: str, to: str,
+                confirm: Optional[Callable[[str], bool]] = None,
+                assume_yes: bool = False, actor: str = "user") -> PromoteResult:
+        """Change a RULE's enforcement binding to `to` (advisory|soft|hard) — the ONE gated moment
+        (doc 62 §4 + P2). Human-gated through the WriteGate + ledgered (who/old→new/approval).
+        Changes ONLY the binding — the rule's condition is byte-identical. Works both ways: a
+        raise is a 'promote', a lower level is a 'demote' (also gated). Fail-closed: an unknown
+        level, a missing item, or a non-rule item makes NO change and writes nothing."""
+        from .item import (ENFORCEMENT_LEVELS, RULE as _RULE, enforcement_rank,
+                           governance_kind)
+        if to not in ENFORCEMENT_LEVELS:
+            return PromoteResult(False, aborted=True,
+                                 message=f"unknown enforcement level '{to}' "
+                                         f"(use {'/'.join(ENFORCEMENT_LEVELS)})")
+        item = self.get(item_id)
+        if item is None:
+            return PromoteResult(False, aborted=True,
+                                 message=f"no memory item with id '{item_id}'")
+        if governance_kind(item.kind) != _RULE:
+            return PromoteResult(False, aborted=True, item=item,
+                                 message=f"enforcement applies only to rules; "
+                                         f"'{item.subject}' is a {item.governance_kind}")
+        old = item.effective_enforcement
+        if old == to:
+            return PromoteResult(False, aborted=False, item=item, old=old, new=to,
+                                 direction="unchanged",
+                                 message=f"'{item.subject}' is already {to} (no change)")
+        direction = "promote" if enforcement_rank(to) > enforcement_rank(old) else "demote"
+
+        original_value, original_kind = item.value, item.kind    # prove the condition is untouched
+        team = self._team_mode()
+
+        def _commit() -> None:
+            item.enforcement = to                # the BINDING only — value/kind/subject untouched
+            self._stamp_author(item)             # TM.S10 — real author on the promotion write (M-1)
+            # TM.S5c — team: journal-first + CAS (never direct-to-backend); local: today's path.
+            self._durable_write(item, op=_OP_UPDATE, base_revision=self._base_revision(item),
+                                backend_call=lambda: self.backend.update(item), team=team)
+            self._bump_write()
+
+        # The universal WriteGate (secret-scan is a no-op — the condition isn't changing — + the
+        # human gate over render_promotion + the audit ledger). No second gate path.
+        outcome = self._gated_commit(item.subject, item.subject, _commit,
+                                     self.render_promotion(item, old, to, direction),
+                                     confirm=confirm, assume_yes=assume_yes)
+        if not outcome.committed:
+            # declined / blocked → nothing changed; the in-memory item stays as it was.
+            item.value, item.kind = original_value, original_kind
+            return PromoteResult(False, aborted=True, item=item, old=old, new=to,
+                                 direction=direction, message="declined at the human gate")
+        self._record_enforcement_change(item, old, to, direction, actor)
+        if team:
+            self._best_effort_flush()            # flush when healthy; offline → journaled, not lost
+        return PromoteResult(True, aborted=False, item=item, old=old, new=to,
+                             direction=direction, message=f"{direction}d {item.subject}: "
+                                                          f"{old} → {to}")
+
+    # --- scope promotion (TM.S10 — the audience-widening gate, doc 52 M-2 + P2) -----------
+    def render_scope_promotion(self, item: MemoryItem, old: str, new: str) -> str:
+        """The gate surface for a SCOPE promotion — honest that it widens the AUDIENCE (who can
+        see the item), not its content."""
+        return (f"mokata · PROMOTE scope [{item.subject}]: {old} → {new}\nThis WIDENS who can see "
+                f"this item (its content is NOT changed).\nNothing changes unless you approve.")
+
+    def _record_scope_promotion(self, item: MemoryItem, old: str, new: str, actor: str) -> None:
+        """Audit the scope promotion (doc 62 §6 who/old→new/approval). The WriteGate's own
+        `approved` entry is the newest ledger row at this point, so its seq is the approval ref."""
+        if self._ledger is not None:
+            approval_seq = len(self._ledger)     # the gate's just-written "approved" entry
+            self._ledger.record("scope_promotion", subject=item.subject, item_id=item.id,
+                                 old=old, new=new, actor=actor, approval_seq=approval_seq)
+
+    def promote_scope(self, item_id: str, to_level: str, to_id: Optional[str] = None,
+                      confirm: Optional[Callable[[str], bool]] = None,
+                      assume_yes: bool = False, actor_id: Optional[str] = None
+                      ) -> ScopePromoteResult:
+        """Broaden an item's scope TO `to_level` (personal→category→project→team→global) — the
+        audience-widening act (doc 52 M-2). SEPARATE from the S7 enforcement promotion; both gated.
+        Requires the promotion-approver role at the target scope (team mode) — human-gated through
+        the WriteGate + ledgered (who/old→new/approval). Fail-closed: an unknown level, a missing
+        item, a non-broadening move, a missing role, or an undeterminable grant makes NO change and
+        writes nothing. Local/zero-config (no policy) → a single user has full authority."""
+        from .scope import DEFAULT_SCOPE_LEVEL, is_valid_scope, scope_depth
+        who = actor_id or self.identity or "user"
+        if not is_valid_scope(to_level):
+            return ScopePromoteResult(False, aborted=True,
+                                      message=f"unknown scope level '{to_level}'")
+        item = self.get(item_id)
+        if item is None:
+            return ScopePromoteResult(False, aborted=True,
+                                      message=f"no memory item with id '{item_id}'")
+        old = item.scope_level or DEFAULT_SCOPE_LEVEL
+        # Only BROADENING is gated here (doc 52 M-2): the target must be strictly broader (smaller
+        # depth). A same/narrower target is refused — narrowing an audience is not a promotion.
+        if scope_depth(to_level) >= scope_depth(old):
+            return ScopePromoteResult(False, aborted=True, item=item, old=old, new=to_level,
+                                      message=f"scope promotion only BROADENS: {old} → {to_level} "
+                                              f"is not a widening (target must be broader)")
+        # Access: promotion-approver at the target (broader) scope. Fail-closed on any doubt.
+        if self.access is not None and getattr(self.access, "enforce", False):
+            from .scope import CATEGORY as _CAT
+            cat = to_id if to_level == _CAT else None
+            try:
+                permitted = self.access.can_promote_scope(who, to_level, cat)
+            except Exception:
+                permitted = False
+            if not permitted:
+                return ScopePromoteResult(False, aborted=True, item=item, old=old, new=to_level,
+                                          message=(f"access denied: {who} lacks the "
+                                                   f"promotion-approver role for [{to_level}] — "
+                                                   f"scope promotion refused (nothing written)"))
+
+        original_level, original_id = item.scope_level, item.scope_id
+        team = self._team_mode()
+
+        def _commit() -> None:
+            item.scope_level = to_level
+            item.scope_id = to_id if to_id is not None else ""
+            self._stamp_author(item)             # TM.S10 — real author on the promotion write (M-1)
+            # TM.S5c — team: journal-first + CAS (never direct-to-backend); local: today's path.
+            self._durable_write(item, op=_OP_UPDATE, base_revision=self._base_revision(item),
+                                backend_call=lambda: self.backend.update(item), team=team)
+            self._bump_write()
+
+        outcome = self._gated_commit(item.subject, item.subject, _commit,
+                                     self.render_scope_promotion(item, old, to_level),
+                                     confirm=confirm, assume_yes=assume_yes)
+        if not outcome.committed:
+            item.scope_level, item.scope_id = original_level, original_id   # untouched on decline
+            return ScopePromoteResult(False, aborted=True, item=item, old=old, new=to_level,
+                                      message="declined at the human gate")
+        self._record_scope_promotion(item, old, to_level, who)
+        if team:
+            self._best_effort_flush()            # flush when healthy; offline → journaled, not lost
+        return ScopePromoteResult(True, aborted=False, item=item, old=old, new=to_level,
+                                  message=f"promoted {item.subject}: {old} → {to_level}")
+
+    # --- PM review workflow (TM.S11 — the review state machine + roles, doc 62 §6 + P2) --------
+    def review_required(self) -> bool:
+        """True only when an ENFORCING access policy is present (team mode) — the review workflow
+        engages: proposed changes enter as Drafts and must be reviewed before they publish. In
+        local/zero-config (no policy) a single user needs NO review: edits/promotions publish
+        directly, byte-identical to today (doc 63 §5)."""
+        return bool(self.access is not None and getattr(self.access, "enforce", False))
+
+    def _can_approve(self, who: Optional[str], scope: str, category: Optional[str]) -> bool:
+        """Fail-closed approver check (TM.S11): does `who` hold the approver role at `scope`
+        (+category)? A non-enforcing policy (local) needs no approval → True. Any doubt → deny."""
+        if self.access is None or not getattr(self.access, "enforce", False):
+            return True
+        try:
+            return self.access.can_approve(who, scope, category)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _review_state(item: MemoryItem) -> str:
+        return (getattr(item, "review", None) or {}).get("state", "")
+
+    def pending_reviews(self) -> List[MemoryItem]:
+        """The proposals awaiting a decision — Draft / In-Review / Approved-not-yet-published — for
+        the PM's `mokata memory review` list. Read-only: PROPOSED status keeps them out of live
+        recall; PUBLISHED (→ ACTIVE) and REJECTED proposals are already excluded by status."""
+        from .item import PROPOSED
+        return [i for i in self.backend.all(statuses=(PROPOSED,))
+                if i.mtype in self.enabled_types]
+
+    def _record_review(self, kind: str, item: MemoryItem, *, actor: str, diff: str,
+                       **fields: Any) -> None:
+        """Audit a review step (doc 62 §6 who/what/when/approval + the rendered diff). The
+        WriteGate's own `approved` entry is the newest ledger row at this point, so its seq is the
+        approval reference — the same pattern as promote / scope-promotion."""
+        if self._ledger is not None:
+            approval_seq = len(self._ledger)
+            self._ledger.record(kind, subject=item.subject, item_id=item.id, actor=actor,
+                                diff=diff, approval_seq=approval_seq, **fields)
+
+    def propose(self, item: MemoryItem, *, base_id: str = "", change: str = "new",
+                proposer: Optional[str] = None,
+                confirm: Optional[Callable[[str], bool]] = None,
+                assume_yes: bool = False) -> ReviewResult:
+        """Enter a proposed change into the review workflow as a DRAFT (doc 62 §6). The proposal is
+        stored NOT-live (status PROPOSED) — it only goes live when PUBLISHED. Editor edits, S7
+        enforcement promotions, and S9 formula proposals all feed this. Human-gated (secret-scan +
+        the human gate + ledger) — a proposer must hold edit rights at the item's scope (fail-closed
+        in team mode; a no-op in local). `base_id` is the published item this change supersedes
+        (for the diff + rollback); `change` labels the origin (edit|enforce|formula|new)."""
+        from .review import DRAFT
+        who = proposer or self.identity or "user"
+        # The proposer is an Editor/Author: they must be permitted to write at this scope (S10).
+        denied = self._access_denied_edit(item)
+        if denied is not None:
+            return ReviewResult(False, aborted=True, message=denied)
+        base = self.get(base_id) if base_id else None
+
+        from .item import PROPOSED
+        from .review import diff_line, render_transition
+        item.status = PROPOSED
+        item.review = {"state": DRAFT, "proposer": who, "approver": "",
+                       "base_id": base_id or "", "change": change}
+        diff = diff_line(base, item)
+        team = self._team_mode()
+
+        def _commit() -> None:
+            self._stamp_author(item)
+            # TM.S5c — a NEW draft is believed-new (base_revision None → INSERT-or-conflict).
+            self._durable_write(item, op=_OP_PUT, base_revision=None,
+                                backend_call=lambda: self.backend.put(item), team=team)
+            self._bump_write()
+
+        outcome = self._gated_commit(
+            item.subject, f"{item.subject}\n{item.value}", _commit,
+            render_transition(item, base, "", DRAFT, who),
+            confirm=confirm, assume_yes=assume_yes)
+        if not outcome.committed:
+            if outcome.findings:
+                return ReviewResult(False, aborted=True,
+                                    message="blocked: secret detected — not proposed")
+            return ReviewResult(False, aborted=True, message="declined at the human gate")
+        self._record_review("review_transition", item, actor=who, diff=diff,
+                            frm="", to=DRAFT, change=change)
+        if team:
+            self._best_effort_flush()            # flush when healthy; offline → journaled, not lost
+        return ReviewResult(True, item=item, state=DRAFT,
+                            message=f"proposed {item.subject} as a Draft ({item.id})")
+
+    def _transition(self, item_id: str, to_state: str, *, actor: Optional[str] = None,
+                    confirm: Optional[Callable[[str], bool]] = None,
+                    assume_yes: bool = False) -> ReviewResult:
+        """Move a proposal one step through Draft→In-Review→Approved→Published (or →Rejected). Each
+        transition is human-gated + ledgered with the rendered diff (doc 62 §6). Fail-closed: an
+        unknown item, a non-proposal, an ILLEGAL transition, a self-approval, or a missing approver
+        role makes NO change and writes nothing (deny on doubt)."""
+        from . import review as R
+        from .item import ACTIVE, REJECTED as REJECTED_STATUS, SUPERSEDED
+        who = actor or self.identity or "user"
+        item = self.get(item_id)
+        if item is None:
+            return ReviewResult(False, aborted=True, message=f"no memory item with id '{item_id}'")
+        frm = self._review_state(item)
+        if not R.is_valid_state(frm) or frm == "":
+            return ReviewResult(False, aborted=True, item=item,
+                                message=f"'{item.subject}' is not a proposal in the review workflow")
+        if not R.can_transition(frm, to_state):
+            return ReviewResult(False, aborted=True, item=item, state=frm,
+                                message=f"illegal transition {frm} → {to_state} for "
+                                        f"'{item.subject}' (refused, fail-closed)")
+
+        scope, cat, _owner = self._item_scope_cat(item)
+        proposer = (item.review or {}).get("proposer", "")
+
+        # APPROVE — the separation-of-duties + named-approver gate (HARD, fail-closed).
+        if to_state == R.APPROVED:
+            if not R.separation_ok(proposer, who):
+                msg = (f"separation of duties: {who} proposed this change and may not self-approve"
+                       if who and who == proposer
+                       else "separation of duties: a distinct approver identity is required")
+                return ReviewResult(False, aborted=True, item=item, state=frm, message=msg)
+            if not self._can_approve(who, scope, cat):
+                return ReviewResult(False, aborted=True, item=item, state=frm,
+                                    message=f"access denied: {who} is not an approver for "
+                                            f"[{scope}] — cannot approve (ask the project PM)")
+
+        # PUBLISH — required-review: a recorded, still-valid approver sign-off is mandatory, AND
+        # (TM.S5c fold-in) separation of duties at publish too — the proposer may not publish their
+        # own change (fail-closed), not only self-approve. A distinct publisher is required.
+        if to_state == R.PUBLISHED:
+            if not R.separation_ok(proposer, who):
+                msg = ("separation of duties: the proposer may not publish their own change"
+                       if who and who == proposer
+                       else "separation of duties: a distinct publisher identity is required")
+                return ReviewResult(False, aborted=True, item=item, state=frm, message=msg)
+            approver = (item.review or {}).get("approver", "")
+            if not approver or not self._can_approve(approver, scope, cat):
+                return ReviewResult(False, aborted=True, item=item, state=frm,
+                                    message="publish blocked: no required-approver sign-off "
+                                            "recorded (a change can't publish without review)")
+
+        base = self.get((item.review or {}).get("base_id", "")) or None
+        diff = R.diff_line(base, item)
+        team = self._team_mode()
+
+        def _commit() -> None:
+            item.review = dict(item.review or {})
+            item.review["state"] = to_state
+            if to_state == R.APPROVED:
+                item.review["approver"] = who
+            elif to_state == R.PUBLISHED:
+                item.status = ACTIVE                     # now live
+                if base is not None and base.status == ACTIVE:
+                    base.status = SUPERSEDED             # supersede lineage → rollback
+                    if base.id not in item.supersedes:
+                        item.supersedes.append(base.id)
+                    # TM.S5c — the superseded prior is its own CAS-guarded team write.
+                    self._durable_write(base, op=_OP_UPDATE,
+                                        base_revision=self._base_revision(base),
+                                        backend_call=lambda: self.backend.update(base), team=team)
+            elif to_state == R.REJECTED:
+                item.status = REJECTED_STATUS            # terminal, never live
+            self._stamp_author(item)
+            # TM.S5c — team: journal-first + CAS (never direct-to-backend); local: today's path.
+            self._durable_write(item, op=_OP_UPDATE, base_revision=self._base_revision(item),
+                                backend_call=lambda: self.backend.update(item), team=team)
+            self._bump_write()
+
+        outcome = self._gated_commit(item.subject, item.subject, _commit,
+                                     R.render_transition(item, base, frm, to_state, who),
+                                     confirm=confirm, assume_yes=assume_yes)
+        if not outcome.committed:
+            return ReviewResult(False, aborted=True, item=item, state=frm,
+                                message="declined at the human gate")
+        self._record_review("review_transition", item, actor=who, diff=diff,
+                            frm=frm, to=to_state)
+        if team:
+            self._best_effort_flush()            # flush when healthy; offline → journaled, not lost
+        return ReviewResult(True, item=item, state=to_state,
+                            message=f"{item.subject}: {frm} → {to_state}")
+
+    def submit_for_review(self, item_id: str, **kw) -> ReviewResult:
+        """Draft → In-Review (the proposer advances their draft). Gated + ledgered."""
+        from .review import IN_REVIEW
+        return self._transition(item_id, IN_REVIEW, **kw)
+
+    def approve(self, item_id: str, **kw) -> ReviewResult:
+        """In-Review → Approved. HARD separation of duties (proposer ≠ approver) + the named
+        approver role at the item's scope/category are enforced, fail-closed (doc 62 §6)."""
+        from .review import APPROVED
+        return self._transition(item_id, APPROVED, **kw)
+
+    def reject(self, item_id: str, **kw) -> ReviewResult:
+        """Reject a proposal (from any non-terminal state) → terminal Rejected. Gated + ledgered."""
+        from .review import REJECTED
+        return self._transition(item_id, REJECTED, **kw)
+
+    def publish(self, item_id: str, **kw) -> ReviewResult:
+        """Approved → Published: the change goes LIVE and supersedes the item it changed (rollback
+        lineage). Blocked without a recorded required-approver sign-off (fail-closed, doc 62 §6)."""
+        from .review import PUBLISHED
+        return self._transition(item_id, PUBLISHED, **kw)
+
+    def rollback(self, item_id: str, *, actor: Optional[str] = None,
+                 confirm: Optional[Callable[[str], bool]] = None,
+                 assume_yes: bool = False) -> ReviewResult:
+        """Restore the PRIOR published item this one superseded — the one-click restore over the
+        supersede lineage (doc 62 §6). Human-gated + ledgered; requires approver rights in team
+        mode (a PM action), fail-closed. No item / no lineage → nothing changes."""
+        from .item import ACTIVE, SUPERSEDED
+        from .review import render_rollback, diff_line
+        who = actor or self.identity or "user"
+        item = self.get(item_id)
+        if item is None:
+            return ReviewResult(False, aborted=True, message=f"no memory item with id '{item_id}'")
+        prior_ids = list(getattr(item, "supersedes", []) or [])
+        prior = None
+        for pid in reversed(prior_ids):                  # the most-recent superseded ancestor
+            prior = self.get(pid)
+            if prior is not None:
+                break
+        if prior is None:
+            return ReviewResult(False, aborted=True, item=item,
+                                message=f"nothing to roll back: '{item.subject}' has no prior "
+                                        "in its supersede lineage")
+        scope, cat, _owner = self._item_scope_cat(item)
+        if not self._can_approve(who, scope, cat):
+            return ReviewResult(False, aborted=True, item=item,
+                                message=f"access denied: {who} is not an approver for [{scope}] "
+                                        "— cannot roll back")
+        diff = diff_line(item, prior)
+        team = self._team_mode()
+
+        def _commit() -> None:
+            item.status = SUPERSEDED                     # the current one steps aside
+            prior.status = ACTIVE                        # restore the prior
+            self._stamp_author(prior)
+            # TM.S5c — both writes are CAS-guarded team journals (never direct-to-backend); local
+            # is today's two backend updates.
+            self._durable_write(item, op=_OP_UPDATE, base_revision=self._base_revision(item),
+                                backend_call=lambda: self.backend.update(item), team=team)
+            self._durable_write(prior, op=_OP_UPDATE, base_revision=self._base_revision(prior),
+                                backend_call=lambda: self.backend.update(prior), team=team)
+            self._bump_write(2)
+
+        outcome = self._gated_commit(item.subject, item.subject, _commit,
+                                     render_rollback(item, prior),
+                                     confirm=confirm, assume_yes=assume_yes)
+        if not outcome.committed:
+            return ReviewResult(False, aborted=True, item=item,
+                                message="declined at the human gate")
+        self._record_review("review_rollback", item, actor=who, diff=diff, restored=prior.id)
+        if team:
+            self._best_effort_flush()            # flush when healthy; offline → journaled, not lost
+        return ReviewResult(True, item=prior, state="published",
+                            message=f"rolled back {item.subject}: restored {prior.id}")
+
     # --- reads (honor toggles, count) ---------------------------------------
     def peek_active(self, mtype: Optional[str] = None) -> List[MemoryItem]:
         """Active items WITHOUT counting a read — for read-only surfaces (the governance
@@ -315,7 +1003,8 @@ class MemoryStore:
         return self.peek_active(mtype=mtype)
 
     def recall(self, subject: str, mtype: Optional[str] = None) -> List[MemoryItem]:
-        return [i for i in self.all_active(mtype=mtype) if i.subject == subject]
+        # TM.S6 — recall reads the UNION across the scope path (byte-identical when no context).
+        return [i for i in self.scoped_active(mtype=mtype) if i.subject == subject]
 
     def recall_relevant(self, query: str, top_k: int = DEFAULT_TOP_K, semantic: bool = True,
                         graph_scorer: Any = None) -> List[Any]:
@@ -339,6 +1028,17 @@ class MemoryStore:
 
     def get(self, item_id: str) -> Optional[MemoryItem]:
         return self.backend.get(item_id)
+
+    # --- formula recall by applicability (TM.S9, doc 62 §2/§8) ---------------
+    def recall_formulas(self, query: str) -> List[MemoryItem]:
+        """The in-scope FORMULAE whose APPLICABILITY matches `query` — matched by their trigger/
+        topic metadata (not general similarity), returned for INJECTION (template + params),
+        alongside the existing fact/rule recall. Reads the S6 UNION across the scope path (so
+        team-scoped formulae surface on the path, byte-identical local recall when unscoped).
+        Never computes/evaluates a formula — computed formulae are deferred (doc 62 §8)."""
+        from .formula import recall_applicable
+        return recall_applicable(self.scoped_active(), query,
+                                 context=self.scope_context)
 
     # --- self-healing (C5, surfacing + gated resolution) --------------------
     def detect_issues(self, now: Optional[str] = None) -> List[HealingProposal]:
@@ -369,7 +1069,11 @@ class MemoryStore:
             self._record_healing(p, decision, changed=False)
             return HealingResult(changed=False, message=f"{decision}: no change")
 
+        team = self._team_mode()
+
         # Build the commit closure + the (untrusted) content to secret-scan + the result.
+        # TM.S5c — every backend write below routes through `_durable_write`: team journals-first +
+        # CAS-guarded (never direct-to-backend), local is byte-identical.
         if decision == "edit":
             if edited is None:
                 raise MemoryError("edit requires an edited item")
@@ -384,8 +1088,12 @@ class MemoryStore:
                     item.status = SUPERSEDED
                     if item.id not in edited.supersedes:
                         edited.supersedes.append(item.id)
-                    self.backend.update(item)
-                self.backend.put(edited)
+                    self._durable_write(item, op=_OP_UPDATE,
+                                        base_revision=self._base_revision(item),
+                                        backend_call=lambda item=item: self.backend.update(item),
+                                        team=team)
+                self._durable_write(edited, op=_OP_PUT, base_revision=None,
+                                    backend_call=lambda: self.backend.put(edited), team=team)
                 self._bump_write(len(replaced) + 1)
         elif p.kind == CONTRADICTION and p.new is not None:
             content = f"{p.new.subject}\n{p.new.value}"       # the winning new value is scanned
@@ -395,8 +1103,10 @@ class MemoryStore:
                 p.old.status = SUPERSEDED
                 if p.old.id not in p.new.supersedes:
                     p.new.supersedes.append(p.old.id)
-                self.backend.update(p.old)
-                self.backend.update(p.new)
+                self._durable_write(p.old, op=_OP_UPDATE, base_revision=self._base_revision(p.old),
+                                    backend_call=lambda: self.backend.update(p.old), team=team)
+                self._durable_write(p.new, op=_OP_UPDATE, base_revision=self._base_revision(p.new),
+                                    backend_call=lambda: self.backend.update(p.new), team=team)
                 self._bump_write(2)
         else:   # STALE approve — marks an existing item stale; no new untrusted value
             content = p.old.subject
@@ -404,7 +1114,8 @@ class MemoryStore:
 
             def _commit() -> None:
                 p.old.status = STATUS_STALE
-                self.backend.update(p.old)
+                self._durable_write(p.old, op=_OP_UPDATE, base_revision=self._base_revision(p.old),
+                                    backend_call=lambda: self.backend.update(p.old), team=team)
                 self._bump_write()
 
         # M2 (Stage 39): the SAME WriteGate path as remember — scan + gate (old→new surface) +
@@ -413,6 +1124,8 @@ class MemoryStore:
                                      confirm=confirm, assume_yes=assume_yes)
         self._record_healing(p, decision, changed=outcome.committed)
         if outcome.committed:
+            if team:
+                self._best_effort_flush()        # flush when healthy; offline → journaled, not lost
             return HealingResult(changed=True, item=result_item, message=result_msg)
         if outcome.findings:
             return HealingResult(changed=False, aborted=True, blocked=True,
@@ -467,29 +1180,48 @@ class MemoryStore:
                 return HealingResult(changed=False, aborted=True,
                                      message="declined at the human gate")
 
+        # TM.S5c — every write below routes through `_durable_write` (bound to THIS `led` so the
+        # journaled entry inherits the consolidation-decision ledger id): team journals-first +
+        # CAS-guarded (never a direct backend upsert/delete), local is byte-identical. Crucially the
+        # PRUNE branch journals a CAS-guarded DELETE in team mode — it never hard-deletes a shared
+        # row (the destructive path the audit flagged); local single-user prune still deletes.
+        team = self._team_mode()
         if p.kind == MERGE:
             keep = edited or p.new
             if edited is not None:
-                self.backend.put(edited)
+                self._durable_write(edited, op=_OP_PUT, base_revision=None,
+                                    backend_call=lambda: self.backend.put(edited),
+                                    team=team, ledger=led)
             for o in p.olds:
                 if o.id == keep.id:
                     continue
                 o.status = SUPERSEDED
                 if o.id not in keep.supersedes:
                     keep.supersedes.append(o.id)
-                self.backend.update(o)
+                self._durable_write(o, op=_OP_UPDATE, base_revision=self._base_revision(o),
+                                    backend_call=lambda o=o: self.backend.update(o),
+                                    team=team, ledger=led)
             if edited is None:
-                self.backend.update(keep)
+                self._durable_write(keep, op=_OP_UPDATE, base_revision=self._base_revision(keep),
+                                    backend_call=lambda: self.backend.update(keep),
+                                    team=team, ledger=led)
             self._bump_write(len(p.olds))
         elif p.kind == SUMMARIZE:
-            self.backend.put(edited or p.new)
+            summary = edited or p.new
+            self._durable_write(summary, op=_OP_PUT, base_revision=None,
+                                backend_call=lambda: self.backend.put(summary),
+                                team=team, ledger=led)
             self._bump_write()
         elif p.kind == PRUNE:
             for o in p.olds:
-                self.backend.delete(o.id)
+                self._durable_write(o, op=_OP_DELETE, base_revision=self._base_revision(o),
+                                    backend_call=lambda o=o: self.backend.delete(o.id),
+                                    team=team, ledger=led)
             self._bump_write(max(1, len(p.olds)))
 
         _log(True, decision)
+        if team:
+            self._best_effort_flush()            # flush when healthy; offline → journaled, not lost
         return HealingResult(changed=True, message=decision)
 
     def close(self) -> None:

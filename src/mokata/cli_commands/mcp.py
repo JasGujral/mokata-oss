@@ -52,22 +52,27 @@ def _cmd_mcp_start(args: argparse.Namespace) -> int:
 
 
 def _cmd_mcp_status(args: argparse.Namespace) -> int:
-    # Real MCP `initialize` handshake against the REGISTERED command. Fail-closed. Uses the
-    # SAME shared reporter as `setup`'s CONNECTED verification (mcp_admin.status_lines).
-    ok, lines = mcp_admin.status_lines(root=args.path, home=getattr(args, "home", None))
-    stream = sys.stdout if ok else sys.stderr
-    for line in lines:
+    # The full wiring check — registered? enabled? permitted? CONNECTED? — each with its fix.
+    # Uses the SAME shared `mcp_admin.full_status` reporter as `mokata doctor` so they can't
+    # drift. Fail-closed. rc reflects reachability (CONNECTED); the enabled/permitted gaps that
+    # cause the stuck-loop are surfaced as lines with a named fix (`mokata mcp install`).
+    fs = mcp_admin.full_status(root=args.path, home=getattr(args, "home", None))
+    stream = sys.stdout if fs.connected else sys.stderr
+    for line in fs.lines:
         print(line, file=stream)
-    return 0 if ok else 1
+    return 0 if fs.connected else 1
 
 
 def _cmd_mcp_install(args: argparse.Namespace) -> int:
-    # Write/repair the Claude Code registration (absolute-path command, merge-safe, idempotent).
+    # Write/repair the Claude Code registration (absolute-path command, merge-safe, idempotent)
+    # AND grant Claude Code permission for mokata's MCP tools + enable the server (the
+    # "stuck-loop" fix) — unless `--no-grant`. Both writes are merge-safe and reversible.
     from .. import harness_setup
     home = getattr(args, "home", None)
     scope = getattr(args, "scope", None) or "project"
+    grant = not getattr(args, "no_grant", False)
     try:
-        path = harness_setup.mcp_install(scope, args.path, home=home)
+        path = harness_setup.mcp_install(scope, args.path, home=home, grant=grant)
     except SetupError as exc:
         print(f"mcp install: {exc}", file=sys.stderr)
         return 1
@@ -77,6 +82,10 @@ def _cmd_mcp_install(args: argparse.Namespace) -> int:
     if command == harness_setup.MCP_COMMAND:
         print("  note: `mokata-mcp` was not found on PATH — wrote the bare command. Ensure "
               "mokata is installed so Claude Code can launch it.")
+    if grant:
+        settings = harness_setup.resolve_targets(scope, args.path, home, "claude").settings_path
+        print(f"  ✓ Granted Claude Code permission for mokata's MCP tools + enabled the "
+              f"server in {settings}")
     print("  next: restart Claude Code, then `mokata mcp status` to verify the handshake.")
     return 0
 
@@ -97,6 +106,10 @@ def register(sub, common):
     p_mcp.add_argument(
         "--scope", choices=SCOPES, default="project",
         help="install/status registration scope: project (.mcp.json) or user (~/.claude.json)")
+    p_mcp.add_argument(
+        "--no-grant", action="store_true",
+        help="install: do NOT grant Claude Code permission for mokata's MCP tools / enable the "
+             "server in settings.json (for teams that manage permissions themselves)")
     p_mcp.add_argument("--home", default=None, help=argparse.SUPPRESS)  # test/override home dir
     p_mcp.set_defaults(func=cmd_mcp)
 

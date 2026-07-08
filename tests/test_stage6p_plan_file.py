@@ -42,7 +42,7 @@ def _approved_session(topic="Add a Slugify Helper!"):
         Approach("regex", "strip with a regex", pros=["tiny"], cons=["unicode edges"]),
         Approach("library", "use a slug lib", pros=["robust"], cons=["a dependency"]),
     ])
-    s.approve("jas", "regex")
+    _support.approve_with_lenses(s, "jas", "regex")
     return s
 
 

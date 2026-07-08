@@ -63,7 +63,10 @@ def tiered_recall(store: Any, query: str, *, embedder: Optional[Embedder] = None
                   graph_scorer: Optional[GraphScorer] = None, top_k: int = DEFAULT_TOP_K,
                   semantic: bool = True) -> List[RetrievalHit]:
     """Fuse lexical + graph + semantic into one ranked, top-k result (see module docstring)."""
-    items = store.all_active()                       # candidate set, honoring toggles
+    # TM.S6 — candidates are the scope-path UNION (byte-identical to all_active when the store
+    # has no scope context). Falls back to all_active for any store-like object lacking the method.
+    candidates = getattr(store, "scoped_active", None) or store.all_active
+    items = candidates()                             # honoring toggles + scope path
     if not items:
         return []
 

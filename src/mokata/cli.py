@@ -53,7 +53,7 @@ from .config import Surface
 # working unchanged.
 # ---------------------------------------------------------------------------
 from .cli_commands import (
-    setup, core, knowledge, memory, collab, skills, rules, index, mcp, diagnostics,
+    setup, core, knowledge, memory, collab, mode, sync, skills, rules, index, mcp, diagnostics,
     distribution, reset, pipeline, runviews, plan, menu, docs,
 )
 from .cli_commands._common import (
@@ -134,6 +134,8 @@ def build_parser() -> argparse.ArgumentParser:
     knowledge.register(sub, common)
     memory.register(sub, common)
     collab.register(sub, common)
+    mode.register(sub, common)
+    sync.register(sub, common)
     skills.register(sub, common)
     rules.register(sub, common)
     index.register(sub, common)
