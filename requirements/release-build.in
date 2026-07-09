@@ -1,0 +1,8 @@
+# Release build/SBOM toolchain (release.yml `build` job). Exact versions kept
+# identical to what the workflow already pinned — this only adds hashes, it does
+# not upgrade. build = PyPA sdist/wheel builder; cyclonedx-bom ships the
+# `cyclonedx-py` CLI used for the CycloneDX SBOM.
+#
+# Compiled to release-build.txt with per-package hashes — see requirements/README.md.
+build==1.2.1
+cyclonedx-bom==6.1.1

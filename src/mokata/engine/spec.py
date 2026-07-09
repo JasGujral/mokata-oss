@@ -37,6 +37,11 @@ class Spec:
     criteria: List[AcceptanceCriterion] = field(default_factory=list)
     approach: Optional[str] = None       # the approved-approach name, if known
     source: str = ""
+    # DK.S0 — the domains-in-play, classified at brainstorm from the approach's graph surface and
+    # persisted here as a FIRST-CLASS constraint beside the ACs + approach (human-approved +
+    # legible). develop/review engage EXACTLY these; a domain reached only later amends the spec.
+    # A JSON field only — the store SCHEMA is untouched; a legacy spec with no key reads as [].
+    domains: List[str] = field(default_factory=list)
 
     @property
     def ac_ids(self) -> List[str]:
@@ -47,6 +52,7 @@ class Spec:
             "title": self.title,
             "criteria": [c.to_dict() for c in self.criteria],
             "approach": self.approach,
+            "domains": list(self.domains),
         }
 
     @classmethod
@@ -56,4 +62,5 @@ class Spec:
             criteria=[AcceptanceCriterion.from_dict(c) for c in d.get("criteria", [])],
             approach=d.get("approach"),
             source=d.get("source", ""),
+            domains=list(d.get("domains", [])),
         )

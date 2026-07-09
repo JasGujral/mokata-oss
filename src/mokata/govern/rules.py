@@ -32,6 +32,9 @@ ALWAYS_ON_RULES = """\
 # Inviolable
 - Human-gate every durable write (code, memory, config). Nothing silent or autonomous.
 - Local-first: nothing leaves the machine unless a human wires it. No telemetry.
+# Skills (proactive dispatch)
+- Auto-engage the matching mokata skill the moment a task fits its triggers — every skill, not
+  just brainstorm; announce it (⛭ banner), follow its Contract + gate, and heed its NOT-when.
 # Spec & correctness
 - Brainstorm first: explore approaches, get one explicitly approved (HARD-GATE) before a spec.
 - No implementation before a spec whose every acceptance criterion maps to a test.

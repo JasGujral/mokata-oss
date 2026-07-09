@@ -43,20 +43,34 @@ class TestGroundingClausePresent(unittest.TestCase):
             # the rendered launch surface carries the exact shared clause
             self.assertIn(GROUNDING_DISCIPLINE, render_skill(skill),
                           f"{name} render missing the grounding clause")
-            # and so does the shipped template
-            self.assertIn("## Grounding discipline", _template(name))
+            # SK.S2 single-source: the template no longer embeds a literal copy — it carries the
+            # grounding MARKER, expanded to the one canonical block at materialization time.
+            from mokata.skills import GROUNDING_MARKER
+            self.assertIn(GROUNDING_MARKER, _template(name),
+                          f"{name} template must carry the grounding marker (not a copy)")
+            self.assertNotIn("## Grounding discipline", _template(name),
+                             f"{name} template must NOT embed a literal grounding block")
 
     def test_clause_is_single_source_for_generated(self):
         # template == command_markdown(skill) — the clause can't drift on generated skills
         for name in GENERATED:
             self.assertEqual(_template(name), command_markdown(get_skill(name)))
 
-    def test_brainstorm_template_carries_clause_verbatim(self):
-        # brainstorm.md is hand-authored; assert the clause's invariant phrases are present
+    def test_brainstorm_template_derives_from_the_single_source(self):
+        # brainstorm.md is hand-authored, but SK.S2 removed its hand-maintained grounding COPY:
+        # it now carries the single-source MARKER, which expands to the canonical block (so the
+        # invariant phrases live in the ONE source, not in a template copy that can drift).
+        from mokata.skills import GROUNDING_MARKER, expand_grounding
         tpl = _template("brainstorm")
+        self.assertIn(GROUNDING_MARKER, tpl,
+                      "brainstorm.md must carry the grounding marker, not a copy")
+        self.assertNotIn("Decide from the code, not from assumption", tpl,
+                         "brainstorm.md must not embed a hand-maintained grounding copy")
+        # the expanded form (what the reader/agent actually sees) carries the invariant phrases
+        expanded = expand_grounding(tpl)
         for phrase in ("Decide from the code, not from assumption",
                        "never silently assume", 'no "assumed and continued" path'):
-            self.assertIn(phrase, tpl)
+            self.assertIn(phrase, expanded)
 
     def test_clause_states_the_core_principle(self):
         low = GROUNDING_DISCIPLINE.lower()

@@ -1,0 +1,8 @@
+# The optional [schema] extra installed on the "present" matrix leg only.
+# Pinned to the EXACT version mokata itself resolves in uv.lock (the source of
+# truth): jsonschema 4.26.0 for python >= 3.10 (mokata's floor). This is the same
+# version `mcp` already pulls transitively — pinning it here changes nothing that
+# ships, it only lets the present-leg install use --require-hashes.
+#
+# Compiled to jsonschema.txt with per-package hashes — see requirements/README.md.
+jsonschema==4.26.0

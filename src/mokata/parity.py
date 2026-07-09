@@ -110,6 +110,13 @@ def _surfaces() -> List[CommandSurface]:
                        note="read-only docs pointer — no topic lists the published topics with "
                             "their site URLs, a topic prints its URL (local-first, no fetch, no "
                             "bundled content) → slash (RT.S3 A2)"),
+        CommandSurface("docsync", slash=("docsync",),
+                       note="docs↔code reconciliation (DK.S5) — `docsync <path>` audits ONE doc, "
+                            "`docsync` (no target) sweeps + drift-detects the docs against the "
+                            "code (skill counts, command names, install path, symbols); the "
+                            "read-only AUDIT is the default in-harness surface. The RECONCILE fix "
+                            "rides the EXISTING human-gated write (preview → approve), so it needs "
+                            "no new write tool → slash drives the audit + the gated reconcile."),
         CommandSurface("reconfigure", slash=("reconfigure",), mcp_write=("reconfigure",),
                        note="re-runnable reconfigure wizard — change what's wired later "
                             "(add/remove integration, switch backend, change profile); gated + "
@@ -347,4 +354,15 @@ def declared_mcp_tools() -> Set[str]:
     out: Set[str] = set()
     for s in SURFACE_MATRIX.values():
         out.update(s.mcp)
+    return out
+
+
+def slash_command_names() -> Set[str]:
+    """Every `/mokata:<name>` slash command the matrix declares — the single source of the shipped
+    slash-command surface (one entry per installed command template). Never hand-listed: a new
+    slash command appears here as soon as its `CommandSurface(..., slash=(...))` is declared, so
+    callers that validate `/mokata:<name>` references (docsync) can't drift from the real set."""
+    out: Set[str] = set()
+    for s in SURFACE_MATRIX.values():
+        out.update(s.slash)
     return out

@@ -69,7 +69,7 @@ _SENSITIVE_SUFFIXES = (".pem", ".key", ".p12", ".pfx")
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9+/=_\-]{20,}")
 # Path / URL / filename separators. A matched token is broken on these before the entropy
-# check so a long file path or URL (e.g. "docs/build/02-mokata-build-status.md") is evaluated
+# check so a long file path or URL (e.g. "src/mokata/memory/precedence.py") is evaluated
 # as its short word-like segments, not as one "high-entropy" blob (the segments don't trip it).
 _SEP_RE = re.compile(r"[/\\.]+")
 # Hex alphabet — a pure-hex run is a DIGEST (git SHA, md5, sha256, a UUID's hex), not a

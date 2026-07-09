@@ -109,6 +109,11 @@ nav:
       - Execution modes: concepts/execution-modes.md
       - Governance & audit: concepts/governance.md
       - Portable sessions: concepts/portable-sessions.md
+  - How it works:
+      - Architecture overview: how-it-works/index.md
+      - Skills layer & gate map: how-it-works/skills-and-gates.md
+      - Domain-skills layer: how-it-works/domain-skills.md
+      - docsync (docs↔code): how-it-works/docsync.md
   - Reference:
       - CLI: reference/cli.md
       - Command surfaces (CLI ↔ slash ↔ MCP): reference/command-surfaces.md

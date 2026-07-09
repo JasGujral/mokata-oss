@@ -102,7 +102,14 @@ def build_backend(tool: str, root: str,
         # opt-in remote store; degrade to the SQLite floor if unset/unreachable (P8).
         # Stage 71a — scoped to the current project so one shared DSN hosts many, no bleed.
         backend = build_postgres_backend(config, project=project)
-        return backend if backend is not None else floor()
+        if backend is None:
+            return floor()          # unavailable → LOCAL SQLite floor, NEVER cached
+        # B3 (0.0.12) — put the per-process read-through cache in front of the LIVE shared
+        # backend so repeated retrieval/gate reads are served without a fresh round trip and
+        # never block on the network. Only the live Postgres backend is wrapped — the floor
+        # above (local mode) stays byte-identical, uncached.
+        from .cache import ReadThroughCache
+        return ReadThroughCache(backend)
     if tool == "native-memory":
         client = clients.get("native-memory")
         if client is not None:
@@ -356,6 +363,12 @@ class MemoryStore:
         if self.scope_context is not None:
             from .scope import union_read
             items = union_read(items, self.scope_context)
+            # M-A2 — collapse the union to the single precedence WINNER per key (doc 62 §3), so two
+            # conflicting scoped items for one subject never BOTH inject (the reader picks no winner
+            # today — the double-inject bug). Reuses the existing engine (precedence.resolve). LOCAL
+            # mode has no scope context → this whole branch is skipped → recall is byte-identical.
+            from .precedence import resolve_items
+            items = resolve_items(items)
         # TM.S10 — drop items the identity can't see (a teammate's private items never leak, S-2).
         # Fail-closed: an item whose readability can't be determined is filtered out (deny on doubt).
         if self.access is not None and getattr(self.access, "enforce", False):

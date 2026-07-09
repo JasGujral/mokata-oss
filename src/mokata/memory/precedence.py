@@ -229,3 +229,51 @@ def resolve(items: Sequence[Any]) -> Resolution:
         if pref_rows:
             res.preferences[key] = _resolve_preference(pref_rows)
     return res
+
+
+# ---------------------------------------------------------------- read-path projection (M-A2)
+_NO_OVERRIDE = object()   # sentinel: keep the representative's stored value (distinct from a None value)
+
+
+def _with_value(item: Any, value: Any) -> Any:
+    """A shallow copy of `item` carrying a resolved (object-merged) `value`. Uses dataclasses.replace
+    (MemoryItem is a dataclass); degrade-clean for a non-dataclass duck-typed item → the stored
+    representative unchanged. The copy is an injected READ-ONLY view — never written back."""
+    try:
+        import dataclasses
+        return dataclasses.replace(item, value=value)
+    except Exception:
+        return item
+
+
+def resolve_items(items: Sequence[Any]) -> List[Any]:
+    """M-A2 — the READ-PATH projection: collapse a UNION `items` list to the injection WINNERS,
+    so two conflicting scoped items for one key become the SINGLE precedence winner BEFORE
+    injection — never the double-inject the reader can't resolve. This is the wiring that makes
+    `resolve()` reach the real read path; it REUSES `resolve()` verbatim (no resolution logic is
+    reimplemented here) and only projects its Resolution back onto the concrete item list.
+
+    Returns the surviving subset of `items`, in input order:
+      * a PREFERENCE key keeps its ONE representative (the pin floor, else the narrowest-wins rep),
+        carrying the resolved value — an object-merged value rides a shallow copy of the rep;
+      * a SAFETY key keeps EVERY authoritative hard item (nothing dropped) and SUPPRESSES any
+        preference item sharing that key (a hard rule cannot be loosened by a narrower preference).
+
+    A key with a single item keeps that item unchanged (byte-identical to no resolution)."""
+    res = resolve(items)
+    keep: Dict[str, Any] = {}          # winning item id -> value override (or _NO_OVERRIDE)
+    for key in res.keys():
+        if res.is_authoritative(key):
+            for e in res.safety_items:
+                if e.key == key:
+                    keep[e.source_ids[0]] = _NO_OVERRIDE   # every hard item, verbatim
+        else:
+            e = res.preferences[key]
+            rep_id = e.source_ids[0] if e.pinned else e.source_ids[-1]
+            keep[rep_id] = e.value if e.merged else _NO_OVERRIDE
+    out: List[Any] = []
+    for it in items:
+        if getattr(it, "id", None) in keep:
+            override = keep[it.id]
+            out.append(it if override is _NO_OVERRIDE else _with_value(it, override))
+    return out

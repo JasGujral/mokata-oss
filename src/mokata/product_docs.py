@@ -41,6 +41,7 @@ TOPICS: Tuple[Topic, ...] = (
     Topic("tutorials/mokata-complete-guide", "Tutorials — The Complete Guide"),
     Topic("how-to/first-run", "How-to — Your first run"),
     Topic("concepts/execution-model", "Concepts — How mokata uses an LLM"),
+    Topic("how-it-works/index", "How it works — architecture overview"),
     Topic("reference/cli", "Reference — the CLI"),
     Topic("profiles", "Profiles & toggles"),
     Topic("developer-guide", "Developer guide"),

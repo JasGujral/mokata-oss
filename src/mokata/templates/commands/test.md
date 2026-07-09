@@ -1,6 +1,7 @@
 ---
 name: test
 description: mokata · Write failing tests first (RED); no implementation.
+when_to_use: Engage when a spec has been emitted and its acceptance criteria need failing tests written, when the user asks to write tests for approved behaviour, or when starting TDD on a change before any implementation exists. Do NOT engage without a persisted spec (produce the spec first), or to write implementation code (that is develop).
 ---
 
 # mokata · /test
@@ -13,8 +14,7 @@ Tests must be shown to FAIL before any implementation exists. Writing implementa
 ## Standalone
 This command runs on its own — no upstream pipeline phase is required. It applies only its own gate above, and never silently skips a gate of a phase you did run.
 
-## Grounding discipline
-Decide from the code, not from assumption. Before you assert anything about types, signatures, behaviour, control flow, conventions, dependencies, error handling, or file layout, VERIFY it against the actual code: read the relevant source, run structural queries (`mokata query callers|callees|implementers|imports|blast_radius <symbol>`), and check memory for prior decisions and conventions. Consult the project brain: honour the captured rules and guardrails, and pull in only the context, references, and best-practices RELEVANT to the symbols/topic in play (just-in-time — never the whole corpus). The graph + memory are the source of truth; where they're absent, read or grep the code and state what you read. If a fact CANNOT be determined from the code, state the assumption explicitly and ASK — never silently assume. Cite what you verified. And continuously: if at any point you find a decision rested on an assumption, or the code contradicts something you assumed, STOP — surface it (what you assumed vs. what the code shows), CONFIRM with the user, and re-plan (route it through the deviation gate and amend the spec/ACs so they stay grounded and provable). There is no "assumed and continued" path.
+<!-- mokata:grounding -->
 
 ## Precondition
 Precondition (spec-persisted): a saved spec with at least one acceptance criterion must exist (`emitted_spec.json`, written by the human-gated `emit` after the completeness gate passes). If it's absent, STOP and produce + emit the spec first (`/mokata:spec`) — do not write code or tests against an unsaved spec.

@@ -1,9 +1,95 @@
 """Shared test support: put `src/` on the import path and build sample manifests."""
 
 import os
+import sqlite3
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+
+# --- B4 (0.0.12): the sandbox-disk-artifact guard --------------------------------------
+# A handful of tests build a REAL file-backed SQLite DB (the memory floor). On a native
+# filesystem — CI runners and any normal dev machine — that works and those tests RUN + PASS.
+# The mokata build sandbox uses an overlay FS that raises `sqlite3.OperationalError: disk I/O
+# error` when SQLite opens the on-disk DB (doc 60 / doc 02 0.0.11 caveat): a broken-disk
+# artifact unrelated to the code under test. `sqlite_disk_ok()` detects that case PRECISELY by
+# doing the same create-table + write a file-backed SQLiteBackend does, so a guarded test skips
+# EXACTLY (and only) where the on-disk artifact genuinely can't exist — never an always-skip,
+# never a silent skip on an unrelated error. Probed once per process, then cached.
+#
+# B4-FU (0.0.12): the probe MUST exercise the SAME on-disk location `SQLiteBackend` writes to.
+# The guarded playbook tests build the backend via `run_playbook(make_surface())` with `root="."`,
+# so `select_memory_backend` puts the real DB at `<cwd>/.mokata/temp_local/memory/memory.db`.
+# The original probe used a SYSTEM temp dir (e.g. /tmp) — but a split-disk sandbox can back /tmp
+# SQLite fine while THAT repo-dir location raises `disk I/O error`. Probing /tmp therefore reported
+# "disk ok", the 2 tests RAN and ERRORED (and the B4 meta-test FAILed). Probing the repo `.mokata`
+# location makes the guard reflect the disk the backend actually uses, so those tests skip cleanly.
+_SQLITE_DISK_OK = None
+
+# The OperationalError messages that mean "this filesystem can't back an on-disk SQLite DB"
+# (the sandbox artifact) — kept narrow so an UNRELATED OperationalError never triggers a skip.
+_DISK_BROKEN_MARKERS = ("disk i/o error", "unable to open database")
+
+
+def _sqlite_probe_dir():
+    """The on-disk directory the probe exercises — the SAME location class `SQLiteBackend` writes
+    to when the guarded tests run (`select_memory_backend` with `root="."`): `<cwd>/.mokata/
+    temp_local/memory`. Deliberately NOT a system temp dir: a split-disk sandbox can back /tmp
+    SQLite while this repo-dir location raises `disk I/O error`, so the probe MUST live here to
+    reflect the backend's real disk. The dir names are pulled from mokata's own constants so this
+    can't drift from where the store actually writes."""
+    from mokata import MOKATA_DIR, TEMP_LOCAL_DIRNAME
+    from mokata.memory.store import MEMORY_DIRNAME
+    return os.path.join(os.getcwd(), MOKATA_DIR, TEMP_LOCAL_DIRNAME, MEMORY_DIRNAME)
+
+
+def _probe_sqlite_disk():
+    """Create + write a throwaway file-backed SQLite DB AT THE SAME on-disk location `SQLiteBackend`
+    uses (`_sqlite_probe_dir()` — the repo `.mokata` dir, not /tmp). Return False ONLY when SQLite
+    reports the broken-disk artifact there; True otherwise (default to RUNNING the test — an
+    unrelated failure must surface as a real failure, not a silent skip)."""
+    base = _sqlite_probe_dir()
+    try:
+        os.makedirs(base, exist_ok=True)
+    except OSError:
+        # Couldn't even stage the probe dir on this disk. Degrade clean: treat it as its own
+        # decision (not a crash) and DEFAULT TO RUN — a dir-create failure is not the precise
+        # broken-disk SQLite marker, so it must never masquerade as a clean skip.
+        return True
+    # A per-process unique name so a concurrent real backend under the same dir can't collide.
+    probe_path = os.path.join(base, ".sqlite_disk_probe.%d.db" % os.getpid())
+    try:
+        conn = sqlite3.connect(probe_path)
+        try:
+            conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
+            conn.execute("INSERT INTO t (v) VALUES (?)", ("x",))
+            conn.commit()
+            conn.execute("SELECT v FROM t").fetchall()
+        finally:
+            conn.close()
+        return True
+    except sqlite3.OperationalError as exc:
+        if any(m in str(exc).lower() for m in _DISK_BROKEN_MARKERS):
+            return False        # the sandbox broken-disk case → skip cleanly, never error
+        return True             # an unrelated OperationalError → let the real test run
+    except Exception:           # pragma: no cover - any other error is a real test concern
+        return True
+    finally:
+        # Leave no artifact behind. A committed DB in rollback-journal mode has no side files once
+        # the connection is closed; removing the main file is enough (ignore if never created).
+        try:
+            os.remove(probe_path)
+        except OSError:
+            pass
+
+
+def sqlite_disk_ok():
+    """True when this filesystem can back a real on-disk SQLite DB (CI + normal dev); False ONLY
+    on the sandbox's broken-disk artifact. Cached after the first probe."""
+    global _SQLITE_DISK_OK
+    if _SQLITE_DISK_OK is None:
+        _SQLITE_DISK_OK = _probe_sqlite_disk()
+    return _SQLITE_DISK_OK
 
 
 # A tiny, deterministic Python repo for exercising the knowledge-layer queries.
