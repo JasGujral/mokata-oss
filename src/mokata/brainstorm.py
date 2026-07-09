@@ -273,6 +273,10 @@ class Handoff:
     # design-fit the approach was approved under). None only on a legacy pre-S11a hand-off.
     impact: Optional[ApproachImpact] = None
     design_fit: Optional[DesignFitVerdict] = None
+    # DK.S0 — the domains-in-play, classified from the chosen approach's graph surface (blast
+    # radius + roles), carried into the hand-off so they become a first-class SPEC CONSTRAINT
+    # (persisted into emitted_spec.json). Empty on a legacy pre-DK.S0 hand-off.
+    domains: List[str] = field(default_factory=list)
     schema_version: int = 1
 
     def to_dict(self) -> Dict[str, Any]:
@@ -287,6 +291,7 @@ class Handoff:
             "approved_at": self.approved_at,
             "impact": self.impact.to_dict() if self.impact else None,
             "design_fit": self.design_fit.to_dict() if self.design_fit else None,
+            "domains": list(self.domains),
         }
 
     @classmethod
@@ -303,6 +308,7 @@ class Handoff:
             approved_at=d.get("approved_at", ""),
             impact=ApproachImpact.from_dict(imp) if imp else None,
             design_fit=DesignFitVerdict.from_dict(fit) if fit else None,
+            domains=list(d.get("domains", [])),
             schema_version=int(d.get("schema_version", 1)),
         )
 
@@ -429,6 +435,25 @@ class BrainstormSession:
         """Record a pre-computed Lens-1 impact for one approach (when the caller computed it)."""
         self.impacts[approach_name] = impact
         self._log(f"impact recorded: {approach_name}")
+
+    def assess_doc_freshness(self, approach_name: str, *, root: Any = ".",
+                             facts: Any = None, resolve: Any = None) -> Any:
+        """DK.S5 — Lens 1 doc-freshness: for the docs the approach's blast radius touches (its
+        impacted files + touched symbols), audit each via docsync and mark fresh / stale /
+        new-doc-needed. Advisory + human-gated (docsync's reconcile is previewed + approved) — a
+        stale doc left unaddressed carries into the spec as an open item. Returns the per-doc list;
+        empty when the approach has no computed impact. Degrade-clean: docsync audits lexically when
+        no code graph is wired."""
+        from .docsync import assess_doc_freshness as _assess
+        impact = self.impacts.get(approach_name)
+        if impact is None:
+            return []
+        touched_files = list(impact.impacted_files) + list(impact.targets)
+        results = _assess(touched_files, root=root, touched_symbols=impact.impacted_symbols,
+                          facts=facts, resolve=resolve)
+        self._log(f"doc freshness: {approach_name} → "
+                  f"{sum(1 for r in results if r.stale)} stale of {len(results)}")
+        return results
 
     def record_design_fit(self, approach_name: str, verdict: "DesignFitVerdict") -> None:
         """LENS 2 — record the model's architectural-fit VERDICT for one approach. It must be VALID
@@ -801,6 +826,12 @@ candidate — correctness is designed IN at brainstorm, not reviewed in after co
    grep floor still scores when no graph is wired) UNIONED with the team decisions it disturbs
    (memory items whose `about_code` names those symbols → affected team decisions). Show
    callers/tests/docs/configs touched + affected decisions per approach, and COMPARE them.
+   DOC-FRESHNESS (part of Lens 1): for the docs that blast radius touches, run docsync's audit
+   (`mokata docsync <doc>`, or `mokata docsync` to sweep + drift-detect) — per approach, list the
+   docs the change touches or invalidates and mark each fresh / stale / new-doc-needed. HIGHLIGHT the
+   stale ones and ASK the user to update them; a stale doc left unaddressed is written into the plan
+   as an OPEN item and carries into the spec (advisory + human-gated — docsync's reconcile is
+   previewed and approved, never silent).
 2. Lens 2 — ARCHITECTURAL FIT (design-fit review): assess each approach's module boundaries,
    layering, import direction, and ownership — grounded in the knowledge layer + memory — and give
    a NAMED verdict (fits / risk / misfit) naming the boundary/layering/ownership risks. A
@@ -810,6 +841,29 @@ its design-fit verdict are on the table. No lenses, no approval. Record both in 
 they become spec constraints; the develop/CI deviation guard stays only as the backstop. If the
 change looks high-impact (wide blast radius, or a design MISFIT), OFFER — do not run — the deep
 whole-codebase architectural review (user-invoked). mokata offers it; the user decides.
+
+## Design pre-mortem (resolve review-class issues IN THE PLAN)
+Once an approach is chosen and its blast radius + design-fit are weighed, run a short DESIGN
+PRE-MORTEM before the plan is approved: anticipate the issue-classes review would otherwise raise
+AFTER the code — missing edge cases, error handling, integration points, test/AC coverage gaps,
+scope creep, blast-radius crossings — and resolve each HERE, in the plan. For EACH risk you
+SURFACE, RECORD it in the plan as a triple: the risk + the acceptance criterion (AC) that covers
+it + the check it gets. The emitted spec then carries an AC + a test for each, so the edge-case is
+caught before code, not at review; a risk you can't resolve now is written into the plan as an
+OPEN item, never dropped silently.
+
+## Domains in play (classify from the surface, persist into the spec)
+Once the approach is chosen and its blast radius is on the table, classify the DOMAINS it
+touches — DERIVED from the graph surface it reaches, never guessed from the words of the ask.
+Read the symbols/files in its blast radius and name their structural role: routes/handlers → API,
+auth/input/secrets/external calls → security, components/views → frontend + a11y, a migration or a
+removal → deprecation, a hot path or a perf AC → performance (and so on). The domain set is what
+the SURFACE structurally touches, not what the topic string says — an approach whose ask never
+says "security" but whose blast radius crosses an auth boundary IS a security change. PERSIST that
+set into the spec as a FIRST-CLASS constraint, beside the ACs and the approach, so it is
+human-approved and legible — the user approves the domains along with the plan. Downstream, develop
+engages EXACTLY these domains and review activates EXACTLY their axes; a domain reached only later
+re-enters here as a spec amendment, so a domain is never silently applied and never silently missed.
 
 ## Stay anchored (so a long brainstorm never drifts off-thread)
 A long exploration loses the plot if the original ask scrolls out of view. Hold it down:

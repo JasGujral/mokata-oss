@@ -21,6 +21,7 @@ import _support  # noqa: F401  (puts src/ on the path)
 from mokata.agent_skills import (
     CURATED_SKILLS,
     SKILL_MARKER,
+    curated_catalog,
     generate_skill_files,
     parse_frontmatter,
     skill_markdown,
@@ -69,10 +70,12 @@ class TestShippedSkillFiles(unittest.TestCase):
             self.assertTrue(os.path.isfile(path), f"missing shipped skill {name}/SKILL.md")
 
     def test_no_stray_skill_dirs(self):
-        # every dir under skills/ maps to a curated skill (no orphans left behind)
+        # every dir under skills/ maps to a curated pipeline skill OR a shipped domain skill
+        # (DK.S1+ hand-authored) — no orphans left behind.
+        from mokata.agent_skills import installed_skill_names
         present = {d for d in os.listdir(_SKILLS_DIR)
                    if os.path.isdir(os.path.join(_SKILLS_DIR, d))}
-        self.assertEqual(present, set(CURATED_SKILLS))
+        self.assertEqual(present, set(installed_skill_names()))
 
     def test_each_skill_has_valid_frontmatter(self):
         for name in CURATED_SKILLS:
@@ -111,11 +114,14 @@ class TestDriftGuard(unittest.TestCase):
 
     def test_body_is_the_command_protocol_verbatim(self):
         # the skill body must contain the command template's protocol body (no logic copy —
-        # it IS the template body), so the two surfaces run the same protocol
+        # it IS the template body), so the two surfaces run the same protocol. SK.S2: the body
+        # carries the single-source grounding MARKER, which render expands to the canonical
+        # block — so compare the EXPANDED body (the marker is the only rendered-time transform).
+        from mokata.skills import expand_grounding
         for name in ("brainstorm", "spec"):
             with self.subTest(skill=name):
                 tmpl = _read(os.path.join(_TEMPLATES, f"{name}.md"))
-                body = tmpl.split("---", 2)[2].lstrip("\n")
+                body = expand_grounding(tmpl.split("---", 2)[2].lstrip("\n").rstrip())
                 self.assertIn(body, _read(os.path.join(_SKILLS_DIR, name, "SKILL.md")))
 
 
@@ -341,10 +347,55 @@ class TestSkillsSyncPrune(unittest.TestCase):
             self.assertTrue((sk / keep_name / "SKILL.md").is_file())
 
     def test_shipped_src_skills_have_no_orphans(self):
-        # After regen, the shipped tree matches CURATED exactly — no marker-bearing orphan ships.
+        # After regen, the shipped tree matches the KEEP-set (curated pipeline + shipped domain
+        # skills) exactly — no marker-bearing orphan ships. Domain skills are marker-bearing but
+        # curated-excluded, so they must be in the keep-set (installed_skill_names), not orphans.
         from pathlib import Path
-        from mokata.agent_skills import find_orphan_skills
-        self.assertEqual(find_orphan_skills(Path(_SKILLS_DIR), CURATED_SKILLS), [])
+        from mokata.agent_skills import find_orphan_skills, installed_skill_names
+        self.assertEqual(find_orphan_skills(Path(_SKILLS_DIR), installed_skill_names()), [])
+
+
+class TestCuratedCatalog(unittest.TestCase):
+    """CAT.S1 — `mokata skills` must present the COMPLETE curated catalog (all 16), not just the
+    runnable pipeline skills. `curated_catalog()` is the single source: the set + count follow
+    CURATED_SKILLS, and each non-runnable skill's summary is single-sourced from its command
+    template frontmatter `description` (so it can't drift from the shipped SKILL.md)."""
+
+    def _catalog(self):
+        from pathlib import Path
+        return curated_catalog(Path(_TEMPLATES))
+
+    def test_count_and_set_track_curated_skills(self):
+        entries = self._catalog()
+        # count is single-sourced to CURATED_SKILLS — never a hardcoded number
+        self.assertEqual(len(entries), len(CURATED_SKILLS))
+        self.assertEqual([e.name for e in entries], list(CURATED_SKILLS))
+
+    def test_previously_omitted_skills_are_present(self):
+        by_name = {e.name: e for e in self._catalog()}
+        for name in ("govern", "session", "playbook", "mcp-repair", "docsync"):
+            self.assertIn(name, by_name, f"{name} must appear in the curated catalog")
+
+    def test_non_runnable_summary_single_sourced_from_template(self):
+        # the 5 non-_SKILLS curated skills carry their command-template `description`, not a copy
+        by_name = {e.name: e for e in self._catalog()}
+        for name in ("govern", "session", "playbook", "mcp-repair", "docsync"):
+            entry = by_name[name]
+            self.assertFalse(entry.runnable, f"{name} is not runnable via `mokata run`")
+            fm = parse_frontmatter(_read(os.path.join(_TEMPLATES, f"{name}.md")))
+            self.assertEqual(entry.summary, fm["description"])
+            # invocation points at its own command / auto-fire, not `mokata run`
+            self.assertNotIn("mokata run", entry.invocation)
+            self.assertIn(name, entry.invocation)
+
+    def test_runnable_pipeline_summary_from_skills_registry(self):
+        from mokata.skills import SKILLS
+        by_name = {e.name: e for e in self._catalog()}
+        for name in ("spec", "test", "develop", "review", "brainstorm"):
+            entry = by_name[name]
+            self.assertTrue(entry.runnable)
+            self.assertEqual(entry.summary, SKILLS[name].summary)
+            self.assertIn("mokata run", entry.invocation)
 
 
 if __name__ == "__main__":

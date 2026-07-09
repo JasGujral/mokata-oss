@@ -1,59 +1,53 @@
 
-mokata **0.0.11 — "Team mode."** Upgrade with `pip install -U mokata`. Additive; no breaking
-changes; **local stays the zero-config default**. Requires **Python ≥ 3.10**.
+mokata **0.0.12 — "Legible skills + native domain knowledge."** Upgrade with `pip install -U mokata`.
+Additive; **no breaking changes**; local stays the zero-config default; **no schema change**. Requires
+**Python ≥ 3.10**.
 
-A shared, governed team brain — on your team's **own** Postgres, with nothing ever phoned home.
+This release makes mokata's pipeline visible and continuous, adds ten clean-room domain-knowledge
+skills that attach to the phase where they apply, and ships a new skill that keeps your docs true to
+your code.
 
-**Run mode, first-class and visible.**
+**Skills are now legible.**
 
-- **`mokata mode` / `mokata mode set local|team`:** the run mode is now an explicit property of every
-  session. `mokata mode` shows it plus a **team-readiness preflight**; `set local` is a zero-config
-  no-op that writes nothing on an already-local repo; `set team` runs a **fail-closed** preflight — a
-  usable run identity, `$MOKATA_PG_DSN` present, the DB reachable within a ≤500ms probe, and a
-  compatible schema — and only then activates (never half-activated). The mode is surfaced in the
-  status badge, the SessionStart briefing, and `mokata doctor`.
+- Every skill carries a `## Contract` — what it CAN do, what it MUST NOT, and which **real gate** backs
+  each boundary — plus an active-skill banner, single-sourced so the statusline, in-chat surface, and
+  `mokata progress` always agree. Each skill also gains an anti-rationalization table and a
+  verification checkbox, and skills **auto-engage** when the moment fits. `mokata skills` now lists
+  the **complete** curated catalog — runnable pipeline skills plus the standalone/auto-firing ones
+  (`docsync`, `govern`, `session`, `playbook`, `mcp-repair`), with detail and search.
 
-**Team setup on your own backend.**
+**Ten native domain-knowledge skills.**
 
-- **`mokata team init`** is first-time setup and the **sole owner of DDL:** it guides a backend pick
-  (`--backend managed|compose|local`), fails closed with a named fix when `$MOKATA_PG_DSN` is unset,
-  provisions the shared tables idempotently on **vanilla Postgres ≥14 (no extensions)**, pins the
-  team project identity, and runs a live CONNECTED test.
-- **`mokata team join <source>`** is the new-member onboarding path (a joiner never runs DDL): it
-  chains **adopt → connect → activate → vault pull → onboard → consent → doctor**, each a confirmable
-  step, inheriting the pinned team project id. The steps ship individually too: `status`, `adopt`,
-  `connect --dsn-env <ENV>`, `disconnect`. The DSN **value is never stored** (only the env-var name),
-  and **mokata hosts nothing**.
+- API design, security & hardening, performance, frontend/accessibility, browser testing, CI/CD, git
+  workflow, deprecation & migration, documentation/ADRs, and shipping & launch. Each **attaches to the
+  pipeline phase where it applies and feeds the gate already running there** — security items are
+  hard-enforced rules, an API contract change walks its blast radius, a deprecation records to the
+  ledger. Authored **clean-room from primary sources** (OWASP, RFCs, web.dev/Core Web Vitals,
+  MDN/WCAG, Google engineering practices) with cited URLs.
 
-**Shared memory over Postgres.**
+**`mokata docsync` — keep docs true to the code.**
 
-- A team-shared store with a **scope hierarchy** (personal → project → team → global), **typed items**
-  (rule / guardrail / best-practice / context / reference / decision) each carrying an **enforcement
-  binding** (advisory / soft / hard), **in-run hard-rule enforcement**, and shared **formulas**.
-- **`mokata memory promote`** moves a rule's enforcement binding (human-gated); **`mokata memory
-  review`** runs the proposal workflow (Draft → In-Review → Approved, proposer ≠ approver).
+- Point it at a doc (`mokata docsync <path>`) or let it find the relevant docs; it **audits** every
+  claim against the code (commands, config keys, skill counts, install path, versions) and highlights
+  drift with severity, then offers **human-gated** fixes — preview the diff, write only on approval.
+  It also **auto-fires** when a change touches a documented symbol.
 
-**Journal-first team writes, conflict-safe.**
+**Develop shifts problems left.**
 
-- Every durable team write lands in a **crash-safe local journal first**, so **offline never blocks**
-  and nothing is lost. **`mokata sync`** flushes + reconciles: each write **inherits the ledger id of
-  its original human approval** (never a governance bypass) and is re-secret-scanned, and each memory
-  write is **compare-and-set** on a revision column so a concurrent-writer conflict **surfaces through
-  the human gate** — never a silent last-writer-wins.
+- On a non-trivial ambiguity, develop now **stops, asks one question, and amends the spec
+  (human-gated)** before continuing — instead of assuming and surfacing the issue at review.
+  Brainstorm gains a design pre-mortem and a doc-freshness check.
 
-**Governance & release safety.**
+**Fixes.**
 
-- **Scoped-consent access** to the shared brain; **`mokata audit --consent show|grant|revoke`**
-  manages a revocable standing consent for the batched audit-publish (per-publish secret-scan still
-  hard-blocks).
-- **`mokata branch-protection-check`** verifies the public default branch is protected — no
-  force-push, no deletion, required checks — **fail-closed** (exit 1 if unprotected or unverifiable).
-- A **team ops kit:** `docker-compose.team.yml` + `.env.example` for self-hosting the shared Postgres,
-  and an `llms.txt` at the docs root.
+- Hooks resolve reliably under a GUI-launched minimal PATH (the SessionStart briefing + secret-guard
+  no longer silently skip). Team-mode memory resolves conflicting scoped items to a single winner. A
+  team-Postgres read-through cache keeps retrieval and gates from blocking on the network.
 
-**Also.**
+**Hardening & docs.**
 
-- The in-Claude-Code MCP repair skill is renamed to **`/mokata:mcp-repair`**.
-- `mokata setup claude` surfaces an explicit **permission-grant** step when wiring the MCP server.
+- CI dependency installs are **hash-pinned** (`--require-hashes`) for a stronger supply-chain posture,
+  and a new developer **"How it works"** documentation section explains the pipeline, gates, knowledge
+  graph, memory, governance, and the domain-skills layer.
 
 Local-first, no telemetry, Apache-2.0.

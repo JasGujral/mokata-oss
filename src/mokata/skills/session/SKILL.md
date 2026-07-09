@@ -1,6 +1,7 @@
 ---
 name: session
 description: mokata · Portable / shareable tagged sessions — package this session and resume it on another machine or hand it to a teammate. Human-gated.
+when_to_use: Engage when the user wants to package this session to continue on another machine, when they ask to share or hand off their session state to a teammate, or when resuming work from a session bundle pulled from another machine. Do NOT engage to push or commit anywhere without explicit approval, or to overwrite another machine's state without confirming the content hash.
 ---
 
 > **mokata Agent Skill.** This is mokata's `session` capability, surfaced so Claude can engage it
@@ -8,6 +9,8 @@ description: mokata · Portable / shareable tagged sessions — package this ses
 > from one shared source — follow that protocol directly here; do not hand off to a parallel
 > flow. mokata's non-negotiables still hold: durable writes are **human-gated** (preview, then
 > explicit approval), and this capability's own gate is never silently skipped.
+
+⛭ mokata session active — gate: bundles are secret-scanned; push/pull is human-gated on every transport
 
 # mokata · session (carry your work to another machine — or a teammate)
 
@@ -105,3 +108,37 @@ bundle's resume point. After a push, remind them where the bundle lives for the 
 `local` → `.mokata/session-bundles/<tag>.json`; `vault` → `.mokata/vault/sessions/<tag>.json`
 (commit/sync it); `postgres` → the shared DB (the teammate runs `session pull <tag> --from
 postgres`).
+
+## Rationalizations — stop if you catch yourself thinking any of these
+
+| Excuse | Reality |
+|---|---|
+| "I'll push the bundle to sync quickly." | Every transport — push/pull/commit — is human-gated on each hop. |
+| "It's just my own state — secrets are fine in it." | Bundles are secret-scanned; a secret hard-blocks egress and human approval can't override it. |
+| "The other machine's state is stale — overwrite it." | Surface the content hash and CONFIRM before overwriting another machine. |
+
+## Verification — confirm each before you claim this skill is done
+
+Evidence, not "seems right" — check every box or say which is unmet and why:
+
+- [ ] the bundle is path-free and content-hashed
+- [ ] the secret scan passed (no secret in the bundle)
+- [ ] each push/pull was human-gated
+- [ ] an overwrite was confirmed against the content hash
+
+## Contract
+
+**CAN**
+- package session state into a path-free, hashed bundle
+- push/pull via local/vault/postgres transports (human-gated), and resume
+
+**MUST NOT**
+- push or commit anywhere without approval (gate: write-gate)
+- include a secret in a bundle (gate: secret-guard)
+- overwrite another machine's state unconfirmed (advisory)
+
+**DEPENDS ON**
+- .mokata/temp_local/ state **(hard)** (advisory)
+- transport availability (postgres DSN) — degrade to local with a note (advisory)
+
+> Grounding: `(gate: …)` boundaries are enforced by that gate in code; `(advisory)` ones are protocol discipline this skill follows, not a hard block.

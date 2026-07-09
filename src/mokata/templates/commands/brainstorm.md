@@ -57,7 +57,12 @@ in the SAME pre-spec pass:
    UNION that with the team decisions it disturbs (memory items whose `about_code` names those
    symbols → "affected team decisions"). Show, per approach, how much it moves —
    callers/tests/docs/configs touched — and which prior team decisions it affects, and COMPARE
-   the approaches on it.
+   the approaches on it. **DOC-FRESHNESS (part of Lens 1):** for the docs that blast radius
+   touches, run docsync's audit (`mokata docsync <doc>`, or `mokata docsync` to sweep +
+   drift-detect) — per approach, list the docs the change touches or invalidates and mark each
+   **fresh / stale / new-doc-needed**. HIGHLIGHT the stale ones and **ASK the user to update
+   them**; a stale doc left unaddressed is written into the plan as an OPEN item and carries into
+   the spec (advisory + human-gated — docsync's reconcile is previewed and approved, never silent).
 2. **Lens 2 — architectural fit (design-fit review).** For each approach, assess how it sits in
    the architecture — module boundaries, layering, import direction, ownership — grounded in the
    knowledge layer (package/module structure, import direction) and memory (who owns what, prior
@@ -74,6 +79,42 @@ the backstop.
 If the change looks high-impact (a wide blast radius, or a design MISFIT), **OFFER — do not run —**
 the deep whole-codebase architectural review (a separate, user-invoked review). mokata offers it;
 the user decides. Never launch it unasked.
+
+## Design pre-mortem (resolve review-class issues IN THE PLAN)
+
+Once an approach is chosen and its blast radius + design-fit are on the table, run a short
+DESIGN PRE-MORTEM before the plan is approved — anticipate the issue-classes a review would
+otherwise raise AFTER the code, and resolve each one HERE, in the plan. Walk the candidate and
+SURFACE its likely traps:
+
+- **missing edge cases** — the empty / boundary / duplicate / out-of-order inputs the happy path skips;
+- **error handling** — what happens on the failure and partial-failure paths, not just success;
+- **integration points** — the callers, contracts, and external edges the change meets;
+- **test / AC coverage gaps** — behaviour the acceptance criteria don't yet pin down;
+- **scope creep** — where the change tends to sprawl past the approved intent;
+- **blast-radius crossings** — the saved decisions / shared symbols this disturbs (Lens 1).
+
+For EACH risk you surface, RECORD it in the plan as a triple: **the risk + the
+acceptance criterion (AC) that will cover it + the check it gets.** So the approved plan already
+encodes the known risk areas and their ACs, and the emitted spec carries an AC + a test for each — the
+edge-case is caught HERE, before code, not discovered at review. A risk you cannot resolve now is
+written into the plan as an OPEN item, never dropped silently. This is the shift-left move:
+brainstorm designs correctness in, so review is the thin final gate — not where problems are first
+found.
+
+## Domains in play (classify from the surface, persist into the spec)
+
+Once the approach is chosen and its blast radius is on the table, classify the DOMAINS it
+touches — DERIVED from the graph surface it reaches, never guessed from the words of the ask.
+Read the symbols/files in its blast radius and name their structural role: routes/handlers → API,
+auth/input/secrets/external calls → security, components/views → frontend + a11y, a migration or a
+removal → deprecation, a hot path or a perf AC → performance (and so on). The domain set is what
+the SURFACE structurally touches, not what the topic string says — an approach whose ask never
+says "security" but whose blast radius crosses an auth boundary IS a security change. PERSIST that
+set into the spec as a FIRST-CLASS constraint, beside the ACs and the approach, so it is
+human-approved and legible — the user approves the domains along with the plan. Downstream, develop
+engages EXACTLY these domains and review activates EXACTLY their axes; a domain reached only later
+re-enters here as a spec amendment, so a domain is never silently applied and never silently missed.
 
 ## Stay anchored (so a long brainstorm never drifts off-thread)
 
@@ -124,21 +165,7 @@ through the config surface and downstream phases refuse to proceed until it exis
 standalone with `mokata brainstorm`; check whether an approach has been approved with
 `mokata brainstorm --status`.
 
-## Grounding discipline
-
-Decide from the code, not from assumption. Before you assert anything about types,
-signatures, behaviour, control flow, conventions, dependencies, error handling, or file
-layout, VERIFY it against the actual code: read the relevant source, run structural queries
-(`mokata query callers|callees|implementers|imports|blast_radius <symbol>`), and check memory
-for prior decisions and conventions. Consult the project brain: honour the captured rules and
-guardrails, and pull in only the context, references, and best-practices RELEVANT to the
-symbols/topic in play (just-in-time — never the whole corpus). The graph + memory are the source of truth; where
-they're absent, read or grep the code and state what you read. If a fact CANNOT be determined
-from the code, state the assumption explicitly and ASK — never silently assume. Cite what you
-verified. And continuously: if at any point you find a decision rested on an assumption, or
-the code contradicts something you assumed, STOP — surface it (what you assumed vs. what the
-code shows), CONFIRM with the user, and re-plan (route it through the deviation gate and amend
-the spec/ACs so they stay grounded and provable). There is no "assumed and continued" path.
+<!-- mokata:grounding -->
 
 ## Progress
 

@@ -49,6 +49,9 @@ CURATED_SKILLS: tuple = (
     "govern",
     "session",
     "playbook",
+    # docs↔code reconciliation (DK.S5) — audits/reconciles docs against the code, auto-fires on
+    # drift, and backs brainstorm's Lens 1 doc-freshness check + the pre-release doc gate.
+    "docsync",
     # harness repair (Stage 3b.4) — auto-engages when the MCP server/tools aren't connecting
     # (named `mcp-repair`, not `mcp`, to avoid colliding with Claude Code's built-in /mcp and
     # the mcp-builder skill — its repair identity is distinctive).
@@ -140,9 +143,25 @@ def load_skill_source(name: str, templates_dir: Path) -> SkillSource:
 
 def render_skill_md(src: SkillSource) -> str:
     """Render a SKILL.md from a skill source. Frontmatter carries the model-invocation trigger
-    (`description` [+ `when_to_use`]); the body is the fixed banner + the command's protocol
-    body verbatim. Deterministic — the drift guard depends on it."""
+    (`description` [+ `when_to_use`]); the body is the fixed banner + the SK.S1 activation line
+    + the command's protocol body verbatim + the SK.S1 `## Contract` block. Deterministic — the
+    drift guard depends on it.
+
+    SK.S1 single-source: the `⛭ … active — gate:` line and the Contract are NOT written here per
+    skill — they are pulled from `progress.active_skill_line` and `skill_contracts.render_contract_md`
+    (one source each), so all 15 SKILL.md render from the same place and can't drift into 15 copies.
+    """
+    from .progress import active_skill_line
+    from .skill_contracts import render_contract_md
+    from .skill_anatomy import render_anatomy_md
+    from .skills import expand_grounding
     when_line = f"when_to_use: {src.when_to_use}\n" if src.when_to_use else ""
+    activation = active_skill_line(src.name)                    # single source (progress.py)
+    # SK.S2 single-source: expand the grounding MARKER the template carries into the one
+    # canonical block (skills.grounding_block) — no template holds a literal copy that can drift.
+    body = expand_grounding(src.body.rstrip())
+    anatomy = render_anatomy_md(src.name)                       # single source (skill_anatomy.py)
+    contract = render_contract_md(src.name)                     # single source (skill_contracts.py)
     return (
         f"---\n"
         f"name: {src.name}\n"
@@ -150,13 +169,54 @@ def render_skill_md(src: SkillSource) -> str:
         f"{when_line}"
         f"---\n\n"
         f"{_SKILL_BANNER.format(name=src.name)}\n\n"
-        f"{src.body}"
+        f"{activation}\n\n"
+        f"{body}\n\n"
+        f"{anatomy}\n\n"
+        f"{contract}\n"
     )
 
 
 def skill_markdown(name: str, templates_dir: Path) -> str:
     """One-shot: render the SKILL.md content for a curated skill name from its template."""
     return render_skill_md(load_skill_source(name, templates_dir))
+
+
+# CAT.S1 — the COMPLETE curated catalog `mokata skills` shows. It is the whole of
+# ``CURATED_SKILLS`` (so the count follows that single source and can't drift), split into two
+# groups the user can tell apart:
+#   * RUNNABLE pipeline skills — those that also live in the `skills._SKILLS` registry, so
+#     `mokata run <name>` / `mokata <name>` drives them; their one-line summary is the registry's
+#     own `summary` (single source).
+#   * STANDALONE / auto-firing skills — the curated capabilities that are NOT in `_SKILLS`
+#     (govern, session, playbook, mcp-repair, docsync): they auto-fire and/or have their own
+#     command, never `mokata run`. Their summary is single-sourced from the command-template
+#     frontmatter `description` (the SAME text the shipped SKILL.md carries), so it can't drift.
+@dataclass(frozen=True)
+class CatalogEntry:
+    name: str
+    summary: str            # one-line — single-sourced (registry OR template frontmatter)
+    runnable: bool          # True → `mokata run <name>`; False → own command / auto-fires
+    invocation: str         # how to invoke it
+
+
+def curated_catalog(templates_dir: Path) -> List[CatalogEntry]:
+    """The complete curated skill catalog — one entry per name in ``CURATED_SKILLS``, in order.
+
+    The set and the count are single-sourced to ``CURATED_SKILLS``: add a name there and the
+    catalog grows automatically. Each summary is single-sourced too — from the ``skills._SKILLS``
+    registry for a runnable pipeline skill, and from the command template's frontmatter
+    ``description`` for a standalone/auto-firing one — so nothing is hand-copied and nothing drifts.
+    """
+    from .skills import SKILLS
+    entries: List[CatalogEntry] = []
+    for name in CURATED_SKILLS:
+        skill = SKILLS.get(name)
+        if skill is not None:
+            entries.append(CatalogEntry(name, skill.summary, True, f"mokata run {name}"))
+        else:
+            src = load_skill_source(name, templates_dir)
+            entries.append(CatalogEntry(name, src.description, False, f"/mokata:{name}"))
+    return entries
 
 
 def generate_skill_files(templates_dir: Path,
@@ -181,6 +241,70 @@ def write_skill_files(skills_dir: Path, files: Dict[str, str]) -> List[Path]:
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_text(content, encoding="utf-8")
         written.append(dst)
+    return written
+
+
+def copy_skill_references(src_skills_dir: Path, dst_skills_dir: Path,
+                          names: Optional[tuple] = None) -> List[Path]:
+    """Copy each curated skill's progressive-disclosure ``references/`` tree from the shipped
+    package skills dir to a setup target, so the pip/setup install path delivers the same JIT
+    detail files the plugin install ships. Skills without a ``references/`` dir are skipped.
+    Returns the written destination paths. Degrade-clean: a missing source is simply skipped."""
+    import shutil
+    chosen = names if names is not None else CURATED_SKILLS
+    written: List[Path] = []
+    src_skills_dir = Path(src_skills_dir)
+    dst_skills_dir = Path(dst_skills_dir)
+    for name in chosen:
+        src_refs = src_skills_dir / name / "references"
+        if not src_refs.is_dir():
+            continue
+        for src in sorted(src_refs.rglob("*")):
+            if not src.is_file():
+                continue
+            rel = src.relative_to(src_skills_dir)
+            dst = dst_skills_dir / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dst)
+            written.append(dst)
+    return written
+
+
+def installed_skill_names() -> tuple:
+    """Every mokata-authored skill dir a setup/regen KEEPS on disk: the curated pipeline skills
+    (template-rendered) PLUS the shipped domain skills (hand-authored, DK.S1+). The prune keep-set
+    and orphan detection use THIS so a domain skill (marker-bearing, but not in ``CURATED_SKILLS``)
+    is never mistaken for an orphan and deleted. Template GENERATION still uses ``CURATED_SKILLS``
+    only — domain skills are copied, not rendered."""
+    from .domains import shipped_domain_skills
+    return tuple(CURATED_SKILLS) + shipped_domain_skills()
+
+
+def install_domain_skills(src_skills_dir: Path, dst_skills_dir: Path,
+                          names: Optional[tuple] = None) -> List[Path]:
+    """Deliver each shipped DOMAIN skill's static ``SKILL.md`` + progressive-disclosure
+    ``references/`` tree from the package skills dir to a setup target. Domain skills are
+    hand-authored clean-room content (not rendered from a command template), so they are COPIED
+    verbatim — the twin of :func:`generate_skill_files`+:func:`write_skill_files` for the pipeline
+    skills. Degrade-clean: a missing source dir is skipped. Returns the written destination paths."""
+    import shutil
+    from .domains import shipped_domain_skills
+    chosen = names if names is not None else shipped_domain_skills()
+    src_skills_dir = Path(src_skills_dir)
+    dst_skills_dir = Path(dst_skills_dir)
+    written: List[Path] = []
+    for name in chosen:
+        src_dir = src_skills_dir / name
+        if not (src_dir / "SKILL.md").is_file():
+            continue
+        for src in sorted(src_dir.rglob("*")):
+            if not src.is_file():
+                continue
+            rel = src.relative_to(src_skills_dir)
+            dst = dst_skills_dir / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dst)
+            written.append(dst)
     return written
 
 
@@ -215,11 +339,18 @@ def prune_orphan_skills(skills_dir: Optional[Path], keep) -> List[Path]:
     Cleans the now-empty ``<name>/`` dir, and the ``skills/`` dir itself if it ends up empty (so
     ``unsetup``, which passes ``keep=()``, leaves no residue). NEVER removes a non-marker (user)
     skill; an unreadable/undeletable file is skipped (degrade-clean). Returns the removed paths."""
+    import shutil
     removed: List[Path] = []
     for sk in find_orphan_skills(skills_dir, keep):
         try:
             sk.unlink()
             removed.append(sk)
+            # SK.S2 — a pruned mokata skill may carry a progressive-disclosure references/ tree;
+            # remove it too so the marker-bearing skill leaves NO residue (the dir stays empty
+            # only for skills without references). The skill is already confirmed mokata-authored.
+            refs = sk.parent / "references"
+            if refs.is_dir():
+                shutil.rmtree(refs, ignore_errors=True)
             if not any(sk.parent.iterdir()):
                 sk.parent.rmdir()
         except OSError:
@@ -244,7 +375,9 @@ def _regenerate_plugin_skills() -> List[Path]:
     templates_dir = root / "templates" / "commands"
     skills_dir = root / "skills"
     written = write_skill_files(skills_dir, generate_skill_files(templates_dir))
-    prune_orphan_skills(skills_dir, CURATED_SKILLS)     # drop any skill dropped from the curated set
+    # Domain skills (DK.S1+) are hand-authored static content already on disk under skills/; the
+    # regen must KEEP them (never render/prune them away), so the keep-set is curated + domain.
+    prune_orphan_skills(skills_dir, installed_skill_names())
     return written
 
 

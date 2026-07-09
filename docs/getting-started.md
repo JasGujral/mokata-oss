@@ -72,8 +72,8 @@ mokata` always gives you the latest stable. To test a candidate:
 
 ```bash
 pip install --pre mokata            # newest pre-release
-# or pin it exactly:
-pip install mokata==0.0.9rc1
+# or pin an exact candidate (see the PyPI release history for the tag):
+pip install "mokata==<version>rc1"
 ```
 
 Once you've validated it, move back to the stable line with `pip install -U mokata`.

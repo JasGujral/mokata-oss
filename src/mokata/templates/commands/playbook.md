@@ -1,6 +1,7 @@
 ---
 name: playbook
 description: mokata · Run the full v1 story end-to-end on this repo (integration check).
+when_to_use: Engage when the user EXPLICITLY asks to run mokata's full pipeline end-to-end as an integration check, when they want to smoke-test the whole brainstorm-to-ship story on a repo, or when validating a fresh install performs a complete run. Do NOT engage implicitly or on your own initiative — it is a long, multi-write flow — and do NOT run it on a dirty working tree without confirmation.
 argument-hint: "[--parallel] [--fanout] [--dense]"
 allowed-tools: Bash, Read
 ---

@@ -1,6 +1,7 @@
 ---
 name: govern
 description: mokata · See the governed state — rules, memory-by-kind, read/write ratio, pending proposals (read-only).
+when_to_use: Engage when the user wants to see the governed state (active rules, memory by kind, the read/write ratio, or pending self-healing proposals), when they ask what mokata is currently enforcing or remembering, or when reviewing governance before a decision. Do NOT engage to change a rule or memory from the view — it is read-only and edits go through the gated memory path — or to run a pipeline phase.
 argument-hint: ""
 allowed-tools: mcp__mokata__govern, Bash, Read
 ---

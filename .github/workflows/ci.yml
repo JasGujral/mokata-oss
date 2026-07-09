@@ -39,10 +39,13 @@ jobs:
       - name: Install mokata
         run: pip install -e .
       - name: Install workflow-lint test tooling (PyYAML — a test-only dep, not a mokata dep)
-        run: pip install pyyaml
+        # Hash-pinned (SC.S1 / OpenSSF Scorecard Pinned-Dependencies). requirements/ci.txt is
+        # regenerated from requirements/ci.in — see requirements/README.md.
+        run: pip install --require-hashes -r requirements/ci.txt
       - name: Install jsonschema (present matrix leg only)
         if: matrix.jsonschema == 'present'
-        run: pip install "jsonschema>=4.0"
+        # Hash-pinned; jsonschema is pinned to the exact version mokata resolves in uv.lock.
+        run: pip install --require-hashes -r requirements/jsonschema.txt
       - name: Ensure jsonschema absent (absent matrix leg)
         if: matrix.jsonschema == 'absent'
         run: pip uninstall -y jsonschema || true

@@ -1,6 +1,7 @@
 ---
 name: session
 description: mokata · Portable / shareable tagged sessions — package this session and resume it on another machine or hand it to a teammate. Human-gated.
+when_to_use: Engage when the user wants to package this session to continue on another machine, when they ask to share or hand off their session state to a teammate, or when resuming work from a session bundle pulled from another machine. Do NOT engage to push or commit anywhere without explicit approval, or to overwrite another machine's state without confirming the content hash.
 argument-hint: "push <tag> [--to local|vault|postgres] | pull <tag> [--from …] [--into <repo>] | list | name <tag> <new>"
 allowed-tools: Bash, Read
 ---

@@ -38,6 +38,43 @@ class TestSkillsCatalog(unittest.TestCase):
         self.assertIn("RED", out)
         self.assertIn("red-before-green", out)
 
+    def test_skills_lists_all_16_curated_grouped(self):
+        # CAT.S1 — the bare list is the COMPLETE curated catalog, including the 5 that
+        # `list_skills()` (the 12 runnable) omits, grouped runnable vs own-command.
+        from mokata.agent_skills import CURATED_SKILLS
+        rc, out = run_cli(["skills"])
+        self.assertEqual(rc, 0)
+        for name in CURATED_SKILLS:
+            self.assertIn(name, out, f"{name} missing from `mokata skills`")
+        for name in ("govern", "session", "playbook", "mcp-repair", "docsync"):
+            self.assertIn(name, out)
+        # grouping is visible: a runnable group and an auto-firing / own-command group
+        self.assertIn("mokata run", out)
+        self.assertRegex(out, r"(?i)auto-fir|own[- ]command|standalone")
+
+    def test_skills_detail_works_for_non_runnable(self):
+        for name in ("docsync", "govern"):
+            rc, out = run_cli(["skills", name])
+            self.assertEqual(rc, 0, f"`mokata skills {name}` should not error")
+            self.assertIn(name, out)
+            self.assertNotIn("no skill", out.lower())
+
+    def test_skills_search_finds_previously_omitted(self):
+        rc, out = run_cli(["skills", "search", "docsync"])
+        self.assertEqual(rc, 0)
+        self.assertIn("docsync", out)
+
+    def test_run_non_runnable_gives_clear_message_not_crash(self):
+        import contextlib
+        outbuf, errbuf = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(outbuf), contextlib.redirect_stderr(errbuf):
+            rc = main(["run", "govern"])
+        combined = outbuf.getvalue() + errbuf.getvalue()
+        self.assertNotEqual(rc, 0)
+        # a clear message pointing at the real invocation, not an argparse/KeyError crash
+        self.assertIn("govern", combined)
+        self.assertIn("/mokata:govern", combined)
+
 
 class TestRunStandalone(unittest.TestCase):
     def test_run_works_with_no_init_and_no_pipeline_prerequisite(self):

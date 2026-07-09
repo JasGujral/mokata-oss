@@ -85,7 +85,8 @@ class ProtectionVerdict:
             '         "allow_force_pushes": false, "allow_deletions": false }\n'
             "       JSON\n"
             "       (and ensure `gh` is installed + authenticated — GH_TOKEN in CI). "
-            "See docs/build/68-mokata-branch-protection-setup.md."
+            "This restores the OSS-required branch-protection policy (no force-push/deletion "
+            "+ required status checks)."
         )
         return "\n".join(lines)
 

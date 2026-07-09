@@ -211,8 +211,8 @@ through the **universal human-gated WriteGate** (`--yes` approves non-interactiv
 (unmet requirements) writes nothing; on approval it lands at `.mokata/skills/<name>.md`.
 
 ### `mokata run <name>`
-Run a skill standalone (no pipeline prerequisite). `name` is one of the 12 skills. Works
-with no init (grounding degrades cleanly).
+Run a skill standalone (no pipeline prerequisite). `name` is any skill listed by `mokata skills`.
+Works with no init (grounding degrades cleanly).
 
 ### `mokata chain <skill> [<skill> …]`
 Plan a manual chain of skills; each step keeps its own gate (gates are never bypassed).
@@ -541,6 +541,17 @@ package** (the docs live at the repo-root `docs/` tree that mkdocs builds into t
 unknown topic re-lists the topics with a hint and exits non-zero. Colour + a Unicode box on a
 real terminal; plain-ASCII with zero escape codes when piped, redirected, or `NO_COLOR` is set.
 Backs `/mokata:docs`.
+
+### `mokata docsync [path] [--reconcile] [--yes]`
+Keep the docs **true to the code**. With no target it **sweeps** the public doc tree and
+drift-detects; with a `path` it **audits** exactly that doc. The audit is **read-only** — it
+cross-references each claim against the code (skill counts, command names, install/getting-started
+path, version examples, and — with a code graph wired — symbols) and reports every discrepancy with
+a severity (**Blocking / Minor / Info**), highlighting the stale section. A Blocking finding exits
+non-zero so a release doc gate can act on it. With `--reconcile` it proposes the fixes, **previews
+the diff, and writes ONLY on approval** through the universal write gate (`--yes` approves
+non-interactively); a decline writes nothing — there is no silent-write path, and it reconciles the
+**doc** to match the code, never the reverse. Backs `/mokata:docsync`.
 
 ### `mokata doctor [--matrix]`
 Diagnose the manifest/config: missing providers, broken adapters, role conflicts, bad

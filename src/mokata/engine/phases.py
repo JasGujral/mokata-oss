@@ -129,6 +129,11 @@ def _emit(ctx: PhaseContext, store: Any, gate: WriteGate, approve: bool) -> Phas
         return PhaseRecord("emit", False,
                            "emit refused — completeness gate did not pass",
                            gate_id="emit-approval", gate_passed=False)
+    # DK.S0 — carry the brainstorm-classified domain set (on the approved hand-off) into the spec
+    # as a first-class constraint, so it is persisted into emitted_spec.json and the user approves
+    # the domains along with the plan. A spec that already carries domains keeps its own.
+    if not ctx.spec.domains:
+        ctx.spec.domains = list(getattr(ctx.handoff, "domains", []) or [])
     content = json.dumps(ctx.spec.to_dict())
 
     def commit() -> None:

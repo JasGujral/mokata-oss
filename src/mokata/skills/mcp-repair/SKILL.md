@@ -10,6 +10,8 @@ when_to_use: Engage when the user reports mokata's MCP server or tools aren't wo
 > flow. mokata's non-negotiables still hold: durable writes are **human-gated** (preview, then
 > explicit approval), and this capability's own gate is never silently skipped.
 
+⛭ mokata mcp-repair active — gate: re-check and rewrite the MCP registration, then you restart Claude Code
+
 # mokata · mcp (repair the MCP server registration)
 
 The user thinks mokata's MCP tools aren't connecting. Your job: **diagnose → repair → re-verify →
@@ -84,3 +86,34 @@ In one short block, tell the user plainly:
 
 If the re-check still fails after a good `install`, do NOT loop — report the exact failure code and
 the one-line fix the command gave, and let the user act on it.
+
+## Rationalizations — stop if you catch yourself thinking any of these
+
+| Excuse | Reality |
+|---|---|
+| "I'll set it up fresh from scratch." | This is REPAIR, not first-time setup — use /mokata:setup to install. |
+| "I'll rewrite the config file directly." | The registration rewrite is a gated config write, not a silent edit. |
+| "It's fixed — no need to restart." | Name the one step left: the user restarts Claude Code so it re-reads the registration. |
+
+## Verification — confirm each before you claim this skill is done
+
+Evidence, not "seems right" — check every box or say which is unmet and why:
+
+- [ ] an existing mokata install was detected (repair, not install)
+- [ ] the MCP registration was re-checked and rewritten through the gated write
+- [ ] the restart step is named for the user
+- [ ] first-time setup was NOT attempted here
+
+## Contract
+
+**CAN**
+- re-check the MCP server registration, rewrite it, and name the one step left (restart Claude Code)
+
+**MUST NOT**
+- do first-time setup or initial installation (use /mokata:setup) (advisory)
+- rewrite the Claude Code registration outside the gated config write (gate: write-gate)
+
+**DEPENDS ON**
+- an already-installed mokata (this is repair, not install) (advisory)
+
+> Grounding: `(gate: …)` boundaries are enforced by that gate in code; `(advisory)` ones are protocol discipline this skill follows, not a hard block.

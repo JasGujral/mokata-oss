@@ -91,6 +91,9 @@ _HARNESS_NATIVE_NOTE = {
 # companion `MCP_SERVER_NAME` now lives in `harness_paths` and is re-exported at the top.
 MCP_COMMAND = "mokata-mcp"
 
+# The hook console entry point (mirrors hooks/hooks.json + pyproject `mokata-hook`).
+HOOK_COMMAND = "mokata-hook"
+
 # PreToolUse matcher (mirrors hooks/hooks.json).
 HOOK_PRETOOL_MATCHER = "Write|Edit|MultiEdit|Bash"
 
@@ -190,13 +193,14 @@ _HOOK_SUBCOMMAND = {"session_start.py": "session-start", "secret_guard.py": "sec
 
 
 def _hook_command(script: str) -> str:
-    # Stage 53b: wire hooks as the `mokata-hook` console entry point — the SAME mechanism
-    # the bundled `mokata-mcp` server already uses reliably — instead of a bare `python3`
-    # (which a minimal PATH or Windows wouldn't resolve) or the `sh launch.sh` chain.
-    # `mokata setup` runs from the installed package, so `mokata-hook` is a guaranteed
-    # sibling console script; resolve it to an absolute path for zero PATH dependency in
-    # the user's later sessions, falling back to the bare name.
-    exe = shutil.which("mokata-hook") or "mokata-hook"
+    # Stage 53b / B1: wire hooks as the `mokata-hook` console entry point — the SAME mechanism
+    # (and now the SAME resolver, `resolved_console_script`) the bundled `mokata-mcp` server
+    # uses — instead of a bare `python3` (which a minimal PATH or Windows wouldn't resolve) or
+    # the `sh launch.sh` chain. `mokata setup` runs from the installed package, so `mokata-hook`
+    # is a guaranteed sibling console script; B1 resolves it to an ABSOLUTE path (via the
+    # interpreter-sibling fallback `which` alone misses) so hooks fire under the GUI-launched
+    # minimal PATH; the plugin's `launch.sh` stays the documented fallback if nothing resolves.
+    exe = resolved_console_script(HOOK_COMMAND)
     sub = _HOOK_SUBCOMMAND[script]
     cmd = f'"{exe}" {sub}'
     if sub == "session-start":
@@ -207,10 +211,11 @@ def _hook_command(script: str) -> str:
 
 
 def _statusline_command(wrap_command: Optional[str] = None) -> str:
-    # Stage 54b: the Claude Code statusLine command — the SAME PATH-resolved `mokata-hook`
-    # console entry point the hooks use. With `wrap_command` set, mokata COMPOSES over a
-    # user's existing statusLine (runs theirs, then appends mokata's) instead of clobbering.
-    exe = shutil.which("mokata-hook") or "mokata-hook"
+    # Stage 54b / B1: the Claude Code statusLine command — the SAME absolute-path-resolved
+    # `mokata-hook` console entry point the hooks use (shared `resolved_console_script`, so it
+    # also survives the GUI-launched minimal PATH). With `wrap_command` set, mokata COMPOSES
+    # over a user's existing statusLine (runs theirs, then appends mokata's) instead of clobbering.
+    exe = resolved_console_script(HOOK_COMMAND)
     cmd = f'"{exe}" statusline'
     if wrap_command:
         cmd += f" --wrap {shlex.quote(wrap_command)}"
@@ -284,16 +289,22 @@ def plan_setup(
     # delivers the current, non-stale set. (If the mokata plugin is ALSO installed, Claude Code may
     # list a skill twice — `mokata:<name>` + `<name>` — which is accepted: reliably current beats
     # deduped-but-stale, and plugin detection was never dependable.)
-    from .agent_skills import CURATED_SKILLS, find_orphan_skills
+    from .agent_skills import CURATED_SKILLS, find_orphan_skills, installed_skill_names
+    # The template-rendered pipeline skills are the set setup GENERATES (skill_names); the
+    # hand-authored domain skills (DK.S1+) are COPIED alongside them at apply-time. The keep-set
+    # for orphan detection/prune is BOTH (installed_skill_names) so a domain skill is delivered and
+    # never pruned as an orphan; template GENERATION stays curated-only (domain skills have no
+    # command template to render from).
     skill_names = list(CURATED_SKILLS) if targets.skills_dir is not None else []
+    keep_names = list(installed_skill_names()) if targets.skills_dir is not None else []
 
     # Stage 5 — SYNC: after (re)writing the current set, setup PRUNES any mokata-authored skill
-    # DROPPED from it, so `.claude/skills/` matches the curated set exactly and users stop seeing
+    # DROPPED from it, so `.claude/skills/` matches the current set exactly and users stop seeing
     # old/removed skills after an update. Compute the orphans now (read-only) so the human-gated
     # plan can show the removal BEFORE approval — pruning is a durable delete. A user's own
-    # (non-marker) skill is never an orphan.
+    # (non-marker) skill is never an orphan; a shipped domain skill is in the keep-set, so kept.
     skill_orphans = [p.parent.name for p in
-                     find_orphan_skills(targets.skills_dir, skill_names)]
+                     find_orphan_skills(targets.skills_dir, keep_names)]
 
     return SetupPlan(
         harness=harness,
@@ -447,22 +458,32 @@ def _write_or_remove_json(path: Path, data: Dict) -> None:
         path.unlink(missing_ok=True)
 
 
-def resolved_mcp_command() -> str:
-    """The `mokata-mcp` command an installed registration should launch — resolved to an
-    ABSOLUTE path so auto-start survives the GUI-launched PATH (the classic silent killer).
-    Resolution order: (1) `shutil.which` on the current PATH; (2) a console-script sibling of
-    the running interpreter (`<sys.executable dir>/mokata-mcp[.exe]`) — this covers a venv/
-    install whose bin dir isn't on PATH, which is precisely the silent-killer case `which`
-    can't see; (3) the bare name as a last resort (e.g. `-e` source runs). Mirrors how the
-    hooks resolve `mokata-hook`."""
-    found = shutil.which(MCP_COMMAND)
+def resolved_console_script(name: str) -> str:
+    """Resolve a mokata console entry point (`mokata-mcp`, `mokata-hook`) to an ABSOLUTE path
+    so it survives the GUI-launched minimal PATH — the classic silent killer: a GUI-launched
+    macOS app inherits a PATH WITHOUT the console-script dir, so a bare name never resolves and
+    the server/hook silently never runs (the same failure class as the old `python3: command
+    not found`). Resolution order, SHARED so `mokata-mcp` and `mokata-hook` resolve identically:
+    (1) `shutil.which` on the current PATH; (2) a console-script sibling of the running
+    interpreter (`<sys.executable dir>/<name>[.exe]`) — this covers a venv/install whose bin
+    dir isn't on PATH, which is precisely the silent-killer case `which` can't see; (3) the bare
+    name as a last resort (e.g. `-e` source runs), which the plugin's `launch.sh` still backs."""
+    found = shutil.which(name)
     if found:
         return found
     bindir = Path(sys.executable).parent
-    for candidate in (bindir / MCP_COMMAND, bindir / f"{MCP_COMMAND}.exe"):
+    for candidate in (bindir / name, bindir / f"{name}.exe"):
         if candidate.is_file():
             return str(candidate)
-    return MCP_COMMAND
+    return name
+
+
+def resolved_mcp_command() -> str:
+    """The `mokata-mcp` command an installed registration should launch — resolved to an
+    ABSOLUTE path so auto-start survives the GUI-launched PATH (the classic silent killer),
+    via the shared `resolved_console_script` (identical rule to how the hooks resolve
+    `mokata-hook`)."""
+    return resolved_console_script(MCP_COMMAND)
 
 
 def _merge_mcp(path: Path, command: str = MCP_COMMAND) -> None:
@@ -681,12 +702,17 @@ def _write_command_file(harness: str, src: Path, commands_dir: Path, name: str) 
     """Materialize one command template into the harness's NATIVE command surface (md copy,
     `*.prompt.md`, a Gemini `*.toml`, or a reference copy). Returns the written path. The
     claude/codex path stays a byte-identical `copyfile` (no regression)."""
+    from .skills import expand_grounding
     fmt = _HARNESS_COMMAND_FORMAT[harness]
     dst = commands_dir / _command_target_name(harness, name)
+    # SK.S2 single-source: expand the grounding MARKER the template carries into the one canonical
+    # block at write time, so the materialized command never ships a marker and every command
+    # surface derives from `skills.GROUNDING_DISCIPLINE` (no per-template copy to drift).
+    content = expand_grounding(src.read_text(encoding="utf-8"))
     if fmt == "toml":
-        dst.write_text(_to_gemini_toml(src.read_text(encoding="utf-8")), encoding="utf-8")
+        dst.write_text(_to_gemini_toml(content), encoding="utf-8")
     else:                                # md / prompt.md / reference all carry the md content
-        shutil.copyfile(src, dst)
+        dst.write_text(content, encoding="utf-8")
     return str(dst)
 
 
@@ -719,9 +745,21 @@ def apply_setup(plan: SetupPlan, *, assume_yes: bool = False, force: bool = Fals
     # the SAME command templates so the two surfaces can't drift. One dir per skill:
     # <skills_dir>/<name>/SKILL.md.
     if plan.skill_names and t.skills_dir is not None:
-        from .agent_skills import generate_skill_files, write_skill_files
+        from .agent_skills import (copy_skill_references, generate_skill_files,
+                                   write_skill_files)
         files = generate_skill_files(_templates_dir(), names=tuple(plan.skill_names))
         for p in write_skill_files(t.skills_dir, files):
+            touched.append(str(p))
+        # SK.S2 — deliver each skill's progressive-disclosure references/ from the shipped tree,
+        # so the setup path matches the plugin install (both carry the JIT detail files).
+        src_skills = _templates_dir().parent.parent / "skills"
+        for p in copy_skill_references(src_skills, t.skills_dir, names=tuple(plan.skill_names)):
+            touched.append(str(p))
+        # DK.S1 — deliver the hand-authored DOMAIN skills (api/security/…) verbatim alongside the
+        # pipeline skills: static SKILL.md + references, copied (not template-rendered), so they
+        # auto-engage exactly like a native skill.
+        from .agent_skills import install_domain_skills
+        for p in install_domain_skills(src_skills, t.skills_dir):
             touched.append(str(p))
 
     # 2c. SYNC (Stage 5) — after writing the current set, PRUNE any mokata-authored skill dropped
@@ -729,8 +767,11 @@ def apply_setup(plan: SetupPlan, *, assume_yes: bool = False, force: bool = Fals
     # after an update). Marker-guarded: a user's own skill is NEVER removed. `plan.skill_names`
     # is the set we keep (the intended project set — empty when the plugin is the sole source).
     if t.skills_dir is not None:
-        from .agent_skills import prune_orphan_skills
-        for p in prune_orphan_skills(t.skills_dir, plan.skill_names):
+        from .agent_skills import installed_skill_names, prune_orphan_skills
+        # Keep BOTH the pipeline skills just written AND the shipped domain skills just copied — a
+        # domain skill is marker-bearing but not curated, so it must be in the keep-set or the sync
+        # would delete it right after install.
+        for p in prune_orphan_skills(t.skills_dir, installed_skill_names()):
             touched.append(str(p))
 
     # 3. MCP server (auto-registered only where the harness supports it; else manual).

@@ -20,21 +20,62 @@ from ._common import (
     SKILL_NAMES,
     SkillNotFound,
     get_skill,
-    list_skills,
     render_skill,
 )
 
 
+def _templates_dir():
+    """The command-template dir — the single source for a standalone skill's frontmatter."""
+    from .. import package_data_root
+    return package_data_root() / "templates" / "commands"
+
+
+def _catalog() -> List:
+    """CAT.S1 — the COMPLETE curated catalog (all of CURATED_SKILLS), single-sourced."""
+    from ..agent_skills import curated_catalog
+    return curated_catalog(_templates_dir())
+
+
 def _search_skills(query: str) -> List[tuple]:
-    """Filter the skill catalog by keyword over name + one-line summary (Stage 70). Read-only,
-    deterministic (catalog order preserved)."""
+    """Filter the COMPLETE curated catalog by keyword over name + one-line summary (Stage 70,
+    CAT.S1 — now the full 16, not just the runnable 12). Returns `(name, summary)` tuples (a
+    stable contract other callers unpack). Read-only, deterministic (catalog order preserved)."""
     q = query.lower()
-    return [(n, s) for n, s in list_skills() if q in n.lower() or q in s.lower()]
+    return [(e.name, e.summary) for e in _catalog()
+            if q in e.name.lower() or q in e.summary.lower()]
+
+
+def _utility_runnable_names() -> List[str]:
+    """Runnable skills (`mokata run <name>`) that are NOT in the curated catalog — pure utilities
+    (e.g. `version`). Derived from the two single sources, never hardcoded, so nothing is silently
+    dropped from the list even though they sit outside the curated set."""
+    from ..agent_skills import CURATED_SKILLS
+    return [n for n in SKILL_NAMES if n not in set(CURATED_SKILLS)]
+
+
+def _skills_detail_non_runnable(name: str) -> int:
+    """Detail for a curated skill that is standalone/auto-firing (not in `_SKILLS`): show its
+    SKILL.md-derived summary + how to invoke, rather than erroring."""
+    from ..agent_skills import load_skill_source, SkillSourceError
+    try:
+        src = load_skill_source(name, _templates_dir())
+    except SkillSourceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"/{src.name} — {src.description}")
+    print(f"  invoke: /mokata:{src.name} "
+          f"(auto-fires / own command — not `mokata run`)")
+    if src.when_to_use:
+        print(f"  when to use: {src.when_to_use}")
+    return 0
 
 
 def cmd_skills(args: argparse.Namespace) -> int:
     # L4 — catalog with progressive disclosure: bare list is cheap; a name reveals detail.
     # Stage 70 — a discoverable skill catalog: `mokata skills search <query>` filters by keyword.
+    # CAT.S1 — the bare list is the COMPLETE curated catalog (all 16), grouped so the user can
+    # tell the runnable pipeline skills from the auto-firing / own-command ones.
+    from ..agent_skills import CURATED_SKILLS  # noqa: F401  (single source for the count note)
     if args.name == "search":
         query = getattr(args, "query", None)
         if not query:
@@ -46,13 +87,18 @@ def cmd_skills(args: argparse.Namespace) -> int:
             return 0
         print(f"skills: {len(hits)} match(es) for {query!r}:")
         for name, summary in hits:
-            print(f"  /{name:10} {summary}")
+            print(f"  /{name:11} {summary}")
         return 0
     if args.name:
         try:
             skill = get_skill(args.name)
-        except SkillNotFound as exc:
-            print(f"error: {exc}", file=sys.stderr)
+        except SkillNotFound:
+            # Not a runnable `_SKILLS` skill — it may still be a curated standalone/auto-firing
+            # skill (govern/session/playbook/mcp-repair/docsync). Show its detail, not an error.
+            if args.name in set(CURATED_SKILLS):
+                return _skills_detail_non_runnable(args.name)
+            print(f"error: no skill '{args.name}'; available: "
+                  f"{', '.join(e.name for e in _catalog())}", file=sys.stderr)
             return 1
         print(f"/{skill.name} — {skill.summary}")
         print(f"  gate: {skill.gate.id} ({skill.gate.kind}) — {skill.gate.description}")
@@ -60,11 +106,26 @@ def cmd_skills(args: argparse.Namespace) -> int:
             print(f"  pipeline phase: {skill.phase}")
         if skill.scaffold:
             print("  (scaffold — deeper engine in a later stage)")
+        print(f"  invoke: mokata run {skill.name}")
         print("\n" + skill.prompt)
         return 0
-    print("mokata skills (run `mokata skills <name>` for detail):")
-    for name, summary in list_skills():
-        print(f"  /{name:10} {summary}")
+
+    catalog = _catalog()
+    runnable = [e for e in catalog if e.runnable]
+    standalone = [e for e in catalog if not e.runnable]
+    print(f"mokata skills — the curated catalog ({len(catalog)} skills; "
+          f"run `mokata skills <name>` for detail):")
+    print("\nRunnable pipeline skills (run `mokata run <name>` or `/mokata:<name>`):")
+    for e in runnable:
+        print(f"  /{e.name:11} {e.summary}")
+    print("\nStandalone / auto-firing skills (their own command or fire on their own — "
+          "not `mokata run`):")
+    for e in standalone:
+        print(f"  /{e.name:11} {e.summary}")
+    utility = _utility_runnable_names()
+    if utility:
+        print("\nUtility skills (runnable, outside the curated catalog): "
+              + ", ".join(f"/{n}" for n in utility))
     print("\nAuthor your own (G6, RED-GREEN-for-docs; human-gated write):")
     print("  mokata skill author <name> --summary <s> --require <doc>:<must-contain> "
           "--content-file <f>")
@@ -120,7 +181,10 @@ def _skill_author(args: argparse.Namespace) -> int:
     gate = Gate(f"{args.name}-approval",
                 args.gate_desc or "Human-gated self-authored skill.", "human")
     skill = draft.to_skill(args.summary or f"mokata · {args.name}", gate)
-    rendered = command_markdown(skill)
+    # SK.S2 single-source: expand the grounding marker so a self-authored skill is written
+    # self-contained (the marker never reaches a user's command file unexpanded).
+    from ..skills import expand_grounding
+    rendered = expand_grounding(command_markdown(skill))
     dest = args.out or os.path.join(args.path, MOKATA_DIR, "skills", f"{args.name}.md")
     ledger = AuditLedger.from_mokata_dir(os.path.join(args.path, MOKATA_DIR))
 
@@ -145,6 +209,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     try:
         skill = get_skill(args.name)
     except SkillNotFound as exc:
+        # CAT.S1 — a curated but NON-runnable skill (govern/session/playbook/mcp-repair/docsync)
+        # is listed by `mokata skills` but isn't a `mokata run` target; point at how to invoke it
+        # rather than the generic "no skill" error.
+        from ..agent_skills import CURATED_SKILLS
+        if args.name in set(CURATED_SKILLS):
+            print(f"'{args.name}' isn't runnable via `mokata run` — it's an auto-firing / "
+                  f"own-command skill. Invoke it with `/mokata:{args.name}` "
+                  f"(or `mokata skills {args.name}` for detail).", file=sys.stderr)
+            return 2
         print(f"error: {exc}", file=sys.stderr)
         return 1
     surface = None
@@ -217,7 +290,11 @@ def register(sub, common):
         "run", parents=[common],
         help="run a skill/command standalone (no pipeline prerequisite)",
     )
-    p_run.add_argument("name", choices=SKILL_NAMES, help="the skill to run")
+    # No argparse `choices` here: a curated but non-runnable skill (govern/session/…) must reach
+    # cmd_run so it gets a CLEAR message pointing at `/mokata:<name>` (CAT.S1), not an argparse
+    # "invalid choice" crash. cmd_run validates the name against the runnable registry itself.
+    p_run.add_argument("name", metavar="name",
+                       help=f"the skill to run (one of: {', '.join(SKILL_NAMES)})")
     p_run.set_defaults(func=cmd_run)
 
     p_enter = sub.add_parser(

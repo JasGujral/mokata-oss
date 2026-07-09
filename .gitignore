@@ -49,3 +49,4 @@ docs/launch/assets/
 # VS Code extension build artifacts (editors/vscode — future 0.8.0/0.9.0 work)
 editors/vscode/node_modules/
 editors/vscode/out/
+.mokata_probe_test/

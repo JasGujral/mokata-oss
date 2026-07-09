@@ -168,6 +168,15 @@ def _render(surface: Surface) -> str:
         "not claims. Captured context/reference surfaces just-in-time when relevant "
         "(`mokata memory`), never all at once."
     )
+    # SK.S4 — proactive dispatch: every mokata skill (not just brainstorm) is model-invocable
+    # and should auto-fire the moment a task fits its triggers, announced with the ⛭ banner.
+    lines.append(
+        "Skills: mokata's capabilities are auto-firing skills — engage the matching one "
+        "PROACTIVELY when a task fits it (brainstorm, spec, test, develop, review, refine, "
+        "debug, bug, optimize, ship, onboard, govern, session, playbook, mcp-repair), announce "
+        "it with the ⛭ banner, follow its Contract + gate, and don't engage against its "
+        "stated NOT-when."
+    )
     return "\n".join(lines) + "\n"
 
 

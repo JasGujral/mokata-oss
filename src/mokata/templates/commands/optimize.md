@@ -1,6 +1,7 @@
 ---
 name: optimize
 description: mokata · Measure first; keep only proven, behaviour-preserving wins.
+when_to_use: Engage when the user wants code made faster or lighter and the change can be measured, when profiling or a performance concern points at a hot path, or when a speed or memory improvement must be proven before it is kept. Do NOT engage without a way to measure the before and after, or when the change would alter behaviour (route that through the normal build).
 ---
 
 # mokata · /optimize
@@ -13,5 +14,4 @@ No optimisation without a before/after measurement proving the win and preserved
 ## Standalone
 This command runs on its own — no upstream pipeline phase is required. It applies only its own gate above, and never silently skips a gate of a phase you did run.
 
-## Grounding discipline
-Decide from the code, not from assumption. Before you assert anything about types, signatures, behaviour, control flow, conventions, dependencies, error handling, or file layout, VERIFY it against the actual code: read the relevant source, run structural queries (`mokata query callers|callees|implementers|imports|blast_radius <symbol>`), and check memory for prior decisions and conventions. Consult the project brain: honour the captured rules and guardrails, and pull in only the context, references, and best-practices RELEVANT to the symbols/topic in play (just-in-time — never the whole corpus). The graph + memory are the source of truth; where they're absent, read or grep the code and state what you read. If a fact CANNOT be determined from the code, state the assumption explicitly and ASK — never silently assume. Cite what you verified. And continuously: if at any point you find a decision rested on an assumption, or the code contradicts something you assumed, STOP — surface it (what you assumed vs. what the code shows), CONFIRM with the user, and re-plan (route it through the deviation gate and amend the spec/ACs so they stay grounded and provable). There is no "assumed and continued" path.
+<!-- mokata:grounding -->

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mokata"
-version = "0.0.11"
+version = "0.0.12"
 description = "The memory + seatbelt for your AI coding agent. Spec-driven TDD for Claude Code — knowledge-aware, human-gated, local-first."
 readme = "README.md"
 requires-python = ">=3.10"

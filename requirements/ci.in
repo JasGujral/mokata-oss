@@ -1,0 +1,7 @@
+# CI test-only tooling (NOT a mokata runtime dependency).
+# PyYAML is imported only by the workflow-lint tests; the mokata package itself
+# ships no YAML dependency. Installed in both jsonschema matrix legs.
+#
+# Compiled to ci.txt with per-package hashes — see requirements/README.md for the
+# single regen command. Do not edit ci.txt by hand.
+pyyaml

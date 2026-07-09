@@ -1,0 +1,6 @@
+# Docs site toolchain (docs.yml `build` job). Exact versions kept identical to
+# what the workflow already pinned — this only adds hashes, it does not upgrade.
+#
+# Compiled to docs.txt with per-package hashes — see requirements/README.md.
+mkdocs==1.6.1
+mkdocs-material==9.7.6

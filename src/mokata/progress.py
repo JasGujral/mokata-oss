@@ -15,8 +15,16 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
 from .brainstorm import PIPELINE_PHASES
-from .govern.resume import CHECKPOINT_PREFIX, PipelineCheckpoint
-from .pipeline import PHASE_GATES
+
+# Defined BEFORE the govern import below: `legibility` imports `STAGE_BADGE_STAGES` from here, and
+# the `.govern.resume` import kicks off govern → enforce → legibility. Defining it up front lets
+# that (pre-existing) import cycle resolve when `progress` is imported cold — e.g. during the SK.S1
+# standalone skill regen (`python -m mokata.agent_skills`), which renders the single-sourced
+# activation line from this module. See the Stage 54b block below for the full rationale of the set.
+STAGE_BADGE_STAGES = ("brainstorm", "spec", "develop", "review", "ship")
+
+from .govern.resume import CHECKPOINT_PREFIX, PipelineCheckpoint  # noqa: E402
+from .pipeline import PHASE_GATES  # noqa: E402
 
 DONE, CURRENT, PENDING = "done", "current", "pending"
 _GLYPHS = {DONE: "✓", CURRENT: "▶", PENDING: "○"}        # ✓ ▶ ○
@@ -187,6 +195,10 @@ def render_progress(progress: RunProgress, ascii_only: bool = False,
         lines.append(f"next: {nxt}     ·     pending: {progress.pending}/"
                      f"{progress.total}")
     lines.extend(_user_stage_arc_lines(surface, ascii_only))   # 6d — MAX detail, degrade-clean
+    if surface is not None:                                     # SK.S1 — same active-skill line
+        skill_line = active_skill_surface(surface)             # as the statusline / in-chat use
+        if skill_line:
+            lines.append(skill_line)
     return "\n".join(lines)
 
 
@@ -268,8 +280,8 @@ def build_todo_items(surface: Any, run_id: Optional[str] = None,
 # build_progress() already exposes (+ an in-progress brainstorm), collapsing the internal
 # phases onto the user-visible arc. Read-only, deterministic, degrade-clean: no run -> a
 # minimal `mokata`, never an error; nothing new is ever written.
-
-STAGE_BADGE_STAGES = ("brainstorm", "spec", "develop", "review", "ship")
+# (STAGE_BADGE_STAGES is defined near the top of this module so the govern→legibility import cycle
+# resolves on a cold `progress` import; see the note there.)
 
 # How the internal pipeline maps onto the user-facing arc:
 #   brainstorm phase / in-progress brainstorm -> "brainstorm"
@@ -473,6 +485,41 @@ def active_banner(label: str, running: bool = True,
     if sub_total:
         return f"mokata · {label} [{sub_done or 0}/{sub_total}] ({state})"
     return f"mokata · {label} ({state})"
+
+
+# =============================================================== SK.S1 — the active-skill line
+# The ONE place the `⛭ mokata <skill> active — gate: …` activation line is constructed. Every
+# shipped SKILL.md renders its line from `active_skill_line` (via agent_skills.render_skill_md),
+# and the statusline / in-chat / `mokata progress` surfaces all render the SAME line from here —
+# never a per-skill copy that could drift. The `gate:` copy is the skill's headline gate, read
+# from the single Contract source (skill_contracts), so the announced gate is exactly the gate
+# the Contract is grounded in. Extends the pre-SK.S1 active-banner coverage (brainstorm/exec/
+# playbook) to all 15 curated skills.
+SKILL_GLYPH = "⛭"
+
+
+def active_skill_line(skill: str, *, state: str = "active") -> str:
+    """`⛭ mokata <skill> active — gate: <its headline gate, one line>` — the single-sourced
+    activation line. Raises on an unknown skill (there is no silent fallback: a skill must have a
+    Contract). `state` lets a caller say `engaged` when a skill auto-activates."""
+    from .skill_contracts import headline_gate_line
+    gate = headline_gate_line(skill)
+    verb = "active" if state == "active" else state
+    return f"{SKILL_GLYPH} mokata {skill} {verb} — gate: {gate}"
+
+
+def active_skill_surface(surface: Any, *, state: str = "active") -> str:
+    """The active-skill line for `surface`'s current run, DERIVED from the same `_badge_state`
+    the statusline reads (single source of "which skill is active"). Returns "" when no skill is
+    active or the surface can't be read — degrade-clean, so no surface ever fabricates a line."""
+    try:
+        active, _counter = _badge_state(surface)
+    except Exception:
+        return ""
+    from .skill_contracts import CONTRACTS
+    if active is None or active not in CONTRACTS:
+        return ""
+    return active_skill_line(active, state=state)
 
 
 # =============================================================== Stage 40 — parallel-aware lanes

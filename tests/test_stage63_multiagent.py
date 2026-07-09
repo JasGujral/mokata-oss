@@ -247,16 +247,22 @@ class TestSetupWiring(unittest.TestCase):
 # claude byte-compatibility — no regression to the reference wiring.
 # ======================================================================================
 class TestClaudeByteCompatible(unittest.TestCase):
-    def test_claude_command_files_are_byte_identical_to_templates(self):
+    def test_claude_command_files_match_the_expanded_template(self):
+        # SK.S2 single-source: the materialized claude command is the template with its grounding
+        # MARKER expanded to the one canonical block — so it equals expand_grounding(template),
+        # not a raw byte-copy. (A template without the marker is unchanged, so this still catches
+        # any other drift.)
         from mokata.harness_setup import _templates_dir
+        from mokata.skills import expand_grounding
         d = tempfile.mkdtemp()
         setup_harness("claude", root=d, with_hooks=False, assume_yes=True, out=silent)
         cdir = os.path.join(d, ".claude", "commands")
         tdir = str(_templates_dir())
         for name in ("brainstorm.md", "ship.md", "spec.md"):
-            with open(os.path.join(cdir, name), "rb") as a, \
-                    open(os.path.join(tdir, name), "rb") as b:
-                self.assertEqual(a.read(), b.read(), f"claude {name} drifted from template")
+            with open(os.path.join(cdir, name), encoding="utf-8") as a, \
+                    open(os.path.join(tdir, name), encoding="utf-8") as b:
+                self.assertEqual(a.read(), expand_grounding(b.read()),
+                                 f"claude {name} drifted from its (expanded) template")
 
     def test_claude_still_wires_hooks_and_mcp(self):
         d = tempfile.mkdtemp()

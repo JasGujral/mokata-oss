@@ -10,6 +10,42 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.12] — 2026-07-08
+
+**A legible skills pipeline, native domain knowledge, and a docs↔code reconciler. No breaking
+changes; additive; local stays the zero-config default; no schema change.** This release makes
+mokata's existing pipeline visible and continuous, adds ten clean-room domain-knowledge skills that
+attach to the phase where they apply, and ships a new skill that keeps your docs true to your code.
+
+- **Skills are now legible.** Every skill carries a `## Contract` (what it CAN do, what it MUST NOT,
+  and which real gate backs each boundary) and an active-skill banner, single-sourced so the
+  statusline, in-chat surface, and `mokata progress` always agree. Each skill also gains an
+  anti-rationalization table and a verification checkbox, and skills auto-engage when the moment
+  fits. `mokata skills` now lists the **complete** curated catalog — grouped into runnable pipeline
+  skills and standalone/auto-firing ones (`docsync`, `govern`, `session`, `playbook`, `mcp-repair`),
+  each with detail and search.
+- **Ten native domain-knowledge skills.** API design, security & hardening, performance,
+  frontend/accessibility, browser testing, CI/CD, git workflow, deprecation & migration,
+  documentation/ADRs, and shipping & launch — each attaches to the pipeline phase where it applies
+  and feeds the gate already running there (e.g. security items are hard-enforced rules; an API
+  contract change walks its blast radius; a deprecation records to the ledger). Authored clean-room
+  from primary sources (OWASP, RFCs, web.dev/Core Web Vitals, MDN/WCAG, Google eng-practices) with
+  cited URLs.
+- **`mokata docsync` — keep docs true to the code.** Point it at a doc (`mokata docsync <path>`) or
+  let it find the relevant docs; it audits every claim against the code (commands, config keys, skill
+  counts, install path, versions) and highlights drift with severity, then offers **human-gated**
+  fixes (preview the diff, write only on approval). It also auto-fires when a change touches a
+  documented symbol.
+- **Develop shifts problems left.** On a non-trivial ambiguity, develop now stops, asks one question,
+  and amends the spec (human-gated) before continuing — instead of assuming and surfacing the issue
+  at review. Brainstorm gains a design pre-mortem and a doc-freshness check.
+- **Fixes.** Hooks resolve reliably under a GUI-launched minimal PATH (SessionStart briefing +
+  secret-guard no longer silently skip); team-mode memory resolves conflicting scoped items to one
+  winner; a team-Postgres read-through cache keeps retrieval and gates from blocking on the network.
+- **Hardening & docs.** CI dependency installs are hash-pinned (`--require-hashes`) for a stronger
+  supply-chain posture, and a new developer "How it works" documentation section explains the
+  pipeline, gates, knowledge graph, memory, governance, and the domain-skills layer.
+
 ## [0.0.11] — 2026-07-07
 
 **Team mode — a shared, governed team brain over your own Postgres. No breaking changes; additive;
@@ -345,5 +381,6 @@ spine.
 - Clean-room throughout: no dependency on, or text copied from, any other framework
   (Apache-2.0, under MoStack).
 
+[0.0.12]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.12
 [0.0.11]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.11
 [0.0.1]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.1
