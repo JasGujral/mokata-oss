@@ -47,7 +47,7 @@ The schema is owned and created only by `mokata team init` (runtime never runs D
 
 ## Documentation
 
-- Full docs: https://jasgujral.github.io/mokata-oss/
+- Full docs: https://mokata.ai/
 - Source: https://github.com/JasGujral/mokata-oss
 - Quickstart: docs/quickstart.md
 - Getting started: docs/getting-started.md

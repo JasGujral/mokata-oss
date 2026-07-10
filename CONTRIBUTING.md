@@ -3,7 +3,7 @@
 Thanks for helping build mokata. This project has a few firm rules — they're what make it
 trustworthy.
 
-Full documentation: <https://jasgujral.github.io/mokata-oss/>.
+Full documentation: <https://mokata.ai/>.
 
 ## Dev setup
 

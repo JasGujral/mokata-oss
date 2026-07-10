@@ -13,11 +13,11 @@ stops the agent shipping the wrong thing.
 [![CI](https://github.com/JasGujral/mokata-oss/actions/workflows/ci.yml/badge.svg)](https://github.com/JasGujral/mokata-oss/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/github/v/release/JasGujral/mokata-oss?label=version)](https://github.com/JasGujral/mokata-oss/releases/latest)
 [![Python](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue.svg)](pyproject.toml)
-[![Docs](https://img.shields.io/badge/docs-mkdocs-blue.svg)](https://jasgujral.github.io/mokata-oss/)
+[![Docs](https://img.shields.io/badge/docs-mkdocs-blue.svg)](https://mokata.ai/)
 [![local-first](https://img.shields.io/badge/local--first-no%20telemetry-success.svg)](docs/concepts/governance.md)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/JasGujral/mokata-oss/badge)](https://securityscorecards.dev/viewer/?uri=github.com/JasGujral/mokata-oss)
 
-📖 **Full documentation:** **<https://jasgujral.github.io/mokata-oss/>** — quickstart, tutorials, concepts, and the complete CLI + plugin reference.
+📖 **Full documentation:** **<https://mokata.ai/>** — quickstart, tutorials, concepts, and the complete CLI + plugin reference.
 
 ---
 
@@ -99,7 +99,7 @@ See [Integrate with other AI tools](docs/how-to/integrate-other-ai-tools.md).
 > **planned, not yet available** — mokata isn't registered on any Claude Code marketplace.
 > The supported way to run mokata inside Claude Code today is the pip-first path:
 > `pip install mokata` → `mokata setup claude`
-> (see [Getting started](https://jasgujral.github.io/mokata-oss/getting-started/)).
+> (see [Getting started](https://mokata.ai/getting-started/)).
 > _(This notice auto-flips once the listing is approved — single source:
 > `scripts/directory_listing.py`.)_
 <!-- mokata:directory-listing:end -->
@@ -129,9 +129,9 @@ mokata playbook                     # drive the full story end-to-end through th
 
 > A `pip` CLI install is **terminal-only** — it runs the deterministic engine with no LLM
 > attached. It does **not** put mokata inside Claude Code; for that, install the plugin or run
-> `mokata setup claude`. ([Why two ways](https://jasgujral.github.io/mokata-oss/concepts/execution-model/).)
+> `mokata setup claude`. ([Why two ways](https://mokata.ai/concepts/execution-model/).)
 
-Full walkthrough: [`docs/quickstart.md`](docs/quickstart.md) · full hands-on guide → [the Complete Guide](https://jasgujral.github.io/mokata-oss/tutorials/mokata-complete-guide/) (with a downloadable PDF) · published docs: <https://jasgujral.github.io/mokata-oss/>
+Full walkthrough: [`docs/quickstart.md`](docs/quickstart.md) · full hands-on guide → [the Complete Guide](https://mokata.ai/tutorials/mokata-complete-guide/) (with a downloadable PDF) · published docs: <https://mokata.ai/>
 
 ## Core concepts
 
@@ -169,7 +169,7 @@ The CLI exposes 40+ subcommands, including:
 - **Team, stacks & sharing** — `team` (`init`/`join`/`adopt`/`connect`/`disconnect`), `mode`, `sync`, `stacks` (`list`/`search`/`show`/`install`), `vault`.
 - **Setup, config & distribution** — `init`, `setup`/`unsetup`, `reconfigure`, `tour`, `config`, `bootstrap`, `validate`, `route`, `detect`, `reset`, `suggest`, `mcp`, `ci-check`, `export`/`import`, `version`/`upgrade`, `release-check`.
 
-Full list with flags: the [CLI reference](https://jasgujral.github.io/mokata-oss/reference/cli/).
+Full list with flags: the [CLI reference](https://mokata.ai/reference/cli/).
 
 ## Contributing · Security · License
 
@@ -180,6 +180,6 @@ Full list with flags: the [CLI reference](https://jasgujral.github.io/mokata-oss
 
 ## Links
 
-- **Documentation: <https://jasgujral.github.io/mokata-oss/>** (the published docs site; source in `docs/`, built with MkDocs)
+- **Documentation: <https://mokata.ai/>** (the published docs site; source in `docs/`, built with MkDocs)
 - Changelog: [`CHANGELOG.md`](CHANGELOG.md)
 - Issues & discussions: the repository's Issues / Discussions tabs

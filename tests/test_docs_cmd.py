@@ -23,7 +23,7 @@ DOCS_DIR = os.path.join(ROOT, "docs")
 CMDS_DIR = os.path.join(ROOT, "src", "mokata", "templates", "commands")
 
 ESC = "\x1b["
-BASE = "https://jasgujral.github.io/mokata-oss/"
+BASE = "https://mokata.ai/"
 
 # Immediate subdirs of docs/ that are INTERNAL planning or mkdocs presentation, never product
 # topics. Everything else under docs/ is a public product section the pointer must cover.

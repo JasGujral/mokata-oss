@@ -4,7 +4,7 @@ site_description: >-
   The memory + seatbelt for your AI coding agent. Spec-driven TDD for
   Claude Code — knowledge-aware, human-gated, local-first.
 repo_url: https://github.com/JasGujral/mokata-oss
-site_url: https://jasgujral.github.io/mokata-oss/
+site_url: https://mokata.ai/
 copyright: "© MoStack — Apache-2.0"
 
 theme:
