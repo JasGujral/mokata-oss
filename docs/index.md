@@ -70,5 +70,5 @@ This site follows the [Diátaxis](https://diataxis.fr/) model:
 | K | Config | per-layer/tool toggles, profiles, local-first, committed config, trust dial, doctor, reset |
 | L | Composability | standalone commands, mid-pipeline entry, direct skills, catalog, chaining, suggestions |
 
-Published docs: <https://jasgujral.github.io/mokata-oss/> · Source & issues:
+Published docs: <https://mokata.ai/> · Source & issues:
 <https://github.com/JasGujral/mokata-oss>.

@@ -533,7 +533,7 @@ hand-maintained list). Colour + a Unicode box on a real terminal; plain-ASCII wi
 escape codes when piped, redirected, or `NO_COLOR` is set. Backs `/mokata:menu`.
 
 ### `mokata docs [topic]`
-A **pointer to the published docs site** (<https://jasgujral.github.io/mokata-oss/>). With no
+A **pointer to the published docs site** (<https://mokata.ai/>). With no
 topic it lists the top-level topics with their site URLs; with a topic (e.g. `getting-started`,
 `concepts/execution-model`) it prints that page's URL and title. **Read-only and local-first** —
 it resolves and prints URLs, it **never fetches** the page, and **no doc content ships in the

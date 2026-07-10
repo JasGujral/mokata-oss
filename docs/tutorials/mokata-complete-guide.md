@@ -2,7 +2,7 @@
 
 **A deep, feature-by-feature tutorial for developers. Every command, gate, layer, and toggle — from `init` to a full governed story, with nothing left out.**
 
-[**⬇ Download this guide as a PDF**](https://jasgujral.github.io/mokata-oss/assets/mokata-complete-guide.pdf) — generated from this page in CI, so it always matches what you're reading.
+[**⬇ Download this guide as a PDF**](https://mokata.ai/assets/mokata-complete-guide.pdf) — generated from this page in CI, so it always matches what you're reading.
 
 > Audience: developers who want to use mokata to its full capacity. This is a **hands-on tutorial** — you'll install the full stack with **every optional dependency wired**, verify each capability resolves to a real provider (not a fallback floor), then take a **guided power tour** that exercises every layer with the commands to run and the output to expect.
 >
@@ -284,7 +284,7 @@ Restart Claude Code. You now have the workflow slash commands (`/mokata:brainsto
 > **planned, not yet available** — mokata isn't registered on any Claude Code marketplace.
 > The supported way to run mokata inside Claude Code today is the pip-first path:
 > `pip install mokata` → `mokata setup claude`
-> (see [Getting started](https://jasgujral.github.io/mokata-oss/getting-started/)).
+> (see [Getting started](https://mokata.ai/getting-started/)).
 > _(This notice auto-flips once the listing is approved — single source:
 > `scripts/directory_listing.py`.)_
 <!-- mokata:directory-listing:end -->
@@ -1342,4 +1342,4 @@ Per-tool backend config (Stage 24A): `tools.sqlite.config.path`, `tools.obsidian
 
 ---
 
-*Built clean-room, Apache-2.0, © MoStack. Framework: **mokata** · brand: **MoStack**. Published docs: <https://jasgujral.github.io/mokata-oss/>.*
+*Built clean-room, Apache-2.0, © MoStack. Framework: **mokata** · brand: **MoStack**. Published docs: <https://mokata.ai/>.*

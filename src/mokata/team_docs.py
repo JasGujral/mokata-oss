@@ -14,7 +14,7 @@ from __future__ import annotations
 
 # The published docs site (mkdocs `site_url`) + the ops page's slug. `team-setup.md` renders at
 # `/how-to/team-setup/`; its `## Security` heading anchors at `#security`.
-DOCS_SITE = "https://jasgujral.github.io/mokata-oss"
+DOCS_SITE = "https://mokata.ai"
 TEAM_DOCS_URL = f"{DOCS_SITE}/how-to/team-setup/"
 TEAM_DOCS_SECURITY_URL = f"{TEAM_DOCS_URL}#security"
 

@@ -40,7 +40,7 @@ PENDING = (
     "> **planned, not yet available** — mokata isn't registered on any Claude Code marketplace.\n"
     "> The supported way to run mokata inside Claude Code today is the pip-first path:\n"
     "> `pip install mokata` → `mokata setup claude`\n"
-    "> (see [Getting started](https://jasgujral.github.io/mokata-oss/getting-started/)).\n"
+    "> (see [Getting started](https://mokata.ai/getting-started/)).\n"
     "> _(This notice auto-flips once the listing is approved — single source:\n"
     "> `scripts/directory_listing.py`.)_"
 )

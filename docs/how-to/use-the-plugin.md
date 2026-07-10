@@ -15,7 +15,7 @@ mechanics for scripting and inspection outside any harness, not the primary way 
 > **planned, not yet available** — mokata isn't registered on any Claude Code marketplace.
 > The supported way to run mokata inside Claude Code today is the pip-first path:
 > `pip install mokata` → `mokata setup claude`
-> (see [Getting started](https://jasgujral.github.io/mokata-oss/getting-started/)).
+> (see [Getting started](https://mokata.ai/getting-started/)).
 > _(This notice auto-flips once the listing is approved — single source:
 > `scripts/directory_listing.py`.)_
 <!-- mokata:directory-listing:end -->

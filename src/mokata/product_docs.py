@@ -22,7 +22,7 @@ from typing import List, Optional, Tuple
 from .legibility import _color_enabled, box, table
 
 # The published documentation site (mkdocs site_url). The ONLY place docs content lives online.
-BASE_URL = "https://jasgujral.github.io/mokata-oss/"
+BASE_URL = "https://mokata.ai/"
 
 
 @dataclass(frozen=True)
