@@ -16,6 +16,12 @@ required. The env-var-only DSN contract is unchanged (no inline credentials):
 
 The dependency-free core is untouched — the drivers stay optional extras, installed only in
 the live-db job.
+
+Schema (D1): the Postgres service starts EMPTY, and runtime connects are verify-only — they
+never CREATE anything. So this module provisions ONCE, up front, through the real admin path
+(`teamdb.provision` / `provision_vector` — the same DDL `mokata team init` runs), before any
+backend or transport is constructed. That mirrors the operator flow exactly: **init provisions,
+runtime verifies**. There is no runtime DDL here to restore, and `ensure_schema` stays strict.
 """
 
 import importlib.util
@@ -26,6 +32,7 @@ import _support  # noqa: F401  (puts src/ on the path when not pip-installed)
 
 from mokata.memory import (
     CONTRADICTION,
+    EMBED_DIM,
     HashingEmbedder,
     MemoryItem,
     MemoryStore,
@@ -50,6 +57,28 @@ _NEO4J_LIVE = LIVE and _have("neo4j") and bool(os.environ.get("NEO4J_URI"))
 
 _PG_REASON = "live PG off (need MOKATA_LIVE_DB=1 + MOKATA_PG_DSN + psycopg + reachable DB)"
 _NEO4J_REASON = "live Neo4j off (need MOKATA_LIVE_DB=1 + NEO4J_URI + neo4j driver + reachable DB)"
+
+
+def setUpModule():
+    """Stand the shared schema up the way an OPERATOR does — via the init path, once.
+
+    D1 made every runtime connect verify-only, so an unprovisioned DB is a LOUD failure by
+    design, not something a `PostgresBackend()` quietly fixes on the way in. The CI service
+    container hands us a bare `mokata_test`, which is exactly the state `mokata team init`
+    exists to resolve — so we call the DDL owner it calls (`teamdb.provision`), plus the
+    opt-in pgvector tier (`provision_vector`, which the golden path deliberately excludes)
+    because the D21 leg below verifies that table.
+
+    Idempotent (doc 48 E5): safe on a re-run against an already-provisioned DB. Skipped
+    entirely when the live gate is off, so a dev box with no Postgres still skips cleanly.
+    Provisioning failures are NOT swallowed — in the live-db job an unreachable or
+    un-provisionable DB must be red, not green-by-skip.
+    """
+    if not _PG_LIVE:
+        return
+    from mokata import teamdb
+    teamdb.provision(_pg_dsn())                        # the exact DDL pass `mokata team init` runs
+    teamdb.provision_vector(_pg_dsn(), dim=EMBED_DIM)  # opt-in tier: the D21 leg needs it
 
 
 @unittest.skipUnless(_PG_LIVE, _PG_REASON)

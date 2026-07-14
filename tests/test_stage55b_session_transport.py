@@ -31,6 +31,7 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _support import mcp_commit
 
 from mokata import session_bundle as SB
 from mokata import session_transport as ST
@@ -175,7 +176,7 @@ class TestPostgresDegradeClean(unittest.TestCase):
             saved = {k: os.environ.pop(k, None)
                      for k in ("MOKATA_SESSION_PG_DSN", "MOKATA_PG_DSN")}
             try:
-                res = M.session_push(path=d, tag="auth", transport="postgres", approve=True)
+                res = mcp_commit(M.session_push, path=d, tag="auth", transport="postgres")
             finally:
                 for k, v in saved.items():
                     if v is not None:
@@ -472,13 +473,13 @@ class TestMcpSurfaces(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _seed_run(surface)
-            M.session_push(path=d, tag="auth", approve=True)
+            mcp_commit(M.session_push, path=d, tag="auth")
             # propose-only without approval
             res = M.session_name(path=d, tag="auth", new="auth-refactor")
             self.assertEqual(res["status"], "proposed")
             self.assertTrue(os.path.exists(SB.bundle_path(d, "auth")))
             # approve → renamed
-            res2 = M.session_name(path=d, tag="auth", new="auth-refactor", approve=True)
+            res2 = mcp_commit(M.session_name, path=d, tag="auth", new="auth-refactor")
             self.assertTrue(res2["committed"])
             self.assertFalse(os.path.exists(SB.bundle_path(d, "auth")))
             self.assertTrue(os.path.exists(SB.bundle_path(d, "auth-refactor")))
@@ -488,7 +489,7 @@ class TestMcpSurfaces(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _seed_run(surface)
-            res = M.session_push(path=d, tag="auth", transport="vault", approve=True)
+            res = mcp_commit(M.session_push, path=d, tag="auth", transport="vault")
             self.assertTrue(res["committed"])
             self.assertTrue(os.path.exists(
                 os.path.join(d, ".mokata", "vault", "sessions", "auth.json")))

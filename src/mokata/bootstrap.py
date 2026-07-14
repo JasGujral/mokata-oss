@@ -12,6 +12,7 @@ high rather than low, so passing the budget here means passing it for real.
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 from typing import List
 
@@ -86,15 +87,23 @@ def _render(surface: Surface) -> str:
     # offers work-locally. The session-start probe also refreshes the shared cache the badge reads.
     # Bounded (≤500ms) + degrade-clean; one compact line healthy, +offer on trouble (token budget).
     if read_mode(surface) == TEAM:
+        # D5 — the fallback SHAPE, not a `pass`. This used to swallow every error, which made the
+        # health verdict line AND the work-locally offer DISAPPEAR from the briefing — and their
+        # ABSENCE is exactly what a local-mode briefing looks like, so a broken shared DB read as a
+        # clean session. Mirror `degrade.resolve_read_routing`: on failure fall back to an OFFLINE
+        # verdict and STILL PRINT THE LINE (+ the offer, since OFFLINE is trouble). `team_health`
+        # itself is imported unguarded, exactly like `.run_mode` above — a first-party import that
+        # cannot fail without the whole briefing being meaningless.
+        import os as _os
+        from . import team_health
         try:
-            import os as _os
-            from . import team_health
             verdict = team_health.check(surface, environ=_os.environ)
-            lines.append(team_health.summary_line(verdict))
-            if verdict.trouble:
-                lines.append(f"  → {team_health.work_locally_offer()}")
-        except Exception:
-            pass
+        except (ImportError, OSError) as exc:      # check() is itself fail-closed; belt-and-braces
+            verdict = team_health.HealthVerdict(team_health.OFFLINE,
+                                                f"health check failed ({str(exc)[:120]})")
+        lines.append(team_health.summary_line(verdict))
+        if verdict.trouble:
+            lines.append(f"  → {team_health.work_locally_offer()}")
     lines.append("")
     lines.append("Active gates (inviolable):")
     for gate in _INVIOLABLE_GATES:
@@ -181,13 +190,31 @@ def _render(surface: Surface) -> str:
 
 
 def _always_on_rule_lines(surface: Surface) -> List[str]:
-    """The capped rule/guardrail lines for the briefing. Guarded: any memory issue -> none."""
+    """The capped rule/guardrail lines for the briefing, or [] when the memory store can't be read.
+
+    D5 — this was the WORST silent degrade in the codebase. It swallowed every error and returned
+    [], so the project's captured rules & guardrails simply NEVER REACHED the briefing: Claude then
+    proceeded with NONE of the user's guardrails, and the briefing looked completely normal —
+    byte-indistinguishable from a project that had captured no rules at all. The user believed
+    governance was on and it was NOT.
+
+    The [] fallback STAYS (a briefing must never crash the session), but it is no longer a secret:
+    one loud, classed notice per process says the rules are not being applied and how to fix it.
+    The narrow classes are the ones a memory read genuinely raises — the SQLite floor
+    (`sqlite3.Error`: locked/corrupt/permission-broken `.mokata/`), the local IO under it
+    (`OSError`), and a half-installed package (`ImportError`). A shared-Postgres failure never gets
+    here: `select_memory_backend` already degrades it to the SQLite floor."""
     try:
         from .memory import MemoryStore, always_on_lines
         store = MemoryStore.from_surface(surface)
         lines, _overflow = always_on_lines(store, BRIEFING_RULES_MAX_LINES)
         return lines
-    except Exception:
+    except (OSError, ImportError, sqlite3.Error) as exc:
+        from .degrade import FAILURE_UNREACHABLE, note_degraded
+        note_degraded("memory-rules", FAILURE_UNREACHABLE,
+                      fallback="your project rules are NOT being applied this session",
+                      fix="run `mokata doctor` to repair the memory store",
+                      detail=str(exc)[:200])
         return []
 
 
@@ -197,7 +224,10 @@ def _changed_since_line(surface: Surface) -> "str | None":
     try:
         from .visibility import changed_since_line
         return changed_since_line(surface)
-    except Exception:
+    except (ImportError, OSError, ValueError):
+        # D5 — the real raisers: a half-installed package (ImportError), an unreadable state/
+        # baseline file (OSError), a torn/unparseable JSON baseline (ValueError, the base of
+        # json.JSONDecodeError). Behaviour is unchanged; a typo (AttributeError) now surfaces.
         return None
 
 
@@ -245,7 +275,12 @@ def build_resume_hint(surface: Surface) -> "str | None":
         lines = [ln for ln in (_resume_run_line(surface),
                                _resume_brainstorm_line(surface)) if ln]
         return "\n".join(lines) if lines else None
-    except Exception:
+    except (OSError, ValueError, KeyError, AttributeError):
+        # D5 — the real raisers behind `list_sessions` / `restore_brainstorm_progress`: an
+        # unreadable state dir (OSError), a torn JSON checkpoint (ValueError), a checkpoint from an
+        # older shape missing a key (KeyError), and a duck-typed/absent state store (AttributeError,
+        # which the docstring's "a corrupt checkpoint" case genuinely produces here). Unchanged
+        # behaviour — None, no noise — for every one of them.
         return None
 
 
@@ -265,6 +300,31 @@ def build_bootstrap(
     prefix = stable_prefix_for(surface).text()      # F6: byte-stable across runs
     text = prefix + _LIVE_BOUNDARY + _render(surface)
     tokens = estimate_tokens(text)
+
+    # MS.S2 — SessionStart is a window's natural birth; register it in the live-session registry so
+    # `mokata windows` can see it. Transient registry upkeep (ungated), degrade-clean, and does NOT
+    # touch the briefing text — a registry hiccup must never affect the bootstrap output/budget.
+    try:
+        from .session_registry import touch as _touch_registry
+        _touch_registry(surface, phase="session-start")
+    except Exception:
+        pass
+
+    # WT.S1 — if another mokata window is already live on this repo, append a ONE-TIME human-gated
+    # worktree offer to the live section (never creates anything). Single-window sessions get no
+    # offer, so their briefing is byte-identical. Degrade-clean; recomputes `tokens` when appended.
+    try:
+        from .session_worktree import offer_text_once
+        offer = offer_text_once(surface)
+        if offer:
+            text = text.rstrip("\n") + "\n" + offer + "\n"
+            tokens = estimate_tokens(text)
+    except (ImportError, OSError):
+        # D5 — `offer_text_once` is already degrade-clean (it returns None on any registry
+        # problem); what can still reach here is a half-installed package (ImportError) or an
+        # unreadable registry path under `repo_identity` (OSError). The offer is an OFFER — its
+        # absence costs nothing and must never break the briefing, so the swallow stays.
+        pass
 
     if tokens > budget:
         # Defensive truncation: keep the briefing inside budget no matter what, and

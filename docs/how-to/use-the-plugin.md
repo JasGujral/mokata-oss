@@ -112,13 +112,39 @@ the spec) and is logged to the audit ledger. You're asked, never surprised — a
 
 ### 2. Hooks (automatic)
 
-Both hooks are declared in `hooks/hooks.json`:
+All three hooks are declared in `hooks/hooks.json`:
 
 - **SessionStart** (`session_start.py`, async/observability) — injects a sub-2k-token
   briefing at the start of each session: which stack you're in, which capabilities are
   live, and the inviolable gates. Nothing to run.
-- **Secret guard** (`secret_guard.py`, **PreToolUse, sync security, exit code 2**) — blocks
-  a write/edit/command that would commit or send a secret. Un-overridable.
+- **Secret guard** (`secret_guard.py`, **PreToolUse, sync security, exit code 2** — matches
+  `Write|Edit|MultiEdit|Bash`) — blocks a write, edit, or shell command that would commit or
+  send a secret. **Un-overridable:** approval is a methodology gate, never a security override.
+- **Gate guard** (`gate_guard.py`, **PreToolUse, sync run-state, exit code 2** — matches
+  `Write|Edit|MultiEdit|NotebookEdit`) — blocks a *native* write that breaks the run's
+  methodology. Three gates: **`spec-persisted`** (an approach is approved but no spec is
+  emitted), **`no-code-without-failing-test`** (the spec is emitted but no failing test is on
+  record), and **`spec-scope`** (the write is outside the spec's authorized surface, spells a
+  **deferred** marker you agreed *not* to build, or a spec amend is in progress).
+
+The two PreToolUse blocks are **different in kind**, and mokata treats them differently:
+
+| | secret-guard | gate-guard |
+|---|---|---|
+| class | **security** | **methodology / run-state** |
+| overridable | **never** | **yes — by a human, explicitly** |
+| how | — | `mokata gate override <gate> --reason "<why>"` — the reason is required and re-confirmed, the override is **session-scoped**, and it is **written to the audit ledger**. `mokata gate status` shows what's enforced; `mokata gate clear` drops the session's overrides. |
+
+There is deliberately **no env-var kill switch, no MCP tool, and no slash command** for the
+override — a model-invocable override would let the model clear its own constraint.
+
+**What it does *not* police, plainly.** The gate-guard fires only inside an **active mokata
+run** (an approach approved and/or a spec emitted) — hand-editing a repo outside a run is never
+gated. **Test files are always writable** (RED is the *permission* to implement, not a
+prohibition). It does **not** match `Bash`, so a `sed -i` through the shell isn't policed. And
+if two runs have state in one repo with none pinned, it **fails open** — the gates turn off for
+that window and say so once, rather than guess which run your edits belong to
+(`mokata windows` shows you when you're in that situation; `MOKATA_SESSION_ID` pins it).
 
 ### 3. The CLI alongside the plugin
 
@@ -132,8 +158,14 @@ can call these too (see [Integrate with other AI tools](integrate-other-ai-tools
 > audit, status, preview, progress, **lanes / watch / govern**, rules, skills, suggest,
 > lat_check, index_status, baseline, sessions, config_get, export_preview, vault_*) expose
 > data directly; write tools (remember, init, config_set, export_stack, vault_push,
-> import_stack, spec_check, reset, …) are **always human-gated**. It **also orchestrates
-> external MCP servers** it discovers (H4, `mokata mcp`) and maps them to capabilities.
+> import_stack, spec_check, reset, …) are **always human-gated** — a write tool call returns a
+> **proposal id** and commits nothing; **you** mint the approval out-of-band in your own terminal
+> (`mokata approve <id>`), and only a re-call carrying that id commits, once. Claude cannot
+> approve its own write — approve ships as a **terminal command only**, deliberately: it has no
+> MCP tool and no slash command, because an in-harness approve surface would hand the model the
+> very consent it is supposed to ask you for. It **also
+> orchestrates external MCP servers** it discovers (H4, `mokata mcp`) and maps them to
+> capabilities.
 >
 > **Full command parity:** every user-facing CLI command is reachable from inside Claude Code
 > (a slash command and/or an MCP tool); the install/diagnostic plumbing is explicitly exempted.

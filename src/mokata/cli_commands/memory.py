@@ -17,16 +17,58 @@ from ._common import (
 )
 
 
+def _warn_if_degraded(store) -> None:
+    """CM.S2 (C-2) — when this team-mode read was served from the LOCAL fallback, print ONE loud
+    notice (names the resolved env-var NAME + failure class), once per subsystem — never per
+    read call. A healthy/local store prints nothing (byte-identical)."""
+    notice = store.degrade_notice
+    if notice is None:
+        return
+    from ..degrade import emit_degrade_notice
+    from ..legibility import _color_enabled
+    emit_degrade_notice(notice, out=lambda m: print(m, file=sys.stderr),
+                        ascii_only=not _color_enabled())
+
+
 def cmd_memory(args: argparse.Namespace) -> int:
     # Read-only surface by default; `export`/`import` share memory across repos (Stage 35b).
     surface = _load_surface(args.path)
     store = MemoryStore.from_surface(surface)
+    _warn_if_degraded(store)
 
     action = getattr(args, "action", None)
     if action == "export":
-        from ..memory import MEMORY_SHARE_FILENAME, export_memory
+        from ..govern import WriteGate, WriteRequest
+        from ..govern.trust import CLI_SURFACE
+        from ..memory import (MEMORY_SHARE_FILENAME, export_memory,
+                              export_payload)
         dest = args.file or os.path.join(args.path, MOKATA_DIR, MEMORY_SHARE_FILENAME)
-        data = export_memory(store, dest=dest)   # read-only on the source
+        data = export_memory(store)              # read-only on the source; scans every value
+        blocked = data["blocked"]
+        # SI.6 (74 C2): the CLI export had the SAME scanning hole as the MCP one — it wrote a
+        # committable, shareable artifact with no secret-scan and no ledger entry. It now goes
+        # through the universal WriteGate as kind `send`: an export is EGRESS, so the gate scans the
+        # exact bytes that leave at outbound strength and records the write (content hashed).
+        #
+        # `assume_yes=True` is deliberate and is NOT a weakening: CONSENT here is unchanged — it is
+        # the human's explicit `mokata memory export` at a terminal, exactly as before. The gate is
+        # added for the SCAN and the LEDGER (the two things C2 is chartered to close), not to invent
+        # a prompt this command never had. A secret still HARD-BLOCKS regardless (I1/P2 — no
+        # assume_yes lifts a security block). That the CLI export carries no *human gate* of its own
+        # is a real and separate gap; it belongs to the CLI-surface bypass cluster filed in doc 84,
+        # not to this stage.
+        ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+        outcome = WriteGate(ledger=ledger).submit(
+            WriteRequest("send", dest, content=export_payload(data), actor="cli",
+                         tool="memory_export", surface=CLI_SURFACE),
+            commit=lambda: export_memory(store, dest=dest),
+            assume_yes=True)
+        if blocked:
+            print(f"memory export: {len(blocked)} item(s) BLOCKED (secret detected — NOT "
+                  f"exported): {', '.join(blocked)}")
+        if not outcome.committed:
+            print(f"memory export: {outcome.reason} — nothing written.", file=sys.stderr)
+            return 1
         print(f"exported {len(data['items'])} memory item(s) (with provenance) to {dest}")
         return 0
     if action == "import":
@@ -86,7 +128,15 @@ def cmd_memory(args: argparse.Namespace) -> int:
     from ..project import project_id
     scope = _review_scope(args)
     if getattr(args, "list_projects", False):
-        projs = _backend_projects(store.backend)
+        # D5 — a FAILED query on the shared backend used to come back as the same `None` a LOCAL
+        # backend returns, so an unreachable Postgres printed "postgres — local/per-repo (single
+        # project: X)": the backend named as shared in the same breath it is called per-repo. Now
+        # only a genuinely local backend reaches the `is None` branch; a query failure says so.
+        try:
+            projs = _backend_projects(store.backend)
+        except Exception as exc:                                 # degrade-clean, never a lie
+            print(f"memory: shared backend unavailable ({exc}).")
+            return 0
         if projs is None:
             print(f"memory backend: {store.backend.name} — local/per-repo (single project: "
                   f"{project_id(surface)}). --list-projects applies to a shared backend.")

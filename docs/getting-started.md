@@ -8,8 +8,8 @@ You get the full spec-driven TDD workflow (brainstorm → spec → develop → r
 commands and Agent Skills inside Claude Code, plus the bundled MCP server.
 
 ```bash
-pip install mokata          # Python 3.10+ recommended (see the note below)
-mokata setup claude         # wires the commands, Agent Skills, MCP server, and status line — with your approval
+pip install mokata          # requires Python 3.10+ (see the note below)
+mokata setup claude         # wires the commands, Agent Skills, MCP server, hooks, and status line — with your approval
 # restart Claude Code so it loads the newly registered MCP server
 ```
 
@@ -25,6 +25,30 @@ and the `/mokata:mcp-repair` repair skill will re-register it (you'll need to re
 
 > **Python version.** mokata requires **Python ≥ 3.10**; the MCP server ships and runs out of the
 > box on a plain `pip install mokata`.
+
+### Approving a write
+
+mokata's writes are gated on **you**, not on the model. When the agent wants a durable write
+(memory, config, a session bundle) nothing is committed: it gets back a *proposal id*. You run
+`mokata approve <id>` in your own terminal, and the agent re-tries the same write, which then
+commits **once**. The approval is single-use, content-hashed (change an argument and the id no
+longer matches), and expires after 15 minutes. Bare `mokata approve` lists what's waiting.
+
+There is deliberately **no approve tool or slash command** inside Claude Code — a model must
+never be able to approve its own write.
+
+### The two guards on Claude's file writes
+
+`mokata setup claude` also wires two blocking hooks (on by default; `--no-hooks` opts out):
+
+- **secret-guard** — a write carrying a secret is blocked outright. Never overridable, and it
+  still blocks a write you *did* approve: approval is a methodology gate, never a security
+  override.
+- **gate-guard** — inside an active run, an implementation write is blocked if there's no spec
+  yet, no failing test on record, or the write strays outside the spec's authorized scope. Test
+  files are always writable, and editing your repo outside a run is never policed.
+  `mokata gate status` shows what's enforced here; `mokata gate override <gate> --reason "…"`
+  lifts one gate for the session — explicit, re-confirmed, and on the audit ledger.
 
 ## Path B — Terminal CLI (any AI tool, CI, scripting)
 

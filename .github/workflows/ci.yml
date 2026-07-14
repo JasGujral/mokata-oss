@@ -51,6 +51,24 @@ jobs:
         run: pip uninstall -y jsonschema || true
       - name: Byte-compile
         run: python -m compileall -q src
+      - name: Two-process stress (MS.S7 / M-7 — the multi-session release gate)
+        # The COMBINED load that MS.S1-S6 only ever test one-at-a-time: two REAL processes on one
+        # repo driving state + session registry + audit ledger + journal/flush + SQLite + undo log +
+        # a bundle-name race, simultaneously. Called out as its OWN step (rather than left to the
+        # unit-suite discover below, which also runs it) so that a red says "two windows can corrupt
+        # a repo" instead of reddening an opaque 2800-test suite, and so its wall-clock is visible.
+        #
+        # Bounded by construction: 2 workers x 2000 seeded ops, ~3s on a dev box. `timeout-minutes`
+        # is the backstop for the failure this stage most fears — a cross-process DEADLOCK, which
+        # would otherwise hang the runner for its full 6h rather than failing.
+        #
+        # On windows-latest this is also the first real exercise of oslock's `msvcrt` branch under
+        # genuine contention (POSIX takes `fcntl`; the Windows half has only ever been dead code in
+        # CI). One jsonschema leg per OS is enough — file locking is orthogonal to jsonschema, and
+        # the unit-suite step re-runs it on every leg regardless.
+        if: matrix.jsonschema == 'present'
+        timeout-minutes: 5
+        run: python -m unittest discover -s tests -t tests -p "test_ms_s7_stress.py" -v
       - name: Run unit test suite
         run: python -m unittest discover -s tests -t tests
       - name: Run integration suite (the release gate)
@@ -66,9 +84,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # SCHEMA: the postgres service starts UNPROVISIONED (a bare `mokata_test`), and since D1 a
+    # runtime connect VERIFIES the schema and never creates it — so nothing here conjures tables
+    # on first use. The test module provisions once in `setUpModule` through the real admin path
+    # (`teamdb.provision` / `provision_vector` — the DDL `mokata team init` owns), exactly as an
+    # operator would. Do NOT add a runtime-DDL escape hatch to make this job green: init
+    # provisions, runtime verifies, and a genuinely unprovisioned DB SHOULD be red here.
     services:
       postgres:
-        image: pgvector/pgvector:pg16    # ships the pgvector extension
+        image: pgvector/pgvector:pg16    # ships the pgvector extension (init still CREATEs it)
         env:
           POSTGRES_USER: mokata
           POSTGRES_PASSWORD: mokata

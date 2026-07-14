@@ -33,6 +33,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .manifest import Manifest
 from .profiles import build_manifest_data
+from .errors import MokataError
 
 # The curated catalog is versioned so a consumer can reason about compatibility. This is the
 # INDEX format version (not a mokata release); it changes only if the index shape changes.
@@ -55,7 +56,7 @@ HONEST_NOTE = (
 )
 
 
-class StackError(Exception):
+class StackError(MokataError):
     """A malformed curated index, an unknown stack, or an unreadable source (degrade-clean)."""
 
 

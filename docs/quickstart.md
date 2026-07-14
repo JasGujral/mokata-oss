@@ -24,7 +24,11 @@ mokata mcp status                # expect: mokata-mcp: CONNECTED ✓
 
 You now have the workflow commands — `/mokata:brainstorm`, `/mokata:refine`, `/mokata:spec`,
 `/mokata:test`, `/mokata:develop`, `/mokata:review`, `/mokata:debug`, `/mokata:optimize`, `/mokata:bug` — plus the SessionStart briefing
-and the secret-guard hook, all automatic. Full guide: [Use mokata without the plugin](how-to/use-without-plugin.md).
+and two blocking guards on Claude's own file writes, all automatic: the **secret-guard** (a
+secret-bearing write is blocked outright — never overridable) and the **gate-guard** (inside an
+active run, an implementation write that skips the spec or the failing test, or strays outside the
+spec's scope, is blocked — overridable, with a reason, on the ledger). Hooks are on by default;
+`mokata setup claude --no-hooks` opts out. Full guide: [Use mokata without the plugin](how-to/use-without-plugin.md).
 
 A typical run: `/mokata:brainstorm` → approve an approach → `/mokata:spec` (blocked until acceptance
 criteria map to tests) → `/mokata:test` → `/mokata:develop` (RED-before-GREEN) → `/mokata:review`. Working on code
@@ -118,11 +122,17 @@ mokata query callers myFunction   # structural query (graph if present, else gre
 mokata memory                     # active memory + self-healing proposals (read-only)
 mokata rules                      # 4-tier rules and their line budgets
 mokata audit                      # the append-only audit ledger
+mokata gate status                # what the run-state gates enforce here (read-only)
+mokata approve                    # writes waiting on you; `mokata approve <id>` mints the approval
 ```
 
 Memory is **on by default** (standard/full). It heals by *surfacing* contradictions and
 stale facts as an old → new diff for you to approve, edit, or reject — never a silent
-rewrite. Every durable memory write is human-gated.
+rewrite. Every durable memory write is human-gated — and the gate is *yours*: the agent
+proposes a write and gets back a proposal id; **you** run `mokata approve <id>` in your own
+terminal to mint the approval, which is single-use and content-hashed (change an argument and
+the id no longer matches). A model cannot approve its own write — there is no approve tool or
+slash command for it to reach.
 
 ## 6. Choose an execution mode, then run end-to-end
 

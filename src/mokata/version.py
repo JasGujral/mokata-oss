@@ -50,6 +50,11 @@ def detect_install_method(home: Optional[str] = None,
     try:
         root = read_plugin_root(home=home)
     except Exception:
+        # D5 — deliberately left BROAD, with no narrow class to name: `read_plugin_root`'s own
+        # docstring promises it returns None rather than raising ("or None if absent/unreadable/
+        # empty"), so this handler guards a contract that is already never-raise. Any exception
+        # reaching it is by definition one the callee promised could not happen; there is no honest
+        # class to enumerate, and `install_method` is cosmetic (it labels a `mokata version` line).
         root = None
     if root:
         src = os.path.abspath(os.path.join(root, "src"))
@@ -121,7 +126,10 @@ def check_for_update(current: Optional[str] = None, *,
     if ledger is not None:
         try:
             ledger.record("update_check", outbound=True, source=RELEASE_API)
-        except Exception:
+        except (OSError, TypeError):
+            # D5 — the real raisers of a ledger append: the local file/disk under `.mokata/`
+            # (OSError) and a non-serializable field (TypeError, from `json.dumps`). The netguard
+            # accounting line is best-effort and must never block the opt-in check itself.
             pass
     fetch = fetcher or _default_fetch
     try:

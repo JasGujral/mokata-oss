@@ -2,10 +2,12 @@
 
 Cowork supports plugins, so mokata installs there the same way it does in Claude Code — as a
 plugin from the `mostack` marketplace. The pipeline, the gated writes, the knowledge graph, and
-the memory all work. One capability differs, and mokata is honest about it: **the PreToolUse
-secret-guard hook may not be enforced in Cowork**, so durable-write protection there relies on
-mokata's own gated write path rather than the hook. This guide covers the install, the
-`/mokata:*` surface, and exactly what degrades and why.
+the memory all work. One capability differs, and mokata is honest about it: **PreToolUse hook
+enforcement is not guaranteed in Cowork**, so mokata declares `hooks` **absent** there. That
+costs you *both* PreToolUse hooks — the **secret-guard** and the run-state **gate-guard** — so
+durable-write protection relies on mokata's own gated write path, and the run-state gates
+enforce nothing. This guide covers the install, the `/mokata:*` surface, and exactly what
+degrades and why.
 
 ## Install
 
@@ -19,8 +21,14 @@ In Cowork, add the marketplace and install the plugin:
 (That's the public mirror. From a local clone you can add the marketplace by directory path
 instead.) After installing, restart the session so the commands load.
 
-`mokata setup` is **not** used for Cowork — `setup` is for harnesses that have *no* plugin
-path. Cowork has one, so the plugin install above is the supported route.
+> **Honest about what this is.** `marketplace add` here registers **the mokata repo itself** as
+> a local marketplace (it reads that repo's `.claude-plugin/marketplace.json`) — mokata is **not
+> listed in any public plugin directory** yet; that listing is pending approval. This is the same
+> manual route described in [Install the plugin](install-plugin.md).
+
+`mokata setup` is **not** used for Cowork — `setup` accepts `claude`, `codex`, `cursor`,
+`copilot`, `windsurf`, `gemini`, and `aider`, i.e. harnesses with *no* plugin path. Cowork has
+one, so the plugin install above is the route here.
 
 ## The `/mokata:*` surface
 
@@ -46,17 +54,28 @@ exists. Cowork's profile:
 | commands | ✅ | the `/mokata:*` slash commands load from the plugin |
 | context_injection | ✅ | the SessionStart briefing is injected |
 | subagents | ✅ | parallel/fan-out execution is available |
-| **hooks** | ❌ | **the PreToolUse secret-guard hook may not run in Cowork** |
+| **hooks** | ❌ | **neither PreToolUse hook may run in Cowork** — not the secret-guard, not the run-state gate-guard |
 
-**What this means in practice.** In Claude Code, the secret-guard runs as a PreToolUse hook on
-every `Write`/`Edit`/`Bash`, blocking a secret *before* the tool acts. In Cowork that hook may
-not fire, so **do not rely on it**. mokata degrades clearly: its durable writes still go through
-the universal **WriteGate** (used by `mokata memory`, the vault, the MCP write tools, and the
-CLI), which **scans for secrets, requires human approval, and records the decision to the audit
-ledger** — independent of any hook. So a secret in a *mokata-gated* write is still blocked in
-Cowork; a secret written by a *raw* tool call that bypasses mokata is not caught the way the
-Claude Code hook would catch it. When in doubt, route durable writes through mokata's gated
-paths (the CLI / the MCP write tools), not raw edits.
+**What this means in practice.** In Claude Code, mokata wires two PreToolUse hooks. Neither is
+guaranteed to fire in Cowork, so **do not rely on either** — and they fail differently:
+
+- **The secret-guard** (in Claude Code: blocks a secret on every `Write`/`Edit`/`MultiEdit`/`Bash`
+  *before* the tool acts). If it doesn't fire, mokata still degrades clearly: its durable writes
+  go through the universal **WriteGate** (used by `mokata memory`, the vault, the MCP write
+  tools, and the CLI), which **scans for secrets, requires a human-minted approval, and records
+  the decision to the audit ledger** — independent of any hook. So a secret in a *mokata-gated*
+  write is still blocked in Cowork; a secret written by a *raw* tool call that bypasses mokata is
+  not caught the way the Claude Code hook would catch it.
+- **The run-state gate-guard** (in Claude Code: blocks a native implementation write that breaks
+  the run's methodology — `spec-persisted`, `no-code-without-failing-test`, `spec-scope`). Here
+  there is **no fallback at all.** These gates live *only* in the hook, so in Cowork they
+  **enforce nothing**: the agent can write implementation code before the spec is emitted, before
+  a failing test exists, or outside the spec's authorized surface, and nothing intercepts it. The
+  `/mokata:*` pipeline still runs and `/mokata:review` still flags divergence after the fact —
+  but that is a review, not a seatbelt. Say it plainly: **hard TDD enforcement is Claude-Code-only.**
+
+When in doubt, route durable writes through mokata's gated paths (the CLI / the MCP write tools),
+not raw edits.
 
 Everything stays **local-first** — nothing leaves the machine unless you wire an external tool.
 

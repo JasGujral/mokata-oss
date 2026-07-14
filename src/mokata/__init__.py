@@ -10,7 +10,7 @@
 #   - A5 unified config + constitution surface     -> config.py
 #   - A7 `mokata init` onboarding                  -> init.py, profiles.py, cli.py
 
-__version__ = "0.0.12"
+__version__ = "0.0.13"
 
 # The directory, relative to a repo root, that holds mokata's committed config.
 MOKATA_DIR = ".mokata"
@@ -44,6 +44,13 @@ def package_data_root():
         if root.is_dir():
             return root
     except Exception:
+        # (iv) SUPPRESS-OK: `importlib.resources.files` is the OPTIMISTIC path, and its failure
+        # classes are the packaging ecosystem's, not mokata's — a zipimport/frozen loader raises
+        # something none of the stdlib docs pin down, and a custom finder in an embedder's app can
+        # raise anything at all. The fallback below is not a degraded answer, it is the SAME answer
+        # by a more direct route (this module's own directory IS the package directory), so nothing
+        # is lost and there is nothing to announce. Narrowing here would only turn a working install
+        # into an import-time crash on an exotic loader.
         pass
     return Path(__file__).resolve().parent
 
@@ -66,6 +73,13 @@ def _force_utf8_io() -> None:
             if reconfigure is not None and current != "utf8":
                 reconfigure(encoding="utf-8")
         except Exception:
+            # (iv) SUPPRESS-OK: this runs at IMPORT time, on whatever `sys.stdout` happens to be —
+            # which an embedder may have replaced with a StringIO, a closed handle, or a custom
+            # writer whose `reconfigure` raises anything. The failure class is therefore the
+            # EMBEDDER's, not ours. Failing here changes nothing about correctness: mokata's console
+            # glyphs may fall back to the legacy Windows encoding, which is a COSMETIC outcome, and
+            # `ascii_only` renderings exist precisely for that case. An import-time raise, by
+            # contrast, would make mokata unimportable — a far worse failure than a mangled arrow.
             pass
 
 

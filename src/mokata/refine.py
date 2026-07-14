@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from .brainstorm import Grounding, ground  # reuse the grounding (graph+memory) primitive
+from .errors import MokataError
 
 # StateStore key (under .mokata/temp_local/state/) — the approved scoped refinement set.
 REFINE_STATE_KEY = "approved_refinements"
@@ -44,7 +45,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class RefineError(Exception):
+class RefineError(MokataError):
     """A refine-flow rule was violated."""
 
 

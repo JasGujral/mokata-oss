@@ -13,9 +13,10 @@ import os
 from typing import Any, Dict, List, Optional
 
 from . import schema
+from .errors import MokataError
 
 
-class ManifestError(Exception):
+class ManifestError(MokataError):
     """Raised when a manifest is missing, unparseable, or fails validation."""
 
 

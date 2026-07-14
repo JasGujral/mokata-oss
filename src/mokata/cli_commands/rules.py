@@ -125,13 +125,13 @@ def _cmd_audit_team(args: argparse.Namespace) -> int:
         return 0
     # Stage 71a — the team read is SCOPED to the current project by default; --all spans, --project
     # selects, --list-projects enumerates the projects present on the shared audit log.
-    from ..team_audit import dsn_env_name, shared_enabled
+    from ..team_audit import shared_enabled
     if getattr(args, "list_projects", False):
         if not shared_enabled(surface.manifest.data):
             print("audit: team sharing is OFF — projects apply to a shared backend.")
             return 0
         try:
-            log = make_shared_log(dsn_env_name(surface.manifest.data))
+            log = make_shared_log(data=surface.manifest.data)
             projs = _backend_projects(log) or []
         except Exception as exc:                                 # degrade-clean
             print(f"audit: shared log unavailable ({exc}).")

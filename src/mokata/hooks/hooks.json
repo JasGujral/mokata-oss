@@ -19,6 +19,15 @@
             "command": "mokata-hook secret-guard"
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mokata-hook gate-guard"
+          }
+        ]
       }
     ]
   }

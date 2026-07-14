@@ -25,6 +25,7 @@ __all__ = [
     "query", "recall", "doctor", "coverage", "budget", "audit", "status", "preview",
     "progress", "lanes", "watch", "govern", "rules", "skills", "suggest", "lat_check",
     "index_status", "tour", "ci_check", "baseline", "sessions", "session_list",
+    "session_windows", "session_save",
     "config_get", "export_preview", "decompose", "vault_list", "vault_search",
     "vault_pull", "stacks_list", "stacks_search", "stacks_show", "plan_list", "plan_show",
 ]
@@ -54,17 +55,37 @@ def recall(path: str = ".", subject: str = "", query: str = "",
         # Stage 59 — explainable retrieval: each hit names WHY it surfaced (frugal, top-k).
         from ..memory.intelligence import explain_recall
         hits = store.recall_relevant(query)
-        return {"enabled": True, "backend": store.backend.name, "query": query,
-                "items": [{"memory_type": e.item.mtype, "kind": e.item.effective_kind,
-                           "subject": e.item.subject, "value": e.item.value, "why": e.why}
-                          for e in explain_recall(query, hits)]}
+        return _with_degrade(store, {
+            "enabled": True, "backend": store.backend.name, "query": query,
+            "items": [{"memory_type": e.item.mtype, "kind": e.item.effective_kind,
+                       "subject": e.item.subject, "value": e.item.value, "why": e.why}
+                      for e in explain_recall(query, hits)]})
     mt = memory_type or mtype
     items = store.recall(subject, mtype=mt) if subject else store.all_active(mtype=mt)
-    return {"enabled": True, "backend": store.backend.name,
-            "items": [{"memory_type": i.mtype, "kind": i.effective_kind,
-                       "mtype": i.mtype,  # deprecated alias, kept for back-compat
-                       "subject": i.subject, "value": i.value}
-                      for i in items]}
+    return _with_degrade(store, {
+        "enabled": True, "backend": store.backend.name,
+        "items": [{"memory_type": i.mtype, "kind": i.effective_kind,
+                   "mtype": i.mtype,  # deprecated alias, kept for back-compat
+                   "subject": i.subject, "value": i.value}
+                  for i in items]})
+
+
+def _with_degrade(store: Any, resp: Dict[str, Any]) -> Dict[str, Any]:
+    """CM.S2 (C-2) — attach the explicit degraded marker when a team-mode read was served from
+    the LOCAL fallback, so an MCP consumer is never handed local state dressed as team state.
+    The marker names the resolved env-var NAME + failure class, NEVER the DSN value. A healthy /
+    local read carries no marker (byte-identical response)."""
+    notice = store.degrade_notice
+    if notice is not None:
+        resp["degraded"] = notice.to_dict()
+    # CM.S4 (C-4) — the structured local-only backlog field: the count of approved-but-unflushed
+    # team writes (+ oldest age + last-failure class). Computed from the SAME routing verdict as
+    # the degrade marker (store.read_routing) so the two always agree. Absent when nothing is
+    # pending / in local mode (byte-identical response). Never carries a DSN value / memory content.
+    ps = getattr(store, "pending_status", None)
+    if ps is not None:
+        resp["pending"] = ps.to_dict()
+    return resp
 
 
 @_tool("doctor", "read")
@@ -128,8 +149,25 @@ def status(path: str = ".") -> Dict[str, Any]:
     now. Read-only."""
     surface = _surface(path)
     m = surface.manifest
-    return {"version": m.mokata_version, "profile": m.profile,
+    resp = {"version": m.mokata_version, "profile": m.profile,
             "capabilities": [r.summary() for r in surface.router.resolve_all()]}
+    # CM.S4 (C-4) — surface the local-only team backlog here too (structured), reusing the ONE
+    # CM.S2 routing verdict so it agrees with the degraded read notice. Absent in local mode / when
+    # nothing is pending. Degrade-clean — a hiccup never breaks the status readout.
+    try:
+        from ..degrade import resolve_read_routing
+        from ..flush_liveness import pending_status
+        ps = pending_status(surface, routing=resolve_read_routing(surface))
+        if ps is not None:
+            resp["pending"] = ps.to_dict()
+    except Exception:  # pragma: no cover - surfacing is best-effort
+        # (iv) SUPPRESS-OK: an ADDITIVE, optional key on an otherwise-complete status response. Both
+        # callees are themselves degrade-clean and loud — `resolve_read_routing` never raises on the
+        # read path and carries its own DegradeNotice — so nothing is hidden here; the only thing
+        # this guard can lose is the pending COUNT, and the degrade itself is reported elsewhere.
+        # Broad because it spans routing + journal + team-health, three subsystems' classes.
+        pass
+    return resp
 
 
 @_tool("preview", "read")
@@ -333,9 +371,12 @@ def ci_check(path: str = ".", files: str = "", symbols: str = "") -> Dict[str, A
     fl = [f.strip() for f in files.split(",") if f.strip()]
     sy = [s.strip() for s in symbols.split(",") if s.strip()] or None
     res = CI.run_ci_check(path, fl, changed_symbols=sy)
-    return {"blocked": res.blocked, "overall": res.overall, "initialized": res.initialized,
+    # D5 — `degraded` rides the structured response too: an agent reading this dict must be able to
+    # tell "checked, and clean" from "could not check" without parsing the prose.
+    return {"blocked": res.blocked, "degraded": res.degraded, "overall": res.overall,
+            "initialized": res.initialized,
             "legs": [{"name": leg.name, "status": leg.status, "summary": leg.summary,
-                      "unblock": leg.unblock} for leg in res.legs],
+                      "degraded": leg.degraded, "unblock": leg.unblock} for leg in res.legs],
             "comment_body": res.comment_body()}
 
 
@@ -345,11 +386,16 @@ def baseline(path: str = ".", cmd: str = "") -> Dict[str, Any]:
     attributable to your change. Degrades clean if no test command is known (mokata never
     guesses a framework). Read-only — runs the existing suite, writes nothing."""
     from ..baseline import baseline_command, baseline_status
+    from ..config import ConfigError
     manifest = None
     if Surface.is_initialized(path):
         try:
             manifest = Surface.load(path).manifest
-        except Exception:
+        except (ConfigError, OSError):
+            # ConfigError: an absent/invalid manifest (Surface.load re-wraps ManifestError as one).
+            # OSError: an unreadable constitution file. Without a manifest, `baseline_command` falls
+            # back to the explicit `cmd` override or reports that no test command is known — mokata
+            # never guesses a framework, so the degrade is visible in the baseline report itself.
             manifest = None
     result = baseline_status(baseline_command(manifest, override=cmd or None), cwd=path)
     return {"ok": result.ok, "report": result.render()}
@@ -367,6 +413,87 @@ def sessions(path: str = ".") -> Dict[str, Any]:
                           "complete": s.complete, "active": s.active,
                           "resume_phase": s.resume_phase, "last_passed": s.last_passed}
                          for s in rows]}
+
+
+@_tool("session_windows", "read")
+def session_windows(path: str = ".") -> Dict[str, Any]:
+    """MS.S2 — list the LIVE Claude Code windows on this repo (each window is its own MCP process):
+    short id, when it started, alive|stale, and its current pipeline phase. Read-only — the caller's
+    own window self-registers, and stale (dead-pid) windows are pruned lazily. Distinct from
+    `sessions` (which lists pipeline RUNS) and `session_list` (shareable session bundles)."""
+    from .. import session_registry as SR
+    from ..repo_identity import worktree_label
+    surface = _surface(path)
+    try:
+        SR.touch(surface)                    # self-register (transient registry upkeep, ungated)
+    except Exception:
+        # (iv) SUPPRESS-OK: `touch` is WRITE-side upkeep (self-registering this window) inside a READ
+        # tool. Failing to register affects only whether THIS window appears in a list the caller is
+        # about to be shown — it cannot corrupt or hide another window's row, and the listing below
+        # is unaffected. Broad because the registry spans PID probing + transient-file IO across
+        # three OSes, and a listing must never die because a registry write did.
+        pass                                 # degrade-clean: listing must never fail on upkeep
+    rows = SR.list_sessions(surface)
+    result: Dict[str, Any] = {
+        "count": len(rows),
+        "windows": [{"session_id": r.session_id, "short_id": r.short_id,
+                     "started": r.started_at, "last_seen": r.last_seen,
+                     "alive": r.alive, "phase": r.phase,
+                     "worktree": worktree_label(r.repo_root) if r.repo_root else "main",
+                     "scope": r.scope} for r in rows]}
+    # WT.S1 — a ONE-TIME human-gated worktree offer when a live sibling is on this repo (data, not
+    # an action; never creates anything). Degrade-clean.
+    try:
+        from .. import session_worktree as SW
+        offer = SW.offer_text_once(surface, rows=rows)
+        if offer:
+            result["offer"] = offer
+    except Exception:
+        # (iv) SUPPRESS-OK: a ONE-TIME, purely ADDITIVE offer (data, never an action — it creates
+        # nothing). Its absence removes a suggestion, not a capability or a warning: the window
+        # listing above is complete either way. Broad because the callee spans git-worktree probing
+        # + a once-only marker file, and a suggestion must never break a listing.
+        pass
+    return result
+
+
+@_tool("session_save", "read")
+def session_save(path: str = ".", brainstorm: Optional[Dict[str, Any]] = None,
+                 passed: Optional[list] = None, run_id: str = "",
+                 turn: bool = False) -> Dict[str, Any]:
+    """SS.S0 — snapshot THIS session's full in-flight state so an interrupted brainstorm/pipeline
+    is recoverable. UNGATED by design: a local save is the user's own transient state (P2-exempt);
+    the human gate sits at the SHARE boundary (`session_push`), NOT here — so there is no
+    approve/confirm param and no WriteGate. Writes EXACTLY what the existing resume stack reads:
+    `brainstorm_progress` (+ `approved_approach` when approved) + the run checkpoint, atomically
+    under this window's MS.S2 session scope. `brainstorm` is a `BrainstormSession.to_dict()`;
+    `passed` is the run's passed pipeline phases. Read-your-own: returns the keys + COUNTS saved,
+    never the state content. A session with nothing to save returns an honest empty result. This is
+    a REGISTERED READ TOOL (ungated + auto-safe, like the rest of the session family) — never a
+    gated write.
+
+    SS.S1 — this routes THROUGH the `SessionFlow` orchestrator (the ONE production seam), so the
+    agent-facing save is degrade-clean: a persist failure warns once and returns a degraded marker
+    rather than raising. It is the same seam the brainstorm skill instructs the agent to hit at
+    each coarse milestone — making crash-safety automatic (P17), never a manual chore.
+
+    SS.S2 — `turn=True` marks a per-turn autosave: a `brainstorm`-only snapshot routed through
+    `SessionFlow.turn()` (one atomic write, no gate/checkpoint), fired after each answered Q&A turn
+    so a kill −9 loses at most the single in-flight turn. The default (`turn=False`) is byte-for-byte
+    the SS.S1 coarse checkpoint; `passed`/`run_id` are ignored on the turn path (a turn is
+    brainstorm-only)."""
+    from ..session_flow import SessionFlow
+    flow = SessionFlow(_surface(path))
+    if turn:
+        res = flow.turn(brainstorm or {})
+    else:
+        res = flow.checkpoint(
+            brainstorm=brainstorm, passed=passed, run_id=run_id or None, moment="session_save")
+    if res is None:
+        return {"ok": True, "empty": True, "degraded": True,
+                "message": "local state persist degraded (see the warning) — your work is not "
+                           "blocked; retry once the disk/permissions recover"}
+    return res.to_dict()
 
 
 @_tool("plan_list", "read")
@@ -412,7 +539,7 @@ def session_list(path: str = ".", transport: str = "") -> Dict[str, Any]:
                     "status": "unavailable", "message": str(exc)}
     else:
         transports = [STX.LocalTransport(path), STX.VaultTransport(path)]
-        if STX.resolve_pg_dsn():
+        if STX.resolve_pg_dsn(root=path):
             try:
                 transports.append(STX.make_transport("postgres", path))
             except STX.SessionTransportUnavailable:

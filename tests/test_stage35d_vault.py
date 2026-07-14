@@ -12,6 +12,7 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _support import mcp_commit          # SI.3: propose -> human approves -> redeem by id
 
 from mokata import MOKATA_DIR
 from mokata import vault as V
@@ -20,6 +21,12 @@ from mokata import vault as V
 def _write(path, text):
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(text)
+
+
+def _ledger(root):
+    """The repo's audit ledger — the same one `vault_pull` records an integrity failure to."""
+    from mokata.govern.ledger import AuditLedger
+    return AuditLedger.from_mokata_dir(os.path.join(root, MOKATA_DIR))
 
 
 BRAINSTORM = """# Payments redesign
@@ -166,6 +173,104 @@ class TestPullRoundTrip(unittest.TestCase):
             with self.assertRaises(V.VaultError):
                 V.vault_pull(r.d, "p")
 
+    # --- DB.S9: an integrity failure is an AUDITABLE event ------------------------------------
+    def test_corrupt_pull_is_ledgered_and_copies_nothing(self):
+        """A tamper caught at pull is not just refused — it is RECORDED (MS.S3-chained), naming the
+        artifact and the hash MISMATCH by prefix (never the full hashes). Nothing is copied."""
+        with _TempRepo() as r:
+            V.commit_push(r.d, V.plan_push(r.d, "p", r.file("a.md", BRAINSTORM)),
+                          author="a", now="2026-06-27T00:00:00+00:00")
+            expected = V.content_hash(BRAINSTORM)
+            _write(os.path.join(r.d, MOKATA_DIR, "vault", "p.md"), "tampered\n")
+
+            dest = os.path.join(r.d, "out", "p.md")
+            with self.assertRaises(V.VaultError):
+                V.vault_pull(r.d, "p", dest=dest)
+            self.assertFalse(os.path.exists(dest), "a refused pull must copy NOTHING")
+
+            rows = [e for e in _ledger(r.d).entries() if e["kind"] == V.VAULT_INTEGRITY_KIND]
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
+            self.assertEqual(row["name"], "p")
+            self.assertEqual(row["outcome"], "refused")
+            # the mismatch is named by PREFIX — the full hashes are never echoed into the ledger
+            self.assertEqual(row["expected"], expected[:V._HASH_PREFIX_LEN])
+            self.assertEqual(row["actual"], V.content_hash("tampered\n")[:V._HASH_PREFIX_LEN])
+            self.assertNotIn(expected, json.dumps(row))
+            # MS.S3: it lands on the hash chain like any other auditable event
+            self.assertTrue(_ledger(r.d).verify().intact)
+
+    def test_intact_pull_ledgers_nothing(self):
+        """No behaviour change on the happy path: an intact artifact pulls byte-identically and
+        adds NO ledger entry (the ledger records failures, not traffic)."""
+        with _TempRepo() as r:
+            V.commit_push(r.d, V.plan_push(r.d, "p", r.file("a.md", BRAINSTORM)),
+                          author="a", now="2026-06-27T00:00:00+00:00")
+            before = len(_ledger(r.d).entries())
+            dest = os.path.join(r.d, "out", "p.md")
+            content, _entry = V.vault_pull(r.d, "p", dest=dest)
+            self.assertEqual(content, BRAINSTORM)
+            with open(dest, encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), BRAINSTORM)      # byte-identical
+            self.assertEqual(len(_ledger(r.d).entries()), before)
+
+    def test_truncated_artifact_is_a_classed_refusal_and_is_ledgered(self):
+        """A truncated (not absent) artifact still fails the hash check — a classed VaultError, not
+        a stack trace, and an auditable event like any other tamper."""
+        with _TempRepo() as r:
+            V.commit_push(r.d, V.plan_push(r.d, "p", r.file("a.md", BRAINSTORM)),
+                          author="a", now="2026-06-27T00:00:00+00:00")
+            _write(os.path.join(r.d, MOKATA_DIR, "vault", "p.md"), BRAINSTORM[:40])
+            with self.assertRaises(V.VaultError):
+                V.vault_pull(r.d, "p")
+            rows = [e for e in _ledger(r.d).entries() if e["kind"] == V.VAULT_INTEGRITY_KIND]
+            self.assertEqual(len(rows), 1)
+
+    def test_an_unwritable_ledger_never_masks_the_refusal_and_says_so(self):
+        """D5 DEGRADES_LOUD, proven: if the audit ledger cannot be written (a read-only or foreign
+        vault ref — exactly what `team join` pulls from), the REFUSAL still stands and nothing is
+        copied. The lost audit note is announced, not swallowed into an empty ledger."""
+        import io
+        import contextlib
+        from mokata.govern.ledger import AuditLedger
+
+        with _TempRepo() as r:
+            V.commit_push(r.d, V.plan_push(r.d, "p", r.file("a.md", BRAINSTORM)),
+                          author="a", now="2026-06-27T00:00:00+00:00")
+            _write(os.path.join(r.d, MOKATA_DIR, "vault", "p.md"), "tampered\n")
+
+            def _boom(self, *a, **k):
+                raise OSError("read-only file system")
+
+            dest = os.path.join(r.d, "out", "p.md")
+            real, err = AuditLedger.record, io.StringIO()
+            AuditLedger.record = _boom
+            try:
+                with contextlib.redirect_stderr(err):
+                    with self.assertRaises(V.VaultError):     # the refusal SURVIVES
+                        V.vault_pull(r.d, "p", dest=dest)
+            finally:
+                AuditLedger.record = real
+
+            self.assertFalse(os.path.exists(dest), "a refused pull must still copy NOTHING")
+            # ...and the lost record is LOUD, in the CM.S2 shape: subsystem + fallback + class.
+            # (The notice interpolates no free text by design — CM.S1 secret-safety — so the
+            # artifact is named by the VaultError the caller already gets, not in here.)
+            notice = err.getvalue()
+            self.assertIn("vault: DEGRADED", notice)
+            self.assertIn("the pull is still refused and nothing was copied", notice)
+            self.assertIn("OSError", notice)
+
+    def test_a_missing_artifact_is_a_classed_refusal(self):
+        """Absence is not corruption: it is refused loudly (classed), and it is NOT a hash mismatch,
+        so it does not manufacture an integrity row."""
+        with _TempRepo() as r:
+            V.commit_push(r.d, V.plan_push(r.d, "p", r.file("a.md", BRAINSTORM)),
+                          author="a", now="2026-06-27T00:00:00+00:00")
+            os.remove(os.path.join(r.d, MOKATA_DIR, "vault", "p.md"))
+            with self.assertRaises(V.VaultError):
+                V.vault_pull(r.d, "p")
+
 
 # ----------------------------------------------------------------- versioning: never a silent clobber
 
@@ -289,8 +394,8 @@ class TestMcpVaultTools(unittest.TestCase):
             self.assertFalse(os.path.exists(
                 os.path.join(r.d, MOKATA_DIR, "vault", "payments-redesign.md")))
 
-            res = M.vault_push(path=r.d, name="payments-redesign", file=src,
-                               author="alice", confirm=True)
+            res = mcp_commit(M.vault_push, path=r.d, name="payments-redesign", file=src,
+                             author="alice")
             self.assertTrue(res["committed"])
             self.assertEqual(res["version"], 1)
 
@@ -316,8 +421,8 @@ class TestMcpVaultTools(unittest.TestCase):
             cli.main(["init", "--path", r.d, "--yes"])
             V.commit_push(r.d, V.plan_push(r.d, "p", r.file("a.md", BRAINSTORM)),
                           author="a", now="2026-06-27T00:00:00+00:00")
-            res = M.vault_push(path=r.d, name="p", file=r.file("b.md", BRAINSTORM + "\nx\n"),
-                               confirm=True)
+            res = mcp_commit(M.vault_push, path=r.d, name="p",
+                             file=r.file("b.md", BRAINSTORM + "\nx\n"))
             self.assertEqual(res["status"], "conflict")
             self.assertFalse(res["committed"])
 

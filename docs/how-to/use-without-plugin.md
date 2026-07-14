@@ -9,7 +9,8 @@ ships:
    (`brainstorm`, `spec`, `test`, `develop`, `review`, `debug`, `optimize`, `bug`).
 2. **Tools** — the `mokata` CLI and the bundled `mokata-mcp` MCP server (knowledge graph,
    memory, audit, governance).
-3. **Enforcement** — the hook scripts in `hooks/` (SessionStart briefing + secret-guard).
+3. **Enforcement** — the hook scripts in `hooks/` (SessionStart briefing + the two PreToolUse
+   blocks: the **secret-guard** and the run-state **gate-guard**).
 
 Because these are plain files plus a CLI, **any agent harness** that supports custom
 commands, MCP, or shell tools can consume them directly — no marketplace install required.
@@ -47,8 +48,10 @@ then waits for your confirmation. It:
 
 - runs `mokata init` (if the project isn't set up yet),
 - copies the slash commands into `.claude/commands/`,
+- writes mokata's Agent Skills into `.claude/skills/` (and prunes stale mokata ones on re-run),
 - registers the `mokata-mcp` server in `.mcp.json`,
-- wires the SessionStart + secret-guard hooks into `.claude/settings.json`,
+- wires **three** hooks into `.claude/settings.json` — the SessionStart briefing, the PreToolUse
+  **secret-guard**, and the PreToolUse run-state **gate-guard**,
 - wires the always-on **pipeline-stage badge** as a Claude Code `statusLine` (default-on;
   composes over any statusLine you already have — see the
   [stage badge](../concepts/pipeline.md#the-always-on-stage-badge-stage-54b)). Opt out with
@@ -57,7 +60,7 @@ then waits for your confirmation. It:
 
 Then **restart Claude Code** in that project. You'll have `/mokata:brainstorm`, `/mokata:spec`, `/mokata:test`,
 `/mokata:develop`, `/mokata:review`, `/mokata:debug`, `/mokata:optimize`, `/mokata:bug`, the bootstrap briefing, the
-secret-guard, and the mokata MCP tools — the same experience as the plugin.
+secret-guard, the run-state gate-guard, and the mokata MCP tools — the same experience as the plugin.
 
 ### Options
 
@@ -111,7 +114,10 @@ claude mcp add --transport stdio --scope project mokata -- mokata-mcp
 }
 ```
 
-Write tools are propose-only unless explicitly confirmed; secrets are a hard block.
+Every MCP write tool is **propose-first**: the call returns a `proposal_id` and writes nothing.
+A **human** mints the approval out-of-band in their own terminal — `mokata approve <id>` — and
+only then does a re-call with that `proposal_id` commit, once. Secrets remain a hard block that
+no approval lifts.
 
 ### 3. Enforcement — the hooks
 
@@ -135,16 +141,39 @@ absolute path; by hand the bare name works just as well:
         "hooks": [
           { "type": "command",
             "command": "mokata-hook secret-guard" }
+        ] },
+      { "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          { "type": "command",
+            "command": "mokata-hook gate-guard" }
         ] }
     ]
   }
 }
 ```
 
+**Wire both `PreToolUse` entries.** If you wire only the secret-guard you get *no run-state
+gates at all* — your spec/TDD/scope enforcement silently never fires, while everything looks
+installed. The two blocks are different in kind:
+
+| hook | matcher | what it blocks | overridable? |
+|---|---|---|---|
+| `mokata-hook secret-guard` | `Write\|Edit\|MultiEdit\|Bash` | a write **or shell command** carrying a secret — a **security** block | **Never.** No approval lifts it. |
+| `mokata-hook gate-guard` | `Write\|Edit\|MultiEdit\|NotebookEdit` | a write that breaks the run's **methodology** — the three run-state gates | **Yes**, explicitly: `mokata gate override <gate> --reason "<why>"` |
+
+Both refuse with **exit code 2** and one stderr line, `BLOCKED [<gate>] <reason>`. The
+gate-guard's three gates are `spec-persisted` (an approach is approved but no spec is emitted),
+`no-code-without-failing-test` (a spec exists but no failing test is on record), and `spec-scope`
+(the write is outside the spec's authorized surface, spells a **deferred** marker, or a spec
+amend is in progress). They fire **only inside an active mokata run** — hand-editing a repo
+outside a run is never policed — and **test files are always writable**, because you must be
+able to write the failing test. Note the matchers **differ**: the gate-guard does not match
+`Bash`, so a `sed -i` through the shell is not policed (a known, documented hole; the
+*secret*-guard does match `Bash`).
+
 `SessionStart` injects the bootstrap briefing (the `--plugin-root` lets `/mokata:init` locate
-the bundled engine — manual setup has no `${CLAUDE_PLUGIN_ROOT}`); `PreToolUse` blocks a
-secret-bearing write or command with **exit code 2**. Just let `mokata setup claude` write the
-block for you to get the absolute-path form automatically.
+the bundled engine — manual setup has no `${CLAUDE_PLUGIN_ROOT}`). Just let `mokata setup
+claude` write the whole block for you to get the absolute-path form automatically.
 
 ### Plugin vs. manual vs. `mokata setup`
 
@@ -173,11 +202,11 @@ Earlier builds launched the hooks with a bare `python3` (via `sh launch.sh`), wh
 resolve in a few common setups — **Windows** names the interpreter `python` or `py -3`; a
 **GUI-launched Claude Code on macOS** runs hooks with a minimal `PATH` that often omits
 Homebrew (`/opt/homebrew/bin`), pyenv shims, or `/usr/local/bin`. The symptom was a
-non-blocking `python3: command not found` line and the SessionStart briefing / secret-guard
-silently not running.
+non-blocking `python3: command not found` line and the SessionStart briefing / secret-guard /
+gate-guard silently not running.
 
 mokata now launches the hooks through the **`mokata-hook` console entry point** (the
-`session-start` / `secret-guard` subcommands). When you `pip install` mokata, `mokata-hook`
+`session-start`, `secret-guard`, and `gate-guard` subcommands). When you `pip install` mokata, `mokata-hook`
 lands on PATH exactly like the `mokata` CLI and the `mokata-mcp` server — so if the MCP server
 resolves for you (it must, for its tools to work), the hooks resolve identically. No bare
 `python3`, no `sh`, no PATH guessing. `mokata setup` additionally pins it to its absolute path.

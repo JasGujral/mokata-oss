@@ -24,6 +24,7 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _support import mcp_commit
 
 from mokata import MOKATA_DIR
 from mokata import session_bundle as SB
@@ -360,7 +361,7 @@ class TestMcpSurfaces(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _seed_run(surface)
-            res = M.session_push(path=d, tag="auth", approve=True)
+            res = mcp_commit(M.session_push, path=d, tag="auth")
             self.assertTrue(res["committed"])
             self.assertTrue(os.path.exists(SB.bundle_path(d, "auth")))
 
@@ -369,10 +370,10 @@ class TestMcpSurfaces(unittest.TestCase):
         with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
             surface = _repo(a)
             _seed_run(surface)
-            M.session_push(path=a, tag="auth", approve=True)
+            mcp_commit(M.session_push, path=a, tag="auth")
             _repo(b)
             os.makedirs(os.path.join(b, "src"), exist_ok=True)  # different codebase
-            res = M.session_pull(path=a, tag="auth", into=b, approve=True)
+            res = mcp_commit(M.session_pull, path=a, tag="auth", into=b)
             self.assertEqual(res["status"], "mismatch")
 
     def test_session_pull_round_trips_with_approval(self):
@@ -380,9 +381,9 @@ class TestMcpSurfaces(unittest.TestCase):
         with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
             surface = _repo(a)
             _seed_run(surface, passed=("brainstorm", "analysis"))
-            M.session_push(path=a, tag="auth", approve=True)
+            mcp_commit(M.session_push, path=a, tag="auth")
             dst = _repo(b)
-            res = M.session_pull(path=a, tag="auth", into=b, approve=True)
+            res = mcp_commit(M.session_pull, path=a, tag="auth", into=b)
             self.assertTrue(res["committed"])
             cp = PipelineCheckpoint(dst.state, "auth-refactor")
             self.assertEqual(cp.resume_phase(), "strawman")

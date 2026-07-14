@@ -1,6 +1,6 @@
 # Supply-chain & security
 
-mokata is built to clear a company security review. Every release carries three
+mokata is built to clear a company security review. Every release carries four
 independently-verifiable trust signals, and the project runs a coordinated-disclosure policy.
 
 > **What runs where (be honest):** the signing, SBOM, and attestation steps **execute in CI at
@@ -25,14 +25,36 @@ gh attestation verify mokata-X.Y.Z-py3-none-any.whl --repo JasGujral/mokata-oss
 Least-privilege: only the `build` job holds `id-token: write` + `attestations: write`; the
 workflow default is `contents: read`, and only the publish job gets `contents: write`.
 
-## 2. SBOM (CycloneDX)
+## 2. Signed artifacts — cosign (keyless)
+
+The attestation above lands in **GitHub's attestation store**. So that the signature is also a
+**file you can download**, the release additionally **signs each artifact with
+[cosign](https://github.com/sigstore/cosign) keyless** (Sigstore OIDC, no long-lived keys, logged to
+the transparency log). For the wheel, the sdist, **and** the SBOM, the Release carries:
+
+| Asset | What |
+|---|---|
+| `<file>.sig` | detached signature |
+| `<file>.pem` | the signing certificate (verification chain) |
+| `<file>.sigstore.json` | the Sigstore bundle |
+
+Verify a downloaded artifact against its bundle:
+
+```bash
+cosign verify-blob --bundle mokata-X.Y.Z-py3-none-any.whl.sigstore.json \
+  --certificate-identity-regexp 'https://github.com/JasGujral/mokata-oss/.+' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  mokata-X.Y.Z-py3-none-any.whl
+```
+
+## 3. SBOM (CycloneDX)
 
 Each release attaches **`sbom.cdx.json`**, a [CycloneDX](https://cyclonedx.org/) Software Bill
 of Materials generated with the pinned `cyclonedx-bom` tool. mokata's core has **no required
 runtime dependencies**, so the SBOM is small by design — it lets a reviewer enumerate exactly
 what `pip install mokata` brings in.
 
-## 3. Reproducible builds
+## 4. Reproducible builds
 
 The sdist and wheel are **deterministic**: the build honors `SOURCE_DATE_EPOCH` (set from the
 tag commit's time), and a small stdlib normalizer (`scripts/normalize_sdist.py`) closes the one
@@ -50,7 +72,7 @@ scripts/check-reproducible.sh        # builds twice, normalizes, fails closed on
 
 Identical hashes mean anyone can rebuild the published artifacts and confirm they match.
 
-## 4. Coordinated disclosure
+## 5. Coordinated disclosure
 
 Security issues are handled under a **coordinated (responsible) disclosure** policy: report
 privately via GitHub Security Advisories, we triage and fix, and we disclose together once a fix

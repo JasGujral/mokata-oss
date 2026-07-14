@@ -63,16 +63,30 @@ A hosted Postgres store is an **opt-in** remote backend. Two rules keep it local
 
 2. **Install the optional driver:** `pip install "mokata[postgres]"` (the `psycopg` extra).
 
-The Postgres backend **degrades to the SQLite floor** — never a hard failure — if `dsn_env`
-is unset, the env var is empty, `psycopg` isn't installed, or the database is unreachable.
+3. **Provision the shared schema once:** `mokata team init`. mokata **never runs DDL at runtime** —
+   `team init` is the sole owner of it — so the tables must already exist. The upside is that your
+   everyday runtime role needs **no `CREATE` and no table ownership**: a DML-only role is enough
+   (see [team setup](team-setup.md#least-privilege-the-runtime-role-needs-no-ddl)).
+
+The Postgres backend **degrades to the SQLite floor** — never a hard failure — if `dsn_env` is
+unset, the env var is empty, `psycopg` isn't installed, the database is unreachable, or the shared
+schema is absent / out of the version range this build serves.
+
+**The fallback is loud, not silent.** A degrade names its failure class and the exact fix (e.g. *run
+`mokata team init` to provision the shared schema*), and it is **remembered** — `mokata doctor`
+reports what fell back to a floor this session, so you never believe you're reading a shared store
+while you're actually reading local SQLite.
 
 ### Local-first & trust caveats
 
 - **Nothing egresses unless you wire it.** A remote store is *explicit user wiring*; mokata
   never sends memory off-machine otherwise. It's surfaced by the local-first netguard as a
   network-capable tool.
-- **Adopt freely, trust nothing (P15).** A hosted store is an adopted external tool: writes
-  to it stay **human-gated** and it honors the per-adapter [trust dial](configure-a-profile.md).
+- **Adopt freely, trust nothing (P15).** A hosted store is an adopted external tool: writes to it
+  stay **human-gated** — a write is proposed, and it commits only against a human-minted approval
+  (`mokata approve <id>`), with the secret-guard hard-blocking it even then. The
+  [trust dial](configure-a-profile.md) sets how freely a tool may write; today it is **enforced on
+  the MCP write surface** (`read-only` there is a configuration bound no approval can lift).
 - **Provenance is preserved.** Memory carries its origin; putting it in a shared DB doesn't
   strip that.
 

@@ -1,9 +1,10 @@
 # Integrating mokata with other AI tools
 
-mokata is **Claude-Code-first** — start with the [plugin](use-the-plugin.md), or wire the
-same experience in without the marketplace via [`mokata setup claude`](use-without-plugin.md).
-But the engine is harness-agnostic: the plugin is just a bundle of three portable artifacts
-(prompt templates, the `mokata-mcp` server, and hook scripts), so you can wire those into
+mokata is **Claude-Code-first** — start with the pip-first path, `pip install mokata` →
+[`mokata setup claude`](use-without-plugin.md) (a one-click Claude Code plugin is planned but
+**not yet available**; see [Using mokata in Claude Code](use-the-plugin.md)). But the engine is
+harness-agnostic: what `setup` wires is just a bundle of three portable artifacts (prompt
+templates, the `mokata-mcp` server, and hook scripts), so you can wire those into
 another harness or share a governed stack across a team. The paths below go from
 highest-fidelity (a real harness integration) down to the lowest common denominator (raw
 CLI), so reach for them in that order. (mokata never supplies the LLM — your harness does;
@@ -67,7 +68,14 @@ See [Share a stack](share-a-stack.md).
 ## What stays true everywhere
 
 No matter the integration path, mokata's guarantees hold: **local-first** (nothing leaves
-the machine unless you wire an external tool), **every durable write human-gated**, and a
-**full audit trail** of every gate decision and tool call. Adopted external tools are
-treated as untrusted input — gated and permission-scoped via the per-adapter
-[trust dial](configure-a-profile.md).
+the machine unless you wire an external tool), **every durable write human-gated** (a write
+tool call returns a proposal id and commits nothing; a **human** mints the approval out-of-band
+with `mokata approve <id>`), and a **full audit trail** of every gate decision and tool call.
+Adopted external tools are treated as untrusted input — their output is gated on the way in,
+never trusted on sight.
+
+One limit, stated plainly: the PreToolUse hooks — the **secret-guard** and the run-state
+**gate-guard** — are wired **only on Claude Code**, the one harness that declares the `hooks`
+capability. Elsewhere the durable-write protections above still hold (they live in mokata's own
+WriteGate, not the hook), but the run-state gates enforce nothing. See
+[Use mokata with other AI agents](use-with-other-agents.md).

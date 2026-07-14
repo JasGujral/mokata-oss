@@ -12,8 +12,8 @@ session is never ambiguous about which mode it's in.
 Scope (TM.S1 = mode PLUMBING + SURFACE only): the shared-DB connection manager and the real
 ≤500ms DB probe land in **TM.S2**. Until then `team_preflight` FAILS CLOSED — it always
 refuses activation, naming the missing connection manager (TM.S2) as a blocker, while still
-reporting the S1-checkable prereqs (a usable run identity + `$MOKATA_PG_DSN` credential
-presence). Team mode is NEVER half-activated.
+reporting the S1-checkable prereqs (a usable run identity + the shared-DB DSN credential
+presence, under the CONFIGURED env-var name). Team mode is NEVER half-activated.
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from . import team_docs
+from .dsn import DEFAULT_DSN_ENV, resolve_dsn_env
 
 # The two run modes. `local` is the default; anything else the setting could hold is NOT
 # team (fail-closed) and reads back as local.
@@ -36,9 +37,10 @@ MODES = (LOCAL, TEAM)
 # key keeps a Stage-1 (zero-config) manifest byte-for-byte unchanged and reads as local.
 MODE_SETTING = "mode"
 
-# The env-var NAME carrying the shared-DB DSN on the golden path (doc 48). The secret DSN
-# is never stored — only its presence is checked here.
-CREDENTIAL_ENV = "MOKATA_PG_DSN"
+# Back-compat alias for the DEFAULT shared-DB DSN env-var NAME. The literal itself lives ONLY
+# in `dsn.py` (CM.S1 / C-1) — a session's ACTUAL env name is resolved from the manifest via
+# `resolve_dsn_env(surface)`, never this default. Kept as a name for existing call sites/tests.
+CREDENTIAL_ENV = DEFAULT_DSN_ENV
 
 
 def is_valid_mode(value: Any) -> bool:
@@ -53,6 +55,25 @@ def stored_mode(surface: Any) -> Optional[str]:
     try:
         val = surface.manifest.setting(MODE_SETTING, None)
     except Exception:
+        # D5 type-(iv) SUPPRESS-OK — and one of the few places `except Exception` is the CONTRACT
+        # rather than a failure to think about one. Three things make it so, and all three have to
+        # hold or this would be a (ii):
+        #
+        #  1. `read_mode` (which this backs) runs on the HOOK HOT PATH — SessionStart, the
+        #     statusline, the gate guard. Those are separate short-lived processes wrapping the
+        #     user's editor, and an exception escaping here does not degrade a mokata feature, it
+        #     WEDGES CLAUDE CODE. "Never raises" is not a nicety here, it is the reason the hook is
+        #     allowed to exist at all.
+        #  2. The fallback is FAIL-CLOSED and therefore safe: absent → local, and an unknown mode is
+        #     NEVER team. A broken surface cannot silently promote a session into team mode.
+        #  3. Nothing is hidden. A surface broken enough to raise here is broken in ways `doctor`'s
+        #     manifest/schema checks report LOUDLY on the very next line — this is not the only
+        #     witness to the failure, so silence here costs the user no information.
+        #
+        # D5 initially narrowed this to `(AttributeError, TypeError)`. That was WRONG twice over:
+        # it made the docstring's "never an exception" a lie, and `flush_liveness` deleted two
+        # guards of its own precisely because `read_mode` cannot raise. Narrowing here silently
+        # re-armed those. The contract is load-bearing for other modules — it stays broad.
         return None
     return val if isinstance(val, str) and val else None
 
@@ -119,7 +140,11 @@ def _resolve_identity(surface: Any, identity: Optional[str]) -> str:
     try:
         from .session_bundle import _default_author
         return _default_author() or ""
-    except Exception:
+    except (ImportError, OSError, KeyError):
+        # D5 — the real raisers behind `crossplat.current_user()`: a half-installed package
+        # (ImportError), a broken passwd/`getpwuid` lookup (OSError), and an environment with
+        # neither $USER nor $LOGNAME (KeyError). "" is a BLOCKER in the preflight, not a silent
+        # pass — the fail-closed report names it and its fix, so this degrade is already loud.
         return ""
 
 
@@ -129,8 +154,9 @@ def team_preflight(surface: Any, *, environ: Optional[Dict[str, str]] = None,
     """The REAL fail-closed team-mode preflight (TM.S2).
 
     Team activates ONLY when every prerequisite passes: a usable run identity (reused from
-    `session_bundle.py`), `$MOKATA_PG_DSN` present (doc 48 golden path), the shared DB
-    reachable within the ≤500ms probe, AND its `mokata_schema_version` compatible. Each
+    `session_bundle.py`), the shared-DB DSN present under the CONFIGURED env-var name (resolved
+    via `dsn.resolve_dsn_env`, doc 48 golden path), the shared DB reachable within the ≤500ms
+    probe, AND its `mokata_schema_version` compatible. Each
     failure mode is fail-closed with its own NAMED fix; team mode is never half-activated,
     never a silent divergence.
 
@@ -149,14 +175,17 @@ def team_preflight(surface: Any, *, environ: Optional[Dict[str, str]] = None,
         else "no usable run identity resolved",
         fix="" if ident else "set $USER / $LOGNAME so writes carry a real author"))
 
-    # 2) credentials — the env-var NAME must be present (the DSN secret is never stored).
-    dsn = (env.get(CREDENTIAL_ENV) or "").strip()
+    # 2) credentials — the CONFIGURED env-var NAME must hold the DSN (the secret is never
+    #    stored; only its presence is checked). Resolved via the ONE resolver so a custom
+    #    `team connect --dsn-env` is honored here exactly as memory reads honor it (C-1).
+    cred_env = resolve_dsn_env(surface)
+    dsn = (env.get(cred_env) or "").strip()
     has_cred = bool(dsn)
     checks.append(PreflightCheck(
         "credentials", has_cred,
-        f"${CREDENTIAL_ENV} is set" if has_cred else f"${CREDENTIAL_ENV} is not set",
+        f"${cred_env} is set" if has_cred else f"${cred_env} is not set",
         fix="" if has_cred
-        else f"export {CREDENTIAL_ENV}=postgres://…  (the DSN secret is never stored)"))
+        else f"export {cred_env}=postgres://…  (the DSN secret is never stored)"))
 
     # 3) the shared DB — reachability + schema compatibility (the real TM.S2 probe). Only
     #    runs with a DSN to probe; without one, credentials (above) is the blocker.
@@ -200,6 +229,8 @@ def _db_checks(dsn: str, probe: Optional[Any]) -> List[PreflightCheck]:
     db_ok = PreflightCheck("shared-database", True,
                            f"reachable ({res.elapsed_ms:.0f}ms round-trip)")
 
+    from .teamdb import TEAM_SCHEMA_VERSION, schema_fix
+
     # reachable, but the schema isn't provisioned → run `team init` (TM.S3).
     if not res.schema_present or res.schema_version is None:
         return [db_ok, PreflightCheck(
@@ -207,17 +238,22 @@ def _db_checks(dsn: str, probe: Optional[Any]) -> List[PreflightCheck]:
             res.detail or "shared schema not provisioned",
             fix="run `mokata team init` to provision the shared schema (TM.S3)")]
 
-    # reachable + provisioned, but an incompatible version.
+    # D2 — reachable + provisioned, but OUT OF RANGE. The two directions are different failures
+    # with different fixes: a schema below our floor needs `team init`; a schema that has moved
+    # ahead and no longer serves this build needs a mokata upgrade (never a silent downgrade).
     if not res.compatible:
-        from .teamdb import TEAM_SCHEMA_VERSION
         return [db_ok, PreflightCheck(
             "team-schema", False,
-            f"schema version {res.schema_version} is incompatible "
-            f"(this mokata speaks v{TEAM_SCHEMA_VERSION})",
-            fix="upgrade mokata, or re-run `mokata team init` to migrate the shared schema")]
+            res.detail or (f"schema version {res.schema_version} is out of range "
+                           f"(this mokata speaks v{TEAM_SCHEMA_VERSION})"),
+            fix=schema_fix(res.reason))]
 
-    return [db_ok, PreflightCheck(
-        "team-schema", True, f"schema v{res.schema_version} compatible")]
+    # In range. A version DIFFERENCE is a warning, not a refusal — that is the whole of D2: a
+    # bump must not partition a team into two islands while it rolls out.
+    note = f"schema v{res.schema_version} in range (this mokata speaks v{TEAM_SCHEMA_VERSION})"
+    if res.warning:
+        note = f"{note} — {res.warning}"
+    return [db_ok, PreflightCheck("team-schema", True, note)]
 
 
 # --------------------------------------------------------------- activation (reach CONNECTED)
@@ -283,9 +319,19 @@ def mode_badge(surface: Any, *, ascii_only: bool = False) -> str:
     hang and can't fabricate a warning that wasn't observed). Degrade-clean → `local`."""
     mode = read_mode(surface)
     try:
-        from . import team_health
-        return mode + team_health.cached_or_neutral(surface).badge_suffix(ascii_only=ascii_only)
-    except Exception:
+        from . import flush_liveness, team_health
+        # TM.S5: the health warning glyph on trouble. CM.S4: the pending-backlog count (zero-
+        # network — journal only) so "N approved writes are still local-only" is never silent.
+        suffix = team_health.cached_or_neutral(surface).badge_suffix(ascii_only=ascii_only)
+        return mode + suffix + flush_liveness.badge_segment(surface, ascii_only=ascii_only)
+    except (ImportError, OSError, AttributeError):
+        # D5 — the real raisers on the hot statusline path: a half-installed package (ImportError),
+        # an unreadable cached-verdict / journal file (OSError), and a duck-typed surface without
+        # `.state`/`.root` (AttributeError). The bare mode is the honest floor — and the badge's own
+        # degrade signal (the ⚠ suffix) is exactly what this returns without, so a hidden failure
+        # here would be a lie by omission; it is the ONE place a print would be worse than useless
+        # (the statusline re-renders constantly), which is why the notice belongs upstream, on the
+        # health/journal reads themselves, not here.
         return mode
 
 

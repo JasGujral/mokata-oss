@@ -86,8 +86,7 @@ nav:
       - Use a codebase graph: how-to/use-a-codebase-graph.md
       - Set the execution mode: how-to/set-execution-mode.md
       - Watch a run (lanes + dashboard): how-to/watch-a-run.md
-      # TODO(0.0.9): VS Code extension is roadmap/not-in-0.0.9 — page banner-marked "Planned".
-      # Consider moving under a "Roadmap" section post-release.
+      # VS Code extension is roadmap — page banner-marked "Planned — not yet available".
       - Use mokata in VS Code (roadmap): how-to/use-mokata-in-vs-code.md
       - Use & heal memory: how-to/use-memory.md
       - Capture project rules & context: how-to/capture-project-rules-and-context.md

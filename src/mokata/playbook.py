@@ -17,6 +17,7 @@ subagent runner is supplied (degrade-safe).
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
@@ -133,15 +134,21 @@ def run_playbook(surface: Any, exec_choice: Optional[ExecutionChoice] = None,
     # radius) is computed over the wired knowledge layer + memory (degrade-clean when absent);
     # Lens 2 (architectural fit) is the golden-path's own honest verdict (this is a self-test).
     from .brainstorm_impact import DesignFitVerdict, FITS
+    # D5 — the real raisers behind a knowledge/memory build + read: a half-installed package or a
+    # missing optional extra (ImportError), the local files under `.mokata/` (OSError), and the
+    # SQLite floor itself (sqlite3.Error — locked/corrupt DB). Both lenses are DEGRADE-CLEAN by
+    # design (an absent layer contributes no blast-radius; an empty memory list contributes no
+    # prior decisions), and this is the golden-path SELF-TEST, whose whole job is to run honestly
+    # on a repo that may have neither wired.
     try:
         from .knowledge import KnowledgeLayer
         _layer = KnowledgeLayer.from_surface(surface)
-    except Exception:
+    except (ImportError, OSError, sqlite3.Error):
         _layer = None
     try:
         from .memory import MemoryStore
         _mem_items = MemoryStore.from_surface(surface).peek_active()
-    except Exception:
+    except (ImportError, OSError, sqlite3.Error):
         _mem_items = []
     session.assess_impacts(layer=_layer, memory_items=_mem_items)
     for _a in session.approaches:
@@ -167,7 +174,7 @@ def run_playbook(surface: Any, exec_choice: Optional[ExecutionChoice] = None,
 
     # 3) Tests written and recorded RED (E1).
     tests = [TestRef(t["name"], t["acs"]) for t in STORY["tests"]]
-    guard = TddGuard(ledger=led)
+    guard = TddGuard(ledger=led, store=surface.state)   # SI.2 — RED/GREEN survives the process
     for t in tests:
         guard.record_red(t.name)
 

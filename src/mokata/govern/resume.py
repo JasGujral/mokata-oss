@@ -39,6 +39,25 @@ class PipelineCheckpoint:
             if self.ledger is not None:
                 self.ledger.record("checkpoint", run=self.run_id, phase=phase)
 
+    def regress(self, drop) -> bool:
+        """SI-DEV — a FORCED phase regression: un-pass `drop` so those gates must run again.
+
+        `mokata spec amend` regresses `develop -> SPEC` by dropping `completeness_gate` and `emit`:
+        the amended spec has to re-earn both. Everything passed EARLIER stays passed, so
+        `resume_phase()` returns the first gate that must re-run rather than the start of the
+        pipeline — which is exactly P17 ("resume from the last PASSED gate, not from scratch").
+        Idempotent, and persisted immediately (crash-safe), like `mark_passed`."""
+        drop = set(drop)
+        kept = [p for p in self.passed if p not in drop]
+        if kept == self.passed:
+            return False
+        dropped = [p for p in self.passed if p in drop]
+        self.passed = kept
+        self._save()
+        if self.ledger is not None:
+            self.ledger.record("checkpoint", run=self.run_id, phase="regress", dropped=dropped)
+        return True
+
     def last_passed(self) -> Optional[str]:
         return self.passed[-1] if self.passed else None
 

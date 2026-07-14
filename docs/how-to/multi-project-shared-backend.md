@@ -68,9 +68,13 @@ Both work:
 
 ## Migration — pre-existing shared tables
 
-Tables created before Stage 71a gain the `project` column automatically (an idempotent
-`ADD COLUMN IF NOT EXISTS` on connect). Their **old rows have no project key** and read back as a
-**`legacy`** bucket:
+Tables created before Stage 71a gain the `project` column when the shared schema is provisioned or
+upgraded — an idempotent `ADD COLUMN IF NOT EXISTS` run by **`mokata team init`**, which owns *all*
+DDL. (Runtime connections run **no DDL at all**; they only verify the schema, so a least-privilege
+DML-only role is enough — see [team setup](team-setup.md#least-privilege-the-runtime-role-needs-no-ddl).
+If the column isn't there yet, re-run `mokata team init`.)
+
+Old rows **have no project key** and read back as a **`legacy`** bucket:
 
 - Scoped reads (the default) **do not** show legacy rows — no crash, no surprise.
 - `--all` **surfaces** them, and `--list-projects` shows the `legacy` bucket, so nothing is hidden

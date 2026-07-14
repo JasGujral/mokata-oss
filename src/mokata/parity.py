@@ -178,6 +178,18 @@ def _surfaces() -> List[CommandSurface]:
                             "tool surfaces the same verdict + comment body in-harness, Stage 58)"),
         CommandSurface("sessions", mcp_read=("sessions",),
                        note="list past + active runs → read tool"),
+        CommandSurface("windows", mcp_read=("session_windows",),
+                       note="MS.S2 — list the LIVE Claude Code windows on this repo (each is its "
+                            "own MCP process): id/started/alive-stale/phase → read tool. Read-only "
+                            "(self-registers + prunes dead pids; transient registry upkeep, "
+                            "ungated). Distinct from `sessions` (pipeline runs) and `session` "
+                            "(shareable bundles)."),
+        CommandSurface("worktree", exempt=(
+            "WT.S1 — `git worktree add` to isolate a session's working tree is a durable git / "
+            "filesystem action, gated through the CLI's fail-closed read_yes_no path (P2/P14). Its "
+            "in-harness DETECT + OFFER is surfaced by `session_windows` (read tool) and the "
+            "SessionStart briefing, which point the user at this command; the create itself is not "
+            "an MCP write tool — a shell worktree action lives outside the WriteGate's data model.")),
         CommandSurface("decompose", slash=("decompose",), mcp_read=("decompose",),
                        note="propose an independent-subtask split of the spec ACs (read-only) "
                             "→ read tool + slash; the confirm + fan-out stay the human-gated "
@@ -207,13 +219,15 @@ def _surfaces() -> List[CommandSurface]:
                        mcp_write=("vault_push",),
                        note="list/search/pull → read; push → gated write"),
         CommandSurface("session", slash=("session",),
-                       mcp_read=("session_list",),
+                       mcp_read=("session_list", "session_save"),
                        mcp_write=("session_push", "session_pull", "session_name"),
                        note="portable tagged sessions (Stage 55a/55b): list → read (spans local "
                             "+ remote transports); push/pull/name → gated writes (secret-scanned "
                             "+ human-gated on EVERY transport — local/vault/postgres; content-hash "
                             "verified + cross-codebase mismatch surfaced on pull; rename never a "
-                            "silent clobber)"),
+                            "silent clobber). SS.S0 `save` → an UNGATED read tool (`session_save`): "
+                            "a LOCAL snapshot of this session's in-flight state is the user's own "
+                            "transient state (P2-exempt) — the gate is at push/SHARE, not save"),
         CommandSurface("export", mcp_read=("export_preview",), mcp_write=("export_stack",),
                        note="export-preview → read tool; export → gated write"),
         CommandSurface("import", mcp_write=("import_stack",),
@@ -233,12 +247,36 @@ def _surfaces() -> List[CommandSurface]:
                             "Postgres via an env-var DSN → slash drives the human-gated, "
                             "secret-scanned adopt/connect (mokata hosts nothing; the DSN secret "
                             "is never stored). status is read-only"),
+        CommandSurface("spec", slash=("spec",), mcp_write=("spec_emit", "spec_amend"),
+                       note="SI-DEV.0 — EMIT the spec: the completeness gate, then a human-gated "
+                            "write of `emitted_spec` + `spec_corpus`. The slash command drives the "
+                            "gated path (propose → `mokata approve <id>` → commit); the CLI twin "
+                            "(`mokata spec emit --file`) is the use-anywhere surface. This is the "
+                            "ONLY writer of the spec the `spec-persisted` gate and `spec-check` "
+                            "read — before it, both were unsatisfiable."),
         CommandSurface("spec-check", mcp_write=("spec_check",),
                        note="regression guard → gated (deviation gate on a conflict)"),
         CommandSurface("reset", mcp_write=("reset",),
                        note="remove mokata state → gated write (propose→approve)"),
 
         # --- install / diagnostic PLUMBING → intentionally CLI-or-hook (each with reason) -
+        CommandSurface("approve", exempt=(
+            "SI.3 — the out-of-band human approval for a durable MCP write. DELIBERATELY has no MCP "
+            "tool and no slash command, for the same reason as `gate`: an in-harness approve surface "
+            "would let the MODEL approve its own writes, which is exactly the hole this closes (the "
+            "old `approve=true` WAS that surface — a consent flag the model typed itself). P2 says "
+            "every durable write is human-gated, and a gate the gated party can open is not a gate. "
+            "The approval must be MINTED by a human at a terminal — explicit, shown in full, "
+            "re-confirmed, single-use, content-hashed, session-scoped, ledgered — and the model may "
+            "only REFERENCE it by id. The write tools' propose path is its in-harness surface: they "
+            "return the proposal and tell the model to ask the human to run this command.")),
+        CommandSurface("gate", exempt=(
+            "SI.1 — the run-state gates' status + P14 override. DELIBERATELY has no MCP tool and "
+            "no slash command: an in-harness surface would let the MODEL clear the very gate that "
+            "constrains it, which is precisely the bypass SI.1 exists to close (the hook makes the "
+            "gate structural; a model-invocable override would make it advisory again). The "
+            "override must be a HUMAN act at a terminal — explicit, re-confirmed, session-scoped, "
+            "ledgered. The hook itself needs no surface: it is wired by `setup`.")),
         CommandSurface("unsetup", exempt=(
             "install plumbing — reverses `setup`; a harness-config + filesystem teardown "
             "run from the shell, the mirror of `setup`.")),

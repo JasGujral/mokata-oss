@@ -12,8 +12,9 @@ TM.S2 adds the doc-48 **connection manager** (E4) + **timeouts** (E2):
     unbounded hangs (doc 48 finding 4). Local mode is untouched; `psycopg` stays an optional
     extra, imported lazily so the core stays dependency-free.
 
-This module NEVER owns DDL — `setup_sql` is the CALLER's (and, post-TM.S3, `team init`'s)
-responsibility; the manager only hands back a live, timeout-bounded connection.
+This module NEVER owns DDL — and after D1 (0.0.13) it cannot carry any either: `connect_psycopg`
+lost its `setup_sql` parameter, so a runtime connect VERIFIES the schema (`teamdb.ensure_schema`,
+one cached read-only probe) and can no longer write it. `team init` (teamdb) is the sole owner.
 """
 
 from __future__ import annotations
@@ -39,6 +40,11 @@ def reset_manager() -> None:
         try:
             conn.close()
         except Exception:  # pragma: no cover - close is best-effort
+            # D5 — deliberately left BROAD, with no narrow class to name: `conn` is a THIRD-PARTY
+            # (psycopg) or injected object whose `close()` raises classes mokata cannot import
+            # without taking a hard dependency on the optional extra. Closing is a teardown that
+            # cannot fail in a way anyone can act on — there is nothing to degrade and nothing to
+            # report; the connection is being dropped either way.
             pass
     _MANAGER.clear()
 
@@ -48,6 +54,10 @@ def _is_live(conn: Any) -> bool:
     try:
         return not getattr(conn, "closed", 0)
     except Exception:  # pragma: no cover - defensive
+        # D5 — deliberately left BROAD, with no narrow class to name: `conn.closed` is a
+        # THIRD-PARTY (psycopg) property whose getter may raise a driver class we cannot name
+        # without a hard dependency on the optional extra. False = "not live" = reconnect, which is
+        # the safe direction (a fresh connection, never a silently dead one).
         return False
 
 
@@ -87,16 +97,21 @@ def get_connection(dsn: str, unavailable: Type[Exception], *,
     return conn
 
 
-def connect_psycopg(dsn: str, unavailable: Type[Exception],
-                    setup_sql: Iterable[str] = ()) -> Any:
-    """Return the shared managed connection for `dsn` (timeout-bounded), then run each
-    `setup_sql` statement on it. Signature-compatible with every existing caller. A missing
-    driver OR any connect/setup failure raises `unavailable(...)` so the caller degrades
-    cleanly (never a hard failure)."""
-    conn = get_connection(dsn, unavailable)
-    try:
-        for stmt in setup_sql:
-            conn.execute(stmt)
-        return conn
-    except Exception as exc:                     # a setup failure degrades cleanly (conn kept)
-        raise unavailable(f"database unavailable: {exc}") from exc
+def connect_psycopg(dsn: str, unavailable: Type[Exception], *,
+                    require_tables: Iterable[str] = ()) -> Any:
+    """Return the shared managed connection for `dsn` (timeout-bounded), VERIFIED against the
+    shared schema. The ONE seam every runtime Postgres consumer connects through.
+
+    D1: this used to take a `setup_sql` list and execute it — that parameter is how four backends
+    ran their own hand-mirrored `CREATE TABLE …` on EVERY connect, which a least-privilege
+    DML-only role is denied (SQLSTATE 42501) even against a perfectly provisioned database. The
+    parameter is GONE, so runtime DDL is now unrepresentable here rather than merely discouraged.
+    What replaces it is a VERIFY: one cached, read-only schema probe (E2). A missing/out-of-range
+    schema raises `unavailable(...)` carrying `failure_class` + the exact `mokata team init` fix,
+    so the caller degrades LOUDLY and honestly — never silently to the local floor.
+
+    `require_tables` verifies extra mokata-owned tables that sit OUTSIDE the version artifact
+    (today only pgvector's opt-in table)."""
+    from ..teamdb import ensure_schema
+    ensure_schema(dsn, unavailable, require_tables=require_tables)
+    return get_connection(dsn, unavailable)

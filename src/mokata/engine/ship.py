@@ -76,7 +76,11 @@ def build_finish_summary(ledger: Any, tail: int = FINISH_SUMMARY_TAIL) -> List[s
     try:
         from ..govern.ledger import why_timeline
         return why_timeline(ledger.entries(), tail=tail)
-    except Exception:
+    except (OSError, ValueError, ImportError):
+        # OSError = the ledger file could not be read; ValueError (json.JSONDecodeError) = a line is
+        # unparseable; ImportError = a half-installed engine. The recap is presentation-only prose
+        # over an already-recorded ledger — the caller shows a friendly note in its place, and the
+        # ledger's own integrity is reported (loudly, as an error) by `mokata doctor`.
         return []
 
 

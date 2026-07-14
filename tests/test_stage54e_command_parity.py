@@ -20,6 +20,7 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _support import mcp_commit   # SI.3: propose -> a HUMAN approves out-of-band -> redeem by id
 
 from mokata import mcp_server as M
 from mokata import parity
@@ -32,8 +33,24 @@ COMMANDS_DIR = os.path.join(ROOT, "src", "mokata", "templates", "commands")
 # gained an in-harness surface (the /mokata:setup guided wizard) at Stage 56, so it's no longer
 # exempt — the rest remain shell/hook-only plumbing. `release-check` (Stage 61b) is release
 # plumbing run from the shell/CI during a release cut — the version mirror of `validate`.
+# `worktree` (WT.S1) is git session-hygiene plumbing: `git worktree add` is a durable git /
+# filesystem action gated via the CLI's fail-closed read_yes_no path — its in-harness DETECT+OFFER
+# is surfaced by `session_windows` + the SessionStart briefing, which point the user at it.
 EXEMPT = {"unsetup", "harness", "route", "detect", "validate", "bootstrap",
-          "release-check", "branch-protection-check", "bench"}
+          "release-check", "branch-protection-check", "bench", "worktree",
+          # SI.1 — `gate` (run-state gate status + P14 override) is exempt BY DESIGN, and this is
+          # the one exemption that is a security property rather than plumbing: giving the override
+          # an MCP tool or a slash command would let the MODEL clear the very gate that constrains
+          # it, turning SI.1's structural block back into advice. It stays a human act at a
+          # terminal. See parity.py's rationale.
+          "gate",
+          # SI.3 — `approve` (mint the out-of-band human approval for a durable MCP write) is exempt
+          # for the SAME security reason as `gate`: a model-invocable approve would let the MODEL
+          # approve its own writes. The old `approve=true` tool param WAS exactly that surface — a
+          # consent flag the model typed itself — and closing it is the whole point of SI.3. The
+          # approval must be minted by a human at a terminal; the model may only REFERENCE it by id
+          # (the write tools' propose path is its in-harness surface). See parity.py's rationale.
+          "approve"}
 # The new in-harness surfaces this stage adds.
 NEW_READ_TOOLS = ("rules", "skills", "suggest", "lat_check", "index_status",
                   "baseline", "sessions", "config_get", "export_preview")
@@ -236,19 +253,23 @@ class TestConfigSetGated(unittest.TestCase):
             self.assertFalse(M.config_get(path=d, key="settings.ux.progress")["found"])
 
     def test_approve_commits(self):
+        # SI.3: only a HUMAN-minted approval commits — mcp_commit drives the real round-trip
+        # (propose -> `mokata approve <id>` -> redeem by id).
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
-            res = M.config_set(path=d, key="settings.ux.progress", value="dashboard",
-                               approve=True)
+            res = mcp_commit(M.config_set, path=d, key="settings.ux.progress",
+                             value="dashboard")
             self.assertTrue(res["committed"])
             got = M.config_get(path=d, key="settings.ux.progress")
             self.assertEqual(got["value"], "dashboard")
 
     def test_secret_is_hard_blocked_even_when_approved(self):
+        # the approval is REAL (human-minted, SI.3) and still cannot license a credential — a
+        # security block is not a methodology gate.
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
-            res = M.config_set(path=d, key="tools.pg.config.dsn", value=_SECRET_DSN,
-                               approve=True)
+            res = mcp_commit(M.config_set, path=d, key="tools.pg.config.dsn",
+                             value=_SECRET_DSN)
             self.assertFalse(res.get("committed", False))
             self.assertEqual(res["status"], "blocked")
             self.assertTrue(res["findings"])
@@ -270,9 +291,10 @@ class TestExportStackGated(unittest.TestCase):
             self.assertFalse(os.path.exists(self._dest(d)))
 
     def test_approve_writes_the_stack(self):
+        # SI.3: the write lands only under a HUMAN-minted approval (mcp_commit round-trip).
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
-            res = M.export_stack(path=d, approve=True)
+            res = mcp_commit(M.export_stack, path=d)
             self.assertTrue(res["committed"])
             self.assertTrue(os.path.exists(self._dest(d)))
 

@@ -22,6 +22,7 @@ from contextlib import contextmanager
 from typing import Iterator, List
 
 from .manifest import Manifest
+from .errors import MokataError
 
 # Tool kinds that can reach off-machine. Everything else (cli, library, builtin) is
 # local-only by construction.
@@ -34,7 +35,7 @@ LOCAL_FIRST_STATEMENT = (
 )
 
 
-class NetworkEgressBlocked(RuntimeError):
+class NetworkEgressBlocked(MokataError, RuntimeError):
     """Raised when code attempts network egress inside a `no_network()` guard."""
 
 

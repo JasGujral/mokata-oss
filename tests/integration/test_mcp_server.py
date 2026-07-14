@@ -1,8 +1,11 @@
 """Stage 21 — the plugin-first MCP surface.
 
 Proves the MCP server is a thin, safe wrapper over the engine: it exposes the right tools,
-READ tools return real data, and every WRITE tool is human-gated — propose-only with no
-`confirm`, and a secret is blocked even when confirmed. The tool functions are SDK-free, so
+READ tools return real data, and every WRITE tool is human-gated. Since SI.3 that gate is one the
+MODEL CANNOT OPEN: a write tool is PROPOSE-ONLY, `approve`/`confirm` are accepted but commit
+nothing, and only an approval a human minted out-of-band (`mokata approve <id>`, replayed here by
+`_support.mcp_commit`) lets a write land — after which a secret is STILL hard-blocked, because
+approval is a methodology gate and never a security override. The tool functions are SDK-free, so
 these run with the MCP SDK absent; the server-construction test runs only when the optional
 SDK is installed.
 
@@ -13,7 +16,7 @@ import os
 import tempfile
 import unittest
 
-from _support import write_sample_repo
+from _support import mcp_commit, write_sample_repo
 
 from mokata import mcp_server as M
 from mokata.config import Surface
@@ -30,6 +33,8 @@ EXPECTED_READ = {"query", "recall", "doctor", "coverage", "budget", "audit",
                  "baseline", "sessions", "config_get", "export_preview",
                  "decompose",                          # Stage 54f — task decomposition (read)
                  "session_list",                       # Stage 55a — portable sessions (read)
+                 "session_windows",                    # MS.S2 — live-window registry (read)
+                 "session_save",                       # SS.S0 — ungated in-flight save (read)
                  "tour",                                # Stage 56 — read-only first-run demo
                  "ci_check",                            # Stage 58 — mokata-as-a-PR-check (read)
                  "stacks_list", "stacks_search",        # Stage 70 — community stacks (read)
@@ -42,7 +47,9 @@ EXPECTED_WRITE = {"remember", "import_stack", "reset", "apply_proposal", "init",
                   "session_name",                     # Stage 55b — rename (gated)
                   "reconfigure",                      # Stage 56b — reconfigure wizard (gated)
                   "stacks_install",                   # Stage 70 — community stacks (gated install)
-                  "audit_share"}                      # Stage 71 — team audit shared publish (gated)
+                  "audit_share",                      # Stage 71 — team audit shared publish (gated)
+                  "spec_emit",                        # SI-DEV.0 — THE spec-emit surface (gated)
+                  "spec_amend"}                       # SI-DEV — the forced scope regression (gated)
 
 
 def _silent(_):
@@ -103,22 +110,35 @@ class TestWriteToolsAreHumanGated(unittest.TestCase):
             self.assertEqual(store.all_active(), [])
             store.close()
 
-    def test_remember_writes_only_with_explicit_confirm(self):
+    def test_a_model_typed_confirm_does_not_write(self):
+        """SI.3 — `confirm`/`approve` are still ACCEPTED (schema stability) but commit NOTHING.
+        They were a consent flag the MODEL typed; consent is now minted out-of-band by a human."""
         with tempfile.TemporaryDirectory() as d:
             _init(d, "standard")
-            res = M.remember(path=d, subject="decision:db", value="postgres",
-                             confirm=True)
+            res = M.remember(path=d, subject="decision:db", value="postgres", confirm=True)
+            self.assertEqual(res["status"], "proposed")
+            self.assertFalse(res.get("committed", False))
+            store = MemoryStore.from_surface(Surface.load(d))
+            self.assertEqual(store.all_active(), [])    # nothing landed on the model's say-so
+            store.close()
+
+    def test_remember_writes_only_with_a_human_minted_approval(self):
+        with tempfile.TemporaryDirectory() as d:
+            _init(d, "standard")
+            # propose -> the HUMAN approves out-of-band (`mokata approve <id>`) -> redeem by id.
+            res = mcp_commit(M.remember, path=d, subject="decision:db", value="postgres")
             self.assertEqual(res["status"], "committed")
             self.assertTrue(res["committed"])
             store = MemoryStore.from_surface(Surface.load(d))
             self.assertEqual([i.value for i in store.recall("decision:db")], ["postgres"])
             store.close()
 
-    def test_secret_is_blocked_even_when_confirmed(self):
+    def test_secret_is_blocked_even_when_a_human_approved_it(self):
+        """A real human approval still cannot override a security block (P2/I1)."""
         with tempfile.TemporaryDirectory() as d:
             _init(d, "standard")
-            res = M.remember(path=d, subject="creds",
-                             value="AKIAIOSFODNN7EXAMPLE", confirm=True)
+            res = mcp_commit(M.remember, path=d, subject="creds",
+                             value="AKIAIOSFODNN7EXAMPLE")
             self.assertEqual(res["status"], "blocked")
             self.assertFalse(res["committed"])
             self.assertTrue(res["findings"])

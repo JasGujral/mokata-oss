@@ -11,9 +11,9 @@ where an agent lacks a capability (it never pretends).
 
 ## What's wired, what degrades (per agent)
 
-| Agent | Commands → native surface | Context | PreToolUse hook | Subagents | MCP server |
+| Agent | Commands → native surface | Context | PreToolUse hooks | Subagents | MCP server |
 |---|---|---|---|---|---|
-| **Claude Code** (`claude`) | ✅ `.claude/commands/*.md` | ✅ | ✅ secret-guard + SessionStart briefing | ✅ native fan-out | ✅ auto (`.mcp.json`) |
+| **Claude Code** (`claude`) | ✅ `.claude/commands/*.md` | ✅ | ✅ secret-guard **+ run-state gate-guard** + SessionStart briefing | ✅ native fan-out | ✅ auto (`.mcp.json`) |
 | **Codex** (`codex`) | ✅ `.codex/prompts/*.md` | ✅ | ❌ *degrades* | ❌ *degrades* | manual (TOML config) |
 | **Cursor** (`cursor`) | ✅ `.cursor/commands/*.md` | ✅ `.cursor/rules` | ❌ *degrades* | ❌ *degrades* | ✅ auto (`.cursor/mcp.json`) |
 | **GitHub Copilot** (`copilot`) | ✅ `.github/prompts/*.prompt.md` | ✅ `copilot-instructions.md` | ❌ *degrades* | ❌ *degrades* | manual (VS Code `mcp.json`) |
@@ -32,10 +32,24 @@ mokata declares a capability **absent** unless it can verify the agent really su
 capability the harness boundary returns a **clear** result that **names** the missing
 capability — never a silent no-op of a gate:
 
-- **No PreToolUse hook** (every agent except Claude Code): the agent won't run mokata's
-  secret-guard on each write. Durable-write protection still holds — mokata's **own** gated
-  CLI/MCP `WriteGate` scans for secrets, human-gates, and audits **every** durable write
-  regardless of the hook. Run writes through `mokata` (or its MCP tools), not raw.
+- **No PreToolUse hooks** (every agent except Claude Code): **only Claude Code declares the
+  `hooks` capability**, so on Codex, Cursor, Copilot, Windsurf, Gemini CLI, and Aider *neither*
+  PreToolUse hook is wired. Two distinct consequences, and they are not equally recoverable:
+
+    - **The secret-guard doesn't run on native writes** — but durable-write protection still
+      holds where it counts: mokata's **own** gated CLI/MCP `WriteGate` scans for secrets,
+      human-gates, and audits **every** durable write regardless of the hook. Route writes
+      through `mokata` (or its MCP tools), not raw, and you keep this.
+    - **The run-state gates enforce NOTHING.** `spec-persisted`,
+      `no-code-without-failing-test`, and `spec-scope` live *only* in the gate-guard hook. With
+      no hook there is no interception of a native `Write`/`Edit`, so on these agents the agent
+      **can** write implementation code before the spec is emitted, before a failing test is on
+      record, or outside the spec's authorized surface — and nothing will stop it. The
+      `/mokata:` commands still run the pipeline, and `/mokata:review` still catches divergence
+      after the fact, but the *hard* seatbelt is Claude-Code-only. Nothing mokata ships works
+      around this; there is no non-hook substitute. If enforced TDD is why you're here, use
+      Claude Code.
+
 - **No native subagents**: parallel fan-out falls back to mokata's sequential gated flow
   (the cost estimate + two-stage review still apply); nothing is skipped.
 - **MCP is a manual step**: register the `mokata-mcp` server with the agent per its docs

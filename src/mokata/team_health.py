@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from . import TEMP_LOCAL_DIRNAME, run_mode as _rm, team_docs
+from .atomicfile import atomic_write_text
 
 # The health states. `local`/`healthy` are OK; `degraded`/`offline` are TROUBLE (always
 # highlighted). `unknown` = team mode, but nothing probed yet this session (no fabricated ⚠).
@@ -100,15 +101,21 @@ def classify(res: Any) -> "tuple[str, str]":
     if not getattr(res, "schema_present", False) or getattr(res, "schema_version", None) is None:
         return DEGRADED, getattr(res, "detail", "") or "reachable, but the shared schema is not provisioned"
     if not getattr(res, "compatible", False):
-        return DEGRADED, getattr(res, "detail", "") or "reachable, but the shared schema version is incompatible"
-    return HEALTHY, getattr(res, "detail", "") or f"reachable ({getattr(res, 'elapsed_ms', 0.0):.0f}ms)"
+        detail = getattr(res, "detail", "") or "reachable, but the shared schema is out of range"
+        fix = getattr(res, "fix", "")
+        return DEGRADED, f"{detail} — {fix}" if fix else detail
+    # D2 — in range. A version difference is HEALTHY (the team is not partitioned) but the badge
+    # carries the upgrade advice, so "working" and "you should upgrade" are both visible at once.
+    detail = getattr(res, "detail", "") or f"reachable ({getattr(res, 'elapsed_ms', 0.0):.0f}ms)"
+    warning = getattr(res, "warning", "")
+    return HEALTHY, f"{detail} — {warning}" if warning else detail
 
 
 # ------------------------------------------------------------------------------ the cache
 def _cache_path(surface: Any) -> Optional[str]:
     try:
         return os.path.join(surface.mokata_dir, TEMP_LOCAL_DIRNAME, CACHE_FILENAME)
-    except Exception:  # pragma: no cover - a broken surface has no cache path
+    except AttributeError:  # pragma: no cover - a surface with no `.mokata_dir` has no cache path
         return None
 
 
@@ -121,7 +128,15 @@ def load_cached(surface: Any) -> Optional[HealthVerdict]:
     try:
         with open(path, encoding="utf-8") as fh:
             return HealthVerdict.from_dict(json.load(fh))
-    except Exception:
+    except (OSError, ValueError, KeyError):
+        # OSError: unreadable cache file. ValueError: a torn/half-written JSON (JSONDecodeError IS a
+        # ValueError) — and, from `from_dict`'s float() coercions, a garbage value. KeyError: none
+        # today (from_dict uses .get throughout) but it is the class a shape change would raise, and
+        # a cache-shape skew must degrade to "no cached verdict", not crash the statusline.
+        #
+        # NOT a silent degrade: the ONLY thing lost is a CACHED verdict. `check()` re-probes and
+        # re-caches; `cached_or_neutral()` returns UNKNOWN, which renders NO warning glyph — it never
+        # fabricates health it hasn't observed, and it never suppresses one it has.
         return None
 
 
@@ -132,10 +147,19 @@ def store(surface: Any, verdict: HealthVerdict) -> None:
     if not path:
         return
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(verdict.to_dict(), fh)
+        # MS.S6 — an ATOMIC replace. This is a blind write of the latest verdict (no accumulated
+        # state to lose, so last-writer-wins is the correct semantics and needs no lock), but the
+        # statusline runs in a SEPARATE process and reads this file while an MCP window may be
+        # writing it. A plain truncate-then-write exposed a torn read; the replace makes the reader
+        # see the whole old verdict or the whole new one, never a fragment.
+        atomic_write_text(path, json.dumps(verdict.to_dict()))
     except Exception:  # pragma: no cover - best-effort persistence
+        # (iv) SUPPRESS-OK: this is a CACHE write, and the verdict it caches has ALREADY been
+        # returned to the caller — every surface renders the correct health with or without it. A
+        # failed write costs one extra ≤500ms probe next call; it cannot make a broken connection
+        # look healthy (the un-cached read is UNKNOWN, which shows no ⚠ and claims nothing) nor a
+        # healthy one look broken. Broad because it spans atomic-replace IO across three OSes and
+        # json serialisation, and observability must never break the operation it observes.
         pass
 
 
@@ -168,10 +192,14 @@ def check(surface: Any, *, environ: Optional[dict] = None,
             return cached
 
     env = os.environ if environ is None else environ
-    dsn = (env.get(_rm.CREDENTIAL_ENV) or "").strip()
+    # Resolve the CONFIGURED shared-DB env-var NAME (C-1) — the same var memory reads use, so a
+    # custom `team connect --dsn-env` reports CONNECTED here instead of a false OFFLINE.
+    from .dsn import resolve_dsn_env
+    cred_env = resolve_dsn_env(surface)
+    dsn = (env.get(cred_env) or "").strip()
     if not dsn:
         v = HealthVerdict(OFFLINE,
-                          f"${_rm.CREDENTIAL_ENV} is not set — team mode has no shared connection",
+                          f"${cred_env} is not set — team mode has no shared connection",
                           checked_at=t)
         store(surface, v)
         return v
@@ -194,11 +222,16 @@ def check(surface: Any, *, environ: Optional[dict] = None,
 def cached_or_neutral(surface: Any) -> HealthVerdict:
     """The HOT-PATH verdict for the statusline badge — reads the last cached verdict and NEVER
     probes (so the badge can't hang). Local → `local`; team with a cache → that verdict (⚠ if
-    troubled, persisting a real observation); team with no cache yet → `unknown` (no ⚠)."""
-    try:
-        if _rm.read_mode(surface) != _rm.TEAM:
-            return HealthVerdict(LOCAL)
-    except Exception:
+    troubled, persisting a real observation); team with no cache yet → `unknown` (no ⚠).
+
+    D5 — the `except Exception: return HealthVerdict(LOCAL)` that used to wrap this was DEAD CODE,
+    and dead in the most dangerous direction. `run_mode.read_mode` cannot raise: it delegates to
+    `stored_mode`, which already swallows every error and returns None, and `is_valid_mode(None)` is
+    False ⇒ LOCAL. So the handler never ran — but had it ever run, it would have returned LOCAL, an
+    OK state that renders NO warning glyph: a team user whose mode lookup broke would have been
+    shown a clean, healthy-looking badge. A silent "everything's fine" is the one answer this
+    function must never be able to give, so the handler is gone rather than narrowed."""
+    if _rm.read_mode(surface) != _rm.TEAM:
         return HealthVerdict(LOCAL)
     cached = load_cached(surface)
     if cached is not None:

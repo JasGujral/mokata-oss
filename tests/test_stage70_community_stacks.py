@@ -24,7 +24,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 
-from _support import sample_manifest_data  # noqa: F401  (path-fix side-effect)
+from _support import mcp_commit, sample_manifest_data  # noqa: F401  (path-fix side-effect)
 
 from mokata import stacks as ST
 from mokata import mcp_server as M
@@ -223,7 +223,7 @@ class TestMcpSurfaces(unittest.TestCase):
 
     def test_stacks_install_approve_commits(self):
         with tempfile.TemporaryDirectory() as d:
-            res = M.stacks_install(path=d, name="python-web", approve=True)
+            res = mcp_commit(M.stacks_install, path=d, name="python-web")
             self.assertTrue(res["committed"])
             data = json.loads(_manifest_text(d))
             self.assertEqual(data["settings"]["stack"]["name"], "python-web")
@@ -233,7 +233,7 @@ class TestMcpSurfaces(unittest.TestCase):
             src = self._poison_dir(d)
             target = os.path.join(d, "target")
             os.makedirs(target)
-            res = M.stacks_install(path=target, name="python-web", source=src, approve=True)
+            res = mcp_commit(M.stacks_install, path=target, name="python-web", source=src)
             self.assertFalse(res.get("committed", False))
             self.assertEqual(res["status"], "blocked")
             self.assertTrue(res["findings"])

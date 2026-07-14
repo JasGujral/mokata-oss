@@ -94,15 +94,27 @@ def _review_scope(args: argparse.Namespace):
 
 
 def _backend_projects(obj: Any) -> Optional[List[str]]:
-    """The distinct project keys a shared backend/transport reports, or None when it can't (a
-    local, per-repo backend has no cross-project space). Degrade-clean — never raises."""
+    """The distinct project keys a shared backend/transport reports, or None when there IS no
+    cross-project space to report (a local, per-repo backend). RAISES when a shared backend was
+    reachable at construct time and its QUERY then failed — see below.
+
+    D5 — this used to swallow that query failure into the SAME `None`, and `None` already MEANT
+    something else. Two very different facts collapsed into one word, and every caller read the
+    word as the FIRST one:
+
+        audit   → "audit: 0 project(s) on the shared team log"
+        session → "session: 0 project(s) with bundles on the shared backend"
+        memory  → "memory backend: postgres — local/per-repo (single project: X)"
+
+    Three commands, three lies: an unreachable shared Postgres rendered as an EMPTY one, and (worst)
+    as a backend that isn't shared at all. The driver error is now allowed to propagate so each
+    caller degrades with a NAMED reason instead of inventing an answer. The `getattr` check above
+    still returns None for its one honest meaning — a backend with no `list_projects` genuinely has
+    no cross-project space."""
     fn = getattr(obj, "list_projects", None)
     if fn is None:
         return None
-    try:
-        return fn()
-    except Exception:
-        return None
+    return fn()
 
 
 def _cli_ask(question: str, default: str) -> str:
@@ -124,7 +136,10 @@ def _profile_for(path: str) -> str:
     try:
         if Surface.is_initialized(path):
             return Surface.load(path).manifest.profile
-    except Exception:
+    # D5 — the set `_load_surface` (above) already names for exactly this call, plus the OSError a
+    # read of the manifest can raise. Narrowed from `Exception` so an AttributeError/TypeError bug
+    # in the config layer surfaces instead of masquerading as "(not initialized)".
+    except (ConfigError, ManifestError, OSError):
         pass
     return "(not initialized)"
 
@@ -134,7 +149,7 @@ def _ledger_for(path: str):
     try:
         if Surface.is_initialized(path):
             return AuditLedger.from_mokata_dir(Surface.load(path).mokata_dir)
-    except Exception:
+    except (ConfigError, ManifestError, OSError):     # D5 — same set as `_load_surface`; see above
         pass
     return None
 

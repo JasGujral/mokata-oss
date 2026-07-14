@@ -90,6 +90,7 @@ def cmd_vault(args: argparse.Namespace) -> int:
         # explicit human approval + audit. Clean content is not gated (degrade-clean;
         # normal pushes are untouched).
         from ..govern import OutboundRequest, gate_outbound_publish, looks_private
+        from ..govern.trust import CLI_SURFACE
         if looks_private(plan.content):
             decision = gate_outbound_publish(
                 OutboundRequest("vault-push", f"vault:{plan.name}", payload=plan.content),
@@ -102,7 +103,8 @@ def cmd_vault(args: argparse.Namespace) -> int:
         box: Dict[str, Any] = {}
         outcome = gate.submit(
             WriteRequest("config", V._artifact_path(root, plan.name),
-                         content=plan.content, actor="cli"),
+                         content=plan.content, actor="cli",
+                         tool="vault_push", surface=CLI_SURFACE),
             commit=lambda: box.update(
                 entry=V.commit_push(root, plan, author=author)),
             assume_yes=args.yes,
@@ -141,7 +143,7 @@ def cmd_session(args: argparse.Namespace) -> int:
         from ..project import ALL_PROJECTS
         scope = _review_scope(args)
         initialized = Surface.is_initialized(root)
-        has_shared = bool(STX.resolve_pg_dsn())
+        has_shared = bool(STX.resolve_pg_dsn(root=root))
 
         if getattr(args, "list_projects", False):
             if not has_shared:
@@ -152,7 +154,15 @@ def cmd_session(args: argparse.Namespace) -> int:
             except STX.SessionTransportUnavailable as exc:
                 print(f"session: {exc}", file=sys.stderr)
                 return 1
-            projs = _backend_projects(pg) or []
+            # D5 — the transport CONSTRUCTED, but the query can still fail (the shared DB went away
+            # between connect and select). That used to be swallowed into `0 project(s)` — an
+            # unreachable backend rendered as an EMPTY one. Degrade with the reason, never a count
+            # we did not read. Same shape + rc as the construct failure directly above.
+            try:
+                projs = _backend_projects(pg) or []
+            except Exception as exc:
+                print(f"session: shared backend unavailable ({exc})", file=sys.stderr)
+                return 1
             print(f"session: {len(projs)} project(s) with bundles on the shared backend:")
             for p in projs:
                 print(f"  {p}")
@@ -197,7 +207,8 @@ def cmd_session(args: argparse.Namespace) -> int:
         try:
             plan = SB.plan_session_push(root, surface, args.tag, run_id=args.run,
                                         force=args.force, author=args.author or "",
-                                        transport=transport)
+                                        transport=transport, save_first=args.save_first,
+                                        requirements_only=args.requirements_only)
         except SB.SessionBundleError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
@@ -206,6 +217,17 @@ def cmd_session(args: argparse.Namespace) -> int:
             return 0
         if plan.blocked:
             print(f"session: {plan.reason()}", file=sys.stderr)
+            return 1
+        # SS.S4 — sharing UNFINISHED thinking (a not-yet-approved brainstorm) is an EXPLICIT
+        # consent. Without --allow-in-progress it refuses with the honest summary; requirements-only
+        # IS that consent. A checkpoint-only / spec-only / approved session is unaffected.
+        in_progress = SB.in_progress_summary(plan.bundle)
+        if SB.shares_unfinished_thinking(plan.bundle) and not args.allow_in_progress \
+                and not args.requirements_only:
+            print(f"session: refusing to share an in-progress session ({in_progress['label']}) — "
+                  "re-run with --allow-in-progress to share unfinished thinking "
+                  "(or --requirements-only to share just the distilled requirements).",
+                  file=sys.stderr)
             return 1
         # Durable write → universal gate (secret-scan hard-block + human approval + audit).
         ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
@@ -283,6 +305,23 @@ def cmd_session(args: argparse.Namespace) -> int:
               f"(provenance preserved).")
         return 0
 
+    if action == "save":
+        # SS.S0 — snapshot this session's in-flight state (UNGATED: local, transient, the user's
+        # own state — the gate is at `push`/share, not here). The CLI is the use-anywhere surface;
+        # with no in-flight objects to pass it re-affirms + reports the on-disk resumable state.
+        from ..session_save import save_session
+        surface = _load_surface(root)
+        res = save_session(surface)
+        d = res.to_dict()
+        if res.empty:
+            print("session: nothing in-flight to save yet — start a brainstorm/run first "
+                  "(a save snapshots the current session so it's recoverable).")
+            return 0
+        keys = ", ".join(sorted(d["saved"]))
+        print(f"session: saved [{keys}] for run {res.run_id} (local, ungated — "
+              f"`mokata resume` continues; `mokata session push <tag>` to share).")
+        return 0
+
     print(f"error: unknown session action '{action}'", file=sys.stderr)
     return 2
 
@@ -314,9 +353,10 @@ def register(sub, common):
         "session", parents=[common],
         help="portable / shareable tagged sessions: push (gated) / pull (gated) / list",
     )
-    p_session.add_argument("action", choices=("push", "pull", "list", "name"),
-                           help="push the current session (gated), pull+rehydrate (gated), "
-                                "list bundles (local + remote, read-only), or rename a tag (gated)")
+    p_session.add_argument("action", choices=("save", "push", "pull", "list", "name"),
+                           help="save this session's in-flight state (ungated, local), push the "
+                                "current session (gated), pull+rehydrate (gated), list bundles "
+                                "(local + remote, read-only), or rename a tag (gated)")
     p_session.add_argument("tag", nargs="?", default=None,
                            help="the bundle tag (push/pull/name), e.g. auth-refactor")
     p_session.add_argument("newname", nargs="?", default=None,
@@ -339,6 +379,17 @@ def register(sub, common):
                                 "name (never silent)")
     p_session.add_argument("--yes", action="store_true",
                            help="non-interactive (approve the gated push/pull/name)")
+    # SS.S4 — the three share flags (push).
+    p_session.add_argument("--save-first", dest="save_first", action="store_true",
+                           help="push: snapshot this session (ungated save) FIRST, then bundle it "
+                                "— one atomic action (no gap between what you see and what you share)")
+    p_session.add_argument("--allow-in-progress", dest="allow_in_progress", action="store_true",
+                           help="push: consent to share an IN-PROGRESS (not-yet-approved) session; "
+                                "without it such a push refuses (completed sessions need no flag)")
+    p_session.add_argument("--requirements-only", dest="requirements_only", action="store_true",
+                           help="push: bundle ONLY the distilled requirements (anchor + synthesis "
+                                "+ requirement lines; no approaches/approval/transcript) as a "
+                                "cross-repo handoff (fingerprint check replaced by an origin label)")
     # Stage 71a — `list` scoping over a shared backend (default: the current project only).
     p_session.add_argument("--all", action="store_true",
                            help="list bundles across ALL projects on a shared backend")

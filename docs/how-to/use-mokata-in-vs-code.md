@@ -14,7 +14,7 @@ knows, and it **never performs a durable write** (every change stays human-gated
 
 ## Install
 
-The extension lives in the mokata repo under [`editors/vscode/`](https://github.com/mostack/mokata/tree/main/editors/vscode).
+The extension lives in the mokata repo under [`editors/vscode/`](https://github.com/JasGujral/mokata-oss/tree/main/editors/vscode).
 Until it's published to the Marketplace, build it from source:
 
 ```bash

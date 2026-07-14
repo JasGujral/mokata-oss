@@ -15,13 +15,16 @@ import sys
 
 def cmd_docsync(args: argparse.Namespace) -> int:
     from ..docsync import (
-        audit_doc, docsync_active_line, gather_facts, has_blocking, reconcile_doc,
-        render_findings, render_sweep, sweep,
+        AuditDegradation, audit_doc, docsync_active_line, gather_facts, has_blocking,
+        reconcile_doc, render_findings, render_sweep, sweep,
     )
 
     # Announce the ⛭ activation line so the user always knows docsync is running (SK.S1 surface).
     print(docsync_active_line())
     facts = gather_facts()
+    # D5 — carry what the fact-gather could NOT arm into the render, so an audit that checked
+    # nothing cannot print "OK". Empty (the normal case) ⇒ the output is unchanged.
+    degradation = AuditDegradation.from_facts(facts)
     target = getattr(args, "target", None)
 
     if getattr(args, "reconcile", False):
@@ -47,21 +50,21 @@ def cmd_docsync(args: argparse.Namespace) -> int:
         print(f"docsync: {result.reason} — {target} left unchanged.")
         # Still surface the audit so the user sees what stands.
         if result.findings:
-            print(render_findings(str(target), result.findings))
+            print(render_findings(str(target), result.findings, degradation))
         return 1 if has_blocking(result.findings) else 0
 
     if target:
         try:
-            findings = audit_doc(target, facts=facts)
+            findings = audit_doc(target, facts=facts, degradation=degradation)
         except OSError as exc:
             print(f"error: cannot read {target}: {exc}", file=sys.stderr)
             return 1
-        print(render_findings(str(target), findings))
+        print(render_findings(str(target), findings, degradation))
         return 1 if has_blocking(findings) else 0
 
     # No target — sweep the doc tree (targeting mode ii).
-    results = sweep(root=args.path, facts=facts)
-    print(render_sweep(results))
+    results = sweep(root=args.path, facts=facts, degradation=degradation)
+    print(render_sweep(results, degradation))
     return 1 if any(has_blocking(v) for v in results.values()) else 0
 
 

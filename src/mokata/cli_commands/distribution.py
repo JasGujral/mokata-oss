@@ -23,21 +23,61 @@ def cmd_export(args: argparse.Namespace) -> int:
     # under .mokata/ so mokata keeps its footprint contained (Stage 24D); an explicit
     # path still writes wherever the user names. The exported stack is committable config,
     # so it goes at the .mokata/ root (not temp_local/).
+    #
+    # SI.6b: this had the SAME hole as C2's memory export, and a worse one — it wrote a committable,
+    # shareable artifact with no secret-scan, no ledger entry and no prompt at all. The write now
+    # goes through the universal WriteGate as kind `send`: an export is EGRESS, so the gate scans the
+    # exact bytes that leave at outbound strength and records the write with that content hashed.
+    # `plan_export` has already DROPPED any secret-bearing key (named below, never its value).
+    #
+    # `assume_yes=True` is deliberate and is NOT a weakening: CONSENT here is unchanged — it is the
+    # human's explicit, typed `mokata export`, exactly as before. The gate is added for the SCAN and
+    # the LEDGER, not to invent a prompt this command never had. A secret still HARD-BLOCKS
+    # regardless (I1/P2 — no assume_yes lifts a security block).
+    from ..govern import WriteGate, WriteRequest
+    from ..govern.ledger import AuditLedger
+    from ..govern.trust import CLI_SURFACE
+    from ..share import ManifestShareError, plan_export
+
     surface = _load_surface(args.path)
     dest = args.file or os.path.join(args.path, MOKATA_DIR, SHARE_FILENAME)
-    export_manifest(surface, dest=dest)
+    plan = plan_export(surface)                  # read-only: scans, drops, writes nothing
+    if plan.refused:
+        print(f"export refused — {plan.message}", file=sys.stderr)
+        return 1
+
+    outcome = WriteGate(ledger=AuditLedger.from_mokata_dir(surface.mokata_dir)).submit(
+        WriteRequest("send", dest, content=plan.payload(), actor="cli",
+                     tool="stack_export", surface=CLI_SURFACE),
+        commit=lambda: export_manifest(surface, dest=dest),
+        assume_yes=True)
+    if plan.blocked:
+        print(f"stack export: {plan.render()}")
+    if not outcome.committed:
+        print(f"stack export: {outcome.reason} — nothing written.", file=sys.stderr)
+        return 1
     print(f"exported stack to {dest}")
     return 0
 
 
 def cmd_import(args: argparse.Namespace) -> int:
     # J3 — validate + apply a shared manifest (human-gated).
+    #
+    # SI.6b: the shared file is UNTRUSTED (P15) and used to overwrite the governing config with no
+    # secret-scan and no ledger entry. `apply_manifest` now scans it at the boundary (a hit REFUSES
+    # the whole file) and routes the write through the WriteGate — consent is unchanged (the same
+    # one prompt, the same text; `--yes` still skips it). Handing it the ledger is what makes the
+    # decision auditable (I3).
     try:
         data = load_shared(args.file)
     except (OSError, ValueError) as exc:
         print(f"error: cannot read {args.file}: {exc}", file=sys.stderr)
         return 1
-    result = apply_manifest(args.path, data, assume_yes=args.yes, force=args.force)
+    result = apply_manifest(args.path, data, assume_yes=args.yes, force=args.force,
+                            ledger=_ledger_for(args.path))
+    if result.blocked:
+        print(f"import BLOCKED — {result.message}", file=sys.stderr)
+        return 1
     if result.errors:
         print("import rejected — invalid manifest:", file=sys.stderr)
         for e in result.errors:
@@ -143,7 +183,7 @@ def cmd_team(args: argparse.Namespace) -> int:
                   f"({'active' if ready.active else 'inactive — driver/DSN not present yet'}).")
         else:
             print("team: local-only (no managed Postgres connected). "
-                  "`mokata team connect --dsn-env MOKATA_PG_DSN` to wire your own.")
+                  f"`mokata team connect --dsn-env {T.DEFAULT_DSN_ENV}` to wire your own.")
         print(T.honest_note())
         return 0
 
@@ -215,6 +255,7 @@ def cmd_harness(args: argparse.Namespace) -> int:
 
 
 def register(sub, common):
+    from ..dsn import DEFAULT_DSN_ENV  # the single source of the default DSN env-var name
     p_exp = sub.add_parser(
         "export", parents=[common],
         help="export the current manifest as a shareable stack (J3)",
@@ -269,7 +310,7 @@ def register(sub, common):
                              "default), compose self-host, or local")
     p_team.add_argument("--dsn-env", dest="dsn_env", default=None,
                         help="join/connect: the env-var NAME holding your managed-Postgres DSN "
-                             "(default MOKATA_PG_DSN); the DSN value is never stored")
+                             f"(default {DEFAULT_DSN_ENV}); the DSN value is never stored")
     p_team.add_argument("--vault", dest="vault", default=None,
                         help="join: a repo/dir holding a shared design/spec vault to pull "
                              "(secret-scanned; skipped when absent)")

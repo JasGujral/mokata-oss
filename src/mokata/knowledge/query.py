@@ -13,12 +13,13 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+from ..errors import DegradedCapability
 
 # The structural questions the API answers. Stable across backends.
 QUERY_KINDS = ("callers", "callees", "implementers", "imports", "blast_radius")
 
 
-class BackendError(Exception):
+class BackendError(DegradedCapability):
     """A backend failed to answer a query (e.g. the graph tool errored). The layer
     catches this to degrade to the grep floor rather than hard-fail (A3)."""
 

@@ -16,6 +16,7 @@ from typing import Dict, List, Optional
 
 from .brainstorm import PIPELINE_PHASES
 from .skills import Gate
+from .errors import MokataError
 
 # Which phases carry a gate (others are advisory/no-gate). Reuses the same Gate type as
 # the skill registry so a phase-gate and a command-gate are one concept.
@@ -48,7 +49,7 @@ FRONT_END_PHASES = ("brainstorm", "refine")
 ENTRY_PHASES = ("refine",) + tuple(PIPELINE_PHASES)
 
 
-class PhaseError(Exception):
+class PhaseError(MokataError):
     pass
 
 

@@ -18,6 +18,10 @@ mokata's gates.
 - **Where:** inside **Claude Code** — via the plugin, or `mokata setup claude` (install
   tiers 1 and 2). Here **Claude is the brain**, on your existing Claude Code sign-in. Nothing
   to configure, no API key.
+- **What only this approach gets:** the two `PreToolUse` hooks — the **secret-guard** and the
+  **gate-guard** (the run-state gates on native `Write`/`Edit`). Only Claude Code declares the
+  `hooks` capability, so on any other harness they are **never wired** and the run-state gates
+  enforce nothing. See [governance](governance.md#hooks-g4).
 - **What "picks the model":** the harness, not mokata. mokata's model router only *suggests*
   a capability tier (`fast` / `balanced` / `deep`) for cost control; the harness maps that to
   a real model.

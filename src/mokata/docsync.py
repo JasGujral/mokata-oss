@@ -62,7 +62,12 @@ class CodeFacts:
     """The ground-truth facts the audit cross-references a doc against — pulled from the SAME
     single sources the rest of mokata reads (the curated-skills registry, the live CLI parser, the
     version constant), never a hand-kept copy. ``known_symbols`` / ``config_keys`` are optional
-    graph/memory-derived sets that sharpen the symbol + config-key checks when present."""
+    graph/memory-derived sets that sharpen the symbol + config-key checks when present.
+
+    ``unchecked`` (D5) names the checks that could NOT be armed because the fact behind them could
+    not be gathered. An empty command set is INDISTINGUISHABLE, to a checker, from "every command in
+    the doc is valid" — `_check_commands` short-circuits on it — so without this field a docsync run
+    that checked NOTHING renders exactly like a clean one."""
 
     skill_count: int                     # curated pipeline skills (len CURATED_SKILLS)
     total_skill_count: int               # curated + shipped domain skills (installed on disk)
@@ -74,6 +79,7 @@ class CodeFacts:
     version: str                         # the shipping version
     known_symbols: frozenset = frozenset()
     config_keys: frozenset = frozenset()
+    unchecked: Tuple[str, ...] = ()      # D5 — the checks this fact-set could not arm
 
 
 def gather_facts(*, extra_symbols: Optional[Sequence[str]] = None,
@@ -81,20 +87,39 @@ def gather_facts(*, extra_symbols: Optional[Sequence[str]] = None,
     """Assemble :class:`CodeFacts` from the live code — the curated-skills registry, the shipped
     domain skills, the argparse command set, and the version constant. This is the "graph + memory"
     side of the cross-reference; ``extra_symbols`` / ``config_keys`` let a caller inject a
-    graph/memory-derived watch set for the symbol + config checks."""
+    graph/memory-derived watch set for the symbol + config checks.
+
+    D5 — a fact that cannot be gathered DISARMS its checker, and a disarmed checker finds nothing,
+    which used to render as "OK — every audited doc matches the code". It now records itself in
+    ``unchecked`` and says so ONCE, loudly (`note_degraded`): the sweep still runs (the fallback
+    still falls back), it just stops claiming a clean bill of health it never earned."""
     from . import __version__
     from .agent_skills import CURATED_SKILLS, installed_skill_names
+    from .degrade import FAILURE_UNREACHABLE, note_degraded
     from .parity import cli_command_names, slash_command_names
     curated = tuple(CURATED_SKILLS)
     installed = tuple(installed_skill_names())
+    unchecked: List[str] = []
+    # A broken parser/registry must never crash an audit — but the drift check it feeds is then
+    # NOT RUNNING, and that is the thing the user must be told. Both failures disarm the SAME
+    # checker (`command-name`), so they share ONE subsystem key: one loud line, not two.
     try:
         commands = frozenset(cli_command_names())
-    except Exception:                    # a broken parser must never crash an audit — degrade
+    except (ImportError, AttributeError) as exc:
         commands = frozenset()
+        unchecked.append("`mokata <cmd>` command-name drift (the CLI parser could not be read)")
+        note_degraded("docsync-facts", FAILURE_UNREACHABLE,
+                      fallback="command-name drift was NOT checked",
+                      fix="fix the CLI import, then re-run `mokata docsync`", detail=str(exc))
     try:
         slash = frozenset(slash_command_names())
-    except Exception:                    # a broken registry must never crash an audit — degrade
+    except (ImportError, AttributeError) as exc:
         slash = frozenset()
+        unchecked.append("`/mokata:<name>` slash-command drift (the surface matrix could not "
+                         "be read)")
+        note_degraded("docsync-facts", FAILURE_UNREACHABLE,
+                      fallback="command-name drift was NOT checked",
+                      fix="fix the CLI import, then re-run `mokata docsync`", detail=str(exc))
     return CodeFacts(
         skill_count=len(curated),
         total_skill_count=len(installed),
@@ -106,7 +131,38 @@ def gather_facts(*, extra_symbols: Optional[Sequence[str]] = None,
         version=__version__,
         known_symbols=frozenset(str(s) for s in (extra_symbols or ())),
         config_keys=frozenset(str(s) for s in (config_keys or ())),
+        unchecked=tuple(unchecked),
     )
+
+
+# --------------------------------------------------------------- D5: the audit's own honesty
+@dataclass
+class AuditDegradation:
+    """D5 — what an audit run could NOT check, so a finding-free result can never be rendered as a
+    clean one. An audit is a NEGATIVE claim ("nothing is stale"), and a negative claim is only worth
+    the checks that actually ran: a disarmed checker turns "we found no drift" into "we looked for
+    no drift", and those two sentences printed the same words.
+
+    Empty ⇒ every check ran ⇒ the render is unchanged, byte for byte."""
+
+    unchecked: List[str] = field(default_factory=list)
+
+    @property
+    def degraded(self) -> bool:
+        return bool(self.unchecked)
+
+    def note(self, reason: str) -> None:
+        if reason not in self.unchecked:
+            self.unchecked.append(reason)
+
+    def banner(self) -> str:
+        """The one line every degraded audit renders FIRST — never below the verdict."""
+        return ("⚠ DEGRADED AUDIT — these checks did NOT run: " + "; ".join(self.unchecked)
+                + ". A finding-free result here is NOT a clean bill of health.")
+
+    @classmethod
+    def from_facts(cls, facts: Optional[CodeFacts]) -> "AuditDegradation":
+        return cls(list(facts.unchecked) if facts is not None else [])
 
 
 # --------------------------------------------------------------- a finding
@@ -153,37 +209,86 @@ def _sections(lines: Sequence[str]) -> List[str]:
     return out
 
 
-def _code_spans(lines: Sequence[str]) -> List[str]:
-    """For each line, the CODE text on it — the whole line when inside a fenced ``` block, else the
-    concatenation of its inline `code` spans. Command/install/version checks scan only code text, so
-    prose like "mokata governs the write" is never mistaken for a `mokata <cmd>` reference."""
-    out: List[str] = []
+_FENCE = re.compile(r"^\s{0,3}(?:```+|~~~+)\s*(\S*)")
+
+# The fenced languages that hold INVOCATIONS — a shell the reader is told to type into, or an
+# undeclared fence (which claims nothing, so the command-position rule below guards it). A fence the
+# author LABELLED something else (`text`, `yaml`, `json`, `python`, …) is output or data: the CLI's
+# own transcript, a workflow step, a payload. It is not a thing to run, and reading it as one is how
+# `mokata initialized with profile 'standard'.` came to be reported as a stale command.
+_SHELL_FENCE_LANGS = frozenset({
+    "", "bash", "sh", "shell", "shell-session", "shellsession", "sh-session", "bash-session",
+    "zsh", "fish", "console", "terminal", "command",
+})
+# A `#` comment tail is prose the author wrote for a human ("# wire mokata into your agent"), not a
+# command. Anchored to a word boundary so a URL fragment or a `#`-bearing argument survives.
+_SHELL_COMMENT = re.compile(r"(?:^|\s)#.*$")
+
+
+def _code_spans(lines: Sequence[str]) -> List[List[str]]:
+    """For each line, the CODE fragments on it — the whole line when inside a fenced ``` block, else
+    each of its inline `code` spans, SEPARATELY.
+
+    Separately is the whole point. These fragments used to be joined with a space, which fabricated
+    text that appears nowhere in the doc: ``> `pip install mokata` → `mokata setup claude` `` became
+    the single string "pip install mokata mokata setup claude", and the checkers dutifully reported
+    the `mokata mokata` and the `pip install mokata-hook` they had just invented. Two code spans are
+    two fragments with prose between them — never one command line."""
+    out: List[List[str]] = []
     in_fence = False
     for ln in lines:
-        stripped = ln.lstrip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
+        if _FENCE.match(ln):
             in_fence = not in_fence
-            out.append("")               # the fence marker line itself carries no claim
+            out.append([])               # the fence marker line itself carries no claim
             continue
-        if in_fence:
-            out.append(ln)
+        out.append([ln] if in_fence else _INLINE_CODE.findall(ln))
+    return out
+
+
+def _command_spans(lines: Sequence[str]) -> List[List[str]]:
+    """For each line, the fragments on it that a reader could actually RUN — the doc's invocation
+    surface, which is what the `mokata <cmd>` checker is asking about ("does the doc tell you to run
+    a command that no longer exists?").
+
+    It is narrower than :func:`_code_spans` in exactly two ways: a fence the author labelled as
+    something other than a shell is output or data, not commands; and inside a shell fence, a `#`
+    comment tail is prose. Inline code spans carry commands and are kept as-is."""
+    out: List[List[str]] = []
+    in_fence = False
+    fence_is_shell = False
+    for ln in lines:
+        m = _FENCE.match(ln)
+        if m:
+            if not in_fence:
+                fence_is_shell = m.group(1).split(",")[0].lower() in _SHELL_FENCE_LANGS
+            in_fence = not in_fence
+            out.append([])
+            continue
+        if not in_fence:
+            out.append(_INLINE_CODE.findall(ln))
+        elif fence_is_shell:
+            out.append([_SHELL_COMMENT.sub("", ln)])
         else:
-            out.append(" ".join(_INLINE_CODE.findall(ln)))
+            out.append([])
     return out
 
 
 # --------------------------------------------------------------- the checkers
 _SKILL_COUNT = re.compile(r"\b(\d+)\s+skills\b")
-_MOKATA_CMD = re.compile(r"\bmokata\s+([a-z][a-z0-9-]+)\b")
+# `mokata <cmd>` only where `mokata` sits in COMMAND POSITION — at the head of the command, after an
+# optional prompt sigil or runner, or straight after a shell separator. The word "mokata" in the
+# middle of a sentence is the subject of that sentence, not a program being invoked: "mokata detects
+# the `rg` executable" and "recurring corrections mokata noticed" are prose, and the old unanchored
+# `\bmokata\s+(\w+)\b` read them as calls to `mokata detects` and `mokata noticed`.
+_MOKATA_CMD = re.compile(
+    r"(?:^|(?<=[|;&(`]))"                                       # command head, or after a separator
+    r"\s*(?:[$>%❯]\s+)?"                                        # an optional prompt sigil: "$ mokata"
+    r"(?:(?:sudo|uvx|npx)\s+|(?:pipx|uv|poetry|pdm|hatch)\s+run\s+|python3?\s+-m\s+)*"
+    r"mokata\s+([a-z][a-z0-9-]+)\b")                            # …then the subcommand
 _SLASH_CMD = re.compile(r"/mokata:([a-z][a-z0-9-]+)\b")
 _PIP_INSTALL = re.compile(r"\bpip\s+install\s+(?:-U\s+|--upgrade\s+)?([A-Za-z0-9._-]+(?:\[[^\]]+\])?)")
 _VERSION_PIN = re.compile(r"\bmokata==(\d+\.\d+\.\d+(?:[.\w-]*)?)")
 _DOTTED_SYMBOL = re.compile(r"\b((?:[A-Za-z_][A-Za-z0-9_]*\.){1,}[A-Za-z_][A-Za-z0-9_]*)\b")
-
-# `mokata <word>` reads where <word> is an argument/topic, not a subcommand — never flag these.
-_CMD_ALLOW_NEXT = frozenset({
-    "agent", "skill", "framework", "memory", "governs", "remembers", "audits",
-})
 
 
 def _check_skill_count(lines, sections, facts: CodeFacts) -> List[Finding]:
@@ -202,124 +307,153 @@ def _check_skill_count(lines, sections, facts: CodeFacts) -> List[Finding]:
     return out
 
 
-def _check_commands(lines, sections, code, facts: CodeFacts) -> List[Finding]:
+def _check_commands(lines, sections, code, commands, facts: CodeFacts) -> List[Finding]:
+    """The two command surfaces are checked over DIFFERENT text, because they are ambiguous in
+    different amounts. `mokata <cmd>` is a shell invocation whose first word is also this project's
+    name, so it is read only off the invocation surface (``commands``) — anywhere else, "mokata" is
+    just the subject of a sentence. `/mokata:<name>` cannot be prose: the `/mokata:` prefix is
+    self-delimiting, so it keeps its full reach over every code fragment (``code``), including the
+    output fences the shell rule skips."""
     out: List[Finding] = []
-    for i, seg in enumerate(code):
-        if not seg:
-            continue
-        for m in _MOKATA_CMD.finditer(seg):
-            name = m.group(1)
-            if name in _CMD_ALLOW_NEXT or name in facts.command_names or not facts.command_names:
-                continue
-            out.append(Finding(
-                "command-name", BLOCKING, i + 1, sections[i], lines[i].strip(),
-                f"references `mokata {name}` — no such command in the CLI "
-                f"(stale/renamed command)", None))
-        for m in _SLASH_CMD.finditer(seg):
-            name = m.group(1)
-            if name in facts.slash_commands or not facts.slash_commands:
-                continue
-            out.append(Finding(
-                "command-name", BLOCKING, i + 1, sections[i], lines[i].strip(),
-                f"references `/mokata:{name}` — no such slash command "
-                f"(stale/renamed command)", None))
+    for i, spans in enumerate(commands):
+        for seg in spans:
+            for m in _MOKATA_CMD.finditer(seg):
+                name = m.group(1)
+                if name in facts.command_names or not facts.command_names:
+                    continue
+                out.append(Finding(
+                    "command-name", BLOCKING, i + 1, sections[i], lines[i].strip(),
+                    f"references `mokata {name}` — no such command in the CLI "
+                    f"(stale/renamed command)", None))
+    for i, spans in enumerate(code):
+        for seg in spans:
+            for m in _SLASH_CMD.finditer(seg):
+                name = m.group(1)
+                if name in facts.slash_commands or not facts.slash_commands:
+                    continue
+                out.append(Finding(
+                    "command-name", BLOCKING, i + 1, sections[i], lines[i].strip(),
+                    f"references `/mokata:{name}` — no such slash command "
+                    f"(stale/renamed command)", None))
     return out
 
 
 def _check_install(lines, sections, code, facts: CodeFacts) -> List[Finding]:
     out: List[Finding] = []
-    for i, seg in enumerate(code):
-        if not seg:
-            continue
-        for m in _PIP_INSTALL.finditer(seg):
-            pkg = m.group(1)
-            base = pkg.split("[", 1)[0]
-            if base == facts.package:
-                continue
-            # a mokata-prefixed but non-canonical package = a dead install path.
-            if base.lower().replace("_", "-").startswith("mokata"):
-                suggestion = lines[i].replace(f"pip install {pkg}", facts.install_command)
-                out.append(Finding(
-                    "install-path", BLOCKING, i + 1, sections[i], lines[i].strip(),
-                    f"dead install path `pip install {pkg}` — the package is "
-                    f"`{facts.package}`; the canonical path is `{facts.install_command}`",
-                    suggestion if suggestion != lines[i] else None))
+    for i, spans in enumerate(code):
+        for seg in spans:
+            for m in _PIP_INSTALL.finditer(seg):
+                pkg = m.group(1)
+                base = pkg.split("[", 1)[0]
+                if base == facts.package:
+                    continue
+                # a mokata-prefixed but non-canonical package = a dead install path.
+                if base.lower().replace("_", "-").startswith("mokata"):
+                    suggestion = lines[i].replace(f"pip install {pkg}", facts.install_command)
+                    out.append(Finding(
+                        "install-path", BLOCKING, i + 1, sections[i], lines[i].strip(),
+                        f"dead install path `pip install {pkg}` — the package is "
+                        f"`{facts.package}`; the canonical path is `{facts.install_command}`",
+                        suggestion if suggestion != lines[i] else None))
     return out
 
 
 def _check_version(lines, sections, code, facts: CodeFacts) -> List[Finding]:
     out: List[Finding] = []
-    for i, seg in enumerate(code):
-        if not seg:
-            continue
-        for m in _VERSION_PIN.finditer(seg):
-            ver = m.group(1)
-            if ver == facts.version:
-                continue
-            suggestion = lines[i].replace(f"mokata=={ver}", f"mokata=={facts.version}")
-            out.append(Finding(
-                "version-example", INFO, i + 1, sections[i], lines[i].strip(),
-                f"version example `mokata=={ver}` differs from the shipping "
-                f"`{facts.version}`", suggestion if suggestion != lines[i] else None))
+    for i, spans in enumerate(code):
+        for seg in spans:
+            for m in _VERSION_PIN.finditer(seg):
+                ver = m.group(1)
+                if ver == facts.version:
+                    continue
+                suggestion = lines[i].replace(f"mokata=={ver}", f"mokata=={facts.version}")
+                out.append(Finding(
+                    "version-example", INFO, i + 1, sections[i], lines[i].strip(),
+                    f"version example `mokata=={ver}` differs from the shipping "
+                    f"`{facts.version}`", suggestion if suggestion != lines[i] else None))
     return out
 
 
 def _check_symbols(lines, sections, code, facts: CodeFacts,
-                   resolve: Optional[Callable[[str], bool]]) -> List[Finding]:
+                   resolve: Optional[Callable[[str], bool]],
+                   degradation: Optional["AuditDegradation"] = None) -> List[Finding]:
     """Cross-reference dotted symbol references (e.g. `progress.active_banner`) against the code.
     Degrade-clean: with NO resolver AND no ``known_symbols`` watch set, this is a no-op (there is no
     graph to check against, so it never guesses). With a resolver it flags references the graph says
-    don't resolve; with a ``known_symbols`` set it flags a near-miss to a known symbol."""
+    don't resolve; with a ``known_symbols`` set it flags a near-miss to a known symbol.
+
+    D5 — a resolver that THROWS is not the same as a resolver that says "resolves fine". Skipping
+    the symbol on an error is still right (a broken resolver must never manufacture a false
+    "stale symbol" finding), but the skip is now COUNTED: a doc every one of whose symbols was
+    skipped was not audited, and must not be declared fresh."""
     if resolve is None and not facts.known_symbols:
         return []
     out: List[Finding] = []
-    for i, seg in enumerate(code):
-        if not seg:
-            continue
-        for m in _DOTTED_SYMBOL.finditer(seg):
-            sym = m.group(1)
-            if sym in facts.known_symbols:
-                continue
-            if resolve is not None:
-                try:
-                    ok = bool(resolve(sym))
-                except Exception:
-                    continue             # a failing resolver never turns into a false finding
-                if ok:
+    failures = 0
+    for i, spans in enumerate(code):
+        for seg in spans:
+            for m in _DOTTED_SYMBOL.finditer(seg):
+                sym = m.group(1)
+                if sym in facts.known_symbols:
                     continue
-                out.append(Finding(
-                    "symbol-ref", MINOR, i + 1, sections[i], lines[i].strip(),
-                    f"references symbol `{sym}` — the code graph does not resolve it "
-                    f"(stale/renamed symbol)", None))
+                if resolve is not None:
+                    try:
+                        ok = bool(resolve(sym))
+                    except Exception:    # (iii) the resolver is INJECTED — its class is the
+                        failures += 1    # caller's (a graph client, an MCP tool), not nameable here
+                        continue         # a failing resolver never turns into a false finding
+                    if ok:
+                        continue
+                    out.append(Finding(
+                        "symbol-ref", MINOR, i + 1, sections[i], lines[i].strip(),
+                        f"references symbol `{sym}` — the code graph does not resolve it "
+                        f"(stale/renamed symbol)", None))
+    if failures:
+        from .degrade import FAILURE_UNREACHABLE, note_degraded
+        if degradation is not None:
+            degradation.note(f"symbol-reference drift ({failures} symbol(s) — the code-graph "
+                             f"resolver raised)")
+        note_degraded("docsync-symbols", FAILURE_UNREACHABLE,
+                      fallback="the symbol-reference check did NOT run",
+                      fix="check the code-graph resolver",
+                      detail=f"{failures} symbol lookup(s) raised")
     return out
 
 
 # --------------------------------------------------------------- AUDIT (output mode a, read-only)
 def audit_text(text: str, *, path: str = "", facts: Optional[CodeFacts] = None,
-               resolve: Optional[Callable[[str], bool]] = None) -> List[Finding]:
+               resolve: Optional[Callable[[str], bool]] = None,
+               degradation: Optional[AuditDegradation] = None) -> List[Finding]:
     """Audit one doc's TEXT against the code (read-only). Returns every :class:`Finding`, sorted by
     line then checker. Pure given ``facts`` + ``text`` (+ an optional graph ``resolve`` predicate for
-    the symbol check). This writes nothing — it is the default, read-only output mode."""
+    the symbol check). This writes nothing — it is the default, read-only output mode.
+
+    ``degradation`` (D5) is an optional collector: pass one and it comes back naming any check that
+    did NOT run this audit, so the caller can render the result honestly (see
+    :func:`render_findings`). Omit it and the behaviour is byte-identical to before."""
     facts = facts or gather_facts()
     lines = text.splitlines()
     sections = _sections(lines)
     code = _code_spans(lines)
+    commands = _command_spans(lines)
     out: List[Finding] = []
     out += _check_skill_count(lines, sections, facts)
-    out += _check_commands(lines, sections, code, facts)
+    out += _check_commands(lines, sections, code, commands, facts)
     out += _check_install(lines, sections, code, facts)
     out += _check_version(lines, sections, code, facts)
-    out += _check_symbols(lines, sections, code, facts, resolve)
+    out += _check_symbols(lines, sections, code, facts, resolve, degradation)
     out.sort(key=lambda f: (f.line, f.checker))
     return out
 
 
 def audit_doc(path: Any, *, facts: Optional[CodeFacts] = None,
-              resolve: Optional[Callable[[str], bool]] = None) -> List[Finding]:
+              resolve: Optional[Callable[[str], bool]] = None,
+              degradation: Optional[AuditDegradation] = None) -> List[Finding]:
     """Read a doc and :func:`audit_text` it. A missing/unreadable file raises ``OSError`` (the
     caller decides whether to skip); an audited file that is fine returns an empty list."""
     text = Path(path).read_text(encoding="utf-8")
-    return audit_text(text, path=str(path), facts=facts, resolve=resolve)
+    return audit_text(text, path=str(path), facts=facts, resolve=resolve,
+                      degradation=degradation)
 
 
 def has_blocking(findings: Sequence[Finding]) -> bool:
@@ -336,12 +470,22 @@ def stale_sections(findings: Sequence[Finding]) -> List[str]:
     return out
 
 
-def render_findings(path: str, findings: Sequence[Finding]) -> str:
-    """A human/CI-readable audit report for ONE doc, highlighting the stale sections."""
+def render_findings(path: str, findings: Sequence[Finding],
+                    degradation: Optional[AuditDegradation] = None) -> str:
+    """A human/CI-readable audit report for ONE doc, highlighting the stale sections.
+
+    D5 — when a check did NOT run, the verdict is DEGRADED, never "OK": the audit's "OK" is a claim
+    that every check ran and found nothing, and a disarmed checker has not earned it."""
+    degraded = degradation is not None and degradation.degraded
     if not findings:
+        if degraded:
+            return (f"docsync audit · {path}: DEGRADED — no discrepancy found, but the audit was "
+                    f"INCOMPLETE.\n  {degradation.banner()}")
         return f"docsync audit · {path}: OK — every claim matches the code."
     stale = stale_sections(findings)
     lines = [f"docsync audit · {path}: {len(findings)} discrepancy(ies)"]
+    if degraded:
+        lines.append(f"  {degradation.banner()}")
     if stale:
         lines.append(f"  ⚠ stale section(s): {', '.join(stale)}")
     for f in sorted(findings, key=lambda f: (_SEVERITY_RANK[f.severity], f.line)):
@@ -411,6 +555,7 @@ def reconcile_doc(path: Any, *, facts: Optional[CodeFacts] = None,
     new_text, edits = apply_suggestions(text, fixable)
     diff = render_diff(text, new_text, str(path))
     from .govern import WriteGate, WriteRequest
+    from .govern.trust import CLI_SURFACE
 
     def commit() -> None:
         p.write_text(new_text, encoding="utf-8")
@@ -418,7 +563,8 @@ def reconcile_doc(path: Any, *, facts: Optional[CodeFacts] = None,
     prompt = (f"mokata docsync · reconcile {edits} doc↔code discrepancy(ies) in {path}:\n"
               f"{diff}\n\nApply these edits to the doc?")
     outcome = WriteGate(ledger=ledger).submit(
-        WriteRequest("config", str(p), content=new_text, actor="docsync"),
+        WriteRequest("config", str(p), content=new_text, actor="docsync",
+                     tool="docsync", surface=CLI_SURFACE),
         commit=commit, confirm=confirm, assume_yes=assume_yes, prompt=prompt)
     return ReconcileResult(outcome.committed, outcome.reason, findings, diff,
                            new_text, edits if outcome.committed else 0)
@@ -470,17 +616,21 @@ def drift_docs(root: Any, changed_symbols: Sequence[str], *,
 def sweep(root: Any = ".", *, facts: Optional[CodeFacts] = None,
           changed_symbols: Optional[Sequence[str]] = None,
           resolve: Optional[Callable[[str], bool]] = None,
-          include_internal: bool = False) -> Dict[str, List[Finding]]:
+          include_internal: bool = False,
+          degradation: Optional[AuditDegradation] = None) -> Dict[str, List[Finding]]:
     """Sweep + audit the doc tree (targeting mode ii). With ``changed_symbols`` it narrows to the
     drift set (docs that reference a changed symbol); without, it audits the whole public doc tree.
-    Returns ``{doc_path: findings}`` for docs with ≥1 finding (a clean doc is omitted)."""
+    Returns ``{doc_path: findings}`` for docs with ≥1 finding (a clean doc is omitted).
+
+    ``degradation`` (D5) collects any check that did NOT run across the sweep — pass it to
+    :func:`render_sweep` so an unchecked sweep can never read as a clean sweep."""
     facts = facts or gather_facts()
     docs = (drift_docs(root, changed_symbols, include_internal=include_internal)
             if changed_symbols else find_docs(root, include_internal=include_internal))
     out: Dict[str, List[Finding]] = {}
     for d in docs:
         try:
-            findings = audit_doc(d, facts=facts, resolve=resolve)
+            findings = audit_doc(d, facts=facts, resolve=resolve, degradation=degradation)
         except OSError:
             continue
         if findings:
@@ -488,12 +638,23 @@ def sweep(root: Any = ".", *, facts: Optional[CodeFacts] = None,
     return out
 
 
-def render_sweep(results: Dict[str, List[Finding]]) -> str:
-    """A human/CI-readable multi-doc audit report."""
+def render_sweep(results: Dict[str, List[Finding]],
+                 degradation: Optional[AuditDegradation] = None) -> str:
+    """A human/CI-readable multi-doc audit report.
+
+    D5 — the sweep's "OK" is the loudest lie in this module: it is printed when the results dict is
+    EMPTY, and a sweep whose command-name checker was disarmed produces an empty dict having checked
+    no command at all. A degraded sweep now says DEGRADED and names what it skipped."""
+    degraded = degradation is not None and degradation.degraded
     if not results:
+        if degraded:
+            return ("docsync sweep: DEGRADED — no discrepancy found, but the sweep was "
+                    f"INCOMPLETE.\n  {degradation.banner()}")
         return "docsync sweep: OK — every audited doc matches the code."
     total = sum(len(v) for v in results.values())
     lines = [f"docsync sweep: {total} discrepancy(ies) across {len(results)} doc(s)"]
+    if degraded:
+        lines.append(f"  {degradation.banner()}")
     for path in sorted(results):
         lines.append(render_findings(path, results[path]))
     return "\n".join(lines)

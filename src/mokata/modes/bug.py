@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
 from ..govern import TddGuard
+from ..errors import MokataError
 
 REPORTED = "reported"
 REPRODUCED = "reproduced"
@@ -19,7 +20,7 @@ VERIFIED = "verified"
 BUG_LABELS = (REPORTED, REPRODUCED, FIXING, VERIFIED)
 
 
-class BugError(Exception):
+class BugError(MokataError):
     pass
 
 
@@ -38,10 +39,12 @@ class Bug:
 
 class BugFlow:
     def __init__(self, bug: Bug, guard: Optional[TddGuard] = None,
-                 ledger: Any = None) -> None:
+                 ledger: Any = None, store: Any = None) -> None:
         self.bug = bug
         self.ledger = ledger
-        self.guard = guard or TddGuard(ledger=ledger)
+        # SI.2 — with a `store` (a StateStore, typically `surface.state`) the reproducer-RED is
+        # persisted per run, so a fix started after a restart still has to answer for it.
+        self.guard = guard or TddGuard(ledger=ledger, store=store)
 
     @property
     def label(self) -> str:

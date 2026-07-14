@@ -36,7 +36,10 @@ def record_plugin_root(plugin_root: str, home: Optional[str] = None) -> Optional
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(os.path.abspath(plugin_root) + "\n")
         return path
-    except Exception:
+    except OSError:
+        # D5 — this is pure local file IO (expanduser → makedirs → open → write), so `OSError` is
+        # the whole of what it can raise. The cache is a convenience, not state: None means "the
+        # command will fall back to locating the engine another way", never lost work.
         return None
 
 
@@ -49,5 +52,8 @@ def read_plugin_root(home: Optional[str] = None) -> Optional[str]:
         with open(path, encoding="utf-8") as fh:
             value = fh.read().strip()
         return value or None
-    except Exception:
+    except (OSError, UnicodeDecodeError):
+        # D5 — local file IO (OSError), plus a cache file with non-UTF-8 bytes, which `fh.read()`
+        # raises as `UnicodeDecodeError` (a ValueError, NOT an OSError). Narrowing to OSError alone
+        # would turn today's swallow into a CRASH on a corrupt cache, so it is named here.
         return None

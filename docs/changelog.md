@@ -8,6 +8,55 @@ The full, versioned changelog lives in the repository's
 > a stabilizing phase and are collapsed into this entry; 0.0.1 is the honest starting point for an
 > early, fast-moving project.
 
+## 0.0.13
+
+**Correctness & Trust — the seatbelt is enforced, not advertised. No breaking changes; additive; no
+schema change.** Every change fixes silent data loss, a race, or a gate that could be walked around.
+**Live bugs fixed:** teams on a custom DSN (`--dsn-env CUSTOM`) read fine but **never flushed a
+single write** — one DSN resolver now serves health, flush, sync, reads, audit and transport; the
+spec gate could **brick every implementation write** after a real approval by pointing at a
+spec-emit surface that did not exist (new `mokata spec emit` / `spec show` + a gated `spec_emit`
+tool); a WAL-switch race; approval misattribution under a two-process race; team access control that
+**failed open** (now deny-by-default); a sequential floor that **fabricated `ok=true` ledger rows**
+for work nothing ran (now labelled `simulated`, never counted); and 30 silent degrades — including a
+tampered ledger that reported *intact* and a secret-guard hook that left every write **unscanned for
+secrets**. **The seatbelt:** a `PreToolUse` hook enforces run-state gates on **native Write/Edit**
+(no code before a persisted spec; no code without a failing test — RED is the permission to
+implement), overrides named/reasoned/ledgered with no MCP surface; **the model can no longer mint its
+own consent** — `approve=true` is dead, a commit needs a human-minted, content-bound, single-use
+approval from `mokata approve <id>` in a separate terminal; the **trust dial** (previously dead code)
+is wired into every writing gate; a **zero-bypass audit** classifies every durable-write site and
+fails CI on an unregistered writer, closing three real side doors; and **scope binding** — a feature
+the spec deferred cannot be built without a re-gated `spec amend` (a forced phase regression). *An
+instruction is authorization to ASK, not to build.* **Multi-session safety:** atomic state (a torn
+write used to silently erase it), real session identity + scoped keys, worktree detection,
+hash-chained ledger, single-flusher sync, and a two-process stress test in CI. **Session save &
+share:** the save path *did not exist in production* — now `session save` survives `kill -9`, a
+per-turn autosave bounds a crash to **at most one lost brainstorm turn**, bundles are versioned and
+secret-scanned, and **approval never crosses machines** (the receiver's gate owns approval).
+**Honest boundaries:** "zero bypasses" holds for the memory/export/migrate funnel, **not repo-wide**
+— six CLI setup one-shots still write outside the gate (registered, filed for 0.0.14); an agent with
+arbitrary **shell** access is out of scope; the trust dial is not yet enforced on the CLI; the
+Windows stress proof lands on public CI at the cut.
+
+## 0.0.12
+
+**A legible skills pipeline, native domain knowledge, and a docs↔code reconciler. No breaking
+changes; additive; no schema change.** Every skill now carries a `## Contract` (what it can do,
+what it must not, and the real gate backing each boundary) plus an active-skill banner
+single-sourced with the statusline and `mokata progress`; skills auto-engage when the moment
+fits, and `mokata skills` lists the complete curated catalog — runnable pipeline skills plus
+standalone/auto-firing `docsync`, `govern`, `session`, `playbook`, `mcp-repair`. Ten clean-room
+**domain-knowledge skills** (API design, security, performance, frontend/accessibility, browser
+testing, CI/CD, git workflow, deprecation, docs/ADRs, shipping) attach to the pipeline phase
+where they apply and feed the gate already running there. New **`mokata docsync`** audits docs
+against the code (commands, config keys, counts, versions) and offers **human-gated** fixes; it
+auto-fires when a change touches a documented symbol. Develop shifts ambiguity left (stop → ask
+one question → amend the spec, human-gated); brainstorm gains a design pre-mortem and a
+doc-freshness check. Fixes: hooks resolve reliably under a GUI-launched minimal PATH; team-mode
+precedence resolves scoped conflicts to one winner; a team-Postgres read-through cache. Hardening:
+hash-pinned CI dependency installs; a new "How it works" developer docs section.
+
 ## 0.0.11
 
 **Team mode — a shared, governed team brain over your own Postgres. No breaking changes; additive;
@@ -80,7 +129,7 @@ and MCP wiring unchanged; no effect when the plugin isn't installed.
 
 **Agent Skills surface. No breaking changes; additive.** mokata's core capabilities now also
 register as Claude Code **Agent Skills** (auto-engaged from their `description`), alongside the
-`/mokata:*` slash commands. 14 skills ship as `skills/<name>/SKILL.md`, each rendered from the one
+`/mokata:*` slash commands. The 0.0.7 skill set (14 then; the curated catalog is 16 today) ships as `skills/<name>/SKILL.md`, each rendered from the one
 command template (single source + drift guard — no duplication). Installed by both the plugin
 (`skills/` + `"skills"` in `plugin.json`) and `mokata setup claude` (`.claude/skills/`, reversible
 via `mokata unsetup claude`). Non-Claude harnesses degrade clean.
@@ -101,8 +150,9 @@ portability test (no lingering handle) that run on every OS.
 
 **Portable sessions, in-Claude-Code UX, every-agent reach & supply-chain trust.
 No breaking changes.**
-Fixed: hook invocation now uses a PATH-resolved `mokata-hook` console entry (the `python3: command
-not found` pre-hook error on Windows / GUI macOS / exotic PATHs is gone). New: portable/shareable
+Fixed: hook invocation now uses a PATH-resolved `mokata-hook` console entry, fixing the
+`python3: command not found` pre-hook error class for PATH-resolved installs (the GUI-launched
+minimal-PATH variant was fully closed in 0.0.12, which pins the absolute path). New: portable/shareable
 **sessions** (`session push`/`pull`/`list`/`name` — machine-path-free, secret-scanned,
 human-gated); an always-on **stage badge** + flow legibility + parallel-agent **lanes** + full
 Claude-Code **command parity** (CI-enforced) + task decomposition + brainstorm anti-drift anchor +

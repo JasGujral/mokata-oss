@@ -10,6 +10,7 @@ import unittest
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _support import mcp_commit   # SI.3: propose -> a HUMAN approves out-of-band -> redeem by id
 
 from mokata.bootstrap import BOOTSTRAP_TOKEN_BUDGET, build_bootstrap
 from mokata.config import Surface
@@ -111,13 +112,15 @@ class TestMcpMemoryType(unittest.TestCase):
         from mokata import mcp_server as M
         with tempfile.TemporaryDirectory() as d:
             _repo(d).close()
+            # SI.3: the commit needs a HUMAN-minted approval (mcp_commit drives the round-trip);
+            # what's under test here is that `memory_type` (and its `mtype` alias) still routes.
             self.assertEqual(
-                M.remember(path=d, subject="a", value="1", memory_type=DECISION,
-                           approve=True)["status"], "committed")
+                mcp_commit(M.remember, path=d, subject="a", value="1",
+                           memory_type=DECISION)["status"], "committed")
             # deprecated `mtype` alias still routes
             self.assertEqual(
-                M.remember(path=d, subject="b", value="2", mtype=DECISION,
-                           approve=True)["status"], "committed")
+                mcp_commit(M.remember, path=d, subject="b", value="2",
+                           mtype=DECISION)["status"], "committed")
 
     def test_recall_exposes_memory_type_with_mtype_alias(self):
         from mokata import mcp_server as M

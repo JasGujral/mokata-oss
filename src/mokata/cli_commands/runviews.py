@@ -41,6 +41,13 @@ def cmd_progress_mark(args: argparse.Namespace) -> int:
         run_id = find_active_run(surface.state)     # reuse the existing run identity
         ProgressLog.from_surface(surface).append_event(
             STAGE_ENTER, args.stage, run_id=run_id)
+        # MS.S2 — a stage transition is a natural touchpoint to refresh this window's registry
+        # entry (its current phase). Degrade-clean: registry upkeep never breaks recording a stage.
+        try:
+            from .. import session_registry as _SR
+            _SR.touch(surface, phase=args.stage)
+        except Exception:
+            pass
         where = f" (run {run_id})" if run_id else ""
         print(f"mokata progress: entered '{args.stage}'{where}.")
         return 0
@@ -108,6 +115,57 @@ def cmd_sessions(args: argparse.Namespace) -> int:
         last = f" · last passed '{s.last_passed}'" if s.last_passed else " · not started"
         print(f"  {s.run_id:24} [{s.done}/{s.total}]{last} — {status}")
     return 0
+
+
+def cmd_windows(args: argparse.Namespace) -> int:
+    # MS.S2 — list the LIVE Claude Code windows on this repo (each window is its own MCP process),
+    # so two windows are no longer invisible to each other. Read-only: the caller's own window
+    # self-registers (transient registry upkeep, ungated — never routes through the WriteGate), and
+    # stale (dead-pid) windows are shown once then pruned. Degrade-clean: any registry problem lists
+    # nothing rather than tracebacking. Distinct from `sessions` (pipeline RUNS).
+    from ..session import short_id
+    from .. import session_registry as SR
+    from ..repo_identity import worktree_label
+    surface = _load_surface(args.path)
+    try:
+        SR.touch(surface)                    # register self so `windows` always shows this window
+    except Exception:
+        pass
+    rows = SR.list_sessions(surface)
+    if not rows:
+        print("mokata windows: no live sessions on record yet.")
+        return 0
+    live = sum(1 for r in rows if r.alive)
+    stale = len(rows) - live
+    tail = f", {stale} stale" if stale else ""
+    print(f"mokata windows — {live} live{tail}:")
+    for r in rows:
+        status = "live " if r.alive else "stale"
+        phase = f"phase: {r.phase}" if r.phase else "phase: —"
+        started = f"started {r.started_at}" if r.started_at else "started —"
+        dead = " (dead pid)" if not r.alive else ""
+        wt = worktree_label(r.repo_root) if r.repo_root else "main"    # WT.S1: main | rel worktree
+        scope = f"  scope: {r.scope}" if r.scope else ""
+        print(f"  {short_id(r.session_id):10} {status}  {started}  {phase}  wt: {wt}{scope}{dead}")
+    # WT.S1 — a ONE-TIME human-gated worktree offer when a live sibling is on this repo (never
+    # creates anything). Reuses the rows just listed; degrade-clean.
+    try:
+        from .. import session_worktree as SW
+        SW.emit_offer_once(surface, rows=rows)
+    except Exception:
+        pass
+    return 0
+
+
+def cmd_worktree_create(args: argparse.Namespace) -> int:
+    # WT.S1 — create a git worktree to isolate THIS session's working tree. The ONLY durable action
+    # in WT and explicitly HUMAN-GATED (P2/P14): it recommends a topic-aware branch/dir name and
+    # confirms via the standard read_yes_no path (fail-closed non-TTY) unless `--yes`. Refuses
+    # politely outside a git repo. Returns 0 when created, 1 when nothing was created.
+    from .. import session_worktree as SW
+    surface = _load_surface(args.path)
+    res = SW.create_worktree(surface, topic=args.topic, assume_yes=args.yes, out=print)
+    return 0 if res.created else 1
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
@@ -264,6 +322,28 @@ def register(sub, common):
     )
     p_sessions.set_defaults(func=cmd_sessions)
 
+    p_windows = sub.add_parser(
+        "windows", parents=[common],
+        help="list the live Claude Code windows on this repo (id, started, alive/stale, phase); "
+             "read-only. Distinct from `sessions`, which lists pipeline runs.",
+    )
+    p_windows.set_defaults(func=cmd_windows)
+
+    p_worktree = sub.add_parser(
+        "worktree", parents=[common],
+        help="isolate a session's working tree with a git worktree (human-gated; never automatic)",
+    )
+    wt_sub = p_worktree.add_subparsers(dest="worktree_command", required=True)
+    p_wt_create = wt_sub.add_parser(
+        "create", parents=[common],
+        help="create a git worktree for this session (asks the scope, recommends a name, confirms)",
+    )
+    p_wt_create.add_argument("topic", nargs="?", default=None,
+                             help="what this session is working on (the scope; asked if omitted)")
+    p_wt_create.add_argument("--yes", action="store_true",
+                             help="approve non-interactively (the durable git worktree add)")
+    p_wt_create.set_defaults(func=cmd_worktree_create)
+
     p_resume = sub.add_parser(
         "resume", parents=[common],
         help="preview where a run resumes — the phase + the gate that still applies",
@@ -305,6 +385,8 @@ __all__ = [
     "cmd_progress_record_review",
     "cmd_progress_review_status",
     "cmd_sessions",
+    "cmd_windows",
+    "cmd_worktree_create",
     "cmd_resume",
     "cmd_watch",
     "cmd_govern",

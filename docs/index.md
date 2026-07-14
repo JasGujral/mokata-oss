@@ -13,11 +13,13 @@ AI-assisted coding into one governed engine. It brainstorms the problem with you
 spec, refuses to write code until every acceptance criterion maps to a test (RED before
 GREEN), and reviews the result back against the spec. Around that engine sit a codebase
 knowledge graph, persistent self-healing memory (on by default), active token governance,
-and a full audit trail — with **every durable write human-gated** and **nothing leaving
-your machine** unless you wire it.
+and a full audit trail — with **every durable write human-gated** (the model proposes; *you*
+mint the approval in your own terminal with `mokata approve <id>` — a model can never approve
+its own write) and **nothing leaving your machine** unless you wire it.
 
-mokata is pure Python (≥ 3.10), has **no required runtime dependencies**, is Apache-2.0
-under **MoStack**, and is built clean-room (no dependency on any other framework).
+mokata is pure Python (≥ 3.10) — the engine is stdlib-only, and the MCP SDK is its single
+runtime dependency, so the MCP server works out of the box. It is Apache-2.0 under
+**MoStack**, and is built clean-room (no dependency on any other framework).
 
 **Start here → [Getting started](getting-started.md).** The canonical, pip-first path:
 `pip install mokata` → `mokata setup claude` → restart Claude Code → `mokata mcp status`

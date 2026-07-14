@@ -193,7 +193,8 @@ def register(sub, common):
                          help=f"profile to init with if not already set up "
                               f"(default: {DEFAULT_PROFILE})")
     p_setup.add_argument("--no-hooks", action="store_true",
-                         help="skip wiring the SessionStart + secret-guard hooks")
+                         help="skip wiring all three hooks (SessionStart briefing + secret-guard "
+                              "+ run-state gate-guard)")
     p_setup.add_argument("--no-grant", action="store_true",
                          help="don't grant Claude Code permission for mokata's MCP tools / "
                               "enable the server in settings.json (default: grant, so Claude "

@@ -141,12 +141,17 @@ def build_hot_ops(surface: Any) -> Dict[str, Callable[[], Any]]:
     grep = GrepBackend(surface.root)
     ops["grep_query"] = lambda: grep.query("callers", "compute")
 
+    from sqlite3 import Error as SQLiteError
     try:
         from .memory import MemoryStore
         from .memory.brain import jit_recall
         store = MemoryStore.from_surface(surface)
         ops["recall"] = lambda: jit_recall(store, "compute helper relevance context")
-    except Exception:
+    except (ImportError, OSError, SQLiteError):
+        # ImportError: memory's optional deps are absent. OSError/sqlite3.Error: the local store
+        # can't be opened. This is a BENCHMARK op list, not a capability: a skipped op means one
+        # fewer row in the perf report, and `run_benchmarks` reports exactly the ops it was given.
+        # Nothing degrades for the user — there is nothing to fall back FROM.
         pass  # memory layer absent/disabled -> skip the recall op (degrade-clean)
 
     return ops

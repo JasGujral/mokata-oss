@@ -40,6 +40,11 @@ class GateRef:
 GATES: Dict[str, GateRef] = {
     "write-gate": GateRef(
         "write-gate",
+        # "human-approved" is now LITERALLY true, not aspirational. Until SI.3 the MCP path's
+        # approval was `approve=true` — a parameter the MODEL typed — so this line overstated what
+        # the code enforced. The approval is now minted out-of-band by a human (`mokata approve
+        # <id>`, see approval.py) and the model can only REFERENCE it. Wording unchanged on purpose:
+        # the claim was always the right one; SI.3 is what made the code keep it.
         "every durable write is secret-scanned, human-approved, and audited",
         "src/mokata/govern/gate.py"),
     "secret-guard": GateRef(
@@ -165,6 +170,9 @@ CONTRACTS: Dict[str, Contract] = {
             "query the graph, memory, and code read-only",
             "present 2–3 grounded approaches and write the design write-up",
             "persist the approved approach (human-gated)",
+            "checkpoint each answered turn (cheap, atomic) + each coarse milestone + the approval "
+            "+ a passed gate so a crash can't lose them (ungated local save via the `session_save` "
+            "tool; add `turn` for a per-turn autosave)",
         ),
         must_not=(
             _c("write or edit code", "write-gate"),
@@ -180,7 +188,8 @@ CONTRACTS: Dict[str, Contract] = {
         can=(
             "turn the problem into concrete, testable acceptance criteria",
             "run the completeness gate and map each AC to a test",
-            "emit emitted_spec.json (human-gated)",
+            "emit the spec — `spec_emit` / `mokata spec emit` (human-gated): persists "
+            "emitted_spec.json AND the shared spec corpus in one commit",
         ),
         must_not=(
             _c("emit a spec that fails completeness", "completeness"),

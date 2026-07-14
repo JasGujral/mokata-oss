@@ -16,6 +16,7 @@ import unittest
 from contextlib import redirect_stdout
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _support import mcp_commit   # SI.3: propose -> a HUMAN approves out-of-band -> redeem by id
 
 from mokata import cli
 from mokata.config import Surface
@@ -273,7 +274,10 @@ class TestMcpSpecCheck(unittest.TestCase):
             self.assertEqual(res["status"], "blocked")
             self.assertTrue(res["conflicts"])
 
-            res = M.spec_check(path=d, symbols="process_payment", confirm=True)
+            # SI.3: a `confirm=True` the MODEL types is not consent. The deviation is only
+            # recorded once a HUMAN mints the approval (`mokata approve <id>`) and the model
+            # redeems it by id — which is exactly what mcp_commit drives.
+            res = mcp_commit(M.spec_check, path=d, symbols="process_payment")
             self.assertEqual(res["status"], "confirmed")
             self.assertTrue(res["committed"])
 

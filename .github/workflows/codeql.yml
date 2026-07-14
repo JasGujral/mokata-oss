@@ -1,14 +1,20 @@
 name: CodeQL
 
-# Static analysis for the Python source: on every push/PR to master, plus a weekly
-# scheduled scan so newly-disclosed query packs catch latent issues. Least-privilege:
+# Static analysis for the Python source: on every push/PR to the default branch, plus a
+# weekly scheduled scan so newly-disclosed query packs catch latent issues. Least-privilege:
 # the workflow reads the repo and writes only security alerts.
+#
+# BOTH branch names are listed on purpose: the PUBLIC mirror (mokata-oss) — the only repo
+# this job runs on (see the `if:` gate below) — has default branch `main`, while the private
+# dev mirror is `master`. Listing only `master` meant CodeQL NEVER fired on the public repo,
+# so Scorecard's SAST check saw the config but "0 commits checked with a SAST tool". Same
+# fix already applied to scorecard.yml. Keep `main` first so public pushes always match.
 
 on:
   push:
-    branches: [master]
+    branches: [main, master]
   pull_request:
-    branches: [master]
+    branches: [main, master]
   schedule:
     - cron: "27 3 * * 1"   # 03:27 UTC every Monday
 

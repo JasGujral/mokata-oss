@@ -43,4 +43,10 @@ def current_user() -> str:
     try:
         return getpass.getuser() or ""
     except Exception:
+        # (iv) SUPPRESS-OK: `getpass.getuser()` raises different classes on different platforms for
+        # the same condition — KeyError from the POSIX `pwd` lookup when no passwd entry exists (a
+        # container/CI user), OSError on Windows, and (3.13+) OSError on POSIX too. Naming them all
+        # would encode a version+platform matrix that goes stale. Nothing degrades: "" is the
+        # documented "unresolvable user", every caller already handles it, and the callers that
+        # NEED an identity (team writes) fail-closed on the empty string with a named fix.
         return ""

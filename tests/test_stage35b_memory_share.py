@@ -14,6 +14,7 @@ import unittest
 from contextlib import redirect_stdout
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _support import mcp_commit          # SI.3: propose -> human approves -> redeem by id
 
 from mokata.cli import main
 from mokata.config import Surface
@@ -188,7 +189,7 @@ class TestMcpMemoryShare(unittest.TestCase):
             self.assertEqual(res["status"], "proposed")
             self.assertFalse(os.path.exists(
                 os.path.join(d, ".mokata", MEMORY_SHARE_FILENAME)))   # nothing written
-            res2 = self.M.memory_export(path=d, confirm=True)
+            res2 = mcp_commit(self.M.memory_export, path=d)
             self.assertTrue(res2["committed"])
             self.assertTrue(os.path.exists(
                 os.path.join(d, ".mokata", MEMORY_SHARE_FILENAME)))
@@ -205,7 +206,7 @@ class TestMcpMemoryShare(unittest.TestCase):
             self.assertEqual(res["incoming"], 1)
             self.assertEqual(Surface.load(b) and
                              MemoryStore.from_surface(Surface.load(b)).all_active(), [])
-            res2 = self.M.memory_import(path=b, file=share, confirm=True)
+            res2 = mcp_commit(self.M.memory_import, path=b, file=share)
             self.assertTrue(res2["committed"])
             self.assertIn("w", res2["added"])
 

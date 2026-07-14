@@ -73,11 +73,13 @@ class TestPersistence(unittest.TestCase):
             reloaded = Surface.load(d)
             loaded = load_approved_approach(reloaded.state)
             self.assertEqual(loaded.approach.name, "cache-aside")
-            # the persisted artifact is transient runtime state under temp_local/ (24D)
-            self.assertTrue(
-                os.path.exists(os.path.join(reloaded.mokata_dir, "temp_local", "state",
-                                            "approved_approach.json"))
-            )
+            # the persisted artifact is transient runtime state under temp_local/ (24D). MS.S2 gives
+            # the file the session dimension (approved_approach__<session_id>.json) so two windows
+            # don't clobber — the FORMAT is unchanged; only the name gains the session_id.
+            state_dir = os.path.join(reloaded.mokata_dir, "temp_local", "state")
+            approach_files = [f for f in os.listdir(state_dir)
+                              if f.startswith("approved_approach") and f.endswith(".json")]
+            self.assertEqual(len(approach_files), 1)
 
 
 if __name__ == "__main__":

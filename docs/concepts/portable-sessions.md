@@ -12,7 +12,9 @@ packages, ships, and re-hydrates them.
 
 ## What a bundle is
 
-A versioned JSON object carrying:
+A versioned JSON object — the bundle schema is at **v2**, and a **v1 bundle still pulls fine**
+(back-compat is kept; a bundle *newer* than the reader is **refused**, never silently downgraded)
+— carrying:
 
 - **`state`** — the collected session keys, **machine-path-free** (absolute paths are stripped to
   basenames, so nothing machine-specific travels);
@@ -25,6 +27,26 @@ A versioned JSON object carrying:
 
 It is **deterministic**: the same `(session, tag, author, timestamp)` always produces the same
 bytes.
+
+## Saving vs sharing — where the gate sits
+
+**`mokata session save` is ungated and purely local.** It snapshots the in-flight session (the
+brainstorm's progress, the approved approach, the run checkpoints) into your own `.mokata/` so
+`mokata resume` can continue it — nothing leaves the machine, so there is nothing to gate. The
+human gate sits at the **share** boundary: `push` and `pull`, where state crosses to (or arrives
+from) somewhere else.
+
+That boundary is also where mokata asks for **consent to share unfinished thinking**. A push of an
+in-progress session — a brainstorm with no approved approach — **refuses** unless you say so:
+
+| Flag | What it does |
+|---|---|
+| `--save-first` | snapshot the session, *then* bundle it — one atomic action, with no gap between what you see and what you share |
+| `--allow-in-progress` | consent to share an unfinished session (a brainstorm with no approved approach) |
+| `--requirements-only` | bundle **only the distilled requirements** (the anchor, goal, constraints, and requirement lines) as a **cross-repo handoff** — no approaches, no approval, no transcript; the repo-fingerprint check is replaced by an origin label |
+
+`--save-first` is pure convenience. The other two are the two *alternative* consents: share the
+unfinished thinking, or share only what it distilled to.
 
 ## The invariants (why it's safe to share)
 
@@ -39,10 +61,15 @@ to the same inviolables as every other mokata write — on **both** ends of the 
 - **Cross-codebase mismatch surfaced, never silently applied.** If the bundle's repo fingerprint
   differs from the target repo's, the pull *stops and surfaces it*; applying anyway is an explicit
   `--force` override.
-- **The HARD-GATE survives the round-trip.** Re-hydration writes exactly the recorded state — it
-  never marks anything approved. A brainstorm that wasn't approved before the push restores as **not
-  approved** after the pull (the Stage 50 / 54g invariant). Approval is a decision, and decisions do
-  not travel inside content.
+- **The approach approval never crosses machines.** On pull, the `approved_approach` handoff is
+  **stripped** and the brainstorm's approved flag is **cleared** — even one that *was* approved on
+  the source machine hydrates as **not approved**, with `imported: approval not transferred —
+  re-approve on this machine (HARD-GATE)` appended to the record. Approving an approach is *your*
+  decision, and a decision does not travel inside content: the HARD-GATE re-runs here.
+
+    Precisely, and no further: this is true of the **approach approval**. An **emitted spec crosses
+    intact** — it is content the completeness gate already proved, not a pending decision — and
+    write proposals, gate overrides, and TDD red/green state are **never bundled at all**.
 - **Degrade-clean.** No session → a friendly no-op on push; a missing or corrupt bundle → a clean
   error, never a crash.
 

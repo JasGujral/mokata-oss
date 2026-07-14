@@ -9,6 +9,21 @@ fix — when it isn't. This module owns the READ-ONLY probe that makes that call
     speaks. The table + all DDL are owned by `team init` (TM.S3, doc 48 C4) — this probe
     **never runs DDL**, only SELECTs.
 
+D1 (0.0.13) makes this module the SINGLE SOURCE OF SCHEMA TRUTH. It always claimed `team init`
+owned DDL, but four runtime backends hand-mirrored the schema and re-ran their copy on EVERY
+connect (`memory/backends`, `memory/vector`, `session_transport`, `team_audit`, all via
+`_pg.connect_psycopg(setup_sql=…)`). Postgres checks the schema ACL *before* the IF-NOT-EXISTS
+short-circuit, and `ADD COLUMN IF NOT EXISTS` demands table ownership — so a least-privilege
+DML-only runtime role (the two-role model `team init` itself RECOMMENDS) was denied CREATE
+(SQLSTATE 42501) even against a perfectly provisioned, current-schema database, and the denial
+degraded to the SQLite floor. The mirrors are gone: runtime connections now VERIFY (one cached
+probe, E2) and never write schema. `ensure_schema` is the seam they all pass through.
+
+D2 (0.0.13) makes the version artifact a RANGE. An exact-match check (`version == VERSION`)
+partitioned a team on ANY bump — the first client to upgrade refused until the DB migrated, and
+the migrated DB then refused every client still on the old build. The artifact now carries
+`(min_supported, current)` and `compatibility()` is the ONE predicate both directions read.
+
 Golden path = plain Postgres ≥14, NO extensions (ADR-54): the probe requires none. `psycopg`
 stays an optional extra (lazy import via `memory/_pg.py`); a missing driver degrades to a
 clear "driver absent" verdict, never a crash.
@@ -21,7 +36,9 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Dict, Iterable, Optional, Type
+from .degrade import FAILURE_SCHEMA
+from .errors import DegradedCapability, MokataError
 
 # The shared-schema version this build of mokata speaks. `team init` (TM.S3) writes/migrates
 # the row in `mokata_schema_version`; the probe reads it and refuses on a mismatch. Bump this
@@ -43,6 +60,100 @@ from typing import Any, Optional
 # until they do.
 TEAM_SCHEMA_VERSION = 3
 SCHEMA_VERSION_TABLE = "mokata_schema_version"
+
+# D2 — the OLDEST shared schema this build can still serve. Not a guess: the live SQL SELECTs
+# `revision` (memory/backends `SELECT doc, revision …`; the flush's revision-guarded CAS in
+# team_journal), which arrived in v2. NOTHING in the runtime SQL touches a v3 column — v3's
+# scope/precedence fields are provisioned for future SQL-side filtering while the authoritative
+# value lives in the item `doc` JSON. So v2 is genuinely the floor, and a v2 team keeps working
+# (with an upgrade warning) instead of being partitioned off by a version bump.
+TEAM_SCHEMA_MIN_SUPPORTED = 2
+
+# A pre-D2 artifact is a bare `version` row with no `min_supported` column: it declares no range.
+# Read its floor as its OWN version — it certainly served the build that wrote it, and it made no
+# promise about a client it never saw. That keeps an existing deployment IN RANGE (a legacy v3
+# artifact still serves a v3 client; a legacy v2 one still serves us, with a warning) without the
+# far worse converse: reading the floor as v1 would have this build cheerfully attach to a schema
+# 40 versions AHEAD of it and read/write columns it has never heard of — the silent corruption D6
+# exists to forbid. Unknown is not permission.
+MIN_SUPPORTED_COLUMN = "min_supported"
+
+
+def effective_min(db_version: int, db_min_supported: Optional[int]) -> int:
+    """The floor an artifact actually promises: its declared `min_supported`, or — for a pre-D2
+    artifact that declares none — its own version."""
+    return int(db_version) if db_min_supported is None else int(db_min_supported)
+
+# Why a schema is incompatible — the two directions are NOT the same failure and must not share a
+# remediation. Both are LOUD; neither is ever silent.
+REASON_SCHEMA_ABSENT = "schema-absent"      # nothing provisioned yet
+REASON_SCHEMA_TOO_OLD = "schema-too-old"    # the DB is below this build's floor → migrate the DB
+REASON_CLIENT_TOO_OLD = "client-too-old"    # the DB no longer serves this build → upgrade mokata
+
+_SCHEMA_FIX = {
+    REASON_SCHEMA_ABSENT: "run `mokata team init` to provision the shared schema",
+    REASON_SCHEMA_TOO_OLD: "run `mokata team init` to upgrade the shared schema",
+    REASON_CLIENT_TOO_OLD: "upgrade mokata (`pip install -U mokata`) — the shared schema is "
+                           "ahead of this build and no longer serves it",
+}
+
+
+def schema_fix(reason: str) -> str:
+    """The ONE remediation string for a schema incompatibility — the exact command to run. Every
+    surface (preflight, the CM.S2 degrade notice, the typed backend errors) renders THIS, so a
+    user is never told to `mokata sync` a connection that is already healthy."""
+    return _SCHEMA_FIX.get(reason, _SCHEMA_FIX[REASON_SCHEMA_ABSENT])
+
+
+@dataclass
+class SchemaVerdict:
+    """Can this build operate against a shared schema at `(min_supported, current)`?"""
+
+    compatible: bool
+    reason: str = ""        # "" when compatible; else REASON_*
+    warning: str = ""       # set when compatible BUT the versions differ (upgrade advised)
+    detail: str = ""
+
+
+def compatibility(db_version: Optional[int], db_min_supported: Optional[int], *,
+                  speaks: int = TEAM_SCHEMA_VERSION,
+                  min_supported: int = TEAM_SCHEMA_MIN_SUPPORTED) -> SchemaVerdict:
+    """The ONE compatibility predicate (D2). Two ranges must overlap:
+
+      * the CLIENT declares it can serve a schema in [`min_supported`, `speaks`];
+      * the ARTIFACT declares the schema is at `db_version` and still serves clients back to
+        `db_min_supported`.
+
+    Compatible iff `db_min_supported <= speaks` (the schema still serves us) AND
+    `min_supported <= db_version` (the schema is new enough for the columns our SQL touches).
+    Anything in range works; a difference in either direction only WARNS — that is the whole
+    point of D2, because a version bump must not partition a team mid-upgrade."""
+    if db_version is None:
+        return SchemaVerdict(False, REASON_SCHEMA_ABSENT,
+                             detail="the shared schema is not provisioned")
+    db_min = effective_min(db_version, db_min_supported)
+
+    if db_version < min_supported:
+        return SchemaVerdict(
+            False, REASON_SCHEMA_TOO_OLD,
+            detail=f"the shared schema is v{db_version}, below the oldest this build can serve "
+                   f"(v{min_supported})")
+    if db_min > speaks:
+        return SchemaVerdict(
+            False, REASON_CLIENT_TOO_OLD,
+            detail=f"the shared schema is v{db_version} and serves clients from v{db_min}; this "
+                   f"build speaks v{speaks}")
+
+    warning = ""
+    if db_version < speaks:
+        warning = (f"the shared schema is v{db_version}, behind this build (v{speaks}) — run "
+                   f"`mokata team init` to upgrade it (working normally meanwhile)")
+    elif db_version > speaks:
+        warning = (f"the shared schema is v{db_version}, ahead of this build (v{speaks}) — it "
+                   f"still serves v{speaks} clients, but upgrade mokata when you can")
+    return SchemaVerdict(True, "", warning=warning,
+                         detail=f"schema v{db_version} in range [v{db_min}, this build speaks "
+                                f"v{speaks}]")
 
 # CAS columns on the memory table (doc 48 C1). `revision` starts at 1 on insert and bumps on
 # every accepted update; `updated_at` is advisory provenance. Runtime NEVER adds these (DDL is
@@ -75,47 +186,83 @@ PROBE_BUDGET_MS = 500
 # Postgres SQLSTATE for "relation does not exist" — the schema-version table not being present
 # is the reachable-but-not-provisioned signal (→ `mokata team init`).
 _UNDEFINED_TABLE = "42P01"
+# …and "column does not exist" — a PRE-D2 artifact has no `min_supported` column. That is a
+# legacy deployment, not a failure: fall back to the single-version read.
+_UNDEFINED_COLUMN = "42703"
 
-# A read-only SELECT of the newest schema-version row. NEVER DDL (C4 — DDL is team init's).
+# Read-only SELECTs of the newest schema-version row. NEVER DDL (C4 — DDL is team init's).
 _VERSION_SQL = (
+    f"SELECT version, {MIN_SUPPORTED_COLUMN} FROM {SCHEMA_VERSION_TABLE} "
+    f"ORDER BY version DESC LIMIT 1"
+)
+_VERSION_SQL_LEGACY = (
     f"SELECT version FROM {SCHEMA_VERSION_TABLE} ORDER BY version DESC LIMIT 1"
 )
 
 
-class _ProbeUnavailable(Exception):
+class _ProbeUnavailable(DegradedCapability):
     """Internal — the connection manager's typed failure for the probe path."""
 
 
 @dataclass
 class ProbeResult:
-    """The verdict of one team-DB probe. Every field is derived read-only; `compatible` is
-    True only when the DB is reachable, the schema is present, AND its version matches."""
+    """The verdict of one team-DB probe. Every field is derived read-only; `compatible` is True
+    only when the DB is reachable, the schema is present, AND its version is IN RANGE (D2).
+    `warning` is set when a compatible schema is nonetheless behind/ahead of this build."""
 
     driver_present: bool = True
     reachable: bool = False
     schema_present: bool = False
     schema_version: Optional[int] = None
+    schema_min_supported: Optional[int] = None
     compatible: bool = False
+    reason: str = ""
+    warning: str = ""
     elapsed_ms: float = 0.0
     detail: str = ""
     error: str = ""
 
+    @property
+    def fix(self) -> str:
+        """The remediation for an incompatible schema (empty when compatible)."""
+        return "" if self.compatible else schema_fix(self.reason)
 
-def _read_schema_version(conn: Any) -> "tuple[bool, Optional[int]]":
-    """(schema_present, version). A `42P01` (undefined table) means the schema-version table
-    isn't provisioned yet → (False, None). No rows → (True, None) (table exists but empty)."""
+
+def _read_schema_version(conn: Any) -> "tuple[bool, Optional[int], Optional[int]]":
+    """(schema_present, version, min_supported). A `42P01` (undefined table) means the schema
+    isn't provisioned yet → (False, None, None). No rows → (True, None, None) (table exists but
+    empty). A `42703` means a PRE-D2 (single-version) artifact → re-read without the range column
+    and report `min_supported=None`, whose floor `compatibility()` reads as the artifact's OWN
+    version — so an existing deployment parses as IN-RANGE rather than exploding."""
     try:
         row = conn.execute(_VERSION_SQL).fetchone()
+        ranged = True
     except Exception as exc:
-        if getattr(exc, "sqlstate", None) == _UNDEFINED_TABLE:
-            return False, None
-        raise
+        state = getattr(exc, "sqlstate", None)
+        if state == _UNDEFINED_TABLE:
+            return False, None, None
+        if state != _UNDEFINED_COLUMN:
+            raise
+        try:                                   # the legacy artifact — version only.
+            row = conn.execute(_VERSION_SQL_LEGACY).fetchone()
+        except Exception as exc2:
+            if getattr(exc2, "sqlstate", None) == _UNDEFINED_TABLE:
+                return False, None, None
+            raise
+        ranged = False
     if not row:
-        return True, None
+        return True, None, None
     try:
-        return True, int(row[0])
+        version = int(row[0])
     except (TypeError, ValueError):  # pragma: no cover - defensive
-        return True, None
+        return True, None, None
+    min_supported = None
+    if ranged and len(row) > 1 and row[1] is not None:
+        try:
+            min_supported = int(row[1])
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            min_supported = None
+    return True, version, min_supported
 
 
 def probe(dsn: str, *, budget_ms: int = PROBE_BUDGET_MS) -> ProbeResult:
@@ -143,9 +290,10 @@ def probe(dsn: str, *, budget_ms: int = PROBE_BUDGET_MS) -> ProbeResult:
             conn = _pg.get_connection(dsn, _ProbeUnavailable)
             conn.execute("SELECT 1").fetchone()          # reachability round-trip
             box["reachable"] = True
-            present, version = _read_schema_version(conn)
+            present, version, min_supported = _read_schema_version(conn)
             box["schema_present"] = present
             box["schema_version"] = version
+            box["schema_min_supported"] = min_supported
         except Exception as exc:                          # connect / query failure
             box["error"] = str(exc)
 
@@ -167,20 +315,103 @@ def probe(dsn: str, *, budget_ms: int = PROBE_BUDGET_MS) -> ProbeResult:
 
     present = bool(box.get("schema_present"))
     version = box.get("schema_version")
+    min_supported = box.get("schema_min_supported")
     if not present:
         return ProbeResult(reachable=True, schema_present=False, compatible=False,
-                           elapsed_ms=elapsed_ms,
+                           reason=REASON_SCHEMA_ABSENT, elapsed_ms=elapsed_ms,
                            detail=f"reachable, but the shared schema is not provisioned "
                                   f"(no {SCHEMA_VERSION_TABLE})")
     if version is None:
         return ProbeResult(reachable=True, schema_present=True, schema_version=None,
-                           compatible=False, elapsed_ms=elapsed_ms,
+                           compatible=False, reason=REASON_SCHEMA_ABSENT, elapsed_ms=elapsed_ms,
                            detail=f"reachable, but {SCHEMA_VERSION_TABLE} has no version row")
-    compatible = version == TEAM_SCHEMA_VERSION
-    detail = (f"reachable + schema v{version} compatible" if compatible
-              else f"reachable, but schema v{version} != required v{TEAM_SCHEMA_VERSION}")
+
+    # D2 — a RANGE check, never an equality one. In-range works (with a warning when the versions
+    # differ); out of range is LOUD, and the two directions carry DIFFERENT remediations.
+    v = compatibility(version, min_supported)
+    detail = ("reachable + " + v.detail) if v.compatible else ("reachable, but " + v.detail)
     return ProbeResult(reachable=True, schema_present=True, schema_version=version,
-                       compatible=compatible, elapsed_ms=elapsed_ms, detail=detail)
+                       schema_min_supported=effective_min(version, min_supported),
+                       compatible=v.compatible, reason=v.reason, warning=v.warning,
+                       elapsed_ms=elapsed_ms, detail=detail)
+
+
+# ==================================================== D1 · the runtime VERIFY seam (zero DDL)
+# Every runtime connection passes through here instead of running its own schema copy. It is the
+# ONE place a runtime path may ask "is the schema I depend on present and in range?" — and the
+# answer is a cached SELECT, never a CREATE. Cached per-process per-DSN (E2's one-probe
+# discipline): N backend builds in one run cost ONE probe, not N.
+_VERIFIED: Dict[str, ProbeResult] = {}
+_TABLE_PRESENT: Dict[str, bool] = {}
+
+
+def reset_schema_cache() -> None:
+    """Drop the per-process verify cache (tests + a forced re-probe)."""
+    _VERIFIED.clear()
+    _TABLE_PRESENT.clear()
+
+
+def verify_schema(dsn: str, *, force: bool = False) -> ProbeResult:
+    """The cached, VERIFY-ONLY schema probe a runtime connect makes (D1). Read-only by
+    construction — it reuses `probe`, which SELECTs and never runs DDL."""
+    if not force:
+        cached = _VERIFIED.get(dsn)
+        if cached is not None:
+            return cached
+    res = probe(dsn)
+    _VERIFIED[dsn] = res
+    return res
+
+
+def table_present(dsn: str, table: str, unavailable: Type[Exception]) -> bool:
+    """Is `table` present? A cheap `to_regclass` lookup (no DDL), cached per-process. Used for the
+    schema mokata owns OUTSIDE the version artifact — today only pgvector's opt-in table."""
+    key = f"{dsn}\x00{table}"
+    if key in _TABLE_PRESENT:
+        return _TABLE_PRESENT[key]
+    from .memory import _pg
+    conn = _pg.get_connection(dsn, unavailable)
+    try:
+        row = conn.execute("SELECT to_regclass(%s)", (table,)).fetchone()
+    except Exception as exc:
+        raise unavailable(f"database unavailable: {exc}") from exc
+    present = bool(row and row[0])
+    _TABLE_PRESENT[key] = present
+    return present
+
+
+def ensure_schema(dsn: str, unavailable: Type[Exception], *,
+                  require_tables: Iterable[str] = ()) -> ProbeResult:
+    """VERIFY that the shared schema this runtime path depends on is provisioned and IN RANGE —
+    and raise `unavailable` LOUDLY, naming the exact remediation, when it is not (D1: never a
+    silent degrade to the local floor; D2: in-range is fine, out-of-range says which way).
+
+    The raised exception carries `failure_class` (the CM.S2 vocabulary — `degrade.FAILURE_SCHEMA`
+    / `FAILURE_UNREACHABLE`) and `fix`, so the caller can class the degrade honestly instead of
+    calling every failure "unreachable"."""
+    from .degrade import FAILURE_SCHEMA, FAILURE_UNREACHABLE
+    res = verify_schema(dsn)
+    if not res.reachable:
+        exc = unavailable(f"database unavailable: {res.detail or res.error}")
+        exc.failure_class = FAILURE_UNREACHABLE          # type: ignore[attr-defined]
+        exc.fix = ""                                     # type: ignore[attr-defined]
+        raise exc
+    if not res.compatible:
+        exc = unavailable(f"the shared schema is unusable: {res.detail} — {res.fix}")
+        exc.failure_class = FAILURE_SCHEMA               # type: ignore[attr-defined]
+        exc.fix = res.fix                                # type: ignore[attr-defined]
+        exc.reason = res.reason                          # type: ignore[attr-defined]
+        raise exc
+    for table in require_tables:
+        if not table_present(dsn, table, unavailable):
+            fix = f"run `mokata team init` to provision the `{table}` schema"
+            exc = unavailable(f"the shared schema is unusable: `{table}` is not provisioned "
+                              f"— {fix}")
+            exc.failure_class = FAILURE_SCHEMA           # type: ignore[attr-defined]
+            exc.fix = fix                                # type: ignore[attr-defined]
+            exc.reason = REASON_SCHEMA_ABSENT            # type: ignore[attr-defined]
+            raise exc
+    return res
 
 
 # ============================================================ provisioning (team init OWNS DDL)
@@ -189,8 +420,10 @@ def probe(dsn: str, *, budget_ms: int = PROBE_BUDGET_MS) -> ProbeResult:
 # statement is IF NOT EXISTS / ON CONFLICT so ONE idempotent pass (doc 48 E5) is safe to re-run.
 # Golden path = vanilla Postgres ≥14, NO extensions (pgvector stays opt-in, off this path).
 
-class ProvisionError(Exception):
+class ProvisionError(MokataError):
     """Raised when the one-pass provision cannot run (driver absent / DB unreachable / DDL error)."""
+
+    failure_class = FAILURE_SCHEMA
 
 
 @dataclass
@@ -209,7 +442,12 @@ def provision_sql(project_id: Optional[str] = None) -> "list[str]":
     return [
         # the version table the probe reads (created before its row is inserted).
         f"CREATE TABLE IF NOT EXISTS {SCHEMA_VERSION_TABLE} (version INT PRIMARY KEY)",
-        # memory items — mirrors memory/backends.py PostgresBackend._setup_sql.
+        # D2 — the artifact carries a RANGE. Idempotent ADD-COLUMN-IF-NOT-EXISTS, so re-running
+        # `team init` upgrades a PRE-D2 (single-version) artifact in place; until it does, the
+        # probe reads that artifact as in-range (floor = its own version), never exploding.
+        f"ALTER TABLE {SCHEMA_VERSION_TABLE} ADD COLUMN IF NOT EXISTS "
+        f"{MIN_SUPPORTED_COLUMN} INT",
+        # memory items — the ONE definition (the runtime backends verify this, never re-create it).
         f"CREATE TABLE IF NOT EXISTS {MEMORY_TABLE} ("
         "  id TEXT PRIMARY KEY, mtype TEXT, subject TEXT,"
         "  status TEXT, doc TEXT, seq BIGSERIAL, project TEXT)",
@@ -232,14 +470,14 @@ def provision_sql(project_id: Optional[str] = None) -> "list[str]":
         "BOOLEAN NOT NULL DEFAULT FALSE",
         f"ALTER TABLE {MEMORY_TABLE} ADD COLUMN IF NOT EXISTS {MEMORY_PRIORITY_COLUMN} "
         "INT NOT NULL DEFAULT 0",
-        # session bundles — mirrors session_transport.PostgresTransport._setup_sql.
+        # session bundles — the ONE definition (session_transport verifies it, never creates it).
         f"CREATE TABLE IF NOT EXISTS {SESSION_TABLE} ("
         "  tag TEXT, blob TEXT, seq BIGSERIAL, project TEXT,"
         "  PRIMARY KEY (project, tag))",
         f"ALTER TABLE {SESSION_TABLE} ADD COLUMN IF NOT EXISTS project TEXT",
         f"CREATE UNIQUE INDEX IF NOT EXISTS {SESSION_TABLE}_project_tag"
         f"  ON {SESSION_TABLE} (project, tag)",
-        # audit ledger — mirrors team_audit.SharedAuditLog._create_sql (append-only by id).
+        # audit ledger — the ONE definition (team_audit verifies it). Append-only by id.
         f"CREATE TABLE IF NOT EXISTS {AUDIT_TABLE} ("
         "  id BIGSERIAL PRIMARY KEY, namespace TEXT NOT NULL, actor TEXT NOT NULL,"
         "  seq BIGINT, kind TEXT, at TEXT, entry TEXT)",
@@ -247,23 +485,93 @@ def provision_sql(project_id: Optional[str] = None) -> "list[str]":
         f"CREATE TABLE IF NOT EXISTS {EVENTS_TABLE} ("
         "  id BIGSERIAL PRIMARY KEY, namespace TEXT, project TEXT, kind TEXT,"
         "  at TEXT, actor TEXT, payload TEXT)",
-        # the schema-version row LAST — ON CONFLICT so a re-run adds no duplicate (idempotent).
-        f"INSERT INTO {SCHEMA_VERSION_TABLE} (version) VALUES ({TEAM_SCHEMA_VERSION})"
-        f"  ON CONFLICT (version) DO NOTHING",
+        # the schema-version row LAST — the (current, min_supported) RANGE (D2). ON CONFLICT DO
+        # UPDATE (not DO NOTHING) so re-running init also refreshes the range on an artifact that
+        # already carries this version but predates the range column. Idempotent either way (E5).
+        f"INSERT INTO {SCHEMA_VERSION_TABLE} (version, {MIN_SUPPORTED_COLUMN})"
+        f"  VALUES ({TEAM_SCHEMA_VERSION}, {TEAM_SCHEMA_MIN_SUPPORTED})"
+        f"  ON CONFLICT (version) DO UPDATE SET "
+        f"{MIN_SUPPORTED_COLUMN} = EXCLUDED.{MIN_SUPPORTED_COLUMN}",
     ]
+
+
+# pgvector's schema — mokata-owned, but OPT-IN and OFF the golden path (ADR-54: vanilla Postgres,
+# no extensions). It lives HERE, in the init path, because D1 admits no runtime DDL anywhere: the
+# `PgVectorBackend` used to run `CREATE EXTENSION vector` on every connect — the single most
+# privileged statement in the codebase, on a path meant for a DML-only role. It is provisioned by
+# `provision_vector` (never by the default `team init` pass); the backend only VERIFIES the table.
+VECTOR_TABLE = "mokata_memory_vectors"
+
+
+def vector_provision_sql(dim: int) -> "list[str]":
+    """The ordered, idempotent DDL for the OPT-IN pgvector tier (needs a role that may CREATE
+    EXTENSION). Not part of `provision_sql` — the golden path stays extension-free."""
+    return [
+        "CREATE EXTENSION IF NOT EXISTS vector",
+        f"CREATE TABLE IF NOT EXISTS {VECTOR_TABLE} ("
+        "  id TEXT PRIMARY KEY, mtype TEXT, subject TEXT, status TEXT,"
+        f"  doc TEXT, embedding vector({dim}), seq BIGSERIAL, project TEXT)",
+        f"ALTER TABLE {VECTOR_TABLE} ADD COLUMN IF NOT EXISTS project TEXT",
+    ]
+
+
+def provision_vector(dsn: str, *, dim: int) -> ProvisionResult:
+    """Provision the opt-in pgvector schema (the init path — never a runtime connect)."""
+    return _run_ddl(dsn, vector_provision_sql(dim), [VECTOR_TABLE])
+
+
+def _run_ddl(dsn: str, stmts: "list[str]", tables: "list[str]") -> ProvisionResult:
+    """Execute an idempotent DDL pass. The ONLY function in mokata that writes schema — every
+    caller is an init path, and the AST guard in the D1 test enforces that."""
+    from .memory import _pg
+    conn = _pg.get_connection(dsn, ProvisionError)
+    try:
+        for stmt in stmts:
+            conn.execute(stmt)
+    except Exception as exc:                              # any DDL failure fails closed + clean
+        raise ProvisionError(f"provisioning failed: {exc}") from exc
+    reset_schema_cache()             # the schema just changed — the verify cache is now stale.
+    return ProvisionResult(statements=stmts, version=TEAM_SCHEMA_VERSION, tables=tables)
 
 
 def provision(dsn: str, *, project_id: Optional[str] = None) -> ProvisionResult:
     """Run the one idempotent provision pass on `dsn` (doc 48 E5). This is the ONLY DDL path in
     mokata — runtime connects (incl. the probe) never run these. Raises `ProvisionError` on a
     missing driver / unreachable DB / DDL failure (the caller surfaces the S2 fail-closed fixes)."""
-    from .memory import _pg
-    conn = _pg.get_connection(dsn, ProvisionError)
-    stmts = provision_sql(project_id)
-    try:
-        for stmt in stmts:
-            conn.execute(stmt)
-    except Exception as exc:                              # any DDL failure fails closed + clean
-        raise ProvisionError(f"provisioning failed: {exc}") from exc
-    tables = [SCHEMA_VERSION_TABLE, MEMORY_TABLE, SESSION_TABLE, AUDIT_TABLE, EVENTS_TABLE]
-    return ProvisionResult(statements=stmts, version=TEAM_SCHEMA_VERSION, tables=tables)
+    return _run_ddl(dsn, provision_sql(project_id),
+                    [SCHEMA_VERSION_TABLE, MEMORY_TABLE, SESSION_TABLE, AUDIT_TABLE, EVENTS_TABLE])
+
+
+# ------------------------------------------------------------------- E5 · the idempotent pass
+@dataclass
+class UpgradePlan:
+    """What re-running `team init` would DO to an existing shared schema — computed BEFORE any
+    DDL, so the human gate can state the change and a true no-op can skip the prompt entirely."""
+
+    needed: bool                # False → the schema is already current AND carries the D2 range
+    label: str = ""             # what the human is approving ("provision" / "upgrade v2 → v3")
+    from_version: Optional[int] = None
+    blocked: str = ""           # a reason the pass CANNOT proceed (a client-too-old schema)
+
+
+def upgrade_plan(res: ProbeResult) -> UpgradePlan:
+    """The E5 plan for one probe result. Re-init on a CURRENT schema is a no-op (nothing to
+    approve, nothing to run); on an old-but-in-range schema it is an upgrade; on an absent schema
+    it is the first-time provision. A schema AHEAD of this build is refused, not downgraded — a
+    newer teammate's schema must never be rewritten by an older client."""
+    if not res.schema_present or res.schema_version is None:
+        return UpgradePlan(True, "provision the shared schema")
+    if res.reason == REASON_CLIENT_TOO_OLD:
+        return UpgradePlan(False, blocked=res.detail or "the shared schema is ahead of this build")
+    if res.schema_version > TEAM_SCHEMA_VERSION:
+        return UpgradePlan(
+            False, from_version=res.schema_version,
+            blocked=f"the shared schema is v{res.schema_version}, ahead of this build "
+                    f"(v{TEAM_SCHEMA_VERSION}) — it must not be rewritten by an older client")
+    if (res.schema_version == TEAM_SCHEMA_VERSION
+            and res.schema_min_supported == TEAM_SCHEMA_MIN_SUPPORTED):
+        return UpgradePlan(False, from_version=res.schema_version)     # true no-op
+    return UpgradePlan(
+        True,
+        f"upgrade the shared schema v{res.schema_version} → v{TEAM_SCHEMA_VERSION}",
+        from_version=res.schema_version)

@@ -40,16 +40,23 @@ from .govern.ledger import AuditLedger
 from .govern.secrets import Finding
 
 # The env vars the shared audit log reads its DSN from (never inline in the committed manifest,
-# exactly like the shared-memory + session backends). The audit-specific var wins; the shared one
-# is the fallback so a team already pointing memory/sessions at one DB needs no extra config.
-PG_DSN_ENVS = ("MOKATA_AUDIT_PG_DSN", "MOKATA_PG_DSN")
+# exactly like the shared-memory + session backends). The audit-specific override var wins; then
+# the CONFIGURED team DSN name (via the ONE resolver — so `team connect --dsn-env CUSTOM` reaches
+# audit too, C-1); then the literal default (which `resolve_dsn_env` supplies). The default NAME
+# lives only in `dsn.py`.
+from .dsn import DEFAULT_DSN_ENV  # noqa: E402  (the single source of the default env-var name)
+from .errors import DegradedCapability
+
+# The audit subsystem's own override env var (wins over the team/default names when set).
+AUDIT_OVERRIDE_ENV = "MOKATA_AUDIT_PG_DSN"
+# Kept for the degrade-clean "needs a DSN in $X / $Y" hint (the two well-known names).
+PG_DSN_ENVS = (AUDIT_OVERRIDE_ENV, DEFAULT_DSN_ENV)
 PG_TABLE = "mokata_audit_log"                # mokata-OWNED, namespaced (never a generic name)
-DEFAULT_DSN_ENV = "MOKATA_PG_DSN"            # matches team_connect / session_transport
 
 _AUDIT_SETTINGS_KEY = "audit"               # settings.audit.{shared, dsn_env}
 
 
-class SharedAuditUnavailable(Exception):
+class SharedAuditUnavailable(DegradedCapability):
     """Raised when the shared audit log can't be built — e.g. psycopg missing or no DSN. The
     caller degrades cleanly (a clear message, the log stays LOCAL) and NEVER silently downgrades."""
 
@@ -91,17 +98,27 @@ def shared_enabled(data: dict) -> bool:
     return bool(_settings(data).get("shared"))
 
 
-def dsn_env_name(data: dict) -> str:
-    """The env-var NAME the shared audit DSN is read from (never the secret itself)."""
-    return _settings(data).get("dsn_env") or DEFAULT_DSN_ENV
+def dsn_env_name(data: Optional[dict] = None) -> str:
+    """The env-var NAME the shared audit DSN is DISPLAYED as (never the secret itself): the
+    audit-specific override (`settings.audit.dsn_env`) when set, else the CONFIGURED team name
+    (via the ONE resolver), else the default. Aligns display with what `resolve_dsn` resolves."""
+    from .dsn import resolve_dsn_env
+    return _settings(data or {}).get("dsn_env") or resolve_dsn_env(data)
 
 
-def resolve_dsn(dsn_env: Optional[str] = None) -> Optional[str]:
-    """The DSN for the shared audit log: an explicit env-var name first, else the standard
-    audit / shared vars. Returns None when none is set (the caller degrades clean)."""
-    names = ((dsn_env,) + PG_DSN_ENVS) if dsn_env else PG_DSN_ENVS
+def resolve_dsn(dsn_env: Optional[str] = None, *, data: Optional[dict] = None,
+                environ: Optional[dict] = None) -> Optional[str]:
+    """The DSN VALUE for the shared audit log. Resolution order (C-1, matches memory/journal):
+    an explicit per-call name / the audit-specific configured name (`settings.audit.dsn_env`) →
+    the audit override var (`$MOKATA_AUDIT_PG_DSN`) → the CONFIGURED team DSN name (via
+    `dsn.resolve_dsn_env`, which also supplies the literal default). None when none is set — the
+    caller degrades clean. The DSN VALUE is only read here, never stored."""
+    from .dsn import resolve_dsn_env
+    env = os.environ if environ is None else environ
+    explicit = dsn_env or _settings(data or {}).get("dsn_env")
+    names = ([explicit] if explicit else []) + [AUDIT_OVERRIDE_ENV, resolve_dsn_env(data)]
     for name in names:
-        val = os.environ.get(name) if name else None
+        val = env.get(name) if name else None
         if val:
             return val
     return None
@@ -243,33 +260,18 @@ class SharedAuditLog:
 
     def __init__(self, dsn: Optional[str] = None, client: Any = None) -> None:
         if client is not None:
-            # an injected connection (tests / a host-provided client); ensure the owned table.
-            self._conn = client
-            try:
-                self._conn.execute(self._create_sql())
-            except Exception:  # pragma: no cover - a fake may no-op DDL
-                pass
+            self._conn = client               # an injected connection: already provisioned.
             return
         if not dsn:
             raise SharedAuditUnavailable(
                 "the shared audit log needs a DSN in $" + " / $".join(PG_DSN_ENVS)
                 + " (never inline in the committed manifest)")
+        # D1 — VERIFY-ONLY: `team init` (teamdb) owns this table. Its `id BIGSERIAL PRIMARY KEY`
+        # is the conflict-free key — every writer's row is its OWN row, so concurrent appends never
+        # clobber. An append-only runtime role (no UPDATE/DELETE grant) is exactly the point, and
+        # this connect no longer demands CREATE on top of it.
         from .memory._pg import connect_psycopg
-        self._conn = connect_psycopg(dsn, SharedAuditUnavailable,
-                                     setup_sql=[self._create_sql()])
-
-    @classmethod
-    def _create_sql(cls) -> str:
-        # `id BIGSERIAL PRIMARY KEY` is the conflict-free key: every writer's row is its OWN row —
-        # there is NO shared key two writers contend on, so concurrent appends never clobber.
-        return (f"CREATE TABLE IF NOT EXISTS {cls.TABLE} ("
-                "  id BIGSERIAL PRIMARY KEY,"      # monotonic; conflict-free by construction
-                "  namespace TEXT NOT NULL,"       # per-repo namespace
-                "  actor TEXT NOT NULL,"           # who (per-actor attribution)
-                "  seq BIGINT,"                    # the writer's LOCAL ledger seq (per ns+actor)
-                "  kind TEXT,"
-                "  at TEXT,"
-                "  entry TEXT)")                   # the full local entry, verbatim JSON
+        self._conn = connect_psycopg(dsn, SharedAuditUnavailable)
 
     # Justification for the B608 suppressions below (bandit false positive): the SQL interpolates
     # ONLY the mokata-OWNED constant `self.TABLE`, never user input; every VALUE (namespace/actor/
@@ -322,13 +324,15 @@ class SharedAuditLog:
         return sorted({(r[0] if r and r[0] else LEGACY_PROJECT) for r in rows})
 
 
-def make_shared_log(dsn_env: Optional[str] = None, *, client: Any = None) -> SharedAuditLog:
+def make_shared_log(dsn_env: Optional[str] = None, *, data: Optional[dict] = None,
+                    client: Any = None) -> SharedAuditLog:
     """Build the shared audit log. OPT-IN + degrade-clean: with no injected client and no DSN it
     raises `SharedAuditUnavailable` (a clear message) rather than crashing or silently
-    downgrading."""
+    downgrading. `data` (the manifest) lets the resolver honor the CONFIGURED team DSN name
+    (C-1), so a `team connect --dsn-env CUSTOM` reaches audit without a separate audit var."""
     if client is not None:
         return SharedAuditLog(client=client)
-    return SharedAuditLog(dsn=resolve_dsn(dsn_env))
+    return SharedAuditLog(dsn=resolve_dsn(dsn_env, data=data))
 
 
 def _is_publish_record(entry: dict) -> bool:
@@ -359,7 +363,7 @@ class ShareResult:
     message: str = ""
 
 
-def share_audit(root: str, surface: Any, *, assume_yes: bool = False,
+def share_audit(root: str, surface: Any, *, assume_yes: bool = False, policy: Any = None,
                 confirm: Optional[Callable[[str], bool]] = None,
                 out: Optional[Callable[[str], None]] = None,
                 ledger: Any = None, client: Any = None) -> ShareResult:
@@ -380,7 +384,7 @@ def share_audit(root: str, surface: Any, *, assume_yes: bool = False,
 
     dsn_env = dsn_env_name(data)
     try:
-        log = make_shared_log(dsn_env, client=client)
+        log = make_shared_log(data=data, client=client)
     except SharedAuditUnavailable as exc:
         msg = (f"shared audit unavailable ({exc}) — your log stays LOCAL (degrade-clean). "
                f"Export ${dsn_env} and `pip install 'mokata[postgres]'` to publish.")
@@ -418,11 +422,15 @@ def share_audit(root: str, surface: Any, *, assume_yes: bool = False,
             log.append(ns, who, entry)
         box["n"] = len(fresh)
 
-    gate = WriteGate(ledger=local)
+    from .govern.trust import (CLI_SURFACE, policy_approved, policy_surface, policy_tool,
+                               policy_trust)
+    gate = WriteGate(ledger=local, trust=policy_trust(policy))
     outcome = gate.submit(
         WriteRequest(kind="send", target=f"team-audit:{dsn_env}/{ns}", content=payload,
-                     actor=who),
-        commit=_commit, confirm=confirm, assume_yes=gate_yes, prompt=prompt)
+                     actor=who, tool=policy_tool(policy, "audit_share"),
+                     surface=policy_surface(policy, CLI_SURFACE)),
+        commit=_commit, confirm=confirm, assume_yes=gate_yes, prompt=prompt,
+        human_approved=policy_approved(policy))
     if not outcome.committed:
         emit(outcome.reason)
         return ShareResult(False, outcome.aborted, 0, pending=len(fresh),
@@ -444,7 +452,7 @@ def pending_share(root: str, surface: Any, *, client: Any = None) -> Tuple[bool,
     if not shared_enabled(data):
         return (False, 0, dsn_env, "team audit sharing is OFF (local-first default).")
     try:
-        log = make_shared_log(dsn_env, client=client)
+        log = make_shared_log(data=data, client=client)
     except SharedAuditUnavailable as exc:
         return (False, 0, dsn_env, str(exc))
     from .project import project_id
@@ -479,7 +487,7 @@ def team_audit_view(root: str, surface: Any, *, client: Any = None,
             "`mokata config set settings.audit.shared true`, then `mokata audit --team`."))
     dsn_env = dsn_env_name(data)
     try:
-        log = make_shared_log(dsn_env, client=client)
+        log = make_shared_log(data=data, client=client)
     except SharedAuditUnavailable as exc:
         return TeamAuditView(False, message=(
             f"shared audit unavailable ({exc}) — nothing team-wide to show; your LOCAL log is "

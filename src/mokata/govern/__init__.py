@@ -54,12 +54,17 @@ from .doctor import (
 )
 from .lifecycle import ResetPlan, ResetResult, plan_reset, reset_state
 from .trust import (
+    CLI_SURFACE,
     DEFAULT_TRUST,
     GATED_WRITE,
+    MCP_SURFACE,
     PROPOSE_ONLY,
     READ_ONLY,
+    REFUSED_READ_ONLY,
+    SURFACES,
     TRUST_LEVELS,
     TrustPolicy,
+    WritePolicy,
     trust_for,
 )
 from .compress import OutputDensity, compress_output, compress_tool_output, density_enabled
@@ -162,7 +167,8 @@ __all__ = [
     # I6 — resume / recovery
     "PipelineCheckpoint", "CHECKPOINT_PREFIX",
     # K3 — per-adapter trust dial
-    "TrustPolicy", "trust_for", "READ_ONLY", "PROPOSE_ONLY", "GATED_WRITE",
+    "TrustPolicy", "WritePolicy", "trust_for", "READ_ONLY", "PROPOSE_ONLY", "GATED_WRITE",
+    "MCP_SURFACE", "CLI_SURFACE", "SURFACES", "REFUSED_READ_ONLY",
     "TRUST_LEVELS", "DEFAULT_TRUST",
     # K5 — doctor
     "diagnose", "DoctorReport", "DoctorFinding",

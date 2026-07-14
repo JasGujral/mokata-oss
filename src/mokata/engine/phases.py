@@ -9,13 +9,14 @@ WriteGate (I2); there is no parallel pipeline.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from ..brainstorm import PIPELINE_PHASES
-from ..govern import KarpathyContext, WriteGate, WriteRequest, run_karpathy_for_phase
+from ..govern.trust import CLI_SURFACE
+from ..govern import KarpathyContext, WriteGate, run_karpathy_for_phase
 from .completeness import run_completeness_gate
+from .emit import commit_spec
 from .premortem import derive_probes
 from .spec import Spec, TestRef
 
@@ -134,20 +135,38 @@ def _emit(ctx: PhaseContext, store: Any, gate: WriteGate, approve: bool) -> Phas
     # the domains along with the plan. A spec that already carries domains keeps its own.
     if not ctx.spec.domains:
         ctx.spec.domains = list(getattr(ctx.handoff, "domains", []) or [])
-    content = json.dumps(ctx.spec.to_dict())
 
-    def commit() -> None:
-        if store is not None:
-            store.write("emitted_spec", ctx.spec.to_dict())
+    if store is None:                       # no state surface — nothing durable to write
+        return PhaseRecord("emit", False, "emit refused — no state store to persist the spec into",
+                           gate_id="emit-approval", gate_passed=False)
 
-    # approve=True -> auto-approve; approve=False -> a deterministic decline (no prompt).
-    out = gate.submit(WriteRequest("config", "spec:emit", content), commit=commit,
-                      assume_yes=approve, confirm=None if approve else (lambda _t: False))
-    if out.committed:
+    # SI-DEV.0 — the durable write is `engine/emit.py:spec_commit`, the ONE committer every surface
+    # shares (the `mokata spec emit` CLI and the `spec_emit` MCP tool land there too). It writes the
+    # run's `emitted_spec` AND appends to the shared `spec_corpus` in the same gated commit, so a
+    # spec on record is always a spec `spec-check` can see. approve=True -> auto-approve;
+    # approve=False -> a deterministic decline (no prompt).
+    committed, _reason, _size = commit_spec(
+        store, ctx.spec, gate=gate, assume_yes=approve,
+        confirm=None if approve else (lambda _t: False), surface=CLI_SURFACE)
+    if committed:
         ctx.emitted = ctx.spec.to_dict()
-    return PhaseRecord("emit", out.committed,
-                       "spec emitted" if out.committed else "emit declined at the gate",
-                       gate_id="emit-approval", gate_passed=out.committed)
+    return PhaseRecord("emit", committed,
+                       "spec emitted" if committed else "emit declined at the gate",
+                       gate_id="emit-approval", gate_passed=committed)
+
+
+def _mark_gate_passed(store: Any, phase: str) -> None:
+    """SS.S1 (b) double-wire — checkpoint each passed gate in the LIVE pipeline so an interrupted
+    run resumes from the last passed phase (not the start). run_id from MS.S2's `current_run_id()`;
+    the write rides `PipelineCheckpoint.mark_passed` (idempotent). Degrade-clean: a persist failure
+    warns ONCE and is swallowed — it never blocks the phase or changes the run's output."""
+    try:
+        from ..session import current_run_id
+        from ..govern.resume import PipelineCheckpoint
+        PipelineCheckpoint(store, current_run_id()).mark_passed(phase)
+    except Exception:
+        from ..session_flow import note_persist_failure
+        note_persist_failure("gate:" + phase)
 
 
 def _karpathy_context(ctx: PhaseContext) -> KarpathyContext:
@@ -195,6 +214,10 @@ def run_pipeline(handoff: Any, spec: Spec, tests: List[TestRef],
             rec = _emit(ctx, store, gate, approve)
         if ledger is not None:
             ledger.record("phase", phase=phase, ok=rec.ok, summary=rec.summary)
+        # SS.S1 (b) — a passed gate in the live pipeline leaves a resume checkpoint (degrade-clean;
+        # only when a store is wired, so the runner stays byte-identical but for the side effect).
+        if store is not None and rec.ok:
+            _mark_gate_passed(store, phase)
         if manifest is not None:
             # G3 — fire the (enabled) Karpathy gates for this phase off the post-phase
             # state; each is audited by the rules layer. Skipped wholesale w/o a manifest.
