@@ -25,10 +25,12 @@ gates are identical on every one; only the byte store changes:
 | `postgres` | a shared, owned DB table (`mokata_session_bundle`) | a **shared team store** — everyone pushes/pulls one place |
 
 **Postgres is opt-in & local-first.** It reads its DSN from `MOKATA_SESSION_PG_DSN` (or the shared
-`MOKATA_PG_DSN`) — never inline in the committed manifest. With no `psycopg` or no DSN it
-**degrades clean**: a clear message, no crash, and it **never** silently falls back to a
-less-secure store. `psycopg` is an optional extra (`pip install "mokata[postgres]"`); the core
-stays dependency-free.
+`MOKATA_PG_DSN`) — never inline in the committed manifest. Its table (`mokata_session_bundle`) is
+provisioned once by **`mokata team init`** (mokata runs no DDL at runtime, so the role you use
+day-to-day needs no `CREATE` rights). With no `psycopg`, no DSN, or no provisioned schema it
+**degrades clean**: a clear message naming the failure and its fix, no crash, and it **never**
+silently falls back to a less-secure store. `psycopg` is an optional extra
+(`pip install "mokata[postgres]"`); the core stays dependency-free.
 
 **Project-scoped on a shared DSN (Stage 71a).** When several projects share one Postgres DSN, the
 `postgres` transport is **scoped by project key**, so a tag like `auth` never collides across
@@ -36,6 +38,20 @@ projects and `session list` shows only the current project. Two clones of the **
 to the same key (via the git remote, or a pinned `settings.project.id`), so cross-machine resume
 still works; `--all` / `--project` widen the listing. See
 [Multi-project on one shared backend](multi-project-shared-backend.md).
+
+## Save the session (ungated — it's local)
+
+```bash
+mokata session save     # snapshot this session's in-flight state; `mokata resume` continues it
+```
+
+`session save` snapshots the in-flight session — brainstorm progress, the approved approach, the run
+checkpoints — so it's **recoverable**. It is **not** human-gated, deliberately: it writes **local,
+transient state that is already yours**. The gate belongs at the **share** boundary (`push`), where
+something actually leaves your machine — gating a local snapshot would only train you to click
+through prompts that guard nothing.
+
+Nothing in flight yet → a friendly no-op (start a brainstorm/run first).
 
 ## Push the current session (human-gated)
 
@@ -53,6 +69,36 @@ travels), carries **provenance** (author, source, created) + a **content hash**,
 fingerprint** used to catch a cross-codebase pull.
 
 No session in progress → a friendly no-op (nothing to package).
+
+### The three share flags
+
+| Flag | What it does |
+|---|---|
+| `--save-first` | **snapshot, then bundle** — one atomic action, so there is no gap between the session you're looking at and the one you share |
+| `--allow-in-progress` | consent to share **unfinished thinking** — a brainstorm with no approved approach |
+| `--requirements-only` | bundle **only the distilled requirements** (the original ask + goal + constraints + requirement lines) as a **cross-repo handoff** — no approaches, no approval, no transcript |
+
+Sharing unfinished thinking is a decision, so mokata makes you make it. Push an unapproved
+brainstorm with no flag and it **refuses**:
+
+```text
+session: refusing to share an in-progress session (in-progress: 6 answered turns, no approved
+approach) — re-run with --allow-in-progress to share unfinished thinking (or --requirements-only
+to share just the distilled requirements).
+```
+
+A completed session (an approved approach, or a spec/checkpoint) needs no flag at all.
+
+`--requirements-only` is the other way to say yes — and it's the one for handing work to a
+**different codebase**: because it carries only the requirements, the cross-codebase fingerprint
+check below is **replaced by an origin label** the receiver sees at the gate ("captured in
+`<repo>` — cross-repo by design").
+
+```bash
+mokata session push auth-refactor --save-first                       # snapshot + share, atomically
+mokata session push spike --allow-in-progress                        # share the thinking so far
+mokata session push auth-reqs --requirements-only --to vault         # hand the requirements over
+```
 
 ### Never a silent clobber
 
@@ -85,11 +131,47 @@ and:
 
 - the **content hash is verified** — a corrupted bundle is caught, not served;
 - a **cross-codebase mismatch** (the bundle came from a different repo than the target) is
-  **surfaced** and *not* applied unless you pass `--force` (your explicit "yes, apply it here");
-- the **HARD-GATE survives the trip** — a brainstorm that wasn't approved before the push is still
-  **not** approved after the pull. Approval never crosses the bundle.
+  **surfaced** and *not* applied unless you pass `--force`:
+
+    ```text
+    'auth-refactor' was captured on a DIFFERENT codebase (repo fingerprints differ) — re-pull with
+    --force to apply it here anyway, or pull into the matching repo. Nothing was hydrated.
+    ```
+
+- the **approach approval does not cross machines** (below).
 
 These guarantees hold on **every transport** — including a pull from the shared Postgres store.
+
+### What crosses, and what doesn't
+
+The **approval of an approach is yours to give, on your machine**. So on pull the approval is
+**stripped**: the approved-approach record is dropped, the brainstorm's approved flag is cleared,
+and a line is appended to the record —
+
+```text
+imported: approval not transferred — re-approve on this machine (HARD-GATE)
+```
+
+— so an approach approved before the push arrives **unapproved**, and re-earns approval here.
+
+Be precise about the scope of that claim:
+
+| | Crosses? |
+|---|---|
+| the **approved approach** | **no** — stripped on pull; re-approve here |
+| the **emitted spec** | **yes**, intact — it is *not* de-approved |
+| the brainstorm turns / run checkpoints / provenance | yes — that's the point of the bundle |
+| **write proposals**, **gate overrides**, **TDD red/green state** | **never bundled at all** |
+
+### Bundle versions
+
+The bundle schema is **v2**. A **v1 bundle still pulls fine** (back-compat — an old bundle is not
+orphaned). A bundle **newer** than the mokata reading it is **refused**, never silently downgraded:
+
+```text
+session bundle is schema v3 but this mokata reads up to v2 — upgrade to pull it (refusing to
+silently drop its newer sections)
+```
 
 ## Rename a session (a name you chose, not a hash)
 
@@ -118,8 +200,10 @@ The same flow is one step inside the plugin:
 ```
 
 The MCP tools mirror the CLI: `session_list` is read-only (and spans transports), and
-`session_push` / `session_pull` / `session_name` are **propose-only** without `approve=true`
-(consistent with the vault and memory write tools). Each carries a `transport` argument
+`session_push` / `session_pull` / `session_name` are **propose-only** — they hand back a
+`proposal_id` and write nothing until *you* approve it out-of-band with `mokata approve <id>`
+(consistent with the vault and memory write tools; `approve=true` on the tool call commits
+nothing). Each carries a `transport` argument
 (`local` | `vault` | `postgres`); an unreachable remote returns a clean `unavailable` status.
 
 See also [share a design vault](share-a-design-vault.md) and

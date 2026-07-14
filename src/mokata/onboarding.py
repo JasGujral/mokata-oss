@@ -238,7 +238,12 @@ def _harness_wired(root: str, scope: str, home: Optional[str], harness: str) -> 
     try:
         from .harness_setup import resolve_targets
         return resolve_targets(scope, root, home, harness).commands_dir.exists()
-    except Exception:
+    except (KeyError, ValueError, OSError, ImportError):
+        # D5 — the real raisers: `resolve_targets` raises `ValueError` on an unknown scope/harness
+        # and looks harnesses up in dicts (KeyError); `commands_dir.exists()` is filesystem IO
+        # (OSError); the lazy import can fail on a half-installed package (ImportError). The
+        # docstring's "never raises on an unknown scope/harness" is exactly these — False means
+        # "not wired", which is what an unresolvable target IS.
         return False
 
 

@@ -10,6 +10,158 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.13] — 2026-07-14
+
+**Correctness & Trust — the seatbelt is now enforced, not advertised.** Every change in this release
+fixes silent data loss, a race, or a gate that could be walked around. No breaking changes; additive;
+no schema change; local stays the zero-config default.
+
+### Fixed — live bugs that were biting
+
+- **Team writes never flushed on a custom DSN (C-1).** Teams on `team connect --dsn-env CUSTOM` read
+  fine but **never flushed a single write**: health, flush and sync were hardwired to `MOKATA_PG_DSN`
+  while the read backend honoured the configured env. Writes journalled forever and nobody was
+  warned. There is now **one DSN resolver** — health, preflight, flush, reads, audit and session
+  transport all resolve the same env var, the literal is named in exactly one module, and CI pins it.
+- **The spec gate could brick every implementation write.** `emitted_spec` had **no writer reachable
+  from any surface** and `spec_corpus` was read by three surfaces and written by none — so
+  `spec-check` always answered "no saved specs — skipped". Because an approved approach *is*
+  persisted and the gate *is* wired, the spec-persisted gate then blocked **every** implementation
+  write after a real approval, permanently, pointing at a surface that did not exist. A brick, not a
+  seatbelt. New `mokata spec emit` / `mokata spec show` + a gated `spec_emit` MCP tool, one committer
+  behind both. Verified end-to-end: brick → emit → gate advances to TDD → RED → write allowed.
+- **WAL-switch race** (found by the new two-process stress). `SQLITE_BUSY` on the delete→WAL switch
+  was believed as a *permanent* degrade: a false user-facing notice, and the losing process stayed on
+  the rollback journal. Now transient-retry + sibling-win; a non-busy refusal still degrades.
+- **Approval misattribution.** The approval id was a *predicted* ledger sequence and could name the
+  wrong entry under a two-process race. The gate now holds the ledger lock across commit +
+  approved-record, so an approval carries the **real** assigned sequence (the human gate stays
+  outside the hold).
+- **Access control failed open.** Team-mode's identity/access fallback silently fell open. It is now
+  **deny-by-default**; the one residual half-install path is named, loud, and stays local rather than
+  posing as governed.
+- **Fabricated ledger rows.** The sequential task floor invented `output="processed:<id>"` and
+  `ok=true` for work **nothing ever ran** — and since the ledger is hash-chained, the fabrication was
+  durably *attested*. The floor now runs the caller's real runner (real `ok`, failures included); with
+  no runner nothing executes, so the result and its ledger row carry `simulated: true`, and every
+  consumer (lanes, dashboard, why-timeline, progress counters) **labels it and never counts it**.
+- **Silent degrades, swept.** 30 fixed. The worst: a torn or tampered ledger line made the hash-chain
+  tamper check report **INTACT**; a scope-*widening* spec amendment silently skipped the blast-radius
+  gate and was approved as if the lens had run; and the secret-guard hook swallowed its own
+  `ImportError`, so every Write/Edit/Bash proceeded **unscanned for secrets**, silently, forever. All
+  three are now loud and fail closed. `doctor` can answer "what degraded this session?", and a
+  registered sweep keeps unclassified broad handlers out of CI.
+
+### Added — the seatbelt
+
+- **Hook-enforced gates.** A `PreToolUse` hook enforces run-state gates on **native Write/Edit**
+  (exit 2) — not only on mokata's own tools, which was the hole. Two gates fire per run: no code
+  before a persisted spec, and no code without a failing test (**RED is the permission to
+  implement**). Test files are always writable. Corrupt state fails *open* on the gate; ambiguity
+  between windows can never block. The P14 override (`mokata gate override / status / clear`) needs a
+  named gate and a reason, re-confirms on a TTY, is session-scoped and hash-chain ledgered — and has
+  **no MCP surface, by design**.
+- **Human-minted approval — the model can no longer type its own consent.** `approve=true` /
+  `confirm=true` were model-typed booleans that stood in for a human decision. They are demoted: they
+  return a proposal and an honest note, and **commit nothing**. A commit now requires an on-disk
+  approval record minted by **`mokata approve <id>`** in a separate TTY — content-bound (approving X
+  then committing Y is arithmetically impossible, not merely refused), single-use (verify-and-burn in
+  one locked read-modify-write), session-scoped, expiring, fail-closed off a TTY, and ledgered. There
+  is **no `approve` MCP tool and no slash command** — a model-invocable approve *is* the hole. The
+  secret hard-block survives a real human approval.
+- **The trust dial is wired.** `settings.trust` was dead code: nothing in the codebase ever
+  constructed a trust policy, so `read-only` did **nothing** while `doctor` linted the levels and the
+  docs described them. A single write-policy seam now carries trust + tool identity + verified consent
+  from the MCP boundary into every gate that actually writes, and read-only refuses *before* proposing
+  (ledgered) rather than walking a human to a terminal for nothing. **Honest ladder, printed by
+  `doctor`:** on MCP it is really *read-only ▸ write-allowed* — after human-minted approval,
+  propose-only and gated-write coincide, so the middle rung pins the floor but adds no teeth; CLI
+  writes carry identity but the dial is not yet enforced there.
+- **The zero-bypass audit.** An AST sweep forces **every durable-write site** in `src/` into
+  *gated* / *ungated-by-design* / *known-bypass*; an unregistered writer **fails CI** (tripwire
+  proven by planting one), stale entries fail, the register is frozen, and the disposition prints on
+  every push. It closed three real side doors: memory consolidation wrote outside the gate (being
+  journal-first made it *look* governed), export was gated but never **scanned** on either surface
+  (the two composed — one plants a secret, the other exfiltrates it), and a direct migrate clobbered
+  a teammate's row and left `revision` stale, corrupting compare-and-set for *later* writes.
+- **Scope binding — born from a real incident.** An agent built batch update/delete although the
+  saved spec had **deferred** it, treating a user's instruction as authorization. The spec now carries
+  a machine-checkable scope (authorized globs + deferred items with paths and literal markers), and
+  the hook reads the incoming **content** (which it used to discard) — so a deferred feature added to
+  an *authorized* file, the incident's actual shape, is caught with exit 2. The only road back is
+  **`spec amend`: a forced phase regression** — writes blocked, completeness and blast-radius re-run,
+  a fresh human approval, spec v*N*+1 with v*N* superseded (not deleted), RED owed for the new
+  criteria, then a resume from the last passed gate. **A user's instruction is authorization to ASK,
+  not to build.** Honest boundary: paths and literal markers, never semantics.
+
+### Added — multi-session safety
+
+Every Claude Code window is its own process, and every in-process lock was exactly that — per
+process.
+
+- **Atomic state** (temp + fsync + replace, plus OS file locks): a torn write used to **silently
+  erase** state.
+- **Session identity**: a minted `session_id` and session-scoped state keys — the keys were per-repo
+  singletons that clobbered each other across windows, and the run id had no generator at all — plus
+  `mokata windows` to see them.
+- **Worktrees**: detected, offered (human-gated), and sharing one team project identity.
+- **Ledger**: hash-chained with a locked O(1) sequence, a self-healing counter, `verify()`, and a
+  `doctor` finding.
+- **SQLite WAL** with an explicit busy timeout, an **idempotent single-flusher** sync, and a
+  read-modify-write / TOCTOU sweep (nine racy shared sites closed).
+- **Two-process stress in CI** (Linux + Windows): a seeded 2×2000-operation mixed workload with 16
+  named invariants and the seed + replay command carried in every failure message.
+
+### Added — session save & share
+
+The save path **did not exist in production**: the brainstorm-progress, gate-checkpoint and
+spec-emit writers had zero non-test callers, so the whole bundle/resume stack read state that nothing
+ever wrote. An interrupted brainstorm was unrecoverable, and push reported "nothing is in progress"
+while one was.
+
+- **`session save`** — ungated by design (consent binds at the **share** boundary, not the local
+  save) and wired to the real pipeline moments. Survives `kill -9`: the resume is a genuine disk
+  round-trip, not an in-memory reset.
+- **Per-turn autosave** — a crash loses **at most one brainstorm turn**, proven numerically. Exactly
+  one state write per turn, and zero network on the save path.
+- **Bundle v2** — a version-aware hash that binds the transcript, metadata and cross-repo flag (forged
+  flags are caught), a bounded, secret-scanned transcript, and `--save-first` / `--allow-in-progress`
+  / `--requirements-only` cross-repo requirements sharing.
+- **Approval never crosses machines.** A real hole: hydrating a bundle imported the approved approach
+  and its approved flags **verbatim** — approval authority travelled with the file. It is now stripped
+  at the single hydrate seam, on every transport: the receiver's own gate owns approval, and the
+  HARD-GATE survives every round trip.
+
+### Added — data safety (D-rows)
+
+- **No runtime DDL** — schema is verified, never created at runtime, so a team can no longer silently
+  degrade to local SQLite; and a schema-version **range** so a version bump does not hard-split a team.
+- **Downgrade-safe memory docs** — read-but-never-write compatibility, unknown fields preserved, and
+  every mutation path (**including prune**) refuses a doc it cannot fully read: destroying fields you
+  can't read is the same bug wearing a different verb.
+- **Vault integrity failures are auditable** — a pull that fails its hash check records a
+  hash-chained `vault_integrity` event (by hash *prefix*, never restating the artifact) and refuses,
+  copying nothing.
+- **`docsync` false positives fixed at the source** — 35 of them, in three fabrication classes; the
+  allow-list that was masking real drift is gone, and reach is pinned so the fix can't disarm the
+  check.
+
+### Honest boundaries
+
+These are real, registered, and not excused:
+
+- **"Zero writes bypass the gate" is NOT true repo-wide.** It *is* true — and proven — of the memory,
+  export and migrate funnel. **Six CLI/bootstrap setup one-shots** (init, harness setup, skill
+  write/prune, governance lifecycle remove) still write without passing the gate. They sit in a frozen
+  six-entry register that CI enforces, and they are filed for **0.0.14**.
+- **The gates bind Write/Edit and mokata's own tools.** An agent with arbitrary **shell** access is
+  out of scope — Bash is a side door the hook does not gate.
+- **The trust dial is not enforced on the CLI** yet, and propose-only has no extra teeth on MCP beyond
+  the human-approval floor. Both are filed, not built.
+- **The Windows two-process-stress proof lands on public CI.** The step is wired on both operating
+  systems; the private repo's Actions are billing-constrained, so the Windows cells and the live
+  database leg are verified on the public mirror's CI at the cut, before publish.
+
 ## [0.0.12] — 2026-07-08
 
 **A legible skills pipeline, native domain knowledge, and a docs↔code reconciler. No breaking
@@ -185,7 +337,7 @@ and MCP wiring are unchanged. No effect when the plugin isn't installed.
 
 Added: mokata's core capabilities now also register as Claude Code **Agent Skills** (which Claude
 auto-engages from their `description`), alongside the existing `/mokata:*` slash commands. 14
-skills (`brainstorm`, `spec`, `develop`, `review`, `refine`, `test`, `debug`, `bug`, `optimize`,
+skills (the 0.0.7 set — the curated catalog has since grown to 16) (`brainstorm`, `spec`, `develop`, `review`, `refine`, `test`, `debug`, `bug`, `optimize`,
 `ship`, `onboard`, `govern`, `session`, `playbook`) ship as `skills/<name>/SKILL.md`, each
 **rendered from the one command template** — a single source with a drift guard, so a skill can
 never diverge from or duplicate its command. Installed by **both** paths: the plugin (`skills/` +
@@ -224,8 +376,9 @@ No breaking changes.**
 Fixed:
 - **Hook invocation** — replaced the fragile `sh launch.sh → python3` hook chain with a
   PATH-resolved `mokata-hook` console entry point (the same reliable mechanism `mokata-mcp`
-  uses). The `python3: command not found` pre-hook error on Windows / GUI-launched macOS / exotic
-  PATHs is gone; `launch.sh` remains only as a last-resort pure-plugin fallback.
+  uses). This fixed the `python3: command not found` pre-hook error class for PATH-resolved
+  installs; the GUI-launched minimal-PATH variant was fully closed in 0.0.12, which resolves
+  `mokata-hook` to an absolute path. `launch.sh` remains only as a last-resort pure-plugin fallback.
 
 Added:
 - **Portable / shareable sessions** — `mokata session push <tag>` / `pull <tag>` / `list` / `name`:
@@ -381,6 +534,7 @@ spine.
 - Clean-room throughout: no dependency on, or text copied from, any other framework
   (Apache-2.0, under MoStack).
 
+[0.0.13]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.13
 [0.0.12]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.12
 [0.0.11]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.11
 [0.0.1]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.1

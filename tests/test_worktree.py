@@ -18,6 +18,7 @@ from mokata.execmode import PARALLEL, ExecutionChoice, Task, TaskResult, run_tas
 from mokata.govern import AuditLedger
 from mokata.worktree import (
     GitResult,
+    Worktree,
     WorktreeManager,
     session_worktree_label,
 )
@@ -220,6 +221,90 @@ class TestRealGit(unittest.TestCase):
             listing = subprocess.run(["git", "-C", d, "worktree", "list"],
                                      capture_output=True, text=True).stdout
             self.assertNotIn("real-1", listing)            # no orphan registered
+
+
+class TestProbeFailsClosed(unittest.TestCase):
+    """D5 — an UNKNOWN worktree status must read as CHANGED, never as clean.
+
+    The bug: `is_changed` read a failed `git status --porcelain` as UNCHANGED — both on the
+    exception path (`except Exception: return False`) and on the non-exception path (`r.ok and ...`
+    is False when git exits non-zero). `remove(force=False)` then DELETED a worktree that may have
+    held uncommitted work, and ledgered `ok=True, changed=False` — a FALSE audit row asserting a
+    cleanliness nobody had ever managed to observe. Its own docstring promised the opposite ("so
+    cleanup doesn't silently discard work").
+
+    The worst case of failing CLOSED is an orphan worktree the user deletes by hand. The worst case
+    of the old direction was destroyed work. These pin the safe direction."""
+
+    def _mgr(self, git, ledger=None):
+        return WorktreeManager("/repo", ledger=ledger, git=git)
+
+    def test_status_raising_reads_as_changed(self):
+        def boom(args, cwd=None):
+            if args[:1] == ["status"]:
+                raise OSError("git went away")
+            return GitResult(0, "true\n")
+        self.assertTrue(self._mgr(boom).is_changed(Worktree("wt", "/repo/wt")))
+
+    def test_status_exiting_nonzero_reads_as_changed(self):
+        # The inversion that had NO exception at all: a non-zero git also read as "clean".
+        self.assertTrue(self._mgr(_StatusFails()).is_changed(Worktree("wt", "/repo/wt")))
+
+    def test_a_failed_probe_keeps_the_worktree_and_says_why(self):
+        with tempfile.TemporaryDirectory() as d:
+            ledger = AuditLedger(os.path.join(d, "l.jsonl"))
+            git = _StatusFails()
+            res = self._mgr(git, ledger).remove(Worktree("wt", "/repo/wt"), force=False)
+
+            self.assertFalse(res.removed)             # NOT deleted — work may be in there
+            self.assertTrue(res.changed)              # unknown reads as changed
+            self.assertEqual(git.removed, [])         # `git worktree remove` never ran
+            row = [e for e in ledger.entries() if e.get("kind") == "worktree_remove"][-1]
+            self.assertFalse(row["ok"])
+            self.assertTrue(row["changed"])
+            # the audit row separates "we could not tell" from "it was dirty" — different facts.
+            self.assertIn("status probe failed", row["reason"])
+
+    def test_a_dirty_worktree_still_reads_as_changed_not_probe_failed(self):
+        def dirty(args, cwd=None):
+            if args[:1] == ["status"]:
+                return GitResult(0, " M file.py\n")
+            return GitResult(0, "")
+        with tempfile.TemporaryDirectory() as d:
+            ledger = AuditLedger(os.path.join(d, "l.jsonl"))
+            res = self._mgr(dirty, ledger).remove(Worktree("wt", "/repo/wt"), force=False)
+            self.assertFalse(res.removed)
+            row = [e for e in ledger.entries() if e.get("kind") == "worktree_remove"][-1]
+            self.assertIn("changed", row["reason"])
+            self.assertNotIn("probe failed", row["reason"])
+
+    def test_force_still_removes_so_isolated_leaves_no_orphan(self):
+        # `isolated()` force-removes throwaway task scratch. Fail-closed must not resurrect orphans.
+        removed = []
+
+        def failing(args, cwd=None):
+            if args[:1] == ["status"]:
+                raise OSError("no git")
+            if args[:2] == ["worktree", "remove"]:
+                removed.append(args[-1])
+            return GitResult(0, "")
+        res = self._mgr(failing).remove(Worktree("wt", "/repo/wt"), force=True)
+        self.assertTrue(res.removed)
+        self.assertEqual(removed, ["/repo/wt"])
+
+
+class _StatusFails:
+    """A git double whose `status` exits NON-ZERO (no exception) — the silent half of the bug."""
+
+    def __init__(self):
+        self.removed = []
+
+    def __call__(self, args, cwd=None):
+        if args[:1] == ["status"]:
+            return GitResult(128, "", "fatal: not a work tree")
+        if args[:2] == ["worktree", "remove"]:
+            self.removed.append(args[-1])
+        return GitResult(0, "")
 
 
 if __name__ == "__main__":

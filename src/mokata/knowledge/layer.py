@@ -55,15 +55,32 @@ def select_backends(
         if res.tool == "neo4j":
             # External Neo4j graph (Stage 35f): build its client from env; if it can't be
             # built (no driver / no NEO4J_* env / DB down) degrade cleanly to the grep floor.
-            from .neo4j_backend import build_neo4j_client
+            #
+            # D5 — the degrade is LOUD now. Reaching this branch means the graph was CONFIGURED:
+            # `neo4j` is wired into no default profile (P8), so the router only resolves it when the
+            # user put it in their own `code_graph` chain AND the driver module imports. A user who
+            # never wired a graph resolves to ripgrep/grep and never gets here — that is the default,
+            # not a degrade, and it must stay silent. A user who DID wire it and gets the grep floor
+            # is looking at a live failure, and used to be told "no codebase graph wired"
+            # (`graph_guidance`) — a sentence that blames their config for mokata's silence.
+            from .neo4j_backend import Neo4jUnavailable, connect_neo4j_client
             cfg: Dict[str, Any] = {}
             try:
                 cfg = router.manifest.tool_config("neo4j")
             except (AttributeError, ManifestError):
                 cfg = {}
-            gclient = client or build_neo4j_client(cfg)
+            gclient = client
             if gclient is None:
-                return GrepBackend(root=root, name="grep"), None
+                try:
+                    gclient = connect_neo4j_client(cfg)
+                except Neo4jUnavailable as exc:
+                    from ..degrade import FAILURE_UNREACHABLE, note_degraded
+                    from ..errors import failure_class_of
+                    note_degraded(
+                        "code-graph", failure_class_of(exc) or FAILURE_UNREACHABLE,
+                        fallback="the code graph fell back to the grep floor",
+                        fix="check the graph tool / NEO4J_* env", detail=str(exc))
+                    return GrepBackend(root=root, name="grep"), None
             return (CodeReviewGraphBackend(name="neo4j", root=root, client=gclient),
                     GrepBackend(root=root))
         primary = CodeReviewGraphBackend(name=res.tool, root=root, client=client)
@@ -160,8 +177,8 @@ def graph_guidance(surface: Any) -> str:
             c = surface.manifest.tool_config(tool)
             if c:
                 cfg = " [config: " + ", ".join(f"{k}={v}" for k, v in c.items()) + "]"
-        except Exception:
-            cfg = ""
+        except (ManifestError, AttributeError):
+            cfg = ""            # the SAME call is narrowly caught in `select_backends` above
         return (f"code graph active ({tool}){cfg} — use `mokata query callers <sym>` / "
                 f"`callees <sym>` / `blast_radius <sym>` for structural queries.")
     return (
@@ -183,17 +200,41 @@ def make_graph_scorer(layer: Any, query: str):
     graph is wired (so the graph tier stays silent and lexical+semantic hold).
 
     Frugal (P11): runs one cheap graph lookup per identifier token in the query (a small set),
-    not per memory item; the resulting anchor set scores items by token membership."""
+    not per memory item; the resulting anchor set scores items by token membership.
+
+    D5 — a graph that FAILS here used to be indistinguishable from a graph that simply found no
+    anchor: both produced `None`, both left recall running on the lexical floor, and neither said a
+    word. That is the whole harm — the user who wired neo4j believes graph-proximity recall is live
+    when it is not. It still degrades to the floor (the fallback keeps falling back); it just says
+    so, once, loudly."""
     if layer is None or not getattr(layer, "uses_graph", False):
         return None
     anchors = set()
+    failed = 0
     for tok in {t for t in _IDENT.findall(query or "")}:
         try:
             res = layer.callers(tok)          # graph confirms the symbol exists/relates
-        except Exception:
+        except (BackendError, ValueError):
+            # BackendError: the graph tool errored and `_run` had no fallback to fall to.
+            # ValueError: the grep floor's unknown-kind guard (structurally unreachable here —
+            # "callers" is a valid kind — but it is the only other class `_run` can raise).
+            failed += 1
+            continue
+        # `_run` ALSO degrades WITHOUT raising: a primary-backend failure is caught there and the
+        # grep floor answers with `degraded=True`. That path — the common one, since a graph
+        # primary always has the grep fallback wired — is why catching the exception alone would
+        # have left this notice unreachable. A degraded result IS the graph having failed.
+        if res is not None and res.degraded and getattr(layer, "uses_graph", False):
+            failed += 1
             continue
         if res is not None and not res.degraded and res.references:
             anchors.add(tok)
+    if failed:
+        from ..degrade import FAILURE_UNREACHABLE, note_degraded
+        note_degraded("code-graph", FAILURE_UNREACHABLE,
+                      fallback="recall is running on the lexical floor",
+                      fix="run `mokata doctor` / check the graph tool",
+                      detail=f"{failed} graph lookup(s) failed during recall")
     if not anchors:
         return None
 

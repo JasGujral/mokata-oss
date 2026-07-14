@@ -40,6 +40,7 @@ from .harness_paths import (MCP_SERVER_NAME, MCP_TOOL_PERMISSION,
 # Stage 3d.1: cycle gone → the `mcp_admin` import that used to be lazy (below, in
 # `setup_harness`) is now a plain module-level import.
 from .mcp_admin import status_lines
+from .errors import MokataError
 
 # Stage 54b — where the original statusLine is stashed when mokata composes over a user's
 # own (so `unsetup` can restore it verbatim). Claude Code ignores unknown statusLine keys.
@@ -94,8 +95,14 @@ MCP_COMMAND = "mokata-mcp"
 # The hook console entry point (mirrors hooks/hooks.json + pyproject `mokata-hook`).
 HOOK_COMMAND = "mokata-hook"
 
-# PreToolUse matcher (mirrors hooks/hooks.json).
+# PreToolUse matchers (mirror hooks/hooks.json). TWO independent hooks share this event:
+#   secret-guard — the SECURITY block (G4/I1). Also matches Bash: a secret can leak through a
+#                  shell command (`echo $KEY >> ...`, a curl with a token), not just a file write.
+#   gate-guard   — the SI.1 RUN-STATE GATE block. File-mutation tools ONLY: it decides from a target
+#                  PATH, and a Bash command has none to decide on (shelling out to `sed -i` is a
+#                  known, documented hole — closing it needs command parsing, not a wider matcher).
 HOOK_PRETOOL_MATCHER = "Write|Edit|MultiEdit|Bash"
+HOOK_GATE_MATCHER = "Write|Edit|MultiEdit|NotebookEdit"
 
 
 def repo_root() -> Path:
@@ -117,7 +124,7 @@ def _hooks_dir() -> Path:
     return repo_root() / "hooks"
 
 
-class SetupError(Exception):
+class SetupError(MokataError):
     """Raised when the artifacts mokata needs to wire can't be found."""
 
 
@@ -180,7 +187,11 @@ class SetupPlan:
     targets: Targets
     command_files: List[str]          # basenames to copy
     needs_init: bool                  # .mokata/manifest.json absent
-    hook_commands: Dict[str, str] = field(default_factory=dict)  # event -> command string
+    # SI.1: event -> the LIST of hook entries mokata wires on it, each `{"command", "matcher"?}`.
+    # It was one command per event until PreToolUse had to carry BOTH the secret-guard (security)
+    # and the gate-guard (run-state) hooks, with DIFFERENT matchers — so the value is a list and the
+    # matcher travels with its own command instead of being assumed per event.
+    hook_commands: Dict[str, List[Dict[str, str]]] = field(default_factory=dict)
     mcp_auto: bool = True             # auto-register the MCP server (claude); else manual
     grant: bool = False               # grant CC permission for mokata's MCP tools (claude)
     unsupported: List[str] = field(default_factory=list)  # capabilities this harness lacks
@@ -189,7 +200,8 @@ class SetupPlan:
 
 
 # The hook scripts (kept as standalone shims) map to `mokata-hook` subcommands.
-_HOOK_SUBCOMMAND = {"session_start.py": "session-start", "secret_guard.py": "secret-guard"}
+_HOOK_SUBCOMMAND = {"session_start.py": "session-start", "secret_guard.py": "secret-guard",
+                    "gate_guard.py": "gate-guard"}
 
 
 def _hook_command(script: str) -> str:
@@ -274,11 +286,16 @@ def plan_setup(
     manifest_path = Path(root).resolve() / MOKATA_DIR / MANIFEST_FILENAME
     needs_init = not manifest_path.exists()
 
-    hook_commands: Dict[str, str] = {}
+    hook_commands: Dict[str, List[Dict[str, str]]] = {}
     if with_hooks:
         hook_commands = {
-            "SessionStart": _hook_command("session_start.py"),
-            "PreToolUse": _hook_command("secret_guard.py"),
+            "SessionStart": [{"command": _hook_command("session_start.py")}],
+            "PreToolUse": [
+                {"command": _hook_command("secret_guard.py"),
+                 "matcher": HOOK_PRETOOL_MATCHER},
+                {"command": _hook_command("gate_guard.py"),
+                 "matcher": HOOK_GATE_MATCHER},
+            ],
         }
 
     # Agent Skills — the model-invocable twin of the slash commands. Only where the harness has
@@ -362,7 +379,8 @@ def render_setup_plan(plan: SetupPlan) -> str:
                      f"with {plan.harness} yourself — automated MCP wiring is claude-only.")
     if plan.with_hooks:
         lines.append("")
-        lines.append("Will wire hooks (SessionStart briefing + secret-guard) in:")
+        lines.append("Will wire hooks (SessionStart briefing + secret-guard + run-state "
+                     "gate-guard) in:")
         lines.append(f"  {t.settings_path}")
     if plan.grant and t.settings_path is not None:
         lines.append("")
@@ -439,6 +457,10 @@ def _write_json(path: Path, data: Dict) -> None:
             fh.write("\n")
         os.replace(tmp, path)
     except BaseException:
+        # D5 — `BaseException` is CORRECT here and is deliberately NOT narrowed. This handler does
+        # not swallow anything: it cleans up the temp file and RE-RAISES. A KeyboardInterrupt or a
+        # SystemExit landing mid-write must also delete the stray temp file, and those are exactly
+        # the two that `except Exception` would miss. Nothing is hidden; nothing degrades.
         # Never leave a stray temp file behind if the write/rename fails.
         try:
             os.unlink(tmp)
@@ -534,22 +556,31 @@ def _is_mokata_hook(entry: Dict) -> bool:
     return False
 
 
-def _merge_hooks(path: Path, hook_commands: Dict[str, str]) -> None:
+def _merge_hooks(path: Path, hook_commands: Dict[str, List[Dict[str, str]]]) -> None:
+    """Wire mokata's hook entries into settings.json — MERGE-SAFE and idempotent.
+
+    Per event: drop EVERY prior mokata-wired entry (`_is_mokata_hook`), then append the current
+    set fresh. So re-setup / update REFRESHES the wiring (the skills-sync pattern — an old command
+    path or a dropped hook can never linger), a hook we ADD lands on the next `setup`, and the
+    user's own entries on the same event are never touched. Each entry carries its OWN matcher, so
+    the two PreToolUse hooks (secret-guard, gate-guard) can match different tool sets."""
     data = _load_json(path)
     hooks = data.get("hooks")
     if not isinstance(hooks, dict):
         hooks = {}
 
-    for event, command in hook_commands.items():
+    for event, entries_to_wire in hook_commands.items():
         entries = hooks.get(event)
         if not isinstance(entries, list):
             entries = []
         # Idempotent: drop any prior mokata-wired entry for this event, then add fresh.
         entries = [e for e in entries if not (isinstance(e, dict) and _is_mokata_hook(e))]
-        block: Dict = {"hooks": [{"type": "command", "command": command}]}
-        if event == "PreToolUse":
-            block["matcher"] = HOOK_PRETOOL_MATCHER
-        entries.append(block)
+        for spec in entries_to_wire:
+            block: Dict = {"hooks": [{"type": "command", "command": spec["command"]}]}
+            matcher = spec.get("matcher")
+            if matcher:
+                block["matcher"] = matcher
+            entries.append(block)
         hooks[event] = entries
 
     data["hooks"] = hooks
@@ -657,7 +688,12 @@ def _statusline_setting_on(root: str) -> bool:
         data = _load_json(Path(root).resolve() / MOKATA_DIR / MANIFEST_FILENAME)
         ux = data.get("settings", {}).get("ux", {})
         return bool(ux.get("statusline", True)) if isinstance(ux, dict) else True
-    except Exception:
+    except (SetupError, OSError, AttributeError):
+        # D5 — the real raisers: `_load_json` converts an unparseable/unreadable/non-object
+        # manifest into `SetupError`; `Path(root).resolve()` can still raise `OSError`; and a
+        # manifest whose `settings` is null/a list makes the chained `.get` raise `AttributeError`
+        # (so AttributeError is added to the named set — narrowing without it would turn today's
+        # swallow into a CRASH). Default-ON is the documented opt-out default, so True is unchanged.
         return True
 
 
@@ -863,13 +899,15 @@ def setup_harness(
         # reachable (not just registered). INFORMATIONAL ONLY: bounded, never raises, and
         # never gates setup success — a broken server prints its specific fix, setup still ok.
         if plan.mcp_auto and plan.targets.mcp_path is not None:
-            try:
-                _connected, lines = status_lines(root=root, home=home)
-                emit("")
-                for line in lines:
-                    emit(line)
-            except Exception:
-                pass
+            # D5 — the guard that used to wrap this call was REDUNDANT and has been deleted.
+            # `mcp_admin.status_lines` is contractually never-raise ("Never raises"): it catches its
+            # own failures and RETURNS them as a "status check skipped (…)" report line. The
+            # `except Exception: pass` could therefore only ever have swallowed a bug in this loop,
+            # while hiding the very report the call exists to print.
+            _connected, lines = status_lines(root=root, home=home)
+            emit("")
+            for line in lines:
+                emit(line)
     else:
         emit(f"Native surface: {_HARNESS_NATIVE_NOTE[harness]}.")
         emit(f"Point {harness} at the commands in {plan.targets.commands_dir}.")

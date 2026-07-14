@@ -23,6 +23,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional
 
+from ..degrade import FAILURE_UNREACHABLE, note_degraded
+from ..errors import failure_class_of
 from .embed import Embedder, cosine
 from .item import DEFAULT_TOP_K
 from .episodic import lexical_score
@@ -80,8 +82,22 @@ def tiered_recall(store: Any, query: str, *, embedder: Optional[Embedder] = None
             try:
                 for it, score in backend.semantic_search(query, top_k=max(top_k, len(items))):
                     sem[it.id] = score
-            except Exception:
-                sem = {}                              # any backend hiccup -> degrade to lexical
+            except Exception as exc:
+                # D5 — the semantic TIER just went away, and recall carried on ranking as if it had
+                # never been configured. The fallback is right (lexical is the designed floor and a
+                # recall must not break); the SILENCE was the bug — the user asked for semantic
+                # recall, is getting keyword overlap, and nothing anywhere said so.
+                #
+                # Deliberately still broad, and this is the honest reason: `semantic_search` is an
+                # index-backed pgvector call, so its raisables span `psycopg.Error` (an OPTIONAL
+                # extra — not nameable at module scope), the embedder's own errors, and the decode of
+                # each stored doc. Narrowing to the subset we CAN name would let a driver error crash
+                # every recall — turning a swallow into a crash, which is worse than the bug.
+                sem = {}                              # degrade to the lexical floor
+                note_degraded("memory-semantic", failure_class_of(exc) or FAILURE_UNREACHABLE,
+                              fallback="semantic recall is OFF — ranking is lexical-only",
+                              fix="check the vector backend / run `mokata doctor`",
+                              detail=f"{type(exc).__name__}: {exc}")
         else:
             qv = embedder(query)
             for it in items:
@@ -94,6 +110,10 @@ def tiered_recall(store: Any, query: str, *, embedder: Optional[Embedder] = None
             try:
                 grp[it.id] = float(graph_scorer(query, it))
             except Exception:
+                # LEGITIMATE SUPPRESS: a PER-ITEM hiccup in a pluggable, OPTIONAL ranking signal.
+                # It contributes 0.0 — the item still ranks on lexical (+ semantic), so nothing is
+                # hidden and no result is lost; only a boost is. A notice per item would be noise,
+                # and the tier is off by default anyway (`graph_scorer is None`).
                 grp[it.id] = 0.0
 
     hits: List[RetrievalHit] = []

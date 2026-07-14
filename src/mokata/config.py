@@ -28,6 +28,7 @@ from .detect import Detector
 from .manifest import Manifest, ManifestError
 from .router import Router
 from .state import StateStore
+from .errors import MokataError
 
 # Subdirectory holding transient pipeline state (e.g. the brainstorm phase's approved
 # approach, resume checkpoints). Config is hand-edited and committed; state is produced by
@@ -36,7 +37,7 @@ from .state import StateStore
 STATE_DIRNAME = "state"
 
 
-class ConfigError(Exception):
+class ConfigError(MokataError):
     """Raised when the unified surface cannot be loaded (e.g. not initialized)."""
 
 
@@ -127,11 +128,20 @@ class Surface:
         return os.path.join(self.temp_local_dir, PLANS_DIRNAME)
 
     @property
-    def state(self) -> StateStore:
+    def state(self):
         """The governed store for transient pipeline state under
         .mokata/temp_local/state/. Downstream phases read the brainstorm phase's approved
-        approach from here; it's runtime data, not committed config (Stage 24D)."""
-        return StateStore(os.path.join(self.temp_local_dir, STATE_DIRNAME))
+        approach from here; it's runtime data, not committed config (Stage 24D).
+
+        MS.S2 — the store is SESSION-SCOPED: the per-run pipeline singletons (approved_approach,
+        brainstorm_progress, approved_refinements, emitted_spec) live under THIS window's session_id
+        so two Claude Code windows on one repo never clobber each other, while shared repo state
+        (memory stats, spec corpus, the registry) passes through global. Scoping is transparent to a
+        single-session flow (same keys, same value format); only the physical file NAME gains the
+        session dimension, with a one-way legacy fallback for pre-upgrade runs (see session_state)."""
+        base = StateStore(os.path.join(self.temp_local_dir, STATE_DIRNAME))
+        from .session_state import scoped_store
+        return scoped_store(base)
 
     @classmethod
     def is_initialized(cls, root: str = ".") -> bool:

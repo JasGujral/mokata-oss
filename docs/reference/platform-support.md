@@ -20,6 +20,26 @@ non-ASCII content write correctly even under Windows' legacy code page.
 plugin-without-pip install where the `mokata-hook` console script isn't present. The normal,
 pip-installed path never touches it.
 
+## Harness support — only Claude Code wires hooks
+
+Cross-platform is not the same question as cross-*harness*. mokata's hooks are a **Claude Code**
+capability: `claude` is the only harness that declares `hooks` in the
+[capability matrix](cli.md#mokata-harness-name) (`mokata harness`).
+
+| Harness | commands | hooks | context injection | subagents |
+|---|:--:|:--:|:--:|:--:|
+| `claude` | ✓ | **✓** | ✓ | ✓ |
+| `cowork` | ✓ | — | ✓ | ✓ |
+| `codex` · `cursor` · `copilot` · `windsurf` · `gemini` | ✓ | — | ✓ | — |
+| `aider` | — | — | ✓ | — |
+
+**What that means concretely:** on every harness *except* Claude Code the `gate-guard` is never
+wired, so the **run-state gates** (`spec-persisted`, `no-code-without-failing-test`, `spec-scope`)
+**enforce nothing** there — they degrade with a clear message rather than pretend. The `secret-guard`
+is the same hook mechanism, so it too is only enforced where `hooks` is declared; mokata's other
+secret layers (the gated CLI/MCP write path) still hard-block. The engine itself is
+harness-agnostic: a missing capability degrades clearly, never a silent no-op of a gate.
+
 ## CI coverage
 
 Every push and PR runs the **full unit + integration suite on `ubuntu-latest`,

@@ -112,7 +112,19 @@ def derive_project_id(root: str, *, git: Optional[GitRunner] = None) -> str:
     if git is None and key in _ID_CACHE:
         return _ID_CACHE[key]
     remote = _git_remote(root, git)
-    basis = ("remote:" + normalize_remote(remote)) if remote else ("path:" + key)
+    if remote:
+        basis = "remote:" + normalize_remote(remote)
+    else:
+        # WT.S2 — no remote: derive from the CANONICAL repo root (the main checkout), so a linked
+        # worktree resolves to the SAME key as the main checkout instead of splitting on its own
+        # path. Only on the production path (git is None) and only for a real git repo; a non-git
+        # dir / an injected runner keeps `abspath(root)` so the derived key is byte-identical (the
+        # pinned-project-key regression guard + the injected-runner tests hold).
+        stable = key
+        if git is None:
+            from .repo_identity import canonical_repo_root
+            stable = canonical_repo_root(root)
+        basis = "path:" + stable
     out = _PREFIX + hashlib.sha256(basis.encode("utf-8")).hexdigest()[:_HASH_LEN]
     if git is None:
         _ID_CACHE[key] = out
@@ -125,7 +137,10 @@ def _configured(surface: object) -> Optional[str]:
         return None
     try:
         cfg = manifest.setting(PROJECT_SETTINGS_KEY, {}) or {}
-    except Exception:
+    except (AttributeError, TypeError):
+        # D5 — the real raisers of a setting lookup on a possibly duck-typed manifest: no
+        # `.setting` (AttributeError) and a non-mapping `settings` block (TypeError). None → the
+        # DERIVED project key, which is the documented fallback (not a degrade).
         return None
     val = cfg.get("id") if isinstance(cfg, dict) else None
     return str(val) if val else None

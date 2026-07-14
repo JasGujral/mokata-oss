@@ -41,7 +41,7 @@ elsewhere; that's the user's explicit choice, overriding the default location.)
 ```json
 {
   "manifest_version": 1,
-  "mokata": { "version": "0.0.4" },
+  "mokata": { "version": "0.0.13" },
   "profile": "full",
   "layers": {
     "engine":     { "enabled": true },
@@ -78,7 +78,7 @@ elsewhere; that's the user's explicit choice, overriding the default location.)
 
 | Field | Type | Notes |
 |---|---|---|
-| `manifest_version` | int | currently `1` |
+| `manifest_version` | int | currently `1`. **An exact-equality check** — this build reads manifest v1 and refuses any other value (it is not a range; the shared *team-DB* schema is the only thing versioned as a range) |
 | `mokata.version` | string | the mokata version that wrote it |
 | `profile` | string | `minimal` / `standard` / `full` / `custom` |
 | `layers.<name>.enabled` | bool | one of `engine`, `knowledge`, `memory`, `governance` |
@@ -121,7 +121,7 @@ elsewhere; that's the user's explicit choice, overriding the default location.)
 
 ## Settings (the generic toggle store)
 
-`settings` is an open-ended key/value block. The keys mokata reads:
+`settings` is an open-ended key/value block. The user-facing keys mokata reads:
 
 | Key | Shape | Default | Feature |
 |---|---|---|---|
@@ -133,10 +133,48 @@ elsewhere; that's the user's explicit choice, overriding the default location.)
 | `brainstorm.auto` | `"on"`/`"off"`/`"ask"` | `on` | auto-engage brainstorm when exploring: `on` (dive in), `ask` (offer first), `off` (never) |
 | `governance.output_density` | bool | `false` | output-density compression (F4) |
 | `governance.karpathy.<id>` | bool per gate id | all on | Karpathy gate toggles (G3) — ids: `think-first`, `simplicity`, `surgical-scope`, `verify` |
-| `trust.<tool>` | `"read-only"`/`"propose-only"`/`"gated-write"` | `gated-write` | per-adapter trust dial (K3) |
+| `trust.<surface>` | `"read-only"`/`"propose-only"`/`"gated-write"` | `gated-write` | trust dial for a whole write **surface** — `mcp` or `cli` (K3/SI.4) |
+| `trust.<tool>` | `"read-only"`/`"propose-only"`/`"gated-write"` | the surface's level | trust dial for ONE tool (e.g. `remember`, `session_push`) — **overrides** the surface default |
+
+`trust` is one flat map; a key is either a surface or a tool name, and the tool wins:
+
+```json
+"trust": { "mcp": "propose-only", "remember": "read-only" }
+```
+
+Resolution is **the tool's own level → the surface's → `gated-write`**. Enforced by the
+`WriteGate`, so a `read-only` tool cannot write even with a valid human approval. Two floors
+are un-loosenable at every level: a **secret** is a hard block, and an MCP write still needs a
+human-minted `mokata approve <id>`.
+
+**What it does NOT do (be precise):** on the **`mcp`** surface the real ladder is
+**`read-only` ▸ write-allowed** — `propose-only` and `gated-write` behave identically, because
+every MCP write *already* requires that out-of-band human approval. Setting `propose-only`
+there pins that floor; it does not add a second one. On **`cli`**, the dial is **not yet
+enforced**: `trust.cli` is accepted and validated, and writes carry their tool identity, but no
+CLI command builds a policy from it today. And the harness's **native `Write`/`Edit`** are outside
+the dial **entirely** — those are policed by the PreToolUse hooks (the
+[`secret-guard` and the `gate-guard`](../security.md)), not by `trust`. `mokata doctor` prints this
+same surface truth as an `info` finding whenever `settings.trust` is set.
 
 The store is intentionally open-ended so future settings (e.g. an execution-mode default)
 read from it the same way.
+
+## Settings owned by their own commands
+
+These live in the same `settings` block, but they are **not** part of the `mokata config wizard`
+walk — each is written by the command that owns it, because setting it by hand is either unsafe
+(a mode switch has a fail-closed preflight) or meaningless (a project identity a joiner must
+inherit, not invent). They are listed here so the block above is a complete picture, not so you
+edit them directly.
+
+| Key | Shape | Default | Written by |
+|---|---|---|---|
+| `mode` | `"local"`/`"team"` | `local` | `mokata mode set local\|team` — a team switch is **fail-closed** behind its preflight |
+| `project.id` | string | derived | `mokata team init` — a joiner **inherits** it (see [multi-project](../how-to/multi-project-shared-backend.md)) |
+| `audit.shared` | bool | `false` | `mokata audit --consent grant` — opt in to publishing your audit entries to the team's own Postgres |
+| `audit.dsn_env` | string | — | team setup — the **name of an env var** holding the shared-audit DSN, never the DSN itself |
+| `baseline.test_command` | string | — | `mokata config set` — the test command `mokata baseline` runs (mokata never guesses a framework) |
 
 ## Profiles (deterministic enabled sets)
 

@@ -365,6 +365,10 @@ def _badge_state(surface: Any):
         if restore_brainstorm_progress(store) is not None:
             return "brainstorm", ""             # mid-stream exploration (HARD-GATE still holds)
     except Exception:
+        # D5 — broad + silent ON PURPOSE: this is a COSMETIC refinement of a statusline badge. On
+        # any failure the badge falls through to the checkpoint-derived stage below (still true,
+        # just less specific), so nothing degrades — and a notice printed from the statusline, which
+        # the harness re-runs on every state change, would be the noisiest line in mokata.
         pass
 
     prog = build_progress(store)
@@ -544,9 +548,11 @@ class Lane:
     state: str                       # running | done | blocked | degraded
     note: str = ""
     at: str = ""                     # last ledger timestamp for this lane (dashboard use)
+    simulated: bool = False          # B3: nothing executed this lane's work — it is not real
 
     def to_dict(self) -> dict:
-        return {"name": self.name, "state": self.state, "note": self.note, "at": self.at}
+        return {"name": self.name, "state": self.state, "note": self.note, "at": self.at,
+                "simulated": self.simulated}
 
 
 @dataclass
@@ -558,6 +564,7 @@ class RunLanes:
     progress: Optional[RunProgress] = None
     message: str = ""
     tasks: int = 0                   # the batch's task total (exec_estimate.tasks); 0 = no batch
+    simulated: bool = False          # B3: the batch carries simulated (not-executed) rows
 
     @property
     def header(self) -> str:
@@ -569,7 +576,7 @@ class RunLanes:
 
     def to_dict(self) -> dict:
         return {"active": self.active, "mode": self.mode, "degraded": self.degraded,
-                "tasks": self.tasks,
+                "tasks": self.tasks, "simulated": self.simulated,
                 "lanes": [ln.to_dict() for ln in self.lanes],
                 "progress": self.progress.to_dict() if self.progress else None,
                 "message": self.message}
@@ -644,6 +651,9 @@ def build_run_lanes(store: Any, ledger: Any = None, run_id: Optional[str] = None
 
     # sequential, or a parallel run that degraded to sequential — a single lane.
     seqs = [e for e in batch if e.get("kind") == "sequential"]
+    # B3: a row nothing executed says so (`simulated: true`). The lane repeats the label rather
+    # than presenting placeholder work as a completed task.
+    simulated = any(e.get("simulated") for e in seqs)
     if degraded:
         state = L_DEGRADED
     elif seqs and all(e.get("ok", True) for e in seqs) and (
@@ -652,10 +662,13 @@ def build_run_lanes(store: Any, ledger: Any = None, run_id: Optional[str] = None
     else:
         state = L_RUNNING
     note = ("degraded to sequential" if degraded else f"{len(seqs)} task(s)")
+    if simulated:
+        note += " · simulated (no runner executed them)"
     at = seqs[-1].get("at", "") if seqs else est.get("at", "")
     return RunLanes(active=True, mode="sequential", degraded=degraded, progress=progress,
-                    lanes=[Lane(name="sequential", state=state, note=note, at=at)],
-                    tasks=tasks_n)
+                    lanes=[Lane(name="sequential", state=state, note=note, at=at,
+                                simulated=simulated)],
+                    tasks=tasks_n, simulated=simulated)
 
 
 def render_lanes(rl: RunLanes, ascii_only: bool = False) -> str:
@@ -716,13 +729,14 @@ def develop_counter(rl: "RunLanes") -> str:
     total = the batch's task count (`rl.tasks`, from exec_estimate.tasks); done = the `done`
     lanes. Only a parallel/fanout batch carries genuine per-task lanes, so a sequential run, a
     degraded-to-sequential run, a no-batch run, or a run with no task total yields "" — never an
-    invented count where no real per-item state exists (the honesty rule)."""
+    invented count where no real per-item state exists (the honesty rule). B3 extends the same
+    rule per LANE: a lane whose work nothing executed (`simulated`) is never counted as done."""
     if rl is None or not rl.active or rl.mode not in _PARALLEL_MODES:
         return ""
     total = rl.tasks
     if total <= 0:
         return ""
-    done = sum(1 for ln in rl.lanes if ln.state == L_DONE)
+    done = sum(1 for ln in rl.lanes if ln.state == L_DONE and not ln.simulated)
     return f"{done}/{total}"
 
 

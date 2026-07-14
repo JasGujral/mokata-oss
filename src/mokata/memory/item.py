@@ -14,6 +14,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from ..degrade import FAILURE_DOC_SCHEMA, note_degraded
+from ..errors import MokataError
+
 # TM.S6 — the scope hierarchy this item is written at (doc 62 §2 axis A). `PERSONAL` is the
 # default so every legacy / zero-config item is personal, and the personal-only (local) path
 # returns all of them — byte-identical local recall. The full model + union read live in scope.py.
@@ -119,6 +122,141 @@ REJECTED = "rejected"
 DEFAULT_TOP_K = 5
 
 
+# ------------------------------------------------------------------- D6 — the memory-DOC version
+# The bug this closes: a memory doc carried NO version. `from_dict` below is a key-WHITELIST parse
+# (every field is a `d.get(...)`) and `to_dict` re-emits only the keys it knows — so a teammate on
+# an older mokata could read a newer doc, drop every field it had no name for, and WRITE IT BACK.
+# An approved memory silently lost content, gated by nothing (P2: the fields the human approved
+# are the fields that must survive; P21). The drop is invisible: no error, no notice, no ledger.
+#
+# The fix is a stamp + a compatibility rule, on the DOC axis:
+#
+#   read   a doc at or below MEMORY_DOC_VERSION  → full parse, mutable (today's behaviour)
+#          a doc ABOVE it (or with an unreadable stamp) → parse what is readable, PRESERVE what is
+#          not (see `extra`), announce ONCE — and REFUSE every write-back (see `downgrade_refusal`
+#          + `to_doc`). SS.S4's bundle rule, applied to the unit that is actually at risk.
+#   write  every new/updated doc carries `schema_version`.
+#
+# Why read-but-never-write, and not SS.S4's refuse-the-artifact-entirely: a bundle is ONE artifact
+# you either pull or don't, so refusing it costs a single pull. A memory CORPUS is many docs, and
+# refusing them on READ would make one teammate's upgrade blank every newer doc out of every older
+# teammate's recall — a read that lies by omission (the CM.S2 bug) or a store that hard-fails until
+# the whole team upgrades in lockstep (the hard split D2 exists to prevent). The harm is asymmetric
+# and it is entirely on the write side: reading a newer doc destroys nothing, and the fields we
+# cannot model ride along on `extra` untouched. Rewriting one destroys an approved memory. So the
+# read proceeds (loudly), and every mutation path refuses (loudly).
+#
+# This is the DOC axis, NOT `teamdb.TEAM_SCHEMA_VERSION` (currently 3), which versions the shared
+# DDL — the tables and columns. The two move independently: a doc-shape change needs no DDL (the
+# doc rides an existing `doc` JSON column), and a DDL change need not touch the doc shape. Starting
+# the doc axis at 3 to "match" the DB axis would assert two doc-shape breaks that never happened.
+MEMORY_DOC_VERSION = 1
+
+# FROZEN, forever: the version an UNSTAMPED doc parses as. Every doc written before D6 came from a
+# build whose field set is a SUBSET of this one (the shape only ever grew — TM.S6/S7/S9/S11/S11a
+# each ADDED keys), so an unstamped doc IS a v1 doc and the floor is exact, not generous. This is
+# D2's legacy-parse discipline, and it is NOT "unknown is permission": the stamp is mandatory from
+# v1 on, so ABSENCE proves the writer predates D6 — it can never mean "a v2 doc that forgot".
+# When MEMORY_DOC_VERSION bumps to 2, this stays 1.
+LEGACY_DOC_VERSION = 1
+
+# A `schema_version` present but not readable AS a version (a string, a float, 0, a negative — a
+# hand-edited or hostile doc). It declares something we cannot classify, so it is not writable:
+# unknown is not permission (D2). Distinct from LEGACY (absent = provably v1) on purpose.
+UNREADABLE_DOC_VERSION = 0
+
+DOC_VERSION_KEY = "schema_version"
+
+# Every key `to_dict` emits — i.e. every key this build MODELS. A doc key outside this set is
+# "unknown", and D6's whole job is that an unknown key is PRESERVED (`MemoryItem.extra`) rather
+# than dropped. Pinned against `to_dict` by a test, so adding a field without adding it here (or
+# vice versa) fails loudly instead of quietly turning a modelled field into an "unknown" one.
+DOC_KEYS = frozenset({
+    "id", "subject", "value", "mtype", "status", "kind", "provenance", "expires_at",
+    "supersedes", "depends_on", "scope_level", "scope_id", "pin", "priority", "enforcement",
+    "applicability", "review", "about_code", DOC_VERSION_KEY,
+})
+
+# The degrade subsystem key (once-per-session notice) — the `memory-*` family memory/tiered.py
+# already uses (`memory-semantic`). One key, so the notice is named + classed exactly once.
+DOC_SUBSYSTEM = "memory-schema"
+
+_DOC_FIX = ("Upgrade mokata (`pip install -U mokata`) to write it — this build will not rewrite a "
+            "doc it cannot read in full")
+
+
+class MemoryDocTooNew(MokataError):
+    """D6 — a durable write was attempted on a doc this build cannot read in full (its
+    `schema_version` is ahead of MEMORY_DOC_VERSION, or is not readable as a version at all).
+
+    This is a HARD refusal, not a degrade: there is no floor to fall back to, because the only
+    fallback on offer — "write it anyway, minus the fields you didn't understand" — IS the bug.
+    It carries `degrade.FAILURE_DOC_SCHEMA` — the class D6 coined there, in the ONE module that
+    owns the failure-class vocabulary, so the exception, the notice and the doctor line all say the
+    same word for the same failure (errors.py). Deliberately NOT FAILURE_SCHEMA: that is the
+    shared-DB schema, whose remediation (`mokata team init`) would never fix this.
+
+    It is the BACKSTOP, not the user-facing path: every mutation path in `MemoryStore` refuses
+    before the gate and returns a message (`downgrade_refusal`), so a caller sees a clean refusal.
+    Reaching this exception means a write sink was called directly, and it fires so that "an older
+    client cannot serialize a newer doc" is structural rather than a promise.
+    """
+
+    failure_class: str = FAILURE_DOC_SCHEMA
+
+
+def doc_version(d: Dict[str, Any]) -> int:
+    """The doc-schema version `d` declares. Absent → LEGACY_DOC_VERSION (provably v1, see above);
+    present but not a readable version → UNREADABLE_DOC_VERSION (never writable)."""
+    if DOC_VERSION_KEY not in d:
+        return LEGACY_DOC_VERSION
+    raw = d.get(DOC_VERSION_KEY)
+    # `bool` is an `int` in Python — `True` is not a version.
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < LEGACY_DOC_VERSION:
+        return UNREADABLE_DOC_VERSION
+    return raw
+
+
+def can_write_doc(version: int) -> bool:
+    """May THIS build durably write a doc at `version`? Only at-or-below what it speaks. There is
+    no lower bound to check: v1 is both the floor and the first version, and the shape has only
+    ever grown, so no doc can be too OLD to write. The bound that exists is the one D6 is about."""
+    return LEGACY_DOC_VERSION <= version <= MEMORY_DOC_VERSION
+
+
+def downgrade_refusal(item: Any) -> Optional[str]:
+    """The refusal message when `item`'s doc must NOT be written back by this build, else None.
+
+    Announces ONCE per session (the CM.S2 loud-degrade shape, class `doc-schema`, fix "upgrade
+    mokata") and returns the message the caller surfaces. Duck-typed on `schema_version`, so an
+    item from any backend works. Nothing is written and nothing is mutated — the doc is untouched.
+
+    Two arms, because they are two different facts about the world and a notice that blurs them is
+    a notice that lies: a doc AHEAD of us was written by a teammate on a NEWER mokata (upgrade and
+    it works); a doc with an UNREADABLE stamp was written by nothing we recognise (hand-edited,
+    truncated, hostile) and an upgrade may not help it at all. Both refuse; only one is skew.
+    """
+    version = getattr(item, "schema_version", MEMORY_DOC_VERSION)
+    if can_write_doc(version):
+        return None
+    subject = getattr(item, "subject", "?")
+    if version == UNREADABLE_DOC_VERSION:
+        cause = (f"declares an UNREADABLE doc schema_version (this build speaks doc "
+                 f"v{MEMORY_DOC_VERSION})")
+        detail = "a memory doc's schema_version is not readable as a version"
+    else:
+        cause = (f"was written by a NEWER mokata (doc schema v{version}; this build speaks "
+                 f"v{MEMORY_DOC_VERSION})")
+        detail = (f"a memory doc declares doc schema v{version}; this build speaks "
+                  f"v{MEMORY_DOC_VERSION}")
+    note_degraded(
+        DOC_SUBSYSTEM, FAILURE_DOC_SCHEMA,
+        fallback="read-only: memory items this build cannot read in full can be READ but not written",
+        fix=_DOC_FIX, detail=detail)
+    return (f"refused: '{subject}' {cause} — rewriting it here would silently drop the fields this "
+            f"build cannot read. Nothing was written. {_DOC_FIX}.")
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -173,6 +311,18 @@ class MemoryItem:
     # item JSON — NO DDL, NO typed-edge graph (the full graph-native edge model is 0.1.3). Empty
     # `[]` for every item that names no code, so legacy items round-trip byte-identically.
     about_code: List[str] = field(default_factory=list)
+    # D6 — the doc-schema version this item's JSON declares. A NEW item is born at the version this
+    # build writes; a parsed one carries what its doc declared (see `doc_version`), which is how a
+    # newer-than-us doc is recognised and refused at every write path.
+    schema_version: int = MEMORY_DOC_VERSION
+    # D6 — every doc key this build does NOT model, carried verbatim so a write-back re-emits it.
+    # Two jobs. (1) Forward-compat WITHIN a version: a sibling key added without a shape break
+    # survives a same-version round-trip instead of being silently dropped by the whitelist parse.
+    # (2) Losslessness of a newer doc that is merely READ (or exported): the fields we cannot model
+    # ride along untouched, so nothing is destroyed even before the write refusal fires. Splatted
+    # back as SIBLINGS by `to_dict` (it is never itself a doc key), and it can never shadow a known
+    # one — `from_dict` only ever puts UNKNOWN keys here.
+    extra: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -251,7 +401,11 @@ class MemoryItem:
         return effective_enforcement(self)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        """The doc JSON — the LOSSLESS view: every modelled field, the D6 stamp, and every unknown
+        sibling key this item was parsed with. Safe on ANY item, including one from a newer build:
+        it is how a read/export/render stays lossless. It is NOT the durable-write serializer —
+        that is `to_doc`, which refuses a doc this build may not rewrite."""
+        doc: Dict[str, Any] = {
             "id": self.id,
             "subject": self.subject,
             "value": self.value,
@@ -270,11 +424,33 @@ class MemoryItem:
             "applicability": dict(self.applicability),
             "review": dict(self.review),
             "about_code": list(self.about_code),
+            # D6 — the stamp. A legacy (unstamped) doc parses as v1 and GAINS it here on its first
+            # legitimate write; a newer doc keeps the version it declared (it is never re-stamped
+            # DOWN to ours — that would forge a claim this build has no right to make).
+            DOC_VERSION_KEY: self.schema_version,
         }
+        # D6 — unknown siblings, re-emitted verbatim. `setdefault` so a key this build models can
+        # never be overwritten by one it doesn't (belt-and-braces: `from_dict` already excludes
+        # every known key from `extra`).
+        for key, value in self.extra.items():
+            doc.setdefault(key, value)
+        return doc
+
+    def to_doc(self) -> Dict[str, Any]:
+        """D6 — the DURABLE-WRITE serializer: `to_dict`, but only if this build may rewrite the
+        doc. Every durable sink (the SQLite/Obsidian/native/Postgres/vector backends, the team
+        journal payload, the migrate payload) calls THIS, so "an older client cannot serialize a
+        newer doc" is a structural property of the write path, not a promise made by its callers.
+
+        Raises MemoryDocTooNew when the doc is ahead of this build. The store's mutation paths
+        refuse before the gate (`downgrade_refusal`), so a user never normally reaches this."""
+        if not can_write_doc(self.schema_version):
+            raise MemoryDocTooNew(downgrade_refusal(self) or "memory doc too new to write")
+        return self.to_dict()
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "MemoryItem":
-        return cls(
+        item = cls(
             subject=d["subject"],
             value=d["value"],
             mtype=d.get("mtype", PERSISTENT),
@@ -303,4 +479,18 @@ class MemoryItem:
             # TM.S11a — a pre-S11a doc has no `about_code` key → [] (names no code); a linked item
             # round-trips its symbol list verbatim.
             about_code=[str(s) for s in (d.get("about_code", []) or [])],
+            # D6 — what the doc DECLARES (absent → v1, the frozen legacy floor). Never coerced to
+            # ours: an item must carry the truth about its own doc, or nothing downstream can
+            # refuse to rewrite it.
+            schema_version=doc_version(d),
+            # D6 — every key above is a WHITELIST `get`, so before this line an unknown sibling was
+            # simply dropped on the floor and never re-emitted. That drop, plus a write-back, IS the
+            # bug. Keep them.
+            extra={k: v for k, v in d.items() if k not in DOC_KEYS},
         )
+        if not can_write_doc(item.schema_version):
+            # The read PROCEEDS — every modelled field above is parsed and `extra` holds the rest —
+            # but it stops being a secret. Once per session (`note_degraded` is once-per-subsystem),
+            # so a corpus-wide `all()` over a newer store announces once, not once per row.
+            downgrade_refusal(item)
+        return item

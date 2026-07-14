@@ -54,6 +54,7 @@ class _FakePgConn:
         self.executed = []
         self._tables = set()
         self._version = None
+        self._min_supported = None      # D2 — the artifact's declared floor
 
     def execute(self, sql, *args):
         self.executed.append(sql)
@@ -62,17 +63,25 @@ class _FakePgConn:
         if m:
             self._tables.add(m.group(1))
             return _Cursor([])
+        if low.startswith("alter table"):
+            return _Cursor([])                       # ADD COLUMN IF NOT EXISTS — idempotent
         if low.startswith("insert into mokata_schema_version"):
-            num = re.search(r"values\s*\((\d+)\)", low)
-            if self._version is None and num:        # ON CONFLICT DO NOTHING → keep first
+            # D2 — the RANGE artifact: VALUES (current, min_supported), ON CONFLICT DO UPDATE.
+            num = re.search(r"values\s*\((\d+),\s*(\d+)\)", low)
+            if num:
                 self._version = int(num.group(1))
+                self._min_supported = int(num.group(2))
             return _Cursor([])
         if low.startswith("select 1"):
             return _Cursor([(1,)])
         if "from mokata_schema_version" in low:
             if "mokata_schema_version" not in self._tables:
                 raise _UndefinedTable("relation \"mokata_schema_version\" does not exist")
-            return _Cursor([(self._version,)] if self._version is not None else [])
+            if self._version is None:
+                return _Cursor([])
+            if "min_supported" in low:
+                return _Cursor([(self._version, self._min_supported)])
+            return _Cursor([(self._version,)])
         return _Cursor([])
 
     def close(self):

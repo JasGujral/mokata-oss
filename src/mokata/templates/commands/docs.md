@@ -8,7 +8,7 @@ allowed-tools: Bash, Read
 # mokata · docs (point at the published docs site)
 
 Point the user at mokata's **published documentation site**
-(<https://jasgujral.github.io/mokata-oss/>). With **no argument** it prints the list of top-level
+(<https://mokata.ai/>). With **no argument** it prints the list of top-level
 topics, each with its live-site URL; with a **topic** it prints that page's URL. It is
 **read-only and local-first** — it resolves a topic to a URL and prints it. It **never fetches**
 the page and it ships **no doc content** in the package.
@@ -40,7 +40,7 @@ list, notes the miss, and exits non-zero — offer the closest topic from the li
 
 The topic list is a small, curated map of the top-level guides and one landing page per docs
 section. For anything not listed, point the user at the full site:
-<https://jasgujral.github.io/mokata-oss/>.
+<https://mokata.ai/>.
 
 ## Notes
 

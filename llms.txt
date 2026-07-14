@@ -20,6 +20,33 @@ shared Postgres.
 - `mokata status` — where things are; `mokata doctor` — check the environment / prereqs.
 - `mokata --help` — the full command list and flags (the source of truth for options).
 
+## Durable writes: you cannot approve your own
+
+A durable write is **proposed**, never self-approved. Calling a mokata write tool stages the change,
+returns a `proposal_id`, and writes nothing. Only a human can mint the approval, in their own
+terminal, in a process you are not driving:
+
+1. You call the write tool → you get back a `proposal_id` (e.g. `p-3f9a2c11b4de`). Nothing is written.
+2. You ask the user to run `mokata approve <proposal_id>` (there is deliberately no in-harness
+   approve surface — no MCP tool, no slash command).
+3. You re-call the SAME tool with `proposal_id=<id>` → the write commits **once**, and the approval
+   is burned.
+
+Passing `approve=true` / `confirm=true` is still accepted for schema stability but **commits
+nothing** — typing consent is not consent. An approval is single-use, content-hashed (change an
+argument and the id changes), session-scoped, and expires in 15 minutes.
+
+## Run-state gates: writing code before the spec is BLOCKED
+
+Inside an active mokata run, a PreToolUse hook blocks native `Write`/`Edit` to implementation files
+(exit 2, with the reason on stderr) under three gates: `spec-persisted` (an approach is approved but
+no spec is emitted), `no-code-without-failing-test` (no failing test is on record), and `spec-scope`
+(the write is outside the spec's authorized surface, spells a deferred marker, or a spec amend is in
+progress). **Test files are always writable** — write the failing test first; RED is the permission
+to implement. Do not work around a block: emit the spec (`/mokata:spec`), write the failing test
+(`/mokata:test`), or ask the user to override it explicitly (`mokata gate override <gate> --reason
+"<why>"` — ledgered, session-scoped, and a human's call, not yours).
+
 ## Team mode (shared memory over one Postgres)
 
 The golden path is "bring one Postgres" — one vanilla Postgres >= 14, no extensions. mokata hosts
@@ -47,7 +74,7 @@ The schema is owned and created only by `mokata team init` (runtime never runs D
 
 ## Documentation
 
-- Full docs: https://jasgujral.github.io/mokata-oss/
+- Full docs: https://mokata.ai/
 - Source: https://github.com/JasGujral/mokata-oss
 - Quickstart: docs/quickstart.md
 - Getting started: docs/getting-started.md

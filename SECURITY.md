@@ -1,7 +1,7 @@
 # Security Policy
 
-Documentation: <https://jasgujral.github.io/mokata-oss/> ·
-Supply-chain details: <https://jasgujral.github.io/mokata-oss/reference/supply-chain/>
+Documentation: <https://mokata.ai/> ·
+Supply-chain details: <https://mokata.ai/reference/supply-chain/>
 
 mokata follows a **coordinated (responsible) disclosure** policy: report privately, we
 investigate and fix, and we disclose together once a fix is available.
@@ -63,7 +63,7 @@ performs **zero network egress**.
 ## Verifying a release (supply chain)
 
 Releases are built in CI at tag time with three trust signals (see the
-[supply-chain reference](https://jasgujral.github.io/mokata-oss/reference/supply-chain/)):
+[supply-chain reference](https://mokata.ai/reference/supply-chain/)):
 
 - **Build-provenance attestation** (Sigstore / SLSA) — verify a downloaded artifact with:
 

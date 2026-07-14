@@ -101,8 +101,10 @@ class TestWowDemo(unittest.TestCase):
         demo = self._read("docs/tutorials/catches-a-bad-change.md")
         self.assertIn("mokata run develop", demo)
         self.assertIn("[BLOCKED] spec-persisted", demo)          # real output of beat 1
-        self.assertIn("status: blocked", demo)                   # real output of beat 2
-        self.assertIn("audit ledger — 2 entries", demo)          # the audit punchline
+        # beat 2 (0.0.13) — the gate-guard hook blocking a NATIVE Write, exit 2
+        self.assertIn("BLOCKED [no-code-without-failing-test]", demo)
+        self.assertIn("status: blocked", demo)                   # real output of beat 3
+        self.assertIn("audit ledger — 7 entries", demo)          # the audit punchline
         # (the internal 60-second screencast shot-list was removed from this public tutorial)
 
     def test_demo_is_registered_in_the_nav(self):

@@ -62,11 +62,15 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 
 def _actor() -> str:
+    """Who to attribute this sync to. D5 — narrowed to ImportError (`team_audit.actor()` itself
+    only reads `os.environ` and cannot raise, so `Exception` here could only ever have swallowed a
+    bug), and the fallback is now `"unknown"`: that is `actor()`'s OWN unknown-sentinel, and two
+    different words for the same unknown actor in the SAME shared audit log is a reader's bug."""
     try:
         from ..team_audit import actor
         return actor()
-    except Exception:
-        return "user"
+    except ImportError:
+        return "unknown"
 
 
 def register(sub, common):

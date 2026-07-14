@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import os
 from typing import Any, Dict, List, Optional
+from ..degrade import FAILURE_UNSET
+from ..errors import DegradedCapability
 
 # Conventional code-graph schema mokata queries (documented; the team's graph populates it).
 # nodes (:Symbol {name, path, line}); rels [:CALLS] [:IMPLEMENTS] [:IMPORTS].
@@ -32,7 +34,7 @@ _CYPHER = {
 }
 
 
-class Neo4jUnavailable(Exception):
+class Neo4jUnavailable(DegradedCapability):
     """Raised when the Neo4j adapter can't be built — driver missing, no NEO4J_* env, or the
     DB unreachable. The caller degrades to the grep floor (never a hard failure)."""
 
@@ -54,6 +56,13 @@ class Neo4jGraphClient:
         except Neo4jUnavailable:
             raise
         except Exception as exc:
+            # (iii) BROAD IS HONEST: the real class here is the neo4j driver's own
+            # (`neo4j.exceptions.ServiceUnavailable`/`AuthError`/…), and naming it would mean
+            # importing the optional dep at module scope — the exact coupling the lazy import
+            # exists to prevent. The `driver` is also INJECTED (a double, a pooled client), so its
+            # failure class is the caller's, not ours. Nothing is swallowed: every failure is
+            # re-raised as the TYPED `Neo4jUnavailable`, which `build_neo4j_client` now reports
+            # loudly instead of dropping.
             raise Neo4jUnavailable(f"neo4j unreachable: {exc}") from exc
 
     def query(self, kind: str, target: str, root: str,
@@ -80,35 +89,65 @@ class Neo4jGraphClient:
         try:
             self._driver.close()
         except Exception:  # pragma: no cover
+            # (iv) SUPPRESS-OK: cleanup on the way out. A close() that fails has nothing left to
+            # degrade — the client is being discarded — and a raise here would turn teardown into
+            # the user's error. Nothing is lost and nothing is hidden: no read depends on it.
             pass
 
 
-def build_neo4j_client(config: Optional[Dict[str, Any]] = None) -> Optional[Neo4jGraphClient]:
-    """Build a Neo4j client from env (URI + credentials), or None to degrade. Honors env-var
-    references only — `config.uri_env`/`user_env`/`password_env` name the vars (defaults
-    NEO4J_URI / NEO4J_USERNAME / NEO4J_PASSWORD); never an inline URI/credential. Returns None
-    when the driver is absent, the env vars are unset, or the DB is unreachable."""
+def connect_neo4j_client(config: Optional[Dict[str, Any]] = None) -> Neo4jGraphClient:
+    """Build a Neo4j client from env (URI + credentials), or RAISE the typed `Neo4jUnavailable`
+    carrying the reason + its failure class. Honors env-var references only —
+    `config.uri_env`/`user_env`/`password_env` name the vars (defaults NEO4J_URI / NEO4J_USERNAME /
+    NEO4J_PASSWORD); never an inline URI/credential.
+
+    D5 — this is the honest half of `build_neo4j_client`, split out so the CALLER can decide what to
+    do with the reason. The old function knew exactly why the graph was unavailable (unset env,
+    absent driver, unreachable DB), threw that away, and returned `None`; the knowledge layer then
+    substituted the grep floor and `graph_guidance()` printed "no codebase graph wired" — which
+    reads as a CONFIG GAP the user never made, not the LIVE FAILURE it is."""
     config = config or {}
     uri = os.environ.get(config.get("uri_env", "NEO4J_URI"))
     if not uri:
-        return None
+        env_name = config.get("uri_env", "NEO4J_URI")
+        exc = Neo4jUnavailable(f"${env_name} is not set — no neo4j URI to connect to")
+        # Per-instance class stamp (the D1 precedent in `teamdb`): the SAME class covers two
+        # genuinely different failures, and "unset" must not be reported as "unreachable" —
+        # the remediation is to export the var, not to fix a connection.
+        exc.failure_class = FAILURE_UNSET
+        raise exc
     user = os.environ.get(config.get("user_env", "NEO4J_USERNAME"))
     password = os.environ.get(config.get("password_env", "NEO4J_PASSWORD"))
     database = config.get("database")
     try:
-        try:
-            import neo4j  # optional extra; lazy so the core stays dependency-free
-        except ImportError as exc:
-            raise Neo4jUnavailable(
-                f"the 'neo4j' driver is not installed (pip install \"mokata[neo4j]\"): {exc}"
-            ) from exc
-        auth = (user, password) if user is not None else None
-        try:
-            driver = neo4j.GraphDatabase.driver(uri, auth=auth)
-        except Exception as exc:
-            raise Neo4jUnavailable(f"could not create the neo4j driver: {exc}") from exc
-        # Neo4jGraphClient.__init__ verifies connectivity and raises Neo4jUnavailable if down.
-        return Neo4jGraphClient(driver, database=database)
+        import neo4j  # optional extra; lazy so the core stays dependency-free
+    except ImportError as exc:
+        raise Neo4jUnavailable(
+            f"the 'neo4j' driver is not installed (pip install \"mokata[neo4j]\"): {exc}"
+        ) from exc
+    auth = (user, password) if user is not None else None
+    try:
+        driver = neo4j.GraphDatabase.driver(uri, auth=auth)
+    except Exception as exc:
+        # (iii) BROAD IS HONEST — same reason as `Neo4jGraphClient.__init__`: the raiser is the
+        # optional driver (`neo4j.exceptions.ConfigurationError` for a bad URI scheme, and the
+        # module is only in scope inside this lazy import). Nothing is swallowed — it becomes the
+        # typed `Neo4jUnavailable` the caller reports.
+        raise Neo4jUnavailable(f"could not create the neo4j driver: {exc}") from exc
+    # Neo4jGraphClient.__init__ verifies connectivity and raises Neo4jUnavailable if down.
+    return Neo4jGraphClient(driver, database=database)
+
+
+def build_neo4j_client(config: Optional[Dict[str, Any]] = None) -> Optional[Neo4jGraphClient]:
+    """Build a Neo4j client, or None to degrade to the grep floor. The fail-open wrapper around
+    :func:`connect_neo4j_client` — kept, with its exact contract, for callers that only need "is
+    there a graph?" (the live-DB integration check).
+
+    NOTE for the knowledge layer: `select_backends` calls :func:`connect_neo4j_client` DIRECTLY, so
+    it sees the reason and can say it out loud. A caller that uses THIS function still degrades
+    silently — which is correct only where the answer, not the reason, is what's being asked."""
+    try:
+        return connect_neo4j_client(config)
     except Neo4jUnavailable:
         # Typed degrade — fall back to the ripgrep→grep floor; never a hard failure.
         return None

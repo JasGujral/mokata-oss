@@ -48,8 +48,8 @@ mokata vault search "idempotent ledger"    # ranks name + title + body matches (
 ## Pull and review (read-only)
 
 ```bash
-mokata vault pull payments-redesign               # → ./payments-redesign.md
-mokata vault pull payments-redesign ./review.md   # or name the destination
+mokata vault pull payments-redesign                      # → ./payments-redesign.md
+mokata vault pull payments-redesign --dest ./review.md   # or name the destination
 ```
 
 `pull` writes the **exact** content to a file for review and verifies the stored content hash,
@@ -68,7 +68,8 @@ The same flow is one step inside the plugin:
 ```
 
 The MCP tools mirror the CLI: `vault_list` / `vault_search` / `vault_pull` are read-only, and
-`vault_push` is **propose-only** without `approve=true` (consistent with `memory_export` /
-`memory_import`).
+`vault_push` is **propose-only** — it returns a `proposal_id` and writes nothing until *you* approve
+it out-of-band with `mokata approve <id>` (consistent with `memory_export` / `memory_import`;
+`approve=true` on the tool call commits nothing).
 
 See also [use & heal memory](use-memory.md) and [share a stack](share-a-stack.md).

@@ -242,7 +242,10 @@ def _with_value(item: Any, value: Any) -> Any:
     try:
         import dataclasses
         return dataclasses.replace(item, value=value)
-    except Exception:
+    except TypeError:
+        # D5 — the ONE real raiser: `dataclasses.replace` raises `TypeError` for a non-dataclass
+        # instance, which is precisely the duck-typed-item case the docstring degrades for. The
+        # stored representative is returned unchanged (no resolved value projected onto it).
         return item
 
 

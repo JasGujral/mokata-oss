@@ -25,6 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
+from .errors import MokataError
 
 
 # The curated allow-list: command names that are genuinely MODEL-INVOCABLE — Claude should be
@@ -80,7 +81,7 @@ _SKILL_BANNER = (
 )
 
 
-class SkillSourceError(RuntimeError):
+class SkillSourceError(MokataError, RuntimeError):
     """A curated skill's source template is missing or malformed."""
 
 
@@ -149,7 +150,7 @@ def render_skill_md(src: SkillSource) -> str:
 
     SK.S1 single-source: the `⛭ … active — gate:` line and the Contract are NOT written here per
     skill — they are pulled from `progress.active_skill_line` and `skill_contracts.render_contract_md`
-    (one source each), so all 15 SKILL.md render from the same place and can't drift into 15 copies.
+    (one source each), so all 16 SKILL.md render from the same place and can't drift into 16 copies.
     """
     from .progress import active_skill_line
     from .skill_contracts import render_contract_md

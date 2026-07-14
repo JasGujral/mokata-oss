@@ -527,5 +527,140 @@ class TestLocalModeUnchanged(_EnvClean):
             self._assert_no_journal(surface)
 
 
+# ============================================ D5: a DB failure mid-flush NEVER fakes a success
+class _BrokenSelectPg(_FakeMemPg):
+    """A `mokata_memory` whose SELECT fails — a transient DB error on exactly the statement
+    `_read_remote` runs. Writes still work, so this isolates the CAS-miss RE-READ."""
+
+    def execute(self, sql, params=()):
+        if " ".join(sql.lower().split()).startswith("select"):
+            raise RuntimeError("connection reset by peer")
+        return super().execute(sql, params)
+
+
+class _DownPg(_FakeMemPg):
+    """A connection that dies on EVERY statement — health said OK, then the DB went away mid-flush.
+    Before D5 this propagated out of `apply_memory_write` and CRASHED the whole flush/sync."""
+
+    def execute(self, sql, params=()):
+        raise RuntimeError("server closed the connection unexpectedly")
+
+
+class _LedgerSpy:
+    def __init__(self):
+        self.rows = []
+
+    def record(self, kind, **fields):
+        self.rows.append((kind, fields))
+
+
+def _flush_l(surface, pg, ledger=None):
+    from mokata import team_health
+    healthy = team_health.HealthVerdict(team_health.HEALTHY, "reachable")
+    return team_journal.flush(surface, health=healthy, connect=lambda *a, **k: pg, ledger=ledger)
+
+
+class TestADbFailureMidFlushLeavesTheEntryPending(_EnvClean):
+    """D5 — THE DATA-LOSS ONE. `_read_remote` swallowed every DB error into `None`, and `None`
+    means "no such row remotely" — which on the DELETE path is the SUCCESS signal. So a transient
+    error marked the user's gated PRUNE as FLUSHED and wrote a `team_flush` ledger row for a delete
+    that NEVER TOUCHED Postgres: the journal, `doctor` and the audit trail all agreed a prune had
+    happened that had not. A false success is not a fallback — there is nothing to fall back TO.
+
+    The entry must now stay PENDING (nothing is lost; the next healthy flush re-applies it)."""
+
+    def setUp(self):
+        super().setUp()
+        from mokata import degrade
+        degrade.reset_degrade_notices()
+
+    def test_a_delete_with_no_base_revision_is_not_flushed_when_the_remote_read_fails(self):
+        # base_revision=None → `_read_remote` runs FIRST and its answer decides everything: None
+        # used to mean "not remote, nothing to lose" → ApplyOutcome("ok"). The row IS remote.
+        with tempfile.TemporaryDirectory() as d:
+            surface = _repo(d, mode="team")
+            pg = _BrokenSelectPg({"k1": {"doc": "{}", "revision": 2}})
+            _seed(surface, "memory_delete", "k1", base_revision=None)
+            ledger = _LedgerSpy()
+            res = _flush_l(surface, pg, ledger)
+
+            self.assertEqual(res.flushed, 0, "a delete that never reached Postgres is NOT flushed")
+            self.assertEqual(res.conflicts, 0, "and NOT a conflict — no concurrent writer exists")
+            self.assertEqual(res.pending, 1, "it stays PENDING — nothing is lost")
+            self.assertEqual([e.key for e in _pending(surface)], ["k1"])
+            self.assertEqual(ledger.rows, [],
+                             "NO `team_flush` ledger row for a delete that never landed")
+            self.assertIn("k1", pg.rows, "and the shared row is still there — no prune happened")
+
+    def test_a_cas_miss_reread_failure_on_delete_is_not_marked_already_applied(self):
+        # A stale base → the DELETE misses the CAS → the `_read_remote` re-read decides. None used
+        # to mean "the row is already gone → already_applied" → FLUSHED. It is NOT gone.
+        with tempfile.TemporaryDirectory() as d:
+            surface = _repo(d, mode="team")
+            pg = _BrokenSelectPg({"k1": {"doc": "{}", "revision": 2}})
+            _seed(surface, "memory_delete", "k1", base_revision=1)     # stale base
+            ledger = _LedgerSpy()
+            res = _flush_l(surface, pg, ledger)
+
+            self.assertEqual(res.flushed, 0)
+            self.assertEqual(res.already_applied, 0, "an UNREAD row is not an 'already applied' one")
+            self.assertEqual(res.pending, 1)
+            self.assertEqual(ledger.rows, [])
+            self.assertIn("k1", pg.rows)
+
+    def test_a_dead_connection_mid_flush_does_not_crash_the_flush(self):
+        """A statement that dies mid-apply used to propagate straight out of `apply_memory_write`
+        and take the whole flush (and `mokata sync`) down with it. It is now a per-entry failure."""
+        with tempfile.TemporaryDirectory() as d:
+            surface = _repo(d, mode="team")
+            _seed(surface, "memory_put", "k1", base_revision=None)
+            _seed(surface, "memory_put", "k2", base_revision=None)
+            res = _flush_l(surface, _DownPg())                          # must not raise
+            self.assertEqual(res.flushed, 0)
+            self.assertEqual(res.pending, 2, "EVERY entry stays pending — none is faked either way")
+            self.assertEqual(sorted(e.key for e in _pending(surface)), ["k1", "k2"])
+
+    def test_the_pending_entry_still_flushes_once_the_database_recovers(self):
+        """Nothing is lost: the entry that survived the outage lands on the next healthy flush."""
+        with tempfile.TemporaryDirectory() as d:
+            surface = _repo(d, mode="team")
+            healthy = _FakeMemPg({"k1": {"doc": "{}", "revision": 2}})
+            _seed(surface, "memory_delete", "k1", base_revision=2)      # a VALID base
+            self.assertEqual(_flush_l(surface, _DownPg()).pending, 1)   # ...but the DB is down
+            self.assertIn("k1", healthy.rows, "the broken flush changed nothing")
+
+            res = _flush_l(surface, healthy)                            # the DB comes back
+            self.assertEqual(res.flushed, 1)
+            self.assertEqual(res.pending, 0)
+            self.assertNotIn("k1", healthy.rows, "the prune the user approved finally happens")
+
+    def test_the_degrade_is_LOUD(self):
+        """It stops being a secret: one classed `team-flush` notice, recorded for `doctor`."""
+        from mokata import degrade
+        with tempfile.TemporaryDirectory() as d:
+            surface = _repo(d, mode="team")
+            _seed(surface, "memory_delete", "k1", base_revision=None)
+            _flush_l(surface, _BrokenSelectPg({"k1": {"doc": "{}", "revision": 2}}))
+
+            notices = [n for n in degrade.emitted_notices() if n.subsystem == "team-flush"]
+            self.assertEqual(len(notices), 1, "exactly one notice per subsystem per process")
+            self.assertEqual(notices[0].failure_class, degrade.FAILURE_UNREACHABLE)
+            self.assertIn("stays PENDING", notices[0].render())
+            self.assertIn("mokata sync", notices[0].render())
+
+    def test_an_insert_cas_miss_reread_failure_is_not_reported_as_a_phantom_conflict(self):
+        """The same swallow on the PUT path invented a CONFLICT out of a read failure. A conflict
+        claims a concurrent writer changed the row; a failed read knows no such thing."""
+        with tempfile.TemporaryDirectory() as d:
+            surface = _repo(d, mode="team")
+            pg = _BrokenSelectPg({"k1": {"doc": "{}", "revision": 1}})  # ON CONFLICT DO NOTHING
+            _seed(surface, "memory_put", "k1", base_revision=None)
+            res = _flush_l(surface, pg)
+
+            self.assertEqual(res.conflicts, 0, "a read failure is not a concurrent writer")
+            self.assertEqual(res.flushed, 0)
+            self.assertEqual(res.pending, 1, "it stays PENDING and retries — never a fake conflict")
+
+
 if __name__ == "__main__":
     unittest.main()

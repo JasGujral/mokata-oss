@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 from abc import ABC, abstractmethod
 from contextlib import closing, contextmanager
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
 
+from ._sqlite import connect_sqlite, is_memory_path
 from .item import MemoryItem
+from ..errors import DegradedCapability
 
 
 class MemoryBackend(ABC):
@@ -55,12 +56,14 @@ class SQLiteBackend(MemoryBackend):
         # deletion on Windows (WinError 32) and leaks a handle. An in-memory DB (":memory:"
         # or a private "") exists ONLY inside its connection, so it MUST keep a persistent
         # one — but it touches no file, so it has no Windows hazard.
-        self._memory = path in (":memory:", "") or "mode=memory" in path
+        self._memory = is_memory_path(path)
         if not self._memory:
             parent = os.path.dirname(path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
-        self._mem_conn = sqlite3.connect(path) if self._memory else None
+        # MS.S4 — every connection (this one and every per-op one below) is opened by the ONE
+        # factory, so WAL + the bounded busy_timeout can never be missed at a call site.
+        self._mem_conn = connect_sqlite(path) if self._memory else None
         with self._connect() as conn:
             # TM.S6 — the local table gains the same scope + precedence fields as the shared
             # Postgres schema (doc 62 §2–3). A fresh DB creates them here; an existing DB is
@@ -102,15 +105,21 @@ class SQLiteBackend(MemoryBackend):
     def _connect(self):
         """A connection scoped to one operation. File-backed DBs open and close per call so no
         OS handle outlives the operation; an in-memory DB reuses its persistent connection
-        (closing it would discard the data — and it has no file handle to leak)."""
+        (closing it would discard the data — and it has no file handle to leak).
+
+        MS.S4 — `busy_timeout` is a PER-CONNECTION pragma, so a per-op connection must set it
+        every time; `journal_mode=WAL` is a property of the FILE, so after the first connect it
+        re-asserts as a no-op. `connect_sqlite` does both. The per-op close is also what keeps the
+        WAL sidecars honest: the LAST connection to close checkpoints and removes `-wal`/`-shm`,
+        so at rest the store is a single complete `memory.db`."""
         if self._memory:
             yield self._mem_conn
         else:
-            with closing(sqlite3.connect(self.path)) as conn:
+            with closing(connect_sqlite(self.path)) as conn:
                 yield conn
 
     def put(self, item: MemoryItem) -> None:
-        doc = json.dumps(item.to_dict())
+        doc = json.dumps(item.to_doc())   # D6 — the durable serializer: refuses a newer-than-us doc
         with self._connect() as conn:
             conn.execute(
                 """INSERT INTO memory (id, mtype, subject, status, doc)
@@ -178,7 +187,7 @@ class ObsidianBackend(MemoryBackend):
         body = (
             f"# memory: {item.subject}  ({item.mtype})\n\n"
             f"{item.value}\n\n"
-            f"{_FENCE}json\n{json.dumps(item.to_dict(), indent=2)}\n{_FENCE}\n"
+            f"{_FENCE}json\n{json.dumps(item.to_doc(), indent=2)}\n{_FENCE}\n"
         )
         with open(self._path(item.id), "w", encoding="utf-8") as fh:
             fh.write(body)
@@ -246,7 +255,7 @@ class NativeMemoryBackend(MemoryBackend):
         self.name = name
 
     def put(self, item: MemoryItem) -> None:
-        self.client.put(item.to_dict())
+        self.client.put(item.to_doc())
 
     def get(self, item_id: str) -> Optional[MemoryItem]:
         doc = self.client.get(item_id)
@@ -277,25 +286,30 @@ def _with_revision(doc: str, revision: Any) -> MemoryItem:
     return item
 
 
-class PostgresUnavailable(Exception):
+class PostgresUnavailable(DegradedCapability):
     """Raised when the Postgres backend can't be built — psycopg missing or the DB
     unreachable. The caller catches this and degrades to the SQLite floor (never a
     hard failure: 'degrade, never break')."""
 
 
 class PostgresBackend(MemoryBackend):
-    """The team's LIVE shared memory store — a hosted/remote backend (`kind: "external"`)
-    whose schema mokata OWNS: it runs `CREATE TABLE IF NOT EXISTS mokata_memory (…)` on connect and
-    implements the full `MemoryBackend` contract (put/upsert/get/all/delete/close), so
-    pointing a whole team's mokata at one Postgres DSN makes everyone read/write the same
-    store live. `autocommit` is on so one client's committed write is immediately visible to
-    the others; conflicts are surfaced (not silently merged) by the store's self-healing
-    layer, writes stay human-gated (P2) and provenance-carrying, and the adapter is
-    trust-dialed (P15) — this class is storage only, the policy lives in the store.
+    """The team's LIVE shared memory store — a hosted/remote backend (`kind: "external"`) that
+    implements the full `MemoryBackend` contract (put/upsert/get/all/delete/close), so pointing a
+    whole team's mokata at one Postgres DSN makes everyone read/write the same store live.
+    `autocommit` is on so one client's committed write is immediately visible to the others;
+    conflicts are surfaced (not silently merged) by the store's self-healing layer, writes stay
+    human-gated (P2) and provenance-carrying, and the adapter is trust-dialed (P15) — this class
+    is storage only, the policy lives in the store.
+
+    D1: it does NOT own its schema. It used to re-run a hand-mirrored `CREATE TABLE …` on every
+    connect, which a DML-only role is denied even on a provisioned DB — so a locked-down team
+    silently fell back to SQLite. `team init` (teamdb) owns the schema; this backend VERIFIES it
+    (one cached probe) and raises `PostgresUnavailable` carrying `failure_class` + the exact
+    `mokata team init` fix when it is absent or out of range — so the fallback is LOUD (CM.S2).
 
     Opt-in / local-first (P8): nothing connects unless the user wires `config.dsn_env`. The
     DSN comes from that env var (never inline in the committed manifest). `psycopg` is an
-    optional extra, lazy-imported here; its absence — or an unreachable database — raises
+    optional extra, lazy-imported; its absence — or an unreachable database — raises
     `PostgresUnavailable` so selection degrades to the SQLite floor, never a hard failure."""
 
     name = "postgres"
@@ -313,39 +327,10 @@ class PostgresBackend(MemoryBackend):
         # host-provided client) so the scoping is exercisable without a live DB.
         self.project = project
         if conn is not None:
-            self._conn = conn
-            for stmt in self._setup_sql():
-                try:
-                    self._conn.execute(stmt)
-                except Exception:  # pragma: no cover - a fake may no-op DDL
-                    pass
+            self._conn = conn                     # an injected connection: already provisioned.
             return
         from ._pg import connect_psycopg
-        self._conn = connect_psycopg(dsn, PostgresUnavailable, setup_sql=self._setup_sql())
-
-    @classmethod
-    def _setup_sql(cls) -> List[str]:
-        # IF-NOT-EXISTS mirrors of the shared schema `team init` owns (teamdb.provision_sql) —
-        # a no-op on a provisioned DB. TM.S6 (doc 62 §2–3) adds the scope + precedence columns;
-        # the authoritative scope value still lives in the item `doc` JSON, so runtime reads work
-        # regardless, and these columns are provisioned for future SQL-side scope filtering.
-        return [
-            f"CREATE TABLE IF NOT EXISTS {cls.TABLE} ("
-            "  id TEXT PRIMARY KEY, mtype TEXT, subject TEXT,"
-            "  status TEXT, doc TEXT, seq BIGSERIAL, project TEXT)",
-            f"ALTER TABLE {cls.TABLE} ADD COLUMN IF NOT EXISTS project TEXT",
-            # TM.S5c — mirror the team-init-owned CAS columns (teamdb v2) so this backend's read
-            # path can surface the row `revision` (the compare-and-set base). Same idempotent
-            # IF-NOT-EXISTS mirror pattern as the scope columns below; DDL ownership stays team
-            # init's — this is a provisioned mirror, not a new migration.
-            f"ALTER TABLE {cls.TABLE} ADD COLUMN IF NOT EXISTS revision INT NOT NULL DEFAULT 1",
-            f"ALTER TABLE {cls.TABLE} ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ",
-            f"ALTER TABLE {cls.TABLE} ADD COLUMN IF NOT EXISTS scope_level "
-            "TEXT NOT NULL DEFAULT 'personal'",
-            f"ALTER TABLE {cls.TABLE} ADD COLUMN IF NOT EXISTS scope_id TEXT",
-            f"ALTER TABLE {cls.TABLE} ADD COLUMN IF NOT EXISTS pin BOOLEAN NOT NULL DEFAULT FALSE",
-            f"ALTER TABLE {cls.TABLE} ADD COLUMN IF NOT EXISTS priority INT NOT NULL DEFAULT 0",
-        ]
+        self._conn = connect_psycopg(dsn, PostgresUnavailable)
 
     def _scope(self, prefix: str = "AND") -> Tuple[str, tuple]:
         """The project WHERE fragment (empty when spanning all projects)."""
@@ -365,7 +350,7 @@ class PostgresBackend(MemoryBackend):
             " subject=EXCLUDED.subject, status=EXCLUDED.status, doc=EXCLUDED.doc,"
             " project=EXCLUDED.project",
             (item.id, item.mtype, item.subject, item.status,
-             json.dumps(item.to_dict()), self.project),
+             json.dumps(item.to_doc()), self.project),   # D6 — refuses a newer-than-us doc
         )
 
     def get(self, item_id: str) -> Optional[MemoryItem]:
@@ -405,6 +390,10 @@ class PostgresBackend(MemoryBackend):
         try:
             self._conn.close()
         except Exception:  # pragma: no cover
+            # D5 — deliberately left BROAD, with no narrow class to name: `self._conn` is a
+            # THIRD-PARTY (psycopg) or injected connection whose `close()` raises driver classes
+            # mokata cannot import without a hard dependency on the optional `postgres` extra.
+            # Teardown has nothing to degrade TO and nothing a user could act on.
             pass
 
 
@@ -415,8 +404,9 @@ def _distinct_projects(rows: List[tuple]) -> List[str]:
     return sorted(out)
 
 
-def build_postgres_backend(config: Dict[str, Any],
-                           project: Optional[str] = None) -> Optional["PostgresBackend"]:
+def build_postgres_backend(config: Dict[str, Any], project: Optional[str] = None,
+                           on_unavailable: Optional[Callable[[Exception], None]] = None
+                           ) -> Optional["PostgresBackend"]:
     """Build a Postgres backend from a per-tool `config`, or return None to degrade.
 
     Honors ONLY `config.dsn_env` — the name of an env var holding the DSN. An inline
@@ -424,14 +414,24 @@ def build_postgres_backend(config: Dict[str, Any],
     leak the secret-guard blocks). Returns None when the env var is unset/empty, psycopg
     is absent, or the database is unreachable — so the caller falls to the SQLite floor.
     `project` (Stage 71a) SCOPES all rows to the current project; None spans all (review).
+
+    D1: `on_unavailable` receives the typed failure (carrying `failure_class` + `fix`) before the
+    None. Returning a bare None is exactly how a denied CREATE became an indistinguishable
+    "degraded somehow" — the caller needs to know it was the SCHEMA, so the notice can say
+    `mokata team init` instead of telling a user to sync a connection that is perfectly healthy.
     """
     dsn_env = (config or {}).get("dsn_env")
     if not dsn_env:
         return None
-    dsn = os.environ.get(dsn_env)
-    if not dsn:
+    # Route the env-var read through the ONE resolver (CM.S1) so reads resolve the DSN via the
+    # SAME path health/flush/sync use — the configured name can never split the two again (C-1).
+    from ..dsn import resolve_dsn
+    res = resolve_dsn(override=dsn_env)
+    if not res.is_set:
         return None
     try:
-        return PostgresBackend(dsn, project=project)
-    except PostgresUnavailable:
+        return PostgresBackend(res.dsn, project=project)
+    except PostgresUnavailable as exc:
+        if on_unavailable is not None:
+            on_unavailable(exc)
         return None

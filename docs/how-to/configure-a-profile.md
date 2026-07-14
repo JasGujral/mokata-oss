@@ -31,7 +31,9 @@ Everything is a toggle in `.mokata/manifest.json` (see the
 - **Tools** — set `tools.<id>.enabled` to `false`; the router degrades to the next provider
   in the capability's `fallback` chain.
 - **Memory types** — `settings.memory.{persistent,decision,episodic}` toggle independently.
-- **Trust dial** — `settings.trust.<tool>` = `read-only` / `propose-only` / `gated-write`.
+- **Trust dial** — `settings.trust` is a flat map to `read-only` / `propose-only` /
+  `gated-write` (the default). See [what it actually governs](#the-trust-dial-what-it-governs)
+  below — it is narrower than the name suggests.
 - **Output density** — `settings.governance.output_density: true` to enable F4 compression.
 - **Karpathy gates** — `settings.governance.karpathy.<id>: false` to disable a gate.
 
@@ -40,6 +42,50 @@ Everything is a toggle in `.mokata/manifest.json` (see the
   [configure storage backends & paths](configure-storage-backends.md).
 - **Codebase graph** — `full` wires a real graph (code-review-graph / serena) for structural
   queries, with grep as the safe floor: see [use a codebase graph](use-a-codebase-graph.md).
+
+## The trust dial: what it governs
+
+`settings.trust` is a **flat `{key: level}` map**. A key is either a write **surface** (`mcp`,
+`cli`) or a **tool** name (`remember`, `config_set`, …), and the tool wins. Resolution is: the
+tool's own level, else the surface's, else `gated-write`. So you can govern a whole surface in
+one line and still carve out a single tool:
+
+```jsonc
+"settings": {
+  "trust": {
+    "mcp":      "propose-only",   // the default for every write arriving over MCP
+    "remember": "read-only"       // …except this one, which may not write at all
+  }
+}
+```
+
+**Where it is actually enforced — and where it is not.** Being precise here matters more than
+being impressive:
+
+- **The MCP write surface is the only place the dial has teeth today.** A `read-only` MCP tool
+  refuses to write at all, and that refusal is a **configuration bound, not a missing approval**:
+  no proposal, and no human approval, can lift it.
+- **`settings.trust.cli` is accepted and validated, but enforces nothing today.** It is
+  reserved — set it and no CLI behaviour changes. mokata says so rather than implying a rung it
+  does not have.
+- **Native `Write` / `Edit` are outside the dial entirely.** The dial governs mokata's own write
+  tools; it is not a filesystem permission. What polices a native write is the PreToolUse
+  **gate-guard** (run-state) and **secret-guard** (security), which are a separate mechanism.
+
+**The honest ladder on `mcp` is two rungs, not three:**
+
+```text
+read-only  ▸  write-allowed        (propose-only == gated-write)
+```
+
+`propose-only` and `gated-write` **coincide on MCP**, because *every* MCP write already requires
+a human-minted approval — the tool call returns a proposal id, you mint the approval out-of-band
+with `mokata approve <id>`, and only a re-call carrying that id commits. Setting `propose-only`
+is still meaningful (it **pins** that floor, so a future loosening cannot silently un-pin it),
+but it buys no extra teeth today.
+
+`mokata doctor` prints this same surface-truth line whenever `settings.trust` is set, so the
+config can never quietly promise more than it delivers.
 
 ## Verify
 

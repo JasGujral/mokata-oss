@@ -144,6 +144,7 @@ def _skill_author(args: argparse.Namespace) -> int:
     # RED before GREEN), then HUMAN-GATE the write of the rendered command template. A RED
     # draft writes nothing; degrade-clean.
     from ..govern import AuditLedger, SkillDraft, WriteGate, WriteRequest
+    from ..govern.trust import CLI_SURFACE
     from ..skills import Gate, command_markdown
     draft = SkillDraft(args.name)
     for spec in (args.require or []):
@@ -194,7 +195,8 @@ def _skill_author(args: argparse.Namespace) -> int:
             fh.write(rendered)
 
     outcome = WriteGate(ledger=ledger).submit(
-        WriteRequest("config", dest, content=rendered, actor="cli"),
+        WriteRequest("config", dest, content=rendered, actor="cli",
+                     tool="skills", surface=CLI_SURFACE),
         commit=commit, assume_yes=args.yes)
     if not outcome.committed:
         print(f"skill author: {outcome.reason} — nothing written.")

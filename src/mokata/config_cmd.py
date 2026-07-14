@@ -21,11 +21,12 @@ from . import schema
 from .govern.gate import WriteGate, WriteRequest
 from .govern.secrets import Finding, scan
 from .manifest import Manifest, ManifestError
+from .errors import MokataError
 
 _MISSING = object()
 
 
-class ConfigCommandError(Exception):
+class ConfigCommandError(MokataError):
     """Raised when the manifest can't be read for a config operation."""
 
 
@@ -112,6 +113,7 @@ def config_set(
     raw_value: str,
     *,
     assume_yes: bool = False,
+    policy: Any = None,
     confirm: Optional[Callable[[str], bool]] = None,
     out: Optional[Callable[[str], None]] = None,
     ledger: Any = None,
@@ -155,11 +157,16 @@ def config_set(
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(new_text)
 
-    gate = WriteGate(ledger=ledger)
+    from .govern.trust import (CLI_SURFACE, policy_approved, policy_surface, policy_tool,
+                               policy_trust)
+    gate = WriteGate(ledger=ledger, trust=policy_trust(policy))
     # The gate secret-scans the whole new manifest: an inline DSN/credential is blocked.
     outcome = gate.submit(
-        WriteRequest(kind="config", target=path, content=new_text),
-        commit=_commit, confirm=confirm, assume_yes=assume_yes)
+        WriteRequest(kind="config", target=path, content=new_text,
+                     tool=policy_tool(policy, "config_set"),
+                     surface=policy_surface(policy, CLI_SURFACE)),
+        commit=_commit, confirm=confirm, assume_yes=assume_yes,
+        human_approved=policy_approved(policy))
 
     return ConfigSetResult(
         committed=outcome.committed,

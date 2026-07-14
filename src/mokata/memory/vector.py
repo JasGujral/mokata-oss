@@ -1,12 +1,15 @@
 """Stage 35e — vector memory backend (pgvector first), mokata-owned schema.
 
-A semantic store: like :class:`PostgresBackend` it OWNS its schema — it runs
-``CREATE EXTENSION IF NOT EXISTS vector`` and creates its own ``mokata_memory_vectors`` table
-with an ``embedding`` column — and implements the full ``MemoryBackend`` contract, plus
-``semantic_search(query_vector, top_k)`` that returns the nearest items via the pgvector index
-(no full-store scan). Embeddings are computed on the gated WRITE by an injected embedder
-(local-first, optional). Degrade-clean: psycopg / the pgvector extension / no embedder ⇒
-``VectorUnavailable`` so selection falls back to the lexical floor — never a hard failure.
+A semantic store over the mokata-owned ``mokata_memory_vectors`` table (an ``embedding`` column),
+implementing the full ``MemoryBackend`` contract plus ``semantic_search(query_vector, top_k)``,
+which returns the nearest items via the pgvector index (no full-store scan). Embeddings are
+computed on the gated WRITE by an injected embedder (local-first, optional). Degrade-clean:
+psycopg / the pgvector extension / no embedder ⇒ ``VectorUnavailable`` so selection falls back to
+the lexical floor — never a hard failure.
+
+D1: this backend does NOT own its schema. It used to run the extension + table DDL on every
+connect; the schema now lives in the init path (``teamdb.provision_vector``), OFF the golden path
+(ADR-54: vanilla Postgres, no extensions), and the connect VERIFIES the table instead.
 
 No live Postgres/pgvector in CI, so this is DEGRADE-tested here and MANUALLY verified live
 (see test_stage35e_vector_memory.py); the local semantic tier (zero-dep, over any backend's
@@ -21,9 +24,10 @@ from typing import Any, List, Optional, Tuple
 from .backends import MemoryBackend
 from .embed import EMBED_DIM, Embedder
 from .item import ACTIVE, DEFAULT_TOP_K, MemoryItem
+from ..errors import DegradedCapability
 
 
-class VectorUnavailable(Exception):
+class VectorUnavailable(DegradedCapability):
     """Raised when the vector backend can't be built — psycopg/pgvector missing, the DB
     unreachable, or no embedder configured. Callers degrade to the lexical floor."""
 
@@ -45,24 +49,17 @@ class PgVectorBackend(MemoryBackend):
         # Stage 71a — scope every row by the current project (None spans all, review only). `conn`
         # injects a connection so the scoping is testable without a live pgvector DB.
         self.project = project
-        setup = [
-            "CREATE EXTENSION IF NOT EXISTS vector",
-            f"CREATE TABLE IF NOT EXISTS {self.TABLE} ("
-            "  id TEXT PRIMARY KEY, mtype TEXT, subject TEXT, status TEXT,"
-            f"  doc TEXT, embedding vector({dim}), seq BIGSERIAL, project TEXT)",
-            f"ALTER TABLE {self.TABLE} ADD COLUMN IF NOT EXISTS project TEXT",
-        ]
         if conn is not None:
-            self._conn = conn
-            for stmt in setup:
-                try:
-                    self._conn.execute(stmt)
-                except Exception:  # pragma: no cover - a fake may no-op DDL
-                    pass
+            self._conn = conn                     # an injected connection: already provisioned.
             return
-        # mokata-OWNED schema: the extension + our own namespaced table (+ the project column).
+        # D1 — VERIFY the mokata-owned vector table; never create it. This connect used to run
+        # `CREATE EXTENSION IF NOT EXISTS vector` — the most privileged statement in the codebase
+        # — on a path a DML-only runtime role is supposed to be able to use. The schema now lives
+        # in the init path (`teamdb.vector_provision_sql` / `provision_vector`), and an unprovisioned
+        # tier degrades LOUDLY with the exact remediation rather than being conjured at runtime.
+        from ..teamdb import VECTOR_TABLE
         from ._pg import connect_psycopg
-        self._conn = connect_psycopg(dsn, VectorUnavailable, setup_sql=setup)
+        self._conn = connect_psycopg(dsn, VectorUnavailable, require_tables=(VECTOR_TABLE,))
 
     def _scope(self, prefix: str = "AND") -> Tuple[str, tuple]:
         if self.project is None:
@@ -83,7 +80,7 @@ class PgVectorBackend(MemoryBackend):
             " subject=EXCLUDED.subject, status=EXCLUDED.status, doc=EXCLUDED.doc,"
             " embedding=EXCLUDED.embedding, project=EXCLUDED.project",
             (item.id, item.mtype, item.subject, item.status,
-             json.dumps(item.to_dict()), _vlit(vec), self.project))
+             json.dumps(item.to_doc()), _vlit(vec), self.project))   # D6 — durable serializer
 
     def get(self, item_id: str) -> Optional[MemoryItem]:
         clause, params = self._scope()
@@ -118,6 +115,10 @@ class PgVectorBackend(MemoryBackend):
         try:
             self._conn.close()
         except Exception:  # pragma: no cover
+            # D5 — deliberately left BROAD, with no narrow class to name: `self._conn` is a
+            # THIRD-PARTY (psycopg) or injected connection whose `close()` raises driver classes
+            # mokata cannot import without a hard dependency on the optional `postgres` extra.
+            # Teardown has nothing to degrade TO and nothing a user could act on.
             pass
 
     # --- semantic search (index-backed top-k; no full-store scan) ---------------
@@ -151,16 +152,18 @@ def build_pgvector_backend(config: dict, embedder: Optional[Embedder],
     Honors ONLY `config.dsn_env` (never an inline DSN). Returns None when the env var is
     unset, no embedder is configured, psycopg/pgvector is absent, or the DB is unreachable.
     `project` (Stage 71a) scopes all rows to the current project; None spans all (review)."""
-    import os
     if embedder is None:
         return None
     dsn_env = (config or {}).get("dsn_env")
     if not dsn_env:
         return None
-    dsn = os.environ.get(dsn_env)
-    if not dsn:
+    # Route the env-var read through the ONE resolver (CM.S1) — same funnel as the postgres
+    # backend + health/flush, so a custom `dsn_env` can never split reads from writes (C-1).
+    from ..dsn import resolve_dsn
+    res = resolve_dsn(override=dsn_env)
+    if not res.is_set:
         return None
     try:
-        return PgVectorBackend(dsn, embedder, project=project)
+        return PgVectorBackend(res.dsn, embedder, project=project)
     except VectorUnavailable:
         return None

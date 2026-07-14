@@ -53,6 +53,10 @@ class TestReadMode(unittest.TestCase):
         self.assertEqual(run_mode.read_mode(_surface({"mode": "solo"})), run_mode.LOCAL)
 
     def test_broken_surface_degrades_to_local(self):
+        # D5: the fixture now raises the class a genuinely broken/duck-typed surface PRODUCES (no
+        # `.manifest` → AttributeError). `stored_mode` is narrowed to (AttributeError, TypeError),
+        # so a synthetic RuntimeError is no longer swallowed — that was the bug-hiding catch-all.
+        # The degrade-to-local contract this test pins is unchanged.
         class Boom:
             @property
             def manifest(self):
@@ -132,6 +136,7 @@ class TestModeSurface(unittest.TestCase):
         self.assertNotIn("\n", line)
 
     def test_mode_line_degrades_clean_on_a_broken_surface(self):
+        # D5: same narrowing as above — the fixture raises what a broken surface really raises.
         class Boom:
             @property
             def manifest(self):

@@ -1,11 +1,11 @@
 {
   "name": "mokata",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "description": "Spec-driven TDD framework for Claude Code \u2014 Socratic brainstorm, provable completeness gate, codebase knowledge graph, persistent self-healing memory, token governance, and human-gated writes.",
   "author": {
     "name": "MoStack"
   },
-  "homepage": "https://jasgujral.github.io/mokata-oss/",
+  "homepage": "https://mokata.ai/",
   "repository": "https://github.com/JasGujral/mokata-oss",
   "license": "Apache-2.0",
   "keywords": [

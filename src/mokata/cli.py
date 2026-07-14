@@ -54,7 +54,7 @@ from .config import Surface
 # ---------------------------------------------------------------------------
 from .cli_commands import (
     setup, core, knowledge, memory, collab, mode, sync, skills, rules, index, mcp, diagnostics,
-    distribution, reset, pipeline, runviews, plan, menu, docs, docsync,
+    distribution, reset, pipeline, runviews, plan, menu, docs, docsync, gate, approve, spec,
 )
 from .cli_commands._common import (
     _load_surface, _review_scope, _backend_projects, _SCOPE_CURRENT, _cli_ask, _profile_for,
@@ -103,7 +103,7 @@ from .cli_commands.pipeline import (
     cmd_exec, cmd_decompose, cmd_preview, cmd_playbook, cmd_suggest, cmd_chain,
 )
 from .cli_commands.runviews import (
-    cmd_progress, cmd_sessions, cmd_resume, cmd_watch, cmd_govern,
+    cmd_progress, cmd_sessions, cmd_windows, cmd_resume, cmd_watch, cmd_govern,
 )
 from .cli_commands.plan import (
     cmd_plan, _cmd_plan_list, _cmd_plan_show, _cmd_plan_export,
@@ -149,6 +149,9 @@ def build_parser() -> argparse.ArgumentParser:
     menu.register(sub, common)
     docs.register(sub, common)
     docsync.register(sub, common)
+    gate.register(sub, common)
+    approve.register(sub, common)
+    spec.register(sub, common)
 
     return parser
 

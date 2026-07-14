@@ -4,8 +4,12 @@ Both jsonschema states (no jsonschema imported here). Verifies:
 - H1: a secret in an imported share file AND in a migrate source is HARD-BLOCKED (no write),
   and import/migrate now record a ledger entry per item.
 - H4: a secret in a `remember` SUBJECT is blocked (not just value).
-- H3: the MCP gate boolean is `approve` (with `confirm` kept as a back-compat alias);
-  `record_finish_decision` uses the same spelling.
+- H3: the `approve`/`confirm` params. SI.3 (0.0.13) DEMOTED both on the MCP write tools — they are
+  still ACCEPTED (schema stability) but they no longer commit anything, because they are parameters
+  the MODEL types and a gate the gated party can open is not a gate. The consent now has to be
+  MINTED BY A HUMAN out-of-band (`mokata approve <id>`, see `mokata/approval.py`). H3's original
+  claim survives where it is still true: `record_finish_decision` (an in-process engine call, not a
+  model-facing tool) keeps the same spelling + alias.
 - M1: Neo4j degrade now flows through the typed `Neo4jUnavailable` path.
 """
 
@@ -17,6 +21,7 @@ import unittest
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _support import mcp_commit   # SI.3: propose -> a HUMAN approves out-of-band -> redeem by id
 
 from mokata.config import Surface
 from mokata.govern import AuditLedger
@@ -42,17 +47,20 @@ def _repo(d, profile="full"):
 
 
 def _share(items):
-    # Build a share file containing UNTRUSTED items (incl. secrets) by planting them straight
-    # into the backend — bypassing the gate — to simulate a teammate's external file. (Since
-    # M2, store.remember itself blocks secrets, so we can't plant a secret through it.)
-    from mokata.memory import SQLiteBackend, export_memory
-    with tempfile.TemporaryDirectory() as t:
-        s = MemoryStore(SQLiteBackend(os.path.join(t, "m.db")))
-        for it in items:
-            s.backend.put(it)
-        data = export_memory(s)
-        s.close()
-        return data
+    # Build a share file containing UNTRUSTED items (incl. secrets) to simulate a teammate's
+    # external file. (Since M2, store.remember itself blocks secrets, so we can't plant a secret
+    # through it.)
+    #
+    # SI.6 (74 C2): this used to construct the file by planting the items into a backend and calling
+    # `export_memory` — which worked only because export was a SCANNING HOLE. Export now hard-blocks
+    # a secret-bearing item, so mokata can no longer PRODUCE such a file (that is the fix, and
+    # `test_si_6_c2_*` pins it). The untrusted file is therefore built directly here, which is what
+    # it always really was: a file from OUTSIDE this mokata — hand-rolled, hostile, or written by a
+    # pre-SI.6 version. The import-side hard-block these tests assert is unchanged and still the
+    # thing under test.
+    from mokata.memory import SHARE_KIND, SHARE_SCHEMA_VERSION
+    return {"schema_version": SHARE_SCHEMA_VERSION, "kind": SHARE_KIND,
+            "items": [i.to_dict() for i in items]}
 
 
 # ----------------------------------------------------------------- H1: import secret-scan + ledger
@@ -155,11 +163,14 @@ class TestMigrateSecretScanAndLedger(unittest.TestCase):
 # ----------------------------------------------------------------- H4: remember scans subject
 
 class TestRememberScansSubject(unittest.TestCase):
+    # These drive the FULL human round-trip (mcp_commit) on purpose: the secret must be hard-blocked
+    # AFTER a real human approval. A security block is not a methodology gate — no approval, however
+    # legitimately minted, can license writing a credential. See SI.3 / src/mokata/approval.py.
     def test_secret_in_subject_is_blocked(self):
         from mokata import mcp_server as M
         with tempfile.TemporaryDirectory() as d:
             _repo(d).close()
-            res = M.remember(path=d, subject=f"creds-{SECRET}", value="ok", approve=True)
+            res = mcp_commit(M.remember, path=d, subject=f"creds-{SECRET}", value="ok")
             self.assertEqual(res["status"], "blocked")
             self.assertEqual(MemoryStore.from_surface(Surface.load(d)).all_active(), [])
 
@@ -167,33 +178,55 @@ class TestRememberScansSubject(unittest.TestCase):
         from mokata import mcp_server as M
         with tempfile.TemporaryDirectory() as d:
             _repo(d).close()
-            res = M.remember(path=d, subject="ok", value=f"key {SECRET}", approve=True)
+            res = mcp_commit(M.remember, path=d, subject="ok", value=f"key {SECRET}")
             self.assertEqual(res["status"], "blocked")
 
 
 # ----------------------------------------------------------------- H3: approve param + alias
+#
+# SI.3 (0.0.13) rewrote what these two tests pin. H3 originally established `approve` as THE MCP gate
+# boolean (with `confirm` as its alias) — and that was the bug: `approve` is a parameter the MODEL
+# types, so "every durable write is human-gated" (P2) reduced to *the model said it was approved*.
+# Both flags are now DEMOTED: still ACCEPTED (schema stability — an older caller must not blow up),
+# but they commit NOTHING. The consent moved out-of-process, to an approval a HUMAN mints with
+# `mokata approve <id>` and the model may only REFERENCE by id. See src/mokata/approval.py.
 
 class TestApproveParam(unittest.TestCase):
-    def test_remember_gates_on_approve(self):
+    def test_approve_param_no_longer_commits(self):
+        """`approve=True` alone must NOT commit (SI.3) — only the human round-trip does."""
         from mokata import mcp_server as M
         with tempfile.TemporaryDirectory() as d:
             _repo(d).close()
-            # no approve -> proposed, nothing written
-            self.assertEqual(M.remember(path=d, subject="a", value="1")["status"],
-                             "proposed")
+            # no consent param at all -> proposed, nothing written
+            res = M.remember(path=d, subject="a", value="1")
+            self.assertEqual(res["status"], "proposed")
             self.assertEqual(MemoryStore.from_surface(Surface.load(d)).all_active(), [])
-            # approve=True -> committed
-            self.assertEqual(
-                M.remember(path=d, subject="a", value="1", approve=True)["status"],
-                "committed")
 
-    def test_confirm_alias_back_compat(self):
+            # approve=True -> STILL only a proposal. It is accepted, it is not consent: it hands
+            # back a proposal_id, sets committed=False, and writes nothing.
+            res = M.remember(path=d, subject="a", value="1", approve=True)
+            self.assertEqual(res["status"], "proposed")
+            self.assertFalse(res["committed"])
+            self.assertTrue(res["proposal_id"])
+            self.assertEqual(MemoryStore.from_surface(Surface.load(d)).all_active(), [])
+
+            # the FULL round-trip — propose, a HUMAN mints the approval out-of-band, the model
+            # redeems it by id — is the only thing that commits.
+            self.assertEqual(
+                mcp_commit(M.remember, path=d, subject="a", value="1")["status"], "committed")
+            self.assertEqual([i.value for i in
+                              MemoryStore.from_surface(Surface.load(d)).recall("a")], ["1"])
+
+    def test_confirm_alias_is_accepted_but_does_not_commit(self):
+        """The deprecated `confirm` alias stays ACCEPTED (no TypeError — older callers keep working)
+        but, like `approve`, it commits nothing (SI.3 / src/mokata/approval.py)."""
         from mokata import mcp_server as M
         with tempfile.TemporaryDirectory() as d:
             _repo(d).close()
-            # the deprecated `confirm=True` alias still performs the gated write
-            res = M.remember(path=d, subject="b", value="2", confirm=True)
-            self.assertEqual(res["status"], "committed")
+            res = M.remember(path=d, subject="b", value="2", confirm=True)   # accepted: no TypeError
+            self.assertEqual(res["status"], "proposed")                      # but NOT a commit
+            self.assertFalse(res["committed"])
+            self.assertEqual(MemoryStore.from_surface(Surface.load(d)).all_active(), [])
 
     def test_record_finish_decision_spelling(self):
         from mokata.engine import record_finish_decision

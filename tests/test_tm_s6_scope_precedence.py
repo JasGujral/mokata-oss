@@ -355,6 +355,10 @@ class TestLocalRegression(unittest.TestCase):
 _SCOPE_COLS = ("scope_level", "scope_id", "pin", "priority")
 
 
+class _UndefinedColumn(Exception):
+    sqlstate = "42703"          # a PRE-D2 artifact has no `min_supported` column
+
+
 class _FakePg:
     """A tiny PG stand-in that models tables→columns + the schema-version rows, enough to prove
     the provision DDL is idempotent and bumps the version. Understands CREATE TABLE / ALTER ADD
@@ -362,7 +366,7 @@ class _FakePg:
 
     def __init__(self):
         self.tables = {}                # name -> set(columns)
-        self.versions = set()
+        self.versions = {}              # D2 — version -> min_supported (the RANGE artifact)
 
     class _Cur:
         def __init__(self, rows):
@@ -390,10 +394,19 @@ class _FakePg:
         if m:
             self.tables.setdefault(m.group(1), set()).add(m.group(2))
             return self._Cur([])
-        m = re.match(r"INSERT INTO mokata_schema_version \(version\) VALUES \((\d+)\)", h, re.I)
+        # D2 — the artifact carries a RANGE: (version, min_supported).
+        m = re.match(r"INSERT INTO mokata_schema_version \(version, min_supported\)"
+                     r" VALUES \((\d+), (\d+)\)", h, re.I)
         if m:
-            self.versions.add(int(m.group(1)))       # ON CONFLICT DO NOTHING == set semantics
+            self.versions[int(m.group(1))] = int(m.group(2))   # ON CONFLICT DO UPDATE the floor
             return self._Cur([])
+        if h.upper().startswith("SELECT VERSION, MIN_SUPPORTED FROM MOKATA_SCHEMA_VERSION"):
+            if not self.versions:
+                return self._Cur([])
+            if "min_supported" not in self.tables.get("mokata_schema_version", set()):
+                raise _UndefinedColumn("column \"min_supported\" does not exist")
+            top = max(self.versions)
+            return self._Cur([(top, self.versions[top])])
         if h.upper().startswith("SELECT VERSION FROM MOKATA_SCHEMA_VERSION"):
             return self._Cur([(max(self.versions),)] if self.versions else [])
         return self._Cur([])
@@ -410,7 +423,9 @@ class TestSchemaMigration(unittest.TestCase):
         sql = " || ".join(teamdb.provision_sql())
         for col in _SCOPE_COLS:
             self.assertIn(f"ADD COLUMN IF NOT EXISTS {col}", sql)
-        self.assertIn(f"VALUES ({teamdb.TEAM_SCHEMA_VERSION})", sql)
+        # D2 — the version row is now the (current, min_supported) RANGE artifact.
+        self.assertIn(f"VALUES ({teamdb.TEAM_SCHEMA_VERSION}, "
+                      f"{teamdb.TEAM_SCHEMA_MIN_SUPPORTED})", sql)
 
     def _apply(self, pg):
         for stmt in teamdb.provision_sql():
@@ -428,7 +443,7 @@ class TestSchemaMigration(unittest.TestCase):
         pg.seed_table(teamdb.MEMORY_TABLE,
                       ["id", "mtype", "subject", "status", "doc", "seq", "project",
                        "revision", "updated_at"])
-        pg.versions.add(2)
+        pg.versions[2] = 2
         self._apply(pg)
         self.assertTrue(set(_SCOPE_COLS) <= pg.tables[teamdb.MEMORY_TABLE])
         self.assertEqual(pg.execute(teamdb._VERSION_SQL).fetchone()[0], 3)  # 2 → 3
@@ -439,12 +454,15 @@ class TestSchemaMigration(unittest.TestCase):
         cols_after_first = set(pg.tables[teamdb.MEMORY_TABLE])
         self._apply(pg)                              # re-run team init
         self.assertEqual(pg.tables[teamdb.MEMORY_TABLE], cols_after_first)
-        self.assertEqual(pg.versions, {3})           # no duplicate version rows
+        self.assertEqual(pg.versions, {3: teamdb.TEAM_SCHEMA_MIN_SUPPORTED})  # one row
 
-    def test_postgres_backend_setup_mirrors_scope_columns(self):
-        sql = " || ".join(PostgresBackend._setup_sql())
+    def test_the_scope_columns_have_ONE_definition_in_the_init_path(self):
+        # D1 — `PostgresBackend` used to hand-mirror this DDL and re-run it on every connect.
+        # The mirror is deleted; `teamdb.provision_sql` (team init) is the single source of truth.
+        sql = " || ".join(teamdb.provision_sql())
         for col in _SCOPE_COLS:
             self.assertIn(f"ADD COLUMN IF NOT EXISTS {col}", sql)
+        self.assertFalse(hasattr(PostgresBackend, "_setup_sql"))
 
     def test_live_pg_leg_when_dsn_present(self):
         dsn = os.environ.get("MOKATA_PG_DSN")

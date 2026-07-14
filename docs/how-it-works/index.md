@@ -32,14 +32,16 @@ config, or a git action — happens without an explicit human approval.
 ├───────────────────────────────────────────────────────────────┤
 │  PIPELINE — brainstorm → spec → test → develop → review → ship │
 │  real gates: approach-approval · completeness · spec-persisted │
-│  · red-before-green · deviation · WriteGate · release-gate     │
+│  · red-before-green · spec-scope · deviation · WriteGate ·     │
+│  release-gate                                                  │
 ├───────────────────────────────────────────────────────────────┤
 │  KNOWLEDGE graph   │  MEMORY engine (local + team scopes)      │
 │  structural facts  │  typed, human-gated, precedence-resolved  │
 ├───────────────────────────────────────────────────────────────┤
 │  GOVERN — WriteGate (secret-scan → human gate → audit ledger)  │
 ├───────────────────────────────────────────────────────────────┤
-│  HOOKS (SessionStart briefing · secret-guard) + MCP tools      │
+│  HOOKS — SessionStart briefing · secret-guard (security, hard) │
+│  · gate-guard (run-state gates, P14-overridable) + MCP tools   │
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -60,9 +62,15 @@ The gates are real code, not advice:
 | `completeness` | spec | any acceptance criterion with no mapped test (or an empty spec) |
 | `spec-persisted` | before develop/test | no saved spec with ≥1 acceptance criterion |
 | `red-before-green` | test → develop | implementing before a failing test exists |
+| `spec-scope` | develop | a write outside the spec's authorized surface, or one spelling a deferred item's marker |
 | `deviation` | spec/refine/develop | a change that would break a saved spec or recorded decision |
 | WriteGate | emit, ship, memory, config | an un-approved durable write |
 | `release-gate` | ship | landing before green tests + met ACs + a passed review |
+
+Three of them — `spec-persisted`, `no-code-without-failing-test` and `spec-scope` — are also
+enforced **outside** mokata's own tools, on the harness's native `Write`/`Edit`, by the
+[gate-guard hook](skills-and-gates.md#the-gate-guard-the-gates-enforced-on-native-edits) (§7). That
+is what makes them structural rather than advisory.
 
 You can run the whole thing (`mokata playbook`), enter a slice (`mokata enter <phase>`), or run
 one skill standalone (`mokata run <skill>`) — the gates apply either way. Full detail:
@@ -128,20 +136,28 @@ Local mode is untouched by any team feature. See [Memory](../concepts/memory.md)
 
 Every durable write in mokata — an emitted spec, a memory item, a config change, a git action, a
 docsync reconcile — goes through **one WriteGate**: secret-scan → explicit human approval → append
-to the **audit ledger**. Nothing is silent and nothing is autonomous; `mokata govern` and
-`mokata audit` replay exactly what changed and why. This is the P2 guarantee that the whole stack
-rests on. See [Governance & audit](../concepts/governance.md).
+to the **audit ledger**. For a write driven from inside the harness, that approval is **minted by
+you out-of-band** (`mokata approve <proposal-id>`, in your own terminal) and merely *referenced* by
+the model — never a flag the model types for itself. Nothing is silent and nothing is autonomous;
+`mokata govern` and `mokata audit` replay exactly what changed and why. This is the P2 guarantee
+that the whole stack rests on. See [Governance & audit](../concepts/governance.md).
 
 ## 7. Hooks & MCP — the harness surface
 
 mokata integrates with Claude Code through two harness surfaces:
 
 - **Hooks.** A **SessionStart** hook injects a sub-2k-token briefing (the always-on rules + a
-  one-line resume pointer) when you open a repo, and a **secret-guard** hook runs synchronously and
-  can **block on exit code 2** before a risky write lands. Security hooks are synchronous
-  (exit-2); observability hooks are async. `mokata setup` writes the hook wiring with an absolute
-  entry-point path so it resolves even under a GUI-launched minimal PATH, and `--no-hooks` skips
-  it cleanly.
+  one-line resume pointer) when you open a repo. Two **PreToolUse** hooks then run synchronously on
+  the harness's own file-mutation tools and **block on exit code 2**: the **secret-guard** (a
+  *security* block — `Write`/`Edit`/`MultiEdit`/`Bash`, never overridable) and the **gate-guard**
+  (a *methodology* block — `Write`/`Edit`/`MultiEdit`/`NotebookEdit`, holding the run-state gates
+  `spec-persisted` · `no-code-without-failing-test` · `spec-scope`, overridable only by an
+  explicit, re-confirmed, ledgered `mokata gate override`). Sync hooks block; async hooks only
+  observe. `mokata setup` writes the hook wiring with an absolute entry-point path so it resolves
+  even under a GUI-launched minimal PATH, and `--no-hooks` skips it cleanly. **Claude Code is the
+  only harness that declares the `hooks` capability** — elsewhere the gate-guard is never wired and
+  the run-state gates enforce nothing. Deep-dive:
+  [the gate-guard](skills-and-gates.md#the-gate-guard-the-gates-enforced-on-native-edits).
 - **MCP.** mokata exposes read-only tools (`progress`, `lanes`, `watch`, `govern`, `query`, …)
   over MCP so the pipeline's state and the graph are reachable from inside the harness without
   leaving the chat. See [Command surfaces (CLI ↔ slash ↔ MCP)](../reference/command-surfaces.md).

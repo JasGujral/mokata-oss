@@ -134,8 +134,20 @@ def _optional_jsonschema_errors(data: Any) -> List[str]:
             errors.append(f"{loc}: {err.message}")
         return errors
     except Exception:
-        # A present-but-incompatible jsonschema must not crash validation; fall back
-        # to the authoritative built-in checks silently.
+        # (iii) BROAD IS HONEST — and D5 tried to narrow this and was WRONG to.
+        #
+        # The failure this guards is "a PRESENT but INCOMPATIBLE jsonschema", and an incompatible
+        # third-party library fails from inside its OWN internals, in its OWN classes. There is no
+        # class to name: `jsonschema` is lazily imported by design (the core stays dependency-free),
+        # so nothing here is in scope at module level, and the distro-shipped 3.2.0 this exists for
+        # can raise anything at all on construct or iterate. `test_manifest.py`'s
+        # `test_present_but_validator_raises_degrades` pins exactly that contract. Narrowing would
+        # convert the degrade into the CRASH the guard was written to prevent.
+        #
+        # And silence IS correct here, so it earns no `note_degraded`: this pass is ADDITIVE polish
+        # ("richer messages"), and the built-in structural checks BELOW it are authoritative and
+        # always run. Losing it loses PHRASING, never a verdict — an invalid manifest is still
+        # rejected, by the same rules, with the same result. Nothing degrades but the prose.
         return []
 
 

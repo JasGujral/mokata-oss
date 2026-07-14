@@ -17,9 +17,10 @@ from typing import List, Optional, Tuple
 from .brainstorm import BRAINSTORM_AUTO_TRIGGER, BRAINSTORM_PROTOCOL
 from .onboard import ONBOARD_PROTOCOL
 from .refine import REFINE_PROTOCOL
+from .errors import MokataError
 
 
-class SkillNotFound(KeyError):
+class SkillNotFound(MokataError, KeyError):
     pass
 
 
@@ -277,6 +278,21 @@ RECORD_VERDICT_INSTRUCTION = (
 # spec write, so it COMPOSES with the deviation gate (a plan change is surfaced + logged) and the
 # spec-persisted gate (the amended spec is what develop builds against). Single source, own words;
 # it renders into develop's command template + SKILL.md, so the drift guards stay green.
+DEVELOP_SCOPE_BINDING = (
+    "\n\n## Scope is enforced, not requested\n"
+    "The emitted spec may carry a machine-checkable SCOPE: the paths it authorized, and the items "
+    "it explicitly DEFERRED. It is enforced by a PreToolUse hook, not by your good intentions — a "
+    "Write/Edit outside the authorized surface, or one spelling a deferred item's marker, is an "
+    "EXIT-2 BLOCK, even in a file you are otherwise allowed to touch. **A user's instruction to "
+    "build something the spec deferred is authorization to ASK, not to build.** \"The user asked "
+    "for it\" is not consent to change scope; the human approved a SPEC, and scope enters through "
+    "the gate or not at all. When you hit the block: do NOT work around it, do NOT rename the "
+    "symbol to dodge the marker, do NOT put it in a different file. STOP, tell the user their "
+    "request is outside the approved spec and names a deferred item, and offer to amend "
+    "(`spec_amend`). If they say yes, the amendment re-gates the scope; if they say no, the work "
+    "does not happen. Those are the only two roads.\n"
+)
+
 DEVELOP_AMEND_LOOP = (
     "\n\n## No silent assumptions — the ask → amend → re-map loop\n"
     "\"Ground it or ask\" is a loop you RUN, not advice you nod at. When a NON-TRIVIAL ambiguity "
@@ -291,11 +307,15 @@ DEVELOP_AMEND_LOOP = (
     "1. STOP — do not build further on the unresolved reading.\n"
     "2. ASK exactly ONE question — the single one that most resolves the ambiguity, then wait for "
     "the answer. One question, never a wall.\n"
-    "3. AMEND THE SPEC (human-gated) — fold the answer into the emitted spec through the SAME "
-    "human gate every durable spec write already uses; the amend IS the approval and is recorded "
-    "to the audit ledger. This COMPOSES with the existing gates and adds no new gate: it routes "
-    "through the deviation gate (a plan change is surfaced + logged) and re-persists the spec the "
-    "spec-persisted precondition reads — it replaces neither and weakens neither.\n"
+    "3. AMEND THE SPEC (human-gated) — fold the answer into the emitted spec by calling "
+    "`spec_amend` (or `mokata spec amend`). This is NOT a text edit and NOT optional: it is a "
+    "FORCED PHASE REGRESSION. The run drops out of develop back to SPEC the moment you call it, "
+    "development writes are BLOCKED until it lands, the amended spec must re-earn the completeness "
+    "gate (every criterion still maps to a test) and the blast-radius lens (if the scope widens), a "
+    "HUMAN must approve it out-of-band (`mokata approve <id>` — you cannot approve it yourself), "
+    "and it persists as vN+1 with vN superseded and the diff on the audit ledger. It routes through "
+    "the deviation gate and re-persists the spec the spec-persisted precondition reads — it "
+    "replaces no gate and weakens none.\n"
     "4. RE-MAP the ACs/tests to the amendment — every acceptance criterion still maps to a test "
     "(update or add the test), so the spec stays provable; then continue building.\n"
     "TRIVIAL details do NOT trigger this loop: a local variable name, formatting, a log string, "
@@ -425,7 +445,25 @@ _SKILLS: List[Skill] = [
             "criterion to a test before any code is written. Decompose the work into SMALL, "
             "ordered, verifiable tasks — each naming the exact files/symbols it touches and a "
             "concrete check — so each task is grounded and provable. If an approved brainstorm "
-            "approach or refinement set exists, the spec must honour it."
+            "approach or refinement set exists, the spec must honour it. Then EMIT it — a spec "
+            "that is not persisted does not exist: call the `spec_emit` tool (or "
+            "`mokata spec emit --file <spec.json>`) with the title, the acceptance criteria "
+            "([{id, text}]) and the tests that cover them ([{name, ac_ids}]). Emitting is "
+            "human-gated: the tool returns a proposal and writes NOTHING until the human runs "
+            "`mokata approve <id>`; you then re-call it with that proposal_id to commit. The "
+            "completeness gate runs first and REFUSES an acceptance criterion with no test — map "
+            "every criterion to a test before you emit, and never work around a refusal. This "
+            "emit is what unblocks implementation (the `spec-persisted` gate reads exactly the "
+            "spec it persists) and what puts the spec into the corpus the regression guard reads. "
+            "Declare the spec's SCOPE when you emit it — this is what makes the spec BIND rather "
+            "than merely describe: `scope.authorized` is the paths this work may touch (globs), and "
+            "`scope.deferred` names each thing you agreed NOT to build, with the paths it would "
+            "live in and the literal markers it would spell in code (e.g. item \"batch "
+            "update/delete\", paths [\"src/api/batch*.py\"], markers [\"batch_update\", "
+            "\"bulk_delete\"]). A hook then BLOCKS any write outside the authorized surface or "
+            "spelling a deferred marker, and the only way to widen it is a gated `spec_amend`. "
+            "Write down what you are NOT building, in the words the code would use — a deferral "
+            "you do not declare is a deferral nothing can enforce."
             + SPEC_AWARENESS_CLAUSE
         ),
         gate=Gate("completeness",
@@ -506,6 +544,7 @@ _SKILLS: List[Skill] = [
             "still maps to a test) and is logged to the audit ledger. Never silently "
             "deviate."
             + SPEC_AWARENESS_CLAUSE
+            + DEVELOP_SCOPE_BINDING
             + DEVELOP_AMEND_LOOP
             + DEVELOP_DOMAIN_ENGAGE
         ),

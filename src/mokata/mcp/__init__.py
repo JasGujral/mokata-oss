@@ -15,11 +15,16 @@ Two safety rules are non-negotiable:
     vault_push, spec_check, init, the Stage 54e config_set + export_stack, the Stage 70 gated
     stacks_install, and the Stage 55a/55b
     human-gated session_push/session_pull/session_name — gated on EVERY transport) are ALWAYS
-    human-gated. With no `approve`, they are PROPOSE-ONLY: they return the staged change
-    and write nothing. Only an explicit `approve=true` — a human decision — performs the
-    write, and even then it goes through the universal WriteGate (secrets are a hard block
+    human-gated, with an approval THE MODEL CANNOT MINT (SI.3). They are PROPOSE-ONLY: a call
+    returns the staged change plus a `proposal_id`, and writes nothing. The write commits only
+    when a HUMAN mints an approval out-of-band (`mokata approve <id>` — a separate process, a
+    TTY re-confirm) and the model re-calls referencing that `proposal_id`; the approval is
+    content-hashed, single-use, session-scoped and TTL-bounded, so what was approved is what
+    commits. The commit still goes through the universal WriteGate (secrets are a hard block
     that approval cannot override) and is recorded in the audit ledger. An MCP call NEVER
-    writes silently. (`confirm=true` is accepted as a deprecated alias for `approve=true`.)
+    writes silently — and, since SI.3, never writes on its own say-so either: `approve=true` /
+    `confirm=true` are still ACCEPTED (schema stability) but DEMOTED — they commit nothing,
+    because a consent flag the model types itself was never a human gate. See `approval.py`.
     They live in `tools_write`.
 
 Layout:

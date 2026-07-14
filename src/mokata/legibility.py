@@ -45,6 +45,12 @@ def _color_enabled(*, ascii_only: bool = False, stream: Any = None) -> bool:
     try:
         return bool(st.isatty())
     except Exception:
+        # (iv) SUPPRESS-OK: `stream` is ANY object a caller/embedder handed us (a StringIO, a
+        # pytest capture, a closed file, a custom writer with no `isatty`). Its failure class is
+        # therefore not ours to name — this is the one place a broad catch is the CONTRACT.
+        # Fail-safe by construction: every failure returns False = NO colour, so the worst outcome
+        # is plain text. There is no state in which this hides a degrade — ANSI escapes are the
+        # thing being withheld, and withholding them is always safe.
         return False
 
 

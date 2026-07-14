@@ -7,6 +7,41 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
+# --- SI.3 (0.0.13): driving a human-gated MCP write from a test --------------------------
+# `approve=True` is no longer consent — it is a parameter the MODEL types, and SI.3 demoted it to
+# nothing (see `mokata/approval.py`). A durable MCP write now needs an approval a HUMAN minted
+# out-of-band with `mokata approve <id>`, in a process the model is not driving.
+#
+# A test is not a model, so a test IS allowed to play the human — but it must play the human
+# HONESTLY: propose, mint the approval through the real `approval.approve` path (the same code the
+# CLI runs), then redeem it by id. That is what this helper does, and it is the ONLY way a test
+# should commit through an MCP write tool. A test that just passes `approve=True` and expects a
+# commit is asserting the bug SI.3 fixed.
+
+def mcp_commit(tool, **kwargs):
+    """Drive an MCP write tool through the FULL human round-trip and return the committed result.
+
+    propose -> the human approves out-of-band -> the model redeems the approval by id.
+
+    Any non-proposal outcome (error / noop / conflict / unchanged / unavailable / a secret hard
+    block on the propose scan) is returned as-is: there is nothing for a human to approve, and the
+    caller's assertions about that outcome still hold."""
+    from mokata import approval
+    from mokata.govern.ledger import AuditLedger
+
+    proposed = tool(**kwargs)
+    if not isinstance(proposed, dict):
+        return proposed
+    pid = proposed.get("proposal_id")
+    if not pid:
+        return proposed                     # nothing was staged — no approval to mint
+
+    root = kwargs.get("path", ".")
+    ledger = AuditLedger.from_mokata_dir(os.path.join(root, ".mokata"))
+    approval.approve(root, pid, actor="test-human", ledger=ledger)   # <-- the out-of-band human act
+    return tool(**dict(kwargs, proposal_id=pid))
+
+
 # --- B4 (0.0.12): the sandbox-disk-artifact guard --------------------------------------
 # A handful of tests build a REAL file-backed SQLite DB (the memory floor). On a native
 # filesystem — CI runners and any normal dev machine — that works and those tests RUN + PASS.

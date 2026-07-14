@@ -26,6 +26,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from typing import List, Optional
+from .errors import MokataError
 
 # Dir name shared by the internal working area (under `.mokata/temp_local/`) and the exported,
 # committable copy (project root).
@@ -35,7 +36,7 @@ PLANS_DIRNAME = "plans"
 _MAX_SLUG = 60
 
 
-class PlanError(Exception):
+class PlanError(MokataError):
     """A plan-file operation could not be completed (e.g. exporting a plan that isn't there)."""
 
 

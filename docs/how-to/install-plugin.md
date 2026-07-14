@@ -5,7 +5,7 @@
 > **planned, not yet available** — mokata isn't registered on any Claude Code marketplace.
 > The supported way to run mokata inside Claude Code today is the pip-first path:
 > `pip install mokata` → `mokata setup claude`
-> (see [Getting started](https://jasgujral.github.io/mokata-oss/getting-started/)).
+> (see [Getting started](https://mokata.ai/getting-started/)).
 > _(This notice auto-flips once the listing is approved — single source:
 > `scripts/directory_listing.py`.)_
 <!-- mokata:directory-listing:end -->
@@ -28,17 +28,29 @@ The `@mostack` handle is the local marketplace name. (A public marketplace submi
 separate, later step for discoverability — it is **not** live yet.)
 
 Either the supported setup path or the experimental route makes the slash commands available — `/mokata:brainstorm`, `/mokata:spec`, `/mokata:test`, `/mokata:develop`,
-`/mokata:review`, `/mokata:debug`, `/mokata:optimize`, `/mokata:bug` — and wires both hooks (declared in
+`/mokata:review`, `/mokata:debug`, `/mokata:optimize`, `/mokata:bug` — and wires all three hooks (declared in
 `hooks/hooks.json`):
 
 - **SessionStart** → `hooks/session_start.py` (async/observability) — injects the bootstrap
   briefing.
-- **PreToolUse** → `hooks/secret_guard.py` (sync **security**, **exit code 2**) — blocks a
-  write/command carrying a secret.
+- **PreToolUse** → `hooks/secret_guard.py` (sync **security**, **exit code 2**, matcher
+  `Write|Edit|MultiEdit|Bash`) — blocks a write or shell command carrying a secret. **Never
+  overridable:** no approval, and no flag, lifts it.
+- **PreToolUse** → `hooks/gate_guard.py` (sync **methodology / run-state**, **exit code 2**,
+  matcher `Write|Edit|MultiEdit|NotebookEdit`) — blocks a write that breaks the run's discipline:
+  `spec-persisted`, `no-code-without-failing-test`, `spec-scope`. **Overridable** — but only
+  explicitly, by a human: `mokata gate override <gate> --reason "<why>"`, re-confirmed
+  interactively, scoped to that session, and written to the audit ledger. There is deliberately
+  **no env-var kill switch, no MCP tool, and no slash command** for it.
+
+Both are *sync* blocks, and they differ in kind: security is absolute, methodology is
+accountable. The gate-guard fires **only inside an active mokata run**, and never on a test
+file — you must be able to write the failing test.
 
 Confirm the exact install handle in `.claude-plugin/marketplace.json`. To verify the
-install: the `/` commands appear, the SessionStart hook injects the briefing, and planting
-a secret in a tool input is blocked by `secret_guard` (exit 2).
+install: the `/` commands appear, the SessionStart hook injects the briefing, planting a secret
+in a tool input is blocked by `secret_guard` (exit 2), and — mid-run, before a failing test —
+an implementation write is blocked by `gate_guard` (exit 2).
 
 Want just the terminal CLI? `pip install mokata` puts the `mokata` command on your PATH:
 

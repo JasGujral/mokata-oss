@@ -60,8 +60,10 @@ eval "$ENGINE reconfigure --remove obsidian --yes --path ."
 eval "$ENGINE reconfigure --set tools.sqlite.config.path=mem/custom.db --yes --path ."
 ```
 
-(The `reconfigure` MCP tool does the same from inside Claude Code: it returns the diff with no
-`approve`, and applies with `approve=true`.)
+(The `reconfigure` MCP tool does the same from inside Claude Code, but it is PROPOSE-ONLY: it
+returns the diff plus a `proposal_id` and writes nothing. `approve=true` does **not** apply it —
+consent is not something you can type. Ask the user to run `mokata approve <proposal-id>` in their
+terminal, then re-call `reconfigure` with that `proposal_id` to apply it once.)
 
 ## 6. Report
 

@@ -27,13 +27,16 @@ import copy
 import json
 import os
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import re
 
 from . import MANIFEST_FILENAME, MOKATA_DIR, team_docs
+from .atomicfile import atomic_write_text
 from .govern.gate import WriteGate, WriteRequest
 from .govern.secrets import Finding, scan
+from .govern.trust import (CLI_SURFACE, policy_approved, policy_surface,
+                           policy_tool, policy_trust)
 from .manifest import Manifest
 from .profiles import TOOL_CATALOG
 
@@ -41,8 +44,9 @@ from .profiles import TOOL_CATALOG
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # The conventional shared-Postgres env var (matches session_transport.PG_DSN_ENVS so memory AND
-# sessions resolve the SAME managed DB out of the box). A team may pick another NAME.
-DEFAULT_DSN_ENV = "MOKATA_PG_DSN"
+# sessions resolve the SAME managed DB out of the box). A team may pick another NAME. Sourced
+# from the ONE resolver (CM.S1) — the literal lives only in `dsn.py`.
+from .dsn import DEFAULT_DSN_ENV  # noqa: E402  (re-exported for callers of the team module)
 
 # Where the team pointer lives in the manifest settings (the env-var NAME + connected flag).
 _TEAM_SETTINGS_KEY = "team"
@@ -73,7 +77,7 @@ def _load_data(root: str) -> dict:
         return json.load(fh)
 
 
-def _gated_write(root: str, new_data: dict, *, assume_yes: bool,
+def _gated_write(root: str, new_data: dict, *, assume_yes: bool, policy: Any = None,
                  confirm: Optional[Callable[[str], bool]], out: Callable[[str], None],
                  ledger: Any, prompt: str):
     """Write `new_data` as the manifest through the universal WriteGate (secret-scan hard-block +
@@ -85,9 +89,12 @@ def _gated_write(root: str, new_data: dict, *, assume_yes: bool,
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(text)
 
-    gate = WriteGate(ledger=ledger)
-    return gate.submit(WriteRequest(kind="config", target=path, content=text),
-                       commit=_commit, confirm=confirm, assume_yes=assume_yes, prompt=prompt)
+    gate = WriteGate(ledger=ledger, trust=policy_trust(policy))
+    return gate.submit(WriteRequest(kind="config", target=path, content=text,
+                                    tool=policy_tool(policy, "team"),
+                                    surface=policy_surface(policy, CLI_SURFACE)),
+                       commit=_commit, confirm=confirm, assume_yes=assume_yes, prompt=prompt,
+                       human_approved=policy_approved(policy))
 
 
 # ============================================================================ connect (managed PG)
@@ -208,10 +215,14 @@ _BACKEND_GUIDANCE = {
               "mode (the zero-config default)."),
 }
 
-# The two-role model (doc 48 C3) — GUIDANCE only here; the REVOKE/least-privilege work is later.
-_ROLE_NOTE = ("two-role model (recommended, not enforced yet): run `team init` as a MIGRATION role "
-              "that owns DDL, and point everyday runtime at a DML-only role (REVOKE UPDATE, DELETE "
-              "ON mokata_audit_log for append-only). The deep role setup lands in a later stage.")
+# The two-role model (doc 48 C3). D1 made the runtime half REAL: no runtime path can reach DDL
+# (AST-guarded), so a DML-only runtime role is not aspirational — it is what mokata now runs on.
+# The grants themselves are the operator's to make: mokata issues none.
+_ROLE_NOTE = ("two-role model (mokata creates no roles and issues no grants — you make them, on "
+              "your own Postgres): run `team init` as a MIGRATION role that owns DDL, then point "
+              "everyday runtime at a DML-only role. The runtime role needs NO DDL rights — "
+              "`team init` is the sole DDL owner and no runtime path issues DDL — and REVOKE "
+              "UPDATE, DELETE ON mokata_audit_log keeps the shared ledger append-only.")
 
 
 @dataclass
@@ -263,14 +274,43 @@ def team_init(root: str, surface: Any, *, backend: str = "managed",
     pid = _project_id(surface)
 
     # 3) ONE idempotent provision pass — the SOLE DDL path (C4 / E5). NEVER runs at runtime.
-    try:
-        prov = teamdb.provision(dsn, project_id=pid)
-    except teamdb.ProvisionError as exc:
-        msg = f"team init — provisioning failed: {exc}. (the fail-closed fixes above apply.)"
+    #
+    #    D1/D2 — the pass is PLANNED before it runs. A schema change is the most durable write
+    #    mokata makes (P2), so it goes through the human gate like any other; but a re-init on an
+    #    already-current schema is a genuine no-op, and asking a human to approve nothing is how
+    #    gates get trained away. So: probe → plan → gate ONLY when there is a real change. A
+    #    schema AHEAD of this build is refused outright, never rewritten by an older client.
+    tables = [teamdb.SCHEMA_VERSION_TABLE, teamdb.MEMORY_TABLE, teamdb.SESSION_TABLE,
+              teamdb.AUDIT_TABLE, teamdb.EVENTS_TABLE]
+    plan = teamdb.upgrade_plan(teamdb.verify_schema(dsn, force=True))
+    if plan.blocked:
+        msg = (f"team init — refused (fail-closed): {plan.blocked}. "
+               f"fix: {teamdb.schema_fix(teamdb.REASON_CLIENT_TOO_OLD)}.")
         emit(msg)
         return InitResult(False, backend=backend, dsn_env=dsn_env, project_id=pid, message=msg)
-    emit(f"provisioned the shared schema (idempotent): {', '.join(prov.tables)} + "
-         f"schema-version v{prov.version}.")
+
+    prov = None
+    if not plan.needed:
+        emit(f"the shared schema is already current (v{teamdb.TEAM_SCHEMA_VERSION}, serving "
+             f"clients from v{teamdb.TEAM_SCHEMA_MIN_SUPPORTED}) — no change.")
+    else:
+        from .govern.gate import _default_confirm       # the SAME prompt the WriteGate uses
+        prompt = (f"mokata · approve {plan.label} on the shared database (${dsn_env})? "
+                  f"This is a DDL write to storage your whole team shares.")
+        if not (assume_yes or (confirm or _default_confirm)(prompt)):
+            msg = f"{plan.label} declined — team init did not finish (nothing was written)."
+            emit(f"team init — {msg}")
+            return InitResult(False, aborted=True, backend=backend, dsn_env=dsn_env,
+                              project_id=pid, message=msg)
+        try:
+            prov = teamdb.provision(dsn, project_id=pid)
+        except teamdb.ProvisionError as exc:
+            msg = f"team init — provisioning failed: {exc}. (the fail-closed fixes above apply.)"
+            emit(msg)
+            return InitResult(False, backend=backend, dsn_env=dsn_env, project_id=pid, message=msg)
+        emit(f"provisioned the shared schema (idempotent): {', '.join(prov.tables)} + "
+             f"schema-version v{prov.version} (serving clients from "
+             f"v{teamdb.TEAM_SCHEMA_MIN_SUPPORTED}).")
 
     # 4) pin project.id into the shared manifest — human-gated + secret-scanned (the DSN value is
     #    never written; only the derived id, a machine-path-free hash). No-op when already pinned.
@@ -288,7 +328,7 @@ def team_init(root: str, surface: Any, *, backend: str = "managed",
             emit(f"team init — {msg}")
             return InitResult(False, connected=False, aborted=outcome.aborted, backend=backend,
                               dsn_env=dsn_env, project_id=pid,
-                              provisioned=prov.tables, message=msg)
+                              provisioned=tables, message=msg)
     else:
         emit(f"project id already pinned (settings.project.id={pid}) — no manifest change.")
 
@@ -300,14 +340,14 @@ def team_init(root: str, surface: Any, *, backend: str = "managed",
              f"compatible. Next: `mokata mode set team` to activate team mode.")
         emit(_ROLE_NOTE)
         return InitResult(True, connected=True, backend=backend, dsn_env=dsn_env,
-                          project_id=pid, provisioned=prov.tables,
+                          project_id=pid, provisioned=tables,
                           message="connected")
     # provisioned but the probe still isn't green → surface the S2 fail-closed verdict.
     emit(f"team init provisioned the schema, but the CONNECTED test did not pass: {res.detail}")
     from .run_mode import team_preflight
     emit(team_preflight(surface, environ=env).render())
     return InitResult(False, connected=False, backend=backend, dsn_env=dsn_env, project_id=pid,
-                      provisioned=prov.tables, message=res.detail or "not connected")
+                      provisioned=tables, message=res.detail or "not connected")
 
 
 def team_disconnect(root: str, surface: Any, *, assume_yes: bool = False,
@@ -611,6 +651,7 @@ def _join_activate(root: str, surface: Any, dsn_env: str, environ: Optional[dict
 
 
 def _join_vault(root: str, vault_ref: Optional[str], *, assume_yes, confirm, out,
+                policy: Any = None,
                 ledger: Any = None) -> JoinStep:
     emit = out or (lambda *_a: None)
     if not vault_ref:
@@ -668,24 +709,31 @@ def _join_vault(root: str, vault_ref: Optional[str], *, assume_yes, confirm, out
     # runs with assume_yes=True — its secret-scan still hard-blocks (belt-and-suspenders), and it
     # records one `write_gate` ledger entry per artifact.
     os.makedirs(V.vault_dir(root), exist_ok=True)
-    gate = WriteGate(ledger=ledger)
-    written = 0
+    gate = WriteGate(ledger=ledger, trust=policy_trust(policy))
+    landed: Dict[str, Any] = {}
     for name, content, rec in fresh:
         path = os.path.join(V.vault_dir(root), f"{name}.md")
 
         def _commit(_p=path, _c=content) -> None:
-            with open(_p, "w", encoding="utf-8") as fh:
-                fh.write(_c)
+            atomic_write_text(_p, _c)               # MS.S6 — atomic (no torn read of an artifact)
 
         outcome = gate.submit(
-            WriteRequest(kind="config", target=path, content=content, actor="team-join"),
-            commit=_commit, assume_yes=True)
+            WriteRequest(kind="config", target=path, content=content, actor="team-join",
+                         tool=policy_tool(policy, "team_join"),
+                         surface=policy_surface(policy, CLI_SURFACE)),
+            # The human approved the vault-pull BATCH above; that decision covers each artifact in
+            # it. A read-only dial still blocks the lot, and the secret-scan still hard-blocks.
+            commit=_commit, human_approved=True)
         if outcome.committed:
-            local_entries[name] = rec
-            written += 1
+            landed[name] = rec
+    written = len(landed)
     if not written:
         return JoinStep("vault", "declined", "vault pull blocked at the gate — nothing written.")
-    V._save_index(root, local)
+    # MS.S6 — MERGE the pulled entries into the index under its lock, rather than writing back the
+    # whole `local` copy read before the gate ran. That blind write-back was the second RMW on the
+    # vault index: anything a sibling window pushed while this join was being approved was silently
+    # dropped from the index (its .md file orphaned on disk).
+    V.update_index(root, lambda cur: {**cur, "entries": {**(cur.get("entries") or {}), **landed}})
     emit(f"team join · pulled {written} vault artifact(s).")
     return JoinStep("vault", "wired",
                     f"pulled {written} shared vault artifact(s) (the specs/designs).")
@@ -751,7 +799,7 @@ def team_join(root: str, surface: Any, source: Optional[str], *,
     if not _ENV_NAME_RE.match(dsn_env or ""):
         emit(team_docs.with_docs(
             "team join — refused (fail-closed): --dsn-env must be the env-var NAME holding your "
-            "DSN (e.g. MOKATA_PG_DSN), never the DSN value itself — the DSN secret stays in your "
+            f"DSN (e.g. {DEFAULT_DSN_ENV}), never the DSN value itself — the DSN secret stays in your "
             "environment and is never stored."))
         result.aborted = True
         return result

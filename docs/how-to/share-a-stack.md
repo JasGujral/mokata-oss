@@ -5,7 +5,7 @@ Publish your stack so a teammate adopts the same governed configuration in one c
 ## Export
 
 ```bash
-mokata export                      # writes <path>/mokata-stack.json
+mokata export                      # writes <path>/.mokata/mokata-stack.json
 mokata export team-stack.json      # custom destination
 ```
 

@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Optional, Protocol
+from ..errors import DegradedCapability
 
 
-class SubagentUnavailable(Exception):
+class SubagentUnavailable(DegradedCapability):
     """No subagent execution is available — degrade to sequential flow."""
 
 
@@ -34,6 +35,9 @@ class TaskResult:
     isolated: bool = False
     seen_context: str = ""             # what the runner actually received (isolation proof)
     review: Optional[Any] = None       # a ReviewResult, when E3 ran
+    simulated: bool = False            # B3: no runner ran this — `ok` is a placeholder, not a
+                                       # verdict. Carried onto the ledger row so no counter,
+                                       # lane, or badge can ever read fiction as real work.
 
 
 class SubagentRunner(Protocol):

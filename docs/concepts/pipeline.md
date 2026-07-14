@@ -77,14 +77,51 @@ Three phases carry a gate (the rest are advisory):
 The completeness gate **never silently passes**: an empty spec and any unmapped AC both
 block. See [AC traceability](knowledge.md) and the [governance model](governance.md).
 
-**Spec before code, enforced.** Implementation entry points (`/mokata:develop`,
-`/mokata:test`, and `mokata run develop`/`test`) carry a **`spec-persisted`** precondition
-that fires *ahead of* the test gate: it blocks unless a saved spec with ≥1 acceptance
-criterion exists (`emitted_spec.json`, written by the human-gated `emit` only after the
-completeness gate passes). Jump straight to `develop` with no saved spec and mokata stops
-with a clear next step — *"no saved spec — draft and emit it first (`/mokata:spec`)"* — and
-logs the decision. So "spec written **and** saved before implementation" is enforced, not
-merely implied.
+### The run-state gates (enforced on native writes)
+
+The three above are **phase** gates: they govern the engine as it runs. A separate, smaller set —
+the **run-state gates** — governs the *code you write between the phases*, enforced on the
+harness's native `Write`/`Edit` by the **`gate-guard`** hook:
+
+| Gate | Blocks a native write to an implementation file when… |
+|---|---|
+| `spec-persisted` | an approach is approved for this run but **no spec is emitted** |
+| `no-code-without-failing-test` | the spec is emitted but **no failing test is on record** |
+| `spec-scope` | the write falls **outside the spec's authorized surface**, spells a **deferred** marker, or a **spec amend is in progress** |
+
+They fire only inside an active run; test files are always writable; ambiguity fails open; and
+each is overridable with `mokata gate override <gate> --reason "<why>"` (session-scoped,
+re-confirmed, ledgered). The full model — including what the hook does *not* police — is in
+[governance](governance.md#run-state-gates-on-native-writes-the-gate-guard-hook).
+
+**Spec before code, enforced.** The `spec-persisted` gate is enforced **twice over**: as a
+precondition on the implementation entry points (`/mokata:develop`, `/mokata:test`, and
+`mokata run develop`/`test`), firing *ahead of* the test gate; and by the hook, on any native
+write. Both block unless a saved spec with ≥1 acceptance criterion exists (`emitted_spec.json`,
+written by the human-gated `emit` only after the completeness gate passes). Jump straight to
+`develop` with no saved spec and mokata stops with a clear next step — *"no saved spec — draft
+and emit it first (`/mokata:spec`)"* — and logs the decision. So "spec written **and** saved
+before implementation" is enforced, not merely implied.
+
+**Scope is declared, then enforced.** When the spec is emitted it carries a machine-checkable
+**scope**: the paths the work is **authorized** to touch, and the items explicitly **deferred** —
+the things you agreed *not* to build, with the paths they'd live in and the literal **markers**
+they'd spell in code. The markers are what catch the realistic failure: a deferred feature added
+to a file that is otherwise perfectly authorized. mokata does not *infer* scope (no hook can
+decide "does this diff implement a deferred feature") — it enforces exactly what was declared, and
+**fails open** wherever nothing was declared: a spec with no scope section, an unreadable one, or
+one that draws no map blocks nothing.
+
+**An amend forces a phase regression.** Scope isn't a cage — it's a decision you can revisit, but
+only *deliberately*. `mokata spec amend` reopens the spec, and while an amend is in flight the run
+has **regressed to the `spec` phase**: `spec-scope` blocks every development write until the new
+scope is approved. That's the point — while the spec is being rewritten there is no approved spec
+to be writing code against. A grown spec also **owes RED**: any new acceptance criterion must have
+a *failing* test before implementation of it is licensed, so an amendment can't be used to smuggle
+in unproven work. Un-wedge a run you don't want to finish amending with `mokata spec amend
+--abort` (*"the run returns to its existing spec, and development writes are unblocked. Nothing
+was changed."*), or take responsibility explicitly with `mokata gate override spec-scope --reason
+"<why>"`.
 
 **Don't break a saved spec by mistake.** As part of grounding, `spec`/`refine`/`develop` run a
 **spec-awareness** check (Stage 37): a change is cross-checked against your **saved specs** and

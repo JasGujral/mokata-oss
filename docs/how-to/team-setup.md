@@ -44,7 +44,9 @@ mokata team init                      # guided: provision → pin identity → l
 2. **fails closed with a named fix** if `$MOKATA_PG_DSN` is unset — **writing nothing**;
 3. runs **one idempotent provision pass** — the shared tables (`mokata_memory`,
    `mokata_session_bundle`, `mokata_audit_log`, `mokata_events`) plus the `mokata_schema_version`
-   row — on **vanilla Postgres ≥14, no extensions**. Re-running is safe (nothing duplicated);
+   row (which records both the version the schema **is** and the oldest client it still **serves**)
+   — on **vanilla Postgres ≥14, no extensions**. Re-running is safe: an already-current schema is a
+   reported no-op, and only a *real* change asks for your approval;
 4. **pins the team project identity** (`settings.project.id`, human-gated) so every teammate's
    clients agree on the same shared namespace instead of splitting by local path-hash;
 5. runs the **live CONNECTED test** (the same probe activation uses) and reports green.
@@ -116,10 +118,13 @@ failure:
 |---|---|---|
 | **unreachable / timeout** | the host didn't answer within the ≤500ms probe — or the DSN points at a **transaction-mode pooler** (Supabase/Neon pooled port), where `LISTEN/NOTIFY` dies | check the host/DSN; use a **direct/session** connection string, not the pooler |
 | **schema not provisioned** | you reached the DB, but no shared schema is there | **ask whoever ran `mokata team init`** to provision it — joiners never run DDL |
-| **incompatible version** | the shared schema is a different `mokata_schema_version` than your build speaks | upgrade mokata, or have the owner re-run `team init` to migrate |
+| **schema-too-old** | the shared schema is *below* the oldest version this build can serve | ask the owner to **re-run `mokata team init`** to upgrade the shared schema |
+| **client-too-old** | the shared schema has moved *ahead* and no longer serves this build | **upgrade mokata** — `pip install -U mokata` |
 | **driver absent** | the optional Postgres driver isn't installed | `pip install 'mokata[postgres]'` |
 
-Every one of these messages links back to this page.
+Every one of these messages links back to this page. Note that `schema-too-old` and `client-too-old`
+are the **only two** version refusals: an ordinary version difference does **not** refuse — it warns
+and keeps working (see [the schema range](#the-shared-schema-is-a-range-not-an-exact-match) below).
 
 ### Health is always visible (never silent)
 
@@ -156,13 +161,41 @@ When the connection is healthy again, **`mokata sync`** flushes the journal and 
 Run it non-interactively with `mokata sync --yes` (flush only; conflicts are deferred, never
 silently overwritten).
 
-### Upgrading an existing team to the CAS schema (v1 → v2)
+### The shared schema is a RANGE, not an exact match
 
-The compare-and-set columns are part of the shared schema (**`mokata_schema_version` v2**). All DDL
-is owned by `team init` — so an existing team upgrades by **re-running `mokata team init`** (the
-owner, or anyone with the migration role). The migration is idempotent (`ADD COLUMN IF NOT EXISTS`);
-existing rows default to revision 1. Until the shared schema is migrated, the preflight reports an
-**incompatible version** and refuses activation fail-closed — nobody half-connects to a v1 schema.
+This build **speaks `mokata_schema_version` v3** and **serves shared schemas back to v2**.
+Compatibility is a **range overlap**, not an equality check — because *a version bump must not
+partition a team mid-upgrade*. Whoever upgrades mokata first must not be locked out of the team's
+database, and the moment the database is migrated the teammates still on the old build must not be
+locked out either.
+
+So a version **difference in either direction only WARNS** and keeps working:
+
+| Situation | What you see | What happens |
+|---|---|---|
+| schema **behind** your build (e.g. DB v2, you speak v3) | *the shared schema is v2, behind this build (v3) — run `mokata team init` to upgrade it (working normally meanwhile)* | you keep working |
+| schema **ahead** of your build (e.g. DB v4, you speak v3) | *the shared schema is v4, ahead of this build (v3) — it still serves v3 clients, but upgrade mokata when you can* | you keep working |
+
+Only **two** states are genuine hard refusals — the two real incompatibilities:
+
+- **`schema-too-old`** — the schema is below this build's floor. Fix: **`mokata team init`** to
+  upgrade the shared schema.
+- **`client-too-old`** — the schema no longer serves this build. Fix: **`pip install -U mokata`**.
+
+Both refuse **fail-closed** (no half-connect), and both name the fix.
+
+### Upgrading the shared schema
+
+All DDL is owned by `team init`, so an existing team upgrades by **re-running `mokata team init`**
+(the owner, or anyone holding the migration role). The migration is idempotent
+(`ADD COLUMN IF NOT EXISTS`; a re-init on an already-current schema is reported as a no-op and
+doesn't even ask for approval). What the versions added: **v2** the compare-and-set columns
+(`revision`, `updated_at`) behind the conflict handling above — existing rows default to revision 1;
+**v3** the memory scope + precedence columns.
+
+`team init` will **refuse to rewrite a schema that is ahead of it** — *the shared schema is v4,
+ahead of this build (v3) — it must not be rewritten by an older client* — so an older teammate can
+never silently downgrade the team's database.
 
 ---
 
@@ -178,10 +211,10 @@ surface. The guarantees:
   name is expected is refused.
 - **No extensions on the golden path.** The shared schema is plain Postgres ≥14 — no `CREATE
   EXTENSION`, no pgvector required. Fewer moving parts, less to trust.
-- **Two-role model (recommended).** Run `team init` as a **migration role** that owns DDL, and point
-  everyday runtime at a **DML-only role** — e.g. `REVOKE UPDATE, DELETE ON mokata_audit_log` so the
-  audit log is **append-only by grant**, not merely by convention. Runtime connects never run DDL, so
-  a least-privilege runtime role is enough for day-to-day work.
+- **The runtime role needs no DDL rights at all.** Everyday runtime connections run **zero DDL** —
+  schema checking is a cached, SELECT-only probe, and *all* DDL belongs to `mokata team init` alone.
+  So a **DML-only runtime role is sufficient**, not a downgrade: see
+  [least-privilege runtime role](#least-privilege-the-runtime-role-needs-no-ddl) below.
 - **Attribution, not authentication.** mokata does **not** add its own auth or roles. Author
   attribution on writes is **advisory** (env-derived); your Git host and database grants remain the
   access-control system of record. What mokata adds is **human-gated, secret-scanned, audited**
@@ -192,6 +225,46 @@ surface. The guarantees:
   — it is **ledgered** and **revocable** any time with `mokata audit --consent revoke`. It replaces the
   per-batch prompt **without weakening the gate**: the per-publish **secret-scan still hard-blocks**,
   so it is never a governance bypass.
+
+### Least-privilege: the runtime role needs NO DDL
+
+Run **`mokata team init` as a migration role** that owns the tables, and point **everyday runtime at
+a DML-only role**. This is not a hardening nicety you trade convenience for — it is simply what
+mokata needs. Runtime connects issue **no DDL whatsoever**: memory and session bundles are
+`INSERT … ON CONFLICT DO UPDATE` / `SELECT` / `DELETE`, the audit log is `INSERT`-only, and the
+schema check is a **cached `SELECT`** against `mokata_schema_version`.
+
+A correct runtime role therefore needs **no `CREATE`, no table ownership, and no `CREATE
+EXTENSION`** — only:
+
+- `USAGE` on the schema;
+- **DML** on `mokata_memory` and `mokata_session_bundle`;
+- **`SELECT, INSERT` only** on `mokata_audit_log` — so revoking `UPDATE`/`DELETE` makes the audit log
+  **append-only by grant**, not merely by convention;
+- `SELECT` on `mokata_schema_version`;
+- `USAGE` on the backing sequences.
+
+!!! warning "mokata does not manage your roles"
+    mokata **creates no roles and issues no grants**, and it prints no GRANT script — `team init`
+    offers guidance in prose, and that is all. Roles and grants are **yours to run**, with your
+    database's own tooling. As a starting point, something like this (**your SQL, not mokata's**):
+
+    ```sql
+    GRANT USAGE ON SCHEMA public TO mokata_runtime;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON mokata_memory, mokata_session_bundle TO mokata_runtime;
+    GRANT SELECT, INSERT                 ON mokata_audit_log        TO mokata_runtime;
+    GRANT SELECT                         ON mokata_schema_version   TO mokata_runtime;
+    GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO mokata_runtime;
+    ```
+
+**This used to be broken, and the fix is why the guidance changed.** Postgres checks the schema ACL
+*before* the `IF NOT EXISTS` short-circuit, and `ADD COLUMN IF NOT EXISTS` demands table
+**ownership** — so runtime backends that re-ran their own `CREATE TABLE …` on every connect got a
+DML-only role **denied `CREATE`** (SQLSTATE 42501) *even against a perfectly provisioned, current
+database* — and that denial quietly degraded the team to the local SQLite floor. Runtime DDL is now
+gone. A DML-only runtime role **just works**; and if the schema really is absent or out of range,
+mokata degrades **loudly** — naming the failure class and the exact fix command — instead of
+silently.
 
 ---
 

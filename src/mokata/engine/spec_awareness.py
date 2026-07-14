@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import os
 import re
+import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from ..degrade import FAILURE_UNREACHABLE, note_degraded
 from ..govern.deviation import (
     ACCEPTANCE_CRITERIA,
     DeviationGate,
@@ -27,7 +29,7 @@ from ..govern.deviation import (
     DeviationRequest,
 )
 from .spec import Spec
-from .spec_gate import load_emitted_spec
+from .spec_gate import read_emitted_spec
 
 # Forward-compat: an optional archive of prior specs (a list of spec dicts) the regression guard
 # also checks. Absent today -> the corpus is just the emitted spec; reusing Stage 32 state.
@@ -67,9 +69,13 @@ class SpecConflict:
 class SpecAwarenessReport:
     conflicts: List[SpecConflict] = field(default_factory=list)
     checked: bool = True        # False when there was nothing to check (no corpus) -> no-op
-    degraded: bool = False      # True when the graph was absent (lexical/file overlap only)
+    degraded: bool = False      # True when the check did not run at full strength (see below)
     note: str = ""
     touch_set: List[str] = field(default_factory=list)
+    # D5 — the two INDEPENDENT ways this check can be weaker than it looks. `degraded` is the
+    # umbrella (either one), kept as the field every existing caller/ledger row already reads.
+    graph_degraded: bool = False   # the touch-set fell to the lexical floor (no graph / it faulted)
+    skipped: int = 0               # saved specs/decisions that could NOT be loaded — NOT checked
 
     @property
     def has_conflicts(self) -> bool:
@@ -78,47 +84,84 @@ class SpecAwarenessReport:
     def render(self) -> str:
         if not self.checked:
             return f"spec-awareness: {self.note}"
-        head = "mode: lexical/file overlap (no graph)" if self.degraded \
+        head = "mode: lexical/file overlap (no graph)" if self.graph_degraded \
             else "mode: graph-expanded touch-set"
         if not self.conflicts:
+            # D5 — an all-clear that SKIPPED its inputs is not an all-clear. "No saved spec is
+            # affected" is a claim about the corpus; a corpus we could not read supports no claim.
+            if self.skipped:
+                return (f"spec-awareness: INCOMPLETE — {self.skipped} saved spec(s)/decision(s) "
+                        f"could NOT be read and were NOT checked. This is NOT an all-clear: a spec "
+                        f"you rely on may be affected and unseen. Run `mokata doctor`. ({head})")
             return f"spec-awareness: no saved spec or decision is affected. ({head})"
         lines = [f"spec-awareness: this change affects {len(self.conflicts)} saved "
                  f"spec(s)/decision(s) — confirm (amend/supersede) or re-plan. ({head})"]
         lines += [c.render() for c in self.conflicts]
+        if self.skipped:
+            lines.append(f"  ! {self.skipped} further saved spec(s)/decision(s) could NOT be read "
+                         f"and were NOT checked — there may be more.")
         return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- corpus loading
+class _Loaded(list):
+    """A plain `list` that also remembers how many entries it could NOT load.
+
+    Why a list subclass and not a new return type: `load_spec_corpus` / `load_decisions` feed
+    straight into `check_change` at every call site (ci_check, the knowledge CLI, the MCP tool), and
+    a corpus that dropped half its entries has to be able to SAY so by the time the report is built.
+    A subclass carries that fact through every one of those call sites with no signature change —
+    `== []`, `not specs`, iteration and comprehension all behave exactly as before."""
+
+    skipped: int = 0
+
+
 def load_spec_corpus(store: Any) -> List[Spec]:
     """The saved-spec corpus from state: the emitted spec + any archived specs. Degrade-clean —
-    an absent/unreadable source contributes nothing."""
-    specs: List[Spec] = []
-    emitted = load_emitted_spec(store)
+    an absent/unreadable source contributes nothing — but a DROPPED entry is COUNTED (`.skipped`),
+    because a corpus that silently lost specs still answers "no saved spec is affected", which is
+    the one answer it has no right to give."""
+    specs = _Loaded()
+    skipped = 0
+    emitted, malformed = read_emitted_spec(store)
     if emitted is not None:
         specs.append(emitted)
+    elif malformed:
+        skipped += 1                    # the emitted spec IS there and could not be parsed
     if store is not None:
         try:
             arr = store.read(SPEC_CORPUS_KEY)
-        except Exception:
+        except (OSError, AttributeError):
+            # The corpus artifact could not be READ (IO/permissions, or a store double without
+            # `read`). Nothing is known about it — count it as ONE unchecked source, not zero.
             arr = None
+            skipped += 1
         if isinstance(arr, list):
             for d in arr:
                 try:
                     specs.append(Spec.from_dict(d))
-                except Exception:
+                except (KeyError, TypeError, ValueError, AttributeError):
+                    skipped += 1        # a corrupt archived spec — dropped, but NOT in silence
                     continue
+    specs.skipped = skipped
     return specs
 
 
 def load_decisions(memory_store: Any) -> List[Any]:
-    """Active decision-memory items, or [] when memory is absent/disabled (degrade-clean)."""
+    """Active decision-memory items, or [] when memory is absent/disabled (degrade-clean).
+
+    D5 — a memory store that is WIRED but broken returned zero decisions, and zero decisions from a
+    broken store is indistinguishable, downstream, from "this project has recorded no decisions".
+    The `[]` fallback stays; `.skipped` now marks that the answer is unknown, not empty."""
     if memory_store is None:
-        return []
+        return _Loaded()                # memory genuinely absent/disabled — an honest empty
+    out = _Loaded()
     try:
         from ..memory import DECISION
-        return list(memory_store.all_active(mtype=DECISION))
-    except Exception:
-        return []
+        out.extend(memory_store.all_active(mtype=DECISION))
+    except (OSError, ImportError, sqlite3.Error):
+        out.skipped = 1                 # the decision corpus is UNKNOWN, not empty
+    return out
 
 
 # --------------------------------------------------------------------------- touch-set
@@ -126,15 +169,25 @@ def expand_touch_set(layer: Any, symbols: List[str],
                      depth: int = 1) -> Tuple[Set[str], bool]:
     """Expand the changed symbols through the code graph (callers/callees/blast-radius) so a spec
     about impacted code is caught too. Returns (expanded_symbols, degraded). degraded=True when
-    there's no real graph -> the set is just the literal symbols (lexical floor)."""
+    there's no real graph -> the set is just the literal symbols (lexical floor).
+
+    D5 — degraded=True ALSO when the graph is wired but a query FAULTED. It used to return
+    degraded=False in that case, so the report announced "mode: graph-expanded touch-set" while
+    standing on the lexical floor: the flag said the strongest check had run when the weakest one
+    had. A degraded flag that lies is worse than no flag."""
     expanded: Set[str] = {s for s in symbols if s}
     if layer is None or not getattr(layer, "uses_graph", False):
         return expanded, True
+    faulted = False
     for sym in list(expanded):
         for getter in ("callers", "callees"):
             try:
                 res = getattr(layer, getter)(sym)
-            except Exception:
+            except Exception:           # noqa: BLE001
+                # BROAD ON PURPOSE: a pluggable optional graph backend's error types are not
+                # nameable at module scope (see the fuller note below). No longer silent — the
+                # fault forces the lexical-floor flag and is announced once.
+                faulted = True
                 continue
             if res is not None and not res.degraded:
                 expanded.update(r.symbol for r in res.references if r.symbol)
@@ -142,8 +195,21 @@ def expand_touch_set(layer: Any, symbols: List[str],
             res = layer.blast_radius(sym, depth=depth)
             if res is not None and not res.degraded:
                 expanded.update(r.symbol for r in res.references if r.symbol)
-        except Exception:
-            pass
+        except Exception:               # noqa: BLE001 — see the note below
+            # BROAD ON PURPOSE: the graph backend is a pluggable OPTIONAL dependency (neo4j, a
+            # custom adapter), so the exception types it can raise are not importable at module
+            # scope — narrowing here would let a driver's own error class escape and crash a
+            # read-only guard. It is no longer SILENT, which is the D5 requirement: the fault sets
+            # `faulted`, which forces the lexical-floor flag and speaks once, below.
+            faulted = True
+    if faulted:
+        note_degraded(
+            "code-graph", FAILURE_UNREACHABLE,
+            fallback=("the touch-set fell back to the literal symbols (the lexical floor) — the "
+                      "graph did NOT expand it, so a spec about a CALLER of your change may go "
+                      "unseen"),
+            fix="run `mokata doctor` to check the code-graph backend")
+        return expanded, True           # graph-backed answer withheld: the floor is what ran
     return expanded, False
 
 
@@ -165,13 +231,27 @@ def _file_tokens(path: str) -> List[str]:
 # --------------------------------------------------------------------------- the check
 def check_change(change: ChangeSet, specs: List[Spec], decisions: List[Any],
                  layer: Any = None, depth: int = 1) -> SpecAwarenessReport:
-    """Cross-check a change against saved specs + decisions. Pure: no I/O, no gate, no logging."""
+    """Cross-check a change against saved specs + decisions. Pure: no I/O, no gate, no logging.
+
+    D5 — the loaders (`load_spec_corpus` / `load_decisions`) carry a `.skipped` count for inputs
+    they could NOT read. It is read here, not re-derived, and it changes what the report is ALLOWED
+    to claim: a guard that never saw the corpus cannot report a clean one."""
+    skipped = getattr(specs, "skipped", 0) + getattr(decisions, "skipped", 0)
+
     if not specs and not decisions:
+        if skipped:
+            # NOT "nothing to guard": there was something to guard and we could not read it.
+            return SpecAwarenessReport(
+                checked=False, degraded=True, skipped=skipped,
+                note=(f"{skipped} saved spec(s)/decision(s) could NOT be read — the regression "
+                      f"guard DID NOT RUN. This is NOT an all-clear; a saved spec may be broken by "
+                      f"this change and nothing would have caught it. Run `mokata doctor`."))
         return SpecAwarenessReport(
             checked=False,
             note="no saved specs or decisions yet — nothing to guard (skipped).")
 
-    touch_symbols, degraded = expand_touch_set(layer, change.symbols, depth)
+    touch_symbols, graph_degraded = expand_touch_set(layer, change.symbols, depth)
+    degraded = graph_degraded or bool(skipped)
     file_terms: List[str] = []
     for f in change.files:
         file_terms.extend(_file_tokens(f))
@@ -199,10 +279,14 @@ def check_change(change: ChangeSet, specs: List[Spec], decisions: List[Any],
                 detail=f"recorded decision: {d.value}"))
 
     note = ("graph absent — checked by lexical/file overlap only"
-            if degraded else "checked against the graph-expanded touch-set")
+            if graph_degraded else "checked against the graph-expanded touch-set")
+    if skipped:
+        note += (f"; {skipped} saved spec(s)/decision(s) could NOT be read and were NOT checked "
+                 f"(this result is INCOMPLETE)")
     return SpecAwarenessReport(
         conflicts=conflicts, checked=True, degraded=degraded, note=note,
-        touch_set=sorted(touch_symbols | set(file_terms)))
+        touch_set=sorted(touch_symbols | set(file_terms)),
+        graph_degraded=graph_degraded, skipped=skipped)
 
 
 # --------------------------------------------------------------------------- the guard

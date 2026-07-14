@@ -45,26 +45,57 @@ class RunResult:
         reviewed = [r for r in self.results if r.review is not None]
         return all(r.review.passed for r in reviewed)
 
+    @property
+    def simulated(self) -> bool:
+        """B3 — any task in this run was NOT executed (no runner): its `ok` is a placeholder."""
+        return any(r.simulated for r in self.results)
 
-def _run_sequential(tasks: List[Task], ledger: Any,
-                    tracker: TokenTracker) -> List[TaskResult]:
-    """The default gated flow — mokata processes tasks in-loop, no subagent needed.
-    Context is shared (not isolated); this is the lowest-cost path."""
+
+def _simulated_result(task: Task, ctx: str) -> TaskResult:
+    """B3 — the placeholder for a task NOTHING executed: no runner was available, so mokata has
+    no verdict to report. It is labeled `simulated` all the way onto the ledger row, so `ok` can
+    never be mistaken for a success mokata witnessed."""
+    out = f"simulated:{task.id}"
+    return TaskResult(
+        task_id=task.id, ok=True, simulated=True,
+        summary=f"sequential {task.id} (simulated — no runner executed this task)", output=out,
+        input_tokens=estimate_tokens(ctx + task.description),
+        output_tokens=estimate_tokens(out), isolated=False, seen_context=ctx,
+    )
+
+
+def _run_sequential(tasks: List[Task], ledger: Any, tracker: TokenTracker,
+                    runner=None) -> List[TaskResult]:
+    """The default gated flow — tasks run in-loop, no subagent needed. Context is SHARED (not
+    isolated); this is the lowest-cost path.
+
+    B3: when a runner is available it is the one that runs the task — the floor reports the
+    runner's REAL verdict. With no runner (the bare floor, and every degrade path) nothing
+    executed here, so the result and its ledger row are marked `simulated: true` rather than
+    claiming a success no one performed. A runner that goes unavailable mid-batch degrades
+    clean — the remainder is simulated, never a hard failure."""
     results: List[TaskResult] = []
     shared: List[str] = []
     for t in tasks:
         ctx = ("\n".join(shared) + ("\n" if shared else "")) + t.context
-        out = f"processed:{t.id}"
-        res = TaskResult(
-            task_id=t.id, ok=True, summary=f"sequential {t.id}", output=out,
-            input_tokens=estimate_tokens(ctx + t.description),
-            output_tokens=estimate_tokens(out), isolated=False, seen_context=ctx,
-        )
+        res: Optional[TaskResult] = None
+        if runner is not None:
+            # the sequential unit carries the SHARED context (that is what makes it sequential).
+            try:
+                res = _invoke_runner(runner, Task(id=t.id, description=t.description,
+                                                  context=ctx))
+                res.isolated = False
+                res.simulated = False
+                res.seen_context = res.seen_context or ctx
+            except SubagentUnavailable:
+                runner = None                    # degrade once; the rest of the batch is simulated
+        if res is None:
+            res = _simulated_result(t, ctx)
         tracker.add(f"seq:{t.id}", input_tokens=res.input_tokens,
                     output_tokens=res.output_tokens)
         if ledger is not None:
-            ledger.record("sequential", task=t.id, ok=True)
-        shared.append(out)
+            ledger.record("sequential", task=t.id, ok=res.ok, simulated=res.simulated)
+        shared.append(res.output)
         results.append(res)
     return results
 
@@ -189,6 +220,7 @@ def run_tasks(tasks: List[Task], choice: ExecutionChoice, runner=None,
             tracker.entries.clear()                  # discard partial accounting
             if ledger is not None:
                 ledger.record("exec_degrade", reason=str(exc))
+            # the runner just proved unavailable — the fallback batch is simulated (B3).
             results = _run_sequential(tasks, ledger, tracker)
     else:
         if choice.is_parallel and runner is None:
@@ -196,7 +228,9 @@ def run_tasks(tasks: List[Task], choice: ExecutionChoice, runner=None,
             if ledger is not None:
                 ledger.record("exec_degrade",
                               reason="no subagent runner available")
-        results = _run_sequential(tasks, ledger, tracker)
+        # B3: the floor RUNS the runner when the caller supplied one (`runner=None` — the
+        # common case — simulates, and says so on every row).
+        results = _run_sequential(tasks, ledger, tracker, runner=runner)
 
     return RunResult(
         choice=choice, estimate=estimate, results=results, degraded=degraded,

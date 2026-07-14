@@ -37,7 +37,8 @@ from .consolidation import (
 )
 from .healing import CONTRADICTION, HealingProposal, detect_issues, render_proposal
 from .item import ACTIVE, DECISION, DEFAULT_TOP_K, MEMORY_TYPES, STALE as STATUS_STALE
-from .item import SUPERSEDED, MemoryItem
+from .item import SUPERSEDED, MemoryItem, downgrade_refusal
+from ..errors import MokataError
 
 MEMORY_SETTINGS_KEY = "memory"     # manifest.settings["memory"] = {type: bool}
 MEMORY_STATS_KEY = "memory_stats"  # StateStore key
@@ -55,7 +56,7 @@ _OP_DELETE = "memory_delete"
 _PROJECT_CURRENT = object()
 
 
-class MemoryError(Exception):
+class MemoryError(MokataError):
     pass
 
 
@@ -73,18 +74,58 @@ def enabled_memory_types(manifest: Any) -> Tuple[str, ...]:
 
 
 # -------------------------------------------------------------- backend selection
+def _overlay_for_team(backend: MemoryBackend, routing: Any, root: str) -> MemoryBackend:
+    """CM.S3 (C-3) — in TEAM mode, wrap `backend` in the read-your-writes `JournalOverlay` so reads
+    merge the pending journaled-but-unflushed team writes over the backend. Applies whether the read
+    is served by the live shared backend or the degraded LOCAL floor — a just-approved write is
+    visible either way. LOCAL mode / no routing (from_router / migrate — no surface) returns the
+    backend UNWRAPPED: the zero-network local hot path is byte-identical and consults no journal."""
+    from .. import run_mode as _rm
+    if routing is None or getattr(routing, "mode", _rm.LOCAL) != _rm.TEAM:
+        return backend
+    # The SAME path TeamJournal.for_surface(surface) resolves (root == surface.mokata_dir), so the
+    # overlay reads exactly the journal the team-write path appends to.
+    from ..team_journal import JOURNAL_FILENAME, TeamJournal
+    from .overlay import JournalOverlay
+    journal = TeamJournal(os.path.join(root, TEMP_LOCAL_DIRNAME, JOURNAL_FILENAME))
+    return JournalOverlay(backend, journal)
+
+
 def build_backend(tool: str, root: str,
                   clients: Optional[Dict[str, Any]] = None,
                   config: Optional[Dict[str, Any]] = None,
-                  project: Optional[str] = None) -> MemoryBackend:
+                  project: Optional[str] = None,
+                  routing: Any = None) -> MemoryBackend:
     """Build the backend the router resolved to, honoring the tool's per-tool `config`
     (Stage 24A) and degrading to the SQLite floor when a chosen backend needs external
     wiring that isn't present. `config` is the manifest's `tools.<id>.config` block;
     defaults are unchanged when it's absent. `project` (Stage 71a) SCOPES the shared
     Postgres backend to the current project; None spans all (review). Local SQLite/Obsidian
-    are already per-repo and ignore it."""
-    clients = clients or {}
-    config = config or {}
+    are already per-repo and ignore it.
+
+    CM.S2 (C-2): `routing` is the ONE read-routing decision (`degrade.resolve_read_routing`).
+    For the shared Postgres tool it GATES the choice on the SAME cached E2 health verdict the
+    badge/doctor use — a troubled verdict routes straight to the LOCAL floor (no redundant
+    connect) and the fall-back is marked degraded on `routing`, so a team-mode read served
+    locally is never silent. When `routing` is None (from_router / migrate — no surface) the
+    behaviour is byte-identical to before (the local, non-team path).
+
+    CM.S3 (C-3): in TEAM mode the resolved backend is wrapped ONCE, at this boundary, in the
+    read-your-writes `JournalOverlay` — so a journaled-but-unflushed team write is visible to the
+    very next read. This is applied for WHATEVER team mode resolved to (the live shared backend OR
+    the degraded local floor), because the journal-first write path activates on team MODE, not on
+    a particular tool. LOCAL / no routing returns the raw backend UNWRAPPED (byte-identical
+    zero-network hot path; the journal is never consulted). This RETIRES the B3 read-through
+    cache (D7): stores are per-call and the overlay supplies coherence."""
+    backend = _select_raw_backend(tool, root, clients or {}, config or {}, project, routing)
+    return _overlay_for_team(backend, routing, root)
+
+
+def _select_raw_backend(tool: str, root: str, clients: Dict[str, Any], config: Dict[str, Any],
+                        project: Optional[str], routing: Any) -> MemoryBackend:
+    """Resolve the concrete storage backend (NO overlay — `build_backend` applies that). This is
+    the CM.S2 selection body verbatim: the shared-Postgres choice is gated on the routing verdict,
+    and any unavailability degrades to the guaranteed SQLite floor."""
     # Default runtime stores are transient: under .mokata/temp_local/memory/ (Stage 24D).
     # A user-set config.path/config.vault overrides this and may point anywhere.
     mem_dir = os.path.join(root, TEMP_LOCAL_DIRNAME, MEMORY_DIRNAME)
@@ -101,15 +142,30 @@ def build_backend(tool: str, root: str,
     if tool == "postgres":
         # opt-in remote store; degrade to the SQLite floor if unset/unreachable (P8).
         # Stage 71a — scoped to the current project so one shared DSN hosts many, no bleed.
-        backend = build_postgres_backend(config, project=project)
+        # CM.S2 — when the ONE routing decision (from the shared E2 health verdict) already
+        # says degraded, route straight to the LOCAL floor: no redundant connect, and the
+        # loud degrade marker on `routing` is what the read surfaces (never a silent fallback).
+        if routing is not None and getattr(routing, "degraded", False):
+            return floor()
+        # D1 — capture WHY the build failed. A schema failure (unprovisioned / out of range /
+        # a DML-only role that cannot CREATE) is not an unreachable database, and telling the
+        # user to `mokata sync` a healthy connection is how this bug stayed invisible.
+        failures: List[Exception] = []
+        backend = build_postgres_backend(config, project=project,
+                                         on_unavailable=failures.append)
         if backend is None:
-            return floor()          # unavailable → LOCAL SQLite floor, NEVER cached
-        # B3 (0.0.12) — put the per-process read-through cache in front of the LIVE shared
-        # backend so repeated retrieval/gate reads are served without a fresh round trip and
-        # never block on the network. Only the live Postgres backend is wrapped — the floor
-        # above (local mode) stays byte-identical, uncached.
-        from .cache import ReadThroughCache
-        return ReadThroughCache(backend)
+            # Residual race: health said OK but the live backend build still failed, so the
+            # read really did fall back. Mark it degraded so the store stays honest (never a
+            # silent team→local fall-through) — mirrors the routing-gated case above.
+            if routing is not None and getattr(routing, "served_by_team", False):
+                from ..degrade import FAILURE_UNREACHABLE
+                exc = failures[0] if failures else None
+                routing.mark_degraded_from_build_failure(
+                    failure_class=getattr(exc, "failure_class", FAILURE_UNREACHABLE),
+                    detail=(str(exc) if exc else "shared backend unavailable at read time"),
+                    fix=getattr(exc, "fix", ""))
+            return floor()          # unavailable → LOCAL SQLite floor
+        return backend
     if tool == "native-memory":
         client = clients.get("native-memory")
         if client is not None:
@@ -122,7 +178,8 @@ def build_backend(tool: str, root: str,
 
 def select_memory_backend(router: Any, root: str,
                           clients: Optional[Dict[str, Any]] = None,
-                          project: Optional[str] = None) -> MemoryBackend:
+                          project: Optional[str] = None,
+                          routing: Any = None) -> MemoryBackend:
     try:
         res = router.resolve("memory_store")
     except (ManifestError, AttributeError):
@@ -133,7 +190,9 @@ def select_memory_backend(router: Any, root: str,
         config = router.manifest.tool_config(tool)
     except AttributeError:
         config = {}
-    return build_backend(tool, root, clients, config, project=project)
+    # CM.S2 — thread the ONE read-routing decision so the shared-tool choice is gated on the
+    # SAME E2 health verdict (never a second, divergent availability answer). None → unchanged.
+    return build_backend(tool, root, clients, config, project=project, routing=routing)
 
 
 def _scope_context_for(surface: Any, project: Any) -> Any:
@@ -152,7 +211,11 @@ def _scope_context_for(surface: Any, project: Any) -> Any:
         proj = project if isinstance(project, str) and project else None
         category = (surface.manifest.setting("memory", {}) or {}).get("category")
         return ScopeContext(project=proj, category=category or None, user=None)
-    except Exception:
+    except (ImportError, AttributeError, ManifestError):
+        # D5 — the real raisers: a half-installed package (ImportError), a duck-typed surface with
+        # no `.manifest`/a non-mapping `memory` block (AttributeError), and a broken manifest
+        # (ManifestError). None → LOCAL/no scope filtering, the fail-closed default this docstring
+        # already promises: an unresolvable scope NEVER silently widens a team read.
         return None
 
 
@@ -161,23 +224,65 @@ def _identity_and_access_for(surface: Any) -> Tuple[Any, Any]:
 
     Identity is the run identity (`team_audit.actor()`) in BOTH modes — the real author is always
     stamped (M-1, "no more `user` everywhere"). The access POLICY only ENFORCES in team mode (doc 62
-    §6): team mode → an enforcing policy from `settings.access.grants`; local mode → None (no
-    enforcement, byte-identical, single-user full personal access). Fail-safe + fail-closed: any
-    error reads as local (no policy), never crashes the store."""
+    §6): team mode → an enforcing policy from `settings.access.grants`; local mode → None. None IS
+    the local contract — no enforcement, byte-identical recall, single-user full personal access —
+    so local is NOT a degrade and never earns a notice.
+
+    D5b — the TEAM-mode fallback is now genuinely FAIL-CLOSED, which is what this docstring always
+    claimed and the code did not do. A team store whose grants could not be READ (an unreadable
+    `.manifest.data`) fell back to `access = None`, and None turns enforcement OFF: the broken
+    manifest — the very case enforcement has to survive — was the one case that disabled it. The
+    fallback is now a DENY-BY-DEFAULT policy (`enforce=True`, zero grants): every shared
+    (team/project/global) item becomes unreadable and uneditable, and only the identity's OWN
+    personal items stay reachable (`AccessPolicy.roles_for`'s owner rule — and if the identity is
+    unresolvable too, not even those). A teammate's private items cannot leak out of a degrade.
+
+    The ONE residual fail-open, named rather than papered over: a half-installed package
+    (ImportError) leaves neither the mode resolver nor the policy ENGINE importable, and code that
+    cannot import `AccessPolicy` cannot construct a deny-by-default one. Forcing enforcement on what
+    may well be a LOCAL store would break local's zero-config contract, so the floor there stays
+    local — but LOUDLY (`note_degraded`), never as a secret. Neither path crashes the store."""
     try:
         from ..team_audit import actor
         identity = actor()
     except Exception:
+        # D5 — deliberately left BROAD, with no narrow class to name: `team_audit.actor()`'s own
+        # contract is never-raise (it resolves the run identity and falls back to a placeholder),
+        # so there is no honest class to enumerate here. An unresolvable identity is not a degrade
+        # of a capability — the write path stamps a placeholder author and carries on.
         identity = None
-    access = None
     try:
         from .. import run_mode as _rm
-        if _rm.read_mode(surface) == _rm.TEAM:
-            from .access import AccessPolicy
+        from .access import AccessPolicy
+    except ImportError as exc:
+        # D5b — a half-installed package: the mode resolver and/or the policy engine are absent.
+        # The mode is UNKNOWABLE here (only `run_mode` can answer it), so a deny-by-default policy
+        # would be imposed on local stores too — breaking the zero-config contract for a fault that
+        # is not theirs. Local is the honest floor; the notice is what stops it being a silent one.
+        from ..degrade import FAILURE_ENGINE, note_degraded
+        note_degraded("memory-access", FAILURE_ENGINE,
+                      fallback="access enforcement is OFF — the policy engine could not be imported",
+                      fix="reinstall mokata (`pip install -U mokata`), then run `mokata doctor`",
+                      detail=str(exc))
+        return identity, None
+
+    access = None
+    if _rm.read_mode(surface) == _rm.TEAM:      # never raises; an unknown mode is NEVER team
+        try:
             settings = surface.manifest.data.get("settings") or {}
             access = AccessPolicy.from_settings(settings, enforce=True)
-    except Exception:
-        access = None
+        except AttributeError as exc:
+            # D5b — the real (and only) raiser left: a surface whose `.manifest.data` is absent or
+            # is not a mapping — a duck-typed surface, a half-written/torn manifest. `read_mode`
+            # never raises and `from_settings` is itself fail-closed, so nothing else reaches here.
+            # FAIL-CLOSED: deny by default rather than disable enforcement.
+            from ..degrade import FAILURE_CORRUPT, note_degraded
+            access = AccessPolicy(grants={}, enforce=True)
+            note_degraded("memory-access", FAILURE_CORRUPT,
+                          fallback="team access DENIED by default — the manifest's grants could "
+                                   "not be read",
+                          fix="repair the manifest (`mokata doctor`), then retry",
+                          detail=str(exc))
     return identity, access
 
 
@@ -212,6 +317,11 @@ class WriteResult:
     aborted: bool
     message: str
     blocked: bool = False        # True when a secret was detected and the write was hard-blocked
+    # D6 — True when THIS BUILD refused the write: the doc is newer than the doc schema it speaks,
+    # so rewriting it would drop fields it cannot read. Distinct from `blocked` (a secret) and from
+    # a plain abort (the human declined) — reporting a client refusal as "you declined" would be
+    # the quiet lie CM.S2/D5 exist to kill. Nothing was written; the doc is untouched.
+    refused: bool = False
 
 
 @dataclass
@@ -221,6 +331,7 @@ class HealingResult:
     message: str = ""
     item: Optional[MemoryItem] = None
     blocked: bool = False        # True when a secret was detected and the change was hard-blocked
+    refused: bool = False        # D6 — this build may not rewrite the doc (see WriteResult.refused)
 
 
 @dataclass
@@ -274,8 +385,14 @@ class MemoryStore:
                  surface: Any = None,
                  scope_context: Any = None,
                  identity: Any = None,
-                 access: Any = None) -> None:
+                 access: Any = None,
+                 read_routing: Any = None) -> None:
         self.backend = backend
+        # CM.S2 (C-2) — the ONE read-routing decision (degrade.ReadRoutingDecision) for this
+        # store. None (local/zero-config/direct construction) => never degraded, byte-identical.
+        # Set (from_surface) => carries whether a team-mode read is served from the LOCAL
+        # fallback, so every read surface can mark it LOUDLY degraded instead of silently.
+        self.read_routing = read_routing
         self.enabled_types = tuple(enabled_types)
         # TM.S10 — the REAL run identity (doc 52 M-1). None (direct/local construction) => the
         # author placeholder is untouched (byte-identical). When set (from_surface), it stamps the
@@ -323,8 +440,13 @@ class MemoryStore:
         # overridden for review: a specific id (str), or `ALL_PROJECTS` (None) to span all.
         from ..project import project_id
         scope = project_id(surface) if project is _PROJECT_CURRENT else project
+        # CM.S2 (C-2) — compute the ONE read-routing decision FIRST (mode + shared-backend
+        # verdict from the same cached E2 probe), then route the backend through it. Local mode
+        # returns a non-degraded decision with NO probe (zero-network hot path, byte-identical).
+        from ..degrade import resolve_read_routing
+        routing = resolve_read_routing(surface)
         backend = select_memory_backend(surface.router, surface.mokata_dir, clients,
-                                        project=scope)
+                                        project=scope, routing=routing)
         # attach the audit ledger so consolidation proposals/decisions are recorded (I3)
         from ..govern import AuditLedger
         from .embed import make_embedder
@@ -351,7 +473,7 @@ class MemoryStore:
                    ledger=AuditLedger.from_mokata_dir(surface.mokata_dir),
                    embedder=embedder, knowledge_layer=knowledge_layer, surface=surface,
                    scope_context=_scope_context_for(surface, scope),
-                   identity=identity, access=access)
+                   identity=identity, access=access, read_routing=routing)
 
     # --- scope (TM.S6, doc 62 §2) -------------------------------------------
     def scoped_active(self, mtype: Optional[str] = None) -> List[MemoryItem]:
@@ -375,35 +497,96 @@ class MemoryStore:
             items = [it for it in items if self._can_read_item(it)]
         return items
 
+    # --- degrade surface (CM.S2, C-2) ---------------------------------------
+    @property
+    def read_degraded(self) -> bool:
+        """True when this store's reads are a team-mode fallback served from the LOCAL floor
+        (shared team memory unreachable). False for every local/zero-config store."""
+        return bool(getattr(self.read_routing, "degraded", False))
+
+    @property
+    def degrade_notice(self) -> Any:
+        """The `degrade.DegradeNotice` for a degraded team read (env-var NAME + failure class),
+        or None. Read surfaces use it for the loud MCP marker + the once-per-subsystem CLI line."""
+        return getattr(self.read_routing, "notice", None) if self.read_degraded else None
+
+    @property
+    def pending_status(self) -> Any:
+        """CM.S4 (C-4) — the surfaced local-only backlog: the count of approved-but-unflushed team
+        writes (+ oldest-backlog age + last-failure class), or None when nothing is pending / local
+        mode. Reuses `read_routing` (the ONE CM.S2 verdict) so the class agrees with the degrade
+        notice — no second probe. Never carries a DSN value or memory content."""
+        try:
+            from .. import flush_liveness
+            return flush_liveness.pending_status(self._surface, routing=self.read_routing)
+        except Exception:  # pragma: no cover - surfacing is best-effort
+            # D5 — deliberately left BROAD, with no narrow class to name: `flush_liveness
+            # .pending_status`'s own contract is never-raise (it is degrade-clean to None), so this
+            # handler guards a promise the callee already keeps. There is no honest class to
+            # enumerate for an exception the callee says cannot occur.
+            return None
+
     # --- toggles ------------------------------------------------------------
     def type_enabled(self, mtype: str) -> bool:
         return mtype in self.enabled_types
 
     # --- instrumentation ----------------------------------------------------
-    def _persist_stats(self) -> None:
-        if self._stats_store is not None:
-            self._stats_store.write(self._stats_key, self.stats.to_dict())
+    def _persist_stats(self, reads: int = 0, writes: int = 0) -> None:
+        """Persist the counters by adding THIS store's DELTA to the current on-disk value under the
+        cross-process lock (MS.S6 / M-6), not by overwriting with a stale in-memory total.
+
+        `memory_stats` is explicitly shared repo state (never session-scoped — see
+        `session_state.SESSION_SCOPED_KEYS`), so the old blind write meant two Claude Code windows
+        each counted only their OWN reads: whichever persisted last erased the other's, and the
+        surfaced read/write ratio silently under-reported. A delta merge is correct under any
+        interleaving. The in-memory `self.stats` is then re-synced from the merged result, so this
+        process's view is the true total, not just its own share.
+
+        Single-process: the merged value equals the in-memory total, so the output is unchanged. A
+        store without `update` (an injected fake) keeps the previous blind write."""
+        store = self._stats_store
+        if store is None:
+            return
+        if not hasattr(store, "update"):             # pragma: no cover - a fake/minimal store
+            store.write(self._stats_key, self.stats.to_dict())
+            return
+        merged = store.update(
+            self._stats_key,
+            lambda cur: {"reads": int((cur or {}).get("reads", 0) or 0) + reads,
+                         "writes": int((cur or {}).get("writes", 0) or 0) + writes},
+            default={"reads": 0, "writes": 0})
+        self.stats = MemoryStats.from_dict(merged)
 
     def _bump_read(self, n: int = 1) -> None:
-        self.stats.reads += n
-        self._persist_stats()
+        self.stats.reads += n            # in-memory total (authoritative with no stats store)
+        self._persist_stats(reads=n)     # ... then re-synced from the merged on-disk total
 
     def _bump_write(self, n: int = 1) -> None:
         self.stats.writes += n
-        self._persist_stats()
+        self._persist_stats(writes=n)
 
     # --- writes (human-gated, C6) -------------------------------------------
     def _gated_commit(self, subject: str, content: str, commit: Callable[[], None],
                       prompt: str, confirm: Optional[Callable[[str], bool]] = None,
-                      assume_yes: bool = False):
+                      assume_yes: bool = False, policy: Any = None, ledger: Any = None):
         """M2 (Stage 39): the SINGLE write path for memory — the universal WriteGate does the
         secret-scan (hard block), the human gate (showing the rich `prompt` surface), the audit-
-        ledger record, then the commit. Returns the gate's WriteOutcome."""
+        ledger record, then the commit. Returns the gate's WriteOutcome.
+
+        `ledger` overrides the store's own (SI.6): `apply_consolidation` is handed the caller's
+        ledger, and the gate must record to THAT one — otherwise the approval id its journal entries
+        inherit would name a seq in a ledger nobody reads."""
         from ..govern import WriteGate, WriteRequest
-        gate = WriteGate(ledger=self._ledger)
+        from ..govern.trust import (CLI_SURFACE, policy_approved, policy_surface, policy_tool,
+                                    policy_trust)
+        led = ledger if ledger is not None else self._ledger
+        gate = WriteGate(ledger=led, trust=policy_trust(policy))
         return gate.submit(
-            WriteRequest("memory", f"memory:{subject}", content=content, actor="memory"),
-            commit=commit, confirm=confirm, assume_yes=assume_yes, prompt=prompt)
+            WriteRequest("memory", f"memory:{subject}", content=content, actor="memory",
+                         tool=policy_tool(policy, "memory"),
+                         surface=policy_surface(policy, CLI_SURFACE)),
+            commit=commit, confirm=confirm, assume_yes=assume_yes, prompt=prompt,
+            human_approved=policy_approved(policy))
 
     def render_write(self, item: MemoryItem) -> str:
         return (f"mokata · propose to remember [{item.mtype}] {item.subject} = "
@@ -455,6 +638,29 @@ class MemoryStore:
         return (f"access denied: {self.identity or 'unknown'} is not permitted to write "
                 f"[{scope}] items — nothing written (ask a project approver for the editor role)")
 
+    # --- doc-schema downgrade safety (D6) -----------------------------------
+    @staticmethod
+    def _downgrade_refusal(*items: Optional[MemoryItem]) -> Optional[str]:
+        """D6 — the refusal message when ANY doc this call would rewrite was written by a newer
+        mokata than this one, else None. Called at the head of every mutation path, in the same
+        place and the same shape as `_access_denied_edit`: BEFORE the gate, so the refusal costs
+        the user no approval prompt and NOTHING is written — the doc on disk is byte-identical
+        after the attempt.
+
+        Takes every item the path would durably write, not just the one it is "about": publishing
+        supersedes its base, a rollback restores its prior, a heal supersedes both sides of a
+        contradiction, a consolidation touches every `old`. Each of those is a write-back, so each
+        is a place the strip could happen — and a path that refuses for one doc must refuse for the
+        whole call, or it lands a half-applied change (a superseded base whose successor never
+        published). The first refusal wins; announcing is once-per-session (`downgrade_refusal`)."""
+        for item in items:
+            if item is None:
+                continue
+            message = downgrade_refusal(item)
+            if message is not None:
+                return message
+        return None
+
     # --- team-mode journal-first routing (TM.S5b, doc 48 E3/C5) --------------
     def _team_mode(self) -> bool:
         """True only when this store was built from a surface AND that surface is in team mode.
@@ -466,6 +672,9 @@ class MemoryStore:
             from .. import run_mode as _rm
             return _rm.read_mode(self._surface) == _rm.TEAM
         except Exception:
+            # D5 — deliberately left BROAD, with no narrow class to name: `run_mode.read_mode`'s own
+            # docstring promises "Never raises" (it is the fail-closed mode resolver), so there is
+            # no honest class to enumerate. False = LOCAL, which is the fail-closed direction.
             return False
 
     @staticmethod
@@ -486,6 +695,10 @@ class MemoryStore:
         write) rides the entry so the deferred flush inherits the original consent (C5/P2)."""
         if team:
             led = ledger if ledger is not None else self._ledger
+            # `len+1` is the seq the gate's upcoming `approved` entry will land at. MS.S3/B2: the
+            # WriteGate holds the ledger append-lock across THIS commit and that approved record, so
+            # no other window can append between here and there — the prediction is provably exact,
+            # never misattributed to a racing write's approval.
             ledger_id = (len(led) + 1) if led is not None else None
             self._journal_team_write(item, ledger_id, op=op, base_revision=base_revision)
         else:
@@ -502,6 +715,10 @@ class MemoryStore:
         import json as _json
         from .. import team_journal, teamdb
         from ..project import project_id
+        # D5 — both handlers below are deliberately left BROAD, with no narrow class to name:
+        # `project.derive_project_id` ("Never raises") and `team_audit.actor` (never-raise by
+        # contract) both promise not to raise, so there is no honest class to enumerate for either.
+        # Naming a made-up class here would be worse than the broad catch it replaced.
         try:
             project = project_id(self._surface)
         except Exception:
@@ -511,8 +728,11 @@ class MemoryStore:
             who = _actor()
         except Exception:
             who = "user"
+        # D6 — `to_doc` (not `to_dict`): the DURABLE serializer, which refuses a doc newer than the
+        # schema this build speaks. The journal is a durable write like any other — a stripped doc
+        # journaled here would flush to the shared table and destroy a teammate's approved fields.
         payload = {"id": item.id, "mtype": item.mtype, "subject": item.subject,
-                   "status": item.status, "doc": _json.dumps(item.to_dict()),
+                   "status": item.status, "doc": _json.dumps(item.to_doc()),
                    "project": project}
         # base_revision None → a believed-new row (INSERT ... ON CONFLICT DO NOTHING at flush; a
         # concurrent create SURFACES as a conflict); an int → the revision-guarded UPDATE/DELETE
@@ -528,14 +748,17 @@ class MemoryStore:
         returns skipped (the write stays journaled: work-locally, nothing lost; `mokata sync`
         reconciles later). The committed gate decision is never undone by a flush hiccup."""
         try:
-            from .. import team_journal
-            team_journal.flush(self._surface, ledger=self._ledger)
+            from .. import flush_liveness
+            # CM.S4 — the liveness-aware flush: a failed flush is now retried with bounded backoff
+            # on subsequent touchpoints (no daemon) and the pending backlog is counted/surfaced,
+            # instead of silently waiting. Healthy writes drain immediately (byte-identical).
+            flush_liveness.flush_with_liveness(self._surface, ledger=self._ledger)
         except Exception:  # pragma: no cover - flush is best-effort by construction
             pass
 
     def remember(self, item: MemoryItem,
                  confirm: Optional[Callable[[str], bool]] = None,
-                 assume_yes: bool = False) -> WriteResult:
+                 assume_yes: bool = False, policy: Any = None) -> WriteResult:
         if not self.type_enabled(item.mtype):
             raise MemoryDisabledError(
                 f"memory type '{item.mtype}' is disabled; enable it to remember this"
@@ -546,6 +769,13 @@ class MemoryStore:
         denied = self._access_denied_edit(item)
         if denied is not None:
             return WriteResult(None, committed=False, aborted=True, message=denied)
+
+        # D6 — refuse to rewrite a doc a NEWER mokata wrote (the strip). `remember` is a write-back
+        # path whenever its item came from a read: a memory-share import hands it a teammate's
+        # parsed doc, and a re-remember hands it one straight off the backend.
+        refusal = self._downgrade_refusal(item)
+        if refusal is not None:
+            return WriteResult(None, committed=False, aborted=True, refused=True, message=refusal)
 
         team = self._team_mode()
 
@@ -561,6 +791,8 @@ class MemoryStore:
                 # TM.S5b — journal-first, capturing the gate's approval ledger id AT this point.
                 # The WriteGate records its "approved" entry immediately AFTER this commit with no
                 # intervening ledger write, so the next seq (len+1) IS that approval's id (C5/P2).
+                # MS.S3/B2: the gate holds the ledger append-lock across this commit + that approved
+                # record, so `len+1` is provably the approval's seq — exact under concurrency.
                 ledger_id = (len(self._ledger) + 1) if self._ledger is not None else None
                 self._journal_team_write(item, ledger_id)
             else:
@@ -572,7 +804,7 @@ class MemoryStore:
         # surface preserved. No second gate path.
         outcome = self._gated_commit(item.subject, f"{item.subject}\n{item.value}",
                                      _commit, self.render_write(item),
-                                     confirm=confirm, assume_yes=assume_yes)
+                                     confirm=confirm, assume_yes=assume_yes, policy=policy)
         if outcome.committed:
             if team:
                 self._best_effort_flush()   # flush when healthy; offline → journaled, not lost
@@ -600,11 +832,11 @@ class MemoryStore:
                 f"({item.value!r}) is NOT rewritten.\nNothing changes unless you approve.")
 
     def _record_enforcement_change(self, item: MemoryItem, old: str, new: str,
-                                   direction: str, actor: str) -> None:
-        """Audit the promotion (doc 62 §6 who/old→new/approval). The WriteGate's own `approved`
-        entry is the newest ledger row at this point, so its seq is the approval reference."""
+                                   direction: str, actor: str, approval_seq: Any) -> None:
+        """Audit the promotion (doc 62 §6 who/old→new/approval). `approval_seq` is the REAL seq the
+        WriteGate returned for its `approved` entry (B2) — NOT `len(ledger)`, which a concurrent
+        append could have moved past the actual approval."""
         if self._ledger is not None:
-            approval_seq = len(self._ledger)     # the gate's just-written "approved" entry
             self._ledger.record("enforcement_change", subject=item.subject, item_id=item.id,
                                  gkind=item.governance_kind, direction=direction,
                                  old=old, new=new, actor=actor, approval_seq=approval_seq)
@@ -631,6 +863,11 @@ class MemoryStore:
             return PromoteResult(False, aborted=True, item=item,
                                  message=f"enforcement applies only to rules; "
                                          f"'{item.subject}' is a {item.governance_kind}")
+        # D6 — a promotion is a read-modify-WRITE of the whole doc: it rewrites every field to
+        # change one binding. On a newer doc that rewrite is the strip.
+        refusal = self._downgrade_refusal(item)
+        if refusal is not None:
+            return PromoteResult(False, aborted=True, item=item, message=refusal)
         old = item.effective_enforcement
         if old == to:
             return PromoteResult(False, aborted=False, item=item, old=old, new=to,
@@ -659,7 +896,7 @@ class MemoryStore:
             item.value, item.kind = original_value, original_kind
             return PromoteResult(False, aborted=True, item=item, old=old, new=to,
                                  direction=direction, message="declined at the human gate")
-        self._record_enforcement_change(item, old, to, direction, actor)
+        self._record_enforcement_change(item, old, to, direction, actor, outcome.approval_seq)
         if team:
             self._best_effort_flush()            # flush when healthy; offline → journaled, not lost
         return PromoteResult(True, aborted=False, item=item, old=old, new=to,
@@ -673,11 +910,11 @@ class MemoryStore:
         return (f"mokata · PROMOTE scope [{item.subject}]: {old} → {new}\nThis WIDENS who can see "
                 f"this item (its content is NOT changed).\nNothing changes unless you approve.")
 
-    def _record_scope_promotion(self, item: MemoryItem, old: str, new: str, actor: str) -> None:
-        """Audit the scope promotion (doc 62 §6 who/old→new/approval). The WriteGate's own
-        `approved` entry is the newest ledger row at this point, so its seq is the approval ref."""
+    def _record_scope_promotion(self, item: MemoryItem, old: str, new: str, actor: str,
+                                approval_seq: Any) -> None:
+        """Audit the scope promotion (doc 62 §6 who/old→new/approval). `approval_seq` is the REAL
+        seq the WriteGate returned for its `approved` entry (B2), not `len(ledger)`."""
         if self._ledger is not None:
-            approval_seq = len(self._ledger)     # the gate's just-written "approved" entry
             self._ledger.record("scope_promotion", subject=item.subject, item_id=item.id,
                                  old=old, new=new, actor=actor, approval_seq=approval_seq)
 
@@ -700,6 +937,11 @@ class MemoryStore:
         if item is None:
             return ScopePromoteResult(False, aborted=True,
                                       message=f"no memory item with id '{item_id}'")
+        # D6 — a scope promotion rewrites the whole doc to widen its audience. On a newer doc that
+        # rewrite is the strip — and it would ALSO broadcast the stripped item to more people.
+        refusal = self._downgrade_refusal(item)
+        if refusal is not None:
+            return ScopePromoteResult(False, aborted=True, item=item, message=refusal)
         old = item.scope_level or DEFAULT_SCOPE_LEVEL
         # Only BROADENING is gated here (doc 52 M-2): the target must be strictly broader (smaller
         # depth). A same/narrower target is refused — narrowing an audience is not a promotion.
@@ -740,7 +982,7 @@ class MemoryStore:
             item.scope_level, item.scope_id = original_level, original_id   # untouched on decline
             return ScopePromoteResult(False, aborted=True, item=item, old=old, new=to_level,
                                       message="declined at the human gate")
-        self._record_scope_promotion(item, old, to_level, who)
+        self._record_scope_promotion(item, old, to_level, who, outcome.approval_seq)
         if team:
             self._best_effort_flush()            # flush when healthy; offline → journaled, not lost
         return ScopePromoteResult(True, aborted=False, item=item, old=old, new=to_level,
@@ -777,12 +1019,11 @@ class MemoryStore:
                 if i.mtype in self.enabled_types]
 
     def _record_review(self, kind: str, item: MemoryItem, *, actor: str, diff: str,
-                       **fields: Any) -> None:
-        """Audit a review step (doc 62 §6 who/what/when/approval + the rendered diff). The
-        WriteGate's own `approved` entry is the newest ledger row at this point, so its seq is the
-        approval reference — the same pattern as promote / scope-promotion."""
+                       approval_seq: Any, **fields: Any) -> None:
+        """Audit a review step (doc 62 §6 who/what/when/approval + the rendered diff). `approval_seq`
+        is the REAL seq the WriteGate returned for its `approved` entry (B2), not `len(ledger)` —
+        the same fix as promote / scope-promotion."""
         if self._ledger is not None:
-            approval_seq = len(self._ledger)
             self._ledger.record(kind, subject=item.subject, item_id=item.id, actor=actor,
                                 diff=diff, approval_seq=approval_seq, **fields)
 
@@ -802,6 +1043,11 @@ class MemoryStore:
         denied = self._access_denied_edit(item)
         if denied is not None:
             return ReviewResult(False, aborted=True, message=denied)
+        # D6 — the proposal doc itself is written (as a not-live DRAFT). `base` is only READ here
+        # (for the diff); publishing is what rewrites it, and `_transition` guards it there.
+        refusal = self._downgrade_refusal(item)
+        if refusal is not None:
+            return ReviewResult(False, aborted=True, message=refusal)
         base = self.get(base_id) if base_id else None
 
         from .item import PROPOSED
@@ -829,7 +1075,7 @@ class MemoryStore:
                                     message="blocked: secret detected — not proposed")
             return ReviewResult(False, aborted=True, message="declined at the human gate")
         self._record_review("review_transition", item, actor=who, diff=diff,
-                            frm="", to=DRAFT, change=change)
+                            approval_seq=outcome.approval_seq, frm="", to=DRAFT, change=change)
         if team:
             self._best_effort_flush()            # flush when healthy; offline → journaled, not lost
         return ReviewResult(True, item=item, state=DRAFT,
@@ -848,6 +1094,12 @@ class MemoryStore:
         item = self.get(item_id)
         if item is None:
             return ReviewResult(False, aborted=True, message=f"no memory item with id '{item_id}'")
+        # D6 — every transition rewrites the proposal doc (its review state), and PUBLISH also
+        # rewrites the base it supersedes. Refuse before any of the workflow checks: a refusal is
+        # not a workflow outcome, and nothing here has written yet.
+        refusal = self._downgrade_refusal(item)
+        if refusal is not None:
+            return ReviewResult(False, aborted=True, item=item, message=refusal)
         frm = self._review_state(item)
         if not R.is_valid_state(frm) or frm == "":
             return ReviewResult(False, aborted=True, item=item,
@@ -888,6 +1140,12 @@ class MemoryStore:
                                             "recorded (a change can't publish without review)")
 
         base = self.get((item.review or {}).get("base_id", "")) or None
+        # D6 — PUBLISH supersedes `base`, which is a write-back of the BASE's doc. A newer base
+        # refuses the whole transition: publishing the successor while failing to supersede its
+        # base would leave two live items claiming the same subject.
+        refusal = self._downgrade_refusal(base)
+        if refusal is not None:
+            return ReviewResult(False, aborted=True, item=item, state=frm, message=refusal)
         diff = R.diff_line(base, item)
         team = self._team_mode()
 
@@ -921,7 +1179,7 @@ class MemoryStore:
             return ReviewResult(False, aborted=True, item=item, state=frm,
                                 message="declined at the human gate")
         self._record_review("review_transition", item, actor=who, diff=diff,
-                            frm=frm, to=to_state)
+                            approval_seq=outcome.approval_seq, frm=frm, to=to_state)
         if team:
             self._best_effort_flush()            # flush when healthy; offline → journaled, not lost
         return ReviewResult(True, item=item, state=to_state,
@@ -971,6 +1229,12 @@ class MemoryStore:
             return ReviewResult(False, aborted=True, item=item,
                                 message=f"nothing to roll back: '{item.subject}' has no prior "
                                         "in its supersede lineage")
+        # D6 — a rollback rewrites BOTH docs (the current steps aside, the prior is restored). If
+        # either is newer than this build, neither is touched — a half-rollback would leave the
+        # store with no live item at all.
+        refusal = self._downgrade_refusal(item, prior)
+        if refusal is not None:
+            return ReviewResult(False, aborted=True, item=item, message=refusal)
         scope, cat, _owner = self._item_scope_cat(item)
         if not self._can_approve(who, scope, cat):
             return ReviewResult(False, aborted=True, item=item,
@@ -997,7 +1261,8 @@ class MemoryStore:
         if not outcome.committed:
             return ReviewResult(False, aborted=True, item=item,
                                 message="declined at the human gate")
-        self._record_review("review_rollback", item, actor=who, diff=diff, restored=prior.id)
+        self._record_review("review_rollback", item, actor=who, diff=diff,
+                            approval_seq=outcome.approval_seq, restored=prior.id)
         if team:
             self._best_effort_flush()            # flush when healthy; offline → journaled, not lost
         return ReviewResult(True, item=prior, state="published",
@@ -1073,7 +1338,7 @@ class MemoryStore:
     def apply_proposal(self, p: HealingProposal, decision: str,
                        edited: Optional[MemoryItem] = None,
                        confirm: Optional[Callable[[str], bool]] = None,
-                       assume_yes: bool = False) -> HealingResult:
+                       assume_yes: bool = False, policy: Any = None) -> HealingResult:
         """Resolve a surfaced proposal. Default (reject/defer) changes nothing; approve
         and edit are human-gated. NEVER auto-rewrites."""
         if decision not in ("approve", "edit", "reject", "defer"):
@@ -1081,6 +1346,15 @@ class MemoryStore:
         if decision in ("reject", "defer"):
             self._record_healing(p, decision, changed=False)
             return HealingResult(changed=False, message=f"{decision}: no change")
+
+        # D6 — self-healing is the most dangerous write-back of all: it rewrites items the human
+        # approved long ago, on the machine that happens to be running. Every doc this decision
+        # would touch is guarded — the stale/superseded `old`, the winning `new`, and the human's
+        # `edited` replacement. reject/defer are above: they write nothing, so they need no guard.
+        refusal = self._downgrade_refusal(p.old, p.new, edited)
+        if refusal is not None:
+            self._record_healing(p, decision, changed=False)
+            return HealingResult(changed=False, aborted=True, refused=True, message=refusal)
 
         team = self._team_mode()
 
@@ -1134,7 +1408,7 @@ class MemoryStore:
         # M2 (Stage 39): the SAME WriteGate path as remember — scan + gate (old→new surface) +
         # ledger — so healing never bypasses the universal gate either.
         outcome = self._gated_commit(p.subject, content, _commit, self.render_proposal(p),
-                                     confirm=confirm, assume_yes=assume_yes)
+                                     confirm=confirm, assume_yes=assume_yes, policy=policy)
         self._record_healing(p, decision, changed=outcome.committed)
         if outcome.committed:
             if team:
@@ -1170,9 +1444,16 @@ class MemoryStore:
                             edited: Optional[MemoryItem] = None,
                             confirm: Optional[Callable[[str], bool]] = None,
                             assume_yes: bool = False,
-                            ledger: Any = None) -> HealingResult:
+                            ledger: Any = None, policy: Any = None) -> HealingResult:
         """Apply a consolidation proposal. Default (reject/defer) changes nothing;
-        approve/edit are human-gated. NEVER auto-applies."""
+        approve/edit are human-gated. NEVER auto-applies.
+
+        SI.6 (74 C1 = 52 M-6): this used to run its OWN bare confirm and then write — the last
+        durable memory writer that never entered the universal WriteGate. It therefore had no
+        secret-scan (a merged/edited/summarized value could carry a credential straight into the
+        store), no `write_gate` ledger record, and no WritePolicy seam. It now commits through
+        `_gated_commit` like every other memory writer: the writes move into a `_commit` closure the
+        gate runs, so scan → gate → ledger → commit is the ONLY order they can happen in."""
         led = ledger if ledger is not None else self._ledger
         if decision not in ("approve", "edit", "reject", "defer"):
             raise MemoryError(f"unknown decision '{decision}'")
@@ -1186,56 +1467,78 @@ class MemoryStore:
             _log(False, decision)
             return HealingResult(changed=False, message=f"{decision}: no change")
 
-        if not assume_yes:
-            gate = confirm or _default_confirm
-            if not gate(self.render_consolidation(p)):
-                _log(False, "declined")
-                return HealingResult(changed=False, aborted=True,
-                                     message="declined at the human gate")
+        # D6 — a consolidation rewrites EVERY doc in `p.olds` (supersede on MERGE, CAS-guarded
+        # delete on PRUNE) plus the item it lands. A PRUNE is guarded like the rest, deliberately:
+        # deleting a doc whose fields this build cannot read destroys them just as thoroughly as
+        # stripping them, and "I did not understand it, so I removed it" is the same bug wearing a
+        # different verb. Guard the landing item, the human's edit, and every old.
+        refusal = self._downgrade_refusal(edited or p.new, p.new, *p.olds)
+        if refusal is not None:
+            _log(False, "refused")
+            return HealingResult(changed=False, aborted=True, refused=True, message=refusal)
 
-        # TM.S5c — every write below routes through `_durable_write` (bound to THIS `led` so the
-        # journaled entry inherits the consolidation-decision ledger id): team journals-first +
-        # CAS-guarded (never a direct backend upsert/delete), local is byte-identical. Crucially the
-        # PRUNE branch journals a CAS-guarded DELETE in team mode — it never hard-deletes a shared
-        # row (the destructive path the audit flagged); local single-user prune still deletes.
         team = self._team_mode()
-        if p.kind == MERGE:
-            keep = edited or p.new
-            if edited is not None:
-                self._durable_write(edited, op=_OP_PUT, base_revision=None,
-                                    backend_call=lambda: self.backend.put(edited),
-                                    team=team, ledger=led)
-            for o in p.olds:
-                if o.id == keep.id:
-                    continue
-                o.status = SUPERSEDED
-                if o.id not in keep.supersedes:
-                    keep.supersedes.append(o.id)
-                self._durable_write(o, op=_OP_UPDATE, base_revision=self._base_revision(o),
-                                    backend_call=lambda o=o: self.backend.update(o),
-                                    team=team, ledger=led)
-            if edited is None:
-                self._durable_write(keep, op=_OP_UPDATE, base_revision=self._base_revision(keep),
-                                    backend_call=lambda: self.backend.update(keep),
-                                    team=team, ledger=led)
-            self._bump_write(len(p.olds))
-        elif p.kind == SUMMARIZE:
-            summary = edited or p.new
-            self._durable_write(summary, op=_OP_PUT, base_revision=None,
-                                backend_call=lambda: self.backend.put(summary),
-                                team=team, ledger=led)
-            self._bump_write()
-        elif p.kind == PRUNE:
-            for o in p.olds:
-                self._durable_write(o, op=_OP_DELETE, base_revision=self._base_revision(o),
-                                    backend_call=lambda o=o: self.backend.delete(o.id),
-                                    team=team, ledger=led)
-            self._bump_write(max(1, len(p.olds)))
+        keep = edited or p.new              # MERGE/SUMMARIZE: the value this consolidation LANDS
 
-        _log(True, decision)
-        if team:
-            self._best_effort_flush()            # flush when healthy; offline → journaled, not lost
-        return HealingResult(changed=True, message=decision)
+        # What the gate must scan: the untrusted NEW content this consolidation would write. MERGE
+        # and SUMMARIZE land a value (an edited/summarized item is exactly where a secret could be
+        # introduced); PRUNE writes no new value at all — it only deletes — so, like the STALE branch
+        # of `apply_proposal`, the subject alone is the content.
+        content = f"{keep.subject}\n{keep.value}" if p.kind in (MERGE, SUMMARIZE) else p.subject
+
+        def _commit() -> None:
+            # TM.S5c — every write below routes through `_durable_write` (bound to THIS `led` so the
+            # journaled entry inherits the approval's ledger id): team journals-first + CAS-guarded
+            # (never a direct backend upsert/delete), local is byte-identical. Crucially the PRUNE
+            # branch journals a CAS-guarded DELETE in team mode — it never hard-deletes a shared row
+            # (the destructive path the audit flagged); local single-user prune still deletes.
+            if p.kind == MERGE:
+                if edited is not None:
+                    self._durable_write(edited, op=_OP_PUT, base_revision=None,
+                                        backend_call=lambda: self.backend.put(edited),
+                                        team=team, ledger=led)
+                for o in p.olds:
+                    if o.id == keep.id:
+                        continue
+                    o.status = SUPERSEDED
+                    if o.id not in keep.supersedes:
+                        keep.supersedes.append(o.id)
+                    self._durable_write(o, op=_OP_UPDATE, base_revision=self._base_revision(o),
+                                        backend_call=lambda o=o: self.backend.update(o),
+                                        team=team, ledger=led)
+                if edited is None:
+                    self._durable_write(keep, op=_OP_UPDATE,
+                                        base_revision=self._base_revision(keep),
+                                        backend_call=lambda: self.backend.update(keep),
+                                        team=team, ledger=led)
+                self._bump_write(len(p.olds))
+            elif p.kind == SUMMARIZE:
+                self._durable_write(keep, op=_OP_PUT, base_revision=None,
+                                    backend_call=lambda: self.backend.put(keep),
+                                    team=team, ledger=led)
+                self._bump_write()
+            elif p.kind == PRUNE:
+                for o in p.olds:
+                    self._durable_write(o, op=_OP_DELETE, base_revision=self._base_revision(o),
+                                        backend_call=lambda o=o: self.backend.delete(o.id),
+                                        team=team, ledger=led)
+                self._bump_write(max(1, len(p.olds)))
+
+        outcome = self._gated_commit(p.subject, content, _commit,
+                                     self.render_consolidation(p), confirm=confirm,
+                                     assume_yes=assume_yes, policy=policy, ledger=led)
+        if outcome.committed:
+            _log(True, decision)
+            if team:
+                self._best_effort_flush()    # flush when healthy; offline → journaled, not lost
+            return HealingResult(changed=True, message=decision)
+        if outcome.findings:
+            _log(False, "blocked")
+            return HealingResult(changed=False, aborted=True, blocked=True,
+                                 message="blocked: secret detected — not applied")
+        _log(False, "declined")
+        return HealingResult(changed=False, aborted=True,
+                             message="declined at the human gate")
 
     def close(self) -> None:
         self.backend.close()

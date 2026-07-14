@@ -196,10 +196,16 @@ class TestReviewIndependentConfig(unittest.TestCase):
             self.assertEqual(review_independent_mode(Surface.load(d)), "on")
 
     def test_degrade_clean(self):
+        """A broken surface degrades to the STRONGER setting (`on` — the independent review).
+
+        D5 narrowed the handler from `except Exception` to `except AttributeError`, so the double
+        now raises what a REAL broken/half-built surface raises: `Surface.manifest` is a plain
+        attribute, so a surface without one raises AttributeError — there is no code path on which
+        it raises a RuntimeError, and a double that invents one was asserting that mokata swallows
+        classes it can never actually see (which is how an `except Exception` hides a genuine typo).
+        The behaviour under test is unchanged: broken ⇒ `on`, never a silent downgrade to inline."""
         class Broken:
-            @property
-            def manifest(self):
-                raise RuntimeError("boom")
+            pass                        # no `.manifest` at all -> AttributeError, as in the wild
         self.assertEqual(review_independent_mode(Broken()), "on")
 
 

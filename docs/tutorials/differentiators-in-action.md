@@ -33,11 +33,18 @@ def checkout(cart):
     return process_payment(total, "USD")
 PY
 mokata init --profile full --yes
+export MOKATA_SESSION_ID=sample     # see the note below
 ```
 
-> The memory demos below use mokata's **Python API** so they run in a plain terminal. In Claude
-> Code the agent drives the *same gated operations* through the `remember` / `recall` /
-> `apply_proposal` MCP tools — the API and the tools are one engine.
+> The memory demos below reach mokata two ways from a plain terminal: through the **MCP tools**
+> (`mcp_server`) exactly as the agent does — those are the ones that must earn a human-minted
+> approval — and through the **Python API** (`MemoryStore`), which is the *human's* own surface, the
+> one the CLI itself uses. Same engine, different side of the gate.
+>
+> **Why the `MOKATA_SESSION_ID` pin?** A human-minted approval (below) is bound to one session,
+> and every `python3 -c` in a shell is a fresh process. The pin makes this terminal one session so
+> the propose → approve → commit loop can run end to end. Inside Claude Code you never set it —
+> the MCP server *is* one long-lived session.
 
 ---
 
@@ -51,10 +58,12 @@ mokata query blast_radius process_payment --depth 2
 ```
 
 ```text
-callers(process_payment) via grep [grep fallback] — 1 result(s)
-  checkout.py:6  «checkout»  return process_payment(total, "USD")
+callers(process_payment) via ripgrep [grep fallback] — 1 result(s)
+  checkout.py:5  «checkout»  return process_payment(total, "USD")
   (lexical fallback (no structural graph; results are approximate))
 ```
+
+(`via ripgrep` if `rg` is installed, `via grep` if not — same five queries either way.)
 
 `spec`/`develop` ground a change in these queries — *"before changing `process_payment`, here
 are its call sites"* — so the agent verifies from the code instead of guessing.
@@ -78,7 +87,9 @@ With no graph tool present mokata runs on the **grep floor** — approximate but
 and it tells you how to wire a real one (`mokata status`):
 
 ```text
-code_graph -> grep (degraded from code-review-graph)
+mokata 0.0.13 · profile 'full' · mode: local
+  code_graph -> ripgrep (degraded from code-review-graph)
+  memory_store -> native-memory
 no codebase graph wired — running on the grep floor (safe, but lexical). To enable richer
 structural queries, install a graph tool (code-review-graph or serena) and wire it: ...
 ```
@@ -111,23 +122,87 @@ graph DB; mokata adopts it under the same contract and never breaks when it's un
 
 ## 2 · Memory — keep, update, share (the institutional brain)
 
-### D10 · Every memory write is human-gated
+### D10 · Every memory write needs an approval the model cannot mint
+
+The model **cannot approve its own write.** It proposes; a *human* mints the approval out-of-band,
+in their own terminal; the model may then reference it by id — once.
 
 ```bash
-python3 - <<'PY'
+python3 -c "
 from mokata import mcp_server as M
-print(M.remember(path=".", subject="api.style", value="REST")["status"])              # propose
-print(M.remember(path=".", subject="api.style", value="REST", approve=True)["status"]) # commit
-PY
+r = M.remember(path='.', subject='api.style', value='REST')
+print(r['status'], r['proposal_id'])
+print(r['hint'])"
 ```
 
 ```text
-proposed
+proposed p-6d9f0e8bb43a
+NOTHING was written. Ask the human to run:  mokata approve p-6d9f0e8bb43a  — then re-call remember with proposal_id="p-6d9f0e8bb43a".
+```
+
+Nothing is stored. Now **you** approve it — a separate process the model is not driving. (Run bare
+`mokata approve` to list everything waiting.)
+
+```bash
+mokata approve p-6d9f0e8bb43a
+```
+
+```text
+mokata · a durable write is waiting for your approval:
+
+  proposal : p-6d9f0e8bb43a
+  tool     : remember
+  target   : memory:api.style
+  summary  : remember 'api.style' = REST
+  expires  : in 14m 59s
+  would write:
+    mokata · propose to remember [decision] api.style = 'REST'
+    Nothing is stored unless you approve.
+
+approved: p-6d9f0e8bb43a — recorded to the audit ledger.
+The model may now commit this ONE write by re-calling remember with proposal_id=p-6d9f0e8bb43a.
+It is single-use and expires with this session — nothing to remember to turn off.
+```
+
+```bash
+python3 -c "
+from mokata import mcp_server as M
+print(M.remember(path='.', subject='api.style', value='REST', proposal_id='p-6d9f0e8bb43a')['status'])"
+```
+
+```text
 committed
 ```
 
-Without `approve` it stages the change and writes **nothing**; the explicit approval is what
-commits — and even then a secret in the content is hard-blocked. See the whole brain by category:
+**The approval is single-use and content-hashed** — so "approve X, commit Y" is arithmetically
+impossible, and a replay is refused:
+
+```bash
+python3 -c "
+from mokata import mcp_server as M
+# same id, TAMPERED value
+print(M.remember(path='.', subject='api.style', value='GraphQL', proposal_id='p-6d9f0e8bb43a')['reason'])
+# same id, second use
+print(M.remember(path='.', subject='api.style', value='REST', proposal_id='p-6d9f0e8bb43a')['reason'])"
+```
+
+```text
+this is NOT the write that was approved — the arguments changed since the human saw them (the approval is bound to its content hash)
+that approval was already used — an approval licenses exactly one write
+```
+
+`approve=true` / `confirm=true` are still *accepted* on all 19 write tools (nothing breaks), but
+they **commit nothing** — the tool answers with a proposal and this note:
+
+```text
+`approve`/`confirm` no longer commit: an approval is MINTED BY A HUMAN out-of-band
+(`mokata approve <id>`) and can only be REFERENCED here by id. Typing approve=true is not
+consent — it never was.
+```
+
+Approve is deliberately a **terminal command only** — it has no MCP tool and no slash command; an in-harness
+approve surface would just hand the model the pen back. And even an approved write is hard-blocked
+if it carries a secret. See the whole brain by category:
 
 ```bash
 mokata memory
@@ -144,11 +219,22 @@ decision (1):
 
 ### D2 · Self-healing — a contradiction is surfaced, never silently overwritten
 
-Record a decision, then a **contradicting** one:
+Record a decision, then a **contradicting** one. Each write runs the same
+propose → `mokata approve <id>` → re-call-with-the-id loop from D10, so here it is as a shell
+helper (the agent does this over MCP; the loop is identical):
 
 ```bash
-python3 -c "from mokata import mcp_server as M; M.remember(path='.', subject='db.engine', value='postgres', approve=True)"
-python3 -c "from mokata import mcp_server as M; M.remember(path='.', subject='db.engine', value='mysql', approve=True)"
+commit() {  # propose -> you approve -> commit
+  ID=$(python3 -c "
+from mokata import mcp_server as M
+print(M.remember(path='.', subject='$1', value='$2')['proposal_id'])")
+  mokata approve $ID --yes >/dev/null
+  python3 -c "
+from mokata import mcp_server as M
+print(M.remember(path='.', subject='$1', value='$2', proposal_id='$ID')['status'])"
+}
+commit db.engine postgres
+commit db.engine mysql
 mokata memory
 ```
 
@@ -157,12 +243,21 @@ mokata **surfaces the old→new diff** for your decision (it does not rewrite):
 ```text
 self-healing — 1 item(s) need your decision (nothing changes until you act):
   (contradiction) [decision] db.engine: 'postgres' -> 'mysql'
+
+mokata · memory health: 0 stale · 1 contradictory · 1 unused — review with `mokata memory` (gated) / `mokata govern`; nothing changes until you approve.
 ```
 
-Approve the heal — the old value is superseded (kept in the record), the new one becomes active:
+Approve the heal — the old value is superseded (kept in the record), the new one becomes active.
+The heal is a durable write too, so it earns its own human-minted approval:
 
 ```bash
-python3 -c "from mokata import mcp_server as M; print(M.apply_proposal(path='.', subject='db.engine', decision='approve', approve=True)['status'])"
+ID=$(python3 -c "
+from mokata import mcp_server as M
+print(M.apply_proposal(path='.', subject='db.engine', decision='approve')['proposal_id'])")
+mokata approve $ID --yes >/dev/null
+python3 -c "
+from mokata import mcp_server as M
+print(M.apply_proposal(path='.', subject='db.engine', decision='approve', proposal_id='$ID')['status'])"
 ```
 
 ```text
@@ -204,6 +299,7 @@ mokata memory migrate --to obsidian --yes
 ```
 
 ```text
+migrate: 3 item(s) sqlite -> obsidian
 migrate: 3 item(s) sqlite -> obsidian (idempotent upsert).
 ```
 
@@ -335,6 +431,111 @@ mokata run develop
 [BLOCKED] spec-persisted — no saved spec — draft and emit it first (/mokata:spec); the completeness gate must pass before implementation.
 ```
 
+**…and the same gates fire on the agent's *native* file writes.** A gate that only lives inside
+mokata's own tools is a door with no lock — the model could just use its editor. `mokata setup
+claude` installs a **`PreToolUse` gate-guard hook**, so `Write`/`Edit`/`MultiEdit`/`NotebookEdit`
+are decided from the run's persisted state and refused with exit code 2. Three gates:
+
+| gate | blocks an implementation write when… |
+|---|---|
+| `spec-persisted` | an approach is approved for this run but no spec is emitted |
+| `no-code-without-failing-test` | the spec is emitted but no failing test is on record |
+| `spec-scope` | the write is outside the spec's authorized surface, spells something the spec **deferred**, or a `spec amend` is in flight |
+
+A spec carries a **scope**: the surface it authorizes, and the things you agreed *not* to build
+(each with the literal marker it would spell in code). The model writes that section when it emits
+the spec through `/mokata:spec` — you never hand-author it. To make this beat runnable in a plain
+terminal, emit one with the scripted escape hatch, and put a failing test on record:
+
+```bash
+cat > spec.json <<'JSON'
+{"title": "Payments",
+ "criteria": [{"id": "AC-1", "text": "process_payment is idempotent on retry"}],
+ "tests":    [{"name": "test_idempotent", "ac_ids": ["AC-1"]}],
+ "scope": {"authorized": ["payments.py"],
+           "deferred":   [{"id": "D1", "item": "batch payments", "markers": ["batch_update"]}]}}
+JSON
+mokata spec emit --file spec.json --yes
+```
+
+```text
+spec emitted: 'Payments' — 1 acceptance criteria, all mapped to tests.
+  saved as this run's spec (run sample), and recorded in the shared spec corpus (1 spec(s)).
+  implementation is unblocked once a failing test is on record (/mokata:test).
+```
+
+Implementation stays blocked until a failing test is on record, so put one there — this is the
+one step `/mokata:test` normally does for you:
+
+```bash
+python3 -c "
+from mokata.state import StateStore
+from mokata import tdd_state
+tdd_state.record(StateStore(tdd_state.state_dir('.')), 'sample', red=['test_idempotent'])
+print('phase:', tdd_state.read_tdd_phase('.', 'sample').phase)"
+```
+
+```text
+phase: red
+```
+
+RED is the *permission* to implement. Now watch `spec-scope` catch scope creep **inside an
+otherwise-authorized file**:
+
+```bash
+# build the PreToolUse envelope Claude Code sends the hook on a native Write
+write() { python3 -c "
+import json, os, sys
+print(json.dumps({'tool_name': 'Write', 'cwd': os.getcwd(), 'session_id': 'w1',
+  'tool_input': {'file_path': os.getcwd() + '/' + sys.argv[1], 'content': sys.argv[2]}}))" "$1" "$2"; }
+
+write payments.py 'def process_payment(a, c): return 1' | mokata-hook gate-guard   # authorized
+write payments.py 'def batch_update(items): pass'       | mokata-hook gate-guard   # DEFERRED
+write checkout.py 'def checkout(c): pass'               | mokata-hook gate-guard   # not in scope
+```
+
+```text
+BLOCKED [spec-scope] spec-scope: scope change — this write is outside spec v1 (deferred: batch payments). this write spells 'batch_update', and the spec DEFERRED 'batch payments'. A user's instruction is authorization to ASK, not to build: run `mokata spec amend` (gated — the new scope is re-approved and re-tested), or override: mokata gate override spec-scope --reason "<why>"
+BLOCKED [spec-scope] spec-scope: scope change — this write is outside spec v1. checkout.py is outside the surface this spec authorized (payments.py). A user's instruction is authorization to ASK, not to build: run `mokata spec amend` (gated — the new scope is re-approved and re-tested), or override: mokata gate override spec-scope --reason "<why>"
+```
+
+(The first write — an authorized file, ordinary implementation — passes silently, exit 0.) The
+honest fine print: **test files are always writable** (you must be able to write the failing
+test), the gates fire **only inside an active mokata run** (hand-editing is never policed), and
+this is a *methodology* block, not a security one — a human can lift one, explicitly and on the
+ledger:
+
+```bash
+mokata gate override spec-scope --reason "hotfix: prod is down"
+mokata gate status
+mokata gate clear          # …and enforce again
+```
+
+```text
+'spec-scope' overridden for this session (run sample) — recorded to the audit ledger.
+It expires with this session. Clear it now with: mokata gate clear
+
+mokata run-state gates (enforced on native Write/Edit by the gate-guard hook):
+  run: sample
+  spec-persisted                   enforced
+  no-code-without-failing-test     enforced
+  spec-scope                       OVERRIDDEN (this session)
+
+  The override expires with this session — a new session enforces again.
+
+cleared: spec-scope — the gates are enforcing again.
+```
+
+The override lands on the ledger with its reason:
+
+```text
+  #5   gate_override gate=spec-scope run=sample actor=human decision=override scope=session reason=hotfix: prod is down
+```
+
+**Why it matters:** every other methodology tool asks the model nicely. mokata's gates are an exit
+code the model cannot argue with — and there is **no env-var kill switch and no MCP tool** to turn
+them off, because a model-invocable override is not an override at all.
+
 ### D7 · Ground in code, never assume
 
 ```bash
@@ -352,19 +553,25 @@ Decide from the code, not from assumption. ... never silently assume. Cite what 
 
 ### D8 · Spec-awareness regression guard · D9 · Deviation gate
 
-Save a spec, then a change that **touches** it is raised and routed through the deviation gate:
+With the `Payments` spec saved (above), a change that **touches** it is raised and routed through
+the deviation gate — and the confirmation is one the model cannot mint for itself:
 
 ```bash
-python3 -c "from mokata import mcp_server as M; print(M.spec_check(path='.', symbols='process_payment')['status'])"
-python3 -c "from mokata import mcp_server as M; print(M.spec_check(path='.', symbols='process_payment', approve=True)['status'])"
-python3 -c "from mokata import mcp_server as M; print(M.spec_check(path='.', symbols='render_sidebar')['status'])"
+python3 -c "
+from mokata import mcp_server as M
+r = M.spec_check(path='.', symbols='process_payment')      # touches the saved spec
+print(r['status'], r['proposal_id'])
+print('unrelated:', M.spec_check(path='.', symbols='render_sidebar')['status'])"
 ```
 
 ```text
-blocked       # touches the saved 'Payments' spec — STOP until confirmed
-confirmed      # human confirms (amend/supersede) — routed through the deviation gate, logged
-ok             # an unrelated change → no false alarm
+blocked p-76acbec00cdf        # touches the saved 'Payments' spec — STOP until a human confirms
+unrelated: ok                 # an unrelated change → no false alarm
 ```
+
+`mokata approve p-76acbec00cdf`, then re-calling `spec_check` with that `proposal_id`, records the
+amend/supersede through the deviation gate and logs it. With **no** saved spec corpus at all the
+answer is `skipped` — mokata says it doesn't know, rather than clearing you.
 
 The same **deviation gate** (D9) guards every plan change: mokata *never silently deviates* — it
 stops, surfaces *what · why · options*, and logs your decision. **Why it matters:** a plain
@@ -425,18 +632,27 @@ Phases to run (each applies its own gate):
 
 ### D16 · Adopt freely, trust nothing
 
-Every MCP write tool is **propose-only by default** — adopt an external tool under mokata's gates
-without granting it autonomy:
+All **19** MCP write tools are propose-only — even the destructive ones. Nothing an adopted tool
+does can commit without an approval a human minted:
 
 ```bash
-python3 -c "from mokata import mcp_server as M; print(M.reset(path='.')['status'])"
+python3 -c "
+from mokata import mcp_server as M
+r = M.reset(path='.')
+print(r['status'], r['proposal_id'])
+print(r['hint'])"
 ```
 
 ```text
-proposed
+proposed p-5da515d63e87
+NOTHING was written. Ask the human to run:  mokata approve p-5da515d63e87  — then re-call reset with proposal_id="p-5da515d63e87".
 ```
 
-Trust dials (`config set tools.<t>.trust …`) let you keep a tool read-only or propose-only.
+On top of that, the **trust dial** (`settings.trust`, keyed by surface or by tool) can pin a tool
+or the whole MCP surface to `read-only` — a *configuration* bound that no proposal and no human
+approval can lift. Its honest ladder on the MCP surface is `read-only` ▸ write-allowed:
+`propose-only` and the default `gated-write` are the same thing there, because every MCP write
+already needs a human-minted approval.
 
 ---
 
@@ -451,13 +667,24 @@ mokata enter analysis             # start mid-pipeline
 ```
 
 ```text
-mokata skills (run `mokata skills <name>` for detail):
-  /brainstorm mokata · Explore approaches with the user; HARD-GATE the spec behind approval.
-  /onboard    mokata · Guided capture of the project's rules, guardrails, conventions, ...
-  /spec       mokata · Turn the problem into testable acceptance criteria; map each to a test.
+mokata skills — the curated catalog (16 skills; run `mokata skills <name>` for detail):
+
+Runnable pipeline skills (run `mokata run <name>` or `/mokata:<name>`):
+  /brainstorm  mokata · Explore approaches with the user; HARD-GATE the spec behind approval.
+  /spec        mokata · Turn the problem into testable acceptance criteria; map each to a test.
+  /test        mokata · Write failing tests first (RED); no implementation.
+  /develop     mokata · Implement the minimum to turn a failing test green.
+  ...
+
+Standalone / auto-firing skills (their own command or fire on their own — not `mokata run`):
+  /govern      mokata · See the governed state — rules, memory-by-kind, read/write ratio, ...
   ...
 # mokata · /review (standalone)
 ```
+
+(16 curated skills, plus 10 auto-engaging domain skills — `api`, `security`, `performance`,
+`frontend-a11y`, `browser-testing`, `ci-cd`, `git`, `deprecation`, `docs-adr`, `shipping` — for
+26 shipped in all.)
 
 Profiles, per-layer/tool toggles, and trust dials make the stack configurable and reproducible.
 

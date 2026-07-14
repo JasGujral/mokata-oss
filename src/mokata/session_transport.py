@@ -27,14 +27,23 @@ Version 2.0.
 from __future__ import annotations
 
 import os
+from contextlib import nullcontext
 from typing import Any, List, Optional
 
 from . import MOKATA_DIR
+from .atomicfile import atomic_write_text, lock_path_for
+from .dsn import DEFAULT_DSN_ENV
+from .oslock import file_lock
+from .errors import DegradedCapability
 
 # The env vars the Postgres transport reads its DSN from (never inline in the committed manifest,
-# exactly like the shared-memory backend). The session-specific var wins; the shared one is the
-# fallback so a team that already points memory at one DB needs no extra config.
-PG_DSN_ENVS = ("MOKATA_SESSION_PG_DSN", "MOKATA_PG_DSN")
+# exactly like the shared-memory backend). The session-specific override var wins; then the
+# CONFIGURED team DSN name (via the ONE resolver — so `team connect --dsn-env CUSTOM` reaches
+# sessions too, C-1); then the literal default (which `resolve_dsn_env` supplies). The default
+# NAME lives only in `dsn.py`.
+SESSION_OVERRIDE_ENV = "MOKATA_SESSION_PG_DSN"
+# Kept for the degrade-clean "needs a DSN in $X / $Y" hint (the two well-known names).
+PG_DSN_ENVS = (SESSION_OVERRIDE_ENV, DEFAULT_DSN_ENV)
 PG_TABLE = "mokata_session_bundle"          # mokata-OWNED, namespaced (never a generic name)
 
 LOCAL_DIRNAME = "session-bundles"           # 55a's store (kept identical)
@@ -45,7 +54,7 @@ VAULT_SUBDIR = "sessions"                   # bundles namespaced inside `.mokata
 _PROJECT_CURRENT = object()
 
 
-class SessionTransportUnavailable(Exception):
+class SessionTransportUnavailable(DegradedCapability):
     """Raised when a transport can't be built — e.g. psycopg missing or no DSN. The caller
     degrades cleanly (a clear message, no write anywhere) and NEVER silently falls back to a
     less-secure store."""
@@ -73,11 +82,17 @@ class _FileTransport:
     def location(self, tag: str) -> str:
         return self._path(tag)
 
+    def lock(self, tag: str):
+        """MS.S6 — hold the cross-process lock for THIS tag (`oslock`, the shared MS.S1 primitive),
+        so a push/rename can check whether the name is free and claim it INDIVISIBLY. The handle is
+        a dot-prefixed `.lock` sibling, so `list_tags` (which matches `*.json`) never sees it."""
+        return file_lock(lock_path_for(self._path(tag)))
+
     def write_bundle(self, tag: str, blob: str) -> str:
+        # MS.S6 — atomic replace: a teammate reading a bundle mid-push can never get a half-written
+        # one (which `verify_bundle` would reject as corrupt, losing a session that was in fact fine).
         path = self._path(tag)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(blob)
+        atomic_write_text(path, blob)
         return path
 
     def read_bundle(self, tag: str) -> Optional[str]:
@@ -137,36 +152,16 @@ class PostgresTransport:
         # ALL projects (review `--all` / `list_projects` only).
         self.project = project
         if client is not None:
-            # an injected connection (tests / a host-provided client); ensure the owned table.
-            self._conn = client
-            for stmt in self._setup_sql():
-                try:
-                    self._conn.execute(stmt)
-                except Exception:  # pragma: no cover - a fake may no-op DDL
-                    pass
+            self._conn = client               # an injected connection: already provisioned.
             return
         if not dsn:
             raise SessionTransportUnavailable(
                 "the Postgres session transport needs a DSN in $"
                 + " / $".join(PG_DSN_ENVS) + " (never inline in the committed manifest)")
+        # D1 — VERIFY-ONLY: `team init` (teamdb) owns this table. The `ON CONFLICT (project, tag)`
+        # upsert below resolves via the composite PK it provisions.
         from .memory._pg import connect_psycopg
-        self._conn = connect_psycopg(dsn, SessionTransportUnavailable,
-                                     setup_sql=self._setup_sql())
-
-    @classmethod
-    def _setup_sql(cls) -> List[str]:
-        # Fresh table: composite PRIMARY KEY (project, tag) → full multi-project correctness.
-        # The ADD-COLUMN + UNIQUE-INDEX migrate a pre-71a table (PK on `tag` alone); its old rows
-        # read back as legacy/unscoped under `--all`. `ON CONFLICT (project, tag)` resolves via the
-        # composite PK (fresh) or the unique index (migrated).
-        return [
-            f"CREATE TABLE IF NOT EXISTS {cls.TABLE} ("
-            "  tag TEXT, blob TEXT, seq BIGSERIAL, project TEXT,"
-            "  PRIMARY KEY (project, tag))",
-            f"ALTER TABLE {cls.TABLE} ADD COLUMN IF NOT EXISTS project TEXT",
-            f"CREATE UNIQUE INDEX IF NOT EXISTS {cls.TABLE}_project_tag"
-            f"  ON {cls.TABLE} (project, tag)",
-        ]
+        self._conn = connect_psycopg(dsn, SessionTransportUnavailable)
 
     def _scope(self, prefix: str = "AND") -> tuple:
         if self.project is None:
@@ -175,6 +170,14 @@ class PostgresTransport:
 
     def location(self, tag: str) -> str:
         return f"postgres:{self.TABLE}/{_safe_tag(tag)}"
+
+    def lock(self, tag: str):
+        """No local lock: the DB is the serialization point (the composite PK + `ON CONFLICT` upsert
+        is already indivisible, and a lock file on THIS machine could not serialise a teammate on
+        another one anyway). The claim re-check in `commit_session_push` still runs — it reads the
+        row back before overwriting, so a push that would clobber a different session still fails
+        honestly rather than silently."""
+        return nullcontext(self.location(tag))
 
     # Justification for the B608 suppressions below (bandit false positive): the SQL interpolates
     # ONLY the mokata-OWNED constant `self.TABLE` (+ the fixed `_scope()` fragment), never user
@@ -216,12 +219,39 @@ class PostgresTransport:
 
 
 # --------------------------------------------------------------------------------- factory
-def resolve_pg_dsn(dsn_env: Optional[str] = None) -> Optional[str]:
-    """The DSN for the Postgres transport: an explicit env-var name first, else the standard
-    session / shared vars. Returns None when none is set (the caller degrades clean)."""
-    names = (dsn_env,) + PG_DSN_ENVS if dsn_env else PG_DSN_ENVS
+def _root_manifest_data(root: Optional[str]) -> Optional[dict]:
+    """Best-effort manifest dict for `root` — for CONFIGURED-team-name resolution. Reads the
+    manifest AT `root` (never guesses from cwd); degrade-clean → None (→ the default env name)
+    for an uninitialized/broken repo, never raises."""
+    if not root:
+        return None
+    from .config import ConfigError, Surface
+    try:
+        if not Surface.is_initialized(root):
+            return None
+        return Surface.load(root).manifest.data or None
+    except (ConfigError, OSError, ValueError):
+        # D5 — the real raisers: `Surface.load` re-raises a broken/unparseable manifest as
+        # `ConfigError` (this is the one that actually fires — WITHOUT it the narrowing would turn
+        # the swallow into a CRASH on the session path), plus an unreadable manifest file (OSError)
+        # and a torn JSON document (ValueError). None → the DEFAULT DSN env name, unchanged.
+        return None
+
+
+def resolve_pg_dsn(dsn_env: Optional[str] = None, *, data: Optional[dict] = None,
+                   root: Optional[str] = None, environ: Optional[dict] = None) -> Optional[str]:
+    """The DSN for the Postgres transport. Resolution order (C-1, matches memory/journal): an
+    explicit per-call name → the session override var (`$MOKATA_SESSION_PG_DSN`) → the CONFIGURED
+    team DSN name (via `dsn.resolve_dsn_env`, which also supplies the literal default). `data`
+    (or `root`, from which the manifest is loaded — never cwd) lets a `team connect --dsn-env
+    CUSTOM` reach sessions. None when none is set (the caller degrades clean)."""
+    from .dsn import resolve_dsn_env
+    env = os.environ if environ is None else environ
+    if data is None and root is not None:
+        data = _root_manifest_data(root)
+    names = ([dsn_env] if dsn_env else []) + [SESSION_OVERRIDE_ENV, resolve_dsn_env(data)]
     for name in names:
-        val = os.environ.get(name) if name else None
+        val = env.get(name) if name else None
         if val:
             return val
     return None
@@ -245,7 +275,9 @@ def make_transport(kind: Optional[str], root: str, *, dsn_env: Optional[str] = N
         scope = derive_project_id(root) if project is _PROJECT_CURRENT else project
         if client is not None:
             return PostgresTransport(client=client, project=scope)
-        return PostgresTransport(dsn=resolve_pg_dsn(dsn_env), project=scope)
+        # thread `root` so the resolver honors the CONFIGURED team DSN name (C-1) — the same DB
+        # memory/journal use — instead of silently falling through to the literal default.
+        return PostgresTransport(dsn=resolve_pg_dsn(dsn_env, root=root), project=scope)
     raise SessionTransportUnavailable(
         f"unknown session transport '{kind}' (use local | vault | postgres)")
 

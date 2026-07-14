@@ -32,9 +32,11 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 from __future__ import annotations
 
 import re
+import sqlite3
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
+from ..errors import DegradedCapability
 from .healing import CONTRADICTION, STALE
 from .item import ALWAYS_ON_KINDS
 
@@ -178,6 +180,30 @@ def memory_health(proposals: List[Any], reads: int, writes: int) -> MemoryHealth
                         unused=_unused_count(reads, writes), reads=reads, writes=writes)
 
 
+def _backend_read_errors() -> tuple:
+    """D5 — the classes a live BACKEND READ (`store.detect_issues` → `backend.all`) genuinely
+    raises, as an except-clause tuple.
+
+    Evaluated lazily (an except clause's expression only runs when something is actually raised),
+    so the optional-driver import costs nothing on the healthy path.
+
+    * `sqlite3.Error`      — the SQLite floor: a locked / corrupt / permission-broken `.mokata/` DB.
+    * `OSError`            — the local file IO under it (and the Obsidian vault backend).
+    * `DegradedCapability` — a backend that could not be BUILT (`PostgresUnavailable` & family).
+    * psycopg's `Error`    — the Postgres backend does NOT wrap its query errors, so a mid-session
+                             network drop surfaces the DRIVER's class here. It is named only when
+                             the optional extra is installed, because mokata's core must not take a
+                             hard dependency on it — and it MUST be named, since narrowing without
+                             it would turn today's swallow into a CRASH on a team-mode blip.
+    """
+    errors: tuple = (sqlite3.Error, OSError, DegradedCapability)
+    try:
+        import psycopg
+    except ImportError:
+        return errors
+    return errors + (psycopg.Error,)
+
+
 def assess_health(store: Any, now: Optional[str] = None) -> MemoryHealth:
     """Assess memory health over a live store — `detect_issues` (read-only; no read-counter
     bump) for the stale/contradictory backlog, plus the C8 `stats` for the unused signal.
@@ -185,7 +211,10 @@ def assess_health(store: Any, now: Optional[str] = None) -> MemoryHealth:
     yields a healthy (all-zero) read."""
     try:
         proposals = store.detect_issues(now=now)
-    except Exception:
+    except _backend_read_errors():
+        # D5 — narrowed to the classes a backend read actually raises (see `_backend_read_errors`).
+        # An empty proposal list is the documented "healthy (all-zero) read" this degrades to; a
+        # typo (AttributeError) in the detection path now SURFACES instead of reading as "healthy".
         proposals = []
     stats = getattr(store, "stats", None)
     reads = int(getattr(stats, "reads", 0) or 0)

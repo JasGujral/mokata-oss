@@ -188,15 +188,27 @@ class TestConnectionManager(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 _pg.get_connection("postgres://h/db", RuntimeError)
 
-    def test_connect_psycopg_still_runs_setup_sql(self):
-        # the existing caller contract is preserved: setup_sql runs on the (now shared) conn.
+    def test_connect_psycopg_runs_NO_ddl(self):
+        # D1 — this test used to assert the OPPOSITE: that `connect_psycopg(setup_sql=…)` ran the
+        # caller's DDL on every connect. That contract WAS the bug (a DML-only role is denied
+        # CREATE even on a provisioned DB → silent SQLite fallback). The parameter is gone; a
+        # runtime connect VERIFIES the schema and writes none of it.
+        import inspect
+
+        from mokata import teamdb
         from mokata.memory import _pg
-        conn = _FakeConn()
+        self.assertNotIn("setup_sql", inspect.signature(_pg.connect_psycopg).parameters)
+
+        conn = _FakeConn(rows_for={_SCHEMA: [(teamdb.TEAM_SCHEMA_VERSION,
+                                              teamdb.TEAM_SCHEMA_MIN_SUPPORTED)]})
+        teamdb.reset_schema_cache()
         with _mock_psycopg(_FakePsycopg(conn=conn)):
-            got = _pg.connect_psycopg("postgres://h/db", RuntimeError,
-                                      setup_sql=["CREATE TABLE IF NOT EXISTS x (id int)"])
+            got = _pg.connect_psycopg("postgres://h/db", RuntimeError)
+        teamdb.reset_schema_cache()
         self.assertIs(got, conn)
-        self.assertIn("CREATE TABLE IF NOT EXISTS x (id int)", conn.executed)
+        ddl = [s for s in conn.executed
+               if s.strip().upper().startswith(("CREATE ", "ALTER ", "DROP "))]
+        self.assertEqual([], ddl, f"a runtime connect must run ZERO DDL, ran: {ddl}")
 
 
 # =========================================================== the probe (reachability + schema)

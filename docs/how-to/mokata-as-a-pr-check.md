@@ -58,7 +58,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --quiet mokata
       - id: check
-        uses: JasGujral/mokata-oss/.github/actions/mokata-check@v0.0.5
+        uses: JasGujral/mokata-oss/.github/actions/mokata-check@v0.0.13
         with:
           base: ${{ github.event.pull_request.base.sha }}
           fail-on-block: "true"          # set "false" for report-only (never fails the job)
@@ -70,7 +70,7 @@ jobs:
 ```
 
 The reusable composite action lives at
-[`.github/actions/mokata-check/action.yml`](https://github.com/JasGujral/mokata-oss/blob/master/.github/actions/mokata-check/action.yml)
+[`.github/actions/mokata-check/action.yml`](https://github.com/JasGujral/mokata-oss/blob/main/.github/actions/mokata-check/action.yml)
 (a runnable copy of the workflow above ships next to it as `example-pr-check.yml`).
 
 ### Action inputs

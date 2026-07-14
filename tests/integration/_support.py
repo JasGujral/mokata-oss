@@ -26,3 +26,4 @@ _spec.loader.exec_module(_parent)
 
 write_sample_repo = _parent.write_sample_repo
 sample_manifest_data = _parent.sample_manifest_data
+mcp_commit = _parent.mcp_commit          # SI.3 — the human-approval round-trip for an MCP write

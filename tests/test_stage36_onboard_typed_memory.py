@@ -17,6 +17,7 @@ import unittest
 from contextlib import redirect_stdout
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _support import mcp_commit          # SI.3: propose -> human approves -> redeem by id
 
 from mokata import cli
 from mokata.bootstrap import BRIEFING_RULES_MAX_LINES, build_bootstrap
@@ -200,8 +201,8 @@ class TestOnboardSkill(unittest.TestCase):
             self.assertEqual(res["status"], "proposed")
             self.assertEqual(_store(d).all_active(), [])
 
-            res = M.remember(path=d, subject="no-net", value="no network in parser",
-                             kind="rule", confirm=True)
+            res = mcp_commit(M.remember, path=d, subject="no-net",
+                             value="no network in parser", kind="rule")
             self.assertEqual(res["status"], "committed")
             items = _store(d).all_active()
             self.assertEqual(len(items), 1)

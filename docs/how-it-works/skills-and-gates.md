@@ -1,9 +1,10 @@
 # The skills layer & gate map
 
 mokata's capabilities are **skills**. This page explains what a skill is under the hood, how its
-Contract maps to a **real gate** (never prose), and how the one activation surface keeps every
-channel in agreement. For the operational catalog, see [Skills reference](../reference/skills.md);
-for the phased flow, see [Pipeline & gates](../concepts/pipeline.md).
+Contract maps to a **real gate** (never prose), how the **gate-guard hook** enforces the run-state
+gates on your *native* edits, and how the one activation surface keeps every channel in agreement.
+For the operational catalog, see [Skills reference](../reference/skills.md); for the phased flow,
+see [Pipeline & gates](../concepts/pipeline.md).
 
 ## Two surfaces, one source
 
@@ -45,7 +46,7 @@ a sentence the model is trusted to honour:
 | `brainstorm` | `approach-approval` | no spec until one approach is explicitly approved (human) |
 | `spec` | `completeness` | every acceptance criterion maps to a test, or `emit` is refused |
 | `test` | `red-before-green` | a failing test must exist first |
-| `develop` | `no-code-without-failing-test` + `spec-persisted` | a saved spec + a RED test precede implementation |
+| `develop` | `no-code-without-failing-test` + `spec-persisted` + `spec-scope` | a saved spec + a RED test precede implementation, and the write stays inside the scope the spec authorized |
 | `review` | `spec-then-quality` | two passes — against the spec, then quality (human) |
 | `ship` | `finish-is-human-landed` | green tests + met ACs + a passed review, then a human-chosen land |
 | `govern` / memory / config edits | WriteGate | secret-scan → human approval → audit ledger |
@@ -74,6 +75,91 @@ claims done. This is the discipline that stops a skill from talking itself past 
 gate is the hard stop, the verification is the evidence, and the anti-rationalization is the
 pre-empt.
 
+## The gate-guard — the gates enforced on *native* edits
+
+A Contract binds the skill. It cannot bind the **native `Write`/`Edit`** Claude Code reaches for
+when no skill is active — and a gate that only fires inside mokata's own tools is a seatbelt with an
+unlocked door. So mokata ships a **`PreToolUse` hook** that runs on the harness's own file-mutation
+tools, decides from state on disk, and **blocks with exit code 2**. There are two, and they are
+different in kind:
+
+| Hook | Runs on | Kind |
+|---|---|---|
+| `mokata-hook secret-guard` | `Write` · `Edit` · `MultiEdit` · **`Bash`** | **security** — never overridable |
+| `mokata-hook gate-guard` | `Write` · `Edit` · `MultiEdit` · `NotebookEdit` | **methodology** — overridable, explicitly and on the ledger |
+
+The gate-guard enforces **three run-state gates** — the same ids the in-tool gates use, at a new
+enforcement point (a net *under* them, never a second opinion):
+
+| Gate | Blocks a native write to an implementation file when… |
+|---|---|
+| `spec-persisted` | an approach is approved for this run but **no spec is emitted** |
+| `no-code-without-failing-test` | the spec is emitted but **no failing test is on record** |
+| `spec-scope` | the write is **outside the spec's authorized surface**, spells an item the spec explicitly **deferred**, or a **spec amend is in progress** |
+
+A violation is one stderr line and exit 2 — it names the file, says what to do, and offers the
+override:
+
+```text
+BLOCKED [no-code-without-failing-test] no failing test is on record for this run — auth.py is
+implementation. Write the failing test first and watch it fail (/mokata:test), or override:
+mokata gate override no-code-without-failing-test --reason "<why>"
+```
+
+### What `spec-scope` checks
+
+When the model emits the spec, it records the **scope you approved**: the paths the change is
+*authorized* to touch, and the items you explicitly agreed **not** to build — the **deferred** ones,
+each carrying the literal **marker** it would spell in code (a token like `batch_update`). You never
+hand-author that JSON; you agree to it in the spec.
+
+The marker is why scope is checkable at all. A deferred feature usually lands *inside a perfectly
+authorized file* — the batch endpoint goes in the same module as the single-item ones — so the path
+alone can't see it. The content can: the hook matches the marker as a literal substring of the text
+about to be written, and blocks. **A user's instruction to build something the spec deferred is
+authorization to ASK, not to build.** Your three levers when it fires:
+
+- `mokata spec amend` — re-gate the scope (the new criteria re-earn completeness and owe their own
+  failing tests). An amend in progress blocks development writes until it lands.
+- `mokata spec amend --abort` — abandon it; the run returns to its existing spec and writes unblock.
+- `mokata gate override spec-scope --reason "<why>"` — take responsibility, on the ledger.
+
+Every undeclared case fails **open**: a spec with no scope section, an unreadable one, or one that
+draws no map is never a block.
+
+### What it will *not* do (the honest limits)
+
+- **Test files are always writable.** RED is the *permission* to implement, not the prohibition —
+  a gate that blocked the failing test would block the fix.
+- **Gates fire only inside an active mokata run** (an approach approved and/or a spec emitted).
+  Hand-editing a repo outside a run is never policed: guardrails on the pipeline, not house arrest.
+- **Ambiguity fails OPEN.** If two runs have state in one repo and none is pinned (two Claude Code
+  windows on one tree), mokata will not guess which run your edits belong to — every run-state gate
+  turns **off** for that window, and says so once. Pin one with `MOKATA_SESSION_ID`, or give the
+  window its own tree with `mokata worktree create` (see `mokata windows`).
+- **A known hole, stated plainly:** the gate-guard does **not** match `Bash`, so a shell edit
+  (`sed -i …`) is not policed by it. The *secret*-guard does match `Bash`.
+- **Only Claude Code wires it.** It is the one harness that declares the `hooks` capability; on
+  Cursor, Gemini, Windsurf, Codex, Aider and Cowork the gate-guard is never wired and **the
+  run-state gates enforce nothing** there. `mokata setup claude` wires both hooks by default
+  (`--no-hooks` opts out cleanly).
+
+### Overriding a run-state gate
+
+These are *methodology* gates, so they are overridable — under one discipline:
+
+```bash
+mokata gate status                                    # read-only: what is enforced / overridden here
+mokata gate override spec-scope --reason "hotfix"     # ONE gate, THIS session — re-confirmed + ledgered
+mokata gate clear                                     # drop this session's overrides
+```
+
+`--reason` is required, the override is re-confirmed interactively, scoped to the session (a new
+session re-enables enforcement — nothing to remember to turn off), and appended to the audit ledger.
+There is deliberately **no env-var kill switch**, **no MCP tool**, and **no slash command**: an
+env var is a side door any process can open silently, and a model-invocable override would let the
+model clear the very constraint it is under. The secret-guard has no override at all.
+
 ## Standalone, composable, gated
 
 Skills don't require the full pipeline. Each runs on its own and applies **only its own gate**:
@@ -87,7 +173,10 @@ mokata enter completeness_gate  # run just one pipeline phase's gate
 ```
 
 Because the gate travels with the skill, there's no "fast path" that skips it — running `develop`
-alone still refuses to implement without a failing test.
+alone still refuses to implement without a failing test. And the one door a Contract *couldn't*
+close — reaching for the harness's native `Write`/`Edit` with no skill active — is closed by the
+[gate-guard hook](#the-gate-guard-the-gates-enforced-on-native-edits) above: the run-state gates
+hold at the harness boundary, not just inside mokata's own tools.
 
 ## How skills auto-engage
 

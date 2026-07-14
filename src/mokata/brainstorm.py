@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 from .manifest import ManifestError
 # TM.S11a — the two pre-spec decision lenses (blast radius + architectural fit). Pure/injected —
 # the engine holds + gates on them; the computation lives in brainstorm_impact.py (doc 63 §4, P21).
+from .errors import MokataError
 from .brainstorm_impact import (
     ApproachImpact,
     DesignFitVerdict,
@@ -67,7 +68,7 @@ def _clip_line(text: Any) -> str:
     return s
 
 
-class BrainstormError(Exception):
+class BrainstormError(MokataError):
     """A brainstorm-flow rule was violated (bad question order, bad approach set…)."""
 
 

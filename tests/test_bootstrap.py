@@ -1,6 +1,8 @@
 """A4 — SessionStart bootstrap + token budget."""
 
+import io
 import os
+import sqlite3
 import sys
 import unittest
 
@@ -113,6 +115,115 @@ class TestBootstrapCalibration(unittest.TestCase):
         self.assertTrue(cal)                     # the estimate was logged
         self.assertNotIn("actual", cal[-1])      # no real count at inject time — estimate alone
         self.assertGreater(cal[-1]["estimate"], 0)
+
+
+class TestRulesDegradeIsLoud(unittest.TestCase):
+    """D5 — a memory store the briefing cannot read must SAY SO.
+
+    The bug: `_always_on_rule_lines` swallowed every error and returned []. The project's captured
+    rules & guardrails then simply never reached the briefing — and the briefing looked completely
+    NORMAL, byte-indistinguishable from a project that had captured no rules at all. Claude went on
+    to work with NONE of the user's guardrails while the user believed governance was on.
+
+    The [] fallback stays (a briefing must never crash the session). It just stops being a secret."""
+
+    def setUp(self):
+        from mokata import degrade
+        degrade.reset_degrade_notices()
+        self.addCleanup(degrade.reset_degrade_notices)
+
+    def _rule_lines_with_broken_memory(self, exc):
+        """Force the memory read to fail with `exc`; return (lines, printed notices)."""
+        from mokata import bootstrap, degrade
+        import mokata.memory as memory
+
+        def boom(_surface):
+            raise exc
+        real = memory.MemoryStore.from_surface
+        memory.MemoryStore.from_surface = staticmethod(boom)
+        self.addCleanup(setattr, memory.MemoryStore, "from_surface", real)
+
+        err = io.StringIO()
+        real_stderr, sys.stderr = sys.stderr, err
+        try:
+            lines = bootstrap._always_on_rule_lines(make_surface())
+        finally:
+            sys.stderr = real_stderr
+        return lines, err.getvalue(), degrade.emitted_notices()
+
+    def test_an_unreadable_memory_store_still_returns_no_lines(self):
+        # the fallback SHAPE is unchanged — the briefing never crashes the session.
+        lines, _err, _n = self._rule_lines_with_broken_memory(sqlite3.OperationalError("locked"))
+        self.assertEqual(lines, [])
+
+    def test_it_is_LOUD_and_says_the_rules_are_not_being_applied(self):
+        _lines, err, notices = self._rule_lines_with_broken_memory(
+            sqlite3.DatabaseError("file is not a database"))
+        self.assertIn("DEGRADED", err)
+        self.assertIn("rules are NOT being applied", err)
+        self.assertIn("mokata doctor", err)          # the exact remediation, named
+        # and it is REMEMBERED, so `mokata doctor` can answer "what degraded?" later.
+        self.assertEqual([n.subsystem for n in notices], ["memory-rules"])
+
+    def test_the_notice_goes_to_stderr_not_stdout(self):
+        out = io.StringIO()
+        real_stdout, sys.stdout = sys.stdout, out
+        try:
+            _lines, err, _n = self._rule_lines_with_broken_memory(OSError("permission denied"))
+        finally:
+            sys.stdout = real_stdout
+        self.assertIn("DEGRADED", err)
+        self.assertEqual(out.getvalue(), "")         # a -quiet/JSON caller's stdout stays clean
+
+    def test_a_bug_is_no_longer_swallowed_as_a_missing_ruleset(self):
+        # the whole point of narrowing: an AttributeError from a typo used to read, to the user,
+        # as "this project has no rules". It now SURFACES.
+        with self.assertRaises(AttributeError):
+            self._rule_lines_with_broken_memory(AttributeError("typo"))
+
+
+class TestTeamHealthLineNeverVanishes(unittest.TestCase):
+    """D5 — in TEAM mode the health verdict line must be printed even when the check fails.
+
+    The bug: `except Exception: pass` deleted BOTH the health line and the work-locally offer. Their
+    ABSENCE is exactly what a healthy LOCAL briefing looks like, so a broken shared DB rendered as a
+    clean session. The fix is the fallback SHAPE (mirroring `degrade.resolve_read_routing`): an
+    OFFLINE verdict — which is printed, and which is trouble, so the offer prints too."""
+
+    def _team_surface(self):
+        data = sample_manifest_data()
+        data.setdefault("settings", {})["mode"] = "team"
+        return Surface(Manifest.from_dict(data),
+                       Constitution(text="# c\n", path="<mem>"),
+                       root=".", detector=Detector(overrides={}))
+
+    def test_a_failing_health_check_still_prints_the_line_and_the_offer(self):
+        from mokata import bootstrap, team_health
+
+        def boom(*_a, **_k):
+            raise OSError("no route to host")
+        real = team_health.check
+        team_health.check = boom
+        self.addCleanup(setattr, team_health, "check", real)
+
+        text = bootstrap._render(self._team_surface())
+        self.assertIn("Team connection:", text)       # the line is PRESENT, not vanished
+        self.assertIn("offline", text.lower())        # the fail-closed verdict, named
+        self.assertIn("keep working locally", text)   # and the work-locally offer
+
+    def test_team_mode_is_never_indistinguishable_from_local(self):
+        from mokata import bootstrap, team_health
+
+        def boom(*_a, **_k):
+            raise OSError("down")
+        real = team_health.check
+        team_health.check = boom
+        self.addCleanup(setattr, team_health, "check", real)
+
+        broken_team = bootstrap._render(self._team_surface())
+        local = bootstrap._render(make_surface())
+        self.assertNotIn("Team connection:", local)   # local says nothing about a team DB...
+        self.assertIn("Team connection:", broken_team)  # ...and a broken team mode always does.
 
 
 if __name__ == "__main__":

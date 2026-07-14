@@ -28,8 +28,8 @@ icon 30×112 @ (202,66).
    or other hues (tried and rejected).
 3. Cursor is ALWAYS green, always the block. Don't italicize, outline, gradient, or recolor
    anything.
-4. EVERY externally-visible surface (README, docs site, landing, PyPI, GitHub, `mokata ui`,
-   cockpit/workspace, VS Code extension, decks, social cards, videos, PDFs) uses THESE files —
+4. EVERY externally-visible surface (README, docs site, landing, PyPI, GitHub, VS Code
+   extension, decks, social cards, videos, PDFs, and any future surface) uses THESE files —
    no re-drawn variants, no one-off logos.
 
 ## Tagline (one line, everywhere, verbatim)

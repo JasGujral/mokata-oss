@@ -20,9 +20,17 @@ Each profile yields a **deterministic enabled set** — same profile in, same st
   simply don't resolve.
 - **Tools** carry an `enabled` flag. A disabled tool is treated as absent, so the router
   degrades to the next provider in the chain.
-- **Memory types** (`persistent`, `decision`) toggle independently under
+- **Memory types** (`persistent`, `decision`, `episodic`) toggle independently under
   `settings.memory`. Memory is on by default; turning a type off removes it cleanly
   (writes refused, reads never surface it).
+- **The trust dial** (`settings.trust`) is one flat map keyed by write **surface** (`mcp`,
+  `cli`) or by a single **tool** — the tool's level beats the surface's. Levels are
+  `read-only` · `propose-only` · `gated-write` (the default). Be precise about what it does
+  today: it is enforced on the **MCP write surface**, where the real ladder is `read-only` ▸
+  write-allowed — `propose-only` behaves exactly like `gated-write`, because every MCP write
+  *already* needs a human-minted `mokata approve <id>`. On `cli` the dial is accepted and
+  validated but **not yet enforced**. See the
+  [manifest reference](reference/manifest.md#settings-the-generic-toggle-store).
 - **Capabilities are chosen through one router.** There is a single detection path:
   `router.resolve(<need>)` picks the first present provider in the declared fallback
   order. grep is the universal floor for `code_graph`; SQLite (stdlib) is the guaranteed

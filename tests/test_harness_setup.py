@@ -1,5 +1,6 @@
 """`mokata setup` / `mokata unsetup` — wire mokata into a harness without the plugin."""
 
+import argparse
 import io
 import json
 import os
@@ -10,7 +11,7 @@ from contextlib import redirect_stdout
 import _support  # noqa: F401  (puts src/ on the path)
 
 from mokata import MOKATA_DIR
-from mokata.cli import main
+from mokata.cli import build_parser, main
 from mokata.harness_setup import (
     MCP_SERVER_NAME,
     apply_setup,
@@ -34,6 +35,14 @@ def run_cli(argv):
 def _read(path):
     with open(path, encoding="utf-8") as fh:
         return json.load(fh)
+
+
+def _flag_help(command, flag):
+    """The registered `help=` for one flag of one subcommand — read off the real parser, so a
+    reworded help string is checked as the user sees it, not as a duplicated copy in a test."""
+    sub = next(a for a in build_parser()._actions
+               if isinstance(a, argparse._SubParsersAction))
+    return next(a.help for a in sub.choices[command]._actions if flag in a.option_strings)
 
 
 class TestSetupProject(unittest.TestCase):
@@ -68,6 +77,15 @@ class TestSetupProject(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(d, ".claude", "settings.json")))
             self.assertTrue(os.path.exists(os.path.join(d, ".mcp.json")))
 
+    def test_no_hooks_help_names_every_hook_it_skips(self):
+        # Doc-gate: setup wires THREE hooks (SessionStart + the two PreToolUse guards), so the
+        # flag that skips them must name all three — a user reading `--help` should not discover
+        # the gate-guard's absence by having an ungated write sail through.
+        help_text = _flag_help("setup", "--no-hooks")
+        for hook in ("SessionStart", "secret-guard", "gate-guard"):
+            self.assertIn(hook, help_text,
+                          f"--no-hooks help does not name the {hook} hook it skips: {help_text!r}")
+
     def test_profile_passthrough(self):
         with tempfile.TemporaryDirectory() as d:
             setup_harness("claude", root=d, profile="minimal",
@@ -89,7 +107,9 @@ class TestIdempotencyAndMerge(unittest.TestCase):
             for _ in range(2):
                 setup_harness("claude", root=d, assume_yes=True, out=lambda _: None)
             settings = _read(os.path.join(d, ".claude", "settings.json"))
-            self.assertEqual(len(settings["hooks"]["PreToolUse"]), 1)
+            # SI.1: mokata wires TWO PreToolUse hooks — secret-guard (security) and gate-guard
+            # (run-state gates) — each with its own matcher. Re-setup refreshes, never duplicates.
+            self.assertEqual(len(settings["hooks"]["PreToolUse"]), 2)
             self.assertEqual(len(settings["hooks"]["SessionStart"]), 1)
 
     def test_merge_preserves_existing_entries(self):
@@ -112,7 +132,8 @@ class TestIdempotencyAndMerge(unittest.TestCase):
             self.assertIn(MCP_SERVER_NAME, mcp["mcpServers"])
             settings = _read(os.path.join(d, ".claude", "settings.json"))
             self.assertIn("permissions", settings)
-            self.assertEqual(len(settings["hooks"]["PreToolUse"]), 2)  # keepme + mokata
+            # keepme + mokata's two (secret-guard + gate-guard)
+            self.assertEqual(len(settings["hooks"]["PreToolUse"]), 3)
 
 
 class TestUnsetup(unittest.TestCase):

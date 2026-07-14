@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from ..spec_scope import SCOPE_KEY, SpecScope, scope_from_dict
+
 
 @dataclass
 class AcceptanceCriterion:
@@ -42,18 +44,27 @@ class Spec:
     # legible). develop/review engage EXACTLY these; a domain reached only later amends the spec.
     # A JSON field only — the store SCHEMA is untouched; a legacy spec with no key reads as [].
     domains: List[str] = field(default_factory=list)
+    # SI-DEV — the MACHINE-CHECKABLE scope: the paths this spec authorized, and the items it
+    # explicitly DEFERRED (each carrying the paths/markers a hook can recognise it by). The gate
+    # hook enforces exactly this and nothing more; a spec with no scope (every spec written before
+    # SI-DEV) reads as None and is NOT policed. Additive, like `domains` above: a JSON field only,
+    # serialized ONLY when set, so a scope-less spec's persisted bytes are unchanged.
+    scope: Optional["SpecScope"] = None
 
     @property
     def ac_ids(self) -> List[str]:
         return [c.id for c in self.criteria]
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        out: Dict[str, Any] = {
             "title": self.title,
             "criteria": [c.to_dict() for c in self.criteria],
             "approach": self.approach,
             "domains": list(self.domains),
         }
+        if self.scope is not None:
+            out[SCOPE_KEY] = self.scope.to_dict()
+        return out
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Spec":
@@ -63,4 +74,5 @@ class Spec:
             approach=d.get("approach"),
             source=d.get("source", ""),
             domains=list(d.get("domains", [])),
+            scope=scope_from_dict(d.get(SCOPE_KEY)),
         )

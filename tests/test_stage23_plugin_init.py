@@ -20,6 +20,7 @@ import unittest
 from contextlib import redirect_stdout
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _support import mcp_commit          # SI.3: propose -> human approves -> redeem by id
 
 from mokata import MOKATA_DIR
 from mokata.cli import main
@@ -203,29 +204,34 @@ class TestMcpInitTool(unittest.TestCase):
             res = self.init(path=d, profile="full")
             self.assertEqual(res["status"], "proposed")
             self.assertIn("full", res["preview"])
-            self.assertFalse(os.path.exists(os.path.join(d, MOKATA_DIR)))
+            # init did NOT take effect. `.mokata/` DOES exist now — SI.3 persists the proposal
+            # record at .mokata/temp_local/state/write_proposal__<id>.json — but that record is
+            # the staged write, not the write: no manifest was written, so the repo is still
+            # uninitialized.
+            self.assertFalse(Surface.is_initialized(d))
+            self.assertFalse(os.path.exists(os.path.join(d, MOKATA_DIR, "manifest.json")))
 
     def test_confirm_writes_manifest(self):
         with tempfile.TemporaryDirectory() as d:
-            res = self.init(path=d, profile="full", confirm=True)
+            res = mcp_commit(self.init, path=d, profile="full")
             self.assertTrue(res["committed"])
             self.assertTrue(Surface.is_initialized(d))
             self.assertEqual(Surface.load(d).manifest.profile, "full")
 
     def test_overwrite_needs_force(self):
         with tempfile.TemporaryDirectory() as d:
-            self.init(path=d, profile="standard", confirm=True)
-            blocked = self.init(path=d, profile="full", confirm=True)
+            mcp_commit(self.init, path=d, profile="standard")
+            blocked = mcp_commit(self.init, path=d, profile="full")
             self.assertFalse(blocked.get("committed"))
             self.assertEqual(blocked["status"], "blocked")
             self.assertEqual(Surface.load(d).manifest.profile, "standard")  # unchanged
-            ok = self.init(path=d, profile="full", confirm=True, force=True)
+            ok = mcp_commit(self.init, path=d, profile="full", force=True)
             self.assertTrue(ok["committed"])
             self.assertEqual(Surface.load(d).manifest.profile, "full")
 
     def test_unknown_profile_errors(self):
         with tempfile.TemporaryDirectory() as d:
-            res = self.init(path=d, profile="bogus", confirm=True)
+            res = mcp_commit(self.init, path=d, profile="bogus")
             self.assertEqual(res["status"], "error")
             self.assertFalse(os.path.exists(os.path.join(d, MOKATA_DIR)))
 

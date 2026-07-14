@@ -166,7 +166,12 @@ def record_review_verdict(surface: Any, *, passed: bool, independent: bool,
         try:
             from .progress import find_active_run
             run_id = find_active_run(surface.state)
-        except Exception:
+        except (OSError, ValueError):
+            # OSError: the state dir is unreadable. ValueError: a torn state JSON (JSONDecodeError
+            # IS a ValueError). A run-less verdict is the documented, STRICTER outcome (doc-49 #3):
+            # per `latest_review_verdict`, a `run_id: None` verdict satisfies only a run-less ship
+            # check — it can never leak into a real run's gate. Failing to find the run therefore
+            # weakens nothing; it fails CLOSED.
             run_id = None
     data: Dict[str, Any] = {"passed": bool(passed), "independent": bool(independent)}
     if findings is not None:
@@ -186,7 +191,18 @@ def latest_review_verdict(surface: Any,
     log -> None (ship then blocks as if no review ran — fail-closed, evidence over vibes)."""
     try:
         events = ProgressLog.from_surface(surface).read_events()
-    except Exception:
+    except (AttributeError, OSError, ValueError):
+        # Read the callee before trusting this list. `read_events` is ALREADY degrade-clean on the
+        # log itself — it returns [] on OSError and SKIPS a torn JSON line — so neither can actually
+        # escape it. The one class that genuinely arrives here is AttributeError, from
+        # `from_surface` reaching through `surface.state.root` on a malformed surface (the
+        # degrade-clean contract `test_stage6r_independent_review` pins). OSError/ValueError are
+        # kept as defence-in-depth on a documented FAIL-CLOSED path, not as decoration.
+        #
+        # Fail-CLOSED is what makes silence safe here, and it is the whole justification: no verdict
+        # ⇒ `ship_review_gate` BLOCKS ("review hasn't run — run /mokata:review first"). The only
+        # outcome this handler can produce is a STOP. It cannot let an unreviewed change through,
+        # which is the single thing a swallowed read on the ship path must never do.
         return None
     found: Optional[Dict[str, Any]] = None
     for e in events:
@@ -214,7 +230,10 @@ def review_independent_mode(surface: Any) -> str:
         v = s.get("independent", REVIEW_INDEPENDENT_ON) if isinstance(s, dict) else \
             REVIEW_INDEPENDENT_ON
         return REVIEW_INDEPENDENT_OFF if v == REVIEW_INDEPENDENT_OFF else REVIEW_INDEPENDENT_ON
-    except Exception:
+    except AttributeError:
+        # A surface with no `.manifest` (a double, a half-built surface). The fallback is the
+        # STRONGER setting (`on` — the independent, fresh-context review), so a failure to read the
+        # preference can never silently downgrade the review to the weaker inline pass.
         return REVIEW_INDEPENDENT_ON
 
 
@@ -245,7 +264,10 @@ def ship_review_gate(surface: Any, run_id: Optional[str] = None) -> ReviewGate:
         try:
             from .progress import find_active_run
             run_id = find_active_run(surface.state)
-        except Exception:
+        except (OSError, ValueError):
+            # OSError: unreadable state dir. ValueError: a torn checkpoint JSON. Same fail-closed
+            # shape as `record_review_verdict`: with no run, only a run-less verdict can satisfy the
+            # gate, so a failure here can only ever make ship STRICTER, never let a change through.
             run_id = None
     v = latest_review_verdict(surface, run_id=run_id)
     if v is None:

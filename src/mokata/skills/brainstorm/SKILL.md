@@ -166,6 +166,19 @@ user it was saved, and OFFER the export: `mokata plan export` keeps an editable 
 repo at `plans/<slug>.md` they can commit alongside the code (`mokata plan list` /
 `mokata plan show` browse the saved plans).
 
+## Checkpoint so a crash can't lose your work
+
+Recovery is DEFAULT, not a chore the user has to remember (P17). At each COARSE milestone —
+when you've recorded the anchor, updated the running synthesis, put the 2–3 approaches on the
+table, and the moment the user approves one — CHECKPOINT the in-flight state by calling the
+`session_save` tool with the current brainstorm state (`session_save` with `brainstorm` = the
+session so far; add `passed` = the pipeline phases that have passed once a gate clears). This is
+an UNGATED LOCAL save — the user's own transient state, not a share — so it never prompts and
+never blocks; if it degrades it warns once and your work still stands. It writes EXACTLY what
+resume reads back, so a kill −9 rehydrates the approved approach, the milestones, and the passed
+checkpoint with no manual save. AND checkpoint each answered turn — one cheap, atomic
+`session_save` with `turn` = the current brainstorm state — so a crash loses at most one turn.
+
 ---
 
 mokata enforces this gate in code, not just in prose: the approved approach is persisted
@@ -210,6 +223,7 @@ Evidence, not "seems right" — check every box or say which is unmet and why:
 - query the graph, memory, and code read-only
 - present 2–3 grounded approaches and write the design write-up
 - persist the approved approach (human-gated)
+- checkpoint each answered turn (cheap, atomic) + each coarse milestone + the approval + a passed gate so a crash can't lose them (ungated local save via the `session_save` tool; add `turn` for a per-turn autosave)
 
 **MUST NOT**
 - write or edit code (gate: write-gate)

@@ -101,8 +101,11 @@ class TestTeamRememberJournalsFirst(_EnvClean):
             self.assertEqual(len(pend), 1)
             self.assertEqual(pend[0].key, item.id)
             self.assertEqual(pend[0].payload["subject"], "db.engine")
-            self.assertEqual(store.all_active(), [],
-                             "team mode defers durability to the flush — no direct backend write")
+            # CM.S3 — durability is still deferred to the flush (nothing reached the backend), but
+            # the write is no longer INVISIBLE: the read-your-writes overlay surfaces the pending
+            # journaled entry, so a just-approved write is readable before the flush lands.
+            self.assertEqual([i.subject for i in store.all_active()], ["db.engine"],
+                             "the journaled-but-unflushed write is visible via the read overlay")
 
             # the captured approval ledger id IS the gate's approval seq (C5: deferred durability,
             # never deferred consent — the journal entry links back to the human decision).

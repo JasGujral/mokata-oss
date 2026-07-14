@@ -1,8 +1,21 @@
 # Developer guide
 
-mokata is a pure-Python package under `src/mokata/`, with one capability model and **no
-required runtime dependencies**. `jsonschema` is the only optional dependency and is
-degraded over when absent. Supported Python: **3.10–3.13**.
+mokata is a pure-Python package under `src/mokata/`, with one capability model. Supported
+Python: **3.10–3.13**.
+
+**Dependencies.** The one required runtime dependency is the **MCP SDK** (`mcp>=1.2`) — it ships
+by default so the bundled `mokata-mcp` server works straight out of `pip install mokata`.
+Everything else is optional and **degraded over when absent**, never fatal:
+
+| Extra | Pulls | Absent ⇒ |
+|---|---|---|
+| `schema` | `jsonschema>=4.0` | the built-in structural validator still validates the manifest |
+| `postgres` | `psycopg>=3.1` | memory degrades to the SQLite floor |
+| `neo4j` | the Neo4j driver | `code_graph` degrades to the ripgrep → grep floor |
+| `mcp` | *(no-op alias of the default dep — kept so `mokata[mcp]` still resolves)* | — |
+
+Every optional import is **lazy**, so the core, the CLI and every default profile run with all of
+them missing.
 
 ## Architecture by package (Parts A–L)
 
@@ -50,21 +63,46 @@ escalation); `modes/bug.py`, `modes/debug.py`, `modes/optimize.py`.
 
 ### Parts F/G/I — Governance (`govern/`)
 `tokens.py`, `retrieval.py`, `compaction.py`, `compress.py`, `budget.py`, `cache.py` (F);
-`rules.py`, `karpathy.py`, `learning.py`, `authoring.py`, `hooks.py` (G);
-`secrets.py`, `gate.py` (WriteGate + trust enforcement), `ledger.py`, `trifecta.py`,
-`revert.py`, `resume.py` (I); `trust.py`, `doctor.py`, `lifecycle.py` (K).
+`rules.py`, `karpathy.py`, `learning.py`, `authoring.py`, `hooks.py`, `enforce.py` (G);
+`secrets.py`, `gate.py` (WriteGate + trust enforcement), `ledger.py` (hash-chained),
+`trifecta.py`, `deviation.py`, `outbound.py`, `revert.py`, `resume.py`, `tdd.py` (I);
+`trust.py`, `doctor.py`, `lifecycle.py` (K).
+
+### The seatbelt — enforcement outside our own tools
+The gates above all fire *inside* mokata's tools; these modules are what stop the model simply
+reaching past them. Read `gate_hook.py`'s module docstring first — it is the design record.
+
+- `approval.py` — the **human-minted approval**: `propose` / `redeem`, content-hashed and
+  session-scoped proposal ids. `approve=true` on a tool call is inert by construction; only
+  `mokata approve <id>` (a human, out-of-band) mints one, and it licenses exactly one commit.
+- `gate_hook.py` — the **decision** for the three run-state gates (`spec-persisted`,
+  `no-code-without-failing-test`, `spec-scope`) on a native `Write`/`Edit`. Pure, total, never
+  raises; every uncertainty (no run, ambiguous run, unreadable state, undeclared scope) resolves
+  to **ALLOW**.
+- `hook_cli.py` — the I/O for all three shipped hooks (`session-start`, `secret-guard`,
+  `gate-guard`), launched via the `mokata-hook` console entry point. Blocks with exit code 2.
+- `spec_scope.py` — a spec's authorized surface + its **deferred** items (paths and literal
+  markers), and `classify()`, the pure verdict the scope gate reads. Plus the amend record.
+- `tdd_state.py` / `session_state.py` / `session.py` — the persisted RED/GREEN record, the
+  run-scoped (`__<run_id>`) state keys, and the minted per-process session identity that makes
+  two windows on one repo distinguishable.
+- `degrade.py` — the degrade registry: a capability that falls back to a floor is *remembered*,
+  so `doctor` can say so instead of letting a silent fallback pass for the real thing.
 
 ### Parts J/K/L — Distribution & composability
-`harness.py` (thin cross-harness boundary), `share.py` (export/import stacks),
-`compose.py` (chaining + suggestions), `playbook.py` (the end-to-end integration runner),
-`packaging.py` (plugin/marketplace validators).
+`harness.py` (thin cross-harness boundary), `harness_setup.py` (`mokata setup <harness>` —
+commands + MCP + the three hooks), `share.py` (export/import stacks), `compose.py` (chaining +
+suggestions), `playbook.py` (the end-to-end integration runner), `packaging.py`
+(plugin/marketplace validators), `team*.py` (the opt-in shared Postgres store).
 
 ## Dev setup
 
 ```bash
 git clone https://github.com/JasGujral/mokata-oss && cd mokata-oss
-pip install -e ".[mcp,schema]" # editable install + both extras (MCP server + jsonschema), for dev
+pip install -e ".[schema]"     # editable install + jsonschema; the MCP SDK is a default dep
 ```
+
+*(End users never clone: `pip install mokata` → `mokata setup claude`.)*
 
 ## Running the tests (BOTH jsonschema states)
 
@@ -85,7 +123,7 @@ written RED-before-GREEN.
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](https://github.com/JasGujral/mokata-oss/blob/master/CONTRIBUTING.md)
+See [`CONTRIBUTING.md`](https://github.com/JasGujral/mokata-oss/blob/main/CONTRIBUTING.md)
 for the full flow. The non-negotiables: TDD (RED-before-GREEN), **clean-room** (no import
 of or text from any other framework), **human-gate every durable write**, local-first, and
 Apache-2.0 / MoStack with no vendor-prefixed names. To add a skill/command, register a

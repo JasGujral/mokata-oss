@@ -228,28 +228,41 @@ class DecompositionPlan:
 
 
 # --------------------------------------------------------------------------- decompose
-def _graph_expand(symbols: Sequence[str], layer: Any) -> Tuple[Dict[str, Set[str]], bool]:
+def _graph_expand(symbols: Sequence[str],
+                  layer: Any) -> Tuple[Dict[str, Set[str]], bool, bool]:
     """Expand each symbol with the code graph's blast-radius neighbours, so a dependency the
-    lexical floor would miss still gets caught. Returns (expansion, graph_backed). Frugal:
-    one bounded query per unique symbol; any failure/degrade is skipped (degrade-clean)."""
+    lexical floor would miss still gets caught. Returns (expansion, graph_backed, faulted). Frugal:
+    one bounded query per unique symbol.
+
+    D5 — `faulted` is the third value, and it is the whole point. A symbol whose query RAISED was
+    `continue`d past, but `graph_backed` stayed True as long as any OTHER symbol answered. The plan
+    then declared its subtasks "graph-verified independent" — and a dependency living on exactly the
+    symbol the graph could not be asked about is precisely the one that makes two "independent"
+    subtasks race each other on the same file. Graph-verified has to mean the graph was ASKED."""
     expansion: Dict[str, Set[str]] = {}
     graph_backed = False
+    faulted = False
     if layer is None or not getattr(layer, "uses_graph", False):
-        return expansion, False
+        return expansion, False, False
     for sym in list(symbols)[:_MAX_GRAPH_SYMBOLS]:
         try:
             res = layer.blast_radius(sym)
-        except Exception:
+        except Exception:               # noqa: BLE001
+            # BROAD ON PURPOSE: the graph backend is a pluggable OPTIONAL dependency, so its error
+            # types are not importable at module scope; narrowing would let a driver's own class
+            # escape and crash a read-only planner. No longer silent — `faulted` propagates, drops
+            # `graph_backed`, and withholds the parallel recommendation.
+            faulted = True
             continue
         if res is None or getattr(res, "degraded", False):
-            continue
+            continue                    # the grep floor answered — a degrade, not a fault
         graph_backed = True
         related = {sym}
         for ref in getattr(res, "references", []) or []:
             if getattr(ref, "symbol", None):
                 related.add(ref.symbol)
         expansion[sym] = related
-    return expansion, graph_backed
+    return expansion, graph_backed, faulted
 
 
 def _expanded_symbols(sub: Subtask, expansion: Dict[str, Set[str]]) -> Set[str]:
@@ -272,7 +285,11 @@ def decompose(spec: Any, layer: Any = None) -> DecompositionPlan:
 
     subtasks = [Subtask.from_ac(ac) for ac in spec.criteria]
     all_symbols = sorted({s for st in subtasks for s in st.symbols})
-    expansion, graph_backed = _graph_expand(all_symbols, layer)
+    expansion, graph_backed, graph_faulted = _graph_expand(all_symbols, layer)
+    # D5 — a graph that FAULTED on any symbol did not verify anything: drop `graph_backed`, which
+    # drops `fanout_safe` and with it the parallel recommendation. The lexical edges we did derive
+    # are kept (they are still real); what is withheld is the CLAIM that the graph checked them.
+    graph_backed = graph_backed and not graph_faulted
 
     exp = {st.id: _expanded_symbols(st, expansion) for st in subtasks}
     for j in range(len(subtasks)):
@@ -285,7 +302,18 @@ def decompose(spec: Any, layer: Any = None) -> DecompositionPlan:
         subtasks[j].depends_on = tuple(deps)
 
     warnings: List[str] = []
-    if not graph_backed:
+    if graph_faulted:
+        from ..degrade import FAILURE_UNREACHABLE, note_degraded
+        warnings.append("the code graph FAULTED on one or more symbols — task independence is "
+                        "UNVERIFIED (the graph could not be asked about every symbol, and an "
+                        "unasked symbol is exactly where a hidden dependency hides); concurrent "
+                        "fan-out is withheld and the sequential gated flow is recommended.")
+        note_degraded(
+            "code-graph", FAILURE_UNREACHABLE,
+            fallback=("task independence is lexical-only and UNVERIFIED — concurrent fan-out is "
+                      "withheld rather than run on an unverified split"),
+            fix="run `mokata doctor` to check the code-graph backend")
+    elif not graph_backed:
         warnings.append("no code graph wired — task independence is lexical-only and "
                         "UNVERIFIED; the sequential gated flow is recommended (you can still "
                         "choose parallel after reviewing the split).")

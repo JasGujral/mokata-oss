@@ -455,5 +455,154 @@ class TestSlashCommandFactSetIsTheShippedSurface(unittest.TestCase):
         self.assertIn("/mokata:frobnicate", hits[0].message)
 
 
+# --------------------------------------------------- DG: the command checker scans INVOCATIONS only
+def _cmd(text, facts=None):
+    return [f for f in audit_text(text, facts=facts or _facts()) if f.checker == "command-name"]
+
+
+class TestCommandCheckerDoesNotFabricateReferences(unittest.TestCase):
+    """DG — `mokata <cmd>` is flagged only where the doc MEANS a command. The checker used to
+    fabricate references three ways: it JOINED a line's separate inline code spans into one string
+    (inventing adjacency that appears nowhere in the doc), it read OUTPUT/prose fences as commands,
+    and it read a shell `#` comment as a command. Each fabrication gets its exact prose line here."""
+
+    # (1) the join: two adjacent code spans are two separate fragments, never one command line.
+    def test_adjacent_inline_code_spans_do_not_fabricate_a_command(self):
+        # README.md L101 — the spans are `pip install mokata` and `mokata setup claude`; the old
+        # checker joined them into "…install mokata mokata setup…" and flagged `mokata mokata`.
+        self.assertEqual(_cmd("> `pip install mokata` → `mokata setup claude`\n"), [])
+
+    def test_adjacent_spans_do_not_fabricate_a_command_across_prose(self):
+        for line in (
+            "Harness-agnostic: use the `mokata` CLI and `mokata-mcp` from any shell.\n",   # quickstart L36
+            "there is **no npm package**, so `npx mokata` does not apply — use `uvx`/`pipx run`.\n",
+            "2. in the project you want to use `mokata` on:\n",
+        ):
+            self.assertEqual(_cmd(line), [], line)
+
+    def test_adjacent_spans_do_not_fabricate_a_dead_install_path(self):
+        # use-without-plugin L180 — the spans are `pip install` and `mokata-hook`; joining them
+        # invented "pip install mokata-hook" and the install checker called it a dead install path.
+        text = "When you `pip install` mokata, `mokata-hook` lands on PATH.\n"
+        self.assertEqual([f for f in audit_text(text, facts=_facts())
+                          if f.checker == "install-path"], [])
+
+    # (2) the fence language: a doc marks its output/data fences, and output is not an invocation.
+    def test_a_text_fence_is_output_not_an_invocation_surface(self):
+        # catches-a-bad-change L26 + differentiators L314 — CLI output, verbatim.
+        self.assertEqual(_cmd("```text\nmokata initialized with profile 'standard'.\n```\n"), [])
+        self.assertEqual(_cmd("```text\nmokata v1 playbook — profile 'full', mode 'sequential'\n```\n"), [])
+
+    def test_a_text_fence_transcript_of_a_mistype_demo_is_not_flagged(self):
+        # first-run L61-62 — the doc DEMONSTRATES a mistype and shows the CLI rejecting it. It
+        # never tells the reader to run `mokata statuss`.
+        text = ("```text\n"
+                "$ mokata statuss\n"
+                "mokata: 'statuss' is not a mokata command.\n"
+                "Did you mean 'status'?\n"
+                "```\n")
+        self.assertEqual(_cmd(text), [])
+
+    def test_a_non_shell_fence_is_not_an_invocation_surface(self):
+        # mokata-as-a-pr-check L65 — a YAML step name, i.e. prose inside a data fence.
+        self.assertEqual(_cmd("```yaml\n      - name: Post the mokata review comment\n```\n"), [])
+
+    # (3) the shell comment: a `#` tail inside a shell fence is prose the author wrote for a human.
+    def test_a_shell_comment_inside_a_bash_fence_is_prose(self):
+        # complete-guide L195 / L202-203 / L230 and use-with-other-agents L47, verbatim.
+        text = ("```bash\n"
+                "rg --version        # mokata detects the `rg` executable\n"
+                "# then confirm the command mokata looks for is resolvable:\n"
+                "command -v code-review-graph    # must print a path for mokata to bind it\n"
+                "# install the Obsidian app, or point mokata at an existing vault:\n"
+                "# wire mokata into your agent (shows exactly what it will write, then asks)\n"
+                "```\n")
+        self.assertEqual(_cmd(text), [])
+
+    # (4) command position: even in an undeclared fence, prose is not an invocation.
+    def test_mokata_mid_sentence_in_a_bare_fence_is_not_a_command(self):
+        # capture-project-rules L65 — CLI output inside an undeclared fence.
+        text = ("```\n"
+                "Proposed guardrails (recurring corrections mokata noticed — human-gated):\n"
+                "```\n")
+        self.assertEqual(_cmd(text), [])
+
+
+class TestCommandCheckerStillCatchesRealDrift(unittest.TestCase):
+    """DG negative controls — the scoping narrows WHERE the checker looks, never WHAT it catches.
+    A genuinely stale command name in any real invocation surface is still Blocking."""
+
+    def test_planted_stale_command_in_a_bash_fence_is_still_blocking(self):
+        hits = _cmd("```bash\nmokata frobnicate --now\n```\n")
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].severity, BLOCKING)
+        self.assertIn("frobnicate", hits[0].message)
+
+    def test_planted_stale_command_in_an_inline_code_span_is_still_blocking(self):
+        hits = _cmd("Run `mokata frobnicate` to fix it.\n")
+        self.assertEqual(len(hits), 1)
+        self.assertIn("frobnicate", hits[0].message)
+
+    def test_planted_stale_command_in_every_invocation_position_is_still_blocking(self):
+        for line in (
+            "$ mokata frobnicate",                    # a prompted transcript line
+            "  mokata frobnicate --json",             # indented in a block
+            "uvx mokata frobnicate",                  # behind a runner
+            "pipx run mokata frobnicate",
+            "python -m mokata frobnicate",
+            "cd repo && mokata frobnicate",           # after a shell separator
+            "mokata frobnicate | jq .",
+            "mokata frobnicate   # with a trailing comment",
+        ):
+            hits = _cmd(f"```bash\n{line}\n```\n")
+            self.assertEqual(len(hits), 1, f"missed real drift in: {line}")
+            self.assertIn("frobnicate", hits[0].message)
+
+    def test_a_bare_fence_invocation_is_still_scanned(self):
+        # an undeclared fence still carries commands — only PROSE inside it is spared.
+        hits = _cmd("```\nmokata frobnicate\n```\n")
+        self.assertEqual(len(hits), 1)
+
+    def test_a_real_command_in_a_bash_fence_is_not_flagged(self):
+        self.assertEqual(_cmd("```bash\nmokata setup claude --yes\nmokata review\n```\n"), [])
+
+    def test_the_slash_surface_keeps_its_full_scan_reach(self):
+        # `/mokata:<name>` is self-delimiting — it cannot be prose — so it is checked in EVERY code
+        # span, including the output fences the shell-invocation rule now skips.
+        hits = _cmd("```text\n/mokata:frobnicate\n```\n")
+        self.assertEqual(len(hits), 1)
+        self.assertIn("/mokata:frobnicate", hits[0].message)
+
+
+class TestCommandCheckerIsNotDisarmed(unittest.TestCase):
+    """DG anti-disarm (the D5 sin, in reverse) — a checker that scans NOTHING also reports no false
+    positives. These pin the checker's REACH over the real shipped docs, so a future 'precision'
+    tweak that silently stops looking fails here instead of rendering as a clean bill of health."""
+
+    def _public_docs(self):
+        return docsync.find_docs(_REPO)
+
+    def test_the_real_docs_no_longer_carry_command_name_false_positives(self):
+        # the exact FP regression: the shipped public doc tree, audited with the LIVE fact set.
+        facts = gather_facts()
+        offenders = {}
+        for d in self._public_docs():
+            hits = [f for f in docsync.audit_doc(d, facts=facts) if f.checker == "command-name"]
+            if hits:
+                offenders[d] = [f.render() for f in hits]
+        self.assertEqual(offenders, {}, f"command-name false positives remain: {offenders}")
+
+    def test_the_checker_still_SEES_the_real_invocations_in_those_docs(self):
+        # Arm the checker with a fact set in which NO real command exists: every genuine
+        # `mokata <cmd>` invocation the docs carry must now light up. A scoping change that
+        # quietly stopped scanning would drive this to zero.
+        blind = _facts(command_names=frozenset({"__no_such_command__"}))
+        seen = 0
+        for d in self._public_docs():
+            seen += len([f for f in docsync.audit_doc(d, facts=blind)
+                         if f.checker == "command-name"])
+        self.assertGreater(seen, 20, "the command checker has been disarmed, not made precise")
+
+
 if __name__ == "__main__":
     unittest.main()

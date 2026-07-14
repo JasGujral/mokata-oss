@@ -13,10 +13,12 @@ G2 — the rules-vs-gates-vs-hooks taxonomy: a rule is advisory (stays prose), b
 from __future__ import annotations
 
 import os
+import sqlite3
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from .. import MOKATA_DIR
+from ..degrade import FAILURE_UNREACHABLE, note_degraded
 
 RULE_TIERS = ("always_on", "agent_memory", "steering", "articles")
 CAPS: Dict[str, Optional[int]] = {
@@ -83,14 +85,24 @@ _PROJECT_RULES_HEADER = "# Project rules & guardrails (captured via /mokata:onbo
 
 def _project_always_on_lines(surface, budget: int) -> List[str]:
     """Pull the captured rule/guardrail entries as terse lines, fitting INSIDE `budget` lines
-    (header included). Degrade-clean: memory off / uninitialized / any error -> no lines."""
+    (header included). Degrade-clean: memory off / uninitialized -> no lines.
+
+    D5 — but NEVER silently. A corrupt/locked memory DB used to mean the project's captured rules
+    and guardrails were simply ABSENT from the always-on tier, while the session went on believing
+    governance was loaded. It was not: the user's own rules were not in the context at all. The
+    `[]` fallback stays (a memory failure must not kill SessionStart), it just stops being a
+    secret."""
     if budget <= 1:
         return []
     try:
         from ..memory import MemoryStore, always_on_lines
         store = MemoryStore.from_surface(surface)
         lines, _overflow = always_on_lines(store, budget - 1)   # -1 reserves the header
-    except Exception:
+    except (OSError, ImportError, sqlite3.Error):
+        note_degraded(
+            "rules", FAILURE_UNREACHABLE,
+            fallback="your captured project rules are NOT loaded this session",
+            fix="run `mokata doctor` to repair the memory store")
         return []
     return [_PROJECT_RULES_HEADER, *lines] if lines else []
 

@@ -2,11 +2,11 @@
 
 **A deep, feature-by-feature tutorial for developers. Every command, gate, layer, and toggle — from `init` to a full governed story, with nothing left out.**
 
-[**⬇ Download this guide as a PDF**](https://jasgujral.github.io/mokata-oss/assets/mokata-complete-guide.pdf) — generated from this page in CI, so it always matches what you're reading.
+[**⬇ Download this guide as a PDF**](https://mokata.ai/assets/mokata-complete-guide.pdf) — generated from this page in CI, so it always matches what you're reading.
 
 > Audience: developers who want to use mokata to its full capacity. This is a **hands-on tutorial** — you'll install the full stack with **every optional dependency wired**, verify each capability resolves to a real provider (not a fallback floor), then take a **guided power tour** that exercises every layer with the commands to run and the output to expect.
 >
-> **Three ways to run mokata** (set up in §2): (1) the **Claude Code plugin**, (2) **`mokata setup claude`** — the same in-Claude-Code experience without the marketplace, and (3) the **CLI**. The guide is **CLI-led** because the CLI makes every gate visible step by step — but a `pip` CLI install is *terminal-only* (the engine with no LLM); to use mokata *inside* Claude Code you install the plugin or run `mokata setup claude`, and there the LLM drives these same operations. Each step maps to its **`/mokata:<name>`** slash command. Follow it top to bottom with a terminal open; the later Parts double as deep reference. Verified against the **current batch** — spot-run the commands as you go to confirm.
+> **How you run mokata** (set up in §2): the canonical path is **`pip install mokata` → `mokata setup claude`**, which wires mokata into Claude Code — slash commands, the MCP server, and the three hooks that make the gates real. (A one-click Claude Code **plugin** is *planned, not yet available* — see §2.8.) The same install also gives you the **CLI**, and the guide is **CLI-led** because the CLI makes every gate visible step by step — but note a `pip` CLI install on its own is *terminal-only* (the engine with no LLM, and no hook enforcement on native file writes). Each step maps to its **`/mokata:<name>`** slash command. Follow it top to bottom with a terminal open; the later Parts double as deep reference. Verified against the **current batch** — spot-run the commands as you go to confirm.
 >
 > **How to read this:** §0–1 are orientation. **§2 is the guided full-stack install** — do every step. **§3–15 are the deep tour** of each layer (run the commands as you go). **§16 is a complete end-to-end story** that ties it all together. §17–19 are reference you'll come back to.
 
@@ -103,7 +103,7 @@ mokata's defensible position is **integration + governance + local-first**, not 
 
 ## 1. What mokata actually is
 
-mokata is a **spec-driven, test-driven development engine for Claude Code** with four things bolted in that most tools leave as add-ons: a **codebase knowledge graph**, **persistent self-healing memory**, **active token/cost governance**, and a **human-gated governance + audit layer**. The whole thing is local-first (zero telemetry), pure Python (≥ 3.10, no required runtime dependencies), Apache-2.0, and built clean-room.
+mokata is a **spec-driven, test-driven development engine for Claude Code** with four things bolted in that most tools leave as add-ons: a **codebase knowledge graph**, **persistent self-healing memory**, **active token/cost governance**, and a **human-gated governance + audit layer**. The whole thing is local-first (zero telemetry), pure Python (≥ 3.10; the MCP SDK is its only required dependency, and every other integration is optional and degraded over), Apache-2.0, and built clean-room.
 
 The defining behavior: **no code ships until every acceptance criterion maps to a test (RED before GREEN), and every durable write — to code, memory, or config — is human-gated.** The completeness gate *blocks* emit; it never silently passes.
 
@@ -213,6 +213,11 @@ command -v serena               # optional; sits between code-review-graph and r
 
 ### 2.5 Step 5 — wire the `memory_store` providers
 
+> **Heads-up — two modes ahead.** mokata is consolidating on **sqlite** (local default — zero
+> setup, nothing to do) and **Postgres** (team mode via `mokata team init`). The `native-memory`
+> and `obsidian` providers below still work but are optional legacy paths slated for deprecation
+> — new setups can skip straight to Checkpoint B.
+
 **native-memory** — detected by the **`claude`** CLI being on `PATH` (it delegates persistence to Claude Code's own memory). If you use Claude Code, you already have it:
 
 ```bash
@@ -228,7 +233,7 @@ mokata config set tools.obsidian.config.vault ~/Documents/MyVault   # a configur
 
 **sqlite** — the guaranteed floor. Nothing to install: Python ships `sqlite3` in the stdlib, so this is always available as the bottom of the chain.
 
-> **Checkpoint B.** `command -v rg code-review-graph claude` resolve, and `~/.obsidian` exists. The top of both capability chains is now present on this machine.
+> **Checkpoint B.** `command -v rg code-review-graph` resolve (plus `claude` / an Obsidian vault only if you opted into those providers). The top of both capability chains is now present on this machine.
 
 ### 2.6 Step 6 — initialize the `full` profile (human-gated)
 
@@ -273,9 +278,11 @@ mokata setup claude          # --profile / --scope options; reverse with `mokata
 mokata mcp status            # expect: mokata-mcp: CONNECTED ✓
 ```
 
-`mokata setup claude` runs `init` if needed, copies the slash commands into `.claude/commands/`, installs the Agent Skills, registers the `mokata-mcp` server in `.mcp.json`, wires the SessionStart + secret-guard hooks into `.claude/settings.json`, and wires the status-line badge. JSON files are **merged, never clobbered**, and it's idempotent (re-running syncs and prunes old skills on update). `--scope user` installs into `~/.claude` for every project; `--no-hooks` wires only commands + MCP.
+`mokata setup claude` runs `init` if needed, copies the slash commands into `.claude/commands/`, installs the Agent Skills, registers the `mokata-mcp` server in `.mcp.json`, wires **three hooks** into `.claude/settings.json` — the SessionStart briefing, the **secret-guard** and the **gate-guard** (both `PreToolUse`) — and wires the status-line badge. JSON files are **merged, never clobbered**, and it's idempotent (re-running syncs and prunes old skills on update). `--scope user` installs into `~/.claude` for every project; `--no-hooks` wires only commands + MCP.
 
-Restart Claude Code. You now have the workflow slash commands (`/mokata:brainstorm`, `/mokata:refine`, `/mokata:spec`, `/mokata:test`, `/mokata:develop`, `/mokata:review`, `/mokata:debug`, `/mokata:optimize`, `/mokata:bug`, and `/mokata:init`), the SessionStart briefing hook, and the secret-guard hook — all automatic. Typing `/mokata` lists them all.
+Restart Claude Code. You now have the workflow slash commands (`/mokata:brainstorm`, `/mokata:refine`, `/mokata:spec`, `/mokata:test`, `/mokata:develop`, `/mokata:review`, `/mokata:debug`, `/mokata:optimize`, `/mokata:bug`, and `/mokata:init`), the SessionStart briefing hook, and the two `PreToolUse` guards — all automatic. Typing `/mokata` lists them all.
+
+> **The hooks are what make the gates real.** Only Claude Code declares the `hooks` capability, so this is the one harness where the run-state gates enforce on the agent's *native* `Write`/`Edit` (§12.4, §13.2). On the CLI or any other harness, mokata's gates still fire inside its own tools — but nothing stops a plain editor write. `--no-hooks` opts out of that enforcement.
 
 > You don't even have to set up first: on a fresh repo mokata's SessionStart briefing **offers to initialize it for you** (once), and you can run **`/mokata:init full`** from inside Claude Code — human-gated, no terminal trip.
 
@@ -284,7 +291,7 @@ Restart Claude Code. You now have the workflow slash commands (`/mokata:brainsto
 > **planned, not yet available** — mokata isn't registered on any Claude Code marketplace.
 > The supported way to run mokata inside Claude Code today is the pip-first path:
 > `pip install mokata` → `mokata setup claude`
-> (see [Getting started](https://jasgujral.github.io/mokata-oss/getting-started/)).
+> (see [Getting started](https://mokata.ai/getting-started/)).
 > _(This notice auto-flips once the listing is approved — single source:
 > `scripts/directory_listing.py`.)_
 <!-- mokata:directory-listing:end -->
@@ -300,9 +307,8 @@ Restart Claude Code. You now have the workflow slash commands (`/mokata:brainsto
 ### 2.9 The 60-second setup recap
 
 ```bash
-git clone https://github.com/JasGujral/mokata-oss.git && cd mokata-oss
 python3 -m venv .venv && source .venv/bin/activate && pip install -U pip
-pip install -e ".[schema]"                     # engine + extras ([postgres] too for a hosted store); MCP SDK comes by default on ≥ 3.10
+pip install "mokata[schema]"                   # from PyPI, no clone (add [postgres] for a hosted store); the MCP SDK comes by default
 brew install ripgrep                           # (or apt/dnf/pacman) — the rg floor
 #  …install code-review-graph + serena per their READMEs so both commands are on PATH
 #  …install Obsidian (or `mokata config set tools.obsidian.config.vault <path>`) for that backend
@@ -310,7 +316,7 @@ command -v rg code-review-graph serena claude  # confirm providers are present
 cd /path/to/your/project
 mokata init --profile full                     # human-gated scaffold
 mokata status && mokata doctor                 # verify real providers, no errors
-mokata setup claude                            # (optional) drive it from Claude Code
+mokata setup claude                            # drive it from Claude Code (commands + MCP + the 3 hooks)
 ```
 
 ---
@@ -339,16 +345,20 @@ Everything mokata creates as its own data lives under `.mokata/`, with a clear *
 | `temp_local/audit/ledger.jsonl` | the append-only audit ledger (every gate decision, tool call, write) |
 | `temp_local/memory/memory.db` | the SQLite memory backend (plus `memory/vault/` for the Obsidian backend) |
 
-Inside `temp_local/state/` you'll find files that make the pipeline durable and inspectable:
+Inside `temp_local/state/` you'll find files that make the pipeline durable and inspectable. The pipeline ones are **run-scoped** — the `__<run_id>` suffix is what lets two Claude Code windows drive two runs in one repo without clobbering each other:
 
-- `approved_approach.json` — the brainstorm handoff (the approach you approved)
-- `approved_refinements.json` — the `refine` handoff (the scoped set you approved)
-- `emitted_spec.json` — the spec that passed the completeness gate
+- `approved_approach__<run>.json` — the brainstorm handoff (the approach you approved)
+- `approved_refinements__<run>.json` — the `refine` handoff (the scoped set you approved)
+- `emitted_spec__<run>.json` — the spec that passed the completeness gate (and its `scope`)
+- `tdd_phase__<run>.json` — the RED/GREEN test record the `no-code-without-failing-test` gate reads
+- `gate_override__<run>.json` — this session's ledgered gate overrides (§13.6)
+- `write_proposal__<id>.json` — a durable write awaiting a human-minted approval (§13.2)
+- `pipeline_run__<run>.json` — resume checkpoints (one per passed gate; the run-progress tracker reads these)
+- `spec_corpus.json` — the saved-spec corpus the regression guard checks a change against
 - `memory_stats.json` — the read/write ratio instrumentation
 - `knowledge_index.json` — the per-file freshness index
 - `story_analysis__<id>.json` — per-story analysis bridge
 - `undo_log.json` — prior values for reversible writes
-- `pipeline_run__<id>.json` — resume checkpoints (one per passed gate; the run-progress tracker reads these)
 
 So the **committed config** is diffable in code review (you see exactly what the agent may do), while the **runtime stores** stay out of version control. A user-set backend path (`tools.<id>.config.path` / `.vault`) can point a store elsewhere — your explicit choice overrides the default. (Harness wiring from `mokata setup claude` — `.claude/`, `.mcp.json` — is **Claude Code's** config at its required paths, not mokata data, so it lives there by necessity.)
 
@@ -418,9 +428,9 @@ mokata bootstrap                 # print the briefing
 mokata bootstrap --show-tokens   # also print the token estimate + budget check to stderr
 ```
 
-`bootstrap` prints the compact briefing the SessionStart hook injects: **which stack you're in, which capabilities are live, and the inviolable gates** — capped at a **2,000-token budget**. With `--show-tokens` it reports the estimate and exits non-zero if over budget. In the plugin this runs automatically at the start of each session; on the CLI it's the same content on demand.
+`bootstrap` prints the compact briefing the SessionStart hook injects: **which stack you're in, which capabilities are live, and the inviolable gates** — capped at a **2,000-token budget**. With `--show-tokens` it reports the estimate and exits non-zero if over budget. Once `mokata setup claude` has wired the SessionStart hook this runs automatically at the start of each Claude Code session; on the CLI it's the same content on demand.
 
-> **Slash-command mapping:** there's no slash command for `init`/`detect`/`route` — in Claude Code the plugin install (or `mokata setup claude`) does the scaffolding, and the SessionStart hook surfaces the bootstrap briefing for you. Run these CLI commands any time to inspect the spine.
+> **Slash-command mapping:** there's no slash command for `init`/`detect`/`route` — in Claude Code `mokata setup claude` does the scaffolding, and the SessionStart hook surfaces the bootstrap briefing for you. Run these CLI commands any time to inspect the spine.
 
 ---
 
@@ -509,13 +519,13 @@ It's intentionally open-ended so future settings read from it the same way.
 
 ### 5.4 The trust dial (K3)
 
-Per-adapter, you decide how much an external tool is allowed to do:
+`settings.trust` is a flat map keyed by **surface** (`mcp`, `cli`) or by **tool** (`remember`, …) — a tool-level setting beats the surface default. Three values:
 
-- **`read-only`** — the adapter can never write.
+- **`read-only`** — the surface/tool can never write.
 - **`propose-only`** — every action is surfaced for approval; nothing is ever auto-approved.
 - **`gated-write`** *(default)* — writes go through the standard human gate.
 
-Adopted external tools are treated as untrusted input; the trust dial is how you scope them.
+**What it actually enforces today** (mokata states this rather than implying more): the dial is enforced on the **MCP write surface**. There, the real ladder is **`read-only` ▸ write-allowed** — `propose-only` and `gated-write` are the same thing, because every MCP write already requires a human-minted `mokata approve <id>` (§13.2). So `read-only` is the setting with teeth, and it is a **configuration bound, not a missing approval**: no proposal and no human approval can lift it. `settings.trust.cli` is accepted and validated but **enforces nothing yet**, and native `Write`/`Edit` are outside the dial entirely (those are the gate-guard's business — §13.6). `mokata doctor` prints this same surface-truth line whenever `settings.trust` is set.
 
 ### 5.5 Backend paths & the `config` command
 
@@ -578,6 +588,8 @@ These are the canonical `PIPELINE_PHASES`. You can run the whole thing (`mokata 
 | emit | `emit-approval` | human | un-approved durable output |
 
 The remaining phases are advisory. The completeness gate **never silently passes**: an empty spec blocks, and *any* unmapped AC blocks.
+
+These three are the *pipeline's* gates. A separate set — the **run-state gates** (`spec-persisted`, `no-code-without-failing-test`, `spec-scope`) — enforces the same discipline on the agent's **native** file writes inside Claude Code, so it cannot simply reach past mokata's tools and edit the file. See §13.6.
 
 ### 6.3 Brainstorm — the HARD-GATE (slash: `/mokata:brainstorm`)
 
@@ -661,6 +673,8 @@ mokata skills           # list — names + one-line summaries (cheap)
 mokata skills test      # reveal one skill's full prompt + gate (details on demand)
 ```
 
+**26 skills ship: 16 curated + 10 domain.** The **curated 16** are the ones you invoke (the pipeline skills below, plus `govern`, `session`, `playbook`, `docsync`, `mcp-repair`). The **10 domain skills** — `api`, `security`, `performance`, `frontend-a11y`, `browser-testing`, `ci-cd`, `git`, `deprecation`, `docs-adr`, `shipping` — you don't invoke at all: they **auto-engage** when the work touches their surface (an endpoint, a secret, a hot path, a migration…), bringing that domain's checks into the run.
+
 The shipped `/<name>` slash commands under `templates/commands/` are **generated from this same registry**, so the command and the CLI never drift.
 
 ### 7.2 The skills and their gates
@@ -676,6 +690,8 @@ The shipped `/<name>` slash commands under `templates/commands/` are **generated
 | `debug` | `/mokata:debug` | `repro-first` | check | reproduce first, root-cause (N-strikes escalation), then fix |
 | `optimize` | `/mokata:optimize` | `measure-first` | check | measure before/after; keep only proven, behavior-preserving wins |
 | `bug` | `/mokata:bug` | `reproducer-required` | check | start from a reproducer + failing test, then fix; label progression |
+| `ship` | `/mokata:ship` | `finish-is-human-landed` | human | verify it's *actually* done (green tests + every AC met + review passed), then **you** choose how to land it — mokata never merges, PRs, or deletes on its own |
+| `onboard` | `/mokata:onboard` | `typed-capture-human-gated` | human | guided capture of the project's rules, guardrails, conventions and domain facts into typed, human-gated memory the other skills then reference |
 
 Two gate **kinds**: **human** (requires explicit approval — it surfaces, you decide) and **check** (a verifiable condition, e.g. a failing test must exist before implementation).
 
@@ -688,7 +704,7 @@ mokata run review      # run a skill with no pipeline prerequisite (grounding de
 mokata run test        # works even with no init
 ```
 
-`run <name>` executes one skill and applies **only its own gate**. `name` is one of the eight skills.
+`run <name>` executes one skill and applies **only its own gate**. `name` is one of the runnable pipeline skills: `brainstorm`, `refine`, `onboard`, `spec`, `test`, `develop`, `review`, `debug`, `optimize`, `bug`, `ship` (plus `version`). The rest of the curated catalog (`govern`, `session`, `playbook`, `docsync`, `mcp-repair`) has its own command or fires on its own, and isn't driven through `mokata run`.
 
 ### 7.4 Chain skills (gates never bypassed)
 
@@ -821,7 +837,7 @@ Chosen through the router (`memory_store`): **SQLite** (default, stdlib, the gua
 
 ### 9.4 Recording facts and decisions (human-gated — C6)
 
-Nothing reaches a backend without approval. The write API takes a `confirm` callback or an `assume_yes` flag; a declined write commits nothing.
+Nothing reaches a backend without approval. The Python write API below is the **human's own surface** (it's what the CLI uses): it takes a `confirm` callback or an `assume_yes` flag, and a declined write commits nothing. When the *model* records a memory it goes through the `remember` MCP tool instead, where `assume_yes` has no equivalent — it must propose, and wait for an approval you mint with `mokata approve <id>` (§13.2).
 
 ```python
 from mokata.config import Surface
@@ -977,10 +993,20 @@ Toggle via `settings.governance.karpathy.<id>` (default on); a disabled gate doe
 
 ### 12.4 Hooks (G4)
 
-- **Sync** hooks block **only for security** (exit code 2) — a non-security sync hook is rejected by design.
+- **Sync** hooks **block** (exit code 2 — the harness refuses the tool call).
 - **Async** hooks **observe and never block** (exceptions are captured).
 
-The shipped sync security hook is `hooks/secret_guard.py` (PreToolUse, blocks a write/edit/command that would commit or send a secret — un-overridable). The shipped async hook is `hooks/session_start.py` (injects the sub-2k-token briefing). Both are declared in `hooks/hooks.json`.
+Three hooks ship, declared in `hooks/hooks.json` and wired by `mokata setup claude`:
+
+| Hook | Event | Matches | Kind of block |
+|---|---|---|---|
+| `secret-guard` | `PreToolUse` | `Write`, `Edit`, `MultiEdit`, **`Bash`** | **security** — **never overridable** |
+| `gate-guard` | `PreToolUse` | `Write`, `Edit`, `MultiEdit`, `NotebookEdit` | **methodology** (run-state) — **overridable** |
+| `session-start` | `SessionStart` | — | async: injects the ≤ 2k-token briefing; never blocks |
+
+**Two sync blocks ship, and they differ in *kind*, not in severity.** The **secret-guard** is a security block: a secret in content that is about to be written, committed or sent is fatal, and nothing lifts it — not a human approval, not a config setting. The **gate-guard** is a *methodology* block: it enforces the run-state gates (§13.2) on the agent's native file writes, and because a methodology gate that cannot be lifted becomes a gate people uninstall, a human **can** lift one — explicitly, with a reason, re-confirmed, session-scoped, and on the audit ledger.
+
+Note the matchers differ: the secret-guard also watches `Bash` (a secret can leak through a shell command); the gate-guard does not, so a `sed -i` through the shell is **not** policed by the run-state gates. That hole is deliberate and stated, not hidden.
 
 ---
 
@@ -997,9 +1023,39 @@ Everything mokata does is reviewable and gated. It is **local-first**: nothing l
 3. **path** — `.env`, `id_rsa`, `*.pem`, …
 4. **egress** — any secret in outbound content is **fatal**
 
-### 13.2 Human-gated writes + the trust dial (I2/K3)
+### 13.2 Human-gated writes: an approval the model cannot mint (I2/K3)
 
-Every durable write goes through the `WriteGate`: **secret scan (an un-overridable security block) → human approval → commit → logged**. The trust dial (`settings.trust.<tool>`) layers on top: `read-only` (cannot write), `propose-only` (always surfaced, never auto-approved), or `gated-write` (default).
+Every durable write goes through the `WriteGate`: **secret scan (an un-overridable security block) → human approval → commit → logged**.
+
+The part that matters most: **the model cannot approve its own write.** Passing `approve=true` on a tool call was never consent — it was the model typing "yes" to itself. So it no longer commits anything. An approval is **minted by a human, out-of-band**, in a process the model is not driving:
+
+```bash
+mokata approve                     # list every write waiting for you
+mokata approve p-3f9a2c11b4de      # mint the approval for ONE of them
+```
+
+The full loop, as it runs inside Claude Code:
+
+1. the model calls a write tool (e.g. `remember`) with **no** `proposal_id` → **nothing is written**; it gets back a **proposal** (`p-3f9a2c11b4de`) and a preview of exactly what would land;
+2. it shows you the id and asks you to approve it;
+3. you run **`mokata approve <id>`** in your own terminal — you see the preview, you confirm;
+4. the model re-calls the **same** tool with `proposal_id=<id>` → the write commits **once**, and the approval is burned.
+
+An approval is **single-use** (it licenses exactly one commit), **content-hashed** (change any argument and the id no longer matches — "approve X, commit Y" is arithmetically impossible), **session-scoped**, **expires after 15 minutes**, and is **ledgered**. Off a TTY it fails closed; a genuine human non-interactive flow (CI, a script) passes `--yes` — never a tool parameter.
+
+`approve` / `confirm` are still *accepted* on all **19** MCP write tools so no caller breaks, but they are inert, and the tool says so:
+
+> `approve`/`confirm` no longer commit: an approval is MINTED BY A HUMAN out-of-band (`mokata approve <id>`) and can only be REFERENCED here by id. Typing approve=true is not consent — it never was.
+
+Approve is deliberately a **terminal command only** — it has **no MCP tool and no slash command**: an approve surface inside the harness would simply hand the pen back to the model. And the secret-guard still **hard-blocks an approved write** — approval is a methodology gate, never a security override.
+
+**The trust dial** (`settings.trust`) layers on top, keyed by **surface** (`mcp`, `cli`) or by **tool** (tool beats surface): `read-only`, `propose-only`, or `gated-write` (default). Be precise about what it does today:
+
+- It is enforced on the **MCP write surface** only. Native `Write`/`Edit` are outside it entirely, and `settings.trust.cli` is accepted and validated but currently **enforces nothing**.
+- On `mcp` the honest ladder is **`read-only` ▸ write-allowed**: `propose-only` and `gated-write` are the *same* thing there, because every MCP write already needs a human-minted approval.
+- `read-only` is therefore the one that bites — and it is a **configuration bound, not a missing approval**: no proposal, and no human approval, can lift it.
+
+`mokata doctor` prints exactly that surface-truth line whenever `settings.trust` is set, so the dial can never over-promise.
 
 ### 13.3 The audit ledger (I3)
 
@@ -1017,6 +1073,67 @@ mokata audit    # print the append-only ledger
 ### 13.5 The lethal-trifecta gate (I4)
 
 When **system access + private data + an outbound action** coexist, the outbound action is **gated behind explicit human approval** (and logged). When the trifecta isn't active, no gate is imposed. This is the specific defense against the classic prompt-injection exfiltration pattern.
+
+### 13.6 The run-state gates on *native* writes — `mokata gate`
+
+A gate that only fires inside mokata's own tools is a door with no lock: the model can reach for its editor's `Write` and walk straight past it. The **gate-guard** `PreToolUse` hook (§12.4) closes that door. It runs on `Write` / `Edit` / `MultiEdit` / `NotebookEdit`, decides from the run's **persisted state on disk**, and exits **2** on a violation — so the block is an exit code the model cannot argue with, not advice it may ignore.
+
+**Three run-state gates:**
+
+| Gate | Blocks a write to an implementation file when… |
+|---|---|
+| `spec-persisted` | an approach is approved for this run but **no spec is emitted** |
+| `no-code-without-failing-test` | the spec is emitted but **no failing test is on record** |
+| `spec-scope` | the write is **outside the spec's authorized surface**, spells something the spec explicitly **deferred**, or a **`spec amend` is in flight** |
+
+What you see is one line on stderr, and the write never happens:
+
+```text
+BLOCKED [no-code-without-failing-test] no failing test is on record for this run — auth.py is
+implementation. Write the failing test first and watch it fail (/mokata:test), or override:
+mokata gate override no-code-without-failing-test --reason "<why>"
+```
+
+**The honest boundaries — read these before you trust it:**
+
+- **Test files are always writable.** You must be able to write the failing test; RED is the *permission* to implement, not the prohibition.
+- Gates fire **only inside an active mokata run** (an approach approved, or a spec emitted). Hand-editing your repo outside a run is **never policed** — guardrails on the pipeline, not house arrest.
+- Ambiguity **fails open**: if two runs have state in one repo and none is pinned, mokata will not guess which window your edit belongs to, so **the gates turn off** for that window and it says so once. Pin a run with `MOKATA_SESSION_ID` to restore enforcement (or give each window its own tree — `mokata worktree create "<topic>"`; `mokata windows` shows you when you're in that situation).
+- The gate-guard does **not** match `Bash`, so a `sed -i` through the shell is not policed. (The *secret*-guard does match `Bash`.)
+- Only **Claude Code** declares the `hooks` capability. On any other harness the gate-guard is never wired and **the run-state gates enforce nothing** on native writes.
+
+**Overriding — explicit, or not at all:**
+
+```bash
+mokata gate status                                              # read-only: what is enforced here
+mokata gate override spec-scope --reason "hotfix: prod is down" # stop ONE gate, THIS session
+mokata gate clear                                               # enforce again
+```
+
+An override needs a `--reason`, is re-confirmed interactively, is **session-scoped** (a new session enforces again — nothing to remember to turn back on), and is **recorded to the audit ledger**. Overrides stack. There is deliberately **no env-var kill switch** (a side door any process could open silently), **no MCP tool** and **no slash command** — a model-invocable override is not an override.
+
+**Scope, and the levers you actually have.** A spec's scope — the paths it authorizes, and the items it **defers** (each with the literal marker it would spell in code, e.g. `batch_update`) — is written by the *model* when it emits the spec through `/mokata:spec`. You never hand-author that JSON. What you steer is:
+
+| Lever | What it does |
+|---|---|
+| `mokata spec show` | the spec this run is working to |
+| `mokata spec amend --reason "<why>"` | a **forced phase regression** (develop → SPEC): the new scope re-earns completeness + human approval, lands as v*N+1*, and **owes a failing test**. Development writes are blocked until it lands. |
+| `mokata spec amend --abort` | abandon an amendment in flight and unblock development writes — nothing is changed |
+| `mokata gate override spec-scope` | take responsibility for the scope change yourself, on the ledger |
+
+The principle the `spec-scope` gate encodes, in its own words: *a user's instruction is authorization to **ask**, not to build.*
+
+### 13.7 Degrade honesty — a fallback is loud
+
+A capability that quietly falls back to its floor is worse than one that fails: you keep trusting an answer that is no longer the answer you think it is. So degrades are **remembered, not just printed** — `mokata doctor` reports what fell back **in this process**:
+
+```text
+⚠ degraded this session (N) — a capability fell back to a floor:
+```
+
+A team read served from the local floor, a code graph that dropped to grep, a secret scanner that could not import — each names its failure class, and (for team mode) the **name** of the env var it resolved, never its value. Nothing degraded ⇒ nothing printed.
+
+In **team mode**, `doctor` also reports the write-flush backlog — approved writes journaled locally that have **not** reached the team DB yet (with the oldest one's age, the last failure class, and `mokata sync` as the fix), and the statusline badge carries the same count (`team ⚠ 3 pending`). It is a **team** backlog, not a list of pending approvals — for those, run bare `mokata approve`.
 
 ---
 
@@ -1055,7 +1172,9 @@ mokata mcp    # discover MCP servers from .mokata/mcp.json and map them to roles
 
 Drop a `.mokata/mcp.json` listing the servers you use (`{name, provides, command}`), and `mokata mcp` enumerates them and maps them to stack roles/capabilities — then mokata orchestrates them through its own gates and audit trail. Discovery is pluggable and **degrades cleanly**: with no config present, the registry is empty and nothing errors.
 
-> mokata both **ships its own MCP server and consumes external ones.** The bundled **`mokata-mcp`** server (registered by the plugin / by `mokata setup claude`) exposes mokata's operations — `query`, `recall`, `doctor`, `coverage`, `budget`, `audit`, `status`, `preview`, `progress`, and the human-gated writes `remember` / `import_stack` / `reset` / `apply_proposal` / `init` / `memory_export` / `memory_import` / `vault_push` / `spec_check` — to Claude Code as native tools. Separately, `mokata mcp` **discovers and routes to** the external MCP servers you list in `.mokata/mcp.json`. (Write tools are propose-only unless you pass `approve=true` — `confirm` is a deprecated alias; secrets are a hard block.)
+> mokata both **ships its own MCP server and consumes external ones.** The bundled **`mokata-mcp`** server (registered by `mokata setup claude`) exposes mokata's operations to Claude Code as native tools: **35 read tools** (`query`, `recall`, `doctor`, `coverage`, `budget`, `audit`, `status`, `preview`, `progress`, `rules`, `govern`, `skills`, `session_save`, … — read-only, ungated) and **19 write tools** (`remember`, `apply_proposal`, `init`, `reset`, `config_set`, `import_stack`, `export_stack`, `memory_export`, `memory_import`, `vault_push`, `spec_check`, `spec_emit`, `spec_amend`, `session_push`, `session_pull`, `audit_share`, …). Separately, `mokata mcp` **discovers and routes to** the external MCP servers you list in `.mokata/mcp.json`.
+>
+> **Every one of the 19 write tools is propose-only.** It hands back a `proposal_id` and writes nothing until *you* mint the approval out-of-band with `mokata approve <id>` — single-use, content-hashed, session-scoped, expiring, ledgered; the model can only ever *reference* it, never create it (§13.2). `approve=true` / `confirm=true` are still accepted but **commit nothing**. Secrets are a hard block even once approved. And there is deliberately no `approve` tool in that list.
 
 ### 15.3 Capability coverage (H/A6)
 
@@ -1186,9 +1305,12 @@ mokata audit       # every gate decision, tool call, hook, write, healing/subage
 mokata rules       # the 4-tier rules + their line budgets (over-cap tiers flagged)
 mokata budget      # the savings readout again
 mokata memory      # decisions + pending heal proposals
+mokata approve     # any durable write still waiting for YOUR approval (nothing commits without one)
+mokata gate status # which run-state gates are enforcing on native writes here
+mokata doctor      # + anything that degraded to a floor this session, said out loud
 ```
 
-> **What just happened:** `mokata audit` is the hero promise made literal — an append-only `.mokata/temp_local/audit/ledger.jsonl` where **every** decision the run made is recorded with a monotonic `seq`, in order. You can review and (via the undo log) walk back every action. Nothing the agent did is opaque.
+> **What just happened:** `mokata audit` is the hero promise made literal — an append-only, hash-chained `.mokata/temp_local/audit/ledger.jsonl` where **every** decision the run made is recorded with a monotonic `seq`, in order: gate blocks, each approval you minted (and each one the model *redeemed*), every gate override with its reason. You can review and (via the undo log) walk back every action. Nothing the agent did is opaque — and nothing durable happened that you didn't personally approve.
 
 ### Step 9 — enter mid-pipeline (the composability escape hatch)
 
@@ -1237,9 +1359,26 @@ Every CLI command, grouped by Part. All accept the shared `--path PATH` (repo ro
 | `mokata brainstorm` | Socratic pre-spec exploration (HARD-GATE) | `--status` |
 | `mokata enter <phase>` | enter the pipeline at a phase | `--to <phase>` |
 | `mokata preview` | dry-run; zero side effects | `--start <phase>`, `--to <phase>` |
-| `mokata progress` | run-progress tracker (done/current/pending); read-only | `--run <id>`, `--ascii` |
+| `mokata progress` | run-progress tracker (done/current/pending); read-only | `--run <id>`, `--ascii`, `--lanes` |
 | `mokata playbook` | run the full story end-to-end | `--parallel`, `--fanout` |
 | `mokata exec` | show/select the execution mode | `--parallel`, `--isolation`, `--fanout` |
+| `mokata spec show` | this run's persisted spec (read-only) | — |
+| `mokata spec emit --file <f>` | emit a spec: completeness gate, then the human write gate (the CI/scripted path — the front door is `/mokata:spec`) | `--yes` |
+| `mokata spec amend` | amend the spec — a forced regression to SPEC; re-earns completeness + approval, lands as v*N+1*, owes RED | `--reason`, `--item`, `--file`, `--abort`, `--yes` |
+| `mokata windows` | which Claude Code windows have a run in this repo (visibility, not enforcement) | — |
+| `mokata worktree create "<topic>"` | give a window its own working tree + branch (human-gated) | `--yes` |
+
+### Approvals & gates (Part I) — the human's surface
+
+| Command | Purpose | Key flags |
+|---|---|---|
+| `mokata approve` | list every durable write waiting for your approval | — |
+| `mokata approve <id>` | **mint** the approval for ONE write — single-use, content-hashed, session-scoped, ledgered | `--yes`, `--actor` |
+| `mokata gate status` | what the run-state gates would enforce here (read-only) | — |
+| `mokata gate override <gate>` | stop enforcing ONE gate for THIS session — explicit, re-confirmed, ledgered | `--reason` *(required)*, `--run`, `--actor`, `--yes` |
+| `mokata gate clear` | drop this session's overrides and enforce again | — |
+
+These are **CLI-only by design**: neither `approve` nor `gate` ships an MCP tool or a slash command, because a model-invocable approval or override is neither.
 
 ### Composability (Part L)
 
@@ -1291,8 +1430,12 @@ Every CLI command, grouped by Part. All accept the shared `--path PATH` (repo ro
 | `completeness` | completeness_gate / `/mokata:spec` | check | any AC with no mapped test, or an empty spec |
 | `emit-approval` | emit | human | un-approved durable output |
 | `red-before-green` | `/mokata:test` | check | implementing before a test has failed |
-| `no-code-without-failing-test` | `/mokata:develop` | check | code without a failing test to satisfy |
+| `spec-persisted` | `/mokata:develop` **+ native `Write`/`Edit`** | check | an approach is approved but no spec is emitted |
+| `no-code-without-failing-test` | `/mokata:develop` **+ native `Write`/`Edit`** | check | code without a failing test to satisfy |
+| `spec-scope` | native `Write`/`Edit` | check | a write outside the spec's authorized surface, spelling a **deferred** marker, or during a `spec amend` |
 | `spec-then-quality` | `/mokata:review` | human | review not done in two passes |
+| `finish-is-human-landed` | `/mokata:ship` | human | landing (merge/PR/delete) without your explicit choice |
+| `typed-capture-human-gated` | `/mokata:onboard` | human | capturing project knowledge without approval |
 | `repro-first` | `/mokata:debug` | check | a fix attempted before root cause |
 | `measure-first` | `/mokata:optimize` | check | a change before a baseline measurement |
 | `reproducer-required` | `/mokata:bug` | check | a fix before a reproducer exists |
@@ -1300,6 +1443,8 @@ Every CLI command, grouped by Part. All accept the shared `--path PATH` (repo ro
 | `simplicity` | strawman (Karpathy) | check | complexity over a cap |
 | `surgical-scope` | emit (Karpathy) | check | touched files over a cap |
 | `verify` | completeness_gate (Karpathy) | check | success criteria undefined/unverified |
+
+The three gates marked **native `Write`/`Edit`** are the **run-state gates** — enforced by the `gate-guard` `PreToolUse` hook on the agent's own file-mutation tools, and the only gates a human can explicitly override (`mokata gate override <gate> --reason "<why>"` — session-scoped, ledgered). Everything the secret-guard blocks is **never** overridable. See §13.6.
 
 ### Every `settings` key
 
@@ -1316,7 +1461,9 @@ Per-tool backend config (Stage 24A): `tools.sqlite.config.path`, `tools.obsidian
 
 ### `temp_local/state/` files
 
-`approved_approach.json` (brainstorm handoff) · `approved_refinements.json` (refine handoff) · `emitted_spec.json` · `memory_stats.json` · `knowledge_index.json` · `story_analysis__<id>.json` · `undo_log.json` (revert) · `pipeline_run__<id>.json` (resume checkpoints; the progress tracker reads these). All transient/runtime — under `.mokata/temp_local/` (gitignored); committed config (manifest, constitution, `.gitignore`) stays at the `.mokata/` root.
+Run-scoped (`__<run_id>`): `approved_approach__<run>.json` (brainstorm handoff) · `approved_refinements__<run>.json` (refine handoff) · `emitted_spec__<run>.json` (incl. its `scope`) · `tdd_phase__<run>.json` (the RED/GREEN record) · `gate_override__<run>.json` · `pipeline_run__<run>.json` (resume checkpoints; the progress tracker reads these).
+Repo-scoped: `write_proposal__<id>.json` (a write awaiting a human-minted approval) · `spec_corpus.json` · `memory_stats.json` · `knowledge_index.json` · `story_analysis__<id>.json` · `undo_log.json` (revert).
+All transient/runtime — under `.mokata/temp_local/` (gitignored); committed config (manifest, constitution, `.gitignore`) stays at the `.mokata/` root.
 
 ---
 
@@ -1332,7 +1479,25 @@ Per-tool backend config (Stage 24A): `tools.sqlite.config.path`, `tools.obsidian
 
 **Parallel didn't actually parallelize.** Without a subagent-capable harness, `--parallel` degrades to the sequential flow and says so. That's expected on the bare CLI.
 
-**A write was blocked and I can't override it.** If it tripped the secret-guard (the 4-layer secret scan), the block is **un-overridable** by design — a secret in outbound content is fatal. Remove the secret (e.g. move it to `.env`, which the path layer already protects) and retry.
+**Claude Code refused to write a file — `BLOCKED [<gate>] …`.** That's the **gate-guard** hook (§13.6): a run-state gate decided this write from your run's persisted state and exited 2, so the file was never touched. Read the gate id in the brackets:
+
+- `spec-persisted` — you approved an approach but no spec is emitted. Run `/mokata:spec`.
+- `no-code-without-failing-test` — no failing test is on record for this run. Write the failing test and watch it fail (`/mokata:test`). **Test files are always writable**, so nothing is stopping you.
+- `spec-scope` — the write is outside what the spec authorized, or it spells something the spec **deferred**, or a `spec amend` is in flight. Widen the scope properly with `mokata spec amend --reason "<why>"` (it re-earns completeness + your approval and owes a new failing test), or `mokata spec amend --abort` if an amendment is stuck.
+
+Every one of these **is** overridable — it's a methodology gate, not a security one:
+
+```bash
+mokata gate status                                       # what's enforced here
+mokata gate override <gate> --reason "<why>"             # this session only; ledgered
+mokata gate clear                                        # enforce again
+```
+
+And if the gates seem to have stopped firing: you probably have **two runs with state in one repo and none pinned**, so mokata refused to guess which window your edit belongs to and turned them off (it says so, once). `mokata windows` shows you; `MOKATA_SESSION_ID` pins a run; `mokata worktree create "<topic>"` gives the window its own tree.
+
+**A write was blocked and I *can't* override it.** Then it tripped the **secret-guard** (the 4-layer secret scan), and that block is **un-overridable** by design — a secret in outbound content is fatal. Note it fires **even on a write you approved**: a human-minted `mokata approve <id>` is a methodology gate, never a security override. Remove the secret (e.g. move it to `.env`, which the path layer already protects) and retry.
+
+**The model says it's waiting for me to approve something.** Durable writes don't commit on the model's say-so — `approve=true` on a tool call does nothing at all (§13.2). Run `mokata approve` to see everything waiting, then `mokata approve <id>` to mint the approval for the one you want. It licenses exactly one write, expires in 15 minutes, and can't be reused or re-pointed at different content.
 
 **I want to undo something mokata wrote.** Durable writes record their prior value to the undo log; use the revert path (`ReversibleStateStore`). To wipe state entirely, `mokata reset` (use `--keep-config` to keep the manifest, `--backup DIR` to make it reversible).
 
@@ -1342,4 +1507,4 @@ Per-tool backend config (Stage 24A): `tools.sqlite.config.path`, `tools.obsidian
 
 ---
 
-*Built clean-room, Apache-2.0, © MoStack. Framework: **mokata** · brand: **MoStack**. Published docs: <https://jasgujral.github.io/mokata-oss/>.*
+*Built clean-room, Apache-2.0, © MoStack. Framework: **mokata** · brand: **MoStack**. Published docs: <https://mokata.ai/>.*

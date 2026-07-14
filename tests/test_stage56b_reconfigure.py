@@ -25,6 +25,7 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _support import mcp_commit
 
 from mokata import onboarding as OB
 from mokata.config import Surface
@@ -298,7 +299,7 @@ class TestMcpSurface(unittest.TestCase):
         from mokata import mcp_server as M
         with tempfile.TemporaryDirectory() as d:
             _init(d, profile="standard")
-            res = M.reconfigure(path=d, profile="full", approve=True)
+            res = mcp_commit(M.reconfigure, path=d, profile="full")
             self.assertTrue(res["committed"])
             self.assertEqual(Surface.load(d).manifest.profile, "full")
 

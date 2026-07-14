@@ -32,7 +32,15 @@ mokata config set settings.audit.dsn_env MOKATA_PG_DSN  # the env-var NAME only 
 
 export MOKATA_PG_DSN='postgresql://…@your-managed-host/db'   # the DSN lives in your env
 pip install 'mokata[postgres]'                               # the optional driver
+
+mokata team init      # provisions the shared schema (once, by one person) — see team setup
 ```
+
+The shared log lives in a mokata-owned table that **`mokata team init`** provisions. Nothing else in
+mokata ever runs DDL, so publishing needs **no `CREATE` rights** — a DML-only role with
+`SELECT, INSERT` on `mokata_audit_log` is enough, and revoking `UPDATE`/`DELETE` makes the log
+**append-only by grant**. (Already ran `team init` for team mode? Then you're done — memory,
+sessions, and audit share the one schema.)
 
 ## Publish your entries — `mokata audit --share`
 
@@ -70,13 +78,17 @@ prefixed with who did it. It is read-only and touches nothing local.
 Everything is reachable in-harness (no dropping to a terminal):
 
 - **`audit`** MCP read tool with **`team=true`** → the shared team-wide who-did-what.
-- **`audit_share`** MCP **write** tool → publish your entries; propose-only until you pass
-  `approve=true`, then it commits through the WriteGate (a secret is hard-blocked).
+- **`audit_share`** MCP **write** tool → publish your entries. Propose-only: it returns a
+  `proposal_id` and writes nothing until *you* run `mokata approve <id>` in your terminal, after
+  which it commits through the WriteGate (a secret is hard-blocked even then). `approve=true` on
+  the tool call commits nothing — the model cannot approve its own writes.
 
 ## Degrade-clean
 
-No driver installed, or no DSN exported? Sharing and the team read **stay local** with a clear
-message — never a crash, and never a silent downgrade to a less-secure path:
+No driver installed, no DSN exported, or a shared schema that isn't provisioned yet? Sharing and the
+team read **stay local** with a clear message that **names the failure and its fix** — never a crash,
+and never a silent downgrade to a less-secure path (`mokata doctor` also reports what fell back to a
+floor this session, so a degrade can't pass for the real thing):
 
 ```text
 shared audit unavailable (… needs a DSN in $MOKATA_AUDIT_PG_DSN / $MOKATA_PG_DSN …) —
