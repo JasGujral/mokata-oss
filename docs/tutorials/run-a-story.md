@@ -19,8 +19,9 @@ mokata init --profile standard --yes
 mokata status
 ```
 
-`status` shows the live stack — on `standard`, `code_graph` resolves to `grep` (the floor)
-and `memory_store` to `sqlite` unless richer tools are installed.
+`status` shows the live stack — on `standard`, `code_graph` resolves to `ast` (the embedded
+stdlib-AST floor) on a Python repo, `grep` only on a non-Python one, and `memory_store` to
+`sqlite` unless richer tools are installed.
 
 ## 2. See the plan before doing anything (dry-run)
 
@@ -88,7 +89,8 @@ mokata gate status   # the run-state gates enforcing on the agent's NATIVE Write
 mokata approve       # every durable write waiting for a human-minted approval
 ```
 
-- **The run-state gates** (`spec-persisted`, `no-code-without-failing-test`, `spec-scope`) are
+- **The run-state gates** (`approach-approval`, `spec-persisted`, `no-code-without-failing-test`,
+  `spec-scope`) are
   enforced by a `PreToolUse` hook, so the agent can't skip mokata's tools and just edit the file:
   the write is refused with `BLOCKED [<gate>] <reason>` and exit code 2. Test files are always
   writable, and they only fire inside an active run. It's a *methodology* block, so you can lift

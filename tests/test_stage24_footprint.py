@@ -50,8 +50,11 @@ class TestInitFootprint(unittest.TestCase):
                 init_repo(root=d, profile=profile, assume_yes=True, out=_silent)
                 mdir = os.path.join(d, MOKATA_DIR)
                 for name in os.listdir(mdir):
-                    self.assertIn(name, COMMITTED_AT_ROOT,
-                                  f"{profile}: unexpected file at .mokata/ root: {name}")
+                    # KB.S1: init now records a bootstrap audit entry, so temp_local/ (the gitignored
+                    # runtime split) exists after init — it is NOT committed, so the "root holds only
+                    # committable config" contract stands (temp_local/ is ignored, checked below).
+                    self.assertTrue(name == TEMP_LOCAL_DIRNAME or name in COMMITTED_AT_ROOT,
+                                    f"{profile}: unexpected file at .mokata/ root: {name}")
                 # the committed essentials are present
                 self.assertTrue(os.path.exists(os.path.join(mdir, "manifest.json")))
                 self.assertTrue(os.path.exists(os.path.join(mdir, "constitution.md")))
@@ -65,12 +68,18 @@ class TestInitFootprint(unittest.TestCase):
                 body = fh.read()
             self.assertIn("temp_local/", body)
 
-    def test_init_does_not_pre_create_temp_local(self):
-        # init writes only committed config; no runtime data yet.
+    def test_init_creates_only_the_bootstrap_ledger_under_temp_local(self):
+        # KB.S1 amends the 24D "init pre-creates no temp_local" invariant: init now records a single
+        # bootstrap audit entry (P7 — every durable write leaves a record; the ledger's own creation
+        # is that first entry). Its footprint is EXACTLY the audit ledger — no memory store, no
+        # state, no index/caches are pre-created. temp_local/ stays gitignored (never committed).
         with tempfile.TemporaryDirectory() as d:
             init_repo(root=d, profile="standard", assume_yes=True, out=_silent)
-            self.assertFalse(
-                os.path.exists(os.path.join(d, MOKATA_DIR, TEMP_LOCAL_DIRNAME)))
+            tl = os.path.join(d, MOKATA_DIR, TEMP_LOCAL_DIRNAME)
+            self.assertTrue(os.path.isdir(tl), "init records the bootstrap entry, so temp_local/ "
+                                               "now holds the audit ledger")
+            self.assertEqual(sorted(os.listdir(tl)), ["audit"],
+                             "the ONLY runtime footprint init leaves is the audit ledger")
 
 
 class TestFullRunFootprint(unittest.TestCase):

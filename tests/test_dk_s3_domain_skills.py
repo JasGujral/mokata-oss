@@ -288,8 +288,10 @@ class TestNoNewGate(unittest.TestCase):
     def test_backed_gate_set_is_unchanged(self):
         self.assertEqual(
             sorted(g for g, r in GATES.items() if r.backed),
-            ["completeness", "deviation", "hard-rule", "no-code-without-failing-test",
-             "secret-guard", "ship-readiness", "spec-persisted", "write-gate"])
+            # PH-GATE.S0 (0.0.14) backed `approach-approval`; this stage still adds no gate.
+            ["approach-approval", "completeness", "deviation", "hard-rule",
+             "no-code-without-failing-test", "secret-guard", "ship-readiness", "spec-persisted",
+             "write-gate"])
 
     def test_ci_cd_feeds_an_instrument_and_git_rides_an_existing_backed_gate(self):
         # ci-cd → the scorecard instrument (never a backed gate); git → the EXISTING write-gate

@@ -41,7 +41,8 @@ Everything is a toggle in `.mokata/manifest.json` (see the
   hosted Postgres) via each tool's `config` block: see
   [configure storage backends & paths](configure-storage-backends.md).
 - **Codebase graph** — `full` wires a real graph (code-review-graph / serena) for structural
-  queries, with grep as the safe floor: see [use a codebase graph](use-a-codebase-graph.md).
+  queries, with the embedded stdlib-AST floor as the structural default and grep as the universal
+  emergency floor: see [use a codebase graph](use-a-codebase-graph.md).
 
 ## The trust dial: what it governs
 

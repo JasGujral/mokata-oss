@@ -161,9 +161,11 @@ can call these too (see [Integrate with other AI tools](integrate-other-ai-tools
 > import_stack, spec_check, reset, …) are **always human-gated** — a write tool call returns a
 > **proposal id** and commits nothing; **you** mint the approval out-of-band in your own terminal
 > (`mokata approve <id>`), and only a re-call carrying that id commits, once. Claude cannot
-> approve its own write — approve ships as a **terminal command only**, deliberately: it has no
-> MCP tool and no slash command, because an in-harness approve surface would hand the model the
-> very consent it is supposed to ask you for. It **also
+> approve its own write — approve is a **terminal command by default** (`mokata approve <id>`).
+> An in-chat MCP approve tool (`mcp__mokata__approve`) also ships but is **opt-in and
+> default-OFF** (`settings.approvals.in_chat`); enabling it is itself a human-gated config write,
+> and even then Claude Code prompts you on every call, so the model never mints its own consent
+> unprompted. There is no approve **slash command**. It **also
 > orchestrates external MCP servers** it discovers (H4, `mokata mcp`) and maps them to
 > capabilities.
 >

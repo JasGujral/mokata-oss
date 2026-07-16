@@ -8,6 +8,30 @@ The full, versioned changelog lives in the repository's
 > a stabilizing phase and are collapsed into this entry; 0.0.1 is the honest starting point for an
 > early, fast-moving project.
 
+## 0.0.14
+
+**Graph mandatory + trust fixes. No breaking changes; additive; no schema change; local stays the
+zero-config default.** The codebase graph becomes a first-class, always-on structural layer with an
+honest fallback. An **embedded stdlib-AST floor** ships in the box — on a Python repo it answers
+callers/callees/imports/blast-radius structurally (`degraded=false`) with zero dependencies, a floor
+**above** grep; adopt a richer graph with `mokata graph adopt [code-review-graph|serena]` (human-gated)
+and see which backend answers with `mokata graph status`. **`graph.required` now defaults on**: a
+degraded (grep-floor) blast radius is **refused** as a decision input unless you accept it for the
+session with the TTY-reconfirmed, ledgered `--allow-degraded` escape (the result stays marked
+degraded). Every graph query now **checks freshness before answering** — a known-stale graph rebuilds
+first, and a rebuild failure degrades loudly to the AST floor on current files, never stale structure.
+**Trust:** a **ninth backed gate** (`approach-approval`) physically blocks the idea→code jump — a
+native `Write`/`Edit` before an approved approach is refused (exit 2); an **opt-in, default-OFF**
+in-chat `mcp__mokata__approve` tool performs the same human-minted, single-use, content-bound approval
+and still prompts you on every call, so the model can't approve its own write; approved approaches
+carry typed **`decisions[]`** the spec's deferred scope derives from (never hand-written twice) behind
+a **prior-art bound step**; the statusline is **session-true** and a **shipped run retires** from the
+badge and `mokata progress` (nothing deleted). The six CLI setup one-shots 0.0.13 filed are now
+**ledgered** (`KNOWN_BYPASS` is empty; a sweep fails CI on any ungated durable writer), and `mokata
+reset` writes a tombstone that survives `.mokata`'s removal. **Fixes:** simulated exec batches report
+zero actual spend and a `simulated` (never green) review; `offer_text_once` never raises; the `reset`
+propose→approve→redeem round trip no longer crashes.
+
 ## 0.0.13
 
 **Correctness & Trust — the seatbelt is enforced, not advertised. No breaking changes; additive; no

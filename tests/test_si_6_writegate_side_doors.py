@@ -561,6 +561,8 @@ _BACKEND_BASES = {"backend", "dest", "source", "self"}
 # (directly, or as the sole callee of one). Each entry names the gate that runs it.
 GATED = {
     ("config_cmd.py", "_commit"): "WriteGate @config_cmd.py:161 (config_set)",
+    ("knowledge/graph_adopt.py", "_commit"): "WriteGate @knowledge/graph_adopt.py (adopt_graph "
+                                             "pins the code graph into the manifest — GR.S2)",
     ("cli_commands/skills.py", "commit"): "WriteGate @cli_commands/skills.py:197",
     ("docsync.py", "commit"): "WriteGate @docsync.py:421",
     ("team.py", "_commit"): "WriteGate @team.py:92 (_gated_write) + @team.py:679 (_join_vault)",
@@ -596,6 +598,16 @@ GATED = {
 # ---- register 2: UNGATED BY DESIGN. Not a governed durable write. Each carries its reason.
 UNGATED_BY_DESIGN = {
     ("atomicfile.py", "atomic_write_text"): "the write PRIMITIVE itself — no target of its own",
+    ("knowledge/user_prefs.py", "record_graph_decline"): "GR.S2 — the USER's own standing "
+        "preference (a graph-adoption decline) recorded in ~/.mokata, NOT a governed PROJECT "
+        "durable write. Recording the human's explicit 'no' is like temp_local run-state, not a "
+        "silent project change (P2 governs project code/config/memory writes); the OPT-IN adopt "
+        "that DOES write the project manifest goes through the gate (graph_adopt._commit, GATED).",
+    ("govern/lifecycle.py", "_write_tombstone"): "KB.S1 — the USER-scoped removal TOMBSTONE in "
+        "~/.mokata/removals.json (repo identity + when + actor, NO repo content). Same class as "
+        "user_prefs above: a user-profile record, not a governed PROJECT write. It exists BECAUSE "
+        "a reset deletes the repo's own audit ledger — the removal must be recorded where the "
+        "removal cannot reach (P22). The `_remove` it audits is in LEDGERED below.",
     ("govern/ledger.py", "record"): "the audit ledger IS the record of gate decisions — gating it "
                                     "would recurse",
     ("govern/ledger.py", "_write_counter"): "the ledger's O(1) seq sidecar (MS.S3)",
@@ -616,6 +628,18 @@ UNGATED_BY_DESIGN = {
     ("progress_events.py", "append_event"): "append-only run telemetry under temp_local/",
     ("state.py", "_atomic_write"): "StateStore — process/run state under temp_local/",
     ("state.py", "delete"): "StateStore — process/run state under temp_local/",
+    ("knowledge/ast_backend.py", "_save_cache"): "GR.S1 — the incremental AST edge cache under "
+                                                 "temp_local/ (transient, same class as run state; "
+                                                 "a missing/torn cache is a silent full re-parse). "
+                                                 "Stores symbols/paths/lines only, never source text.",
+    ("knowledge/freshness.py", "mark_dirty"): "GR.S4 — the graph dirty-set under temp_local/ "
+                                              "(transient run-state, GR.S1-cache precedent; the "
+                                              "PostToolUse async observability lane). Stores touched "
+                                              "PATHS only, never content; an append failure just "
+                                              "means the next query reconciles via HEAD/mtime.",
+    ("knowledge/freshness.py", "drain_dirty"): "GR.S4 — consume-and-clear of the temp_local/ graph "
+                                              "dirty-set (rename-then-read). Transient run-state, "
+                                              "same class as the AST cache; never a governed write.",
     ("session_state.py", "update"): "session run-state under temp_local/",
     ("session_state.py", "delete"): "session run-state under temp_local/",
     ("govern/revert.py", "revert"): "undo of a state write under temp_local/",
@@ -647,32 +671,52 @@ UNGATED_BY_DESIGN = {
                                              "--drop-source — both inside the per-item WriteGate.",
 }
 
-# ---- register 3: KNOWN BYPASS. Real durable writes that genuinely bypass the WriteGate TODAY.
-# These are NOT excused — they are FILED. The audit exists to make them impossible to forget, and
-# the set is frozen: a new bypass cannot be waved through without editing this register.
+# ---- register 3: LEDGERED (KB.S1). A governed durable write that keeps its bespoke human-at-TTY
+# consent AND now leaves an audit-ledger record (P7: every durable write leaves a record), but is a
+# BOOTSTRAP/SETUP one-shot that does not pass through the universal WriteGate. Distinct from GATED
+# (no `commit=` closure / no secret-scan of user content — these write mokata's OWN scaffolding, so
+# there is nothing to content-review) and from UNGATED_BY_DESIGN (these ARE governed project writes,
+# not temp_local/derived/user-profile state). They are honestly their own class — calling them
+# "GATED" would overclaim (doc 85 §4 forbids), and calling them "by design" would understate the
+# record they now leave.
 #
-# Found by THIS stage's sweep. One coherent cluster: CLI/bootstrap surfaces that predate the
-# universal gate, whose MCP twins were later correctly wrapped in `_gated_write`. Filed to doc 84 as
-# "CLI-surface gate bypasses". NONE is a memory/export/migrate path — SI.6's own three doors are
-# CLOSED (registers 1 and 2 above), which `test_no_memory_path_is_a_known_bypass` pins.
-#
-# SI.6b (2026-07-13) closed the 2 SCAN-RELEVANT entries — `share.py:export_manifest` and
-# `share.py:apply_manifest`, the two ends of the stack-share trust boundary. Both moved to GATED
-# above; see tests/test_si_6b_stack_share_scan.py. What remains is 6 SETUP one-shots (init, harness,
-# skills, reset), whose fix is an ordering problem (bootstrap runs before a manifest exists) rather
-# than a scanning one. They stay REGISTERED, are still printed in CI on every push, and land in
-# 0.0.14 — unchanged, unexcused, and impossible to forget.
-KNOWN_BYPASS = {
-    ("init.py", "write_files"): "writes manifest/constitution/.gitignore under a bespoke "
-                                "read_yes_no — no WriteGate. Bootstrap: no manifest exists yet.",
-    ("harness_setup.py", "_write_json"): "writes .mcp.json / .claude/settings.json under a bespoke "
-                                         "confirm — no WriteGate anywhere in harness_setup.",
-    ("harness_setup.py", "_write_command_file"): "writes .claude/commands/* — same apply_setup path.",
-    ("agent_skills.py", "write_skill_files"): "writes .claude/skills/*/SKILL.md from apply_setup.",
-    ("agent_skills.py", "prune_orphan_skills"): "DELETES .claude/skills/* trees from setup/unsetup.",
-    ("govern/lifecycle.py", "_remove"): "DELETES .mokata/ entirely under a bespoke confirm. The MCP "
-                                        "`reset` tool gates it; the CLI/library path does not.",
+# These are the 6 that SI.6's sweep filed to KNOWN_BYPASS and doc 84 as "CLI-surface gate bypasses"
+# (SI.6b closed the stack-share pair earlier). KB.S1 closes them: each writer's flow now records the
+# act on the repo's audit ledger — init in `write_files` (the ledger's own creation is its first
+# entry: the bootstrap-ordering answer), the harness/skills writers via a batched `setup`/`unsetup`
+# record at the flow that drives them, and `_remove` via a user-scoped TOMBSTONE that survives the
+# deletion of the repo ledger (the unsetup answer). Consent is UNCHANGED everywhere.
+LEDGERED = {
+    ("init.py", "write_files"): "KB.S1 — writes manifest/constitution/.gitignore under init_repo's "
+        "bespoke read_yes_no; `_record_bootstrap` now leaves a `setup`/action=init record NAMING "
+        "them on the repo ledger it creates (the ledger's own creation is the FIRST entry — the "
+        "bootstrap-ordering answer). Files named, contents never (not content review).",
+    ("harness_setup.py", "_write_json"): "KB.S1 — raw JSON committer (.mcp.json / settings.json "
+        "merges). Every flow that reaches it (apply_setup / unsetup_harness / mcp_install) records a "
+        "batched `setup`/`unsetup`/`mcp_install` entry naming the files on the repo ledger. Bespoke "
+        "setup consent unchanged; merge-safety unchanged.",
+    ("harness_setup.py", "_write_command_file"): "KB.S1 — materializes a command template; "
+        "apply_setup records the batched `setup` entry naming the commands. Byte-identical write.",
+    ("agent_skills.py", "write_skill_files"): "KB.S1 — writes SKILL.md; apply_setup records the "
+        "batched `setup` entry naming the skills. (The `python -m mokata.agent_skills` regen of the "
+        "SHIPPED plugin tree is a build tool, not a governed project write — no repo ledger there.)",
+    ("agent_skills.py", "prune_orphan_skills"): "KB.S1 — DELETES stale mokata skill dirs; "
+        "apply_setup (sync) and unsetup_harness record the removed dirs in the `setup`/`unsetup` "
+        "entry. Marker-guarded (never a user's own skill), unchanged.",
+    ("govern/lifecycle.py", "_remove"): "KB.S1 — DELETES .mokata/ under reset_state's read_yes_no "
+        "consent (fail-closed off a TTY); the removal is now recorded in a user-scoped TOMBSTONE "
+        "(~/.mokata/removals.json via `_write_tombstone`) that SURVIVES the deletion of the repo's "
+        "own ledger — repo identity + when + actor, no repo content. The MCP `reset` already gated "
+        "it; the CLI/library path now audits it too (parity).",
 }
+
+# ---- register 4: KNOWN BYPASS. Real durable writes that genuinely bypass the WriteGate AND leave
+# no audit record. As of KB.S1 (0.0.14) this is EMPTY: the memory/export/migrate funnel (SI.6) and
+# stack-share pair (SI.6b) are GATED, and the 6 setup one-shots are LEDGERED above. The register is
+# KEPT — and the sweep FAILS if anything reappears here — so the 0.0.13 exit criterion "every
+# durable write is at least recorded" cannot silently regress. A genuinely un-closable new writer is
+# filed HERE with its reason (and flagged for Jas), never waved through.
+KNOWN_BYPASS: dict = {}
 
 
 def _durable_write_sites():
@@ -743,7 +787,8 @@ class TestZeroBypass(unittest.TestCase):
 
     def test_every_durable_write_site_in_src_is_registered(self):
         sites = _durable_write_sites()
-        registered = set(GATED) | set(UNGATED_BY_DESIGN) | set(KNOWN_BYPASS)
+        registered = (set(GATED) | set(UNGATED_BY_DESIGN) | set(LEDGERED)
+                      | set(KNOWN_BYPASS))
         unregistered = sorted(set(sites) - registered)
 
         detail = "\n".join(f"    {rel}:{fn}  ({', '.join(sites[(rel, fn)])})"
@@ -762,18 +807,28 @@ class TestZeroBypass(unittest.TestCase):
         """Keeps the register honest: a justification for a site that no longer exists is a lie that
         makes the next reader trust the whole list less."""
         sites = _durable_write_sites()
-        stale = sorted((set(GATED) | set(UNGATED_BY_DESIGN) | set(KNOWN_BYPASS)) - set(sites))
+        stale = sorted((set(GATED) | set(UNGATED_BY_DESIGN) | set(LEDGERED)
+                        | set(KNOWN_BYPASS)) - set(sites))
         self.assertEqual(stale, [],
                          "these registered sites no longer exist — remove them: " + str(stale))
 
-    def test_the_known_bypasses_are_exactly_the_frozen_filed_set(self):
-        """A new bypass cannot be waved through by quietly appending to the register. Adding one
-        means editing this list, which means someone reviews it."""
-        self.assertEqual(len(KNOWN_BYPASS), 6,
-                         "KNOWN_BYPASS changed. A bypass was ADDED (fix it, or file it and update "
-                         "the count) or REMOVED (gated at last — drop it here and update the count).")
-        self.assertTrue(all(v.strip() for v in KNOWN_BYPASS.values()),
-                        "every known bypass must carry its justification")
+    def test_the_known_bypass_register_is_empty(self):
+        """THE KB.S1 EXIT-CRITERION FLIP. SI.6 froze KNOWN_BYPASS at its filed count and failed if a
+        7th appeared; KB.S1 CLOSED the 6 setup one-shots (all now LEDGERED), so the register must be
+        EMPTY. It is kept — and this asserts empty rather than deleting it — so a NEW durable writer
+        that bypasses both the gate AND the ledger cannot be quietly filed here: reappearing means
+        editing this, which means someone reviews it (and flags it for Jas)."""
+        self.assertEqual(
+            KNOWN_BYPASS, {},
+            "KNOWN_BYPASS is non-empty. A durable writer bypasses BOTH the WriteGate and the audit "
+            "ledger. Close it: route it through a gate (→ GATED) or leave it a bespoke-consent "
+            "record (→ LEDGERED). Filing it here again is the 0.0.13 exit criterion regressing.")
+
+    def test_the_ledgered_setup_one_shots_carry_their_reasons(self):
+        """The 6 KB.S1 closures are honestly its own class (bespoke consent + audit record, no
+        WriteGate) — each must say why it is LEDGERED rather than GATED."""
+        self.assertTrue(all(v.strip() for v in LEDGERED.values()),
+                        "every LEDGERED setup one-shot must carry its justification")
 
     def test_no_memory_path_is_a_known_bypass(self):
         """SI.6's own three doors: CLOSED. Whatever else the sweep found, C1/C2/C3 are not on the
@@ -791,7 +846,9 @@ class TestZeroBypass(unittest.TestCase):
                  "=" * 78]
         for title, reg in (("GATED — inside a gate-wrapped committer", GATED),
                            ("UNGATED BY DESIGN — not a governed durable write", UNGATED_BY_DESIGN),
-                           ("KNOWN BYPASS — real, filed, NOT excused (doc 84)", KNOWN_BYPASS)):
+                           ("LEDGERED — bespoke consent + audit record, bootstrap/setup one-shot "
+                            "(KB.S1)", LEDGERED),
+                           ("KNOWN BYPASS — gate-AND-ledger bypass, filed (doc 84)", KNOWN_BYPASS)):
             present = sorted(k for k in reg if k in sites)
             lines.append(f"\n{title}  [{len(present)}]")
             for rel, fn in present:
@@ -799,12 +856,14 @@ class TestZeroBypass(unittest.TestCase):
                 lines.append(f"      {reg[(rel, fn)]}")
         lines.append("\n" + "-" * 78)
         lines.append(f"TOTAL sites: {len(sites)}  |  gated: {len(GATED)}  |  "
-                     f"by-design: {len(UNGATED_BY_DESIGN)}  |  KNOWN BYPASS: {len(KNOWN_BYPASS)}")
+                     f"by-design: {len(UNGATED_BY_DESIGN)}  |  ledgered: {len(LEDGERED)}  |  "
+                     f"KNOWN BYPASS: {len(KNOWN_BYPASS)}")
         lines.append("VERDICT: mokata's memory / export / migrate funnel has ZERO bypasses, and as")
-        lines.append("         of SI.6b so does the STACK-SHARE pair — both ends of that trust")
-        lines.append("         boundary are scanned (export drops the key; import refuses the file).")
-        lines.append("         The 6 SETUP one-shots above still do NOT go through the gate, so")
-        lines.append("         'zero writes bypass WriteGate' is NOT yet true repo-wide (doc 84).")
+        lines.append("         of SI.6b so does the STACK-SHARE pair. KB.S1 closes the last 6 SETUP")
+        lines.append("         one-shots (init / harness / skills / reset) — each keeps its bespoke")
+        lines.append("         TTY consent and now leaves an audit record (LEDGERED). KNOWN_BYPASS")
+        lines.append("         is EMPTY: every durable write in src/ is gated, by-design, or")
+        lines.append("         recorded. (Full WriteGate routing of the setup surfaces is 0.0.14+.)")
         lines.append("=" * 78)
         print("\n".join(lines))
         self.assertTrue(sites)

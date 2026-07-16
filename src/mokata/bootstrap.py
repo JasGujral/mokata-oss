@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 from .config import Surface
 from .router import Resolution
@@ -126,6 +126,15 @@ def _render(surface: Surface) -> str:
                 lines.append(f"- {r.need} -> UNAVAILABLE (no provider present)")
         lines.append("")
 
+    # GR.S4 / HP.S1 — ONE bounded, graph-derived structure line. Rides the SAME briefing text
+    # (no second channel) inside the ≤2k budget; ABSENT (byte-identical) when the structural
+    # floor can't summarise the repo. So a session opens knowing the real code structure, not a
+    # memory of it.
+    structure_line = _graph_structure_line(surface)
+    if structure_line:
+        lines.append(structure_line)
+        lines.append("")
+
     # Layers (one terse line).
     if m.layers:
         on = [name for name in m.layers if m.layer_enabled(name)]
@@ -187,6 +196,16 @@ def _render(surface: Surface) -> str:
         "stated NOT-when."
     )
     return "\n".join(lines) + "\n"
+
+
+def _graph_structure_line(surface: Surface) -> Optional[str]:
+    """The GR.S4 briefing structure line, or None (byte-identical) on any repo the structural
+    floor can't summarise. Fully guarded — the briefing never crashes on it."""
+    try:
+        from .knowledge.layer import graph_structure_line
+        return graph_structure_line(surface)
+    except Exception:
+        return None
 
 
 def _always_on_rule_lines(surface: Surface) -> List[str]:

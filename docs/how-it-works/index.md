@@ -113,8 +113,11 @@ Deep-dive: [The domain-skills layer](domain-skills.md).
 The knowledge layer gives every phase **structural facts about the codebase** — what calls what,
 what a change's blast-radius is, where a symbol is defined. Brainstorm grounds an approach in it,
 develop pulls it JIT for the symbols in play, review reads it for the architecture axis, and the
-domain classifier derives the domains-in-play from it. It's an **external, optional** graph with a
-clean fallback — mokata never requires it and never ships its own. See
+domain classifier derives the domains-in-play from it. The layer answers structurally from an
+**embedded, zero-dependency stdlib-AST floor** out of the box, and lets you adopt an external
+graph (code-review-graph / serena / Neo4j) for cross-language precision. `graph.required` is on
+by default: mokata refuses to present a *degraded* (grep-floor) blast radius as decision input
+unless you accept it (`--allow-degraded`, ledgered). See
 [Knowledge layer](../concepts/knowledge.md).
 
 ## 5. The memory engine & scopes

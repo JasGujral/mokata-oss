@@ -142,8 +142,9 @@ The `full` profile declares the richest fallback chain for each capability. Here
 |---|---|---|---|
 | `code_graph` | `code-review-graph` | persisted graph: callers/callees/blast-radius, incremental | `code-review-graph` on `PATH` |
 | | `serena` | LSP-backed, type-accurate symbol navigation | `serena` on `PATH` |
+| | `ast` | embedded stdlib-AST floor — structural queries **non-degraded** on Python (name-resolution) | a `.py` file in the repo |
 | | `ripgrep` | fast lexical floor (better than plain grep) | `rg` on `PATH` |
-| | `grep` | universal floor — always present | always |
+| | `grep` | universal lexical floor — always present | always |
 | `memory_store` | `native-memory` | delegate to Claude Code's native memory | `claude` on `PATH` |
 | | `obsidian` | a human-readable markdown vault you can Git | `~/.obsidian` exists |
 | | `sqlite` | guaranteed stdlib floor | `sqlite3` importable (always) |
@@ -411,7 +412,7 @@ This is the **capability router (H6)**, the heart of the spine. A *capability* (
 mokata status      # version, profile, and what each capability resolves to right now
 ```
 
-This is your quickest "where am I" check. On `standard`, you'll typically see `code_graph → grep` and `memory_store → sqlite` unless richer tools are installed.
+This is your quickest "where am I" check. On `standard`, you'll typically see `code_graph → ast` (the embedded AST floor, on a Python repo) and `memory_store → sqlite` unless richer tools are installed — `code_graph → grep` only on a non-Python repo.
 
 ### 4.5 `mokata validate` — does the committed manifest parse?
 
@@ -445,11 +446,11 @@ Profiles are deterministic "enabled sets" — they decide which layers are on an
 | Profile | Layers | `code_graph` chain | `memory_store` chain | Network |
 |---|---|---|---|---|
 | `minimal` | engine, governance | — | — | **zero egress** |
-| `standard` *(default)* | all four | ripgrep → grep | sqlite | local-only |
-| `full` | all four | code-review-graph → serena → ripgrep → grep | native-memory → obsidian → sqlite | only present tools, all gated |
+| `standard` *(default)* | all four | ast → ripgrep → grep | sqlite | local-only |
+| `full` | all four | code-review-graph → serena → ast → ripgrep → grep | native-memory → obsidian → sqlite | only present tools, all gated |
 | `custom` | all four | full chains (hand-tune) | full chains (hand-tune) | — |
 
-`grep` is the universal floor for `code_graph`; `sqlite` (stdlib) is the guaranteed floor for `memory_store`. **Every richer provider degrades to its floor when absent — never a hard failure.** Pick a profile at init:
+The embedded stdlib-**AST floor** answers structural `code_graph` queries when no graph is adopted (grep is the universal lexical floor beneath it); `sqlite` (stdlib) is the guaranteed floor for `memory_store`. **Every richer provider degrades to its floor when absent — never a hard failure.** Pick a profile at init:
 
 ```bash
 mokata init --profile minimal    # just the governed TDD engine, zero network egress
@@ -477,7 +478,7 @@ mokata init --profile custom     # full chains wired as a starting point to hand
     "code_graph": {
       "description": "structural code queries",
       "layer": "knowledge",
-      "fallback": ["code-review-graph", "serena", "ripgrep", "grep"]
+      "fallback": ["code-review-graph", "serena", "ast", "ripgrep", "grep"]
     },
     "memory_store": {
       "description": "durable memory backend",
@@ -589,7 +590,7 @@ These are the canonical `PIPELINE_PHASES`. You can run the whole thing (`mokata 
 
 The remaining phases are advisory. The completeness gate **never silently passes**: an empty spec blocks, and *any* unmapped AC blocks.
 
-These three are the *pipeline's* gates. A separate set — the **run-state gates** (`spec-persisted`, `no-code-without-failing-test`, `spec-scope`) — enforces the same discipline on the agent's **native** file writes inside Claude Code, so it cannot simply reach past mokata's tools and edit the file. See §13.6.
+These three are the *pipeline's* gates. A separate set — the **four run-state gates** (`approach-approval`, `spec-persisted`, `no-code-without-failing-test`, `spec-scope`) — enforces the same discipline on the agent's **native** file writes inside Claude Code, so it cannot simply reach past mokata's tools and edit the file. See §13.6.
 
 ### 6.3 Brainstorm — the HARD-GATE (slash: `/mokata:brainstorm`)
 
@@ -780,12 +781,13 @@ mokata query blast_radius helper --depth 3   # --depth defaults to 2, applies to
 
 ### 8.2 Backend selection — one detection path (B1/B3)
 
-The layer resolves `code_graph` through the router (`code-review-graph → serena → ripgrep → grep`) and uses the first present provider:
+The layer resolves `code_graph` through the router (`code-review-graph → serena → ast → ripgrep → grep`) and uses the first present provider:
 
 - A real graph tool (`code-review-graph` / `serena`) → the adopted **graph backend (B1)**, which delegates all graph work to the external tool via an injected client. No in-house parser, no in-house graph.
-- Otherwise the **grep floor (B3)** — a dependency-free lexical implementation of the same five queries. Results are marked `degraded=True` (approximate, but always available).
+- Else, on a repo with Python, the embedded **AST floor (B2)** answers structurally (`degraded=False`, `is_graph=False`) — a floor above grep, never the adopted graph.
+- Otherwise (a zero-Python repo / non-Python files) the **grep floor (B3)** — a dependency-free lexical implementation of the same five queries. Results are marked `degraded=True` (approximate, but always available).
 
-If the graph backend errors mid-query, the layer **degrades to grep** rather than failing.
+If the graph backend errors mid-query, the layer **degrades to the AST floor (then grep)** rather than failing — a graph rebuild failure answers from the AST floor on current files, never from stale graph data.
 
 ### 8.3 Incremental index + staleness (B4)
 
@@ -1047,7 +1049,7 @@ An approval is **single-use** (it licenses exactly one commit), **content-hashed
 
 > `approve`/`confirm` no longer commit: an approval is MINTED BY A HUMAN out-of-band (`mokata approve <id>`) and can only be REFERENCED here by id. Typing approve=true is not consent — it never was.
 
-Approve is deliberately a **terminal command only** — it has **no MCP tool and no slash command**: an approve surface inside the harness would simply hand the pen back to the model. And the secret-guard still **hard-blocks an approved write** — approval is a methodology gate, never a security override.
+Approve is a **terminal command by default**. An in-chat MCP approve tool (`mcp__mokata__approve`) is opt-in and **default-OFF** (`settings.approvals.in_chat`); even opted-in it re-prompts the human on every call (setup writes a `permissions.ask` entry), so the model still cannot mint its own consent — and there is no approve slash command. And the secret-guard still **hard-blocks an approved write** — approval is a methodology gate, never a security override.
 
 **The trust dial** (`settings.trust`) layers on top, keyed by **surface** (`mcp`, `cli`) or by **tool** (tool beats surface): `read-only`, `propose-only`, or `gated-write` (default). Be precise about what it does today:
 
@@ -1078,10 +1080,11 @@ When **system access + private data + an outbound action** coexist, the outbound
 
 A gate that only fires inside mokata's own tools is a door with no lock: the model can reach for its editor's `Write` and walk straight past it. The **gate-guard** `PreToolUse` hook (§12.4) closes that door. It runs on `Write` / `Edit` / `MultiEdit` / `NotebookEdit`, decides from the run's **persisted state on disk**, and exits **2** on a violation — so the block is an exit code the model cannot argue with, not advice it may ignore.
 
-**Three run-state gates:**
+**Four run-state gates:**
 
 | Gate | Blocks a write to an implementation file when… |
 |---|---|
+| `approach-approval` | a run is registered (brainstorm in progress) but **no approach is approved yet** — the idea→code jump |
 | `spec-persisted` | an approach is approved for this run but **no spec is emitted** |
 | `no-code-without-failing-test` | the spec is emitted but **no failing test is on record** |
 | `spec-scope` | the write is **outside the spec's authorized surface**, spells something the spec explicitly **deferred**, or a **`spec amend` is in flight** |
@@ -1174,7 +1177,7 @@ Drop a `.mokata/mcp.json` listing the servers you use (`{name, provides, command
 
 > mokata both **ships its own MCP server and consumes external ones.** The bundled **`mokata-mcp`** server (registered by `mokata setup claude`) exposes mokata's operations to Claude Code as native tools: **35 read tools** (`query`, `recall`, `doctor`, `coverage`, `budget`, `audit`, `status`, `preview`, `progress`, `rules`, `govern`, `skills`, `session_save`, … — read-only, ungated) and **19 write tools** (`remember`, `apply_proposal`, `init`, `reset`, `config_set`, `import_stack`, `export_stack`, `memory_export`, `memory_import`, `vault_push`, `spec_check`, `spec_emit`, `spec_amend`, `session_push`, `session_pull`, `audit_share`, …). Separately, `mokata mcp` **discovers and routes to** the external MCP servers you list in `.mokata/mcp.json`.
 >
-> **Every one of the 19 write tools is propose-only.** It hands back a `proposal_id` and writes nothing until *you* mint the approval out-of-band with `mokata approve <id>` — single-use, content-hashed, session-scoped, expiring, ledgered; the model can only ever *reference* it, never create it (§13.2). `approve=true` / `confirm=true` are still accepted but **commit nothing**. Secrets are a hard block even once approved. And there is deliberately no `approve` tool in that list.
+> **Every one of the 19 write tools is propose-only.** It hands back a `proposal_id` and writes nothing until *you* mint the approval out-of-band with `mokata approve <id>` — single-use, content-hashed, session-scoped, expiring, ledgered; the model can only ever *reference* it, never create it (§13.2). `approve=true` / `confirm=true` are still accepted but **commit nothing**. Secrets are a hard block even once approved. An in-chat `approve` tool (`mcp__mokata__approve`) exists but is **opt-in, default-OFF**, single-use and content-hash-bound; even opted-in it forces a per-call human prompt via a `permissions.ask` entry — so it never lets the model approve its own write.
 
 ### 15.3 Capability coverage (H/A6)
 
@@ -1378,7 +1381,7 @@ Every CLI command, grouped by Part. All accept the shared `--path PATH` (repo ro
 | `mokata gate override <gate>` | stop enforcing ONE gate for THIS session — explicit, re-confirmed, ledgered | `--reason` *(required)*, `--run`, `--actor`, `--yes` |
 | `mokata gate clear` | drop this session's overrides and enforce again | — |
 
-These are **CLI-only by design**: neither `approve` nor `gate` ships an MCP tool or a slash command, because a model-invocable approval or override is neither.
+`gate` override/clear are **CLI-only by design** — no MCP tool, no slash command, because a model-invocable override is none. `approve` is **CLI-first**: its in-chat MCP tool (`mcp__mokata__approve`) is opt-in/default-OFF and still forces a human prompt on every call, so the model never mints its own consent.
 
 ### Composability (Part L)
 
@@ -1425,7 +1428,7 @@ These are **CLI-only by design**: neither `approve` nor `gate` ships an MCP tool
 
 | Gate id | Where | Kind | Blocks on |
 |---|---|---|---|
-| `approach-approval` | brainstorm / `/mokata:brainstorm` | human | no approved approach (the HARD-GATE) |
+| `approach-approval` | brainstorm / `/mokata:brainstorm` **+ native `Write`/`Edit`** | human | no approved approach (the HARD-GATE) — also blocks a native implementation write when a run is registered but no approach is approved |
 | `refinement-approval` | refine / `/mokata:refine` | human | no approved scoped set of refinements (the HARD-GATE for existing code) |
 | `completeness` | completeness_gate / `/mokata:spec` | check | any AC with no mapped test, or an empty spec |
 | `emit-approval` | emit | human | un-approved durable output |
@@ -1444,7 +1447,7 @@ These are **CLI-only by design**: neither `approve` nor `gate` ships an MCP tool
 | `surgical-scope` | emit (Karpathy) | check | touched files over a cap |
 | `verify` | completeness_gate (Karpathy) | check | success criteria undefined/unverified |
 
-The three gates marked **native `Write`/`Edit`** are the **run-state gates** — enforced by the `gate-guard` `PreToolUse` hook on the agent's own file-mutation tools, and the only gates a human can explicitly override (`mokata gate override <gate> --reason "<why>"` — session-scoped, ledgered). Everything the secret-guard blocks is **never** overridable. See §13.6.
+The four gates marked **native `Write`/`Edit`** are the **run-state gates** — `approach-approval`, `spec-persisted`, `no-code-without-failing-test`, and `spec-scope`, enforced by the `gate-guard` `PreToolUse` hook on the agent's own file-mutation tools, and the only gates a human can explicitly override (`mokata gate override <gate> --reason "<why>"` — session-scoped, ledgered). Everything the secret-guard blocks is **never** overridable. See §13.6.
 
 ### Every `settings` key
 

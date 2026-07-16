@@ -72,9 +72,18 @@ class SpecAwarenessReport:
     degraded: bool = False      # True when the check did not run at full strength (see below)
     note: str = ""
     touch_set: List[str] = field(default_factory=list)
-    # D5 — the two INDEPENDENT ways this check can be weaker than it looks. `degraded` is the
-    # umbrella (either one), kept as the field every existing caller/ledger row already reads.
-    graph_degraded: bool = False   # the touch-set fell to the lexical floor (no graph / it faulted)
+    # D5 — the INDEPENDENT ways this check can be weaker than it looks. `degraded` is the umbrella
+    # (any one), kept as the field every existing caller/ledger row already reads.
+    # GR.S3-FU — TWO distinct floor signals, mirroring `brainstorm_impact.ApproachImpact`:
+    #   * `floor_degraded` — DISPLAY: the touch-set did not come from a REAL adopted graph (it came
+    #     from the embedded AST floor or bare grep, or no layer). Drives the honesty caveat.
+    #   * `graph_degraded` — QUERY-LEVEL: the structural answer was WITHHELD (no layer, a faulted
+    #     query, or a `blast_radius` that fell to the grep floor). This is the signal the
+    #     `graph.required` gate reads — AST answering WITH evidence is floor_degraded but NOT
+    #     graph_degraded, so it is not refused (GR.S3 deviation 2 closed).
+    graph_degraded: bool = False
+    floor_degraded: bool = False   # the touch-set came from a floor (AST/grep), not a real graph
+    touch_note: str = ""           # the floor's caveat (e.g. the AST note) — carried, never stripped
     skipped: int = 0               # saved specs/decisions that could NOT be loaded — NOT checked
 
     @property
@@ -84,8 +93,16 @@ class SpecAwarenessReport:
     def render(self) -> str:
         if not self.checked:
             return f"spec-awareness: {self.note}"
-        head = "mode: lexical/file overlap (no graph)" if self.graph_degraded \
-            else "mode: graph-expanded touch-set"
+        if self.graph_degraded:
+            head = "mode: lexical/file overlap (no graph)"
+        elif self.floor_degraded:
+            # GR.S3-FU — the AST floor expanded the touch-set structurally: honest that it is a
+            # floor (not the adopted graph), carrying its caveat so it is never overclaimed.
+            head = "mode: AST-expanded touch-set"
+            if self.touch_note:
+                head += f" — {self.touch_note}"
+        else:
+            head = "mode: graph-expanded touch-set"
         if not self.conflicts:
             # D5 — an all-clear that SKIPPED its inputs is not an all-clear. "No saved spec is
             # affected" is a claim about the corpus; a corpus we could not read supports no claim.
@@ -166,51 +183,78 @@ def load_decisions(memory_store: Any) -> List[Any]:
 
 # --------------------------------------------------------------------------- touch-set
 def expand_touch_set(layer: Any, symbols: List[str],
-                     depth: int = 1) -> Tuple[Set[str], bool]:
-    """Expand the changed symbols through the code graph (callers/callees/blast-radius) so a spec
-    about impacted code is caught too. Returns (expanded_symbols, degraded). degraded=True when
-    there's no real graph -> the set is just the literal symbols (lexical floor).
+                     depth: int = 1) -> Tuple[Set[str], bool, bool, str]:
+    """Expand the changed symbols through the code graph OR the embedded AST floor (callers /
+    callees / blast-radius) so a spec about impacted code is caught too. Returns
+    ``(expanded, floor_degraded, graph_degraded, note)``.
 
-    D5 — degraded=True ALSO when the graph is wired but a query FAULTED. It used to return
-    degraded=False in that case, so the report announced "mode: graph-expanded touch-set" while
-    standing on the lexical floor: the flag said the strongest check had run when the weakest one
-    had. A degraded flag that lies is worse than no flag."""
+    GR.S3-FU — the expansion no longer sits behind the LAYER-level ``uses_graph`` gate, so the AST
+    floor's real structural evidence expands the touch-set out of the box (P22). Two INDEPENDENT
+    signals, mirroring ``brainstorm_impact.compute_impact`` (Lens-1) so the three decision consumers
+    key on the SAME query-level evidence:
+
+      * ``floor_degraded`` (DISPLAY) — the touch-set did not come from a REAL adopted graph: no
+        layer, or the layer is a floor (``uses_graph`` False → AST or bare grep). The honesty caveat
+        (GR.S1): an AST-expanded touch-set is still flagged a floor and carries the AST note.
+      * ``graph_degraded`` (QUERY-LEVEL) — the signal the ``graph.required`` gate reads: True only
+        when a structural answer was ATTEMPTED and WITHHELD — no layer (with symbols to expand), a
+        query that FAULTED, or a ``blast_radius`` that fell to the grep floor (``qr.degraded``, the
+        grep / empty-AST fallthrough). The AST floor answering WITH evidence keeps
+        ``floor_degraded=True`` but ``graph_degraded=False`` — so it EXPANDS and is NOT refused,
+        while empty-AST evidence still refuses (the GR.S1 hand-off). This mirrors Lens-1 exactly:
+        ``blast_radius`` is the canonical query the signal keys on.
+
+    D5 — a graph wired but FAULTING forces ``graph_degraded=True`` and speaks once via
+    ``note_degraded('code-graph')``: a degraded flag that lies is worse than no flag."""
     expanded: Set[str] = {s for s in symbols if s}
-    if layer is None or not getattr(layer, "uses_graph", False):
-        return expanded, True
+    if layer is None:
+        # No layer: display-degraded, and query-degraded only if there were symbols whose blast
+        # radius went un-answered (an empty change has none — mirrors Lens-1's ``bool(tgts)``).
+        return expanded, True, bool(expanded), ""
+    # DISPLAY: a floor (AST/grep, ``uses_graph`` False) is degraded for the caveat; a real graph
+    # is not. An object without ``uses_graph`` is assumed a real graph (matches Lens-1).
+    floor_degraded = getattr(layer, "uses_graph", True) is False
+    graph_degraded = False
     faulted = False
+    note = ""
     for sym in list(expanded):
+        # ``blast_radius`` is the CANONICAL query the query-level signal keys on — exactly the query
+        # Lens-1 uses. A degraded (grep-floor / empty-AST fallthrough) answer withholds the radius.
+        try:
+            res = layer.blast_radius(sym, depth=depth)
+        except Exception:               # noqa: BLE001 — see the note below
+            faulted = True
+            res = None
+        if res is not None:
+            if getattr(res, "degraded", False):
+                graph_degraded = True
+            else:
+                expanded.update(r.symbol for r in res.references if r.symbol)
+                if not note and getattr(res, "note", ""):
+                    note = res.note     # carry the floor's caveat (the AST note) — never stripped
+        # callers/callees WIDEN the expansion; a fault degrades, a floor answer is simply not used.
         for getter in ("callers", "callees"):
             try:
                 res = getattr(layer, getter)(sym)
             except Exception:           # noqa: BLE001
                 # BROAD ON PURPOSE: a pluggable optional graph backend's error types are not
-                # nameable at module scope (see the fuller note below). No longer silent — the
-                # fault forces the lexical-floor flag and is announced once.
+                # nameable at module scope (neo4j, a custom adapter). No longer silent — the fault
+                # forces the lexical-floor flag and is announced once, below.
                 faulted = True
                 continue
             if res is not None and not res.degraded:
                 expanded.update(r.symbol for r in res.references if r.symbol)
-        try:
-            res = layer.blast_radius(sym, depth=depth)
-            if res is not None and not res.degraded:
-                expanded.update(r.symbol for r in res.references if r.symbol)
-        except Exception:               # noqa: BLE001 — see the note below
-            # BROAD ON PURPOSE: the graph backend is a pluggable OPTIONAL dependency (neo4j, a
-            # custom adapter), so the exception types it can raise are not importable at module
-            # scope — narrowing here would let a driver's own error class escape and crash a
-            # read-only guard. It is no longer SILENT, which is the D5 requirement: the fault sets
-            # `faulted`, which forces the lexical-floor flag and speaks once, below.
-            faulted = True
+                if not note and getattr(res, "note", ""):
+                    note = res.note
     if faulted:
+        graph_degraded = True           # graph-backed answer withheld: the floor is what ran
         note_degraded(
             "code-graph", FAILURE_UNREACHABLE,
             fallback=("the touch-set fell back to the literal symbols (the lexical floor) — the "
                       "graph did NOT expand it, so a spec about a CALLER of your change may go "
                       "unseen"),
             fix="run `mokata doctor` to check the code-graph backend")
-        return expanded, True           # graph-backed answer withheld: the floor is what ran
-    return expanded, False
+    return expanded, floor_degraded, graph_degraded, note
 
 
 def _hit(token: str, text: str) -> bool:
@@ -250,8 +294,11 @@ def check_change(change: ChangeSet, specs: List[Spec], decisions: List[Any],
             checked=False,
             note="no saved specs or decisions yet — nothing to guard (skipped).")
 
-    touch_symbols, graph_degraded = expand_touch_set(layer, change.symbols, depth)
-    degraded = graph_degraded or bool(skipped)
+    touch_symbols, floor_degraded, graph_degraded, touch_note = expand_touch_set(
+        layer, change.symbols, depth)
+    # The umbrella `degraded` = ANY weakness vs a full-strength real-graph check: a floor answered
+    # (AST/grep), a structural answer was withheld (query-level), or inputs were skipped.
+    degraded = floor_degraded or graph_degraded or bool(skipped)
     file_terms: List[str] = []
     for f in change.files:
         file_terms.extend(_file_tokens(f))
@@ -278,15 +325,21 @@ def check_change(change: ChangeSet, specs: List[Spec], decisions: List[Any],
                 "decision", d.subject, where,
                 detail=f"recorded decision: {d.value}"))
 
-    note = ("graph absent — checked by lexical/file overlap only"
-            if graph_degraded else "checked against the graph-expanded touch-set")
+    if graph_degraded:
+        note = "graph absent — checked by lexical/file overlap only"
+    elif floor_degraded:
+        note = "checked against the AST-expanded touch-set" + (f" ({touch_note})" if touch_note
+                                                               else "")
+    else:
+        note = "checked against the graph-expanded touch-set"
     if skipped:
         note += (f"; {skipped} saved spec(s)/decision(s) could NOT be read and were NOT checked "
                  f"(this result is INCOMPLETE)")
     return SpecAwarenessReport(
         conflicts=conflicts, checked=True, degraded=degraded, note=note,
         touch_set=sorted(touch_symbols | set(file_terms)),
-        graph_degraded=graph_degraded, skipped=skipped)
+        graph_degraded=graph_degraded, floor_degraded=floor_degraded, touch_note=touch_note,
+        skipped=skipped)
 
 
 # --------------------------------------------------------------------------- the guard
@@ -296,8 +349,12 @@ class GuardOutcome:
     blocked: bool               # True == a conflict the human did not confirm
     report: SpecAwarenessReport
     deviation: Optional[DeviationOutcome] = None
+    graph_refusal: Optional[str] = None    # GR.S3 — set when a DEGRADED touch-set was refused
 
     def render(self) -> str:
+        if self.graph_refusal is not None:
+            # GR.S3 — a degraded touch-set is not a decision input: the refusal IS the output.
+            return self.graph_refusal
         out = self.report.render()
         if self.deviation is not None:
             out += "\n" + ("[CONFIRMED] " if self.proceeded else "[BLOCKED] ") \
@@ -308,12 +365,29 @@ class GuardOutcome:
 def guard_change(change: ChangeSet, *, specs: List[Spec], decisions: List[Any],
                  layer: Any = None, ledger: Any = None, phase: str = "develop",
                  confirm=None, assume_yes: bool = False,
-                 depth: int = 1) -> GuardOutcome:
+                 depth: int = 1, graph_required: bool = False, graph_overridden: bool = False,
+                 graph_backend: Any = None, notice: Any = None) -> GuardOutcome:
     """Run the corpus check; on a conflict surface it and route through the DeviationGate
     (human-gated, logged). No conflict / no corpus → proceed cleanly. Never breaks a saved spec
     without surfacing it: a conflict BLOCKS until the human confirms (amend/supersede) or
-    re-plans, and both the conflict and the resolution are recorded in the audit ledger."""
+    re-plans, and both the conflict and the resolution are recorded in the audit ledger.
+
+    GR.S3 — when `graph_required` is on and the touch-set fell to the lexical floor
+    (`report.graph_degraded`) with no ledgered override, the whole result is REFUSED as a decision
+    input FIRST: a degraded regression guard cannot vouch for a clean corpus. The escape is the
+    session-scoped `--allow-degraded` (`graph_overridden`); default-off keeps today's behavior
+    byte-identical."""
     report = check_change(change, specs, decisions, layer=layer, depth=depth)
+    if graph_required and report.graph_degraded and not graph_overridden:
+        from ..govern.graph_required import check_graph_required
+        gate = check_graph_required(
+            degraded=True, required=True, overridden=False,
+            consumer="spec-check (regression guard)", backend=graph_backend,
+            mentions=len(report.touch_set), files=len(change.files),
+            targets=change.symbols, notice=notice)
+        if gate.refused:
+            return GuardOutcome(proceeded=False, blocked=True, report=report,
+                                graph_refusal=gate.render())
     if not report.checked or not report.has_conflicts:
         return GuardOutcome(proceeded=True, blocked=False, report=report)
 

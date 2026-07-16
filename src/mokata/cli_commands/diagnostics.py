@@ -31,6 +31,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     for line in mcp_admin.full_status(root=args.path,
                                       home=getattr(args, "home", None)).lines:
         print(line)
+    # B-VER — the version-parity finding (parity + scope/plugin shadow), the SAME shared reporter
+    # `mokata mcp status` uses. Informational: doctor's ok/exit stays derived from `report.ok`,
+    # never from parity. DB.S1 folds `mcp_admin.version_parity` into its DSN deep-check later.
+    for line in mcp_admin.parity_lines(root=args.path, home=getattr(args, "home", None),
+                                       quiet_when_ok=False):
+        print(line)
     # R13 — the full pass/degraded/fail coverage matrix is opt-in (`--matrix`) so the default
     # problem summary stays lean. It's informational: doctor's ok/exit stays derived from
     # `report.ok` above, never from the matrix. Read-only, degrade-clean.

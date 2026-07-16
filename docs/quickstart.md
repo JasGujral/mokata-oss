@@ -131,8 +131,9 @@ stale facts as an old → new diff for you to approve, edit, or reject — never
 rewrite. Every durable memory write is human-gated — and the gate is *yours*: the agent
 proposes a write and gets back a proposal id; **you** run `mokata approve <id>` in your own
 terminal to mint the approval, which is single-use and content-hashed (change an argument and
-the id no longer matches). A model cannot approve its own write — there is no approve tool or
-slash command for it to reach.
+the id no longer matches). A model cannot approve its own write: by default there is no approve
+tool or slash command for it to reach — and the in-chat MCP approve tool that can be **opted
+into** (default-OFF) still forces a human prompt on every call.
 
 ## 6. Choose an execution mode, then run end-to-end
 

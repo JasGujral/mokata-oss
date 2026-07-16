@@ -261,15 +261,21 @@ def _surfaces() -> List[CommandSurface]:
 
         # --- install / diagnostic PLUMBING → intentionally CLI-or-hook (each with reason) -
         CommandSurface("approve", exempt=(
-            "SI.3 — the out-of-band human approval for a durable MCP write. DELIBERATELY has no MCP "
-            "tool and no slash command, for the same reason as `gate`: an in-harness approve surface "
-            "would let the MODEL approve its own writes, which is exactly the hole this closes (the "
-            "old `approve=true` WAS that surface — a consent flag the model typed itself). P2 says "
-            "every durable write is human-gated, and a gate the gated party can open is not a gate. "
-            "The approval must be MINTED by a human at a terminal — explicit, shown in full, "
-            "re-confirmed, single-use, content-hashed, session-scoped, ledgered — and the model may "
-            "only REFERENCE it by id. The write tools' propose path is its in-harness surface: they "
-            "return the proposal and tell the model to ask the human to run this command.")),
+            "SI.3 — the out-of-band human approval for a durable MCP write. An in-chat MCP tool "
+            "(`mcp__mokata__approve`) NOW EXISTS but is a DEFAULT-OFF, ledgered OPT-IN (AP-MCP, "
+            "doc 85 §5 D26 amendment) — deliberately NOT a standing in-harness surface, which is "
+            "why `approve` stays exempt here rather than declaring one. SI.3's reasoning is intact "
+            "and still the default posture: an in-harness approve surface lets the MODEL approve "
+            "its own writes (the old `approve=true` WAS that surface — a consent flag the model "
+            "typed itself), and P2 says a gate the gated party can open is not a gate. AP-MCP does "
+            "not refute that; it BOUNDS it: the tool ships OFF (`settings.approvals.in_chat=false`; "
+            "enabling is a human-gated TTY config write, ledgered), NEVER rides the `mcp__mokata__*` "
+            "auto-grant (setup writes an explicit `permissions.ask` entry so Claude Code prompts on "
+            "every call), and reuses every SI.3 invariant verbatim (single-use, content-hashed, "
+            "session-scoped, clock-expiry, actor=`chat-relayed` in the ledger). Out of the box the "
+            "model still cannot mint its own consent — it may only REFERENCE a proposal by id, at a "
+            "terminal, exactly as before. The write tools' propose path remains the default "
+            "in-harness surface (they return the proposal and tell the model to ask the human).")),
         CommandSurface("gate", exempt=(
             "SI.1 — the run-state gates' status + P14 override. DELIBERATELY has no MCP tool and "
             "no slash command: an in-harness surface would let the MODEL clear the very gate that "
@@ -280,6 +286,13 @@ def _surfaces() -> List[CommandSurface]:
         CommandSurface("unsetup", exempt=(
             "install plumbing — reverses `setup`; a harness-config + filesystem teardown "
             "run from the shell, the mirror of `setup`.")),
+        CommandSurface("graph", exempt=(
+            "GR.S2 code-graph adoption. `graph adopt` is a DELIBERATE human-gated durable "
+            "manifest write (P2) — the same class as `reconfigure`/`config set`, best made at a "
+            "terminal, not model-invocable; the detect-and-OFFER path already surfaces the offer "
+            "in-flow at setup and the read-only overlay discloses first use. `graph status` is "
+            "diagnostic and overlaps `index`/`doctor`'s backend line. The AST floor answers "
+            "without adoption, so no in-harness surface is a gap.")),
         CommandSurface("mcp", slash=("mcp-repair",),
                        note="MCP server management — a command GROUP (discover/start/status/"
                             "install) that introspects or repairs the host↔server wiring from "

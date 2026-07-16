@@ -162,7 +162,7 @@ class TestNoUnbackedEnforcement(unittest.TestCase):
         # Guard the guard: a clause that cites an advisory gate id must raise at render time.
         bad = sc.Contract(skill="x", headline_gate="write-gate",
                           can=("do a thing",),
-                          must_not=(sc.Clause("nope", gate="approach-approval"),),  # advisory!
+                          must_not=(sc.Clause("nope", gate="measure-first"),),  # advisory!
                           depends_on=())
         saved = sc.CONTRACTS.get("x")
         sc.CONTRACTS["x"] = bad
@@ -177,8 +177,10 @@ class TestNoUnbackedEnforcement(unittest.TestCase):
 
     def test_prose_only_headline_flags_match_the_map(self):
         # These skills announce a protocol HARD-GATE (advisory headline), per doc 76's flags.
+        # PH-GATE.S0 (0.0.14) backed `approach-approval`, so brainstorm's HEADLINE gate is now a
+        # code gate — it drops out of the prose-only set (doc 76 FU-1).
         prose_only = set(sc.prose_only_headline_skills())
-        expected = {"brainstorm", "refine", "test", "debug", "bug", "optimize", "review",
+        expected = {"refine", "test", "debug", "bug", "optimize", "review",
                     "ship", "onboard", "govern", "session", "playbook", "mcp-repair",
                     "docsync"}
         self.assertEqual(prose_only, expected,

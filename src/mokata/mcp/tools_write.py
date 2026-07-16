@@ -216,7 +216,7 @@ def _gated_write(mokata_dir: str, kind: str, target: str, content: str,
 def remember(path: str = ".", subject: str = "", value: str = "",
              memory_type: str = DECISION, kind: str = "", approve: bool = False,
              confirm: Optional[bool] = None, mtype: Optional[str] = None,
-             proposal_id: str = "") -> Dict[str, Any]:
+             proposal_id: str = "", about_code: Optional[list] = None) -> Dict[str, Any]:
     """Remember a fact/decision in memory. `memory_type` is the storage tier
     (persistent/decision/episodic); `kind` is the typed project part (rule/guardrail/
     best-practice/context/reference) captured by /mokata:onboard; `mtype` is a DEPRECATED alias
@@ -234,14 +234,27 @@ def remember(path: str = ".", subject: str = "", value: str = "",
     norm = normalize_kind(kind)
     if norm in PART_KINDS:
         mtype = PERSISTENT          # the captured "parts" are persistent project knowledge
-    item = MemoryItem.create(subject, value, mtype=mtype, kind=norm or kind)
+    item = MemoryItem.create(subject, value, mtype=mtype, kind=norm or kind,
+                             about_code=about_code)
 
     args = {"path": path, "subject": subject, "value": value, "memory_type": mtype, "kind": norm}
     gate = _consent(path, "remember", args, proposal_id)
     if gate.refused:
         return _refused(gate)
     if not gate.granted:
-        return _propose(path, "remember", args, {"preview": store.render_write(item)},
+        # GR.S4 — validate any about_code anchors against the code graph. A PROPOSAL-level
+        # warning rides on the proposal (never a block, never an auto-write — P2 untouched).
+        payload = {"preview": store.render_write(item)}
+        if about_code:
+            try:
+                from ..knowledge.about_code import check_about_code_anchors
+                from ..knowledge.layer import KnowledgeLayer
+                chk = check_about_code_anchors(about_code, KnowledgeLayer.from_surface(surface))
+                if chk.warning:
+                    payload["about_code_warning"] = chk.warning
+            except Exception:
+                pass                       # validation never blocks a proposal
+        return _propose(path, "remember", args, payload,
                         target=f"memory:{subject}", summary=f"remember '{subject}' = {value[:60]}",
                         preview=store.render_write(item), approve=approve, confirm=confirm)
     # H4: scan subject AND value so a secret pasted into the subject can't slip the gate.
@@ -330,15 +343,22 @@ def reset(path: str = ".", keep_config: bool = False,
                         target=_mokata_dir(path),
                         summary=f"remove {len(plan.targets)} mokata state target(s)",
                         preview="\n".join(plan.targets), approve=approve, confirm=confirm)
-    box: Dict[str, Any] = {}
+    # RESET-CRASH (R-13F) — the removal erases THIS repo's `.mokata`, and with it the very ledger
+    # `_gated_write` writes its approved/redemption record to. Deleting INSIDE the gated commit meant
+    # that post-commit write opened a path `_do_reset` had already removed → FileNotFoundError. So we
+    # DEFER: the gate commits (recording the approved decision against the still-present ledger), and
+    # only THEN do we perform the physical removal — which lands its own deletion-proof record (the
+    # user-scoped tombstone, KB.S1, actor="mcp"). The CLI reset is untouched: it calls `reset_state`
+    # directly and never rode this gate.
+    def _approve_removal() -> Any:
+        return {"planned": sorted(plan.targets)}
 
-    def _do_reset() -> Any:
-        result = reset_state(path, keep_config=keep_config, assume_yes=True)
-        box["reset"] = result
-        return {"removed": result.removed, "aborted": result.aborted}
-
-    return _gated_write(_mokata_dir(path), "config", _mokata_dir(path), "", _do_reset, gate,
-                        _policy(path, "reset", human_approved=True))
+    out = _gated_write(_mokata_dir(path), "config", _mokata_dir(path), "", _approve_removal, gate,
+                       _policy(path, "reset", human_approved=True))
+    if out.get("committed"):
+        result = reset_state(path, keep_config=keep_config, assume_yes=True, actor="mcp")
+        out["result"] = {"removed": result.removed, "aborted": result.aborted}
+    return out
 
 
 @_tool("apply_proposal", "write")
@@ -754,6 +774,48 @@ def audit_share(path: str = ".", approve: bool = False,
             "message": res.message, "log": msgs}
 
 
+def _graph_required_emit_refusal(surface: Any, path: str,
+                                 approach: str) -> Optional[Dict[str, Any]]:
+    """GR.S3 MCP parity — refuse `spec_emit` when the persisted brainstorm's CHOSEN approach has a
+    DEGRADED blast radius and `graph.required` is on with no ledgered override. Returns a blocked
+    result, or None when there is nothing to refuse on (no brainstorm / no degraded chosen impact).
+    Best-effort + fail-open on any read fault: this is a parity guard, never a new failure mode."""
+    from ..govern import graph_required as GR
+    try:
+        if not GR.graph_required_enabled(surface):
+            return None
+        from ..brainstorm import restore_brainstorm_progress
+        session = restore_brainstorm_progress(surface.state)
+        if session is None:
+            return None
+        chosen = getattr(session, "chosen", None)
+        name = approach or (chosen.name if chosen is not None else None)
+        if not name:
+            return None
+        imp = (getattr(session, "impacts", {}) or {}).get(name)
+        if imp is None or not getattr(imp, "graph_degraded", False):
+            return None
+        from ..session import current_run_id
+        run_id = current_run_id()
+        if GR.read_degraded_override(surface.root, run_id):
+            return None
+        notice = GR.fire_upgrade_notice_once(surface.root)
+        gate = GR.check_graph_required(
+            degraded=True, required=True, overridden=False,
+            consumer="blast radius (Lens 1)", mentions=int(getattr(imp, "caller_count", 0) or 0),
+            files=int(getattr(imp, "file_count", 0) or 0),
+            targets=list(getattr(imp, "targets", []) or []), notice=notice)
+        if not gate.refused:
+            return None
+        return {"status": "blocked", "committed": False, "gate": "graph-required",
+                "reason": gate.render(),
+                "hint": ("this approach's blast radius is a degraded lexical estimate — adopt a "
+                         "code graph (`mokata graph adopt`) or accept it for this session with "
+                         "`--allow-degraded`. Nothing was written; there is nothing to approve.")}
+    except Exception:                                     # noqa: BLE001 — a parity guard never crashes emit
+        return None
+
+
 @_tool("spec_emit", "write")
 def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
               tests: Optional[list] = None, approach: str = "", domains: Optional[list] = None,
@@ -780,8 +842,8 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
     blocked until the spec is AMENDED (`spec_amend`). Declare what you are NOT building, in the
     words the code would use. Omit `scope` and the spec is not policed at all (the honest default —
     but then "we deferred that" is a note, not a gate)."""
-    from ..engine.emit import (EMIT_KIND, EMIT_TARGET, EMIT_TOOL, spec_commit,
-                               spec_from_payload)
+    from ..engine.emit import (EMIT_KIND, EMIT_TARGET, EMIT_TOOL, preview_content,
+                               spec_commit, spec_from_payload)
     from ..engine.completeness import run_completeness_gate
 
     surface = _surface(path)
@@ -807,6 +869,16 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
                          "written and there is nothing to approve — this is a completeness "
                          "failure, not a missing approval.")}
 
+    # Gate 1b — GR.S3 `graph.required`. MCP-loop parity for the Lens-1 HARD-GATE: a spec emitted
+    # from a brainstorm whose CHOSEN approach's blast radius fell to the lexical floor is refused as
+    # a decision input, exactly as the CLI approve gate refuses. Read the persisted brainstorm's
+    # chosen-approach radius; degrade-clean — no persisted brainstorm / no chosen impact → skip (we
+    # only refuse when we can positively see a degraded radius). The escape is the session-scoped
+    # `--allow-degraded` override the same human-consent flow writes.
+    grr = _graph_required_emit_refusal(surface, path, approach)
+    if grr is not None:
+        return grr
+
     # Gate 2 — the human. Same consent boundary as every other durable write (SI.3/SI.4).
     args = {"path": path, "title": title, "criteria": criteria or [], "tests": tests or [],
             "approach": approach, "domains": domains or [], "scope": scope or {}}
@@ -823,7 +895,7 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
             preview=_spec_preview(spec, test_refs), approve=approve, confirm=confirm)
 
     out = _gated_write(_mokata_dir(path), EMIT_KIND, EMIT_TARGET,
-                       json.dumps(spec.to_dict()),
+                       preview_content(surface.state, spec),
                        lambda: spec_commit(surface.state, spec),
                        gate, _policy(path, EMIT_TOOL, human_approved=True))
     out["ac_count"] = len(spec.criteria)

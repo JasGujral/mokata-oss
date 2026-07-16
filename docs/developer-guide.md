@@ -11,7 +11,7 @@ Everything else is optional and **degraded over when absent**, never fatal:
 |---|---|---|
 | `schema` | `jsonschema>=4.0` | the built-in structural validator still validates the manifest |
 | `postgres` | `psycopg>=3.1` | memory degrades to the SQLite floor |
-| `neo4j` | the Neo4j driver | `code_graph` degrades to the ripgrep → grep floor |
+| `neo4j` | the Neo4j driver | `code_graph` degrades to the ast → ripgrep → grep floor |
 | `mcp` | *(no-op alias of the default dep — kept so `mokata[mcp]` still resolves)* | — |
 
 Every optional import is **lazy**, so the core, the CLI and every default profile run with all of
@@ -40,8 +40,9 @@ capability router, and the unified `Surface`.
 
 ### Part B — Knowledge (`knowledge/`)
 `query.py` (typed `QueryResult`/`Reference`, 5 query kinds), `grep_backend.py` (the
-lexical floor), `graph_backend.py` (the adopted code-review-graph adapter via an injected
-client), `layer.py` (`KnowledgeLayer` — backend chosen through the router, story bridge),
+lexical floor), `ast_backend.py` (the embedded stdlib-AST floor — non-degraded structural
+queries on Python, a floor above grep), `graph_backend.py` (the adopted code-review-graph
+adapter via an injected client), `layer.py` (`KnowledgeLayer` — backend chosen through the router, story bridge),
 `index.py` (incremental fingerprint index + staleness surfacing), `anchors.py` (`@lat`
 drift anchors + `lat_check`).
 
@@ -75,10 +76,10 @@ reaching past them. Read `gate_hook.py`'s module docstring first — it is the d
 - `approval.py` — the **human-minted approval**: `propose` / `redeem`, content-hashed and
   session-scoped proposal ids. `approve=true` on a tool call is inert by construction; only
   `mokata approve <id>` (a human, out-of-band) mints one, and it licenses exactly one commit.
-- `gate_hook.py` — the **decision** for the three run-state gates (`spec-persisted`,
-  `no-code-without-failing-test`, `spec-scope`) on a native `Write`/`Edit`. Pure, total, never
-  raises; every uncertainty (no run, ambiguous run, unreadable state, undeclared scope) resolves
-  to **ALLOW**.
+- `gate_hook.py` — the **decision** for the four run-state gates (`approach-approval`,
+  `spec-persisted`, `no-code-without-failing-test`, `spec-scope`) on a native `Write`/`Edit`.
+  Pure, total, never raises; every uncertainty (no run, ambiguous run, unreadable state,
+  undeclared scope) resolves to **ALLOW**.
 - `hook_cli.py` — the I/O for all three shipped hooks (`session-start`, `secret-guard`,
   `gate-guard`), launched via the `mokata-hook` console entry point. Blocks with exit code 2.
 - `spec_scope.py` — a spec's authorized surface + its **deferred** items (paths and literal

@@ -60,6 +60,12 @@ def _cmd_mcp_status(args: argparse.Namespace) -> int:
     stream = sys.stdout if fs.connected else sys.stderr
     for line in fs.lines:
         print(line, file=stream)
+    # B-VER — the version-parity block (parity + scope/plugin shadow), the SAME shared reporter
+    # `mokata doctor` and `setup` use so wording can't drift. quiet_when_ok=False shows the OK
+    # line on this diagnostic surface. Informational: it never changes the exit code below.
+    for line in mcp_admin.parity_lines(root=args.path, home=getattr(args, "home", None),
+                                       quiet_when_ok=False):
+        print(line, file=stream)
     return 0 if fs.connected else 1
 
 
@@ -87,6 +93,11 @@ def _cmd_mcp_install(args: argparse.Namespace) -> int:
         print(f"  ✓ Granted Claude Code permission for mokata's MCP tools + enabled the "
               f"server in {settings}")
     print("  next: restart Claude Code, then `mokata mcp status` to verify the handshake.")
+    # B-VER — probe the registration just written for version parity + scope/plugin shadowing
+    # (the SAME shared reporter as setup/status/doctor). Loud-only; additive; never gates install.
+    from .. import mcp_admin
+    for line in mcp_admin.parity_lines(root=args.path, home=home):
+        print(line)
     return 0
 
 

@@ -1,12 +1,18 @@
 """approve — the SI.3 out-of-band human approval for a durable MCP write.
 
-This command is the one act the MODEL CANNOT PERFORM. Every mokata write tool now returns a
+This command is the DEFAULT act the model cannot perform. Every mokata write tool returns a
 *proposal* and commits nothing; only an approval minted HERE — in a separate process, through a
 terminal the model does not own — lets that write land, exactly once.
 
 It is the same discipline SI.1 put on the gate override (`cli_commands/gate.py`), for the same
-reason, and it deliberately has NO MCP tool and NO slash command (see `parity.py`): an in-harness
-approve surface would let the model approve its own writes, which is precisely the hole this closes.
+reason. Historically it had NO MCP tool at all; AP-MCP (doc 85 §5 D26 amendment) adds ONE bounded
+exception — an in-chat `mcp__mokata__approve` tool that does the SAME act as this command — but
+DEFAULT-OFF and opt-in (`settings.approvals.in_chat`), never riding the `mcp__mokata__*` auto-grant
+(setup writes an explicit `permissions.ask` prompt), and reusing every invariant below verbatim
+(actor=`chat-relayed` in the ledger). The reasoning that kept an approve surface out by default is
+intact and remains the out-of-the-box posture: an in-harness approve surface would let the model
+approve its own writes, which is precisely the hole this command closes — the opt-in only lets a
+team that accepts the named residual risk redeem an approval in-flow. See `parity.py` + AP-MCP.
 
   * **explicit**       — you name the proposal id the model showed you. There is no "approve all",
                          and deliberately NO env-var auto-approve: an env var is a side door any

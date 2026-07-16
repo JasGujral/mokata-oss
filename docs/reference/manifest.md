@@ -41,7 +41,7 @@ elsewhere; that's the user's explicit choice, overriding the default location.)
 ```json
 {
   "manifest_version": 1,
-  "mokata": { "version": "0.0.13" },
+  "mokata": { "version": "0.0.14" },
   "profile": "full",
   "layers": {
     "engine":     { "enabled": true },
@@ -132,6 +132,7 @@ elsewhere; that's the user's explicit choice, overriding the default location.)
 | `review.independent` | `"on"`/`"off"` | `on` | run the closing `/mokata:review` as a fresh-context subagent (`on`) or the inline two-pass (`off`); any other value reads as `on` |
 | `brainstorm.auto` | `"on"`/`"off"`/`"ask"` | `on` | auto-engage brainstorm when exploring: `on` (dive in), `ask` (offer first), `off` (never) |
 | `governance.output_density` | bool | `false` | output-density compression (F4) |
+| `graph.required` | bool | `true` | REFUSE a degraded (grep-floor) blast radius as decision input in brainstorm Lens-1 / spec-check / domain classification (GR.S3) — opt-out; the escape is a ledgered `--allow-degraded` |
 | `governance.karpathy.<id>` | bool per gate id | all on | Karpathy gate toggles (G3) — ids: `think-first`, `simplicity`, `surgical-scope`, `verify` |
 | `trust.<surface>` | `"read-only"`/`"propose-only"`/`"gated-write"` | `gated-write` | trust dial for a whole write **surface** — `mcp` or `cli` (K3/SI.4) |
 | `trust.<tool>` | `"read-only"`/`"propose-only"`/`"gated-write"` | the surface's level | trust dial for ONE tool (e.g. `remember`, `session_push`) — **overrides** the surface default |

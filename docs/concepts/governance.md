@@ -96,10 +96,11 @@ The `WriteGate` above governs *mokata's own* durable writes. The **`gate-guard`*
 It is where the method stops being advice: a write that breaks the run's own methodology is
 **blocked**, with a reason and the way out. It is the gate you actually *see*.
 
-**Three run-state gates**, each blocking a native write to an **implementation** file:
+**Four run-state gates**, each blocking a native write to an **implementation** file:
 
 | Gate | Blocks when… |
 |---|---|
+| `approach-approval` | a run is registered (brainstorm in progress) but **no approach is approved yet** — the idea→code jump |
 | `spec-persisted` | an approach is approved for this run but **no spec is emitted** |
 | `no-code-without-failing-test` | the spec is emitted but **no failing test is on record** |
 | `spec-scope` | the write is **outside the spec's authorized surface**, spells a **deferred** marker, or a **spec amend is in progress** |

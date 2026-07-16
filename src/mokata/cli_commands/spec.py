@@ -119,10 +119,18 @@ def cmd_spec_show(args: argparse.Namespace) -> int:
     from ..engine.spec_gate import load_emitted_spec
 
     surface = _load_surface(args.path)
-    store, _run_id, err = _run_scoped_store(surface)
+    store, run_id, err = _run_scoped_store(surface)
     if err:
         print(f"error: {err}", file=sys.stderr)
         return 1
+    # RUN-REG — legible no-run recovery: distinguish "no tracked run at all" (nothing to attach a
+    # spec to — the conversational-brainstorm repro) from "a run is tracked but no spec is emitted
+    # yet". The first names how to START/attach a tracked run; the second, how to emit.
+    if run_id is None:
+        print("no tracked run in this repo — mokata has nothing to attach a spec to yet. Start a "
+              "tracked run with /mokata:brainstorm (it registers the run) or resume one with "
+              "/mokata:resume, then emit the spec (/mokata:spec).")
+        return 0
     spec = load_emitted_spec(store)
     if spec is None:
         print("no spec is emitted for this run — draft one and emit it (/mokata:spec, or "

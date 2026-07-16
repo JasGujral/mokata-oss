@@ -58,6 +58,8 @@ DEGRADE_FAMILY = {
     "SharedAuditUnavailable": FAILURE_UNREACHABLE,  # → the log stays LOCAL
     "SubagentUnavailable": FAILURE_UNREACHABLE,     # → sequential flow
     "BackendError": FAILURE_UNREACHABLE,            # knowledge query → the grep floor
+    "CrgUnavailable": FAILURE_UNREACHABLE,          # code-review-graph down → the AST floor
+    "CrgVersionSkew": FAILURE_UNREACHABLE,          # CRG version out of range → the AST floor
     "_ProbeUnavailable": FAILURE_UNREACHABLE,       # teamdb's internal probe failure
     "_JournalUnavailable": FAILURE_UNREACHABLE,     # team_journal's connect failure
 }
@@ -67,7 +69,8 @@ DEGRADE_FAMILY = {
 # so that adding a class forces a decision about which side of the line it is on.
 HARD_ERRORS = {
     "MokataError", "AuthoringError", "BrainstormError", "BrainstormGateError", "BugError",
-    "ConfigCommandError", "ConfigError", "DebugError", "LockTimeout", "ManifestError",
+    "ConfigCommandError", "ConfigError", "DebugError", "GraphDegradedError", "LockTimeout",
+    "ManifestError",
     "ManifestShareError", "MeasureFirstError", "MemoryDisabledError", "MemoryDocTooNew",
     "MemoryError", "MemoryShareError", "MigrateError", "NetworkEgressBlocked", "OptimizeError",
     "PhaseError", "PlanError", "ProvisionError", "RedBeforeGreenError", "RefineError",
@@ -393,16 +396,16 @@ def _live_classes():
     from mokata import config, config_cmd, brainstorm, dsn, manifest, pipeline, plans, refine
     from mokata import agent_skills, harness_setup, session_bundle, session_transport, share
     from mokata.execmode import tasks
-    from mokata.govern import authoring, revert, tdd
-    from mokata.knowledge import neo4j_backend, query
+    from mokata.govern import authoring, graph_required, revert, tdd
+    from mokata.knowledge import crg_client, neo4j_backend, query
     from mokata.memory import backends, item, migrate, share as mshare, store, vector
     from mokata.modes import bug, debug, optimize
 
     mods = (netguard, oslock, skills, stacks, teamdb, team_audit, team_journal, vault, config,
             config_cmd, brainstorm, dsn, manifest, pipeline, plans, refine, agent_skills,
-            harness_setup, session_bundle, session_transport, share, tasks, authoring, revert,
-            tdd, neo4j_backend, query, backends, item, migrate, mshare, store, vector, bug, debug,
-            optimize)
+            harness_setup, session_bundle, session_transport, share, tasks, authoring,
+            graph_required, revert, tdd, crg_client, neo4j_backend, query, backends, item, migrate,
+            mshare, store, vector, bug, debug, optimize)
     live = {"MokataError": MokataError}
     for mod in mods:
         for name in dir(mod):

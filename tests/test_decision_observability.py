@@ -176,6 +176,13 @@ class TestAuditWhyCommand(unittest.TestCase):
     def test_cmd_audit_why_degrades_clean_with_no_ledger(self):
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
+            # KB.S1: init now seeds a bootstrap entry, so remove the ledger to recreate the
+            # genuinely-empty/absent-ledger condition this degrade path is about.
+            from mokata import MOKATA_DIR
+            from mokata.govern.ledger import AuditLedger
+            led = AuditLedger.from_mokata_dir(os.path.join(d, MOKATA_DIR))
+            if os.path.exists(led.path):
+                os.remove(led.path)
             rc, out = run_cli(["audit", "--why", "--path", d])
             self.assertEqual(rc, 0)
             self.assertIn("empty", out.lower())

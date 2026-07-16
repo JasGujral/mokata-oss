@@ -1,0 +1,77 @@
+name: real-crg (opt-in)
+
+# GR.S2-FU — the OPT-IN real code-review-graph leg. The GR.S2 contract suite runs on a full
+# fake-CRG double; the raw MCP-stdio wire (`knowledge/crg_client.py:_McpStdioSession`) is only
+# exercisable against a real `code-review-graph serve`. This job installs the real tool and
+# drives that wire end-to-end. It is MANUAL-only (`workflow_dispatch`) so it NEVER blocks normal
+# CI — dispatch it deliberately when validating the real integration.
+#
+# Note: mokata carries no dependency on code-review-graph and does NOT durably adopt it here.
+# `graph adopt` pins the manifest through the human WriteGate, which fails CLOSED off a TTY (P2 —
+# no headless durable consent); that is the gate working, not a gap. Instead the `full` profile
+# BINDS a detected code-review-graph read-only through the router, so `mokata query` / `graph
+# status` exercise the real query + version-handshake wire the fake double stands in for.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-crg:
+    name: real code-review-graph wire (manual)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install mokata
+        run: pip install -e .
+
+      - name: Install code-review-graph (headless)
+        run: pip install code-review-graph
+
+      - name: Build a sample Python repo
+        run: |
+          set -euo pipefail
+          repo="$(mktemp -d)"
+          echo "SAMPLE_REPO=$repo" >> "$GITHUB_ENV"
+          printf 'def process_payment(total, currency):\n    return {"total": total, "currency": currency}\n' > "$repo/payments.py"
+          printf 'from payments import process_payment\n\ndef checkout(total):\n    return process_payment(total, "USD")\n' > "$repo/checkout.py"
+          ( cd "$repo" && mokata init --profile full --yes )
+
+      - name: Real graph status — the version handshake must bind the real backend
+        run: |
+          set -euo pipefail
+          out="$( cd "$SAMPLE_REPO" && mokata graph status )"
+          echo "$out"
+          # The real code-review-graph must ANSWER — not the AST/grep floor.
+          echo "$out" | grep -qi "code-review-graph" \
+            || { echo "::error::graph status did not bind the real code-review-graph backend"; exit 1; }
+          echo "$out" | grep -qi "floor '" \
+            && { echo "::error::graph status fell to a floor — the real CRG wire did not answer"; exit 1; }
+          echo "ok — real code-review-graph is the live backend"
+
+      - name: Real query over the MCP-stdio wire
+        run: |
+          set -euo pipefail
+          out="$( cd "$SAMPLE_REPO" && mokata query callers process_payment )"
+          echo "$out"
+          # Answered via the real graph (not `via ast` / `via grep` / `via ripgrep`).
+          echo "$out" | grep -qiE "via code-review-graph|\[graph\]" \
+            || { echo "::error::callers query was not answered by the real code-review-graph wire"; exit 1; }
+          echo "$out" | grep -q "checkout" \
+            || { echo "::error::the real wire did not resolve the known caller"; exit 1; }
+          echo "ok — the real _McpStdioSession query wire round-tripped"
+
+      - name: GR.S2 contract suite (regression under the real binary present)
+        run: |
+          python -m unittest discover -s tests -t tests -p "test_gr_s2_*.py" -v

@@ -45,16 +45,22 @@ mokata query blast_radius helper --depth 3
 
 ## Backend selection (B1/B3) — one detection path
 
-The layer resolves `code_graph` through the **router** (`code-review-graph → serena →
+The layer resolves `code_graph` through the **router** (`code-review-graph → serena → ast →
 ripgrep → grep`) and uses the first present provider:
 
 - A real graph tool (`code-review-graph`/`serena`, or an external **Neo4j** database) → the
   adopted **graph backend** (B1), which delegates all graph work to the external tool via an
   injected client. No parser, no in-house graph.
-- Otherwise the **grep floor** (B3) — a dependency-free lexical implementation of the same
-  five queries. Results are marked `degraded=True` (approximate but always available).
+- Else, on a repo with Python, the **embedded stdlib-AST floor** answers structurally
+  (`degraded=False`, `is_graph=False`) — a floor above grep with real name-resolution, never the
+  adopted structural graph.
+- Otherwise (a zero-Python repo / non-Python files) the **grep floor** (B3) — a dependency-free
+  lexical implementation of the same five queries. Results are marked `degraded=True`
+  (approximate but always available).
 
-If the graph backend errors mid-query, the layer degrades to grep rather than failing.
+If the graph backend errors mid-query, the layer degrades to the AST floor (then grep) rather
+than failing — a graph rebuild failure answers from the AST floor on current files, never from
+stale graph data.
 
 ## Language coverage (Stage 65)
 
@@ -62,9 +68,12 @@ mokata's structural paths work across **Python, JS/TS, Go, Rust, and Java** — 
 Python. The **real graph** comes from the adopted tool (whatever languages it supports); the
 **grep floor** is language-aware via a central, dependency-free table of *lexical heuristics*
 (`mokata/languages.py`) — extension awareness plus per-language patterns for
-`function`/`def`/`func`/`fn`, `import`/`require`/`use`, and `class`/`impl`/`interface`. **No
-parser, no AST** — the floor is the locked-inviolable grep heuristic, and it announces itself
-as lexical (`degraded=True`).
+`function`/`def`/`func`/`fn`, `import`/`require`/`use`, and `class`/`impl`/`interface`. Above
+grep sits the **embedded stdlib-AST floor** (`is_graph=False`): real name-resolution on Python,
+answering `degraded=False` — a floor above grep, never the adopted structural graph. **No
+in-house structural *graph*** — the AST floor and the grep heuristic are floors; the real graph
+is always the adopted tool. The grep floor announces itself as lexical (`degraded=True`); a
+zero-Python repo gets byte-identical grep behaviour.
 
 | Language | Extensions | Real graph (adopt) | Grep-floor heuristics | Tests recognised |
 |---|---|---|---|---|

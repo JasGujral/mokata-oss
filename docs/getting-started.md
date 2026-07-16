@@ -34,8 +34,9 @@ mokata's writes are gated on **you**, not on the model. When the agent wants a d
 commits **once**. The approval is single-use, content-hashed (change an argument and the id no
 longer matches), and expires after 15 minutes. Bare `mokata approve` lists what's waiting.
 
-There is deliberately **no approve tool or slash command** inside Claude Code — a model must
-never be able to approve its own write.
+By default there is **no approve tool or slash command** inside Claude Code — a model must
+never approve its own write. (An in-chat MCP approve tool ships but is **opt-in, default-OFF**,
+and even when enabled Claude Code prompts you on every call.)
 
 ### The two guards on Claude's file writes
 

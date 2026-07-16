@@ -60,6 +60,8 @@ SETTINGS: Tuple[Setting, ...] = (
     Setting("settings.governance.output_density", "governance.output_density",
             "true | false", "false",
             "output-density compression (F4)"),
+    Setting("settings.graph.required", "graph.required", "true | false", "true",
+            "REFUSE a degraded (grep-floor) blast radius as decision input (GR.S3) — opt-out"),
 )
 
 

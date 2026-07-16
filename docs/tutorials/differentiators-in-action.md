@@ -58,18 +58,22 @@ mokata query blast_radius process_payment --depth 2
 ```
 
 ```text
-callers(process_payment) via ripgrep [grep fallback] — 1 result(s)
-  checkout.py:5  «checkout»  return process_payment(total, "USD")
-  (lexical fallback (no structural graph; results are approximate))
+callers(process_payment) via ast [graph] — 1 result(s)
+  checkout.py:4  «checkout»
+  (answered by the embedded AST floor (name-resolution, not type inference); dynamic dispatch is not resolved)
 ```
 
-(`via ripgrep` if `rg` is installed, `via grep` if not — same five queries either way.)
+No graph tool is installed here, yet the answer is **structural, not lexical** — with no
+`code-review-graph`/`serena` adopted, the router binds mokata's **embedded stdlib-AST floor**,
+which resolves names on Python and answers `degraded=False`. (grep is only the emergency floor
+beneath it, for a zero-Python repo.)
 
 `spec`/`develop` ground a change in these queries — *"before changing `process_payment`, here
 are its call sites"* — so the agent verifies from the code instead of guessing.
 
 **Keep it fresh — the update loop.** The index is incremental and staleness is *surfaced, never
-served silently*:
+served silently* (0.0.14 adds a freshness-before-answer contract — a known-stale graph rebuilds
+*before* it answers):
 
 ```bash
 mokata index        # build/refresh — only changed files
@@ -83,19 +87,21 @@ index: no code graph wired — refresh runs on the grep floor (`mokata lat-check
 lat check: no anchors or lat.md — drift tracking inactive (clean).
 ```
 
-With no graph tool present mokata runs on the **grep floor** — approximate but always available,
-and it tells you how to wire a real one (`mokata status`):
+`mokata graph status` is the precise report of which backend answers today:
 
 ```text
-mokata 0.0.13 · profile 'full' · mode: local
-  code_graph -> ripgrep (degraded from code-review-graph)
-  memory_store -> native-memory
-no codebase graph wired — running on the grep floor (safe, but lexical). To enable richer
-structural queries, install a graph tool (code-review-graph or serena) and wire it: ...
+code graph: floor 'ast' — no adopted graph. Adopt one with `mokata graph adopt`.
 ```
 
-**Why it matters:** a plain agent (and superpowers) reads ad-hoc; mokata navigates by structure
-and keeps the index fresh — and never hard-fails when the graph is absent.
+**Graph is mandatory-by-default (0.0.14).** `graph.required` is on by default, so a *degraded*
+(grep-floor) blast radius is **refused** as a decision input — you adopt a real graph
+(`mokata graph adopt`, human-gated; the AST floor stays the fallback) or explicitly accept the
+degraded evidence for the session with `--allow-degraded` (TTY-reconfirmed, ledgered). The AST
+floor answering `degraded=False` is not a degraded state; only the *grep* floor trips the refusal.
+
+**Why it matters:** a plain agent (and superpowers) reads ad-hoc; mokata navigates by structure —
+answering structurally out of the box via the AST floor — and will not let a lexical guess
+silently drive a decision.
 
 ### D22 · Wire an external Neo4j graph (degrade-clean)
 
@@ -103,20 +109,72 @@ Point the `code_graph` capability at a team **Neo4j** graph — credentials by e
 
 ```bash
 mokata config set tools.neo4j '{"provides":"code_graph","kind":"external","enabled":true,"detect":{"type":"python_module","name":"neo4j"},"config":{"uri_env":"NEO4J_URI","user_env":"NEO4J_USERNAME","password_env":"NEO4J_PASSWORD"}}'
-mokata config set capabilities.code_graph.fallback '["neo4j","ripgrep","grep"]'
+mokata config set capabilities.code_graph.fallback '["neo4j","ast","ripgrep","grep"]'
 mokata status
 ```
 
-With no driver / no `NEO4J_*` env / DB down, it **degrades cleanly to the grep floor** and says so:
+With no driver / no `NEO4J_*` env / DB down, it **degrades cleanly to the next tier** (the
+embedded AST floor on a Python repo, grep beneath) and says so:
 
 ```text
-code_graph -> grep (degraded from neo4j)
+code_graph -> ast (degraded from neo4j)
 ```
 
 Install the driver (`pip install "mokata[neo4j]"`), export `NEO4J_URI/_USERNAME/_PASSWORD`, then
 `mokata index` → `mokata lat-check` run over the live graph. Full loop:
 [use a codebase graph](../how-to/use-a-codebase-graph.md). **Why it matters:** bring your own
 graph DB; mokata adopts it under the same contract and never breaks when it's unreachable.
+
+---
+
+## 1b · Graph mandatory + trust (new in 0.0.14)
+
+### D29 · Freshness-before-answer — never structure from stale code
+
+Every graph query front-runs a freshness check: a known-stale graph rebuilds **before** it
+answers. Add a second caller and re-ask — no manual reindex, and the new call site is already
+there:
+
+```bash
+# add refund.py (a new caller of process_payment), then immediately:
+mokata query callers process_payment
+```
+
+```text
+callers(process_payment) via ast [graph] — 2 result(s)
+  checkout.py:4  «checkout»
+  refund.py:4  «refund»
+  (answered by the embedded AST floor (name-resolution, not type inference); dynamic dispatch is not resolved)
+```
+
+A CRG rebuild failure degrades *loud* to the AST floor on **current** files — never stale graph
+data. **Why it matters:** structural answers are only trustworthy if they track the code you have
+right now; no surveyed framework contracts freshness before answering.
+
+### D32 · The idea→code jump is physically blocked (the 9th backed gate)
+
+`approach-approval` is a **backed** gate, not advice: with a run registered but no approach
+approved, a *native* `Write`/`Edit` to an implementation file is refused with exit code 2 by the
+`gate-guard` hook — the model can't skip brainstorm by reaching past mokata's tools.
+
+```text
+approach-approval: brainstorm in progress — approve an approach first. payments.py is
+implementation, but no approach is approved for this run yet. Explore and approve one approach
+(/mokata:brainstorm), or override: mokata gate override approach-approval --reason "<why>"
+```
+
+It is the 4th run-state gate (see §4) and, like the others, a *methodology* block a human can lift
+on the record.
+
+### D30 · Prior-art bound step · D31 · Typed approach `decisions[]`
+
+Two more trust contracts land inside **brainstorm** (§3): approach approval is **refused unless
+the prior-art step actually ran** (a step-ran check — grounding new work in what already exists,
+never "found something"), and the approved approach carries typed **`decisions[]`** (statement ·
+rationale · `about_code` anchors · deferred). At spec emit the deferred scope **derives** from
+`decisions[].deferred` — one truth, never hand-written twice — and review's first pass compares
+the diff's actual reach against the declared `about_code` anchors, so undeclared blast radius is a
+divergence finding.
 
 ---
 
@@ -200,9 +258,11 @@ they **commit nothing** — the tool answers with a proposal and this note:
 consent — it never was.
 ```
 
-Approve is deliberately a **terminal command only** — it has no MCP tool and no slash command; an in-harness
-approve surface would just hand the model the pen back. And even an approved write is hard-blocked
-if it carries a secret. See the whole brain by category:
+Approve is a **terminal command by default**. An in-chat MCP approve tool (`mcp__mokata__approve`)
+exists but is **opt-in and default-OFF** (`settings.approvals.in_chat`); even when enabled, setup
+writes a `permissions.ask` entry so the harness re-prompts the human on every call — the model
+still cannot mint its own consent. (There is no approve slash command.) And even an approved write
+is hard-blocked if it carries a secret. See the whole brain by category:
 
 ```bash
 mokata memory
@@ -434,10 +494,11 @@ mokata run develop
 **…and the same gates fire on the agent's *native* file writes.** A gate that only lives inside
 mokata's own tools is a door with no lock — the model could just use its editor. `mokata setup
 claude` installs a **`PreToolUse` gate-guard hook**, so `Write`/`Edit`/`MultiEdit`/`NotebookEdit`
-are decided from the run's persisted state and refused with exit code 2. Three gates:
+are decided from the run's persisted state and refused with exit code 2. Four gates:
 
 | gate | blocks an implementation write when… |
 |---|---|
+| `approach-approval` | a run is registered (brainstorm in progress) but no approach is approved yet — the idea→code jump |
 | `spec-persisted` | an approach is approved for this run but no spec is emitted |
 | `no-code-without-failing-test` | the spec is emitted but no failing test is on record |
 | `spec-scope` | the write is outside the spec's authorized surface, spells something the spec **deferred**, or a `spec amend` is in flight |
@@ -520,6 +581,7 @@ mokata run-state gates (enforced on native Write/Edit by the gate-guard hook):
   spec-persisted                   enforced
   no-code-without-failing-test     enforced
   spec-scope                       OVERRIDDEN (this session)
+  approach-approval                enforced
 
   The override expires with this session — a new session enforces again.
 

@@ -29,6 +29,23 @@ HARD-GATE: do not draft a spec, write code, or hand off to the next phase until 
 has explicitly approved exactly one approach. No approval, no spec. This gate cannot be
 skipped, softened, or assumed. If you are unsure whether approval was given, it was not.
 
+## First: register the run (so this brainstorm is TRACKED, not invisible)
+
+Before you ask the first question, REGISTER the run — call the `session_save` tool with
+`register` = true. This is the protocol's opening state write: it records a tracked run so
+everything downstream can SEE this brainstorm. Without it, a brainstorm run conversationally
+in chat leaves no run behind — `mokata progress` reports "no run in progress", `spec` has
+nothing to attach to, and the phase gate has no state to bind on, so the whole run silently
+bypasses the pipeline. Registering is ungated (transient run-state, not a durable write) and
+idempotent — safe to call once at the start; it never resets a run already under way.
+
+> **If a required mokata tool call never comes back** (this `session_save`, or any
+> `mcp__mokata__*` call, appears to hang or "stick" with no result), it was most likely a
+> Claude Code permission prompt you DECLINED, not a mokata failure. Check the grant line with
+> `mokata mcp status`: if the mokata MCP server is not granted for this session, approve it (or
+> restart Claude Code so the grant takes effect), then retry. This is a config/permission issue,
+> not a bug in the tool.
+
 ## How to run the conversation
 
 1. Ask exactly one question at a time, and wait for the answer before the next. A wall of
@@ -79,6 +96,19 @@ the backstop.
 If the change looks high-impact (a wide blast radius, or a design MISFIT), **OFFER — do not run —**
 the deep whole-codebase architectural review (a separate, user-invoked review). mokata offers it;
 the user decides. Never launch it unasked.
+
+## Prior art — extend, don't re-implement (a BOUND step before approval)
+Before you approve, run the **prior-art pass** for the chosen approach — a bound step, not a
+suggestion. Graph-query the codebase for **existing implementations** related to the approach's
+symbols/terms (`mokata query implementers <name>` / `callers <name>`; CRG semantic search when
+adopted, the AST name-resolution floor or grep otherwise — **name the tier honestly**) and **recall
+the related team decisions** the surface touches. Surface each finding in the tradeoff table as an
+"existing `<symbol>` in `<file>` — **extend?**" row beside blast radius, so the human weighs reuse
+before choosing. A **deviation from found prior art must be stated, not silent.** This is a
+**step-RAN** check: an empty result ("no prior art found via <tier>") is a first-class **pass** — the
+gate is that you *looked*, never that you found something — and a degraded/absent graph still runs
+the pass (GR.S3 owns the degraded-radius refusal; nothing new is refused here). **Approving before
+the pass has run is refused.**
 
 ## Design pre-mortem (resolve review-class issues IN THE PLAN)
 

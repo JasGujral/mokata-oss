@@ -20,16 +20,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
+import sys
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 from . import __version__
 from .harness_paths import (MCP_SERVER_NAME, MCP_TOOL_PERMISSION,
                             claude_mcp_config_path, claude_settings_path)
+from .plugin_cache import read_plugin_root
 
 
 # --------------------------------------------------------------------------------------
@@ -369,3 +372,252 @@ def unreachable_registration(root: str = ".",
         return reg
     except Exception:
         return None
+
+
+# ======================================================================================
+# B-VER — version-parity preventive check (the "did I upgrade the server Claude Code will
+# actually launch?" question). The shared seam `mokata mcp status`, `mokata doctor`,
+# `mokata setup claude`, and `mokata mcp install` all report through — and DB.S1 later folds
+# `version_parity` into its `doctor` DSN deep-check (the B-VER stage).
+#
+# Setup already verifies the registered server is CONNECTED, but never that the command Claude
+# Code launches serves the SAME VERSION as the CLI that wrote the registration. The 2026-07-14
+# incident: `pip install -U mokata` + `setup claude` still ran the OLD server. Four undetected
+# stale paths, each a NAMED finding here: a stale running process / multi-env drift (`version_
+# parity`), scope shadowing (`scope_shadow`), plugin shadowing (`plugin_shadow`).
+# ======================================================================================
+
+# Env keys whose VALUES are secret-shaped (DSN/credentials). The probe launches
+# `<command> --version`, which needs none of them — so the child gets a scrubbed environment
+# and a finding can never carry a DSN (B-VER secret-safety).
+_SECRET_KEY_RE = re.compile(
+    r"(DSN|DATABASE_URL|PASSWORD|SECRET|TOKEN|API[_-]?KEY|_KEY|PRIVATE|CREDENTIAL)", re.I)
+
+# A version-ish token: two-or-more dotted numeric groups, optional pre-release/build tail.
+_VERSION_RE = re.compile(r"\d+(?:\.\d+)+(?:[.\-+][0-9A-Za-z.]+)?")
+
+
+def _scrubbed_env() -> dict:
+    """A copy of the environment with secret-shaped keys removed — handed to the version probe
+    so no DSN/credential is ever passed to the probed subprocess (which does not need one)."""
+    return {k: v for k, v in os.environ.items() if not _SECRET_KEY_RE.search(k)}
+
+
+def _parse_version(text: str) -> Optional[str]:
+    """The version token from a `--version` reply (`mokata-mcp --version` prints the bare
+    version, but stay lenient about surrounding text)."""
+    if not text:
+        return None
+    m = _VERSION_RE.search(text)
+    return m.group(0) if m else (text.strip() or None)
+
+
+def _probe_version(command: str, args: Optional[List[str]],
+                   timeout: float) -> Tuple[str, Optional[str], str]:
+    """Launch `command args --version` and classify: ('ok', version, '') | ('mismatch' handled
+    by the caller) | ('timeout', None, detail) | ('probe_failed', None, detail). Bounded and
+    fail-open — it never raises; a hang is a TIMEOUT, a non-zero/absent command is PROBE-FAILED.
+    The env is scrubbed of secrets; the child needs none to print a version."""
+    argv = [command] + list(args or []) + ["--version"]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
+                              env=_scrubbed_env())
+    except subprocess.TimeoutExpired:
+        return ("timeout", None, f"no --version reply within {timeout:.0f}s")
+    except FileNotFoundError:
+        return ("probe_failed", None, f"the registered command '{command}' was not found")
+    except OSError as exc:
+        return ("probe_failed", None, f"could not launch '{command}': {exc}")
+    if proc.returncode != 0:
+        tail = [ln for ln in (proc.stderr or "").strip().splitlines() if ln.strip()]
+        return ("probe_failed", None, tail[-1] if tail else f"exited {proc.returncode}")
+    ver = _parse_version(proc.stdout)
+    if not ver:
+        return ("probe_failed", None, "answered --version with no parseable version")
+    return ("ok", ver, "")
+
+
+@dataclass
+class VersionParityFinding:
+    """The version-parity verdict for the registered mokata server. `status` is one of
+    ``match`` (quiet pass) · ``mismatch`` · ``probe_failed`` · ``timeout`` · ``unregistered``.
+    A read-only diagnostic (doc 85 §3 `*Finding`); `render` is the loud printable report."""
+    status: str
+    cli_version: str
+    registered_command: str
+    registered_version: Optional[str] = None
+    source: Optional[Path] = None
+    detail: str = ""
+    registered_args: List[str] = field(default_factory=list)
+
+    @property
+    def registered_invocation(self) -> str:
+        """The full launched command line (command + args) — the which-env-owns-what identity."""
+        return " ".join([self.registered_command, *self.registered_args]).strip()
+
+    def render(self, quiet_when_ok: bool = True) -> List[str]:
+        # A clean MATCH is a QUIET pass on the write paths (setup/install stay byte-identical);
+        # the status/doctor surfaces pass quiet_when_ok=False to show the OK line. Unregistered is
+        # always silent here — `status_lines`/`full_status` already report "NOT REGISTERED".
+        if self.status == "unregistered":
+            return []
+        if self.status == "match":
+            return [] if quiet_when_ok else [
+                f"mokata-mcp: version parity OK ✓ ({self.cli_version})"]
+        src = f"  (from {self.source})" if self.source else ""
+        cli_env = f"  at {sys.executable}"
+        if self.status == "mismatch":
+            return [
+                "mokata-mcp: VERSION MISMATCH ✗ — the registered server is a DIFFERENT version "
+                "than this CLI.",
+                f"  registered: {self.registered_version} at {self.registered_invocation}{src}",
+                f"  this CLI:   {self.cli_version}{cli_env}",
+                "  Cause: Claude Code keeps launching the stale server until you RESTART it — and "
+                "the registered command must point at the environment you upgraded.",
+                "  Fix:   restart Claude Code; if it persists, run `mokata mcp install` to "
+                "re-point the registration at this environment.",
+            ]
+        if self.status == "probe_failed":
+            return [
+                "mokata-mcp: VERSION PROBE FAILED ✗ — the registered server did not answer "
+                "`--version` (likely a STALE install predating this check).",
+                f"  registered: {self.registered_invocation}{src}",
+                f"  this CLI:   {self.cli_version}{cli_env}",
+                f"  detail: {self.detail}" if self.detail else "  detail: (no output)",
+                "  Fix: restart Claude Code; if it persists, reinstall mokata "
+                "(`pip install -U mokata`) then `mokata mcp install`.",
+            ]
+        # timeout
+        return [
+            "mokata-mcp: VERSION PROBE TIMED OUT ✗ — no `--version` reply "
+            "(setup still succeeded).",
+            f"  registered: {self.registered_command}{src}",
+            "  Fix: run `mokata mcp status` to diagnose, then restart Claude Code.",
+        ]
+
+
+def version_parity_for(command: str, args: Optional[List[str]] = None,
+                       source: Optional[object] = None, *,
+                       cli_version: Optional[str] = None,
+                       timeout: float = 5.0) -> VersionParityFinding:
+    """Probe an EXPLICIT registered command (the exact string the write path just wrote) and
+    classify it against the running CLI's version. This is the shared probe the write paths call
+    on the just-written registration; `version_parity` wraps it for the resolve-then-probe path."""
+    cli_version = cli_version or __version__
+    code, ver, detail = _probe_version(command, args, timeout)
+    status = ("match" if ver == cli_version else "mismatch") if code == "ok" else code
+    return VersionParityFinding(
+        status=status, cli_version=cli_version, registered_command=command,
+        registered_version=ver, source=Path(source) if source else None, detail=detail,
+        registered_args=[str(a) for a in (args or [])])
+
+
+def version_parity(root: str = ".", home: Optional[str] = None, *,
+                   timeout: float = 5.0,
+                   cli_version: Optional[str] = None) -> VersionParityFinding:
+    """Resolve the registered mokata server (project then user scope — `resolve_registered`) and
+    return its version-parity finding. The single shared probe `mokata mcp status` and
+    `mokata doctor` call (DB.S1 folds this into its doctor deep-check). Never raises."""
+    try:
+        reg = resolve_registered(root, home)
+    except Exception:
+        reg = None
+    if reg is None:
+        return VersionParityFinding(status="unregistered",
+                                    cli_version=cli_version or __version__,
+                                    registered_command="", registered_version=None)
+    return version_parity_for(reg.command, reg.args, reg.source,
+                              cli_version=cli_version, timeout=timeout)
+
+
+@dataclass
+class ScopeShadowFinding:
+    """Both-scope sweep: is mokata registered in BOTH project `.mcp.json` and user
+    `~/.claude.json`? If so, Claude Code uses the project one (resolve_registered precedence) and
+    the user one is a stale-shadow risk. Read-only; `render` names the winner and the loser path."""
+    shadowed: bool
+    winner_scope: str = ""
+    winner_path: Optional[Path] = None
+    loser_scope: str = ""
+    loser_path: Optional[Path] = None
+
+    def render(self) -> List[str]:
+        if not self.shadowed:
+            return []
+        return [
+            "mokata-mcp: SCOPE SHADOW ✗ — mokata is registered in BOTH scopes; Claude Code uses "
+            f"the {self.winner_scope} one.",
+            f"  active (wins): {self.winner_path}  [{self.winner_scope} scope]",
+            f"  shadowed:      {self.loser_path}  [{self.loser_scope} scope]  "
+            "← stale-shadow risk; remove mokata's entry here to avoid confusion.",
+        ]
+
+
+def scope_shadow(root: str = ".", home: Optional[str] = None) -> ScopeShadowFinding:
+    """Detect a mokata registration present in BOTH scopes. Project wins (the order/paths
+    `resolve_registered` and `harness_setup` use), so the user-scope copy is flagged as the
+    stale-shadow risk with its exact path to clean. Read-only. Never raises."""
+    try:
+        proj = Path(claude_mcp_config_path("project", root, home))
+        user = Path(claude_mcp_config_path("user", root, home))
+        has_proj = _read_server(proj) is not None
+        has_user = _read_server(user) is not None
+    except Exception:
+        return ScopeShadowFinding(False)
+    if has_proj and has_user:
+        return ScopeShadowFinding(True, "project", proj, "user", user)
+    return ScopeShadowFinding(False)
+
+
+@dataclass
+class PluginShadowFinding:
+    """A mokata Claude Code plugin is installed: it launches its OWN bundled server regardless of
+    pip upgrades, so a `pip install -U mokata` won't change the plugin's server."""
+    plugin_root: Path
+
+    def render(self) -> List[str]:
+        return [
+            f"mokata-mcp: PLUGIN PRESENT ⚠ — the mokata Claude Code plugin is installed "
+            f"({self.plugin_root}).",
+            "  It launches its OWN bundled server regardless of pip — `pip install -U mokata` "
+            "won't change the plugin's server. Update the plugin too "
+            "(`/plugin marketplace update`).",
+        ]
+
+
+def plugin_shadow(home: Optional[str] = None) -> Optional[PluginShadowFinding]:
+    """Return a finding IFF a mokata plugin registration is detectable — the recorded plugin root
+    (`plugin_cache.read_plugin_root`, written by the SessionStart hook) carries a
+    `.claude-plugin/plugin.json` that declares the mokata MCP server. None otherwise (silent).
+    Never raises."""
+    try:
+        root = read_plugin_root(home=home)
+        if not root:
+            return None
+        manifest = Path(root) / ".claude-plugin" / "plugin.json"
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        servers = data.get("mcpServers") if isinstance(data, dict) else None
+        if isinstance(servers, dict) and MCP_SERVER_NAME in servers:
+            return PluginShadowFinding(Path(root))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    return None
+
+
+def parity_lines(root: str = ".", home: Optional[str] = None, *,
+                 timeout: float = 5.0, quiet_when_ok: bool = True) -> List[str]:
+    """The shared version-parity report block — version parity + scope shadow + plugin shadow —
+    printed by `setup`, `mcp install`, `mcp status`, and `doctor` so their wording can't drift.
+    Loud-only by default (a clean run emits nothing, keeping the write paths byte-identical);
+    the status/doctor surfaces pass `quiet_when_ok=False` to also show the OK line. Never raises."""
+    lines: List[str] = []
+    try:
+        lines.extend(version_parity(root, home, timeout=timeout).render(
+            quiet_when_ok=quiet_when_ok))
+        lines.extend(scope_shadow(root, home).render())
+        ps = plugin_shadow(home)
+        if ps is not None:
+            lines.extend(ps.render())
+    except Exception as exc:                 # informational path — never raise
+        return [f"mokata-mcp: version-parity check skipped ({exc})."]
+    return lines

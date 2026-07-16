@@ -29,6 +29,17 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mokata-hook dirty-track"
+          }
+        ]
+      }
     ]
   }
 }

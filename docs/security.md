@@ -18,7 +18,7 @@ mokata registers **two** blocking (`PreToolUse`) hooks in Claude Code. Both stop
 | Hook | Matches | Class | Overridable? |
 |---|---|---|---|
 | `secret-guard` | `Write` · `Edit` · `MultiEdit` · **`Bash`** | **security** — a credential is about to be written, committed, or sent | **Never.** No flag, no approval, no override lifts it — an approved write is still hard-blocked |
-| `gate-guard` | `Write` · `Edit` · `MultiEdit` · `NotebookEdit` | **methodology** — the [run-state gates](reference/cli.md#mokata-gate-statusoverrideclear) (`spec-persisted`, `no-code-without-failing-test`, `spec-scope`) | **Yes**, explicitly: `mokata gate override <gate> --reason "<why>"` — session-scoped, re-confirmed, and **ledgered**. There is deliberately no env-var kill switch |
+| `gate-guard` | `Write` · `Edit` · `MultiEdit` · `NotebookEdit` | **methodology** — the [run-state gates](reference/cli.md#mokata-gate-statusoverrideclear) (`approach-approval`, `spec-persisted`, `no-code-without-failing-test`, `spec-scope`) | **Yes**, explicitly: `mokata gate override <gate> --reason "<why>"` — session-scoped, re-confirmed, and **ledgered**. There is deliberately no env-var kill switch |
 
 A methodology gate is something a human may knowingly step around, on the record. A security block is
 not — so mokata never lets an approval, a trust level, or a flag turn the secret-guard off.
