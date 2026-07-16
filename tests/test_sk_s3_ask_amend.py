@@ -148,8 +148,10 @@ class TestComposesWithExistingGates(unittest.TestCase):
         # No gate was added or altered by this stage — the backed set is exactly the SK.S1 eight.
         self.assertEqual(
             sorted(g for g, r in sc.GATES.items() if r.backed),
-            ["completeness", "deviation", "hard-rule", "no-code-without-failing-test",
-             "secret-guard", "ship-readiness", "spec-persisted", "write-gate"])
+            # PH-GATE.S0 (0.0.14) backed `approach-approval`; this stage still adds no gate.
+            ["approach-approval", "completeness", "deviation", "hard-rule",
+             "no-code-without-failing-test", "secret-guard", "ship-readiness", "spec-persisted",
+             "write-gate"])
 
 
 class TestChangeSizingAdvisory(unittest.TestCase):

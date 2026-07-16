@@ -244,11 +244,13 @@ class TestSpecGate(unittest.TestCase):
                               env={"MOKATA_SESSION_ID": RUN})
             self.assertEqual(code, 0, f"hand-editing outside a run was blocked: {err!r}")
 
-    def test_pipeline_checkpoint_is_not_used_to_gate(self):
-        """`pipeline_run__<rid>` IS persisted, but its phase vocabulary is brainstorm's INNER phases
-        (`brainstorm.PIPELINE_PHASES`: analysis/strawman/pre_mortem/…) — it has no "spec emitted" or
-        "test written" phase, so it cannot decide a code write. Proven fail-open: a checkpoint alone
-        gates nothing."""
+    def test_pipeline_checkpoint_binds_the_phase_gate_only(self):
+        """SUPERSEDED by PH-GATE.S0. `pipeline_run__<rid>` IS persisted, and its EXISTENCE now binds
+        the PHASE gate: a registered run with no approach approved is a brainstorm run, so an impl
+        write is blocked ("brainstorm in progress"). But its inner phase vocabulary
+        (`brainstorm.PIPELINE_PHASES`: analysis/strawman/…) still has no "spec emitted"/"test
+        written" phase, so it does NOT decide the spec/TDD gates — the phase gate is the only thing a
+        checkpoint alone can trigger, and only before an approach exists."""
         from mokata.brainstorm import PIPELINE_PHASES
         from mokata.govern.resume import CHECKPOINT_PREFIX
         self.assertNotIn("spec", PIPELINE_PHASES)
@@ -257,9 +259,12 @@ class TestSpecGate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
             _raw_store(d).write(CHECKPOINT_PREFIX + RUN, {"run_id": RUN, "passed": ["brainstorm"]})
-            code, _ = _hook(os.path.join(d, "src", "auth.py"), d,
-                            env={"MOKATA_SESSION_ID": RUN})
-            self.assertEqual(code, 0)                  # a checkpoint alone never blocks
+            code, err = _hook(os.path.join(d, "src", "auth.py"), d,
+                              env={"MOKATA_SESSION_ID": RUN})
+            self.assertEqual(code, 2, f"a registered brainstorm run did not gate the impl write: "
+                                      f"{err!r}")
+            self.assertIn(G.GATE_PHASE, err)              # the phase gate, not spec/tdd
+            self.assertIn("approve an approach first", err)
 
     def test_non_source_files_are_out_of_scope(self):
         with tempfile.TemporaryDirectory() as d:
@@ -592,11 +597,15 @@ class TestLatency(unittest.TestCase):
         equal to the constants they mirror — this is the pin that catches a drift."""
         from mokata.brainstorm import APPROACH_STATE_KEY
         from mokata.engine.spec_gate import SPEC_PERSISTED_GATE_ID, SPEC_STATE_KEY
+        from mokata.govern.resume import CHECKPOINT_PREFIX
         from mokata.govern.tdd import GATE_ID
+        from mokata.pipeline import PHASE_GATES
         self.assertEqual(G.GATE_TDD, GATE_ID)
         self.assertEqual(G.GATE_SPEC, SPEC_PERSISTED_GATE_ID)
+        self.assertEqual(G.GATE_PHASE, PHASE_GATES["brainstorm"].id)   # PH-GATE.S0: the backed id
         self.assertEqual(G.APPROACH_PREFIX, APPROACH_STATE_KEY + "__")
         self.assertEqual(G.SPEC_PREFIX, SPEC_STATE_KEY + "__")
+        self.assertEqual(G.CHECKPOINT_PREFIX, CHECKPOINT_PREFIX)       # PH-GATE.S0: run-registered
         self.assertEqual(G.BLOCK_EXIT, hook_cli.BLOCK_EXIT)
         self.assertEqual(T.STATE_DIRNAME, STATE_DIRNAME)
 

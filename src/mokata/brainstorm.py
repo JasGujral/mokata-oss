@@ -33,6 +33,9 @@ from .brainstorm_impact import (
     render_design_fits,
     render_impacts,
 )
+# GR-PA — the prior-art step (existing-implementations query + related-decision recall) the engine
+# holds + gates on before approval; the pure computation + render live in prior_art.py (P22).
+from .prior_art import PriorArtResult, render_prior_art, run_prior_art
 
 # The 7 pipeline phases, in order. Brainstorm is first; its handoff feeds the strawman.
 PIPELINE_PHASES = (
@@ -101,6 +104,66 @@ class Question:
                    answer=d.get("answer"))
 
 
+# --------------------------------------------------------------------------- AP-SD: decisions[]
+@dataclass
+class DecisionDeferral:
+    """AP-SD — ONE thing a decision explicitly DEFERS, and how a hook recognises it landing anyway.
+
+    This is the ONE-truth source of a spec-scope `DeferredItem`: `paths` catches the deferred work
+    landing in its own module, `markers` catches it inside an otherwise-authorized one (the SI-DEV
+    incident shape). PATH globs + LITERAL markers only — the tokens the human named — never a
+    semantic judgement of what a diff means (that is the SI-DEV boundary; no hook can decide it)."""
+
+    id: str
+    item: str = ""
+    paths: List[str] = field(default_factory=list)
+    markers: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"id": self.id, "item": self.item,
+                "paths": list(self.paths), "markers": list(self.markers)}
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "DecisionDeferral":
+        return cls(id=str(d.get("id", "")), item=str(d.get("item", "")),
+                   paths=list(d.get("paths", [])), markers=list(d.get("markers", [])))
+
+
+@dataclass
+class Decision:
+    """AP-SD — a recorded, machine-readable design decision on the approved approach (doc 85 §3:
+    a `*Decision` is a recorded human choice; P2 — what the human approved becomes machine-readable).
+
+    The model PROPOSES a decision during brainstorm; it persists ONLY through the existing gated
+    approval flow (no new write path). Once durable it is the CONTRACT the pipeline verifies against:
+    `about_code` anchors are what review's pass-1 checks the diff's blast radius against (GR.S2(m))
+    and what prior-art recall enriches from (GR-PA); `deferred` is what the spec's scope section
+    derives at emit. The shape (`id`/`statement`/`about_code`) is exactly what both dormant hooks
+    duck-type over, so a `Decision` (or its `to_dict`) drops straight into them."""
+
+    id: str
+    statement: str = ""
+    rationale_ref: str = ""
+    about_code: List[str] = field(default_factory=list)
+    deferred: List[DecisionDeferral] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"id": self.id, "statement": self.statement,
+                "rationale_ref": self.rationale_ref,
+                "about_code": list(self.about_code),
+                "deferred": [d.to_dict() for d in self.deferred]}
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "Decision":
+        return cls(
+            id=str(d.get("id", "")),
+            statement=str(d.get("statement", "")),
+            rationale_ref=str(d.get("rationale_ref", "")),
+            about_code=list(d.get("about_code", [])),
+            deferred=[DecisionDeferral.from_dict(x) for x in d.get("deferred", [])],
+        )
+
+
 @dataclass
 class Approach:
     name: str
@@ -111,6 +174,12 @@ class Approach:
     # Lens 1 (blast radius): its impact is computed over these. Empty = the impact degrades to the
     # about_code intersection only (still scores). Not a tradeoff input — pure impact seed.
     targets: List[str] = field(default_factory=list)
+    # AP-SD — the machine-readable decisions[] block (additive; empty on a pre-AP-SD approach, which
+    # is then byte-identical to today). Recorded via `BrainstormSession.propose_decision` and
+    # persisted through the existing approval flow. `schema_version` stamps the approach record for
+    # future evolution (the additive-field convention: fields are added without bumping it).
+    decisions: List[Decision] = field(default_factory=list)
+    schema_version: int = 1
 
     @property
     def has_tradeoff(self) -> bool:
@@ -119,13 +188,17 @@ class Approach:
     def to_dict(self) -> Dict[str, Any]:
         return {"name": self.name, "summary": self.summary,
                 "pros": list(self.pros), "cons": list(self.cons),
-                "targets": list(self.targets)}
+                "targets": list(self.targets),
+                "decisions": [d.to_dict() for d in self.decisions],
+                "schema_version": self.schema_version}
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Approach":
         return cls(name=d["name"], summary=d.get("summary", ""),
                    pros=list(d.get("pros", [])), cons=list(d.get("cons", [])),
-                   targets=list(d.get("targets", [])))
+                   targets=list(d.get("targets", [])),
+                   decisions=[Decision.from_dict(x) for x in d.get("decisions", [])],
+                   schema_version=int(d.get("schema_version", 1)))
 
 
 @dataclass
@@ -274,6 +347,10 @@ class Handoff:
     # design-fit the approach was approved under). None only on a legacy pre-S11a hand-off.
     impact: Optional[ApproachImpact] = None
     design_fit: Optional[DesignFitVerdict] = None
+    # GR-PA — the chosen approach's prior-art evidence, carried into the hand-off so the "extend,
+    # don't re-implement" finding + the step-ran record are durable + reviewable. None on a legacy
+    # pre-GR-PA hand-off.
+    prior_art: Optional[PriorArtResult] = None
     # DK.S0 — the domains-in-play, classified from the chosen approach's graph surface (blast
     # radius + roles), carried into the hand-off so they become a first-class SPEC CONSTRAINT
     # (persisted into emitted_spec.json). Empty on a legacy pre-DK.S0 hand-off.
@@ -292,6 +369,7 @@ class Handoff:
             "approved_at": self.approved_at,
             "impact": self.impact.to_dict() if self.impact else None,
             "design_fit": self.design_fit.to_dict() if self.design_fit else None,
+            "prior_art": self.prior_art.to_dict() if self.prior_art else None,
             "domains": list(self.domains),
         }
 
@@ -299,6 +377,7 @@ class Handoff:
     def from_dict(cls, d: Dict[str, Any]) -> "Handoff":
         imp = d.get("impact")
         fit = d.get("design_fit")
+        pa = d.get("prior_art")
         return cls(
             topic=d["topic"],
             approach=Approach.from_dict(d["approach"]),
@@ -309,6 +388,7 @@ class Handoff:
             approved_at=d.get("approved_at", ""),
             impact=ApproachImpact.from_dict(imp) if imp else None,
             design_fit=DesignFitVerdict.from_dict(fit) if fit else None,
+            prior_art=PriorArtResult.from_dict(pa) if pa else None,
             domains=list(d.get("domains", [])),
             schema_version=int(d.get("schema_version", 1)),
         )
@@ -330,6 +410,9 @@ class BrainstormSession:
         # HARD-GATE (`approve`) refuses until BOTH are on the table for the chosen approach (P21).
         self.impacts: Dict[str, ApproachImpact] = {}
         self.design_fit: Dict[str, DesignFitVerdict] = {}
+        # GR-PA — the prior-art evidence per approach name (existing implementations + related
+        # decisions). Recorded by `assess_prior_art`; the step-RAN gate reads `ran` off it.
+        self.prior_art: Dict[str, PriorArtResult] = {}
         self.chosen: Optional[Approach] = None
         self.approved: bool = False
         self.approver: Optional[str] = None
@@ -419,6 +502,20 @@ class BrainstormSession:
         self.approaches = list(approaches)
         self._log(f"propose: {[a.name for a in approaches]}")
 
+    # --- AP-SD: propose a structured decision onto an approach (the capture path) ------------
+    def propose_decision(self, approach_name: str, decision: "Decision") -> "Decision":
+        """Record a PROPOSED machine-readable decision on the named approach (P2 — the model
+        proposes; nothing is written here). It becomes durable only when the approved approach is
+        persisted through the existing approval flow (`persist_approach`) — no new write path."""
+        a = next((a for a in self.approaches if a.name == approach_name), None)
+        if a is None:
+            raise BrainstormError(
+                f"no approach named '{approach_name}'; propose decisions onto one of "
+                f"{[a.name for a in self.approaches]}")
+        a.decisions.append(decision)
+        self._log(f"propose decision: {approach_name}/{decision.id}")
+        return decision
+
     # --- TM.S11a: the two pre-spec decision lenses (blast radius + architectural fit) --------
     def assess_impacts(self, layer: Any = None, memory_items: Any = None,
                        depth: int = 2) -> Dict[str, "ApproachImpact"]:
@@ -436,6 +533,47 @@ class BrainstormSession:
         """Record a pre-computed Lens-1 impact for one approach (when the caller computed it)."""
         self.impacts[approach_name] = impact
         self._log(f"impact recorded: {approach_name}")
+
+    # --- GR-PA: the prior-art step (existing implementations + related decisions) --------------
+    def assess_prior_art(self, *, layer: Any = None,
+                         recall: Any = None, memory_store: Any = None,
+                         top_n: int = 5, decisions: Any = None) -> Dict[str, "PriorArtResult"]:
+        """Run the bounded prior-art pass for EVERY proposed approach, over each approach's `targets`,
+        and record the evidence in run state. The graph query uses the injected `layer` (semantic tier
+        when a CRG semantic graph is adopted, structural/lexical otherwise — the tier is named
+        honestly); related decisions come from `recall` (a `query -> items` callable) or, when a
+        `memory_store` is given instead, its EXISTING `recall_relevant` channel (no second channel —
+        GR.S2 boundary). Evidence-gathering: it always runs; empty findings are a first-class outcome.
+
+        `decisions` is the dormant AP-SD hook (GR.S2(m) precedent): None = recall-only; a structured
+        `decisions[]` activates about_code enrichment. Returns the per-approach map."""
+        rec = recall
+        if rec is None and memory_store is not None:
+            # the SAME tiered recall channel the rest of brainstorm uses — never a second surface.
+            rec = lambda q: [getattr(h, "item", h)                       # noqa: E731
+                             for h in memory_store.recall_relevant(q, top_k=top_n)]
+        for a in self.approaches:
+            # AP-SD wake — when the caller supplies no explicit `decisions`, each approach's OWN
+            # decisions[] enrich its recall (source == "decisions[]"). An approach with no decisions
+            # passes None, so the hook stays dormant and the pass is byte-identical to pre-AP-SD.
+            dec = decisions
+            if dec is None and a.decisions:
+                dec = a.decisions
+            self.prior_art[a.name] = run_prior_art(
+                a.name, a.targets, layer=layer, recall=rec, query=a.summary,
+                top_n=top_n, decisions=dec)
+        self._log(f"assess prior art: {sorted(self.prior_art)}")
+        return self.prior_art
+
+    def record_prior_art(self, approach_name: str, result: "PriorArtResult") -> None:
+        """Record a pre-computed prior-art result for one approach (when the caller ran the step)."""
+        self.prior_art[approach_name] = result
+        self._log(f"prior art recorded: {approach_name}")
+
+    def prior_art_ran(self, approach_name: str) -> bool:
+        """True only when the prior-art step has run for `approach_name` — the condition the bound
+        step requires before an approach can be approved (never that it found anything)."""
+        return bool(getattr(self.prior_art.get(approach_name), "ran", False))
 
     def assess_doc_freshness(self, approach_name: str, *, root: Any = ".",
                              facts: Any = None, resolve: Any = None) -> Any:
@@ -516,6 +654,11 @@ class BrainstormSession:
                                          if a.name in self.impacts]))
             lines.append(render_design_fits([self.design_fit[a.name] for a in self.approaches
                                              if a.name in self.design_fit]))
+            # GR-PA — the prior-art row beside blast radius + design fit: existing implementations
+            # ("extend, don't re-implement") + related decisions, mokata-rendered, per approach.
+            if self.prior_art:
+                lines.append(render_prior_art([self.prior_art[a.name] for a in self.approaches
+                                               if a.name in self.prior_art]))
             offer = self.deep_review_offer()
             if offer:
                 lines.append(f"· Deep review: {offer}")
@@ -532,9 +675,17 @@ class BrainstormSession:
 
     # --- the HARD-GATE ------------------------------------------------------
     def approve(self, approver: str, approach_name: str,
-                at: Optional[str] = None) -> Approach:
+                at: Optional[str] = None, *, graph_gate: Any = None,
+                prior_art_gate: Any = None) -> Approach:
         """Explicitly approve one approach. This is the human gate the whole phase
-        turns on; nothing downstream proceeds without it."""
+        turns on; nothing downstream proceeds without it.
+
+        GR.S3 — `graph_gate` is the `graph.required` verdict for the chosen approach's Lens-1 blast
+        radius (a `GraphRequiredOutcome`, computed by the caller via
+        `govern.graph_required.brainstorm_impact_gate`). When it REFUSES — the radius is degraded,
+        `graph.required` is on, and the session has no ledgered override — the approval is blocked
+        with the informative refusal, exactly as the CLI and the MCP loop enforce it. Absent (the
+        `graph.required=false` path, or a legacy caller) it is a no-op — byte-identical."""
         if not self.approaches:
             raise BrainstormGateError(
                 "cannot approve before any approaches are on the table"
@@ -556,6 +707,21 @@ class BrainstormSession:
                 "Both pre-spec decision lenses (blast radius + architectural fit) must be shown "
                 "for the chosen approach before it can be approved (P21)."
             )
+        # GR.S3 HARD-GATE — a DEGRADED blast radius is not a decision input. When `graph.required`
+        # is on (default) and the chosen approach's Lens-1 radius fell to the lexical floor, the
+        # approval is REFUSED unless a human has ledgered an `--allow-degraded` override for this
+        # session. The refusal is informative + actionable (never a stack trace); the escape keeps
+        # the degraded marking (honesty over convenience, P22).
+        if graph_gate is not None and getattr(graph_gate, "refused", False):
+            raise BrainstormGateError(graph_gate.render())
+        # GR-PA BOUND STEP — the prior-art pass must have RUN for this approach before it can be
+        # approved (a step-RAN check, not a graph-quality gate; distinct gate id per doc 85 §3). When
+        # a `prior_art_gate` is supplied and the step did not run, the approval is refused with the
+        # informative message. Absent (a legacy caller / the graph.required=false path) it is a no-op
+        # — byte-identical. A degraded/absent graph is NEVER refused here: the step still ran (GR.S3
+        # owns the degraded-radius refusal; this stage adds no duplicate refusal semantics).
+        if prior_art_gate is not None and getattr(prior_art_gate, "refused", False):
+            raise BrainstormGateError(prior_art_gate.render())
         self.chosen = chosen
         self.approved = True
         self.approver = approver
@@ -584,6 +750,8 @@ class BrainstormSession:
             # TM.S11a — the chosen approach's lenses ride into the hand-off as spec constraints.
             impact=self.impacts.get(self.chosen.name),
             design_fit=self.design_fit.get(self.chosen.name),
+            # GR-PA — the chosen approach's prior-art evidence rides along too.
+            prior_art=self.prior_art.get(self.chosen.name),
         )
 
     # --- mid-brainstorm checkpoint (Stage 50): save/restore an IN-PROGRESS session --
@@ -601,6 +769,9 @@ class BrainstormSession:
             # inputs (and the gate stays satisfied on restore).
             "impacts": {k: v.to_dict() for k, v in self.impacts.items()},
             "design_fit": {k: v.to_dict() for k, v in self.design_fit.items()},
+            # GR-PA — persist prior-art evidence so a resumed/persisted brainstorm keeps its
+            # step-ran record (the bound step stays satisfied on restore).
+            "prior_art": {k: v.to_dict() for k, v in self.prior_art.items()},
             "chosen": self.chosen.name if self.chosen else None,
             "approved": self.approved,
             "approver": self.approver,
@@ -623,6 +794,9 @@ class BrainstormSession:
                      for k, v in (d.get("impacts", {}) or {}).items()}
         s.design_fit = {k: DesignFitVerdict.from_dict(v)
                         for k, v in (d.get("design_fit", {}) or {}).items()}
+        # GR-PA — restore prior-art evidence straight into its slot (no re-derivation).
+        s.prior_art = {k: PriorArtResult.from_dict(v)
+                       for k, v in (d.get("prior_art", {}) or {}).items()}
         name = d.get("chosen")
         s.chosen = next((a for a in s.approaches if a.name == name), None) if name else None
         s.approved = bool(d.get("approved", False))
@@ -697,6 +871,15 @@ def load_approved_approach(store: Any) -> Optional[Handoff]:
     """Retrieve the persisted approved approach (the downstream constraint), or None."""
     data = store.read(APPROACH_STATE_KEY)
     return Handoff.from_dict(data) if data else None
+
+
+def load_decisions(store: Any) -> List[Decision]:
+    """AP-SD — the persisted approved approach's `decisions[]`, or [] when none (no approach, or a
+    pre-AP-SD approach that carries no block). This is the NAMED BRIDGE the review-graph docstring
+    anticipates: a review with a change passes `decisions=load_decisions(store)` and pass-1 lights
+    up; prior-art recall reads the same source. Degrade-clean — never raises."""
+    handoff = load_approved_approach(store)
+    return list(handoff.approach.decisions) if handoff is not None else []
 
 
 # --------------------------------------------------- mid-brainstorm checkpoint (Stage 50)
@@ -842,6 +1025,19 @@ its design-fit verdict are on the table. No lenses, no approval. Record both in 
 they become spec constraints; the develop/CI deviation guard stays only as the backstop. If the
 change looks high-impact (wide blast radius, or a design MISFIT), OFFER — do not run — the deep
 whole-codebase architectural review (user-invoked). mokata offers it; the user decides.
+
+## Prior art — extend, don't re-implement (a BOUND step before approval)
+Before you approve, run the PRIOR-ART pass for the chosen approach — a bound step, not a suggestion.
+Graph-query the codebase for EXISTING implementations related to the approach's symbols/terms
+(`mokata query implementers <name>` / `callers <name>`; CRG semantic search when adopted; the AST
+name-resolution floor or grep otherwise — name the tier honestly) AND recall the RELATED team
+decisions the surface touches. Surface each finding in the tradeoff table as an "existing
+`<symbol>` in `<file>` — extend?" row beside blast radius, so the human weighs reuse before the
+approach is chosen. A deviation from found prior art must be STATED, not silent. This is a step-RAN
+check: an empty result ("no prior art found via <tier>") is a first-class PASS — the gate is that you
+LOOKED, never that you found something — and a degraded/absent graph still runs the pass (GR.S3 owns
+the degraded-radius refusal; nothing new is refused here). Approving before the pass has run is
+refused.
 
 ## Design pre-mortem (resolve review-class issues IN THE PLAN)
 Once an approach is chosen and its blast radius + design-fit are weighed, run a short DESIGN

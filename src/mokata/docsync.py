@@ -420,6 +420,38 @@ def _check_symbols(lines, sections, code, facts: CodeFacts,
     return out
 
 
+def graph_symbol_resolver(layer: Any,
+                          degradation: Optional["AuditDegradation"] = None
+                          ) -> Optional[Callable[[str], bool]]:
+    """GR.S2 rider — a real symbol-existence resolver for `_check_symbols`, through the graph
+    client. Returns a `Callable[[str], bool]` ONLY when a real graph that can AUTHORITATIVELY
+    answer existence is wired (code-review-graph's `not_found` status); otherwise None.
+
+    Two None cases, deliberately different:
+      * no graph wired -> None + SILENT. No graph is the DEFAULT, never a degrade (mirrors
+        `make_graph_scorer`), so a plain docsync run on a floor repo does not print a degrade
+        banner for a check that was never meant to run.
+      * a real graph is wired but exposes no authoritative existence query -> None + the disarm
+        is recorded in `degradation`, so the audit is not read as clean when it skipped a check
+        it COULD have run.
+
+    NAMED HOOK: when mokata's typed query API gains an authoritative `exists`/`defines` kind,
+    wire it here so more backends (e.g. the AST floor) can drive the symbol-drift audit too."""
+    if layer is None or not getattr(layer, "uses_graph", False):
+        return None
+    primary = getattr(layer, "primary", None)
+    supports = getattr(primary, "supports_resolve", None)
+    if supports is None:
+        supports = hasattr(primary, "resolves")
+    if supports and hasattr(primary, "resolves"):
+        return lambda sym: primary.resolves(sym)
+    if degradation is not None:
+        degradation.note(
+            "symbol-reference drift check disarmed — the wired code graph exposes no "
+            "authoritative existence query (GR.S2 named hook: wire an `exists` query)")
+    return None
+
+
 # --------------------------------------------------------------- AUDIT (output mode a, read-only)
 def audit_text(text: str, *, path: str = "", facts: Optional[CodeFacts] = None,
                resolve: Optional[Callable[[str], bool]] = None,

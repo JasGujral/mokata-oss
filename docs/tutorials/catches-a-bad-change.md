@@ -97,8 +97,9 @@ exit: 0
 
 That's the whole idea in two commands: **RED is the *permission* to implement, not the
 prohibition.** A test file is always writable — you have to be able to write the failing test.
-Three run-state gates guard native writes — `spec-persisted`, `no-code-without-failing-test`, and
-`spec-scope` (a write outside the surface the spec authorized, or a feature you agreed *not* to
+Four run-state gates guard native writes — `approach-approval` (a run is registered but no
+approach is approved yet), `spec-persisted`, `no-code-without-failing-test`, and `spec-scope`
+(a write outside the surface the spec authorized, or a feature you agreed *not* to
 build) — and they fire **only inside an active run**: hand-editing a repo mokata isn't running is
 never policed. It is a *methodology* block, not a security one, so a human can lift it, on the
 record: `mokata gate override <gate> --reason "<why>"`.

@@ -44,7 +44,7 @@ class TestGraphVsGrepSameTypedShape(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             write_sample_repo(d)
 
-            grep_layer = KnowledgeLayer.from_router(
+            floor_layer = KnowledgeLayer.from_router(
                 _full_router({"code-review-graph": False, "serena": False,
                               "ripgrep": False}), root=d)
             graph_layer = KnowledgeLayer.from_router(
@@ -53,25 +53,27 @@ class TestGraphVsGrepSameTypedShape(unittest.TestCase):
                     {"path": "mod_a.py", "line": 14, "snippet": "compute()",
                      "symbol": "run"}]}))
 
-            self.assertFalse(grep_layer.uses_graph)
-            self.assertEqual(grep_layer.backend_name, "grep")
+            # GR.S1: on a Python repo the floor is the embedded AST floor (a floor, not the
+            # adopted graph — uses_graph stays False), preferred over grep.
+            self.assertFalse(floor_layer.uses_graph)
+            self.assertEqual(floor_layer.backend_name, "ast")
             self.assertTrue(graph_layer.uses_graph)
             self.assertEqual(graph_layer.backend_name, "code-review-graph")
 
-            grep_result = grep_layer.callers("compute")
+            floor_result = floor_layer.callers("compute")
             graph_result = graph_layer.callers("compute")
 
             # identical typed shape regardless of which backend answered
-            self.assertIsInstance(grep_result, QueryResult)
+            self.assertIsInstance(floor_result, QueryResult)
             self.assertIsInstance(graph_result, QueryResult)
             self.assertEqual(
-                {f.name for f in dataclasses.fields(grep_result)},
+                {f.name for f in dataclasses.fields(floor_result)},
                 {f.name for f in dataclasses.fields(graph_result)})
-            self.assertIsInstance(grep_result.count, int)
+            self.assertIsInstance(floor_result.count, int)
             self.assertIsInstance(graph_result.count, int)
 
-            # only the floor flags degraded
-            self.assertTrue(grep_result.degraded)
+            # GR.S1: the AST floor answers non-degraded now, like the graph
+            self.assertFalse(floor_result.degraded)
             self.assertFalse(graph_result.degraded)
 
     def test_graph_failure_degrades_to_grep_floor(self):

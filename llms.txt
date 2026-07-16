@@ -27,8 +27,9 @@ returns a `proposal_id`, and writes nothing. Only a human can mint the approval,
 terminal, in a process you are not driving:
 
 1. You call the write tool → you get back a `proposal_id` (e.g. `p-3f9a2c11b4de`). Nothing is written.
-2. You ask the user to run `mokata approve <proposal_id>` (there is deliberately no in-harness
-   approve surface — no MCP tool, no slash command).
+2. You ask the user to run `mokata approve <proposal_id>` out-of-band (there is no approve
+   slash command; an in-chat MCP approve tool exists but is opt-in, default-OFF, and prompts
+   the human on every call).
 3. You re-call the SAME tool with `proposal_id=<id>` → the write commits **once**, and the approval
    is burned.
 

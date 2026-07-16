@@ -77,6 +77,12 @@ def tiered_recall(store: Any, query: str, *, embedder: Optional[Embedder] = None
     sem: dict = {}
     if semantic and embedder is not None:
         backend = store.backend
+        # D5-rider(3) — NOT-YET-REACHABLE on any shipped config: the only backend exposing
+        # `semantic_search` is PgVectorBackend, which no shipped store selects (export-only until
+        # DB.S4 wires pgvector for real in 0.0.15). KEPT rather than deleted — this is the exact
+        # shape DB.S4 will consume, so removing it would only force DB.S4 to re-add it. Today it is
+        # exercised solely by test_r_13f_d5_rider_3 (an injected `semantic_search` backend), so the
+        # branch is covered-and-marked, never dead-and-silent.
         if hasattr(backend, "semantic_search"):
             # index-backed top-k (e.g. pgvector) — no full-store scan
             try:

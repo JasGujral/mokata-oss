@@ -25,7 +25,9 @@ SERVER_NAME = "mokata"
 @dataclass
 class ToolSpec:
     name: str
-    kind: str          # "read" | "write"
+    kind: str          # "read" | "write" | "approve" (AP-MCP: the in-chat approval act — neither
+                       # a read nor a propose-only write, so `read_tool_names`/`write_tool_names`
+                       # both exclude it and the SI.3 write-tool sweeps never touch it)
     fn: Callable[..., Any]
 
 

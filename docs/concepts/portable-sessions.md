@@ -20,8 +20,9 @@ A versioned JSON object — the bundle schema is at **v2**, and a **v1 bundle st
   basenames, so nothing machine-specific travels);
 - **`repo_fingerprint`** — a deterministic, content-free signature of the *codebase* (its top-level
   layout), used to detect a cross-codebase pull;
-- **`content_hash`** — a SHA-256 over the substantive payload (schema, kind, fingerprint, run id,
-  state) — *not* the provenance, so a re-push of the same session at a later time stays idempotent;
+- **`content_hash`** — a SHA-256 over the substantive payload — the schema, kind, fingerprint,
+  run id, and state, plus (at schema v2) the transcript, meta, and cross-repo marker — *not* the
+  provenance, so a re-push of the same session at a later time stays idempotent;
 - **`provenance`** — author, source (a repo label, never a machine path), and created timestamp;
 - **`resume`** — a small descriptor (run id, resume phase, done/total) so `list` reads well.
 

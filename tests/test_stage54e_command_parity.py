@@ -37,7 +37,7 @@ COMMANDS_DIR = os.path.join(ROOT, "src", "mokata", "templates", "commands")
 # filesystem action gated via the CLI's fail-closed read_yes_no path — its in-harness DETECT+OFFER
 # is surfaced by `session_windows` + the SessionStart briefing, which point the user at it.
 EXEMPT = {"unsetup", "harness", "route", "detect", "validate", "bootstrap",
-          "release-check", "branch-protection-check", "bench", "worktree",
+          "release-check", "branch-protection-check", "bench", "worktree", "graph",
           # SI.1 — `gate` (run-state gate status + P14 override) is exempt BY DESIGN, and this is
           # the one exemption that is a security property rather than plumbing: giving the override
           # an MCP tool or a slash command would let the MODEL clear the very gate that constrains

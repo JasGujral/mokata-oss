@@ -10,6 +10,63 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.14] — 2026-07-17
+
+**Graph mandatory + trust fixes.** The codebase graph becomes a first-class, always-on structural
+layer with an honest fallback, and several trust surfaces are tightened. No breaking changes;
+additive; no schema change; local stays the zero-config default. Requires **Python ≥ 3.10**.
+
+### Added
+
+- **Embedded stdlib-AST floor.** A zero-dependency structural backend now ships in the box: on a
+  Python repo it answers callers/callees/imports/blast-radius by name-resolution
+  (`degraded=false`) — a real floor **above** grep, not the adopted graph. Adopt a richer graph
+  with `mokata graph adopt [code-review-graph|serena]` (human-gated); `mokata graph status` reports
+  which backend actually answers today.
+- **Graph mandatory-by-default.** `settings.graph.required` defaults **true**: a *degraded*
+  (grep-floor) blast radius is **refused** as a decision input rather than letting a lexical guess
+  drive a decision. The escape is explicit and honest — `--allow-degraded` accepts the degraded
+  evidence for the session, is **TTY-reconfirmed** (a model cannot type it) and **ledgered**, and
+  the result stays marked degraded.
+- **Freshness-before-answer.** Every graph query front-runs a freshness check; a known-stale graph
+  rebuilds *before* it answers, and a rebuild failure degrades loudly to the AST floor on **current**
+  files — never stale structure.
+- **The 9th backed gate — `approach-approval`.** The idea→code jump is now physically blocked: with
+  a run registered but no approach approved, a native `Write`/`Edit` to an implementation file is
+  refused (exit 2) by the gate-guard hook. It is the 4th run-state gate, overridable like the others
+  (named, reasoned, session-scoped, ledgered).
+- **Opt-in in-chat approve.** An `mcp__mokata__approve` tool can be enabled
+  (`settings.approvals.in_chat`, **default-OFF**; enabling is itself a human-gated, ledgered config
+  write). It performs the same single-use, content-hash-bound, expiring approval as `mokata approve`,
+  never rides the `mcp__mokata__*` auto-grant (setup writes a `permissions.ask` entry so the harness
+  prompts on **every** call), and is ledgered `actor="chat-relayed"`. Out of the box the model still
+  cannot mint its own consent.
+- **Typed approach `decisions[]`.** An approved approach carries machine-readable decisions
+  (statement · rationale · `about_code` anchors · deferred); at spec emit the deferred scope
+  **derives** from `decisions[].deferred` (one truth, never hand-written twice), and review's first
+  pass compares the diff's actual reach against the declared anchors (undeclared reach is a
+  divergence finding). A **prior-art bound step** now gates brainstorm: approach approval is refused
+  unless the prior-art step actually ran.
+- **Setup one-shots ledgered + reset tombstone.** The six former setup one-shot writers sit in a
+  **ledgered** register (TTY consent + audit record), the `KNOWN_BYPASS` register is **empty** and a
+  sweep fails if any ungated durable writer ever appears, and `mokata reset` writes a user-scoped
+  tombstone that survives `.mokata`'s removal.
+
+### Changed
+
+- **Session-true statusline + run lifecycle.** The active-run badge resolves **session-aware** (a
+  fresh session never wears another session's run); a **shipped** run retires from the active badge
+  and from `mokata progress` while a spec-emitted-but-unshipped run stays active — nothing is
+  deleted, and explicit `run_id` views + resume still work.
+
+### Fixed
+
+- Simulated exec batches now report **zero** actual token spend and a `simulated` (never green)
+  review verdict, instead of a placeholder estimate or a false pass.
+- `offer_text_once` never raises; the tiered-semantic retrieval branch is kept and marked; and the
+  `reset` propose→approve→redeem round trip no longer crashes — the delete is deferred past the gate
+  so an approved record is never orphaned.
+
 ## [0.0.13] — 2026-07-14
 
 **Correctness & Trust — the seatbelt is now enforced, not advertised.** Every change in this release

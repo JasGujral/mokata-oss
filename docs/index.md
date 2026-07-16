@@ -61,7 +61,7 @@ This site follows the [Diátaxis](https://diataxis.fr/) model:
 | Part | Area | Highlights |
 |---|---|---|
 | A | Spine | manifest, capability router, detection + graceful degradation, bootstrap, `init` |
-| B | Knowledge | adopted code graph + grep floor, typed queries, incremental index + staleness, drift anchors |
+| B | Knowledge | adopted code graph + embedded AST floor (grep beneath), typed queries, incremental index + staleness, drift anchors |
 | C | Memory | persistent / decision / episodic, self-healing (surfacing), pluggable backends, consolidation |
 | D | Engine | 7-phase pipeline, provable completeness gate, AC-mapper, pre-mortem, spec-compliance, dry-run |
 | E | TDD & execution | RED-before-GREEN, model routing, bug/debug/optimize engines, execution-mode selector |

@@ -25,6 +25,14 @@ COMPLETENESS_PHASE = "completeness_gate"
 GATE = PHASE_GATES[COMPLETENESS_PHASE]
 
 
+# AP-SD — the named, non-blocking warning when the approved approach records no structured
+# decisions[]. Adoption is gradual: the gate PASSES, but names the missing contract so a run is
+# nudged toward it rather than silently proceeding without it (doc 85 §3 naming).
+WARN_NO_DECISIONS = ("no structured decisions[] on the approved approach — the diff has no "
+                     "machine-readable contract for review to verify against (adoption is gradual; "
+                     "record decisions in brainstorm to enable it)")
+
+
 @dataclass
 class GateResult:
     passed: bool
@@ -36,6 +44,9 @@ class GateResult:
     refinements_present: bool = False
     refinements: Optional[str] = None         # Stage 26 — approved refinement set label
     gate_id: str = GATE.id
+    # AP-SD — non-blocking advisories that do NOT flip `passed` (e.g. the approved approach carries
+    # no decisions[]). Empty on the happy path; named so a warning is legible, never a silent gap.
+    warnings: List[str] = field(default_factory=list)
 
     def render(self) -> str:
         head = "PASS" if self.passed else "BLOCK"
@@ -46,6 +57,8 @@ class GateResult:
         ]
         if self.unmapped_ids:
             lines.append(f"  unmapped: {', '.join(self.unmapped_ids)}")
+        for w in self.warnings:
+            lines.append(f"  ⚠ {w}")
         if self.approach_present:
             lines.append(f"  approved approach: {self.approach}")
         elif self.refinements_present:
@@ -94,12 +107,20 @@ def run_completeness_gate(spec: Spec, tests: List[TestRef],
         reason = (f"all {len(spec.criteria)} acceptance criteria map to tests "
                   "(RED-before-GREEN traceability)")
 
+    # AP-SD — WARN (never block) when an approved approach carries no structured decisions[]. Scoped
+    # to when an approach is actually present: a standalone/refine run has no approach to hang
+    # decisions on, so it is not nagged. The verdict stays exactly as computed above.
+    warnings: List[str] = []
+    if approach_present and not getattr(handoff.approach, "decisions", None):
+        warnings.append(WARN_NO_DECISIONS)
+
     return GateResult(
         passed=passed, reason=reason, map_result=map_result,
         approach=approach, approach_present=approach_present,
         unmapped_ids=list(map_result.unmapped_ids),
         refinements_present=refinements is not None,
         refinements=refinements.label if refinements is not None else None,
+        warnings=warnings,
     )
 
 

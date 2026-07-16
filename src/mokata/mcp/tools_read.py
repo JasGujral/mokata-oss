@@ -35,9 +35,11 @@ __all__ = [
 def query(path: str = ".", kind: str = "callers", target: str = "",
           depth: int = 2) -> Dict[str, Any]:
     """Run a structural code query (graph backend if present, else the grep floor). `kind`
-    is one of callers/callees/implementers/imports/blast_radius. Read-only."""
+    is one of callers/callees/implementers/imports/blast_radius, or `semantic` when an adopted
+    graph exposes a semantic index (GR.S2; degrades honestly on the floor). Read-only."""
+    from ..knowledge.layer import run_query
     layer = KnowledgeLayer.from_surface(_surface(path))
-    return layer._run(kind, target, depth=depth).to_dict()
+    return run_query(layer, kind, target, depth=depth).to_dict()
 
 
 @_tool("recall", "read")
@@ -460,7 +462,7 @@ def session_windows(path: str = ".") -> Dict[str, Any]:
 @_tool("session_save", "read")
 def session_save(path: str = ".", brainstorm: Optional[Dict[str, Any]] = None,
                  passed: Optional[list] = None, run_id: str = "",
-                 turn: bool = False) -> Dict[str, Any]:
+                 turn: bool = False, register: bool = False) -> Dict[str, Any]:
     """SS.S0 — snapshot THIS session's full in-flight state so an interrupted brainstorm/pipeline
     is recoverable. UNGATED by design: a local save is the user's own transient state (P2-exempt);
     the human gate sits at the SHARE boundary (`session_push`), NOT here — so there is no
@@ -481,19 +483,38 @@ def session_save(path: str = ".", brainstorm: Optional[Dict[str, Any]] = None,
     `SessionFlow.turn()` (one atomic write, no gate/checkpoint), fired after each answered Q&A turn
     so a kill −9 loses at most the single in-flight turn. The default (`turn=False`) is byte-for-byte
     the SS.S1 coarse checkpoint; `passed`/`run_id` are ignored on the turn path (a turn is
-    brainstorm-only)."""
+    brainstorm-only).
+
+    RUN-REG — `register=True` REGISTERS this run (writes its `pipeline_run__<rid>` checkpoint if
+    absent) as the brainstorm protocol's FIRST step, so a run driven conversationally is tracked
+    from the start: `progress` reports it, `spec` can attach, and the phase gate has state to bind
+    on. Idempotent and non-destructive; the result carries `registered: <run_id>`."""
     from ..session_flow import SessionFlow
-    flow = SessionFlow(_surface(path))
+    surface = _surface(path)
+    flow = SessionFlow(surface)
+    # RUN-REG — `register=True` is the brainstorm protocol's FIRST step: it REGISTERS this run (a
+    # `pipeline_run__<rid>` checkpoint) so conversational execution cannot silently bypass tracking.
+    # Rides the existing write path, idempotent, and never resets a run already past its first gate.
+    registered = None
+    if register:
+        from ..session_save import register_run
+        registered = register_run(surface, run_id=run_id or None)
     if turn:
         res = flow.turn(brainstorm or {})
     else:
         res = flow.checkpoint(
             brainstorm=brainstorm, passed=passed, run_id=run_id or None, moment="session_save")
     if res is None:
-        return {"ok": True, "empty": True, "degraded": True,
-                "message": "local state persist degraded (see the warning) — your work is not "
-                           "blocked; retry once the disk/permissions recover"}
-    return res.to_dict()
+        out = {"ok": True, "empty": True, "degraded": True,
+               "message": "local state persist degraded (see the warning) — your work is not "
+                          "blocked; retry once the disk/permissions recover"}
+        if registered:
+            out["registered"] = registered
+        return out
+    out = res.to_dict()
+    if registered:
+        out["registered"] = registered
+    return out
 
 
 @_tool("plan_list", "read")

@@ -35,11 +35,12 @@ from . import MOKATA_DIR, MANIFEST_FILENAME, package_data_root
 # Stage 3d.1: the shared MCP name + Claude config-path resolution live in the neutral
 # `harness_paths` leaf so `mcp_admin` can depend on THEM instead of on this module (which
 # broke the mcp_admin ↔ harness_setup cycle). Re-exported below for back-compat importers.
-from .harness_paths import (MCP_SERVER_NAME, MCP_TOOL_PERMISSION,
-                            claude_mcp_config_path, scope_base)
+from .harness_paths import (MCP_APPROVE_TOOL_ASK, MCP_SERVER_NAME,
+                            MCP_TOOL_PERMISSION, claude_mcp_config_path,
+                            scope_base)
 # Stage 3d.1: cycle gone → the `mcp_admin` import that used to be lazy (below, in
 # `setup_harness`) is now a plain module-level import.
-from .mcp_admin import status_lines
+from .mcp_admin import parity_lines, status_lines
 from .errors import MokataError
 
 # Stage 54b — where the original statusLine is stashed when mokata composes over a user's
@@ -103,6 +104,10 @@ HOOK_COMMAND = "mokata-hook"
 #                  known, documented hole — closing it needs command parsing, not a wider matcher).
 HOOK_PRETOOL_MATCHER = "Write|Edit|MultiEdit|Bash"
 HOOK_GATE_MATCHER = "Write|Edit|MultiEdit|NotebookEdit"
+#   dirty-track  — GR.S4 PostToolUse ASYNC OBSERVABILITY hook. File-mutation tools only (it
+#                  records the written PATH into the graph dirty-set). NEVER blocks (exit 0
+#                  always) — it is not a security lane; the sync PreToolUse blockers are untouched.
+HOOK_DIRTY_MATCHER = "Write|Edit|MultiEdit|NotebookEdit"
 
 
 def repo_root() -> Path:
@@ -201,7 +206,7 @@ class SetupPlan:
 
 # The hook scripts (kept as standalone shims) map to `mokata-hook` subcommands.
 _HOOK_SUBCOMMAND = {"session_start.py": "session-start", "secret_guard.py": "secret-guard",
-                    "gate_guard.py": "gate-guard"}
+                    "gate_guard.py": "gate-guard", "dirty_track.py": "dirty-track"}
 
 
 def _hook_command(script: str) -> str:
@@ -295,6 +300,13 @@ def plan_setup(
                  "matcher": HOOK_PRETOOL_MATCHER},
                 {"command": _hook_command("gate_guard.py"),
                  "matcher": HOOK_GATE_MATCHER},
+            ],
+            # GR.S4 — the ASYNC OBSERVABILITY lane: record touched paths for the read-time graph
+            # freshness contract. Exits 0 always; the sync PreToolUse security blockers above are
+            # untouched.
+            "PostToolUse": [
+                {"command": _hook_command("dirty_track.py"),
+                 "matcher": HOOK_DIRTY_MATCHER},
             ],
         }
 
@@ -390,6 +402,9 @@ def render_setup_plan(plan: SetupPlan) -> str:
         lines.append(f"  {t.settings_path}")
         lines.append(f"  (enabledMcpjsonServers += {MCP_SERVER_NAME}; "
                      f"permissions.allow += {MCP_TOOL_PERMISSION}; opt out with --no-grant)")
+        lines.append(f"  (permissions.ask += {MCP_APPROVE_TOOL_ASK} — the in-chat approve tool is "
+                     "NEVER auto-granted; Claude Code prompts you on every approve call even with "
+                     "the wildcard above. AP-MCP, doc 85 D26 amendment.)")
     if (plan.with_hooks and plan.harness == "claude" and t.settings_path is not None
             and _statusline_setting_on(plan.root)):
         lines.append("")
@@ -537,8 +552,13 @@ def mcp_install(scope: str, root: str = ".", home: Optional[str] = None,
     if targets.mcp_path is None:                       # pragma: no cover - claude always auto
         raise SetupError("the claude harness has no auto-wired MCP config path.")
     _merge_mcp(targets.mcp_path, resolved_mcp_command())
+    touched = [str(targets.mcp_path)]
     if grant and targets.settings_path is not None:
         _merge_grant(targets.settings_path)
+        touched.append(str(targets.settings_path))
+    # KB.S1 — the repair-install writes .mcp.json / settings.json through `_write_json` too; record
+    # it on the repo ledger like the setup flow (P7).
+    _record_setup_ledger(root, "mcp_install", touched, scope=scope)
     return targets.mcp_path
 
 
@@ -622,7 +642,13 @@ def _merge_grant(path: Path) -> None:
 
       * ``enabledMcpjsonServers`` += ``"mokata"`` — surgically trust mokata's project server
         (NOT ``enableAllProjectMcpServers``, which would trust every project's server);
-      * ``permissions.allow`` += ``"mcp__mokata__*"`` — unioned into any existing allow list.
+      * ``permissions.allow`` += ``"mcp__mokata__*"`` — unioned into any existing allow list;
+      * ``permissions.ask``   += ``"mcp__mokata__approve"`` — AP-MCP (doc 85 §5 D26 amendment):
+        the in-chat approve tool must NEVER ride the allow-wildcard. The wildcard already MATCHES
+        ``mcp__mokata__approve``; Claude Code evaluates deny → ask → allow, so this explicit ``ask``
+        entry overrides it and forces a human PROMPT on every approve call, even when the tool is
+        opted on. Written UNCONDITIONALLY alongside the allow grant so the wildcard can never
+        silently cover the approve tool (the two are inseparable — see the grant-exclusion test).
 
     Idempotent (re-running converges) and reversible (``_strip_grant`` removes exactly these)."""
     data = _load_json(path)
@@ -643,6 +669,14 @@ def _merge_grant(path: Path) -> None:
     if MCP_TOOL_PERMISSION not in allow:
         allow.append(MCP_TOOL_PERMISSION)
     perms["allow"] = allow
+    # AP-MCP grant-exclusion: the explicit prompt on the approve tool, written whenever the
+    # allow-wildcard is (they are inseparable — the wildcard covers approve without this).
+    ask = perms.get("ask")
+    if not isinstance(ask, list):
+        ask = []
+    if MCP_APPROVE_TOOL_ASK not in ask:
+        ask.append(MCP_APPROVE_TOOL_ASK)
+    perms["ask"] = ask
     data["permissions"] = perms
 
     _write_json(path, data)
@@ -665,6 +699,7 @@ def _strip_grant(data: Dict) -> bool:
 
     perms = data.get("permissions")
     if isinstance(perms, dict):
+        perms_changed = False
         allow = perms.get("allow")
         if isinstance(allow, list) and MCP_TOOL_PERMISSION in allow:
             kept = [a for a in allow if a != MCP_TOOL_PERMISSION]
@@ -672,6 +707,17 @@ def _strip_grant(data: Dict) -> bool:
                 perms["allow"] = kept
             else:
                 perms.pop("allow", None)
+            perms_changed = True
+        # AP-MCP: remove the explicit approve prompt symmetrically (the mirror of `_merge_grant`).
+        ask = perms.get("ask")
+        if isinstance(ask, list) and MCP_APPROVE_TOOL_ASK in ask:
+            kept_ask = [a for a in ask if a != MCP_APPROVE_TOOL_ASK]
+            if kept_ask:
+                perms["ask"] = kept_ask
+            else:
+                perms.pop("ask", None)
+            perms_changed = True
+        if perms_changed:
             if perms:
                 data["permissions"] = perms
             else:
@@ -753,6 +799,35 @@ def _write_command_file(harness: str, src: Path, commands_dir: Path, name: str) 
 
 
 # --------------------------------------------------------------------------------------
+# Audit-ledger record (KB.S1)
+# --------------------------------------------------------------------------------------
+
+def _record_setup_ledger(root: str, action: str, files, *, actor: str = "cli",
+                         removed=None, **extra) -> None:
+    """Record a setup/unsetup durable write on the REPO's audit ledger (KB.S1 / P7: every durable
+    write leaves a record). These flows keep their existing bespoke human-at-TTY consent; this adds
+    only the record — the raw committers (`_write_json`, `_write_command_file`, `write_skill_files`,
+    `prune_orphan_skills`) are recorded here, at the flow that drives them, on the repo ledger.
+
+    Names the touched PATHS only — never their contents (mokata's own scaffolding: command
+    templates, SKILL.md, .claude/settings.json, .mcp.json — not user content, so not content
+    review). Best-effort: a ledger IO failure never breaks the wiring."""
+    try:
+        from .govern.ledger import AuditLedger
+        mokata_dir = os.path.join(root, MOKATA_DIR)
+        rec: Dict = {"action": action,
+                     "files": sorted(str(f) for f in files), "actor": actor}
+        if removed:
+            rec["removed"] = sorted(str(f) for f in removed)
+        rec.update(extra)
+        AuditLedger.from_mokata_dir(mokata_dir).record("setup", **rec)
+    except OSError:
+        # Non-fatal (the `user_prefs` philosophy): the wiring is already on disk; a ledger that
+        # can't be written on a broken FS never blocks setup/unsetup.
+        pass
+
+
+# --------------------------------------------------------------------------------------
 # Apply
 # --------------------------------------------------------------------------------------
 
@@ -802,6 +877,7 @@ def apply_setup(plan: SetupPlan, *, assume_yes: bool = False, force: bool = Fals
     # from it, so the tree matches the curated set exactly (users stop seeing old/removed skills
     # after an update). Marker-guarded: a user's own skill is NEVER removed. `plan.skill_names`
     # is the set we keep (the intended project set — empty when the plugin is the sole source).
+    pruned: List[str] = []
     if t.skills_dir is not None:
         from .agent_skills import installed_skill_names, prune_orphan_skills
         # Keep BOTH the pipeline skills just written AND the shipped domain skills just copied — a
@@ -809,6 +885,7 @@ def apply_setup(plan: SetupPlan, *, assume_yes: bool = False, force: bool = Fals
         # would delete it right after install.
         for p in prune_orphan_skills(t.skills_dir, installed_skill_names()):
             touched.append(str(p))
+            pruned.append(str(p))
 
     # 3. MCP server (auto-registered only where the harness supports it; else manual).
     # Stage 3b.3: claude registers the RESOLVED absolute command (the SAME resolver as
@@ -840,6 +917,11 @@ def apply_setup(plan: SetupPlan, *, assume_yes: bool = False, force: bool = Fals
         _merge_grant(t.settings_path)
         if str(t.settings_path) not in touched:
             touched.append(str(t.settings_path))
+
+    # KB.S1 — one batched record of the whole apply on the repo ledger (commands, skills, MCP /
+    # settings merges, prunes). Names the paths, never their contents.
+    _record_setup_ledger(plan.root, "setup", touched, removed=pruned,
+                         harness=plan.harness, scope=plan.scope, profile=plan.profile)
 
     return touched
 
@@ -907,6 +989,13 @@ def setup_harness(
             _connected, lines = status_lines(root=root, home=home)
             emit("")
             for line in lines:
+                emit(line)
+            # B-VER — version-parity preventive check. CONNECTED above proves the server is
+            # REACHABLE; this proves it serves the SAME VERSION as the CLI that just wrote the
+            # registration (probing the exact command in the file just written), and sweeps for
+            # scope/plugin shadowing. Loud-only: a clean MATCH emits nothing (setup stays
+            # byte-identical). Additive + fail-open — the probe NEVER gates setup success.
+            for line in parity_lines(root=root, home=home):
                 emit(line)
     else:
         emit(f"Native surface: {_HARNESS_NATIVE_NOTE[harness]}.")
@@ -1071,6 +1160,12 @@ def unsetup_harness(
             return UnsetupResult(removed=[], plan=plan, aborted=True,
                                  message="aborted by user")
     removed = apply_unsetup(plan)
+    # KB.S1 — record the unsetup removal on the repo ledger (P7). This is where the setup/unsetup
+    # path's `prune_orphan_skills` + `_write_or_remove_json` deletions are audited; names the
+    # removed paths only. The repo's .mokata config is left intact by unsetup (only the harness
+    # wiring is removed), so the ledger survives to carry the record.
+    _record_setup_ledger(root, "unsetup", [], removed=removed, actor="cli",
+                         harness=harness, scope=scope)
     emit("")
     emit(f"removed mokata wiring for {harness} ({scope} scope).")
     return UnsetupResult(removed=removed, plan=plan, message="ok")

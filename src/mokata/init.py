@@ -111,7 +111,31 @@ class InitPlan:
                 fh.write(DEFAULT_GITIGNORE)
             written.append(self.gitignore_path)
 
+        # KB.S1 — leave an audit-ledger record of the bootstrap write (P7: every durable write
+        # leaves a record). The BOOTSTRAP ORDERING answer: init runs before any ledger exists, so
+        # the ledger's own creation IS its first entry. `from_mokata_dir` makes
+        # .mokata/temp_local/audit/ — which the .mokata dir this method just created can now hold —
+        # so the record can land the moment the files are on disk. One batched record NAMING the
+        # files (never their contents — bootstrap scaffolding, not content review).
+        self._record_bootstrap(written)
         return written
+
+    def _record_bootstrap(self, written: List[str]) -> None:
+        """Record init's writes on the repo's audit ledger (KB.S1). Best-effort by design: a
+        ledger IO failure must never break the bootstrap that just wrote a valid config (the
+        `user_prefs`/`record_graph_decline` philosophy — the record is non-fatal). Names paths +
+        the profile only; carries no file contents or secrets."""
+        try:
+            from .govern.ledger import AuditLedger
+            mokata_dir = os.path.join(self.root, MOKATA_DIR)
+            AuditLedger.from_mokata_dir(mokata_dir).record(
+                "setup", action="init", profile=self.profile,
+                files=sorted(written), actor="cli")
+        except OSError:
+            # A ledger record that can't land is non-fatal — the config is already written and
+            # valid; worst case one bootstrap goes unrecorded on a broken FS (which would have
+            # failed the manifest write first anyway).
+            pass
 
 
 @dataclass

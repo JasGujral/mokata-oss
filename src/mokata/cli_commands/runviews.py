@@ -41,6 +41,16 @@ def cmd_progress_mark(args: argparse.Namespace) -> int:
         run_id = find_active_run(surface.state)     # reuse the existing run identity
         ProgressLog.from_surface(surface).append_event(
             STAGE_ENTER, args.stage, run_id=run_id)
+        # B-LIFE — entering `ship` is the run's terminal END-OF-RUN signal: stamp the checkpoint's
+        # `completed_at` (once, additive, run-state class) so a finished run is reported as
+        # finished-THEN, not current-NOW. Best-effort: a stamp failure never blocks recording the
+        # transition. Keyed on SHIP (not the emit checkpoint) — a spec-emitted run is AT develop.
+        if args.stage == "ship" and run_id:
+            try:
+                from ..govern.resume import PipelineCheckpoint
+                PipelineCheckpoint(surface.state, run_id).mark_completed()
+            except Exception:
+                pass
         # MS.S2 — a stage transition is a natural touchpoint to refresh this window's registry
         # entry (its current phase). Degrade-clean: registry upkeep never breaks recording a stage.
         try:

@@ -300,15 +300,25 @@ current stale files.
 Scan `@lat` anchors and flag concept drift. Exit 1 on drift (gate-usable), exit 0 when
 clean or inactive (degrades when no anchors/registry).
 
-### `mokata spec-check --symbols <a,b> [--files <x,y>] [--phase <p>] [--yes]`
+### `mokata graph`
+Adopt or inspect the code graph. `mokata graph adopt [code-review-graph|serena]` (default
+`code-review-graph`) pins a real structural graph into the manifest through the human gate (the
+embedded AST floor stays the fallback, so adoption is recommended, never required). `mokata graph
+status` reports which backend actually answers today (graph or floor), and whether semantic
+search is available.
+
+### `mokata spec-check --symbols <a,b> [--files <x,y>] [--text <desc>] [--phase <p>] [--allow-degraded] [--reason <why>] [--yes]`
 **Regression guard (Stage 37).** Cross-check a change's touch-set against the **saved specs**
 (emitted spec + archive) and **decision memory**; the touch-set is **graph-expanded** so a spec
 about an impacted caller is caught. On a hit it surfaces the conflict and routes it through the
 **deviation gate**: exit 1 (BLOCKED) until you confirm with `--yes` (amend/supersede) or re-plan;
 the conflict **and** resolution are logged. Exit 0 with no conflict. **Degrade-clean:** no saved
 specs ⇒ a no-op (no false alarm); no code graph ⇒ a lexical/file-overlap check that says so. Only
-the touch-set is checked (frugal). (MCP: `spec_check`, propose-only — `blocked` without
-`confirm`.)
+the touch-set is checked (frugal). **`--allow-degraded` (GR.S3):** with `graph.required` on (the
+default), a touch-set that fell to the grep floor is refused as decision input; `--allow-degraded`
+explicitly accepts the degraded evidence for the session — TTY-reconfirmed, ledgered, and the
+result stays marked degraded — with `--reason <why>` recording why. (MCP: `spec_check`,
+propose-only — `blocked` without `confirm`.)
 
 ### `mokata ci-check [--files <a,b>] [--base <ref>] [--symbols <s,…>] [--comment-file <p>] [--no-fail] [--ascii]`
 **mokata as a CI / PR check (Stage 58).** Runs two gates over a pull request's **changed files**

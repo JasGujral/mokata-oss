@@ -80,11 +80,12 @@ block. See [AC traceability](knowledge.md) and the [governance model](governance
 ### The run-state gates (enforced on native writes)
 
 The three above are **phase** gates: they govern the engine as it runs. A separate, smaller set —
-the **run-state gates** — governs the *code you write between the phases*, enforced on the
+the **four run-state gates** — governs the *code you write between the phases*, enforced on the
 harness's native `Write`/`Edit` by the **`gate-guard`** hook:
 
 | Gate | Blocks a native write to an implementation file when… |
 |---|---|
+| `approach-approval` | a run is registered but **no approach is approved** — a native implementation write before an approved approach is blocked |
 | `spec-persisted` | an approach is approved for this run but **no spec is emitted** |
 | `no-code-without-failing-test` | the spec is emitted but **no failing test is on record** |
 | `spec-scope` | the write falls **outside the spec's authorized surface**, spells a **deferred** marker, or a **spec amend is in progress** |

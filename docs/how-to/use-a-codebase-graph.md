@@ -2,9 +2,20 @@
 
 mokata can answer **structural** questions about your code — who calls a function, who
 implements an interface, what the blast radius of a change is — by orchestrating a codebase
-graph tool. When no graph is wired it runs on a **grep floor** (lexical, dependency-free):
-safe and always available, just not structural. This guide shows how to tell which you're
-on and how to wire a real graph.
+graph tool. There are three tiers, tried in order:
+
+1. an **adopted graph** (`code-review-graph` / `serena` / an external Neo4j) — full,
+   cross-language structural precision;
+2. the **embedded stdlib-AST floor** — ships with mokata, zero-dependency, answers structural
+   queries **cleanly (`degraded=False`)** on Python out of the box;
+3. the **grep floor** — the universal lexical emergency floor beneath everything, marked
+   `degraded=True`.
+
+**Graph is mandatory-by-default in 0.0.14.** `settings.graph.required` defaults to **true**, so
+mokata will *refuse to present a degraded (grep-floor) blast radius as decision input* — you
+either adopt a real graph or explicitly accept the degraded evidence for the session (see
+[Graph is mandatory-by-default](#graph-is-mandatory-by-default) below). This guide shows how to
+tell which tier you're on and how to wire a real graph.
 
 ## Which am I on?
 
@@ -21,6 +32,32 @@ structural queries, install a graph tool (code-review-graph or serena) and wire 
 `mokata init --profile full`, or add it via `mokata config set tools.<graph>...` / the manifest.
 ```
 
+> On a Python repo the embedded **AST floor** answers structural queries cleanly even while this
+> hint still reads "grep floor" — the hint names only the *adopted* graph. `mokata graph status`
+> is the precise report of which backend actually answers today.
+
+## Graph is mandatory-by-default
+
+`settings.graph.required` defaults to **true**. When a decision input — a Lens-1 blast radius, a
+`spec-check` touch-set, a domain classification — resolves only to the **grep floor** (degraded),
+mokata **refuses it** rather than letting a lexical guess drive a decision. You get two roads out:
+
+- **Adopt a real graph** — `mokata graph adopt [code-review-graph|serena]` (default
+  `code-review-graph`) pins it into the manifest through the human gate. The embedded AST floor
+  stays the fallback, so adoption is *recommended, never required*.
+- **Accept the degraded evidence for this session** — pass `--allow-degraded` (e.g. on
+  `mokata spec-check`). It is **TTY-reconfirmed** (a model cannot type it), **session-scoped**,
+  and **ledgered**, and the result stays marked degraded — with `--reason "<why>"` recorded.
+
+Inspect the live state any time:
+
+```bash
+mokata graph status    # which backend actually answers today (graph / AST floor / grep), degrade-clean
+```
+
+The AST floor answering `degraded=False` on Python is **not** a degraded state — it is only the
+*grep* floor that trips the `graph.required` refusal.
+
 ## Wire a graph
 
 1. **Install** a supported graph tool — `code-review-graph` or `serena` (each is an external
@@ -28,7 +65,7 @@ structural queries, install a graph tool (code-review-graph or serena) and wire 
 2. **Add it to the project** — either start from a profile that wires the full chain:
 
    ```bash
-   mokata init --profile full     # wires code-review-graph → serena → ripgrep → grep
+   mokata init --profile full     # wires code-review-graph → serena → ast → ripgrep → grep
    ```
 
    or point the manifest at it / set a custom endpoint (Stage 24A config):
@@ -81,8 +118,9 @@ mokata config set capabilities.code_graph.fallback '["neo4j","ripgrep","grep"]'
 ```
 
 Confirm with `mokata status` — you should see *code graph active (neo4j)*. If the driver is
-missing, the env vars are unset, or the DB is unreachable, mokata silently stays on the grep
-floor instead (see [degrade-to-grep](#degrade-to-grep-is-safe) below) — wiring is never a hard
+missing, the env vars are unset, or the DB is unreachable, mokata drops to the next tier instead
+(the embedded AST floor on a Python repo, grep beneath — see
+[Degrade is honest, not silent](#degrade-is-honest-not-silent) below) — wiring is never a hard
 failure.
 
 ### 3 & 4. Keep it fresh — `mokata index`, then `mokata lat-check`
@@ -137,13 +175,21 @@ Wire a real graph tool (above) for precise, cross-language structural answers; t
 always there underneath so the queries never hard-fail on a stack the graph tool doesn't cover.
 An unknown language falls back to **generic identifier matching** (degrade-clean, no crash).
 
-## Degrade-to-grep is safe
+## Degrade is honest, not silent
 
-If the graph tool is absent or errors mid-query, mokata **falls back to the grep floor**
-rather than failing — the same query shape, answered lexically, marked degraded. This holds
-for an external DB too: no `neo4j` driver, no `NEO4J_*` env, or an unreachable Neo4j ⇒ mokata
-quietly runs on the grep floor and your `mokata query …` / `index` / `lat-check` commands all
-still work. You never lose the ability to ask; you only lose structural precision until a graph
-is wired. See
+If a real graph is absent or errors mid-query, mokata degrades **loudly and in order** — never
+to stale data. On a Python repo the **embedded AST floor** carries the structural queries cleanly
+(`degraded=False`); only when even that can't answer (a zero-Python repo, or non-Python files)
+does it fall to the **grep floor**, marked degraded. A graph rebuild failure answers from the AST
+floor on *current* files, never from a stale graph. This holds for an external DB too: no `neo4j`
+driver, no `NEO4J_*` env, or an unreachable Neo4j ⇒ mokata drops to the next tier and your
+`mokata query …` / `index` / `lat-check` commands all still work.
+
+The one place degrade is **not** waved through: a *grep-floor* result offered as **decision
+input** (a blast radius, a `spec-check` touch-set, a domain classification). With
+`graph.required` on (the default) that is **refused** until you adopt a graph or accept it for
+the session with `--allow-degraded` — see
+[Graph is mandatory-by-default](#graph-is-mandatory-by-default). You never lose the ability to
+*ask*; you only can't let a lexical guess silently drive a decision. See
 [the knowledge layer](../concepts/knowledge.md) and
 [configure a profile](configure-a-profile.md).

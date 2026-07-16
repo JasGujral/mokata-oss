@@ -28,6 +28,15 @@ MCP_SERVER_NAME = "mokata"
 # approval-loop hang). The server segment must be literal; only the trailing tool is wild.
 MCP_TOOL_PERMISSION = f"mcp__{MCP_SERVER_NAME}__*"
 
+# AP-MCP (doc 85 §5 D26 amendment): the in-chat `approve` tool must NEVER ride the auto-grant. The
+# wildcard above ALREADY matches `mcp__mokata__approve`, so silence would let the model's approve
+# call sail through un-prompted — re-opening the exact hole SI.3 closed. Claude Code evaluates
+# deny → ask → allow, so this EXPLICIT `permissions.ask` entry overrides the allow-wildcard and
+# forces a human prompt on EVERY approve call. `ask` (not `deny`) is deliberate: `deny` would block
+# the opt-in tool outright; `ask` is the strongest rule that still lets the human say yes in-flow.
+MCP_APPROVE_TOOL = f"mcp__{MCP_SERVER_NAME}__approve"
+MCP_APPROVE_TOOL_ASK = MCP_APPROVE_TOOL
+
 
 def scope_base(scope: str, root: str, home: Optional[str] = None) -> Path:
     """The base directory a (scope) choice resolves under: the project ``root`` for the

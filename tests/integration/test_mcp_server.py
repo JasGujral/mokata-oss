@@ -50,6 +50,10 @@ EXPECTED_WRITE = {"remember", "import_stack", "reset", "apply_proposal", "init",
                   "audit_share",                      # Stage 71 — team audit shared publish (gated)
                   "spec_emit",                        # SI-DEV.0 — THE spec-emit surface (gated)
                   "spec_amend"}                       # SI-DEV — the forced scope regression (gated)
+# AP-MCP (doc 85 §5 D26 amendment): the in-chat approve tool is its OWN kind — neither a read nor
+# a propose-only write — so it is excluded from both name lists (and from the SI.3 write-tool
+# sweeps). Default-OFF opt-in; see test_ap_mcp_in_chat_approval.py for its behaviour.
+EXPECTED_APPROVE = {"approve"}
 
 
 def _silent(_):
@@ -65,8 +69,10 @@ class TestToolRegistry(unittest.TestCase):
     def test_read_and_write_tools_are_registered_and_classified(self):
         self.assertEqual(set(M.read_tool_names()), EXPECTED_READ)
         self.assertEqual(set(M.write_tool_names()), EXPECTED_WRITE)
-        # the registry is the union, with no overlap between read and write
-        self.assertEqual(set(M.tool_names()), EXPECTED_READ | EXPECTED_WRITE)
+        # AP-MCP: `approve` is its own kind — in neither name list, so the SI.3 write sweeps skip it.
+        self.assertNotIn("approve", set(M.read_tool_names()) | set(M.write_tool_names()))
+        # the registry is the union of all three kinds, with no overlap between them.
+        self.assertEqual(set(M.tool_names()), EXPECTED_READ | EXPECTED_WRITE | EXPECTED_APPROVE)
         self.assertFalse(EXPECTED_READ & EXPECTED_WRITE)
 
 
@@ -195,7 +201,7 @@ class TestServerConstructsWithSdk(unittest.TestCase):
         server = M.build_server()
         self.assertEqual(type(server).__name__, "FastMCP")
         names = {t.name for t in asyncio.run(server.list_tools())}
-        self.assertEqual(names, EXPECTED_READ | EXPECTED_WRITE)
+        self.assertEqual(names, EXPECTED_READ | EXPECTED_WRITE | EXPECTED_APPROVE)
 
 
 if __name__ == "__main__":

@@ -1,80 +1,61 @@
 
-mokata **0.0.13 — "Correctness & Trust."** Upgrade with `pip install -U mokata`. Additive;
-**no breaking changes**; local stays the zero-config default; **no schema change**. Requires
-**Python ≥ 3.10**.
+mokata **0.0.14 — "Graph mandatory + trust fixes."** Upgrade with `pip install -U mokata`.
+Additive; **no breaking changes**; local stays the zero-config default; **no schema change**.
+Requires **Python ≥ 3.10**.
 
-This is a correctness release. Nothing here was built to be new — every change fixes silent data
-loss, a race, or a gate that could be walked around. The headline is that **mokata's seatbelt is now
-enforced rather than advertised**: the gates bind your agent's *native* edits, and the model can no
-longer type its own approval.
+The codebase graph stops being an optional nicety and becomes a first-class, always-on structural
+layer — with an honest fallback and a ledgered escape, never a silent lexical guess. Around it,
+several trust surfaces are tightened: a ninth backed gate, an opt-in in-chat approve that still
+can't let a model approve itself, a session-true statusline, and the setup one-shots that 0.0.13
+left registered are now ledgered.
 
-**Live bugs, fixed.**
+**Graph, mandatory by default — but honest.**
 
-- **Team writes never flushed on a custom DSN.** Teams on `team connect --dsn-env CUSTOM` read fine
-  but **never flushed a single write** — health, flush and sync were hardwired to `MOKATA_PG_DSN`
-  while reads honoured the configured env. Writes journalled forever and nobody was warned. One DSN
-  resolver now serves every subsystem.
-- **The spec gate could brick every implementation write.** The spec-emit path had no writer reachable
-  from any surface, so `spec-check` always said "no saved specs — skipped" — while the gate, which
-  *is* wired, blocked **every** implementation write after a real approval, pointing at a surface that
-  did not exist. New `mokata spec emit` / `spec show` and a gated `spec_emit` MCP tool close it.
-- A **WAL-switch race** (surfaced by the new stress test) that left a losing process on the rollback
-  journal behind a false "permanent degrade" notice; **approval misattribution** under a two-process
-  race (an approval could name the wrong ledger entry); team access control that **failed open**;
-  and a sequential task floor that **fabricated ledger rows** — inventing `ok=true` output for work
-  nothing ran, then hash-chaining the lie into the audit trail.
-- **30 silent degrades** swept out. The worst: a tampered ledger line made the tamper check report
-  *intact*; a scope-widening spec amendment skipped the blast-radius gate; and the secret-guard hook
-  swallowed an import error, leaving every Write/Edit/Bash **unscanned for secrets**, silently.
+- **An embedded stdlib-AST floor ships in the box.** On a Python repo, mokata now answers
+  callers/callees/imports/blast-radius by real name-resolution (`degraded=false`) with **zero
+  dependencies** — a structural floor **above** grep, not the adopted graph. Adopt a richer graph
+  when you want cross-language precision (`mokata graph adopt [code-review-graph|serena]`,
+  human-gated); `mokata graph status` tells you which backend actually answers today.
+- **`graph.required` defaults on.** A *degraded* (grep-floor) blast radius is now **refused** as a
+  decision input — mokata will not let a lexical guess drive a decision. The way out is explicit and
+  recorded: `--allow-degraded` accepts the degraded evidence for the session, is **TTY-reconfirmed**
+  (a model cannot type it), is **ledgered**, and the result stays marked degraded.
+- **Freshness before answer.** Every graph query front-runs a freshness check: a known-stale graph
+  rebuilds *before* it answers, and a rebuild failure degrades **loud** to the AST floor on the
+  files as they are right now — never stale structure.
 
-**The seatbelt.**
+**Trust, tightened.**
 
-- **Hook-enforced gates.** A `PreToolUse` hook enforces run-state gates on **native Write/Edit**
-  (exit 2) — not just on mokata's own tools, which was the hole. No code before a persisted spec; no
-  code without a failing test (**RED is the permission to implement**). Overrides are named,
-  reasoned, session-scoped, ledgered — and have no MCP surface, by design.
-- **Human-minted approval.** `approve=true` was a model-typed boolean standing in for a human. It is
-  dead: it returns a proposal and commits nothing. A commit now needs an approval **minted by a human**
-  via `mokata approve <id>` in a separate terminal — content-bound (approving X then committing Y is
-  arithmetically impossible), single-use, session-scoped, expiring, fail-closed off a TTY, ledgered.
-  There is deliberately no `approve` MCP tool: a model-invocable approve *is* the hole.
-- **The trust dial actually works.** `settings.trust` was 100% dead code — `read-only` did nothing
-  while `doctor` linted it and the docs described it. It is now threaded into every gate that writes.
-- **The zero-bypass audit.** Every durable-write site in the codebase is swept and classified; an
-  unregistered writer fails CI. It closed three real side doors — consolidation writing outside the
-  gate, export being gated but never *scanned* (the two compose: one plants a secret, the other
-  exfiltrates it), and a migrate that corrupted a teammate's row.
-- **Scope binding**, born from a real incident where an agent built a feature the spec had explicitly
-  **deferred**, treating a user's instruction as authorization. The spec now carries a
-  machine-checkable scope, and an out-of-scope write is an exit-2. The only road back is `spec amend`
-  — a **forced phase regression**: writes blocked, gates re-run, a fresh human approval, RED owed for
-  the new criteria, then a resume. **An instruction is authorization to ASK, not to build.**
+- **A ninth backed gate — the idea→code jump.** With a run registered but no approach approved, a
+  native `Write`/`Edit` to an implementation file is now refused (exit 2) by the gate-guard hook —
+  `approach-approval` is the fourth run-state gate, overridable like the others (named, reasoned,
+  session-scoped, ledgered).
+- **In-chat approve, opt-in and still un-mintable by the model.** You can enable an
+  `mcp__mokata__approve` tool (`settings.approvals.in_chat`) — but it is **default-OFF**, enabling it
+  is a human-gated, ledgered config write, it never rides the `mcp__mokata__*` auto-grant (setup
+  writes a `permissions.ask` entry so the harness prompts you on **every** call), and it performs the
+  exact same single-use, content-hash-bound, expiring approval as `mokata approve` (ledgered
+  `actor="chat-relayed"`). Out of the box the model still cannot type its own consent.
+- **Typed approach decisions.** An approved approach now carries machine-readable `decisions[]`
+  (statement · rationale · code anchors · deferred). The spec's deferred scope **derives** from those
+  decisions — one truth, never hand-written twice — review's first pass checks the diff's reach
+  against the declared anchors, and a **prior-art bound step** refuses approach approval unless the
+  step actually ran.
+- **Session-true statusline + run lifecycle.** The active-run badge is now session-aware (a fresh
+  window never wears another session's run), and a **shipped** run retires from the badge and
+  `mokata progress` while a spec-emitted-but-unshipped run stays active. Nothing is deleted — explicit
+  `run_id` views and resume still work.
 
-**Multi-session safety.** Every editor window is its own process, and every lock was per-process.
-State writes are now atomic (a torn write used to silently *erase* state), sessions have real
-identities and scoped keys (they were singletons that clobbered each other), worktrees are detected
-and share one team identity, the ledger is hash-chained with a locked counter, and a **two-process
-stress test** — 2×2000 mixed operations, 16 named invariants, seed-replay on failure — runs in CI.
+**Closing 0.0.13's honest boundary.** 0.0.13 registered six CLI setup one-shots (init, harness
+setup, skill write/prune, lifecycle remove) as writing outside the gate and filed them for here.
+They now sit in a **ledgered** register (TTY consent + an audit record), the `KNOWN_BYPASS` register
+is **empty**, and a sweep fails CI if any ungated durable writer ever appears. `mokata reset` writes
+a user-scoped tombstone that survives `.mokata`'s removal.
 
-**Session save & share.** The save path *did not exist in production*: the resume stack read state
-that nothing ever wrote, so an interrupted brainstorm was unrecoverable. Now `session save` survives
-`kill -9`, a per-turn autosave bounds a crash to **at most one lost brainstorm turn** (proven
-numerically), and bundles are versioned with a hash that catches forged flags and a secret-scanned
-transcript. One real hole closed: **approval no longer crosses machines** — hydrating a bundle used
-to import the approved approach verbatim; the receiver's own gate now owns approval, on every
-transport.
-
-**Honest boundaries** — real, registered, not excused.
-
-- **"Zero writes bypass the gate" is not true repo-wide.** It is true, and proven, of the memory /
-  export / migrate funnel. **Six CLI setup one-shots** (init, harness setup, skill write/prune,
-  lifecycle remove) still write outside the gate; they sit in a frozen register CI enforces, and are
-  filed for 0.0.14.
-- The gates bind Write/Edit and mokata's own tools. **An agent with arbitrary shell access is out of
-  scope** — Bash is a side door the hook does not gate.
-- The **trust dial is not yet enforced on the CLI**, and propose-only adds no teeth beyond the
-  human-approval floor on MCP.
-- The **Windows** leg of the stress test is wired on both operating systems, but its proof (with the
-  live-database leg) lands on the **public mirror's CI** at the cut.
+**Fixes.** Simulated exec batches report **zero** actual token spend and a `simulated` (never green)
+review verdict instead of a placeholder estimate or a false pass; `offer_text_once` never raises;
+the tiered-semantic retrieval branch is kept and marked; and the `reset` propose→approve→redeem
+round trip no longer crashes — the delete is deferred past the gate so an approved record is never
+orphaned.
 
 Local-first, no telemetry, Apache-2.0.
