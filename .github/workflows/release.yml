@@ -150,7 +150,7 @@ jobs:
             --output-format JSON --outfile dist/sbom.cdx.json
           echo "SBOM written:"; head -c 400 dist/sbom.cdx.json; echo
       - name: Attest build provenance (Sigstore) for the artifacts + SBOM
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           # SBOM now lives in dist/ alongside the wheel+sdist, so dist/* covers all three.
           subject-path: dist/*
