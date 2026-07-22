@@ -18,6 +18,23 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     from ..legibility import _color_enabled
     surface = _load_surface(args.path)
     report = diagnose(surface)
+    # DB.S1 — the DSN DEEP-CHECK. For a TEAM-connected repo, classify the shared-DB connection into
+    # NAMED, secret-free findings (driver / network / auth / pooler / schema-version), each with its
+    # concrete fix and the env-var NAME (never the DSN value). Reuses `teamdb.probe` (bounded ≤500ms,
+    # fail-closed — never a second probe) + `dsn_inspect` (DB.S0 shape). A local / no-DSN repo is
+    # SILENT (None — zero probe, zero noise; P8). Computed here, BEFORE `report.render()`, so its rich
+    # section prints separately below while its findings feed `report.ok` further down.
+    from .. import db_doctor
+    db_check = db_doctor.deep_check(surface)
+    if db_check is not None:
+        # Fold each DSN finding into `report.findings` BEFORE render, so the overall
+        # status line AND the exit code both derive from the SAME `report.ok` — a hard
+        # failure (driver / network / auth / schema-broken → error) reads as PROBLEMS FOUND
+        # and exits non-zero; pooler + an in-range version difference are warnings (OK). The
+        # terse `summary` is the table cell; the full fix renders in the section below.
+        from ..govern.doctor import DoctorFinding
+        for f in db_check.findings:
+            report.findings.append(DoctorFinding(f.severity, f.code, f.summary))
     # Colour + a Unicode box only on a real TTY (NO_COLOR unset); a piped / redirected /
     # NO_COLOR run degrades to a clean plain-ASCII table with zero escape codes.
     color = _color_enabled()
@@ -30,6 +47,61 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     print("")
     for line in mcp_admin.full_status(root=args.path,
                                       home=getattr(args, "home", None)).lines:
+        print(line)
+    # B-VER — the version-parity finding (parity + scope/plugin shadow), the SAME shared reporter
+    # `mokata mcp status` uses. Informational: doctor's ok/exit stays derived from `report.ok`,
+    # never from parity. This is the MCP-server version axis — a DIFFERENT axis than DB.S1's shared
+    # schema-VERSION finding just below (which mokata binary Claude Code launches vs which shared
+    # schema the DB carries); the two are kept as distinct findings, never conflated.
+    for line in mcp_admin.parity_lines(root=args.path, home=getattr(args, "home", None),
+                                       quiet_when_ok=False):
+        print(line)
+    # DB.S1 — the DSN deep-check SECTION: the full, actionable `database (team DSN)` block for a
+    # team-connected repo (each finding names its axis, the concrete fix, and the env-var NAME —
+    # never the DSN value). Its findings already fed `report.ok` above; this is the human-facing
+    # rich view. Silent on a local / no-DSN repo (P8). The SCHEMA-VERSION axis here is distinct from
+    # the MCP-server version parity above — different axes, never conflated.
+    if db_check is not None:
+        print("")
+        for line in db_check.render_lines(ascii_only=not color):
+            print(line)
+    # B-SKILLS — the skills-visibility finding: are mokata's Agent Skills + `/`-commands actually
+    # wired in THIS root (a new session on a worktree / fresh checkout shows an empty `/` menu),
+    # and if present, the restart hint that answers the Claude-Code-side caching case. Same shared
+    # reporter style as parity_lines; informational — never changes doctor's ok/exit (derived from
+    # `report.ok` above). Loud when wrong; on the OK path it shows the "visible ✓ + restart" line.
+    from .. import skills_visibility as _skills_visibility
+    for line in _skills_visibility.skills_visibility_lines(
+            root=args.path, home=getattr(args, "home", None), quiet_when_ok=False):
+        print(line)
+    # MCP-R.D2 (B-AMEND-STUCK / UX-STUCK) — "what is waiting on YOU". The returning-user answer to
+    # the worst UX in the product: a run that is regressed with an amendment pending looks wedged
+    # from the outside, and until now doctor — the command you run when things look wedged — said
+    # nothing about it. Same shared-reporter style as parity_lines / skills_visibility_lines.
+    #
+    # INFORMATIONAL, and emphatically so: a pending proposal is the gate WORKING (P2), not a
+    # problem. It is never a DoctorFinding and never touches `report.ok`, so doctor's exit stays
+    # derived from `report.ok` alone — exactly as it does for the MCP/parity/skills sections above.
+    # Secret-safe: names the tool, the id, and the commands; never the proposal's summary/preview.
+    from .. import awaiting as _awaiting
+    for line in _awaiting.pending_lines(args.path, quiet_when_ok=False):
+        print(line)
+    # The LIVENESS line. D0 already made "no MCP call hangs past its budget" true (the R1 wall-clock
+    # timeout + per-class budgets); this only tells the human that guarantee EXISTS, so a slow call
+    # reads as bounded rather than as the hang it used to be. Referencing D0, not rebuilding it.
+    for line in _awaiting.liveness_lines():
+        print(line)
+    # DB.S4 — the RETRIEVAL STACK: which engines actually rank a recall in this repo (semantic:
+    # model2vec / hashing / off; lexical: fts5 / tsvector / jaccard). Retrieval quality used to be
+    # invisible — two installs could both read "memory: ok" while one ranked by meaning and the
+    # other by token-hash — so this says which, and labels the hashing tier as NOT semantic.
+    #
+    # INFORMATIONAL, like the MCP/parity/skills/awaiting sections above: every state it prints is a
+    # supported configuration (hashing + jaccard is a working zero-dep install), so it emits no
+    # DoctorFinding and doctor's ok/exit stays derived from `report.ok` alone.
+    from ..memory import tier_report
+    print("")
+    for line in tier_report.retrieval_lines(surface, ascii_only=not color):
         print(line)
     # R13 — the full pass/degraded/fail coverage matrix is opt-in (`--matrix`) so the default
     # problem summary stays lean. It's informational: doctor's ok/exit stays derived from

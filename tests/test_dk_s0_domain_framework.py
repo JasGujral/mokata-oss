@@ -352,10 +352,14 @@ class TestNoNewGate(unittest.TestCase):
     """DK.S0 adds NO gate — the backed enforcement set is exactly the SK.S1 eight."""
 
     def test_backed_gate_set_is_unchanged(self):
+        # PH-GATE.S0 (0.0.14) backs `approach-approval` — the SI.1 gate hook now enforces the
+        # brainstorm boundary (doc 76 FU-1), so it joins the SK.S1 eight. DK.S0 itself still adds
+        # no gate; this set is the post-PH-GATE.S0 backed enforcement set.
         self.assertEqual(
             sorted(g for g, r in GATES.items() if r.backed),
-            ["completeness", "deviation", "hard-rule", "no-code-without-failing-test",
-             "secret-guard", "ship-readiness", "spec-persisted", "write-gate"])
+            ["approach-approval", "completeness", "deviation", "hard-rule",
+             "no-code-without-failing-test", "secret-guard", "ship-readiness", "spec-persisted",
+             "write-gate"])
 
 
 if __name__ == "__main__":

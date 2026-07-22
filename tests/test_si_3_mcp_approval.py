@@ -274,12 +274,14 @@ class TestTheModelCannotMint(unittest.TestCase):
 
     def test_grep_guard_no_bare_assume_yes_gate_remains(self):
         """The `_approved(approve, confirm)` gate is GONE from the source, not merely bypassed."""
+        # PRE-SIMP (0.0.15) — the consent boundary moved tools_write.py -> mcp/consent.py; the
+        # greppable single-location property now anchors there (same check, same strength).
         src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                           "src", "mokata", "mcp", "tools_write.py")
+                           "src", "mokata", "mcp", "consent.py")
         with open(src, encoding="utf-8") as fh:
             text = fh.read()
         self.assertNotIn("def _approved(", text,
-                         "the model-settable gate function still exists in tools_write")
+                         "the model-settable gate function still exists in the consent boundary")
         # every `assume_yes=True` handed downstream must sit under a granted consent, which is only
         # obtainable from `_consent(...)`. Pin that the consent helper is what every tool calls.
         self.assertIn("def _consent(", text)
@@ -354,13 +356,26 @@ class TestApproveCli(unittest.TestCase):
         res = TW.remember(path=self.repo.path, subject="db", value="pg", proposal_id=self.pid)
         self.assertEqual(res["status"], "committed")
 
-    def test_approve_has_no_mcp_surface(self):
-        """The SI.1 lesson: a model-invocable approve would re-open the very hole this closes."""
-        from mokata.mcp.registry import tool_names
-        names = tool_names()
-        self.assertNotIn("approve", names)
-        self.assertFalse([n for n in names if "approv" in n.lower()],
-                         "approval must have NO MCP tool — the model may reference, never mint")
+    def test_approve_mcp_tool_is_a_default_off_opt_in(self):
+        """AMENDED by AP-MCP (doc 85 §5 D26 amendment): an in-chat `approve` MCP tool NOW EXISTS,
+        but as a DEFAULT-OFF, ledgered opt-in — so the SI.1 lesson still holds out of the box. The
+        model may reference a proposal; it cannot mint consent unless a human first enables the
+        opt-in (itself a gated config write) AND approves each call (the tool never rides the
+        auto-grant). This pins the amendment's binding shape, not the tool's absence."""
+        from mokata.mcp.registry import TOOLS, tool_names
+        self.assertIn("approve", tool_names(), "AP-MCP: the in-chat approve tool is registered")
+        # it is its OWN kind — never a propose-only 'write' — so the SI.3 write-tool sweeps in this
+        # file (which prove no write tool commits on a model-typed param) do not touch it.
+        spec = next(t for t in TOOLS if t.name == "approve")
+        self.assertNotEqual(spec.kind, "write")
+        # DEFAULT-OFF is the load-bearing negative: with the setting absent it refuses and approves
+        # nothing — the model cannot get an in-chat approve surface out of a default install.
+        pid = TW.remember(path=self.repo.path, subject="db", value="pg")["proposal_id"]
+        from mokata.mcp import tools_approve as TA
+        off = TA.approve(path=self.repo.path, proposal_id=pid)
+        self.assertEqual(off["status"], "disabled")
+        self.assertEqual(A.load(self.repo.path, pid).status, A.STATUS_PROPOSED,
+                         "a default (opt-in OFF) install must not let the tool mint consent")
 
 
 class TestTheLedgerChain(unittest.TestCase):

@@ -75,11 +75,15 @@ GATES: Dict[str, GateRef] = {
         "ship-readiness",
         "landing blocks until tests are green, ACs met, and a review verdict is recorded",
         "src/mokata/engine/ship.py"),
-    # --- advisory protocol boundaries (backed=False): headline-gate copy only, never cited ---
+    # `approach-approval` was advisory until PH-GATE.S0 (doc 76 FU-1): the SI.1 gate hook now
+    # ENFORCES the brainstorm boundary — a native implementation write with a run registered but no
+    # approach approved exits 2 (`gate_hook.GATE_PHASE`). It is a backed gate now, so the brainstorm
+    # Contract may cite it.
     "approach-approval": GateRef(
         "approach-approval",
         "no spec until exactly one approach is explicitly approved",
-        "", backed=False),
+        "src/mokata/gate_hook.py"),
+    # --- advisory protocol boundaries (backed=False): headline-gate copy only, never cited ---
     "refinement-approval": GateRef(
         "refinement-approval",
         "no spec until a scoped set of refinements is explicitly approved",
@@ -176,7 +180,8 @@ CONTRACTS: Dict[str, Contract] = {
         ),
         must_not=(
             _c("write or edit code", "write-gate"),
-            _c("draft or emit a spec before an approach is explicitly approved"),
+            _c("draft a spec or write implementation code before an approach is explicitly approved",
+               "approach-approval"),
             _c("batch questions, or rewrite the immutable problem statement"),
         ),
         depends_on=(

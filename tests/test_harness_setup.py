@@ -78,13 +78,21 @@ class TestSetupProject(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(d, ".mcp.json")))
 
     def test_no_hooks_help_names_every_hook_it_skips(self):
-        # Doc-gate: setup wires THREE hooks (SessionStart + the two PreToolUse guards), so the
-        # flag that skips them must name all three — a user reading `--help` should not discover
-        # the gate-guard's absence by having an ungated write sail through.
+        # Doc-gate: setup wires FOUR hooks — SessionStart, the two PreToolUse guards, and GR.S4's
+        # dirty-track PostToolUse — so the flag that skips them must name all four. A user reading
+        # `--help` should not discover the gate-guard's absence by having an ungated write sail
+        # through. ✂-FIX: the help said "all three hooks" and the count had rotted when dirty-track
+        # landed, so the COUNT is no longer written down anywhere — it is derived from the plan
+        # here, and the help enumerates rather than counts. Neither can drift again.
         help_text = _flag_help("setup", "--no-hooks")
-        for hook in ("SessionStart", "secret-guard", "gate-guard"):
+        named = ("SessionStart", "secret-guard", "gate-guard", "dirty-track")
+        for hook in named:
             self.assertIn(hook, help_text,
                           f"--no-hooks help does not name the {hook} hook it skips: {help_text!r}")
+        wired = sum(len(v) for v in
+                    plan_setup("claude", with_hooks=True).hook_commands.values())
+        self.assertEqual(len(named), wired,
+                         "--no-hooks help must name EVERY hook setup actually wires")
 
     def test_profile_passthrough(self):
         with tempfile.TemporaryDirectory() as d:

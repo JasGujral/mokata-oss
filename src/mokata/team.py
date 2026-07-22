@@ -46,7 +46,8 @@ _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # The conventional shared-Postgres env var (matches session_transport.PG_DSN_ENVS so memory AND
 # sessions resolve the SAME managed DB out of the box). A team may pick another NAME. Sourced
 # from the ONE resolver (CM.S1) — the literal lives only in `dsn.py`.
-from .dsn import DEFAULT_DSN_ENV  # noqa: E402  (re-exported for callers of the team module)
+from .dsn import DEFAULT_DSN_ENV, resolve_dsn  # noqa: E402  (re-exported for team-module callers)
+from .dsn_inspect import inspect_dsn, pooler_trap_finding  # noqa: E402  (DB.S0 preflight primitives)
 
 # Where the team pointer lives in the manifest settings (the env-var NAME + connected flag).
 _TEAM_SETTINGS_KEY = "team"
@@ -86,8 +87,7 @@ def _gated_write(root: str, new_data: dict, *, assume_yes: bool, policy: Any = N
     text = Manifest.from_dict(new_data).to_json()
 
     def _commit() -> None:
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(text)
+        atomic_write_text(path, text)           # R-MAN — a crash leaves the OLD manifest, whole
 
     gate = WriteGate(ledger=ledger, trust=policy_trust(policy))
     return gate.submit(WriteRequest(kind="config", target=path, content=text,
@@ -150,6 +150,41 @@ def team_connect(root: str, surface: Any, dsn_env: str = DEFAULT_DSN_ENV, *,
         emit(msg)
         return ConnectResult(True, False, False, dsn_env, ready, msg)
 
+    # DB.S0 — DSN provider onboarding + the pooler-trap preflight (doc 84 §7; doc 85 §1 H1).
+    # Inspect the RESOLVED DSN VALUE's SHAPE only — read transiently from the env (via the ONE
+    # resolver), never stored, no network. Surface the detected provider + verdict, and LOUD-warn +
+    # human-gate a transaction-mode pooler BEFORE wiring: LISTEN/NOTIFY (team push) + session
+    # features break silently behind one. mokata NEVER rewrites the DSN.
+    resolved = resolve_dsn(None, override=dsn_env)
+    if resolved.is_set:
+        inspection = inspect_dsn(resolved.dsn)
+        emit(inspection.summary(dsn_env))
+        finding = pooler_trap_finding(inspection, dsn_env)
+        if finding is not None:
+            from .govern.gate import _default_confirm   # the SAME prompt the WriteGate defaults to
+            emit(finding.render())
+            pooler_prompt = (f"mokata · ${dsn_env} looks like a transaction-mode pooler "
+                             f"({finding.provider_label}) — LISTEN/NOTIFY + sessions will break. "
+                             f"connect anyway?")
+            if not (assume_yes or (confirm or _default_confirm)(pooler_prompt)):
+                msg = ("not connected — pooled DSN declined at the pooler-trap check (nothing "
+                       "written). Use a direct/session connection string.")
+                emit(msg)
+                return ConnectResult(False, False, True, dsn_env, ready, msg)
+            # Explicit override — proceed, but LEDGER it (never silent; doc 85 H1). The record
+            # carries the provider + bare port only, NEVER the DSN value/credential.
+            if ledger is not None:
+                ledger.record("pooler_trap", target=dsn_env, provider=finding.provider,
+                              port=finding.port, decision="override",
+                              reason="pooled/transaction-mode DSN accepted at team connect")
+            emit("pooled-endpoint warning overridden — proceeding (recorded in the audit ledger).")
+    else:
+        # env unset at connect → today's behavior is unchanged; add the provider-agnostic hint so a
+        # teammate exports the RIGHT (direct/session) string, not a pooler (H1).
+        emit(f"${dsn_env} is not exported yet — when you set it, use a DIRECT/SESSION connection "
+             f"string (a non-pooler host / port 5432), not a transaction-mode pooler "
+             f"(LISTEN/NOTIFY + sessions break behind one).")
+
     new_data = copy.deepcopy(data)
     # 1) the memory Postgres backend (reuses build_postgres_backend's config.dsn_env contract).
     tool = dict(TOOL_CATALOG["postgres"])
@@ -175,8 +210,9 @@ def team_connect(root: str, surface: Any, dsn_env: str = DEFAULT_DSN_ENV, *,
         if not ready.dsn_set:
             parts.append(f"export your DSN: `export {dsn_env}=...` (Supabase/Neon/RDS)")
         emit("wiring recorded, but not active yet — " + "; ".join(parts) + ". Until then memory "
-             "degrades to the local SQLite floor and sessions to the local transport "
-             "(degrade-clean).")
+             "degrades to the local SQLite floor (degrade-clean); a portable session REFUSES with "
+             "a clear error rather than silently writing a private local bundle — pass `--file` to "
+             "force a local session (SIMP.S1 transport-from-mode).")
 
     prompt = (f"mokata · approve wiring shared memory + sessions to your managed Postgres "
               f"(${dsn_env}; the DSN is NEVER stored)?")

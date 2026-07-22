@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mokata"
-version = "0.0.13"
+version = "0.0.15"
 description = "The memory + seatbelt for your AI coding agent. Spec-driven TDD for Claude Code — knowledge-aware, human-gated, local-first."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -44,6 +44,13 @@ postgres = ["psycopg>=3.1"]
 # with this absent (code_graph degrades to the ripgrep→grep floor). Opt-in only — the URI and
 # credentials come from env vars, never the committed manifest (local-first, no egress).
 neo4j = ["neo4j>=5.0"]
+# DB.S4 — the ONE blessed embeddings extra: model2vec STATIC embeddings (a distilled lookup
+# table — numpy-only, no torch, ~30MB, CPU-fast). Lazy-imported and AUTO-DETECTED: with it
+# absent, `make_embedder("auto")` returns the zero-dep HashingEmbedder and everything still
+# works, just on token-hash similarity instead of meaning (`mokata doctor` says which). Installed
+# only on explicit consent (P2) via the setup offer. Heavy families
+# (sentence-transformers / hosted APIs) stay documented-never-bundled.
+embeddings = ["model2vec>=0.3", "numpy>=1.24"]
 
 [project.scripts]
 mokata = "mokata.cli:main"

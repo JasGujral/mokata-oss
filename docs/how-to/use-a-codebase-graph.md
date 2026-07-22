@@ -2,9 +2,20 @@
 
 mokata can answer **structural** questions about your code — who calls a function, who
 implements an interface, what the blast radius of a change is — by orchestrating a codebase
-graph tool. When no graph is wired it runs on a **grep floor** (lexical, dependency-free):
-safe and always available, just not structural. This guide shows how to tell which you're
-on and how to wire a real graph.
+graph tool. There are three tiers, tried in order:
+
+1. an **adopted graph** (`code-review-graph` / `serena`, or a deprecated external Neo4j) — full,
+   cross-language structural precision;
+2. the **embedded stdlib-AST floor** — ships with mokata, zero-dependency, answers structural
+   queries **cleanly (`degraded=False`)** on Python out of the box;
+3. the **grep floor** — the universal lexical emergency floor beneath everything, marked
+   `degraded=True`.
+
+**Graph is mandatory-by-default.** `settings.graph.required` defaults to **true**, so
+mokata will *refuse to present a degraded (grep-floor) blast radius as decision input* — you
+either adopt a real graph or explicitly accept the degraded evidence for the session (see
+[Graph is mandatory-by-default](#graph-is-mandatory-by-default) below). This guide shows how to
+tell which tier you're on and how to wire a real graph.
 
 ## Which am I on?
 
@@ -15,23 +26,75 @@ on and how to wire a real graph.
 code graph active (code-review-graph) — use `mokata query callers <sym>` / `callees <sym>` /
 `blast_radius <sym>` for structural queries.
 
+# the embedded AST floor (the default on a Python repo with no graph adopted):
+code graph: floor 'ast' — the embedded AST floor is answering structurally (real Python
+call/import edges, no install needed) and you can run `mokata query callers <sym>` /
+`callees <sym>` / `blast_radius <sym>` today. It is not a full graph: adopt one for
+cross-language and dynamic edges (plus semantic search) — `mokata graph adopt`, or
+`mokata init --profile full`.
+
 # only the grep floor:
-no codebase graph wired — running on the grep floor (safe, but lexical). To enable richer
+code graph: floor 'grep' — no codebase graph wired, and no AST floor here (the embedded AST
+floor answers Python repos), so answers are lexical (safe, but approximate). To enable richer
 structural queries, install a graph tool (code-review-graph or serena) and wire it:
 `mokata init --profile full`, or add it via `mokata config set tools.<graph>...` / the manifest.
 ```
 
+> The hint names the backend that **actually answers** — the same vocabulary `mokata graph
+> status` uses — so the two surfaces can't disagree.
+
+## Graph is mandatory-by-default
+
+`settings.graph.required` defaults to **true**. When a decision input — a Lens-1 blast radius, a
+`spec-check` touch-set, a domain classification — resolves only to the **grep floor** (degraded),
+mokata **refuses it** rather than letting a lexical guess drive a decision. You get two roads out:
+
+- **Adopt a real graph** — `mokata graph adopt [code-review-graph|serena]` (default
+  `code-review-graph`) pins it into the manifest through the human gate. The embedded AST floor
+  stays the fallback, so adoption is *recommended, never required*.
+- **Accept the degraded evidence for this session** — pass `--allow-degraded` (e.g. on
+  `mokata spec-check`). It is **TTY-reconfirmed** (a model cannot type it), **session-scoped**,
+  and **ledgered**, and the result stays marked degraded — with `--reason "<why>"` recorded.
+
+Inspect the live state any time:
+
+```bash
+mokata graph status    # which backend actually answers today (graph / AST floor / grep), degrade-clean
+```
+
+The AST floor answering `degraded=False` on Python is **not** a degraded state — it is only the
+*grep* floor that trips the `graph.required` refusal.
+
 ## Wire a graph
 
-1. **Install** a supported graph tool — `code-review-graph` or `serena` (each is an external
-   tool mokata orchestrates; neither is a mokata dependency).
-2. **Add it to the project** — either start from a profile that wires the full chain:
+The recommended path is `code-review-graph` **with its embeddings extra** — that enables
+semantic (hybrid FTS + local-embedding) symbol search on top of the structural queries:
+
+1. **Install** it (an external tool mokata orchestrates — not a mokata dependency):
 
    ```bash
-   mokata init --profile full     # wires code-review-graph → serena → ripgrep → grep
+   pip install "code-review-graph[embeddings]"
    ```
 
-   or point the manifest at it / set a custom endpoint (Stage 24A config):
+   The `[embeddings]` extra uses CRG's **bundled local model** (`all-MiniLM-L6-v2`) — no API
+   key, no network egress at query time. Skip the extra and structural queries still work;
+   mokata prints the install hint for the semantic tier and degrades cleanly.
+
+2. **Adopt it** (gated — pins the tool into the committed `code_graph` chain):
+
+   ```bash
+   mokata graph adopt code-review-graph
+   ```
+
+   If the tool isn't installed yet, `graph adopt` offers an assisted install first; on adopt it
+   also provisions the semantic index when the extra is present. `serena` is the supported
+   alternative: `mokata graph adopt serena`.
+
+   Wiring alternatives: on a **fresh** repo, `mokata init --profile full` wires the whole chain
+   (`code-review-graph → serena → ast → ripgrep → grep`); on an **already-initialized** repo use
+   `mokata reconfigure --profile full` (see
+   [configure a profile](configure-a-profile.md#switch-an-existing-repos-profile-eg-up-to-full)),
+   or point the manifest at a custom endpoint (Stage 24A config):
 
    ```bash
    mokata config set tools.code-review-graph.config.endpoint http://localhost:7000
@@ -39,9 +102,24 @@ structural queries, install a graph tool (code-review-graph or serena) and wire 
 
    A configured path/endpoint is reflected back in the `status`/`doctor` hint so you can
    confirm what's live.
-3. **Confirm** with `mokata status` — you should see *code graph active (...)*.
 
-## Wire an external graph database (Neo4j)
+3. **Confirm** with `mokata graph status` — the precise report of which backend answers
+   (adopted graph / AST floor / grep) — or `mokata status` for the one-line hint.
+
+## Wire an external graph database (Neo4j) — deprecated
+
+!!! warning "The Neo4j backend is deprecated (removal: 0.0.17)"
+    It **still works**, and nothing about it has been removed — but a third database contradicts
+    mokata's two-stores shape, so the backend is on its way out. On first use in a repo mokata
+    prints the notice once:
+
+    > ⚠ deprecated: the Neo4j code-graph backend is deprecated and will be REMOVED in mokata
+    > 0.0.17. The canonical code graph is the embedded AST floor / adopted CRG. No migration
+    > needed — the graph is derived data; re-index with your current code-graph backend.
+
+    There is **no `mokata migrate neo4j`** and there deliberately isn't one: a code graph is
+    derived data, so the move is to adopt `code-review-graph` (or `serena`) and re-index. The
+    section below documents the backend as it works today.
 
 If your team already populates a **Neo4j** graph of the codebase, mokata can query it directly
 — it becomes an optional provider for the `code_graph` capability, sitting in front of the grep
@@ -81,8 +159,9 @@ mokata config set capabilities.code_graph.fallback '["neo4j","ripgrep","grep"]'
 ```
 
 Confirm with `mokata status` — you should see *code graph active (neo4j)*. If the driver is
-missing, the env vars are unset, or the DB is unreachable, mokata silently stays on the grep
-floor instead (see [degrade-to-grep](#degrade-to-grep-is-safe) below) — wiring is never a hard
+missing, the env vars are unset, or the DB is unreachable, mokata drops to the next tier instead
+(the embedded AST floor on a Python repo, grep beneath — see
+[Degrade is honest, not silent](#degrade-is-honest-not-silent) below) — wiring is never a hard
 failure.
 
 ### 3 & 4. Keep it fresh — `mokata index`, then `mokata lat-check`
@@ -137,13 +216,21 @@ Wire a real graph tool (above) for precise, cross-language structural answers; t
 always there underneath so the queries never hard-fail on a stack the graph tool doesn't cover.
 An unknown language falls back to **generic identifier matching** (degrade-clean, no crash).
 
-## Degrade-to-grep is safe
+## Degrade is honest, not silent
 
-If the graph tool is absent or errors mid-query, mokata **falls back to the grep floor**
-rather than failing — the same query shape, answered lexically, marked degraded. This holds
-for an external DB too: no `neo4j` driver, no `NEO4J_*` env, or an unreachable Neo4j ⇒ mokata
-quietly runs on the grep floor and your `mokata query …` / `index` / `lat-check` commands all
-still work. You never lose the ability to ask; you only lose structural precision until a graph
-is wired. See
+If a real graph is absent or errors mid-query, mokata degrades **loudly and in order** — never
+to stale data. On a Python repo the **embedded AST floor** carries the structural queries cleanly
+(`degraded=False`); only when even that can't answer (a zero-Python repo, or non-Python files)
+does it fall to the **grep floor**, marked degraded. A graph rebuild failure answers from the AST
+floor on *current* files, never from a stale graph. This holds for an external DB too: no `neo4j`
+driver, no `NEO4J_*` env, or an unreachable Neo4j ⇒ mokata drops to the next tier and your
+`mokata query …` / `index` / `lat-check` commands all still work.
+
+The one place degrade is **not** waved through: a *grep-floor* result offered as **decision
+input** (a blast radius, a `spec-check` touch-set, a domain classification). With
+`graph.required` on (the default) that is **refused** until you adopt a graph or accept it for
+the session with `--allow-degraded` — see
+[Graph is mandatory-by-default](#graph-is-mandatory-by-default). You never lose the ability to
+*ask*; you only can't let a lexical guess silently drive a decision. See
 [the knowledge layer](../concepts/knowledge.md) and
 [configure a profile](configure-a-profile.md).

@@ -31,8 +31,9 @@ _GLYPHS = {DONE: "✓", CURRENT: "▶", PENDING: "○"}        # ✓ ▶ ○
 _ASCII_GLYPHS = {DONE: "[x]", CURRENT: "[>]", PENDING: "[ ]"}
 
 NO_RUN_MESSAGE = (
-    "mokata · no run in progress — start with /mokata:brainstorm (a new problem) "
-    "or /mokata:refine (existing code)."
+    "mokata · no run in progress — no tracked run exists in this repo yet. Start one with "
+    "/mokata:brainstorm (a new problem; it registers the run) or /mokata:refine (existing code), "
+    "or resume an interrupted run with /mokata:resume."
 )
 
 
@@ -82,13 +83,65 @@ def list_runs(store: Any) -> List[str]:
     return out
 
 
+def _shipped_run_ids(store: Any) -> set:
+    """Run ids whose most-recent logged user-stage is `ship` — the terminal END-OF-RUN signal in the
+    progress-event log. B-LIFE grounds "finished" here (not on the pipeline checkpoint): `STAGE_PASS`
+    is defined but never written and there is no ship-completion event, so entering `ship` (its
+    `stage_enter`) is the strongest end-of-run evidence the log records. Uses the LAST stage_enter
+    per run (matching the badge's forward-only view), so a run that re-entered develop after ship
+    reads as active again. One bounded log read. Degrade-clean: no/broken log -> empty set (nothing
+    is retired), so an unreadable log can never wrongly hide a run."""
+    try:
+        from .progress_events import ProgressLog, STAGE_ENTER
+        events = ProgressLog.from_state_dir(store.root).read_events()
+    except Exception:
+        return set()
+    furthest: dict = {}
+    for e in events:
+        if e.get("type") != STAGE_ENTER:
+            continue
+        stage = e.get("stage")
+        if stage in STAGE_BADGE_STAGES:
+            furthest[e.get("run_id")] = stage
+    return {rid for rid, s in furthest.items() if s == "ship"}
+
+
 def find_active_run(store: Any, phases=PIPELINE_PHASES) -> Optional[str]:
-    """The run to show: the first incomplete run, else the most recent, else None."""
+    """The ACTIVE run to show: the first incomplete-checkpoint run, else the most-recent run that has
+    NOT shipped, else None.
+
+    B-LIFE (ship-based retirement) — a complete pipeline CHECKPOINT means the spec emitted and the
+    user is AT `develop`, a healthy ACTIVE state, NOT that the run finished (develop/review/ship are
+    tracked in the progress-event log, not the checkpoint). So a spec-emitted run STAYS active. Only
+    a run that reached the terminal `ship` stage is retired: it finished, and reporting it as the
+    current run is the live bug. The incomplete-checkpoint ordering is unchanged; the completed-but-
+    unshipped fallback is byte-identical to the old "most recent" pick. Shipped runs are never
+    deleted — still readable by explicit run_id, surfaced as finished-then by `build_progress`."""
     runs = list_runs(store)
     for rid in runs:
         if not PipelineCheckpoint(store, rid).is_complete(phases):
             return rid
-    return runs[-1] if runs else None
+    shipped = _shipped_run_ids(store)
+    for rid in reversed(runs):
+        if rid not in shipped:
+            return rid                                   # most-recent completed-but-unshipped run
+    return None
+
+
+def _no_active_run_message(store: Any, phases=PIPELINE_PHASES) -> str:
+    """The message for "no active run". B-LIFE — when the repo HAS runs but none is active (every run
+    has shipped, since `find_active_run` returned None), report the most-recent one as finished-THEN
+    — "last run '<id>' completed <when> — no active run" — followed by the SAME PH-GATE.S0 recovery
+    guidance (`NO_RUN_MESSAGE`) so the user still learns how to start / resume a tracked run. No
+    timestamp on record (a legacy shipped run stamped before this stage) ⇒ "completed" without the
+    when, never a crash. No runs at all ⇒ the plain `NO_RUN_MESSAGE`, byte-identical to before."""
+    runs = list_runs(store)
+    if not runs:
+        return NO_RUN_MESSAGE
+    rid = runs[-1]                                        # the most recent (all runs shipped here)
+    when = PipelineCheckpoint(store, rid).completed_at
+    when_txt = f" {when}" if when else ""
+    return (f"mokata · last run '{rid}' completed{when_txt} — no active run. " + NO_RUN_MESSAGE)
 
 
 # --------------------------------------------------------------- the model
@@ -100,7 +153,7 @@ def build_progress(store: Any, run_id: Optional[str] = None,
     rid = run_id or find_active_run(store, phases)
     if rid is None:
         return RunProgress(active=False, total=total, pending=total,
-                           message=NO_RUN_MESSAGE)
+                           message=_no_active_run_message(store, phases))
 
     if store.read(CHECKPOINT_PREFIX + rid) is None:
         # an explicit run_id that doesn't exist -> friendly, inactive (never an error)
@@ -348,7 +401,7 @@ def badge_verbosity(surface: Any) -> str:
         return BADGE_FULL
 
 
-def _badge_state(surface: Any):
+def _badge_state(surface: Any, *, run_id: Optional[str] = None, session_mode: bool = False):
     """(active_user_stage, counter) derived read-only from run-state + the Stage-6b progress
     log — (None, "") with no run and no log. `counter` is the pipeline phase fraction shown
     only during the spec stage.
@@ -358,20 +411,33 @@ def _badge_state(surface: Any):
     develop/review/ship (the transitions the checkpoint can't see). The log can only move the
     badge FORWARD past the checkpoint-derived stage, never backward — a stage is claimed only
     if one source genuinely recorded it. Degrade-clean: no log -> the checkpoint default; no
-    checkpoint but a log -> the log's stage (the user did enter it)."""
-    store = surface.state                       # may raise on a broken surface -> caller guards
-    try:
-        from .brainstorm import restore_brainstorm_progress
-        if restore_brainstorm_progress(store) is not None:
-            return "brainstorm", ""             # mid-stream exploration (HARD-GATE still holds)
-    except Exception:
-        # D5 — broad + silent ON PURPOSE: this is a COSMETIC refinement of a statusline badge. On
-        # any failure the badge falls through to the checkpoint-derived stage below (still true,
-        # just less specific), so nothing degrades — and a notice printed from the statusline, which
-        # the harness re-runs on every state change, would be the noisiest line in mokata.
-        pass
+    checkpoint but a log -> the log's stage (the user did enter it).
 
-    prog = build_progress(store)
+    B-BADGE — `session_mode` selects the run SESSION-AWARELY (the caller resolved `run_id` for THIS
+    Claude Code session via `badge_run.resolve_badge_run`): `run_id is None` renders CLEAN (the
+    session is bound to no run), and a set `run_id` renders exactly that run — the badge never falls
+    back to `find_active_run` (which is session-blind) here. The brainstorm-progress short-circuit
+    is SKIPPED in session mode: that key is scoped by the CURRENT process's mokata session_id (a
+    statusline-hook uuid), unrelated to the Claude session being rendered, so trusting it would leak
+    a foreign session's mid-stream state. The default (`session_mode=False`, no `session_id` in the
+    payload) is byte-identical to today — the load-bearing degrade for older/non-Claude callers."""
+    store = surface.state                       # may raise on a broken surface -> caller guards
+    if session_mode:
+        if run_id is None:
+            return None, ""                     # this session is bound to no run -> clean badge
+        prog = build_progress(store, run_id=run_id)
+    else:
+        try:
+            from .brainstorm import restore_brainstorm_progress
+            if restore_brainstorm_progress(store) is not None:
+                return "brainstorm", ""         # mid-stream exploration (HARD-GATE still holds)
+        except Exception:
+            # D5 — broad + silent ON PURPOSE: this is a COSMETIC refinement of a statusline badge. On
+            # any failure the badge falls through to the checkpoint-derived stage below (still true,
+            # just less specific), so nothing degrades — and a notice printed from the statusline,
+            # which the harness re-runs on every state change, would be the noisiest line in mokata.
+            pass
+        prog = build_progress(store)
     # checkpoint-derived candidate (today's behaviour) + the active run id to scope the log.
     if not prog.active:
         ckpt_stage, counter, run_id = None, "", None
@@ -406,16 +472,30 @@ def _badge_state(surface: Any):
 
 
 def build_stage_badge(surface: Any, *, session_name: Optional[str] = None,
-                      ascii_only: bool = False) -> str:
+                      session_id: Optional[str] = None, ascii_only: bool = False) -> str:
     """The one-line mode badge, e.g. `mokata ▸ [brainstorm · spec · ›develop‹ · review · ship]`.
 
     Highlights the active user stage among STAGE_BADGE_STAGES; appends a compact phase
     counter during the spec stage; takes an optional `session_name` (the Stage-55 hook —
     Claude Code passes it on the statusLine stdin, omitted gracefully when absent). Pure,
     read-only, deterministic; with no run (or a surface it can't read) it degrades to a
-    minimal `mokata`, never an error."""
+    minimal `mokata`, never an error.
+
+    B-BADGE — when `session_id` (Claude Code's session id, off the statusLine payload) is given, the
+    run is resolved SESSION-AWARELY (`badge_run.resolve_badge_run`: bound run -> single live run ->
+    none) instead of via the session-blind `find_active_run`, so a cleared session never wears a
+    dead run's strip and a fresh run flips the badge. `session_id=None` (no such field in the
+    payload — an older/non-Claude caller) keeps today's behaviour byte-for-byte."""
     try:
-        active, counter = _badge_state(surface)
+        if session_id is not None:
+            try:
+                from .badge_run import resolve_badge_run
+                run_id = resolve_badge_run(surface.root, session_id)
+            except Exception:
+                run_id = None
+            active, counter = _badge_state(surface, run_id=run_id, session_mode=True)
+        else:
+            active, counter = _badge_state(surface)
     except Exception:
         active, counter = None, ""
     if active is None:
@@ -459,7 +539,7 @@ def build_stage_badge(surface: Any, *, session_name: Optional[str] = None,
 
 
 def statusline_badge(surface: Any, *, session_name: Optional[str] = None,
-                     ascii_only: bool = False) -> str:
+                     session_id: Optional[str] = None, ascii_only: bool = False) -> str:
     """The full statusline segment: the run-mode badge + the pipeline-stage badge, e.g.
     `local · mokata ▸ [brainstorm · ›spec‹ · develop · review · ship]`.
 
@@ -467,14 +547,18 @@ def statusline_badge(surface: Any, *, session_name: Optional[str] = None,
     ambiguous about which mode it's in. The stage badge is left byte-for-byte as
     `build_stage_badge` produces it (it degrades to a plain `mokata` with no run); the mode
     is a SEPARATE segment, not folded into the stage strip. Pure, read-only, degrade-clean:
-    a broken surface reads as `local`, never an error."""
+    a broken surface reads as `local`, never an error.
+
+    B-BADGE — `session_id` (Claude Code's session id off the statusLine payload) is threaded to
+    `build_stage_badge` so the stage strip is resolved for THIS session; absent it, unchanged."""
     from .run_mode import mode_badge
     try:
         mode = mode_badge(surface, ascii_only=ascii_only)
     except Exception:
         from .run_mode import LOCAL
         mode = LOCAL
-    stage = build_stage_badge(surface, session_name=session_name, ascii_only=ascii_only)
+    stage = build_stage_badge(surface, session_name=session_name, session_id=session_id,
+                              ascii_only=ascii_only)
     return f"{mode} · {stage}"
 
 

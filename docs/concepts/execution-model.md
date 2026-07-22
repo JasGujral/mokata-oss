@@ -8,16 +8,17 @@ engine's deterministic mechanics.
 
 ## Approach A — Harness-driven (the brain runs the protocol)
 
-mokata supplies the **structure**: the phase prompts (`/mokata:brainstorm`, `/mokata:spec`,
-`/mokata:test`, `/mokata:develop`, `/mokata:review`), the gates (HARD-GATE before spec,
+mokata supplies the **structure**: the phase prompts (`/brainstorm`, `/spec`,
+`/test`, `/develop`, `/review`), the gates (HARD-GATE before spec,
 completeness gate, RED-before-GREEN, secret-guard), the knowledge graph, the self-healing
 memory, and the audit trail. The harness's LLM supplies the **reasoning** — it brainstorms
 approaches, drafts the spec, writes the tests and code, and reviews — all constrained by
 mokata's gates.
 
-- **Where:** inside **Claude Code** — via the plugin, or `mokata setup claude` (install
-  tiers 1 and 2). Here **Claude is the brain**, on your existing Claude Code sign-in. Nothing
-  to configure, no API key.
+- **Where:** inside **Claude Code** — `pip install mokata` then `mokata setup claude`, the
+  canonical route. (A Claude Code **plugin/marketplace** route is *planned, not yet
+  available*.) Here **Claude is the brain**, on your existing Claude Code sign-in. Nothing to
+  configure, no API key.
 - **What only this approach gets:** the two `PreToolUse` hooks — the **secret-guard** and the
   **gate-guard** (the run-state gates on native `Write`/`Edit`). Only Claude Code declares the
   `hooks` capability, so on any other harness they are **never wired** and the run-state gates
@@ -46,14 +47,15 @@ graph + memory) — it does not reason about your problem; a brain would do that
 
 > **The CLI alone does not give you mokata *inside* Claude Code.** A `pip install` puts the
 > `mokata` command in your terminal (Approach B). To drive the gated workflow *with Claude as
-> the brain* (Approach A), install the [plugin](../how-to/install-plugin.md) or run
-> [`mokata setup claude`](../how-to/use-without-plugin.md).
+> the brain* (Approach A), run [`mokata setup claude`](../how-to/use-without-plugin.md) — one
+> command, and the canonical route. (The [plugin](../how-to/install-plugin.md) route is
+> *planned, not yet available*.)
 
 ## Which should I use?
 
 | You want to… | Approach | How |
 |---|---|---|
-| Have features written *with* you, gated and memory-aware | A — harness | Claude Code plugin or `mokata setup claude` |
+| Have features written *with* you, gated and memory-aware | A — harness | `pip install mokata` → `mokata setup claude` |
 | Inspect a repo, query structure, read the audit | B — CLI | `mokata query` / `audit` / `status` |
 | Run gates/checks in CI or a script | B — CLI | `mokata playbook`, `validate`, `coverage` |
 | Use mokata with Gemini / Codex / another agent | B — CLI (+ that harness's brain) | wire the CLI/MCP into that harness |
@@ -67,12 +69,12 @@ local-first guarantee: mokata holds no credentials and phones nothing home.
 A **skill** is a reusable, gated capability — a **prompt (the protocol) + its gate**
 (e.g. `review` = the review protocol + the spec-compliance gate). Skills are the same in both
 approaches because mokata generates them from **one definition** (`skills.py`): the same
-source produces the CLI launch text *and* the `/mokata:<name>` slash command, so they can
+source produces the CLI launch text *and* the `/<name>` slash command, so they can
 never drift. What differs is how the skill is *consumed*:
 
 | | From the CLI (Approach B) | Inside Claude Code (Approach A) |
 |---|---|---|
-| Invoke | `mokata run review` / `mokata skills review` | `/mokata:review` |
+| Invoke | `mokata run review` / `mokata skills review` | `/review` |
 | What happens | **emits** the skill — prints the prompt + gate + live grounding (what graph/memory is available) | **executes** the skill — Claude does the review using that prompt |
 | Who reasons | nobody (you/another tool act on the output) | Claude (the brain), under the same gate + hooks |
 | Result | the recipe + the rule | the work, gated |

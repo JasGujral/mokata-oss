@@ -3,7 +3,8 @@
 The one-glance demo. An AI coding agent, mid-task, tries three bad changes — ship code with no
 spec, edit a source file straight past the gates, and stash a secret. **mokata stops all three, and
 every write it governs lands on the audit ledger.** Every command below was run end-to-end on a
-fresh sample repo; the output is exactly what it prints (absolute paths shortened to `.`).
+fresh sample repo; the output is exactly what it prints (absolute paths shortened to `.`, and
+`init`'s tool-detection preamble elided).
 
 > **mokata is the memory + seatbelt for your AI coding agent.** This page is the seatbelt in
 > action; copy-paste it and watch it catch a bad change in your own terminal.
@@ -37,7 +38,7 @@ mokata run develop
 ```
 
 ```text
-[BLOCKED] spec-persisted — no saved spec — draft and emit it first (/mokata:spec); the completeness gate must pass before implementation.
+[BLOCKED] spec-persisted — no saved spec — draft and emit it first (/spec); the completeness gate must pass before implementation.
 ```
 
 ### Bad change #2 — going around the gates with a plain file edit
@@ -57,7 +58,7 @@ mokata spec emit --file spec.json --yes
 ```text
 spec emitted: 'checkout rejects an empty cart' — 1 acceptance criteria, all mapped to tests.
   saved as this run's spec (run demo), and recorded in the shared spec corpus (1 spec(s)).
-  implementation is unblocked once a failing test is on record (/mokata:test).
+  implementation is unblocked once a failing test is on record (/test).
 ```
 
 Now the obvious dodge: there's a spec but still no failing test, so instead of mokata's tools the
@@ -75,7 +76,7 @@ print(json.dumps({'tool_name': 'Write', 'cwd': os.getcwd(), 'session_id': 'w1',
 ```
 
 ```text
-BLOCKED [no-code-without-failing-test] no-code-without-failing-test: no failing test is on record for this run — checkout.py is implementation. Write the failing test first and watch it fail (/mokata:test), or override: mokata gate override no-code-without-failing-test --reason "<why>"
+BLOCKED [no-code-without-failing-test] no-code-without-failing-test: no failing test is on record for this run — checkout.py is implementation. Write the failing test first and watch it fail (/test), or override: mokata gate override no-code-without-failing-test --reason "<why>"
 ```
 
 Exit code **2** — Claude Code refuses the tool call and the file is never touched.
@@ -97,8 +98,9 @@ exit: 0
 
 That's the whole idea in two commands: **RED is the *permission* to implement, not the
 prohibition.** A test file is always writable — you have to be able to write the failing test.
-Three run-state gates guard native writes — `spec-persisted`, `no-code-without-failing-test`, and
-`spec-scope` (a write outside the surface the spec authorized, or a feature you agreed *not* to
+Four run-state gates guard native writes — `approach-approval` (a run is registered but no
+approach is approved yet), `spec-persisted`, `no-code-without-failing-test`, and `spec-scope`
+(a write outside the surface the spec authorized, or a feature you agreed *not* to
 build) — and they fire **only inside an active run**: hand-editing a repo mokata isn't running is
 never policed. It is a *methodology* block, not a security one, so a human can lift it, on the
 record: `mokata gate override <gate> --reason "<why>"`.
@@ -159,21 +161,26 @@ mokata audit
 ```
 
 ```text
-audit ledger — 7 entries:
-  #1   gate        gate=spec-persisted phase=develop decision=blocked reason=no saved spec — draft and emit it first (/mokata:spec); the completeness gate must pass before implementation. ac_count=0
-  #2   write_gate  write_kind=config target=spec:emit actor=agent decision=approved reason=committed
-  #3   checkpoint  run=demo phase=completeness_gate
-  #4   checkpoint  run=demo phase=emit
-  #5   write_approval decision=approved proposal=p-d6af1f0f5d5b tool=remember target=memory:aws.key actor=human run=demo scope=session
-  #6   write_gate  write_kind=memory target=memory:aws.key actor=mcp decision=blocked reason=secret detected
-  #7   write_approval decision=redeemed proposal=p-d6af1f0f5d5b tool=remember target=memory:aws.key approved_by=human run=demo committed=False
+audit ledger — 8 entries:
+  #1   setup       action=init profile=standard files=['./.mokata/.gitignore', './.mokata/constitution.md', './.mokata/manifest.json'] actor=cli
+  #2   gate        gate=spec-persisted phase=develop decision=blocked reason=no saved spec — draft and emit it first (/spec); the completeness gate must pass before implementation. ac_count=0
+  #3   write_gate  write_kind=config target=spec:emit actor=agent decision=approved reason=committed
+  #4   checkpoint  run=demo phase=completeness_gate
+  #5   checkpoint  run=demo phase=emit
+  #6   write_approval decision=approved proposal=p-d6af1f0f5d5b tool=remember target=memory:aws.key content_hash=3754acbb… actor=human run=demo scope=session
+  #7   write_gate  write_kind=memory target=memory:aws.key actor=mcp decision=blocked reason=secret detected
+  #8   write_approval decision=redeemed proposal=p-d6af1f0f5d5b tool=remember target=memory:aws.key content_hash=3754acbb… approved_by=human run=demo committed=False
 ```
+
+Note row **#1**: even `mokata init` — a plain CLI scaffold, nothing the model touched — is on the
+ledger. Every durable writer is registered; there is no unledgered side door.
 
 *(Each row also carries `prev_hash`/`entry_hash` — the ledger is hash-chained. Elided here for
 width.)* Even the *approved* write is recorded as `committed=False`: you can see exactly what you
 approved, and exactly why it still didn't land.
 
-One honest gap worth knowing: the **gate-guard's block (#2) is not on the ledger.** The hook runs
+One honest gap worth knowing: the **gate-guard's block from bad change #2 is not on the ledger.**
+The hook runs
 as its own short-lived process at the harness's tool boundary — it stops the write with an exit
 code, and it is the *override* (`mokata gate override`) that gets recorded, permanently, along with
 who lifted which gate and why. What mokata *governs*, it logs.
@@ -189,4 +196,4 @@ That's mokata: it remembers your project and stops the agent shipping the wrong 
 **Next:** see *every* differentiator run (graph, memory, governance) in
 [differentiators in action](differentiators-in-action.md), or
 [get started](../quickstart.md) in your own repo. Inside Claude Code the agent drives the *same
-gates* through the `/mokata:` commands and MCP tools — one engine.
+gates* through the slash commands and MCP tools — one engine.

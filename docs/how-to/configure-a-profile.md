@@ -13,13 +13,49 @@ mokata init --profile custom     # everything wired as a starting point to hand-
 defaults (grep + SQLite). Use `full` to wire every graph/memory provider (each degrades to
 its floor when absent), or `minimal` for just the governed TDD engine.
 
-### From the plugin (no CLI, no pip)
+### Or pick an adoption MODE instead
 
-Inside Claude Code you don't need the terminal — type **`/mokata:init full`** (or
-`standard` / `minimal`). It previews exactly what it will write, asks you to approve, then
-sets the profile — running the bundled engine on your existing Claude Code sign-in. You can
-also just say *"set up mokata here"* and Claude will run the gated `init` MCP tool; on a
-brand-new project mokata even offers to initialize it for you (once — never a nag).
+If you'd rather not think about providers, `--mode` is a graduated on-ramp — an **alias for a
+profile plus a printed quickstart**. It is **mutually exclusive** with `--profile`:
+
+```bash
+mokata init --mode seatbelt   # just the gates
+mokata init --mode memory     # gates + persistent memory
+mokata init --mode full       # everything
+```
+
+`memory` and `full` additionally **offer** the local embeddings model when run interactively (see
+[use & heal memory](use-memory.md)); `seatbelt` structurally never does.
+
+### From inside Claude Code
+
+Once mokata is wired (`pip install mokata` → `mokata setup claude`), you don't need the terminal —
+type **`/init full`** (or `standard` / `minimal`). It previews exactly what it will write, asks you
+to approve, then sets the profile. You can also just say *"set up mokata here"* and Claude will run
+the gated `init` MCP tool; on a brand-new project mokata even offers to initialize it for you
+(once — never a nag).
+
+## Switch an existing repo's profile (e.g. up to `full`)
+
+Already initialized? **Don't re-init** — run the re-runnable wizard:
+
+```bash
+mokata reconfigure --profile full
+```
+
+It is gated, idempotent, and reversible: it re-wires providers on the already-initialized repo
+(add/remove an integration, switch a backend, change the profile) and leaves your memory and run
+state untouched. Inside Claude Code the same flow is the **`/reconfigure`** slash command.
+
+`full` wires the whole graph/memory provider chain, but the graph tools themselves are external —
+to get the full structural tier immediately after switching, install and adopt
+`code-review-graph` (see [use a codebase graph](use-a-codebase-graph.md#wire-a-graph)):
+
+```bash
+pip install "code-review-graph[embeddings]"
+mokata graph adopt code-review-graph
+mokata graph status
+```
 
 ## Tune the committed manifest
 
@@ -41,7 +77,8 @@ Everything is a toggle in `.mokata/manifest.json` (see the
   hosted Postgres) via each tool's `config` block: see
   [configure storage backends & paths](configure-storage-backends.md).
 - **Codebase graph** — `full` wires a real graph (code-review-graph / serena) for structural
-  queries, with grep as the safe floor: see [use a codebase graph](use-a-codebase-graph.md).
+  queries, with the embedded stdlib-AST floor as the structural default and grep as the universal
+  emergency floor: see [use a codebase graph](use-a-codebase-graph.md).
 
 ## The trust dial: what it governs
 

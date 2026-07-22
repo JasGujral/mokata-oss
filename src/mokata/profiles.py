@@ -38,14 +38,28 @@ TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
         "version": None,
         "detect": {"type": "command", "name": "rg"},
     },
+    "ast": {
+        # GR.S2: the embedded stdlib-AST floor (GR.S1) promoted to a first-class, routable
+        # provider so a manifest can NAME the thing that actually answers on Python repos.
+        # Builtin + zero-dep: `detect: python_files` marks it present iff the repo holds a
+        # `.py` file, so a zero-Python repo routes straight past it to the lexical floor
+        # (byte-identical to before). It is a FLOOR (is_graph=False), not the adopted graph.
+        "provides": "code_graph",
+        "kind": "builtin",
+        "version": None,
+        "detect": {"type": "python_files"},
+    },
     "neo4j": {
         # Opt-in external graph DB (Stage 35f). NOT wired by any default profile (P8): a user
         # adds it to the code_graph chain + sets NEO4J_* env. Degrades to the grep floor when
         # the driver/env/DB is absent. URI + credentials via env var only (never inline).
+        # SIMP.S2 (0.0.15): DEPRECATED — a 3rd DB contradicts the two-modes-one-shape model; the
+        # canonical graph is the embedded AST floor / adopted CRG. WARN-only here; removed 0.0.17.
         "provides": "code_graph",
         "kind": "external",
         "version": None,
         "detect": {"type": "python_module", "name": "neo4j"},
+        "deprecated": "0.0.17",
     },
     "grep": {
         "provides": "code_graph",
@@ -57,24 +71,42 @@ TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
     },
     # --- memory_store providers (storage only; the memory logic is mokata's own) ---
     "native-memory": {
+        # SIMP.S2 (0.0.15): DEPRECATED — the canonical store is SQLite / one Postgres DSN
+        # (two-modes-one-shape). Kept + warned this release (`mokata migrate native-memory`);
+        # removed 0.0.17. It stays listed here so a committed manifest never silently loses it.
         "provides": "memory_store",
         "kind": "external",
         "version": None,
         "detect": {"type": "command", "name": "claude"},
+        "deprecated": "0.0.17",
     },
     "obsidian": {
+        # SIMP.S2 (0.0.15): DEPRECATED — as native-memory (`mokata migrate obsidian`); removed 0.0.17.
         "provides": "memory_store",
         "kind": "external",
         "version": None,
         # Stage 24A: detect the real per-OS Obsidian config dirs (and a configured
         # `config.vault`), not the bare ~/.obsidian that usually doesn't exist.
         "detect": {"type": "obsidian"},
+        "deprecated": "0.0.17",
     },
     "postgres": {
         # Opt-in hosted/remote memory backend. NOT wired by any default profile (P8
         # local-first): a user adds it explicitly via `mokata config set`. The DSN comes
         # from an env var (config.dsn_env) — never inline. Degrades to SQLite if psycopg
         # is absent or the DB is unreachable.
+        "provides": "memory_store",
+        "kind": "external",
+        "version": None,
+        "detect": {"type": "python_module", "name": "psycopg"},
+    },
+    "pgvector": {
+        # DB.S4 — the OPT-IN semantic memory store (Postgres + the pgvector extension). NOT wired
+        # by any default profile and deliberately not detectable-into-use: pgvector needs
+        # `CREATE EXTENSION`, which ADR-54 keeps OFF the vanilla-Postgres golden path, so a team
+        # opts in explicitly (`mokata config set` + `mokata team init --vector`). Degrades to the
+        # SQLite floor when the DSN is unset, psycopg/pgvector is absent, the DB is unreachable,
+        # or the index's embedder stamp does not match the configured embedder.
         "provides": "memory_store",
         "kind": "external",
         "version": None,
@@ -93,8 +125,9 @@ TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
 CAPABILITY_FALLBACKS: Dict[str, Dict[str, Any]] = {
     "code_graph": {
         "description": "Structural codebase queries (callers/callees, imports, "
-        "blast-radius); grep is the universal fallback.",
-        "fallback": ["code-review-graph", "serena", "ripgrep", "grep"],
+        "blast-radius); the embedded AST floor answers on Python, grep is the "
+        "universal fallback.",
+        "fallback": ["code-review-graph", "serena", "ast", "ripgrep", "grep"],
     },
     "memory_store": {
         "description": "Where persistent/decision memory is stored; SQLite is the "
@@ -135,7 +168,10 @@ PROFILES: Dict[str, Dict[str, Any]] = {
         "layers": {"engine": True, "knowledge": True, "memory": True,
                    "governance": True},
         "capabilities": {
-            "code_graph": ["ripgrep", "grep"],
+            # GR.S2: names the AST floor that actually answers on Python repos (was
+            # ["ripgrep","grep"] while `ast` answered unnamed — the drift bug). A real
+            # graph (code-review-graph) is offered at setup and pinned via `graph adopt`.
+            "code_graph": ["ast", "ripgrep", "grep"],
             "memory_store": ["sqlite"],
         },
     },
@@ -145,7 +181,7 @@ PROFILES: Dict[str, Dict[str, Any]] = {
         "layers": {"engine": True, "knowledge": True, "memory": True,
                    "governance": True},
         "capabilities": {
-            "code_graph": ["code-review-graph", "serena", "ripgrep", "grep"],
+            "code_graph": ["code-review-graph", "serena", "ast", "ripgrep", "grep"],
             "memory_store": ["native-memory", "obsidian", "sqlite"],
         },
     },
@@ -155,7 +191,7 @@ PROFILES: Dict[str, Dict[str, Any]] = {
         "layers": {"engine": True, "knowledge": True, "memory": True,
                    "governance": True},
         "capabilities": {
-            "code_graph": ["code-review-graph", "serena", "ripgrep", "grep"],
+            "code_graph": ["code-review-graph", "serena", "ast", "ripgrep", "grep"],
             "memory_store": ["native-memory", "obsidian", "sqlite"],
         },
     },

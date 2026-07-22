@@ -16,7 +16,7 @@ a scoped set → hand off to `spec`). Both HARD-GATE the spec; the completeness 
 whichever ran. See [refine existing code](../how-to/refine-existing-code.md).
 
 **mokata engages brainstorm when you're exploring.** You don't have to remember to type
-`/mokata:brainstorm` — the skill is *model-invocable*, so Claude Code can auto-activate it
+`/brainstorm` — the skill is *model-invocable*, so Claude Code can auto-activate it
 when you're weighing options or describing a new problem before any code. You'll know it
 stepped in by the banner `mokata · brainstorm (engaged)`. It's proactive, **not** intrusive:
 it only *starts* the conversation — the HARD-GATE still holds (no spec/code until you approve
@@ -80,11 +80,12 @@ block. See [AC traceability](knowledge.md) and the [governance model](governance
 ### The run-state gates (enforced on native writes)
 
 The three above are **phase** gates: they govern the engine as it runs. A separate, smaller set —
-the **run-state gates** — governs the *code you write between the phases*, enforced on the
+the **four run-state gates** — governs the *code you write between the phases*, enforced on the
 harness's native `Write`/`Edit` by the **`gate-guard`** hook:
 
 | Gate | Blocks a native write to an implementation file when… |
 |---|---|
+| `approach-approval` | a run is registered but **no approach is approved** — a native implementation write before an approved approach is blocked |
 | `spec-persisted` | an approach is approved for this run but **no spec is emitted** |
 | `no-code-without-failing-test` | the spec is emitted but **no failing test is on record** |
 | `spec-scope` | the write falls **outside the spec's authorized surface**, spells a **deferred** marker, or a **spec amend is in progress** |
@@ -95,12 +96,12 @@ re-confirmed, ledgered). The full model — including what the hook does *not* p
 [governance](governance.md#run-state-gates-on-native-writes-the-gate-guard-hook).
 
 **Spec before code, enforced.** The `spec-persisted` gate is enforced **twice over**: as a
-precondition on the implementation entry points (`/mokata:develop`, `/mokata:test`, and
+precondition on the implementation entry points (`/develop`, `/test`, and
 `mokata run develop`/`test`), firing *ahead of* the test gate; and by the hook, on any native
 write. Both block unless a saved spec with ≥1 acceptance criterion exists (`emitted_spec.json`,
 written by the human-gated `emit` only after the completeness gate passes). Jump straight to
 `develop` with no saved spec and mokata stops with a clear next step — *"no saved spec — draft
-and emit it first (`/mokata:spec`)"* — and logs the decision. So "spec written **and** saved
+and emit it first (`/spec`)"* — and logs the decision. So "spec written **and** saved
 before implementation" is enforced, not merely implied.
 
 **Scope is declared, then enforced.** When the spec is emitted it carries a machine-checkable
@@ -133,7 +134,7 @@ lexical/file check that says so). See [governance](governance.md) and `mokata sp
 **Start green, finish verified.** Before implementing, confirm a clean baseline —
 `mokata baseline` reports the test suite green/red so a *new* failure is attributable to your
 change (it degrades cleanly when no test command is configured — mokata never guesses one).
-And the flow now **ends with `/mokata:ship`**: it verifies the work is *actually* done
+And the flow now **ends with `/ship`**: it verifies the work is *actually* done
 (evidence over claims — green tests + every AC met + review passed; otherwise it blocks with
 what's missing), summarizes what shipped, and **lets you choose how to land it** — merge, open
 a PR, keep the branch, or discard. mokata may prepare a commit/branch or a PR description, but
@@ -237,12 +238,12 @@ a counter.
 
   ```text
   ✗ completeness blocked — 1 acceptance criterion unmapped to any test
-    → to unblock: write a test for each unmapped acceptance criterion (`/mokata:test`), then re-run the gate
+    → to unblock: write a test for each unmapped acceptance criterion (`/test`), then re-run the gate
   ```
 - **Stage recap + next-step nudge.** When a stage finishes, mokata prints a recap and names
-  the one next command: `✓ spec done — 5 ACs written. Next: \`/mokata:develop\``. **Honest
+  the one next command: `✓ spec done — 5 ACs written. Next: \`/develop\``. **Honest
   mechanism:** Claude Code has no plugin API to pre-fill the prompt box or rebind Tab, so the
-  nudge just *names* the next `/mokata:` command — it reaches you through the `/` command
+  nudge just *names* the next `/` command — it reaches you through the `/` command
   **autocomplete** (click-to-fill) and **model-invoked continuation** (Claude offers to run
   the next step so you just confirm). mokata never claims to type for you or rebind a key.
 - **In-stage progress counters.** The `[done/total]` count (e.g. `[3/7 ACs]`) is surfaced in
@@ -340,8 +341,8 @@ they never write durable state, never gate, never mutate a run. The dashboard is
 
 **Inside Claude Code (Stage 54d).** The same read-only engines are reachable *without leaving
 the harness*: the **`lanes`**, **`watch`**, and **`govern`** MCP tools (all declared `read`) and
-the **`/mokata:progress`** (incl. the parallel lanes), **`/mokata:watch`**, and
-**`/mokata:govern`** slash commands. They reuse `build_run_lanes` / `write_dashboard` /
+the **`/progress`** (incl. the parallel lanes), **`/watch`**, and
+**`/govern`** slash commands. They reuse `build_run_lanes` / `write_dashboard` /
 `build_governance_view` — no new engine, no gating, no durable writes (the `watch`/`govern` HTML
 is the existing self-contained artifact under gitignored `temp_local/`). And during a fan-out the
 [stage badge](#the-always-on-stage-badge-stage-54b) appends a compact agents summary — e.g.

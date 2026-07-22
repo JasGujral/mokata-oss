@@ -3,7 +3,7 @@ name: Docs
 on:
   push:
     branches: [master, main]
-    paths: ["docs/**", "mkdocs.yml", ".github/workflows/docs.yml"]
+    paths: ["docs/**", "overrides/**", "mkdocs.yml", ".github/workflows/docs.yml"]
   release:
     types: [published]      # rebuild docs whenever a release is published (build verifies; deploy is gated below)
   workflow_dispatch:
@@ -27,8 +27,8 @@ jobs:
     permissions:
       contents: read        # checkout + build only; no write scopes for the build job
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
       # Pinned EXACTLY (now HASH-pinned — SC.S1 / Scorecard Pinned-Dependencies) so an upstream
@@ -61,7 +61,7 @@ jobs:
             --include-before-body docs/assets/brand/pdf-cover.html \
             --toc -V toc-title="Contents"
           test -s site/assets/mokata-complete-guide.pdf && echo "PDF generated."
-      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: site
 

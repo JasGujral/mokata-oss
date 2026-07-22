@@ -37,7 +37,11 @@ COMMANDS_DIR = os.path.join(ROOT, "src", "mokata", "templates", "commands")
 # filesystem action gated via the CLI's fail-closed read_yes_no path — its in-harness DETECT+OFFER
 # is surfaced by `session_windows` + the SessionStart briefing, which point the user at it.
 EXEMPT = {"unsetup", "harness", "route", "detect", "validate", "bootstrap",
-          "release-check", "branch-protection-check", "bench", "worktree",
+          "release-check", "branch-protection-check", "bench", "worktree", "graph",
+          # SIMP.S2 — `migrate` is one-time deprecation→canonical migration run from the shell; the
+          # in-harness deprecation WARN detects+points at it (the `worktree` detect-and-offer
+          # pattern), so it is disclosed, not a silent gap. Removed with the channels at 0.0.17.
+          "migrate",
           # SI.1 — `gate` (run-state gate status + P14 override) is exempt BY DESIGN, and this is
           # the one exemption that is a security property rather than plumbing: giving the override
           # an MCP tool or a slash command would let the MODEL clear the very gate that constrains
@@ -213,7 +217,7 @@ class TestNewReadTools(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
             res = M.baseline(path=d)
-            self.assertIn("report", res)
+            self.assertIn("ok", res)     # MCP-R.D1b: concise default answers with `ok` (report opt-in)
 
     def test_sessions_empty_state(self):
         with tempfile.TemporaryDirectory() as d:

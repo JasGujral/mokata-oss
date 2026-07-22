@@ -22,7 +22,7 @@ Each entry carries a first-class `kind`:
 ## Capture it (guided, LLM-processed, gated)
 
 ```text
-/mokata:onboard            # in Claude Code — the guided conversation
+/onboard            # in Claude Code — the guided conversation
 mokata onboard             # the same protocol from the CLI
 ```
 
@@ -59,7 +59,7 @@ record), the new one becomes active — surfaced, never silently overwritten.
 
 When you keep correcting the same thing — declining a write, reverting a change, hitting a spec
 conflict — mokata notices and distils it into a guardrail-rule **proposal**. Running
-`/mokata:onboard` (and `mokata rules`) surfaces these:
+`/onboard` (and `mokata rules`) surfaces these:
 
 ```
 Proposed guardrails (recurring corrections mokata noticed — human-gated, NOT auto-added):

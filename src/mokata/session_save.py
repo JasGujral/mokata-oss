@@ -102,6 +102,21 @@ def _describe(store: Any, run_id: str) -> Dict[str, Dict[str, Any]]:
     return out
 
 
+def register_run(surface: Any, run_id: Optional[str] = None) -> str:
+    """RUN-REG — the protocol-start state write. Ensure THIS run is REGISTERED (a
+    `pipeline_run__<rid>` checkpoint exists) so a run driven conversationally cannot silently bypass
+    tracking: after this, `progress` reports the run active, `spec` has a run to attach to, and
+    PH-GATE.S0's phase gate has state to bind on. Returns the run id.
+
+    Rides the EXISTING write path (`PipelineCheckpoint.ensure_registered`) — no new persistence
+    logic — and is idempotent + non-destructive: a run already past its first gate keeps its
+    progress. UNGATED, like every save here: registering run state is transient run-tracking under
+    the MS.S2 session scope, not a durable write (P2 governs durable writes)."""
+    rid = run_id or current_run_id()
+    PipelineCheckpoint(surface.state, rid).ensure_registered()
+    return rid
+
+
 def save_session(surface: Any, brainstorm: Optional[Dict[str, Any]] = None,
                  passed: Optional[List[str]] = None,
                  run_id: Optional[str] = None) -> SaveResult:

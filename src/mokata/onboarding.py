@@ -492,11 +492,19 @@ def run_wizard(root: str = ".", *, ask: Optional[Callable] = None,
                detector: Optional[Detector] = None, profile: Optional[str] = None,
                wire_harness: Optional[bool] = None, harness: str = "claude",
                scope: str = "project", home: Optional[str] = None, ledger: Any = None,
-               assume_yes: bool = False, force: bool = False) -> WizardResult:
+               assume_yes: bool = False, force: bool = False,
+               offer_embeddings: Any = None) -> WizardResult:
     """Run the interactive first-run wizard end to end: DETECT → ASK (profile + what to wire) →
     one HUMAN GATE → RUN (init + wire integrations + wire harness). Decline → nothing wired.
-    Never installs a third-party tool (absent → recommend only). `assume_yes` is the
-    non-interactive CI path (no asks; scaffolds the profile; no integrations/harness wired)."""
+    `assume_yes` is the non-interactive CI path (no asks; scaffolds the profile; no
+    integrations/harness wired).
+
+    Installs nothing on its own, with ONE consented exception (DB.S4, Jas 2026-07-14): after the
+    wiring is done, an INTERACTIVE run OFFERS mokata's ~30MB local embeddings model, because
+    hashing-only made "semantic recall" untrue for most installs. It is a question, never a
+    default — declining leaves the zero-dep hashing tier, is recorded USER-scoped, and is never
+    asked again. `assume_yes` (CI) skips the offer entirely, and off a TTY the prompt is
+    fail-closed, so no non-interactive path can ever trigger a `pip install`."""
     from .init import init_repo
     emit = out or print
     ask = ask or _default_ask
@@ -560,6 +568,23 @@ def run_wizard(root: str = ".", *, ask: Optional[Callable] = None,
                 wired.append(f"harness '{harness}' ({scope} scope): slash commands + MCP + hooks")
         except SetupError as exc:
             wired.append(f"harness '{harness}' NOT wired (degraded: {exc})")
+
+    # 6. DB.S4 — the consented embeddings offer. AFTER the wiring, so a decline (or a failed
+    # install) can never cost the user their setup; interactive only, and routed through the
+    # shared `extras_install` primitive so the ask → bounded pip → verify → ledger → no-nag
+    # behaviour is the same one G1's `--mode=memory|full` will call.
+    if not assume_yes and offer_embeddings is not False:
+        from .extras_install import offer_embeddings as _offer
+        offer = offer_embeddings if callable(offer_embeddings) else _offer
+        try:
+            ores = offer(root, ledger=ledger, user_home=home, out=emit)
+            if getattr(ores, "installed", False):
+                wired.append("semantic memory model installed (mokata[embeddings])")
+        except Exception as exc:
+            # DEGRADE_CLEAN: an optional post-setup offer must never abort a setup that has
+            # already succeeded. The repo is wired; the user simply stays on the hashing tier.
+            emit(f"note: the embeddings offer was skipped ({type(exc).__name__}: {exc}); "
+                 f"mokata's built-in hashing tier is active.")
 
     next_step = _wizard_next_step()
     result = WizardResult(profile=profile, detected=detected, wired=wired,

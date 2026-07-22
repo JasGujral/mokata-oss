@@ -41,11 +41,26 @@ def _default_reviewer(stage: str, task: Any, result: Any) -> Tuple[bool, str]:
 
 
 def two_stage_review(task: Any, result: Any, spec: Any = None,
-                     reviewer: Optional[Callable[[str, Any, Any], Tuple[bool, str]]] = None
+                     reviewer: Optional[Callable[[str, Any, Any], Tuple[bool, str]]] = None,
+                     *, layer: Any = None, change: Any = None,
+                     decisions: Any = None, budget: Any = None
                      ) -> ReviewResult:
+    """Two-stage review. GR.S2(m): when a real code graph + a change's touch-set are supplied,
+    review becomes a `uses_graph` CONSUMER — a THIN verification slice adds bounded findings
+    (callers-of-changed-symbols/guards to pass 2; the DORMANT declared-reach check to pass 1).
+    With no graph (the default), the result is byte-identical to today's review."""
     review = reviewer or _default_reviewer
     stages: List[ReviewStage] = []
     for name in STAGES:
         passed, notes = review(name, task, result)
         stages.append(ReviewStage(name=name, passed=passed, notes=notes))
+
+    if layer is not None and change is not None:
+        from .review_graph import graph_verify
+        gv = graph_verify(layer, change, decisions=decisions, budget=budget)
+        if not gv.degraded and gv.findings:
+            by_stage = {1: stages[0], 2: stages[1]}   # pass 1 -> spec-compliance, 2 -> quality
+            for f in gv.findings:
+                st = by_stage.get(f.pass_no, stages[-1])
+                st.notes = (st.notes + " | " if st.notes else "") + f"[graph] {f.message}"
     return ReviewResult(stages=stages)

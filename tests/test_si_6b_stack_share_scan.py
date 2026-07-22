@@ -394,17 +394,21 @@ class TestTheRegisterRecordsTheClosure(unittest.TestCase):
         # enforce: a write that cannot execute except inside a gate.
         self.assertIn(("share.py", "_commit"), GATED)
 
-    def test_exactly_six_bypasses_remain_and_they_are_the_setup_cluster(self):
-        """The 6 setup one-shots stay registered, still printed in CI every run, and land in
-        0.0.14. SI.6b closes the 2 scan-relevant entries and claims nothing more."""
-        from test_si_6_writegate_side_doors import KNOWN_BYPASS
-        self.assertEqual(len(KNOWN_BYPASS), 6)
+    def test_the_setup_cluster_that_si_6b_left_is_now_closed_by_kb_s1(self):
+        """SI.6b left exactly 6 setup one-shots on the bypass register and claimed nothing more.
+        KB.S1 (0.0.14) closes all 6 — each now keeps its bespoke TTY consent and leaves an audit
+        record, moving to the LEDGERED register — so KNOWN_BYPASS is empty and this stack-share
+        stage's remainder is gone. (This pin flips SI.6b's transient "6 remain" to its resolution;
+        the live count lives in test_si_6's `test_the_known_bypass_register_is_empty`.)"""
+        from test_si_6_writegate_side_doors import KNOWN_BYPASS, LEDGERED
+        self.assertEqual(KNOWN_BYPASS, {},
+                         "the 0.0.13 exit criterion: no durable write bypasses both gate and ledger")
         self.assertEqual(
-            sorted(KNOWN_BYPASS),
+            sorted(LEDGERED),
             [("agent_skills.py", "prune_orphan_skills"), ("agent_skills.py", "write_skill_files"),
              ("govern/lifecycle.py", "_remove"), ("harness_setup.py", "_write_command_file"),
              ("harness_setup.py", "_write_json"), ("init.py", "write_files")],
-            "the residual bypasses are the setup/bootstrap cluster — no stack-share path remains")
+            "the former setup/bootstrap cluster is now the LEDGERED set — recorded, not bypassing")
 
 
 if __name__ == "__main__":

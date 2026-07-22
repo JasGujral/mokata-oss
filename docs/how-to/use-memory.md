@@ -14,6 +14,71 @@ one-line **health nudge** — `N stale · M contradictory · K unused — review
 / mokata govern` — pointing at the gated review path. It is read-only and **proposal-only**:
 it never edits or prunes memory, and it's silent when the store is healthy.
 
+## Back it up & restore it — `memory export` / `memory import`
+
+Memory is a durable asset, so it has a **backup** surface. `export` writes a committable,
+human-readable JSON file **you own**; `import` restores one through the gate.
+
+```bash
+mokata memory export                       # → .mokata/backups/memory-<UTC>.json
+mokata memory export ./team-brain.json     # or name the destination
+mokata memory import ./team-brain.json     # human-gated restore (--yes to skip the prompt)
+```
+
+The default destination is `.mokata/backups/memory-<UTC>.json` — **not** under `temp_local/`, so
+it's committable, and it is UTC-stamped to the microsecond so successive backups **never clobber**
+each other. Export is read-only on the source and carries provenance with each item.
+
+`import` is a **restore**, not a merge-and-hope: it previews (counts + a keys-only sample), dedups,
+surfaces each new item for approval, and routes a **conflict** (same subject, different value)
+through the self-healing old→new surface — never a silent overwrite. Every restored item lands
+through the one WriteGate, secret-scanned and stamped with import provenance, so a round trip is
+content-identical.
+
+!!! note "Backup ≠ sharing"
+    This is a **backup** surface. Cross-repo/team sharing is the team Postgres store (see
+    [team setup](team-setup.md)). The old `memory-share.json` channel still works as a destination
+    but is **deprecated** (removal: 0.0.17) and warns once — fold it into the canonical store with
+    the one-time, human-gated `mokata migrate memory-share`.
+
+## How recall actually ranks — the retrieval tiers
+
+A recall fuses up to three tiers, and mokata tells you **which engines are really ranking your
+results** rather than letting two installs both say "memory: ok":
+
+| Tier | What runs | Notes |
+|---|---|---|
+| **lexical** (always on) | `fts5` (SQLite FTS5 + bm25) or `tsvector` (Postgres tsvector + ts_rank) — ranked **in the database** | degrades honestly to `jaccard`, a Python keyword-overlap floor, when FTS5 is absent |
+| **graph-proximity** (optional) | a code-graph-keyed boost | off unless a graph is wired |
+| **semantic** (opt-in) | embedding cosine over the vector index | `off` by default; `hashing` is the zero-dep floor and is **honestly labelled "token-hash overlap, NOT meaning"** |
+
+`mokata doctor` prints the live retrieval-stack line, so you never have to guess. It is
+**informational** — `hashing` + `jaccard` is a legitimate, working zero-dependency install, not a
+failure, and it never affects doctor's exit code.
+
+### Turning on real semantics (consented, not default-on)
+
+The embeddings tier is **opt-in**. mokata **asks before installing anything** — an extra is a real
+install that runs `pip` and may touch the network, so it goes through the same consent discipline
+as any durable change:
+
+```bash
+pip install 'mokata[embeddings]'      # or accept the offer when mokata asks
+```
+
+`mokata init --mode memory` and `--mode full` **offer** the local embeddings model when run
+interactively; `--mode seatbelt` structurally never does. The prompt **fails closed off a TTY** (an
+unanswered prompt is not consent), the install is one **bounded** subprocess, and success is decided
+by whether the module actually **imports** — not by pip's exit code. A **decline is remembered**
+(user-scoped, so it survives a re-clone) and you are not asked again.
+
+Changed embedder? Vectors must never silently mix, so the runtime **refuses** a mismatched index
+(the semantic tier goes off and recall falls to lexical). The way out is the gated migration:
+
+```bash
+mokata memory reembed        # previewed (the item count + old→new embedder), then human-gated
+```
+
 ## Explainable recall — "why did this surface?"
 
 A by-relevance recall names *why* each hit surfaced (matched token / graph anchor / semantic
