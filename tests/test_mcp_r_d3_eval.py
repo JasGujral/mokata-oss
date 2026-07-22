@@ -131,6 +131,12 @@ class Fixture:
         return len(led.entries())
 
     def close(self) -> None:
+        # The eval calls tools THROUGH `_serve`, which fires D0's R5 self-registration in a daemon
+        # thread that writes under `.mokata/temp_local/`. Without the drain, teardown races that
+        # write and the cleanup fails on the still-open lock file (Windows cannot unlink an open
+        # file) — a fixture race, not a product fault. `_await_registrations` is the documented
+        # test seam for exactly this.
+        MS._await_registrations(5.0)
         self._dir.cleanup()
 
     def __enter__(self) -> "Fixture":

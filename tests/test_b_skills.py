@@ -145,7 +145,10 @@ class TestPluginShadowNote(unittest.TestCase):
             self.assertTrue(f.plugin_present)
             out = "\n".join(f.render(quiet_when_ok=False))
             self.assertIn("plugin is installed", out)
-            self.assertIn("/some/plugin/root", out)
+            # The finding renders the root with `str(Path)`, which is NATIVE-separated — so the
+            # expectation is built the same way rather than hardcoding a POSIX separator (on
+            # Windows the line reads `\some\plugin\root`).
+            self.assertIn(str(Path("/some/plugin/root")), out)
 
 
 class TestUncheckableNeverRaises(unittest.TestCase):

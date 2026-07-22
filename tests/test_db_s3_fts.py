@@ -603,18 +603,27 @@ class BackfillTest(unittest.TestCase):
             finally:
                 SQLiteBackend.fts5_available = original
 
-            with sqlite3.connect(path) as probe:
+            # `sqlite3.connect` as a context manager commits the transaction but does NOT close
+            # the connection, and an open handle blocks the temp-dir unlink on Windows — so the
+            # probe is closed explicitly, like every other backend in this class.
+            probe = sqlite3.connect(path)
+            try:
                 tables = {r[0] for r in probe.execute(
                     "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            finally:
+                probe.close()
             self.assertNotIn("memory_fts", tables, "premise broken: the old store had an index")
 
-            # today's build opens it — the index is created AND backfilled
+            # today's build opens it — the index is created AND backfilled. Closed INSIDE the
+            # `with` (not via addCleanup, which runs after the temp dir is already being removed).
             new = SQLiteBackend(path)
-            self.addCleanup(new.close)
-            self.assertEqual(new.lexical_mode, LEXICAL_MODE_FTS5)
-            ids = {it.id for it, _ in new.lexical_search(_QUERY, top_k=10)}
-            self.assertIn("gate", ids, "pre-existing rows must be findable after the upgrade")
-            self.assertIn("verbose", ids)
+            try:
+                self.assertEqual(new.lexical_mode, LEXICAL_MODE_FTS5)
+                ids = {it.id for it, _ in new.lexical_search(_QUERY, top_k=10)}
+                self.assertIn("gate", ids, "pre-existing rows must be findable after the upgrade")
+                self.assertIn("verbose", ids)
+            finally:
+                new.close()
 
     def test_db_s3_backfill_is_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
