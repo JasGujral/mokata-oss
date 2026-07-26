@@ -77,5 +77,6 @@ never trusted on sight.
 One limit, stated plainly: the PreToolUse hooks — the **secret-guard** and the run-state
 **gate-guard** — are wired **only on Claude Code**, the one harness that declares the `hooks`
 capability. Elsewhere the durable-write protections above still hold (they live in mokata's own
-WriteGate, not the hook), but the run-state gates enforce nothing. See
+WriteGate, not the hook), but the four run-state gates (`approach-approval`, `spec-persisted`,
+`no-code-without-failing-test`, `spec-scope`) enforce nothing. See
 [Use mokata with other AI agents](use-with-other-agents.md).

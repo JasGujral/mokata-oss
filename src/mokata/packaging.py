@@ -70,15 +70,26 @@ def validate_marketplace(data: Any) -> List[str]:
 # checkout AND the public mirror), and the ship-artifact test. No network, never raises:
 # a missing/unreadable field is reported as a named mismatch (None), not a crash.
 
-# field name -> (relative path, extractor). The four version-bearing FILES + the package
-# __version__ — the set a tag must match before it can be pushed.
+# PIN-DRIFT (0.0.15) — the published `mokata-check@vX.Y.Z` action pins. They used to be
+# bumped BY HAND at each doc gate (0.0.14: `916c65f`) and one gate missed them; they are now
+# guarded fields like any other version-bearing location. A new pin must be added HERE;
+# `tests/test_pin_drift.py` sweeps the tree and fails CI if a published pin isn't covered.
+ACTION_PIN_RE = re.compile(r"mokata-check@v(\d+\.\d+\.\d+)")
+ACTION_PIN_PATHS = (
+    "docs/how-to/mokata-as-a-pr-check.md",
+    ".github/actions/mokata-check/example-pr-check.yml",
+)
+
+# field name (`path:selector`) -> how to read it. The four version-bearing FILES + the
+# package __version__ + the action pins — the set a tag must match before it can be pushed.
+# VERIFY-ONLY: nothing here bumps; `release.sh` REFUSES to tag on a mismatch.
 _VERSION_FIELDS = (
     "pyproject.toml:version",
     "plugin.json:version",
     "marketplace.json:metadata.version",
     "marketplace.json:plugins[0].version",
     "src/mokata/__init__.py:__version__",
-)
+) + tuple(f"{rel}:action-pin" for rel in ACTION_PIN_PATHS)
 
 
 def _read_text(root: str, rel: str) -> Optional[str]:
@@ -103,6 +114,19 @@ def _dunder_version(text: Optional[str]) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def _action_pin(text: Optional[str]) -> Optional[str]:
+    """The `@vX.Y.Z` action pin inside arbitrary text (the `action-pin` selector kind).
+    Fail-closed: no pin -> None (a named mismatch); several DISAGREEING pins in one file ->
+    the joined values, which can never equal a tag, so the file is named as an offender."""
+    if not text:
+        return None
+    found = ACTION_PIN_RE.findall(text)
+    if not found:
+        return None
+    uniq = sorted(set(found))
+    return uniq[0] if len(uniq) == 1 else ",".join(uniq)
+
+
 def _json_get(root: str, rel: str, *path: Any) -> Optional[str]:
     text = _read_text(root, rel)
     if text is None:
@@ -117,9 +141,10 @@ def _json_get(root: str, rel: str, *path: Any) -> Optional[str]:
 
 
 def read_version_fields(root: str = ".") -> "Dict[str, Optional[str]]":
-    """The version string at each of the five canonical locations (None when the file or
-    field is missing/unreadable). Pure/offline; never raises."""
-    return {
+    """The version string at each guarded location — the five canonical version fields plus
+    the `action-pin` entries (None when the file or field is missing/unreadable). Keyed by
+    `_VERSION_FIELDS`. Pure/offline; never raises."""
+    fields: "Dict[str, Optional[str]]" = {
         "pyproject.toml:version": _toml_version(_read_text(root, PYPROJECT_PATH)),
         "plugin.json:version": _json_get(root, PLUGIN_MANIFEST_PATH, "version"),
         "marketplace.json:metadata.version":
@@ -129,6 +154,9 @@ def read_version_fields(root: str = ".") -> "Dict[str, Optional[str]]":
         "src/mokata/__init__.py:__version__":
             _dunder_version(_read_text(root, PACKAGE_INIT_PATH)),
     }
+    for rel in ACTION_PIN_PATHS:
+        fields[f"{rel}:action-pin"] = _action_pin(_read_text(root, rel))
+    return fields
 
 
 def _normalize_tag(target: str) -> str:

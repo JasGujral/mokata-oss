@@ -45,7 +45,7 @@ sequential flow** when subagent execution is unavailable — never a hard failur
 ## Assisted task decomposition (Stage 54f)
 
 The selector and orchestrator answer *how* to run a set of tasks — but where do the tasks
-come from? `mokata decompose` (and the `decompose` MCP tool / `/mokata:decompose`) **splits
+come from? `mokata decompose` (and the `decompose` MCP tool / `/decompose`) **splits
 the approved work into the tasks it runs**, then hands them straight to the flow above. It
 adds **no** fan-out logic of its own — it reuses the selector and `run_tasks`.
 
@@ -79,9 +79,9 @@ through the same `TokenTracker`.
 
 ## Depth engines (E5/E6)
 
-- **`/mokata:bug` (E5)** — capture a reproducer **first**, then fix; labels progress
+- **`/bug` (E5)** — capture a reproducer **first**, then fix; labels progress
   `reported → reproduced → fixing → verified`; reproducer-before-fix is gated.
-- **`/mokata:debug` (E6)** — **root-cause-before-fix** with **N-strikes escalation** (after N
+- **`/debug` (E6)** — **root-cause-before-fix** with **N-strikes escalation** (after N
   ruled-out hypotheses, escalate the model).
-- **`/mokata:optimize` (E6)** — **measure-first**: no change before a baseline; an optimization is
+- **`/optimize` (E6)** — **measure-first**: no change before a baseline; an optimization is
   kept only when a before/after measurement shows it faster with behavior preserved.

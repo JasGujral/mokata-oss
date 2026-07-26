@@ -8,7 +8,7 @@ see [Pipeline & gates](../concepts/pipeline.md).
 
 ## Two surfaces, one source
 
-Claude Code exposes two ways to invoke a capability: a **slash command** (`/mokata:<name>`) and an
+Claude Code exposes two ways to invoke a capability: a **slash command** (`/<name>`) and an
 **Agent Skill** (a `SKILL.md` file Claude auto-engages from its `description`). mokata renders both
 from the **same** `templates/commands/<name>.md` source — the skill's trigger text is the
 template's own `description`, and its body is the template's protocol verbatim, behind a fixed
@@ -53,7 +53,12 @@ a sentence the model is trusted to honour:
 
 If a skill's prose promised a boundary the engine didn't back, that would be a bug the skill-lint
 catches — Contracts are grounded in a boundary→gate map, so a Contract never claims enforcement
-that isn't there.
+that isn't there. That map (`skill_contracts.GATES`) marks **9 gates as *backed*** — `write-gate`,
+`secret-guard`, `spec-persisted`, `completeness`, `no-code-without-failing-test`, `deviation`,
+`hard-rule`, `ship-readiness`, `approach-approval` — and only a backed gate may be cited as
+enforcement. The rest (`red-before-green`, `spec-then-quality`, `measure-first`,
+`finish-is-human-landed`, …) are **advisory protocol boundaries**: they are a skill's headline
+copy, never a claim that code stops you.
 
 ### 2. One activation surface (the `⛭` line)
 
@@ -88,11 +93,12 @@ different in kind:
 | `mokata-hook secret-guard` | `Write` · `Edit` · `MultiEdit` · **`Bash`** | **security** — never overridable |
 | `mokata-hook gate-guard` | `Write` · `Edit` · `MultiEdit` · `NotebookEdit` | **methodology** — overridable, explicitly and on the ledger |
 
-The gate-guard enforces **three run-state gates** — the same ids the in-tool gates use, at a new
-enforcement point (a net *under* them, never a second opinion):
+The gate-guard enforces **four run-state gates** (`gate_hook.GATES`) — the same ids the in-tool
+gates use, at a new enforcement point (a net *under* them, never a second opinion):
 
 | Gate | Blocks a native write to an implementation file when… |
 |---|---|
+| `approach-approval` | a brainstorm is in progress and **no approach is approved yet** |
 | `spec-persisted` | an approach is approved for this run but **no spec is emitted** |
 | `no-code-without-failing-test` | the spec is emitted but **no failing test is on record** |
 | `spec-scope` | the write is **outside the spec's authorized surface**, spells an item the spec explicitly **deferred**, or a **spec amend is in progress** |
@@ -102,7 +108,7 @@ override:
 
 ```text
 BLOCKED [no-code-without-failing-test] no failing test is on record for this run — auth.py is
-implementation. Write the failing test first and watch it fail (/mokata:test), or override:
+implementation. Write the failing test first and watch it fail (/test), or override:
 mokata gate override no-code-without-failing-test --reason "<why>"
 ```
 

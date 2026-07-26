@@ -38,6 +38,11 @@ narrative: **[Getting started](../getting-started.md)** · full detail:
 > durable delete is human-gated, the removal is shown for approval first. Note: Claude Code
 > **caches the skill list**, so **restart Claude Code** after the sync to see the change.
 
+> **Command form ↔ install route.** The tables below use the **plugin** render, `/mokata:<name>`.
+> Because the supported route today is the pip-first `mokata setup claude` path, the commands
+> actually appear **bare** in your `/` menu — `/<name>` (drop the `mokata:` prefix). The one-click
+> plugin (which would namespace them) is planned, not yet available.
+
 ## What you get
 
 ### 1. Slash commands (the workflow)
@@ -122,7 +127,8 @@ All three hooks are declared in `hooks/hooks.json`:
   send a secret. **Un-overridable:** approval is a methodology gate, never a security override.
 - **Gate guard** (`gate_guard.py`, **PreToolUse, sync run-state, exit code 2** — matches
   `Write|Edit|MultiEdit|NotebookEdit`) — blocks a *native* write that breaks the run's
-  methodology. Three gates: **`spec-persisted`** (an approach is approved but no spec is
+  methodology. Four gates: **`approach-approval`** (the run is still in brainstorm — no approach
+  approved yet), **`spec-persisted`** (an approach is approved but no spec is
   emitted), **`no-code-without-failing-test`** (the spec is emitted but no failing test is on
   record), and **`spec-scope`** (the write is outside the spec's authorized surface, spells a
   **deferred** marker you agreed *not* to build, or a spec amend is in progress).
@@ -161,9 +167,11 @@ can call these too (see [Integrate with other AI tools](integrate-other-ai-tools
 > import_stack, spec_check, reset, …) are **always human-gated** — a write tool call returns a
 > **proposal id** and commits nothing; **you** mint the approval out-of-band in your own terminal
 > (`mokata approve <id>`), and only a re-call carrying that id commits, once. Claude cannot
-> approve its own write — approve ships as a **terminal command only**, deliberately: it has no
-> MCP tool and no slash command, because an in-harness approve surface would hand the model the
-> very consent it is supposed to ask you for. It **also
+> approve its own write — approve is a **terminal command by default** (`mokata approve <id>`).
+> An in-chat MCP approve tool (`mcp__mokata__approve`) also ships but is **opt-in and
+> default-OFF** (`settings.approvals.in_chat`); enabling it is itself a human-gated config write,
+> and even then Claude Code prompts you on every call, so the model never mints its own consent
+> unprompted. There is no approve **slash command**. It **also
 > orchestrates external MCP servers** it discovers (H4, `mokata mcp`) and maps them to
 > capabilities.
 >

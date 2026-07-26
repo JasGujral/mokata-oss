@@ -90,6 +90,61 @@ REASON_SCHEMA_ABSENT = "schema-absent"      # nothing provisioned yet
 REASON_SCHEMA_TOO_OLD = "schema-too-old"    # the DB is below this build's floor → migrate the DB
 REASON_CLIENT_TOO_OLD = "client-too-old"    # the DB no longer serves this build → upgrade mokata
 
+# DB.S1 — why the CONNECTION layer failed (a DIFFERENT axis than the schema reasons above: this
+# names WHY we could not complete a reachable, authenticated round-trip). Typed here rather than
+# string-sniffed at the call site, so `doctor`'s DSN deep-check can tell auth apart from network
+# without parsing an exception message. `""` == the connection layer is fine (a reachable probe).
+CONN_DRIVER_ABSENT = "driver-absent"        # psycopg not installed → the `postgres` extra
+CONN_AUTH_FAILED = "auth-failed"            # the host answered, the credentials were rejected
+CONN_NETWORK_UNREACHABLE = "network-unreachable"  # DNS / host down / port closed — no server reply
+CONN_TIMEOUT = "timeout"                    # no response inside the wall-clock probe budget
+
+# Postgres SQLSTATE class 28 = invalid authorization (28000 invalid_authorization_specification,
+# 28P01 invalid_password): the server ANSWERED and rejected the credentials — an auth failure, not
+# a network one.
+_AUTH_SQLSTATE_CLASS = "28"
+
+# …but a CONNECT-PHASE auth failure carries NO sqlstate. Grounded against the live driver
+# (psycopg 3.3): a wrong password raises `OperationalError` with `.sqlstate is None` AND
+# `.diag.sqlstate is None` — libpq folds the server's 28P01 into a generic
+# "connection failed: … FATAL: password authentication failed for user …" MESSAGE. So sqlstate
+# alone misses the most common case; the message text is the only signal that tells auth from
+# network. It is read HERE, inside teamdb, to produce the TYPED reason (never string-sniffed at the
+# doctor call site) — and the message (which carries host/user but NEVER the password libpq refuses
+# to echo) stays internal: `db_doctor` renders only the typed reason + the env-var NAME, never this.
+_AUTH_MESSAGE_MARKERS = (
+    "password authentication failed",   # the common wrong-password case
+    "authentication failed",            # md5 / scram / PAM / peer / GSS variants
+    "no password supplied",             # the server required one, none was sent
+    'role "',                           # 'role "x" does not exist' (a 28000-class identity failure)
+)
+
+
+def _conn_reason_from_exc(exc: BaseException) -> str:
+    """Classify a connect/round-trip failure as auth vs network. First the typed signal — a
+    SQLSTATE of class 28 on the exception or its cause/context chain (the connection manager wraps
+    the psycopg error in a typed `unavailable`, so the SQLSTATE rides on `__cause__`); this catches
+    a query-phase 28xxx. Then the MESSAGE fallback for the sqlstate-less connect-phase auth failure
+    the live driver actually raises. No auth signal anywhere → the connect never authenticated →
+    network. Never raises."""
+    seen = 0
+    cur: Optional[BaseException] = exc
+    texts: list = []
+    while cur is not None and seen < 6:
+        state = getattr(cur, "sqlstate", None)
+        if not state:
+            diag = getattr(cur, "diag", None)
+            state = getattr(diag, "sqlstate", None) if diag is not None else None
+        if state and str(state).startswith(_AUTH_SQLSTATE_CLASS):
+            return CONN_AUTH_FAILED
+        texts.append(str(cur))
+        cur = cur.__cause__ or cur.__context__
+        seen += 1
+    blob = " ".join(texts).lower()
+    if any(marker in blob for marker in _AUTH_MESSAGE_MARKERS):
+        return CONN_AUTH_FAILED
+    return CONN_NETWORK_UNREACHABLE
+
 _SCHEMA_FIX = {
     REASON_SCHEMA_ABSENT: "run `mokata team init` to provision the shared schema",
     REASON_SCHEMA_TOO_OLD: "run `mokata team init` to upgrade the shared schema",
@@ -221,6 +276,10 @@ class ProbeResult:
     elapsed_ms: float = 0.0
     detail: str = ""
     error: str = ""
+    # DB.S1 — the typed CONNECTION-layer reason (CONN_*), distinct from `reason` (the schema axis).
+    # Set only when the connection did NOT complete a reachable round-trip; `""` on a reachable
+    # probe. Lets `doctor` name auth vs network vs driver-absent vs timeout without string-sniffing.
+    conn_reason: str = ""
 
     @property
     def fix(self) -> str:
@@ -279,7 +338,7 @@ def probe(dsn: str, *, budget_ms: int = PROBE_BUDGET_MS) -> ProbeResult:
         if importlib.util.find_spec("psycopg") is None:
             return ProbeResult(driver_present=False, reachable=False, compatible=False,
                                detail="psycopg driver not installed (optional extra 'postgres')",
-                               error="driver-absent")
+                               error="driver-absent", conn_reason=CONN_DRIVER_ABSENT)
     except Exception:  # pragma: no cover - find_spec is robust
         pass
 
@@ -296,6 +355,7 @@ def probe(dsn: str, *, budget_ms: int = PROBE_BUDGET_MS) -> ProbeResult:
             box["schema_min_supported"] = min_supported
         except Exception as exc:                          # connect / query failure
             box["error"] = str(exc)
+            box["conn_reason"] = _conn_reason_from_exc(exc)
 
     start = time.monotonic()
     t = threading.Thread(target=_work, daemon=True)
@@ -306,12 +366,13 @@ def probe(dsn: str, *, budget_ms: int = PROBE_BUDGET_MS) -> ProbeResult:
     if t.is_alive():
         return ProbeResult(reachable=False, compatible=False, elapsed_ms=elapsed_ms,
                            detail=f"unreachable — no response within {budget_ms}ms",
-                           error="timeout")
+                           error="timeout", conn_reason=CONN_TIMEOUT)
 
     if not box.get("reachable"):
         return ProbeResult(reachable=False, compatible=False, elapsed_ms=elapsed_ms,
                            detail="unreachable — could not connect / round-trip",
-                           error=box.get("error", "unreachable"))
+                           error=box.get("error", "unreachable"),
+                           conn_reason=box.get("conn_reason", CONN_NETWORK_UNREACHABLE))
 
     present = bool(box.get("schema_present"))
     version = box.get("schema_version")
@@ -470,6 +531,19 @@ def provision_sql(project_id: Optional[str] = None) -> "list[str]":
         "BOOLEAN NOT NULL DEFAULT FALSE",
         f"ALTER TABLE {MEMORY_TABLE} ADD COLUMN IF NOT EXISTS {MEMORY_PRIORITY_COLUMN} "
         "INT NOT NULL DEFAULT 0",
+        # DB.S3 — the lexical tier's GIN index over the searchable text (subject + the doc's
+        # `value`), matching `PostgresBackend.lexical_search`'s expression EXACTLY so the planner
+        # can actually use it. Core Postgres: `to_tsvector` needs no `CREATE EXTENSION`, so this
+        # stays on the ADR-54 vanilla-PG path (unlike the opt-in pgvector tier).
+        #
+        # ADDITIVE, and deliberately not a schema-version bump: it adds no column and changes no
+        # row, so an older client reads and writes this table unchanged — it simply doesn't use the
+        # index. The runtime query works WITHOUT it too (the expression is computed per row), so a
+        # DML-only role that never ran `team init` gets correct results, just slower. That is why
+        # this lives in init's DDL and nowhere near a runtime connect (D1/C4: no runtime DDL).
+        f"CREATE INDEX IF NOT EXISTS {MEMORY_TABLE}_fts ON {MEMORY_TABLE} USING GIN ("
+        f"to_tsvector('english', coalesce(subject, '') || ' ' || "
+        f"coalesce((doc::jsonb->>'value'), '')))",
         # session bundles — the ONE definition (session_transport verifies it, never creates it).
         f"CREATE TABLE IF NOT EXISTS {SESSION_TABLE} ("
         "  tag TEXT, blob TEXT, seq BIGSERIAL, project TEXT,"
@@ -502,32 +576,71 @@ def provision_sql(project_id: Optional[str] = None) -> "list[str]":
 # `provision_vector` (never by the default `team init` pass); the backend only VERIFIES the table.
 VECTOR_TABLE = "mokata_memory_vectors"
 
+# DB.S4 — the STAMP table. The binding (Jas 2026-07-14): the embedder's identity + dimension are
+# recorded ON the index, and an embedder CHANGE forces a gated re-embed rather than a silent mix.
+#
+# This is not bookkeeping. Cosine between vectors from two different embedders is arithmetic over
+# unrelated coordinate systems: it returns a confident-looking number that means nothing, so a
+# half-re-embedded index does not fail — it silently RANKS WRONG, forever, with no symptom a user
+# could ever attribute to the cause. The stamp is what makes that state detectable, and the single
+# row (`id=1`) is deliberately the whole table: one index, one embedder, no ambiguity.
+VECTOR_STAMP_TABLE = "mokata_vector_stamp"
 
-def vector_provision_sql(dim: int) -> "list[str]":
+
+def vector_provision_sql(dim: int, embedder_id: str = "") -> "list[Any]":
     """The ordered, idempotent DDL for the OPT-IN pgvector tier (needs a role that may CREATE
-    EXTENSION). Not part of `provision_sql` — the golden path stays extension-free."""
-    return [
+    EXTENSION). Not part of `provision_sql` — the golden path stays extension-free.
+
+    Entries are either a bare SQL string or a `(sql, params)` pair; the stamp UPSERT is the one
+    pair, because the embedder id is a VALUE and values ride the driver's placeholders (an id
+    interpolated into DDL would be the one string in this file built from non-constant input).
+
+    HNSW (DB.S4) is provisioned here for the same reason DB.S3's GIN is: the query is CORRECT
+    without it and merely SLOW — pgvector computes `<=>` per row — so the index is a performance
+    artifact of the init path (D1/C4: no runtime DDL), never something a runtime connect conjures.
+    `vector_cosine_ops` matches `semantic_search`'s `<=>` operator exactly; an index built for a
+    different operator class is one the planner silently declines to use."""
+    stmts: "list[Any]" = [
         "CREATE EXTENSION IF NOT EXISTS vector",
         f"CREATE TABLE IF NOT EXISTS {VECTOR_TABLE} ("
         "  id TEXT PRIMARY KEY, mtype TEXT, subject TEXT, status TEXT,"
         f"  doc TEXT, embedding vector({dim}), seq BIGSERIAL, project TEXT)",
         f"ALTER TABLE {VECTOR_TABLE} ADD COLUMN IF NOT EXISTS project TEXT",
+        f"CREATE INDEX IF NOT EXISTS {VECTOR_TABLE}_hnsw ON {VECTOR_TABLE}"
+        f"  USING hnsw (embedding vector_cosine_ops)",
+        f"CREATE TABLE IF NOT EXISTS {VECTOR_STAMP_TABLE} ("
+        "  id INT PRIMARY KEY, embedder TEXT NOT NULL, dim INT NOT NULL)",
     ]
+    if embedder_id:
+        stmts.append((
+            f"INSERT INTO {VECTOR_STAMP_TABLE} (id, embedder, dim) VALUES (1, %s, %s)"
+            f"  ON CONFLICT (id) DO UPDATE SET embedder=EXCLUDED.embedder, dim=EXCLUDED.dim",
+            (embedder_id, int(dim)),
+        ))
+    return stmts
 
 
-def provision_vector(dsn: str, *, dim: int) -> ProvisionResult:
-    """Provision the opt-in pgvector schema (the init path — never a runtime connect)."""
-    return _run_ddl(dsn, vector_provision_sql(dim), [VECTOR_TABLE])
+def provision_vector(dsn: str, *, dim: int, embedder_id: str = "") -> ProvisionResult:
+    """Provision the opt-in pgvector schema (the init path — never a runtime connect). Stamps
+    `embedder_id` + `dim` onto the index when given, so the runtime can refuse a mismatch."""
+    return _run_ddl(dsn, vector_provision_sql(dim, embedder_id),
+                    [VECTOR_TABLE, VECTOR_STAMP_TABLE])
 
 
-def _run_ddl(dsn: str, stmts: "list[str]", tables: "list[str]") -> ProvisionResult:
+def _run_ddl(dsn: str, stmts: "list[Any]", tables: "list[str]") -> ProvisionResult:
     """Execute an idempotent DDL pass. The ONLY function in mokata that writes schema — every
-    caller is an init path, and the AST guard in the D1 test enforces that."""
+    caller is an init path, and the AST guard in the D1 test enforces that.
+
+    An entry may be a bare SQL string or a `(sql, params)` pair (DB.S4's stamp UPSERT): a value
+    that is not a mokata constant travels as a BOUND parameter, never interpolated into the text."""
     from .memory import _pg
     conn = _pg.get_connection(dsn, ProvisionError)
     try:
         for stmt in stmts:
-            conn.execute(stmt)
+            if isinstance(stmt, tuple):
+                conn.execute(stmt[0], stmt[1])
+            else:
+                conn.execute(stmt)
     except Exception as exc:                              # any DDL failure fails closed + clean
         raise ProvisionError(f"provisioning failed: {exc}") from exc
     reset_schema_cache()             # the schema just changed — the verify cache is now stale.

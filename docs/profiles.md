@@ -9,8 +9,8 @@ Each profile yields a **deterministic enabled set** — same profile in, same st
 | Profile | Layers enabled | code_graph chain | memory_store chain | Network egress |
 |---|---|---|---|---|
 | `minimal` | engine, governance | — (none) | — (none) | **zero** |
-| `standard` **(default)** | engine, knowledge, memory, governance | ripgrep → grep | sqlite | local-only |
-| `full` | engine, knowledge, memory, governance | code-review-graph → serena → ripgrep → grep | native-memory → obsidian → sqlite | only present tools, all gated |
+| `standard` **(default)** | engine, knowledge, memory, governance | ast → ripgrep → grep | sqlite | local-only |
+| `full` | engine, knowledge, memory, governance | code-review-graph → serena → ast → ripgrep → grep | native-memory → obsidian → sqlite | only present tools, all gated |
 | `custom` | all (starting point) | full chains (hand-tune) | full chains (hand-tune) | — |
 
 ## How toggling works
@@ -33,13 +33,14 @@ Each profile yields a **deterministic enabled set** — same profile in, same st
   [manifest reference](reference/manifest.md#settings-the-generic-toggle-store).
 - **Capabilities are chosen through one router.** There is a single detection path:
   `router.resolve(<need>)` picks the first present provider in the declared fallback
-  order. grep is the universal floor for `code_graph`; SQLite (stdlib) is the guaranteed
-  floor for `memory_store`.
+  order. The embedded stdlib-AST floor answers structural `code_graph` queries when no graph is
+  adopted (grep is the universal floor beneath it); SQLite (stdlib) is the guaranteed floor for
+  `memory_store`.
 
 ## Local-first
 
 `minimal` wires no network-capable tools and is proven to perform **zero network egress**.
-`standard` (the default) stays fully local (grep + SQLite). `full` *declares* egress-capable
+`standard` (the default) stays fully local (embedded AST floor + grep + SQLite). `full` *declares* egress-capable
 providers (MCP / external tools), but they only act when actually present and every durable
 action is human-gated — nothing leaves the machine unless you wire it, and there is no
 telemetry.
@@ -55,6 +56,13 @@ To use a different profile:
 - **At init:** `mokata init --profile full` (or `minimal` / `custom`). To switch an existing
   project, re-run with `--force`: `mokata init --profile full --force` (human-gated; an
   overwrite guard protects your committed config).
+- **Or name an on-ramp instead:** `mokata init --mode {seatbelt,memory,full}` is a graduated
+  adoption alias — `seatbelt` and `memory` both resolve to `standard`, `full` to `full` — plus a
+  printed 5-minute quickstart. It is mutually exclusive with `--profile`, and **only the profile
+  is persisted**: a manifest written by `--mode memory` is byte-identical to one written by
+  `--profile standard`, so nothing here becomes a second config axis. The modes differ in
+  *flavour*, not in wiring — `memory`/`full` additionally offer the optional local embeddings
+  model when run interactively, `seatbelt` never does.
 - **Fine-tune by hand:** edit `.mokata/manifest.json` — flip a layer's `enabled`, or a
   tool's `enabled` flag — then `mokata validate`. `mokata doctor` flags any problems.
 - **See what's active:** `mokata status` (live capabilities) and `mokata coverage`

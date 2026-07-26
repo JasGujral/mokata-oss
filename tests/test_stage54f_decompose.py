@@ -283,7 +283,7 @@ class TestDecomposeMCPTool(unittest.TestCase):
             self._emit_spec(surface, ("AC1", "add `parse_config`"),
                             ("AC2", "add `render_view`"))
             before = sorted(os.listdir(surface.state.root))
-            res = M.decompose(path=d)
+            res = M.decompose(path=d, response_format="detailed")   # MCP-R.D1b: block is opt-in
             self.assertTrue(res["available"])
             self.assertEqual(len(res["subtasks"]), 2)
             self.assertIn("block", res)

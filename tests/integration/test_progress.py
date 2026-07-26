@@ -31,7 +31,7 @@ class TestProgressMcpTool(unittest.TestCase):
     def test_progress_tool_no_run(self):
         with tempfile.TemporaryDirectory() as d:
             init_repo(root=d, profile="standard", assume_yes=True, out=_silent)
-            res = M.progress(path=d)
+            res = M.progress(path=d, response_format="detailed")   # MCP-R.D1b: block is opt-in
             self.assertFalse(res["active"])
             self.assertIn("no run in progress", res["block"])
 
@@ -47,7 +47,7 @@ class TestProgressMcpTool(unittest.TestCase):
             for phase in PIPELINE_PHASES[:4]:
                 cp.mark_passed(phase)
 
-            res = M.progress(path=d)               # active/most-recent run
+            res = M.progress(path=d, response_format="detailed")   # active run + block (MCP-R.D1b)
             self.assertTrue(res["active"])
             self.assertEqual(res["run_id"], "story-1")
             self.assertEqual(res["done"], 4)

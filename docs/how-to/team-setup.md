@@ -70,7 +70,7 @@ mokata export                         # writes .mokata/mokata-stack.json — com
 
 A new teammate does **not** run `team init` (joiners never run DDL). They point at the already-
 provisioned shared DB and run **one guided command** — from a DSN to **CONNECTED**, without reading
-any source. Inside Claude Code this is also `/mokata:team join`.
+any source. Inside Claude Code this is also `/team join`.
 
 ```bash
 # point at the SAME managed Postgres the team provisioned (env-var only — never inline):
@@ -91,7 +91,7 @@ mokata team join ./shared/mokata-stack.json --yes          # scripted / non-inte
    it stops with the **named fix** and **writes no activation** (see
    [Connection health & fallback](#3-connection-health-fallback) below);
 4. **pull** the shared design/spec vault (`--vault`);
-5. **onboard** the project knowledge — hands you `/mokata:onboard` (the guided capture);
+5. **onboard** the project knowledge — hands you `/onboard` (the guided capture);
 6. **consent** — capture the revocable [standing audit-publish consent](#security) (once);
 7. **verify** with `mokata doctor`, then print a **"here's what you're now wired to"** summary.
 
@@ -116,15 +116,77 @@ failure:
 
 | Symptom | What it means | Fix |
 |---|---|---|
-| **unreachable / timeout** | the host didn't answer within the ≤500ms probe — or the DSN points at a **transaction-mode pooler** (Supabase/Neon pooled port), where `LISTEN/NOTIFY` dies | check the host/DSN; use a **direct/session** connection string, not the pooler |
+| **unreachable / timeout** | the host didn't answer within the ≤500ms probe (DNS / host down / port closed / firewall) | check the host and port, the firewall, and that the database is running |
+| **auth failed** | the host **answered** and rejected the credentials — the network is fine | check the role and password in that env var |
 | **schema not provisioned** | you reached the DB, but no shared schema is there | **ask whoever ran `mokata team init`** to provision it — joiners never run DDL |
 | **schema-too-old** | the shared schema is *below* the oldest version this build can serve | ask the owner to **re-run `mokata team init`** to upgrade the shared schema |
 | **client-too-old** | the shared schema has moved *ahead* and no longer serves this build | **upgrade mokata** — `pip install -U mokata` |
 | **driver absent** | the optional Postgres driver isn't installed | `pip install 'mokata[postgres]'` |
+| **transaction-mode pooler** | you connected fine, but the DSN is a **pooled** endpoint — `LISTEN/NOTIFY` (team push) and session features break silently behind one | point the env var at the **direct/session** connection string, not the pooler (see below) |
 
 Every one of these messages links back to this page. Note that `schema-too-old` and `client-too-old`
 are the **only two** version refusals: an ordinary version difference does **not** refuse — it warns
 and keeps working (see [the schema range](#the-shared-schema-is-a-range-not-an-exact-match) below).
+
+### The pooler trap — use a DIRECT/SESSION connection string
+
+The **single most common** silent team-DB failure is pointing mokata at a managed provider's
+**transaction-mode pooler**. It connects, it authenticates, everything looks green — and then
+`LISTEN/NOTIFY` (which team push rides) and session features quietly do nothing. So mokata checks
+the *shape* of the DSN **before** it wires anything, by pure string parsing — **no network call,
+and it never echoes the DSN value, host, user, or password**.
+
+`mokata team connect` prints the detected provider and, if the string is pooled, **loudly warns and
+asks** before writing. Decline and nothing is written:
+
+```text
+not connected — pooled DSN declined at the pooler-trap check (nothing written). Use a
+direct/session connection string.
+```
+
+Say yes anyway and it proceeds, but the override is **recorded in the audit ledger** (provider +
+bare port only — never the credential). If the env var isn't exported yet, `team connect` tells you
+which kind of string to reach for up front.
+
+**The direct string, per provider:**
+
+| Provider | Use this | Not this |
+|---|---|---|
+| **Supabase** | the Direct/Session string — host `db.<ref>.supabase.co`, port **5432** | `*.pooler.supabase.com:6543` (transaction mode) |
+| **Neon** | the endpoint **without** the `-pooler` host segment | the `-pooler` pooled endpoint |
+| **Amazon RDS** | the instance/cluster endpoint | an RDS Proxy endpoint (`*.proxy-*`) |
+| anything else | a non-pooler host / port 5432 | a `pgbouncer`/`pooler` host, or a transaction-pooler port |
+
+mokata **never rewrites your DSN** — it names the problem and the fix, and the change is yours to
+make.
+
+### `mokata doctor` — the DSN deep-check
+
+`mokata doctor` runs the same probe and reports a **named, secret-free finding per layer** under a
+`database (team DSN)` section, so you learn *which* layer failed instead of reading a psycopg
+stack trace:
+
+```bash
+mokata doctor            # includes the DSN deep-check on a team-connected repo
+```
+
+| Finding code | Severity | Means |
+|---|---|---|
+| `db-driver-absent` | ✗ error | `psycopg` isn't installed — `pip install 'mokata[postgres]'` |
+| `db-network` | ✗ error | unreachable — no response in the probe budget, or the connect failed outright |
+| `db-auth` | ✗ error | the host answered and rejected the credentials |
+| `db-schema-absent` | ✗ error | connected + authed, but the shared schema isn't provisioned — `mokata team init` |
+| `db-schema-old` | ✗ error | the shared schema is older than this build serves — `mokata team init` |
+| `db-client-old` | ✗ error | the shared schema is newer than this build — `pip install -U mokata` |
+| `db-schema-version` | ⚠ warning | connected, versions differ but are in range — you keep working |
+| `db-pooler` | ⚠ warning | the connection works but is a **transaction-mode pooler** (co-reported alongside whichever primary finding applies) |
+| `db-ok` | ✓ info | provider, schema version, and round-trip time — all green |
+
+Exactly **one primary finding** is reported (the most fundamental failing layer), plus the pooler
+warning **orthogonally** when a *reachable* connection turns out to be pooled. Only the errors flip
+doctor's exit code; a pooler and an in-range version difference warn and keep working. The check is
+**silent on a local/solo repo** — no probe, no noise — and it never renders the DSN value, host,
+user, or password.
 
 ### Health is always visible (never silent)
 

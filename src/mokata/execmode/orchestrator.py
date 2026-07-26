@@ -91,8 +91,12 @@ def _run_sequential(tasks: List[Task], ledger: Any, tracker: TokenTracker,
                 runner = None                    # degrade once; the rest of the batch is simulated
         if res is None:
             res = _simulated_result(t, ctx)
-        tracker.add(f"seq:{t.id}", input_tokens=res.input_tokens,
-                    output_tokens=res.output_tokens)
+        if not res.simulated:
+            # B3-rider — a simulated task executed NOTHING; feeding estimate_tokens of its
+            # PLACEHOLDER context/output into the tracker would report that fiction as `actual`
+            # spend. Only real work contributes to actuals, so a fully-simulated batch reports zero.
+            tracker.add(f"seq:{t.id}", input_tokens=res.input_tokens,
+                        output_tokens=res.output_tokens)
         if ledger is not None:
             ledger.record("sequential", task=t.id, ok=res.ok, simulated=res.simulated)
         shared.append(res.output)

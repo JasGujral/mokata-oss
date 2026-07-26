@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 from .config import Surface
 from .router import Resolution
@@ -126,6 +126,15 @@ def _render(surface: Surface) -> str:
                 lines.append(f"- {r.need} -> UNAVAILABLE (no provider present)")
         lines.append("")
 
+    # GR.S4 / HP.S1 — ONE bounded, graph-derived structure line. Rides the SAME briefing text
+    # (no second channel) inside the ≤2k budget; ABSENT (byte-identical) when the structural
+    # floor can't summarise the repo. So a session opens knowing the real code structure, not a
+    # memory of it.
+    structure_line = _graph_structure_line(surface)
+    if structure_line:
+        lines.append(structure_line)
+        lines.append("")
+
     # Layers (one terse line).
     if m.layers:
         on = [name for name in m.layers if m.layer_enabled(name)]
@@ -187,6 +196,16 @@ def _render(surface: Surface) -> str:
         "stated NOT-when."
     )
     return "\n".join(lines) + "\n"
+
+
+def _graph_structure_line(surface: Surface) -> Optional[str]:
+    """The GR.S4 briefing structure line, or None (byte-identical) on any repo the structural
+    floor can't summarise. Fully guarded — the briefing never crashes on it."""
+    try:
+        from .knowledge.layer import graph_structure_line
+        return graph_structure_line(surface)
+    except Exception:
+        return None
 
 
 def _always_on_rule_lines(surface: Surface) -> List[str]:
@@ -324,6 +343,22 @@ def build_bootstrap(
         # problem); what can still reach here is a half-installed package (ImportError) or an
         # unreadable registry path under `repo_identity` (OSError). The offer is an OFFER — its
         # absence costs nothing and must never break the briefing, so the swallow stays.
+        pass
+
+    # B-SKILLS — if THIS root has no mokata skills/commands wired (a worktree / fresh checkout /
+    # never-set-up root — the new-session repro), append a ONE-LINE human-gated offer so the
+    # session SAYS why the `/` menu is empty and names the fix. Never writes; a root that IS wired
+    # gets no offer, so its briefing is byte-identical. Local FS reads only — no subprocess, no
+    # handshake — so the async SessionStart path is never blocked/slowed. Degrade-clean.
+    try:
+        from .skills_visibility import briefing_offer
+        offer = briefing_offer(surface.root)
+        if offer:
+            text = text.rstrip("\n") + "\n" + offer + "\n"
+            tokens = estimate_tokens(text)
+    except Exception:
+        # A briefing offer is an OFFER — its absence costs nothing and must never break the
+        # briefing. The check itself never raises; this guards a half-installed package.
         pass
 
     if tokens > budget:

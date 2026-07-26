@@ -66,6 +66,9 @@ class TestExport(unittest.TestCase):
             self.assertEqual(before, after)                 # source untouched
 
     def test_cli_export_default_path_under_mokata_root(self):
+        # 35b — the default backup dest is a timestamped `.mokata/backups/memory-<UTC>.json`, not
+        # the deprecated memory-share.json channel.
+        import glob
         with tempfile.TemporaryDirectory() as d:
             store = _repo(d)
             store.remember(MemoryItem.create("y", "2"), assume_yes=True)
@@ -73,7 +76,9 @@ class TestExport(unittest.TestCase):
             with redirect_stdout(buf):
                 rc = main(["memory", "export", "--path", d])
             self.assertEqual(rc, 0)
-            self.assertTrue(os.path.exists(
+            backups = glob.glob(os.path.join(d, ".mokata", "backups", "memory-*.json"))
+            self.assertEqual(len(backups), 1)
+            self.assertFalse(os.path.exists(          # NOT the deprecated channel
                 os.path.join(d, ".mokata", MEMORY_SHARE_FILENAME)))
 
 
@@ -182,17 +187,20 @@ class TestMcpMemoryShare(unittest.TestCase):
         self.assertIn("memory_import", self.M.write_tool_names())
 
     def test_export_propose_only_without_confirm(self):
+        import glob
         with tempfile.TemporaryDirectory() as d:
             store = _repo(d)
             store.remember(MemoryItem.create("z", "1"), assume_yes=True)
             res = self.M.memory_export(path=d)               # no confirm
             self.assertEqual(res["status"], "proposed")
-            self.assertFalse(os.path.exists(
-                os.path.join(d, ".mokata", MEMORY_SHARE_FILENAME)))   # nothing written
+            # nothing written — no backup file exists yet
+            self.assertEqual(glob.glob(os.path.join(d, ".mokata", "backups", "*.json")), [])
             res2 = mcp_commit(self.M.memory_export, path=d)
             self.assertTrue(res2["committed"])
-            self.assertTrue(os.path.exists(
-                os.path.join(d, ".mokata", MEMORY_SHARE_FILENAME)))
+            # 35b — the default dest is a timestamped backup file the human owns
+            self.assertTrue(res2["dest"].endswith(".json"))
+            self.assertIn(os.path.join(".mokata", "backups"), res2["dest"])
+            self.assertTrue(os.path.exists(res2["dest"]))
 
     def test_import_propose_only_without_confirm(self):
         with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:

@@ -286,6 +286,11 @@ _MOKATA_CMD = re.compile(
     r"(?:(?:sudo|uvx|npx)\s+|(?:pipx|uv|poetry|pdm|hatch)\s+run\s+|python3?\s+-m\s+)*"
     r"mokata\s+([a-z][a-z0-9-]+)\b")                            # …then the subcommand
 _SLASH_CMD = re.compile(r"/mokata:([a-z][a-z0-9-]+)\b")
+# A BARE slash command — `/name` where the `/` is NOT part of a `mokata:` prefix and NOT a path
+# segment (`foo/bar`, `/docs/…`). This is the form the pip-first project route actually renders
+# (`.claude/commands/<name>.md` → `/<name>`), and the form check reads it only where the name is a
+# real mokata command, so a URL path or an ordinary `/word` in prose is never mistaken for one.
+_BARE_SLASH_CMD = re.compile(r"(?<![:\w/])/([a-z][a-z0-9-]+)\b(?!/)")
 _PIP_INSTALL = re.compile(r"\bpip\s+install\s+(?:-U\s+|--upgrade\s+)?([A-Za-z0-9._-]+(?:\[[^\]]+\])?)")
 _VERSION_PIN = re.compile(r"\bmokata==(\d+\.\d+\.\d+(?:[.\w-]*)?)")
 _DOTTED_SYMBOL = re.compile(r"\b((?:[A-Za-z_][A-Za-z0-9_]*\.){1,}[A-Za-z_][A-Za-z0-9_]*)\b")
@@ -304,6 +309,126 @@ def _check_skill_count(lines, sections, facts: CodeFacts) -> List[Finding]:
                 "skill-count", BLOCKING, i + 1, sections[i], ln.strip(),
                 f'doc claims "{n} skills" but the code ships {facts.skill_count} pipeline '
                 f"skills ({facts.total_skill_count} incl. domain skills)", suggestion))
+    return out
+
+
+# --------------------------------------------------------------- D-CMDNS: command-NAME FORM per route
+# The rendered slash-command NAME depends on the install route, and a doc that shows the wrong form
+# tells the reader to type a command their `/` menu does not have:
+#   * pip-first project route (`mokata setup claude` → `.claude/commands/<name>.md`) and the
+#     user-scope route (`~/.claude/commands/`) render the BARE `/<name>` — no prefix (grounded in
+#     Claude Code's slash-command docs; subdirectories do not namespace the name either);
+#   * the plugin route (installed from a marketplace, `plugin.json` name = `mokata`) namespaces
+#     every command as `/mokata:<name>`.
+# The canonical install path is pip-first (doc 00 rule 2), so BARE is the default form a page uses;
+# a page whose subject is the plugin/harness surface declares itself otherwise.
+ROUTE_PIP = "pip"          # bare `/<name>` only (the shipping, canonical form)
+ROUTE_PLUGIN = "plugin"    # `/mokata:<name>` only (marketplace-plugin render)
+ROUTE_BOTH = "both"        # a dual-route page: either form is accepted (it states the mapping once)
+_ROUTES = (ROUTE_PIP, ROUTE_PLUGIN, ROUTE_BOTH)
+_DEFAULT_COMMAND_ROUTE = ROUTE_PIP
+
+# The pages that legitimately carry the `/mokata:<name>` namespaced form — their subject IS the
+# harness/plugin surface (the CLI↔slash↔MCP mapping, or "using the plugin"), so they state the
+# route→form mapping once and keep the namespaced form as their primary. Keyed by POSIX path
+# SUFFIX (matched with endswith) so the map is independent of where the repo root sits. Everything
+# not listed defaults to the pip-first bare form. A page may override this inline with a
+# `mokata_command_route:` frontmatter key (self-documenting; used by fixtures and future pages).
+_PAGE_COMMAND_ROUTE: Dict[str, str] = {
+    "docs/reference/command-surfaces.md": ROUTE_BOTH,
+    "docs/reference/cli.md": ROUTE_BOTH,
+    "docs/how-to/use-the-plugin.md": ROUTE_BOTH,
+    "docs/how-to/install-plugin.md": ROUTE_BOTH,
+    "docs/how-to/use-mokata-in-cowork.md": ROUTE_BOTH,
+}
+
+_FRONTMATTER_ROUTE = re.compile(r"^mokata_command_route:\s*([a-z]+)\s*$")
+
+
+def _frontmatter_route(text: str) -> Optional[str]:
+    """The `mokata_command_route:` value from a leading `---` YAML frontmatter block, if present and
+    valid. Degrade-clean: no YAML dependency, no frontmatter or an unknown value → ``None`` (the
+    caller falls back to the path map, then the default). A page opts into a route inline with it —
+    the self-contained mechanism fixtures use."""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    for ln in lines[1:]:
+        if ln.strip() == "---":
+            break
+        m = _FRONTMATTER_ROUTE.match(ln.strip())
+        if m and m.group(1) in _ROUTES:
+            return m.group(1)
+    return None
+
+
+def resolve_command_route(text: str, path: str = "") -> str:
+    """The command-name route a doc's slash references are checked against — the FORM its install
+    route actually renders. Resolution order: an inline `mokata_command_route:` frontmatter key wins;
+    else the per-page map (keyed by path suffix); else the pip-first default (bare). Always one of
+    :data:`_ROUTES`."""
+    fm = _frontmatter_route(text)
+    if fm is not None:
+        return fm
+    norm = str(path).replace("\\", "/")
+    for suffix, route in _PAGE_COMMAND_ROUTE.items():
+        if norm == suffix or norm.endswith("/" + suffix) or norm.endswith(suffix):
+            return route
+    return _DEFAULT_COMMAND_ROUTE
+
+
+def _rewrite_to_bare(line: str, valid: frozenset) -> str:
+    """Rewrite every `/mokata:<name>` on ``line`` whose ``name`` is a real command to the bare
+    `/<name>`. Unknown names are left alone (they are a different, membership finding)."""
+    return _SLASH_CMD.sub(
+        lambda m: ("/" + m.group(1)) if m.group(1) in valid else m.group(0), line)
+
+
+def _rewrite_to_namespaced(line: str, valid: frozenset) -> str:
+    """Rewrite every bare `/<name>` on ``line`` whose ``name`` is a real command to `/mokata:<name>`
+    (the inverse — for a page whose declared route is the namespaced plugin form)."""
+    return _BARE_SLASH_CMD.sub(
+        lambda m: ("/mokata:" + m.group(1)) if m.group(1) in valid else m.group(0), line)
+
+
+def _check_command_form(lines, sections, code, facts: CodeFacts, route: str) -> List[Finding]:
+    """D-CMDNS — every slash-command reference uses the FORM its page's install route renders. The
+    curated command set (``facts.slash_commands``, the single source of truth) fixes membership; the
+    ``route`` fixes form. Read only over ``code`` fragments (inline `code` + fenced blocks) — a real
+    invocation is written as code, and confining the check there is what keeps a `/word` in prose or
+    a URL path from being read as a command (the false-positive discipline the 0.0.13 fix set).
+
+    A ``both`` page accepts either form (it states the mapping once); a disarmed command set
+    (``facts.slash_commands`` empty) checks nothing, exactly like the sibling checkers."""
+    valid = facts.slash_commands
+    if not valid or route == ROUTE_BOTH:
+        return []
+    out: List[Finding] = []
+    for i, spans in enumerate(code):
+        for seg in spans:
+            if route == ROUTE_PIP:
+                for m in _SLASH_CMD.finditer(seg):
+                    name = m.group(1)
+                    if name not in valid:            # unknown name → membership check owns it
+                        continue
+                    fixed = _rewrite_to_bare(lines[i], valid)
+                    out.append(Finding(
+                        "command-form", BLOCKING, i + 1, sections[i], lines[i].strip(),
+                        f"references `/mokata:{name}` but this page's install route (pip-first "
+                        f"`mokata setup claude`) renders the BARE `/{name}` — the plugin-namespaced "
+                        f"form is not what the reader sees",
+                        fixed if fixed != lines[i] else None))
+            elif route == ROUTE_PLUGIN:
+                for m in _BARE_SLASH_CMD.finditer(seg):
+                    name = m.group(1)
+                    if name not in valid:
+                        continue
+                    fixed = _rewrite_to_namespaced(lines[i], valid)
+                    out.append(Finding(
+                        "command-form", BLOCKING, i + 1, sections[i], lines[i].strip(),
+                        f"references the bare `/{name}` but this page's install route (plugin) "
+                        f"renders the namespaced `/mokata:{name}`",
+                        fixed if fixed != lines[i] else None))
     return out
 
 
@@ -420,6 +545,38 @@ def _check_symbols(lines, sections, code, facts: CodeFacts,
     return out
 
 
+def graph_symbol_resolver(layer: Any,
+                          degradation: Optional["AuditDegradation"] = None
+                          ) -> Optional[Callable[[str], bool]]:
+    """GR.S2 rider — a real symbol-existence resolver for `_check_symbols`, through the graph
+    client. Returns a `Callable[[str], bool]` ONLY when a real graph that can AUTHORITATIVELY
+    answer existence is wired (code-review-graph's `not_found` status); otherwise None.
+
+    Two None cases, deliberately different:
+      * no graph wired -> None + SILENT. No graph is the DEFAULT, never a degrade (mirrors
+        `make_graph_scorer`), so a plain docsync run on a floor repo does not print a degrade
+        banner for a check that was never meant to run.
+      * a real graph is wired but exposes no authoritative existence query -> None + the disarm
+        is recorded in `degradation`, so the audit is not read as clean when it skipped a check
+        it COULD have run.
+
+    NAMED HOOK: when mokata's typed query API gains an authoritative `exists`/`defines` kind,
+    wire it here so more backends (e.g. the AST floor) can drive the symbol-drift audit too."""
+    if layer is None or not getattr(layer, "uses_graph", False):
+        return None
+    primary = getattr(layer, "primary", None)
+    supports = getattr(primary, "supports_resolve", None)
+    if supports is None:
+        supports = hasattr(primary, "resolves")
+    if supports and hasattr(primary, "resolves"):
+        return lambda sym: primary.resolves(sym)
+    if degradation is not None:
+        degradation.note(
+            "symbol-reference drift check disarmed — the wired code graph exposes no "
+            "authoritative existence query (GR.S2 named hook: wire an `exists` query)")
+    return None
+
+
 # --------------------------------------------------------------- AUDIT (output mode a, read-only)
 def audit_text(text: str, *, path: str = "", facts: Optional[CodeFacts] = None,
                resolve: Optional[Callable[[str], bool]] = None,
@@ -439,6 +596,8 @@ def audit_text(text: str, *, path: str = "", facts: Optional[CodeFacts] = None,
     out: List[Finding] = []
     out += _check_skill_count(lines, sections, facts)
     out += _check_commands(lines, sections, code, commands, facts)
+    out += _check_command_form(lines, sections, code, facts,
+                               resolve_command_route(text, path))
     out += _check_install(lines, sections, code, facts)
     out += _check_version(lines, sections, code, facts)
     out += _check_symbols(lines, sections, code, facts, resolve, degradation)

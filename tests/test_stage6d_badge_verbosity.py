@@ -171,12 +171,16 @@ class TestProgressMaxDetail(unittest.TestCase):
 
     def test_pending_is_empty_dash_at_the_last_stage(self):
         # A run logged into `ship` (the final user stage) has nothing pending this session.
+        # B-LIFE (amendment #2 corollary): a ship-logged run is FINISHED, so the no-run_id progress
+        # surface retires it (`find_active_run` excludes it). This test's mechanic — empty pending at
+        # the last stage — is rendered via the EXPLICIT run_id surface, which by P17 always shows the
+        # named run in full (retirement applies only to "which run is active" resolution).
         with tempfile.TemporaryDirectory() as d:
             s = _repo(d)
             rid = _at_develop(s)
             from mokata.progress_events import ProgressLog, STAGE_ENTER
             ProgressLog.from_surface(s).append_event(STAGE_ENTER, "ship", run_id=rid)
-            block = P.render_progress(P.build_progress(s.state), surface=s)
+            block = P.render_progress(P.build_progress(s.state, run_id=rid), surface=s)
             self.assertIn("pending this session: —", block)
 
     def test_no_run_surface_degrades_clean(self):

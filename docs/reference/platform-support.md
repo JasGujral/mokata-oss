@@ -34,17 +34,18 @@ capability: `claude` is the only harness that declares `hooks` in the
 | `aider` | — | — | ✓ | — |
 
 **What that means concretely:** on every harness *except* Claude Code the `gate-guard` is never
-wired, so the **run-state gates** (`spec-persisted`, `no-code-without-failing-test`, `spec-scope`)
-**enforce nothing** there — they degrade with a clear message rather than pretend. The `secret-guard`
+wired, so the **run-state gates** (`approach-approval`, `spec-persisted`,
+`no-code-without-failing-test`, `spec-scope`) **enforce nothing** there — they degrade with a clear message rather than pretend. The `secret-guard`
 is the same hook mechanism, so it too is only enforced where `hooks` is declared; mokata's other
 secret layers (the gated CLI/MCP write path) still hard-block. The engine itself is
 harness-agnostic: a missing capability degrades clearly, never a silent no-op of a gate.
 
 ## CI coverage
 
-Every push and PR runs the **full unit + integration suite on `ubuntu-latest`,
-`windows-latest`, and `macos-latest`**, across each supported Python version and both the
-`jsonschema`-present and `jsonschema`-absent legs. A regression on any OS fails the build.
+Every push and PR runs the **full unit + integration suite on `ubuntu-latest` and
+`windows-latest`**, on Python 3.12, across both the `jsonschema`-present and
+`jsonschema`-absent legs. (macOS runners bill at 10× and are dropped from the matrix; the
+package floor stays Python ≥ 3.10.) A regression on either OS fails the build.
 
 ## Manual-verification leg
 

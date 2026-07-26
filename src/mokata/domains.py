@@ -216,10 +216,20 @@ def classify_domains(surface: "DomainSurface") -> List[str]:
     return sorted(found)
 
 
-def classify_from_impact(impact: Any, roles: Optional[Sequence[str]] = None) -> List[str]:
+def classify_from_impact(impact: Any, roles: Optional[Sequence[str]] = None, *,
+                         graph_gate: Any = None) -> List[str]:
     """Classify domains from a brainstorm blast-radius report (:class:`ApproachImpact`). The
     impact's ``targets`` + ``impacted_files`` are the graph-derived surface; ``roles`` are the
-    model's structural tags. A convenience wrapper over :func:`classify_domains`."""
+    model's structural tags. A convenience wrapper over :func:`classify_domains`.
+
+    GR.S3 — ``graph_gate`` is the ``graph.required`` verdict for this impact's blast radius. When it
+    REFUSES (the surface is a degraded lexical estimate, ``graph.required`` on, no override), the
+    classification is refused with :class:`~mokata.govern.graph_required.GraphDegradedError`: a
+    domain set derived from an unreliable surface is not a decision input. Absent (the
+    ``graph.required=false`` path) it is a no-op — byte-identical."""
+    if graph_gate is not None and getattr(graph_gate, "refused", False):
+        from .govern.graph_required import GraphDegradedError
+        raise GraphDegradedError(graph_gate.render())
     files = list(getattr(impact, "impacted_files", []) or []) + \
         list(getattr(impact, "targets", []) or [])
     symbols = list(getattr(impact, "impacted_symbols", []) or [])
@@ -228,16 +238,18 @@ def classify_from_impact(impact: Any, roles: Optional[Sequence[str]] = None) -> 
     return classify_domains(surface)
 
 
-def classify_session_domains(session: Any, roles: Optional[Sequence[str]] = None) -> List[str]:
+def classify_session_domains(session: Any, roles: Optional[Sequence[str]] = None, *,
+                             graph_gate: Any = None) -> List[str]:
     """Classify the domains-in-play for a brainstorm session's CHOSEN approach — from its
     computed blast-radius impact when present, else its declared targets. The ``roles`` are the
-    model's structural tags for the touched surface (grounded in the graph)."""
+    model's structural tags for the touched surface (grounded in the graph). GR.S3 — ``graph_gate``
+    refuses classification from a degraded surface (see :func:`classify_from_impact`)."""
     chosen = getattr(session, "chosen", None)
     if chosen is None:
         return []
     impact = getattr(session, "impacts", {}).get(chosen.name)
     if impact is not None:
-        return classify_from_impact(impact, roles=roles)
+        return classify_from_impact(impact, roles=roles, graph_gate=graph_gate)
     surface = DomainSurface(touched_files=list(getattr(chosen, "targets", []) or []),
                             roles=list(roles or []))
     return classify_domains(surface)

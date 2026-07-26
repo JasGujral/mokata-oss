@@ -2,9 +2,14 @@
 
 Run `mokata skills` for the live catalog (progressive disclosure — `mokata skills <name>`
 reveals the full prompt + gate). Every skill runs standalone (`mokata run <name>`) with no
-full-pipeline prerequisite and applies **only its own gate**. The shipped `/<name>` slash
+full-pipeline prerequisite and applies **only its own gate**. The **37** shipped `/<name>` slash
 commands under `templates/commands/` are generated from this same registry, so the command
 and the CLI never drift.
+
+**The count: 26 skills** — the **16** curated skills below plus **10** domain-knowledge skills.
+That is what `mokata setup claude` writes into `.claude/skills/`, and what
+[`mokata doctor`](cli.md#mokata-doctor-matrix) checks for when it tells you whether your skills
+are visible in this root.
 
 ## The skills
 
@@ -61,12 +66,13 @@ See [how-to: refine existing code](../how-to/refine-existing-code.md).
 
 ## The run-state gates (enforced beyond the skills)
 
-Three gates don't only live inside a skill: the **`gate-guard` PreToolUse hook** enforces them on
+Four gates don't only live inside a skill: the **`gate-guard` PreToolUse hook** enforces them on
 Claude Code's *native* `Write`/`Edit`/`MultiEdit`/`NotebookEdit` too, blocking with **exit code 2**
 so they hold even when no mokata skill is driving.
 
 | Gate | Blocks an implementation write when… |
 |---|---|
+| `approach-approval` | the run is registered but still in brainstorm — no approach approved, no spec emitted |
 | `spec-persisted` | an approach is approved for this run but no spec is emitted |
 | `no-code-without-failing-test` | the spec is emitted but no failing test is on record |
 | `spec-scope` | the write is outside the spec's authorized surface, spells a **deferred** item's marker, or a `spec amend` is in progress |

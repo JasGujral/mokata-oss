@@ -34,6 +34,7 @@ from _support import sample_manifest_data  # noqa: F401  (path-fix side-effect)
 
 from mokata import __version__
 from mokata.packaging import (
+    ACTION_PIN_PATHS,
     check_release_consistency,
     read_version_fields,
 )
@@ -45,9 +46,11 @@ DOCS_YML = os.path.join(ROOT, ".github", "workflows", "docs.yml")
 
 def _make_repo(tmp, *, pyproject="0.0.4", plugin="0.0.4", mp_meta="0.0.4",
                mp_plugin="0.0.4", pkg="0.0.4", omit=()):
-    """Lay down a minimal repo carrying the five version fields, each independently
-    settable (and any of them omittable) so a planted mismatch / missing file can be
-    asserted to be NAMED, not a no-op."""
+    """Lay down a minimal repo carrying every GUARDED field — the five version fields plus
+    the two PIN-DRIFT `action-pin` entries — each independently settable (and any of them
+    omittable) so a planted mismatch / missing file can be asserted to be NAMED, not a
+    no-op. The pins always track `pyproject` here; their own drift cases live in
+    tests/test_pin_drift.py."""
     os.makedirs(os.path.join(tmp, ".claude-plugin"), exist_ok=True)
     os.makedirs(os.path.join(tmp, "src", "mokata"), exist_ok=True)
     if "pyproject" not in omit:
@@ -64,6 +67,12 @@ def _make_repo(tmp, *, pyproject="0.0.4", plugin="0.0.4", mp_meta="0.0.4",
     if "pkg" not in omit:
         with open(os.path.join(tmp, "src", "mokata", "__init__.py"), "w", encoding="utf-8") as fh:
             fh.write(f'__version__ = "{pkg}"\n')
+    for rel in ACTION_PIN_PATHS:                       # PIN-DRIFT (0.0.15)
+        path = os.path.join(tmp, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("uses: JasGujral/mokata-oss/.github/actions/"
+                     f"mokata-check@v{pyproject}\n")
     return tmp
 
 
@@ -74,11 +83,12 @@ class TestReleaseConsistency(unittest.TestCase):
         self.assertTrue(res.consistent, res.render())
         self.assertEqual(res.mismatches, [])
 
-    def test_reads_all_five_version_fields(self):
+    def test_reads_all_guarded_version_fields(self):
         tmp = _make_repo(self.tmp())
         fields = read_version_fields(tmp)
-        # five fields: pyproject, plugin, marketplace×2, package __version__
-        self.assertEqual(len(fields), 5)
+        # five version fields (pyproject, plugin, marketplace×2, package __version__)
+        # + the two PIN-DRIFT action pins
+        self.assertEqual(len(fields), 5 + len(ACTION_PIN_PATHS))
         self.assertTrue(all(v == "0.0.4" for v in fields.values()), fields)
 
     def test_passes_when_all_match_the_target(self):
@@ -112,7 +122,7 @@ class TestReleaseConsistency(unittest.TestCase):
                          mp_plugin="0.0.3", pkg="0.0.3")
         res = check_release_consistency("0.0.4", root=tmp)
         self.assertFalse(res.consistent)
-        self.assertEqual(len(res.mismatches), 5)
+        self.assertEqual(len(res.mismatches), 5 + len(ACTION_PIN_PATHS))
 
     def test_missing_file_is_a_named_mismatch_not_a_crash(self):
         tmp = _make_repo(self.tmp(), omit=("plugin",))

@@ -1,0 +1,141 @@
+name: live-db-legs (opt-in)
+
+# GR.S2-FU — the OPT-IN live-Postgres legs for the 0.0.15 retrieval substrate.
+#
+# DB.S2a, DB.S3 and DB.S4 each shipped their Postgres coverage through a psycopg-shaped SHIM that
+# executes the real emitted SQL on SQLite. That shim proves the SQL's SHAPE — the WHERE filters,
+# the scope composes, the ORDER ranks, every value binds — and each stage recorded, honestly, the
+# boundary it CANNOT prove:
+#
+#   * DB.S2a deviation (1) — psycopg itself: `%s` binding and PG's own ORDER BY seq.
+#   * DB.S3  deviation (1) — PG's REAL `to_tsvector`/`ts_rank` RANKING QUALITY (the shim emulates
+#                            four text-search primitives narrowly; it cannot rank like PG does).
+#   * DB.S4  deviations (1)+(2) — pgvector's real `<=>` + HNSW RECALL, and the stamp round-trip
+#                            through a genuinely provisioned index.
+#
+# This workflow is the leg that closes them. It is OPT-IN — `workflow_dispatch` plus a weekly
+# cron — so it NEVER blocks or slows normal CI: nothing here triggers on push or pull_request.
+#
+# Why a separate workflow rather than a job in ci.yml or beside real-crg.yml:
+#   * ci.yml's existing `live-db` job runs on every push/PR (it is BLOCKING by design, and covers
+#     tests/integration/test_live_db.py). Adding these legs there would make them blocking, which
+#     the stage constraint forbids.
+#   * real-crg.yml is dispatched to validate the code-review-graph wire; spinning a Postgres
+#     cluster for that dispatch (and vice-versa) conflates two independently-dispatchable legs.
+#
+# NO REPO SECRETS ARE CONSUMED. The DSN below is a throwaway service-container credential that
+# exists only for the life of the job; `MOKATA_TEST_DSN` is declared once in `env:` and never
+# echoed by any step.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Mondays 04:17 UTC — off the hour so it does not pile into GitHub's cron rush.
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  live-db-legs:
+    name: live postgres + pgvector legs (opt-in)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    services:
+      postgres:
+        # Ships the pgvector EXTENSION — but does not enable it. `CREATE EXTENSION vector` is the
+        # first statement of the SHIPPED `teamdb.vector_provision_sql`, which DB.S4's live test
+        # invokes via `teamdb.provision_vector`. So the extension is created by the code users
+        # run, on the init path that owns DDL (D1/C4: no runtime DDL) — not by a bespoke step here.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: mokata
+          POSTGRES_PASSWORD: mokata
+          POSTGRES_DB: mokata_legs
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mokata -d mokata_legs"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      # Password-less DSN + PGPASSWORD (libpq) — no inline credential in a connection string that
+      # tests or errors might echo. Throwaway container credential; no repo secret involved.
+      MOKATA_TEST_DSN: "postgresql://mokata@localhost:5432/mokata_legs"
+      PGPASSWORD: "mokata"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install mokata + the postgres extra
+        # `postgres` brings psycopg — the whole point of DB.S2a's leg is that psycopg is REAL here.
+        run: pip install -e ".[postgres]"
+
+      - name: Preflight — the image must actually carry pgvector
+        # A missing extension would otherwise surface as an opaque DDL error inside DB.S4's leg.
+        # Fail here instead, naming the engine and the image.
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, sys, psycopg
+          with psycopg.connect(os.environ["MOKATA_TEST_DSN"]) as conn:
+              row = conn.execute(
+                  "SELECT 1 FROM pg_available_extensions WHERE name = 'vector'").fetchone()
+              ver = conn.execute("SHOW server_version").fetchone()[0]
+          print(f"postgres {ver}; pgvector available: {bool(row)}")
+          if not row:
+              print("::error::the postgres service image does not ship pgvector — DB.S4's live "
+                    "leg cannot CREATE EXTENSION vector. Expected image pgvector/pgvector:pg16.")
+              sys.exit(1)
+          PY
+
+      # The three legs below name their test modules EXPLICITLY — no broad discover. The point of
+      # this job is these legs; a discover would drown a red one in 4,000 unrelated passes.
+      # `working-directory: tests` matches the repo's `-t tests` top-level (each file does
+      # `import _support` to put src/ on the path).
+
+      - name: DB.S2a live leg — real psycopg reproduces the pushdown oracle
+        working-directory: tests
+        # Shim boundary being closed: the emitted SQL ran on SQLite with `%s`→`?`. Red here means
+        # psycopg's own binding / PG's ORDER BY seq diverges from the Python-filter oracle.
+        run: |
+          set -euo pipefail
+          if ! python -m unittest -v test_db_s2a_pushdown.LivePostgresPushdownTest; then
+            echo "::error::DB.S2a LIVE leg RED on real Postgres/psycopg — the pushed WHERE or ORDER BY seq diverged from the fetch-all-then-filter oracle. The _PgShim (real SQL, but SQLite with %s->?) proved shape only; psycopg is the untested half and it just failed."
+            exit 1
+          fi
+
+      - name: DB.S3 live leg — PG's real tsvector/ts_rank ranking
+        working-directory: tests
+        # Shim boundary being closed: the shim emulated to_tsvector/to_tsquery/@@/ts_rank narrowly
+        # and proved SQL shape only. Red here means PG's ACTUAL ranking does not put the document
+        # that answers the query first — i.e. the retrieval-quality claim, on the real engine.
+        run: |
+          set -euo pipefail
+          if ! python -m unittest -v test_db_s3_fts.LivePostgresTest; then
+            echo "::error::DB.S3 LIVE leg RED on real Postgres — to_tsvector/ts_rank did not rank the relevant document first. The shim proved the WHERE filters and the values bind; only this leg proves PG's ranking QUALITY, which is the retrieval claim DB.S3 shipped on."
+            exit 1
+          fi
+
+      - name: DB.S4 live leg — real pgvector <=> + HNSW recall + stamp round-trip
+        working-directory: tests
+        # Shim boundary being closed: `_PgVectorShim` stood in for `<=>` as cosine. Red here means
+        # either HNSW does not recall the seeded vector, or the embedder stamp written by
+        # provision_vector does not read back — the two things only a real index can show.
+        run: |
+          set -euo pipefail
+          if ! python -m unittest -v test_db_s4_pgvector.TestLivePgVector; then
+            echo "::error::DB.S4 LIVE leg RED on real pgvector — either the HNSW index did not recall the seeded vector via <=>, or the embedder stamp written by provision_vector did not round-trip. _PgVectorShim emulated <=> and proved neither."
+            exit 1
+          fi
+
+      - name: Summary
+        run: |
+          echo "ok — DB.S2a (psycopg) · DB.S3 (ts_rank) · DB.S4 (pgvector/HNSW) all green on the"
+          echo "real engines. The three recorded shim boundaries are measured, not assumed."

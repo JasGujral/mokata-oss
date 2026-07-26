@@ -41,9 +41,9 @@ class TestDeterministicEnabledSets(unittest.TestCase):
         )
         self.assertEqual(
             s["capabilities"],
-            {"code_graph": ["ripgrep", "grep"], "memory_store": ["sqlite"]},
+            {"code_graph": ["ast", "ripgrep", "grep"], "memory_store": ["sqlite"]},
         )
-        self.assertEqual(s["tools"], ("grep", "ripgrep", "sqlite"))
+        self.assertEqual(s["tools"], ("ast", "grep", "ripgrep", "sqlite"))
 
     def test_full_enabled_set(self):
         s = profile_enabled_set("full")
@@ -53,13 +53,13 @@ class TestDeterministicEnabledSets(unittest.TestCase):
         self.assertEqual(
             s["capabilities"],
             {
-                "code_graph": ["code-review-graph", "serena", "ripgrep", "grep"],
+                "code_graph": ["code-review-graph", "serena", "ast", "ripgrep", "grep"],
                 "memory_store": ["native-memory", "obsidian", "sqlite"],
             },
         )
         self.assertEqual(
             s["tools"],
-            ("code-review-graph", "grep", "native-memory", "obsidian",
+            ("ast", "code-review-graph", "grep", "native-memory", "obsidian",
              "ripgrep", "serena", "sqlite"),
         )
 

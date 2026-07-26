@@ -27,8 +27,12 @@ registers it as a local marketplace named `mostack`:
 The `@mostack` handle is the local marketplace name. (A public marketplace submission is a
 separate, later step for discoverability — it is **not** live yet.)
 
+> **Command form ↔ install route.** The namespaced `/mokata:<name>` form below is the **plugin**
+> render. Via the pip-first `mokata setup claude` path (the supported route today) the same
+> commands appear **bare** in your `/` menu — `/<name>` (drop the `mokata:` prefix).
+
 Either the supported setup path or the experimental route makes the slash commands available — `/mokata:brainstorm`, `/mokata:spec`, `/mokata:test`, `/mokata:develop`,
-`/mokata:review`, `/mokata:debug`, `/mokata:optimize`, `/mokata:bug` — and wires all three hooks (declared in
+`/mokata:review`, `/mokata:debug`, `/mokata:optimize`, `/mokata:bug` — and wires its hooks (declared in
 `hooks/hooks.json`):
 
 - **SessionStart** → `hooks/session_start.py` (async/observability) — injects the bootstrap
@@ -38,12 +42,16 @@ Either the supported setup path or the experimental route makes the slash comman
   overridable:** no approval, and no flag, lifts it.
 - **PreToolUse** → `hooks/gate_guard.py` (sync **methodology / run-state**, **exit code 2**,
   matcher `Write|Edit|MultiEdit|NotebookEdit`) — blocks a write that breaks the run's discipline:
-  `spec-persisted`, `no-code-without-failing-test`, `spec-scope`. **Overridable** — but only
+  `approach-approval`, `spec-persisted`, `no-code-without-failing-test`, `spec-scope`.
+  **Overridable** — but only
   explicitly, by a human: `mokata gate override <gate> --reason "<why>"`, re-confirmed
   interactively, scoped to that session, and written to the audit ledger. There is deliberately
   **no env-var kill switch, no MCP tool, and no slash command** for it.
+- **PostToolUse** → `hooks/dirty_track.py` (async/bookkeeping, matcher
+  `Write|Edit|MultiEdit|NotebookEdit`) — records touched paths into the session graph dirty-set
+  so the code graph is reconciled before the next query answers. It never blocks (always exits 0).
 
-Both are *sync* blocks, and they differ in kind: security is absolute, methodology is
+The two `PreToolUse` guards are *sync* blocks, and they differ in kind: security is absolute, methodology is
 accountable. The gate-guard fires **only inside an active mokata run**, and never on a test
 file — you must be able to write the failing test.
 

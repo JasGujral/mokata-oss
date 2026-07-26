@@ -50,7 +50,7 @@ from ..govern.resume import PipelineCheckpoint
 from ..spec_scope import (STATUS_CLOSED, STATUS_OPEN, AmendRecord, amend_from_state,
                           amend_key, archive_key)
 from .completeness import run_completeness_gate
-from .emit import EMIT_KIND, EMIT_TARGET, spec_commit, spec_version
+from .emit import EMIT_KIND, EMIT_TARGET, preview_content, spec_commit, spec_version
 from .spec import Spec, TestRef
 from .spec_gate import SPEC_STATE_KEY, load_emitted_spec
 
@@ -350,7 +350,7 @@ def finish_amend(plan: AmendPlan, *, store: Any, gate: Any = None, ledger: Any =
                     archive_key=archive_key(plan.run_id, plan.from_version))
 
     out = wgate.submit(
-        WriteRequest(EMIT_KIND, EMIT_TARGET, content=json.dumps(plan.spec.to_dict()),
+        WriteRequest(EMIT_KIND, EMIT_TARGET, content=preview_content(store, plan.spec),
                      tool=AMEND_TOOL, surface=surface_name or CLI_SURFACE),
         commit=commit, assume_yes=assume_yes, confirm=confirm, human_approved=human_approved)
 

@@ -27,15 +27,20 @@ from .backends import (
     build_postgres_backend,
 )
 from .share import (
+    BACKUPS_DIRNAME,
     MEMORY_SHARE_FILENAME,
     ImportResult,
+    MemoryImportPlan,
     MemoryShareError,
     SHARE_KIND,
     SHARE_SCHEMA_VERSION,
+    default_backup_path,
     export_memory,
     export_payload,
     import_memory,
+    is_legacy_share_dest,
     load_memory_share,
+    plan_memory_import,
     scan_export_item,
 )
 from .migrate import (
@@ -116,6 +121,7 @@ from .review import (
     separation_ok,
 )
 from .vector import (
+    EmbedderStampMismatch,
     PgVectorBackend,
     VectorUnavailable,
     build_pgvector_backend,
@@ -274,17 +280,22 @@ __all__ = [
     "MERGE",
     "SUMMARIZE",
     "PRUNE",
-    # Stage 35b — memory export/import (file share)
+    # Stage 35b — memory backup surface (export=backup / import=restore)
     "SHARE_KIND",
     "SHARE_SCHEMA_VERSION",
     "export_memory",
     "export_payload",
     "import_memory",
+    "plan_memory_import",
+    "MemoryImportPlan",
     "load_memory_share",
     "scan_export_item",
     "ImportResult",
     "MemoryShareError",
     "MEMORY_SHARE_FILENAME",
+    "BACKUPS_DIRNAME",
+    "default_backup_path",
+    "is_legacy_share_dest",
     # Stage 35c — migrate between backends
     "migrate_memory",
     "build_named_backend",
@@ -306,6 +317,7 @@ __all__ = [
     "memory_health",
     "assess_health",
     "PgVectorBackend",
+    "EmbedderStampMismatch",
     "build_pgvector_backend",
     "VectorUnavailable",
     # TM.S6 — scope hierarchy + union read (doc 62 §2)

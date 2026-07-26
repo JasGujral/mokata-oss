@@ -65,7 +65,7 @@ Type **`@mokata`** in Copilot Chat to pull up mokata's state without leaving the
 
 These render the output of the **same read-only CLI commands** the panel uses (via the Stage-64
 thin client's `READ_COMMANDS` whitelist). For anything that would **change** your project
-(`spec`, `develop`, `ship`, `remember`, …), `@mokata` **proposes** the exact `/mokata:` /
+(`spec`, `develop`, `ship`, `remember`, …), `@mokata` **proposes** the exact slash /
 `mokata …` command and offers a button to **stage** it in a terminal — you press Enter and
 mokata's human gates apply. **The participant never writes.** It needs VS Code 1.90+ with
 Copilot Chat; where the Chat API is absent it degrades cleanly (the badge and panel still work).

@@ -22,6 +22,14 @@ from .anchors import (
     load_concepts,
     scan_anchors,
 )
+from .ast_backend import AstBackend, FileEdges, extract_edges, parse_source
+from .crg_client import (
+    CRG_COMMAND,
+    CodeReviewGraphClient,
+    CrgUnavailable,
+    CrgVersionSkew,
+    parse_crg_version,
+)
 from .graph_backend import (
     CodeReviewGraphBackend,
     GraphQueryClient,
@@ -61,9 +69,18 @@ __all__ = [
     "QueryResult",
     "Reference",
     "GrepBackend",
+    "AstBackend",
+    "FileEdges",
+    "extract_edges",
+    "parse_source",
     "CodeReviewGraphBackend",
     "GraphQueryClient",
     "SubprocessGraphClient",
+    "CodeReviewGraphClient",
+    "CrgUnavailable",
+    "CrgVersionSkew",
+    "parse_crg_version",
+    "CRG_COMMAND",
     "KnowledgeLayer",
     "select_backends",
     "graph_guidance",

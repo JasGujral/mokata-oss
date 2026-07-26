@@ -303,6 +303,72 @@ def gate_guard_main(argv: Optional[List[str]] = None) -> int:
 
 
 # ======================================================================================
+# dirty-track (PostToolUse, ASYNC OBSERVABILITY hook — GR.S4)
+# ======================================================================================
+
+def dirty_track_main(argv: Optional[List[str]] = None) -> int:
+    """Append the just-written path to the session graph dirty-set (GR.S4).
+
+    This is the ASYNC OBSERVABILITY lane (doc 85): the sync PreToolUse hooks are SECURITY ONLY
+    and are the only hooks that block (exit 2); this one NEVER blocks and NEVER fails an action —
+    it always exits 0, and every failure is swallowed. It records which files changed so the
+    read-time freshness contract can reconcile the code graph BEFORE the next query answers,
+    with no watcher and no daemon.
+
+    Input: the PostToolUse JSON envelope on stdin (`tool_input` + `cwd` + `session_id`), or the
+    `--path`/`--cwd`/`--session-id` argv escape (for tests / manual wiring)."""
+    try:
+        parser = argparse.ArgumentParser(description="mokata graph dirty-track (async observability hook)")
+        parser.add_argument("--path", default=None)
+        parser.add_argument("--cwd", default=None)
+        parser.add_argument("--session-id", default=None)
+        args, _unknown = parser.parse_known_args(argv)
+
+        payload: dict = {}
+        if args.path is None:
+            raw = _read_stdin_bounded(_STDIN_READ_TIMEOUT_SECS)
+            if raw and raw.strip():
+                try:
+                    loaded = json.loads(raw)
+                    payload = loaded if isinstance(loaded, dict) else {}
+                except (ValueError, TypeError):
+                    payload = {}
+
+        cwd = args.cwd or payload.get("cwd") or os.getcwd()
+        sid = args.session_id or payload.get("session_id")
+        session_id = sid if isinstance(sid, str) and sid.strip() else None
+
+        paths: List[str] = []
+        if args.path:
+            paths = [args.path]
+        else:
+            tool_input = payload.get("tool_input")
+            from .gate_hook import target_path
+            p = target_path(tool_input)
+            if p:
+                paths = [p]
+
+        if not paths:
+            return 0                       # nothing to record — still a clean success
+
+        from .config import find_project_root
+        from .knowledge.freshness import mark_dirty
+        root = find_project_root(cwd)
+        rels = []
+        for p in paths:
+            ab = p if os.path.isabs(p) else os.path.join(cwd, p)
+            try:
+                rel = os.path.relpath(ab, root)
+            except (ValueError, OSError):
+                rel = p
+            rels.append(rel)
+        mark_dirty(root, rels, session_id=session_id)
+        return 0
+    except Exception:  # noqa: BLE001 — the async lane NEVER fails a tool call
+        return 0
+
+
+# ======================================================================================
 # session-start (SessionStart, async/observability hook — A4 bootstrap + Stage 23 offer)
 # ======================================================================================
 
@@ -318,6 +384,22 @@ def _read_cwd_from_stdin() -> str:
     except json.JSONDecodeError:
         return os.getcwd()
     return payload.get("cwd") or os.getcwd()
+
+
+def _payload_from_stdin() -> dict:
+    """The SessionStart JSON payload as a dict, or `{}` (TTY / EOF / unparseable / not a mapping).
+    Reads stdin exactly ONCE — SessionStart needs `cwd` AND (B-BADGE) `session_id` + `source`, and
+    stdin can only be consumed once. Same bounded, never-blocks guards as `_read_cwd_from_stdin`."""
+    if sys.stdin is None or sys.stdin.isatty():
+        return {}
+    raw = _read_stdin_bounded(_STDIN_READ_TIMEOUT_SECS)
+    if not raw or not raw.strip():
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _emit(context: str) -> None:
@@ -371,7 +453,14 @@ def session_start_main(argv: Optional[List[str]] = None) -> int:
                         help="the plugin/clone root holding the bundled engine")
     args, _unknown = parser.parse_known_args(argv)
 
-    cwd = _read_cwd_from_stdin()
+    # B-BADGE — one stdin read yields cwd AND the session identity (`session_id` + `source`) the
+    # badge binding needs; stdin can only be consumed once.
+    payload = _payload_from_stdin()
+    cwd = payload.get("cwd") or os.getcwd()
+    _sid = payload.get("session_id")
+    session_id = _sid if isinstance(_sid, str) and _sid.strip() else None
+    _src = payload.get("source")
+    source = _src if isinstance(_src, str) and _src.strip() else None
     try:
         from .bootstrap import build_bootstrap, build_setup_offer
         from .config import ConfigError, Surface, find_project_root
@@ -428,6 +517,18 @@ def session_start_main(argv: Optional[List[str]] = None) -> int:
         capture_session_snapshot(surface)
     except Exception:
         pass
+
+    # B-BADGE — bind THIS Claude Code session to its single live run so the statusline badge is
+    # session-aware (a cleared session never wears a dead run's strip; a resumed one re-attaches).
+    # SessionStart is the writer because the MCP process that REGISTERS the run cannot learn Claude
+    # Code's `session_id` (harness gap #25642) — see `badge_run.maybe_bind_on_session_start`, which
+    # binds only on source=startup/resume with exactly one live run (never on `clear`). Run-state
+    # class, ungated, degrade-clean: on any failure the badge falls open to live-narrowing.
+    try:
+        from .badge_run import maybe_bind_on_session_start
+        maybe_bind_on_session_start(root, session_id, source)
+    except Exception:
+        pass
     return 0
 
 
@@ -463,14 +564,16 @@ def _read_statusline_stdin() -> str:
 
 
 def _cwd_and_session_name(raw: str):
-    """(cwd, session_name) from the statusLine payload. Honour `workspace.current_dir`
-    (then top-level `cwd`), and the optional `session_name` Claude Code passes (the Stage-55
-    badge slot). Degrade to the process cwd / no name on any parse problem."""
-    cwd, name = os.getcwd(), None
+    """(cwd, session_name, session_id) from the statusLine payload. Honour `workspace.current_dir`
+    (then top-level `cwd`), the optional `session_name` Claude Code passes (the Stage-55 badge
+    slot), and the top-level `session_id` (B-BADGE — the session-aware badge resolution key).
+    Degrade to the process cwd / no name / no id on any parse problem — a payload with no
+    `session_id` (older/non-Claude caller) yields None, which keeps today's badge byte-identical."""
+    cwd, name, session_id = os.getcwd(), None, None
     try:
         payload = json.loads(raw)
     except (ValueError, TypeError):
-        return cwd, name
+        return cwd, name, session_id
     if isinstance(payload, dict):
         ws = payload.get("workspace")
         if isinstance(ws, dict) and ws.get("current_dir"):
@@ -480,10 +583,14 @@ def _cwd_and_session_name(raw: str):
         sn = payload.get("session_name")
         if isinstance(sn, str) and sn.strip():
             name = sn
-    return cwd, name
+        sid = payload.get("session_id")
+        if isinstance(sid, str) and sid.strip():
+            session_id = sid
+    return cwd, name, session_id
 
 
-def _mokata_segment(cwd: str, session_name: Optional[str]) -> str:
+def _mokata_segment(cwd: str, session_name: Optional[str],
+                    session_id: Optional[str] = None) -> str:
     """mokata's badge for `cwd` — "" when mokata isn't initialized here, the badge is
     disabled, or the engine is unavailable. Never raises."""
     try:
@@ -499,8 +606,21 @@ def _mokata_segment(cwd: str, session_name: Optional[str]) -> str:
         if not statusline_enabled(surface):
             return ""
         # TM.S1 — the statusline segment prefixes the run mode (local|team) so a session is
-        # never ambiguous about which mode it's in, then the pipeline-stage badge.
-        return statusline_badge(surface, session_name=session_name)
+        # never ambiguous about which mode it's in, then the pipeline-stage badge. B-BADGE — the
+        # payload's `session_id` scopes the stage strip to THIS session (see `badge_run`).
+        badge = statusline_badge(surface, session_name=session_name, session_id=session_id)
+        # MCP-R.D2 (UX-NOTIFY) — the mokata-OWNED wait signal, for the waits that raise no harness
+        # notification. A gated write returning a proposal does NOT trigger a permission prompt
+        # (the `mcp__mokata__*` allow-grant is what stops it prompting), so Claude Code's
+        # Notification event never fires and the wait is invisible until someone notices silence.
+        # This is the channel mokata owns, and it costs nothing: the pending set is already on
+        # disk, so it renders on the statusline tick the harness was going to run anyway — no
+        # daemon, no watcher, no new dependency.
+        #
+        # Appended, never substituted: a session with nothing pending gets a byte-identical badge.
+        from .awaiting import statusline_segment
+        wait = statusline_segment(root)
+        return f"{badge}  {wait}" if wait else badge
     except Exception:
         return ""
 
@@ -537,10 +657,10 @@ def statusline_main(argv: Optional[List[str]] = None) -> int:
     args, _unknown = parser.parse_known_args(argv)
 
     raw = _read_statusline_stdin()
-    cwd, session_name = _cwd_and_session_name(raw)
+    cwd, session_name, session_id = _cwd_and_session_name(raw)
 
     their = _run_wrapped(args.wrap, raw) if args.wrap else ""
-    mine = _mokata_segment(cwd, session_name)
+    mine = _mokata_segment(cwd, session_name, session_id)
 
     line = "  ".join(part for part in (their, mine) if part)
     if line:
@@ -556,6 +676,7 @@ _SUBCOMMANDS = {
     "session-start": session_start_main,
     "secret-guard": secret_guard_main,
     "gate-guard": gate_guard_main,
+    "dirty-track": dirty_track_main,
     "statusline": statusline_main,
 }
 
@@ -571,14 +692,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not argv:
         sys.stderr.write(
             "mokata-hook: missing subcommand "
-            "(session-start | secret-guard | gate-guard | statusline)\n")
+            "(session-start | secret-guard | gate-guard | dirty-track | statusline)\n")
         return 1  # misconfiguration → visible exit 1 (NOT 0=silent, NOT 2=security-block)
     sub, rest = argv[0], argv[1:]
     handler = _SUBCOMMANDS.get(sub)
     if handler is None:
         sys.stderr.write(
             f"mokata-hook: unknown subcommand {sub!r} "
-            f"(expected session-start | secret-guard | gate-guard | statusline)\n")
+            f"(expected session-start | secret-guard | gate-guard | dirty-track | statusline)\n")
         return 1  # misconfiguration → visible exit 1 (NOT 0=silent, NOT 2=security-block)
     return handler(rest)
 

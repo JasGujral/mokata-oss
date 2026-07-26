@@ -25,6 +25,7 @@ from . import (
     MOKATA_DIR,
     __version__,
 )
+from .atomicfile import atomic_write_text
 from .detect import Detector
 from .manifest import Manifest
 from .profiles import (
@@ -93,25 +94,50 @@ class InitPlan:
         os.makedirs(os.path.join(self.root, MOKATA_DIR), exist_ok=True)
         written: List[str] = []
 
+        # R-MAN — all three scaffold writes are atomic (temp + fsync + os.replace). They are the
+        # same crash-window class as the gated manifest writers: `open(..., "w")` truncates first,
+        # so a crash mid-scaffold leaves a half-written manifest, which since SIMP.S1 makes the
+        # repo REFUSE transport derivation until a human repairs the JSON by hand.
         manifest = Manifest.from_dict(self.manifest_data, self.manifest_path)
-        with open(self.manifest_path, "w", encoding="utf-8") as fh:
-            fh.write(manifest.to_json())
+        atomic_write_text(self.manifest_path, manifest.to_json())
         written.append(self.manifest_path)
 
         # Never overwrite a hand-edited constitution; only scaffold if absent.
         if not os.path.exists(self.constitution_path):
-            with open(self.constitution_path, "w", encoding="utf-8") as fh:
-                fh.write(DEFAULT_CONSTITUTION)
+            atomic_write_text(self.constitution_path, DEFAULT_CONSTITUTION)
             written.append(self.constitution_path)
 
         # The committed ignore rule that keeps temp_local/ out of version control (24D).
         # Only scaffold if absent so a hand-edited ignore is never clobbered.
         if not os.path.exists(self.gitignore_path):
-            with open(self.gitignore_path, "w", encoding="utf-8") as fh:
-                fh.write(DEFAULT_GITIGNORE)
+            atomic_write_text(self.gitignore_path, DEFAULT_GITIGNORE)
             written.append(self.gitignore_path)
 
+        # KB.S1 — leave an audit-ledger record of the bootstrap write (P7: every durable write
+        # leaves a record). The BOOTSTRAP ORDERING answer: init runs before any ledger exists, so
+        # the ledger's own creation IS its first entry. `from_mokata_dir` makes
+        # .mokata/temp_local/audit/ — which the .mokata dir this method just created can now hold —
+        # so the record can land the moment the files are on disk. One batched record NAMING the
+        # files (never their contents — bootstrap scaffolding, not content review).
+        self._record_bootstrap(written)
         return written
+
+    def _record_bootstrap(self, written: List[str]) -> None:
+        """Record init's writes on the repo's audit ledger (KB.S1). Best-effort by design: a
+        ledger IO failure must never break the bootstrap that just wrote a valid config (the
+        `user_prefs`/`record_graph_decline` philosophy — the record is non-fatal). Names paths +
+        the profile only; carries no file contents or secrets."""
+        try:
+            from .govern.ledger import AuditLedger
+            mokata_dir = os.path.join(self.root, MOKATA_DIR)
+            AuditLedger.from_mokata_dir(mokata_dir).record(
+                "setup", action="init", profile=self.profile,
+                files=sorted(written), actor="cli")
+        except OSError:
+            # A ledger record that can't land is non-fatal — the config is already written and
+            # valid; worst case one bootstrap goes unrecorded on a broken FS (which would have
+            # failed the manifest write first anyway).
+            pass
 
 
 @dataclass

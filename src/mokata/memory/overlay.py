@@ -105,11 +105,16 @@ class JournalOverlay(MemoryBackend):
         return self._backend.get(item_id)
 
     def all(self, mtype: Optional[str] = None,
-            statuses: Optional[Tuple[str, ...]] = None) -> List[MemoryItem]:
+            statuses: Optional[Tuple[str, ...]] = None,
+            limit: Optional[int] = None) -> List[MemoryItem]:
+        # DB.S2a — mtype/statuses ARE pushed to the backend (it filters in SQL now). `limit` is
+        # deliberately NOT: this layer removes rows a pending delete hid and appends rows a pending
+        # write revealed, so a backend-side LIMIT would take its N before the merge and hand back
+        # the wrong N. Apply it to the MERGED result, which is the set the caller asked to cap.
         base = self._backend.all(mtype=mtype, statuses=statuses)
         overrides, deletes = self._pending()
         if not overrides and not deletes:
-            return base                        # fully-flushed team state → backend-identical
+            return base[:limit] if limit is not None else base   # fully-flushed → backend-identical
         # A pending entry is the authoritative CURRENT state for its key: drop the backend's copy,
         # then re-add the pending item IFF it still matches the requested filter.
         touched = set(overrides) | deletes
@@ -117,7 +122,7 @@ class JournalOverlay(MemoryBackend):
         for it in overrides.values():
             if self._matches(it, mtype, statuses):
                 result.append(it)
-        return result
+        return result[:limit] if limit is not None else result
 
     # --- writes (delegate — team writes journal first, never reach here) -----
     def put(self, item: MemoryItem) -> None:

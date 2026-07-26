@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator, List, Optional, Tuple
 
 from . import MANIFEST_FILENAME, MOKATA_DIR, schema
+from .atomicfile import atomic_write_text
 from .manifest import Manifest
 from .errors import MokataError
 
@@ -260,8 +261,7 @@ def apply_manifest(root: str, data: Any,
 
     def _commit() -> None:
         os.makedirs(mdir, exist_ok=True)
-        with open(manifest_path, "w", encoding="utf-8") as fh:
-            fh.write(content)
+        atomic_write_text(manifest_path, content)   # R-MAN — crash leaves the OLD manifest, whole
 
     outcome = WriteGate(ledger=ledger).submit(
         WriteRequest("config", manifest_path, content=content, actor="human",
