@@ -129,10 +129,20 @@ def cmd_session(args: argparse.Namespace) -> int:
     action = args.action
     root = args.path
 
-    def _open(kind):
-        """Build a transport, degrading clean (clear message, rc 1) on an unavailable remote."""
+    def _kind(explicit):
+        """SIMP.S1 — resolve the effective transport kind: `--file` forces local (the explicit
+        escape hatch); an explicit --to/--from is honored verbatim; otherwise it is DERIVED from
+        the repo mode (team-connected → postgres, solo → local)."""
+        if getattr(args, "file", False):
+            return "local"
+        return explicit if explicit is not None else STX.transport_kind_for_mode(root)
+
+    def _open(explicit):
+        """Build a transport for the resolved kind, degrading clean (clear message, rc 1) on an
+        unavailable remote — a team-connected repo with no DSN REFUSES here, never silently
+        downgrades to a local file."""
         try:
-            return STX.make_transport(kind, root), 0
+            return STX.make_transport(_kind(explicit), root), 0
         except STX.SessionTransportUnavailable as exc:
             print(f"session: {exc}", file=sys.stderr)
             return None, 1
@@ -367,12 +377,17 @@ def register(sub, common):
                            help="pull target repo root (default: this repo)")
     p_session.add_argument("--author", default=None,
                            help="push author for provenance (default: $USER)")
-    p_session.add_argument("--to", choices=("local", "vault", "postgres"), default="local",
-                           help="push/name transport: local (default), vault (committed/synced), "
-                                "or postgres (shared DSN; opt-in, degrades clean)")
+    p_session.add_argument("--to", choices=("local", "vault", "postgres"), default=None,
+                           help="push/name transport (default: DERIVED from the repo mode — a "
+                                "team-connected repo uses postgres, a solo repo uses local); "
+                                "vault = committed/synced. An explicit value is honored verbatim")
     p_session.add_argument("--from", dest="frm",
-                           choices=("local", "vault", "postgres"), default="local",
-                           help="pull transport (default: local) — same choices as --to")
+                           choices=("local", "vault", "postgres"), default=None,
+                           help="pull transport (default: derived from the repo mode) — same "
+                                "choices as --to")
+    p_session.add_argument("--file", dest="file", action="store_true",
+                           help="force the LOCAL file transport regardless of mode (the explicit "
+                                "escape hatch on a team-connected repo)")
     p_session.add_argument("--force", action="store_true",
                            help="push: overwrite a changed bundle; pull: apply despite a "
                                 "cross-codebase fingerprint mismatch; name: overwrite a colliding "

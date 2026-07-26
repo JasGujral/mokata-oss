@@ -85,9 +85,10 @@ def cmd_onboard(args: argparse.Namespace) -> int:
 
 
 def cmd_query(args: argparse.Namespace) -> int:
+    from ..knowledge.layer import run_query
     surface = _load_surface(args.path)
     layer = KnowledgeLayer.from_surface(surface)
-    result = layer._run(args.kind, args.target, depth=args.depth)
+    result = run_query(layer, args.kind, args.target, depth=args.depth)
     mode = "graph" if not result.degraded else "grep fallback"
     print(
         f"{result.kind}({result.target}) via {result.backend} [{mode}] — "
@@ -119,8 +120,36 @@ def cmd_spec_check(args: argparse.Namespace) -> int:
     decisions = load_decisions(store)
     layer = KnowledgeLayer.from_surface(surface)
     ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+
+    # GR.S3 — the `graph.required` gate + its ledgered `--allow-degraded` escape. When the touch-set
+    # is degraded and graph.required is on, the guard REFUSES unless this session has an override. A
+    # `--allow-degraded` run re-confirms at the TTY (the model cannot type it), writes a session-
+    # scoped ledgered override, and proceeds with the degraded marking intact (P22).
+    from ..govern import graph_required as GR
+    from ..session import current_run_id
+    from ..prompt import read_yes_no
+    run_id = current_run_id()
+    graph_required = GR.graph_required_enabled(surface)
+    if getattr(args, "allow_degraded", False) and graph_required:
+        reason = args.reason or "operator accepted degraded evidence"
+        plan = (f"Accept a DEGRADED (grep-floor) blast radius as decision input for this session "
+                f"(run {run_id[:8]}).\n"
+                f"  The regression guard cannot vouch for a clean corpus without a real graph.\n"
+                f"  Scope: THIS session only — a new session enforces again.\n"
+                f"  Reason (recorded to the audit ledger): {reason}")
+        if not (args.yes or read_yes_no(plan, "Accept degraded evidence for this session?")):
+            print("aborted — the graph.required gate stays enforced.")
+            return 1
+        GR.write_degraded_override(surface, run_id, reason=reason, ledger=ledger)
+    graph_overridden = bool(GR.read_degraded_override(surface.root, run_id))
+    notice = None
+    if graph_required and not graph_overridden:
+        notice = GR.fire_upgrade_notice_once(surface.root)
+
     outcome = guard_change(change, specs=specs, decisions=decisions, layer=layer,
-                           ledger=ledger, phase=args.phase, assume_yes=args.yes)
+                           ledger=ledger, phase=args.phase, assume_yes=args.yes,
+                           graph_required=graph_required, graph_overridden=graph_overridden,
+                           graph_backend=getattr(layer, "backend_name", None), notice=notice)
     print(outcome.render())
     return 0 if outcome.proceeded else 1
 
@@ -185,7 +214,8 @@ def register(sub, common):
         "query", parents=[common],
         help="run a structural query (graph if present, else grep floor)",
     )
-    p_query.add_argument("kind", choices=QUERY_KINDS, help="the structural question")
+    p_query.add_argument("kind", choices=list(QUERY_KINDS) + ["semantic"],
+                         help="the structural question ('semantic' needs an adopted graph)")
     p_query.add_argument("target", help="symbol or module to ask about")
     p_query.add_argument(
         "--depth", type=int, default=2,
@@ -208,6 +238,12 @@ def register(sub, common):
                          help="phase this runs at (develop/refine/spec; default: develop)")
     p_speck.add_argument("--yes", action="store_true",
                          help="confirm the change at the deviation gate (amend/supersede)")
+    p_speck.add_argument("--allow-degraded", action="store_true", dest="allow_degraded",
+                         help="GR.S3: explicitly accept a DEGRADED (grep-floor) touch-set for this "
+                              "session when graph.required is on — recorded to the audit ledger; "
+                              "the result stays marked degraded")
+    p_speck.add_argument("--reason", default="",
+                         help="why the degraded evidence is being accepted (recorded to the ledger)")
     p_speck.set_defaults(func=cmd_spec_check)
 
     p_ci = sub.add_parser(

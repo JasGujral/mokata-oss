@@ -85,6 +85,13 @@ class ApproachImpact:
     affected_decisions: List[AffectedDecision] = field(default_factory=list)
     degraded: bool = False
     note: str = ""
+    # GR.S3 — the QUERY-LEVEL floor signal, distinct from the display `degraded` caveat above:
+    # True only when the blast-radius query itself fell to the lexical grep floor (no layer, a
+    # failed query, or `qr.degraded` — the grep floor / empty-AST fallthrough answered). The AST
+    # floor answering WITH evidence keeps `degraded=True` (uses_graph=False) for the display, but
+    # `graph_degraded=False` — so AST-with-evidence is NOT refused. This is the signal the
+    # `graph.required` gate reads; a repo with a real graph OR real AST evidence is not degraded.
+    graph_degraded: bool = False
 
     @property
     def file_count(self) -> int:
@@ -122,6 +129,7 @@ class ApproachImpact:
             "affected_decisions": [a.to_dict() for a in self.affected_decisions],
             "degraded": self.degraded,
             "note": self.note,
+            "graph_degraded": self.graph_degraded,
         }
 
     @classmethod
@@ -137,6 +145,7 @@ class ApproachImpact:
                                 for a in d.get("affected_decisions", [])],
             degraded=bool(d.get("degraded", False)),
             note=d.get("note", ""),
+            graph_degraded=bool(d.get("graph_degraded", False)),
         )
 
 
@@ -161,6 +170,12 @@ def compute_impact(approach: str, targets: Sequence[str], *, layer: Any = None,
     # about_code intersection + any grep hits STILL score — degradation lowers confidence, not the
     # ability to compare (doc 63 §2). A layer without `uses_graph` is assumed a real graph.
     degraded = layer is None or (getattr(layer, "uses_graph", True) is False)
+    # GR.S3 — the QUERY-LEVEL floor signal: True only when a structural answer was ATTEMPTED and
+    # fell to the lexical grep floor (no layer, a failed query, or `qr.degraded`). The AST floor
+    # answering WITH evidence does NOT set it (its query is `degraded=False`), so AST-with-evidence
+    # is not refused. An approach that named NO targets has no blast radius to refuse (nothing was
+    # queried) — it is not "degraded", just empty; so the signal starts False when `tgts` is empty.
+    graph_degraded = bool(tgts) and layer is None
     touched_syms = set(tgts)
     touched_files: set = set()
     ref_keys: set = set()
@@ -172,9 +187,11 @@ def compute_impact(approach: str, targets: Sequence[str], *, layer: Any = None,
                 qr = layer.blast_radius(t, depth=depth)
             except Exception:
                 degraded = True                       # a failing query → degrade, keep scoring
+                graph_degraded = True                 # the structural answer was withheld
                 continue
             if getattr(qr, "degraded", False):
                 degraded = True                       # the grep floor answered
+                graph_degraded = True                 # ...from the lexical floor (a decision input)
             for r in getattr(qr, "references", []) or []:
                 path = getattr(r, "path", "") or ""
                 line = getattr(r, "line", 0) or 0
@@ -212,7 +229,8 @@ def compute_impact(approach: str, targets: Sequence[str], *, layer: Any = None,
     return ApproachImpact(
         approach=approach, targets=tgts, impacted_files=files,
         impacted_symbols=sorted(touched_syms), caller_count=caller_count,
-        buckets=buckets, affected_decisions=affected, degraded=degraded, note=note)
+        buckets=buckets, affected_decisions=affected, degraded=degraded, note=note,
+        graph_degraded=graph_degraded)
 
 
 def compare_impacts(impacts: Sequence[ApproachImpact]) -> List[ApproachImpact]:

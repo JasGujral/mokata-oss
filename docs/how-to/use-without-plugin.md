@@ -58,8 +58,8 @@ then waits for your confirmation. It:
   `mokata config set settings.ux.statusline false`, or `--no-hooks` to skip the
   settings.json wiring entirely.
 
-Then **restart Claude Code** in that project. You'll have `/mokata:brainstorm`, `/mokata:spec`, `/mokata:test`,
-`/mokata:develop`, `/mokata:review`, `/mokata:debug`, `/mokata:optimize`, `/mokata:bug`, the bootstrap briefing, the
+Then **restart Claude Code** in that project. You'll have `/brainstorm`, `/spec`, `/test`,
+`/develop`, `/review`, `/debug`, `/optimize`, `/bug`, the bootstrap briefing, the
 secret-guard, the run-state gate-guard, and the mokata MCP tools — the same experience as the plugin.
 
 ### Options
@@ -159,10 +159,11 @@ installed. The two blocks are different in kind:
 | hook | matcher | what it blocks | overridable? |
 |---|---|---|---|
 | `mokata-hook secret-guard` | `Write\|Edit\|MultiEdit\|Bash` | a write **or shell command** carrying a secret — a **security** block | **Never.** No approval lifts it. |
-| `mokata-hook gate-guard` | `Write\|Edit\|MultiEdit\|NotebookEdit` | a write that breaks the run's **methodology** — the three run-state gates | **Yes**, explicitly: `mokata gate override <gate> --reason "<why>"` |
+| `mokata-hook gate-guard` | `Write\|Edit\|MultiEdit\|NotebookEdit` | a write that breaks the run's **methodology** — the four run-state gates | **Yes**, explicitly: `mokata gate override <gate> --reason "<why>"` |
 
 Both refuse with **exit code 2** and one stderr line, `BLOCKED [<gate>] <reason>`. The
-gate-guard's three gates are `spec-persisted` (an approach is approved but no spec is emitted),
+gate-guard's four gates are `approach-approval` (the run is still in brainstorm — no approach
+approved yet), `spec-persisted` (an approach is approved but no spec is emitted),
 `no-code-without-failing-test` (a spec exists but no failing test is on record), and `spec-scope`
 (the write is outside the spec's authorized surface, spells a **deferred** marker, or a spec
 amend is in progress). They fire **only inside an active mokata run** — hand-editing a repo
@@ -171,7 +172,7 @@ able to write the failing test. Note the matchers **differ**: the gate-guard doe
 `Bash`, so a `sed -i` through the shell is not policed (a known, documented hole; the
 *secret*-guard does match `Bash`).
 
-`SessionStart` injects the bootstrap briefing (the `--plugin-root` lets `/mokata:init` locate
+`SessionStart` injects the bootstrap briefing (the `--plugin-root` lets `/init` locate
 the bundled engine — manual setup has no `${CLAUDE_PLUGIN_ROOT}`). Just let `mokata setup
 claude` write the whole block for you to get the absolute-path form automatically.
 

@@ -1,0 +1,110 @@
+name: real-crg (opt-in)
+
+# GR.S2-FU — the OPT-IN real code-review-graph leg. The GR.S2 contract suite runs on a full
+# fake-CRG double; the raw MCP-stdio wire (`knowledge/crg_client.py:_McpStdioSession`) is only
+# exercisable against a real `code-review-graph serve`. This job installs the real tool and
+# drives that wire end-to-end. It is MANUAL-only (`workflow_dispatch`) so it NEVER blocks normal
+# CI — dispatch it deliberately when validating the real integration.
+#
+# Note: mokata carries no dependency on code-review-graph and does NOT durably adopt it here.
+# `graph adopt` pins the manifest through the human WriteGate, which fails CLOSED off a TTY (P2 —
+# no headless durable consent); that is the gate working, not a gap. Instead the `full` profile
+# BINDS a detected code-review-graph read-only through the router, so `mokata query` / `graph
+# status` exercise the real query + version-handshake wire the fake double stands in for.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-crg:
+    name: real code-review-graph wire (manual)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install mokata
+        run: pip install -e .
+
+      - name: Install code-review-graph through the SHIPPED install seam (DB.S4)
+        # GR.S2-FU — this used to be a bare `pip install code-review-graph`, i.e. CI proving a
+        # shell line rather than mokata's code. DB.S4 shipped `extras_install.install_extra`, and
+        # `graph_adopt.offer_graph_at_setup`'s `install_fn` now defaults to it: ONE bounded pip
+        # subprocess (no unbounded hang on a wedged index), verified by IMPORT rather than by
+        # pip's exit code. This step drives THAT primitive, so what CI exercises is what users run.
+        #
+        # P2 — why `install_extra` and not `offer_graph_at_setup`. The offer is the CONSENT
+        # wrapper: it ASKS (fail-closed off a TTY), and on accept it calls `adopt_graph`, which
+        # PINS the tool into the committed manifest through the WriteGate. Neither belongs in CI.
+        # `install_extra` is the prompt-free primitive by design — consent lives one layer up, in
+        # the caller — so calling it here is not a bypass and adds nothing to shipped code: the
+        # human who DISPATCHED this workflow is the consent, and no durable adopt happens at all.
+        # `_crg_importable` is the same verify the shipped offer passes in.
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sys
+          from mokata.extras_install import install_extra
+          from mokata.knowledge.graph_adopt import _crg_importable
+
+          res = install_extra("code-review-graph", verify=_crg_importable)
+          print(f"install_extra -> ok={res.ok} ran={res.ran} verified={res.verified}: {res.message}")
+          if not res.ok:
+              print("::error::the SHIPPED install seam (extras_install.install_extra) failed to "
+                    f"install+verify code-review-graph: {res.message}")
+              sys.exit(1)
+          PY
+
+      - name: The install seam's own unit tests (the seam must EXIST, not just be called)
+        # `extras_install`'s consent/bounded-pip/verify-by-import tests ship inside DB.S4's file
+        # (it is the stage that built the primitive). Running them here means a green real-crg
+        # job attests both halves: the seam behaves, AND it really installed the real tool.
+        run: |
+          python -m unittest discover -s tests -t tests -p "test_db_s4_pgvector.py" -v
+
+      - name: Build a sample Python repo
+        run: |
+          set -euo pipefail
+          repo="$(mktemp -d)"
+          echo "SAMPLE_REPO=$repo" >> "$GITHUB_ENV"
+          printf 'def process_payment(total, currency):\n    return {"total": total, "currency": currency}\n' > "$repo/payments.py"
+          printf 'from payments import process_payment\n\ndef checkout(total):\n    return process_payment(total, "USD")\n' > "$repo/checkout.py"
+          ( cd "$repo" && mokata init --profile full --yes )
+
+      - name: Real graph status — the version handshake must bind the real backend
+        run: |
+          set -euo pipefail
+          out="$( cd "$SAMPLE_REPO" && mokata graph status )"
+          echo "$out"
+          # The real code-review-graph must ANSWER — not the AST/grep floor.
+          echo "$out" | grep -qi "code-review-graph" \
+            || { echo "::error::graph status did not bind the real code-review-graph backend"; exit 1; }
+          echo "$out" | grep -qi "floor '" \
+            && { echo "::error::graph status fell to a floor — the real CRG wire did not answer"; exit 1; }
+          echo "ok — real code-review-graph is the live backend"
+
+      - name: Real query over the MCP-stdio wire
+        run: |
+          set -euo pipefail
+          out="$( cd "$SAMPLE_REPO" && mokata query callers process_payment )"
+          echo "$out"
+          # Answered via the real graph (not `via ast` / `via grep` / `via ripgrep`).
+          echo "$out" | grep -qiE "via code-review-graph|\[graph\]" \
+            || { echo "::error::callers query was not answered by the real code-review-graph wire"; exit 1; }
+          echo "$out" | grep -q "checkout" \
+            || { echo "::error::the real wire did not resolve the known caller"; exit 1; }
+          echo "ok — the real _McpStdioSession query wire round-tripped"
+
+      - name: GR.S2 contract suite (regression under the real binary present)
+        run: |
+          python -m unittest discover -s tests -t tests -p "test_gr_s2_*.py" -v

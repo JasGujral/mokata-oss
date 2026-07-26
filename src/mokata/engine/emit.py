@@ -39,12 +39,12 @@ Clean-room. Copyright 2026 MoStack. Licensed under the Apache License, Version 2
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Dict, List, Optional
 
 from ..govern import WriteGate, WriteRequest
 from ..govern.trust import CLI_SURFACE
-from ..spec_scope import SCOPE_KEY, scope_from_dict
+from ..spec_scope import SCOPE_KEY, DeferredItem, SpecScope, scope_from_dict
 from .completeness import run_completeness_gate
 from .spec import Spec, TestRef
 from .spec_awareness import SPEC_CORPUS_KEY
@@ -80,8 +80,50 @@ class EmitOutcome:
 
 
 # ======================================================================================
+# AP-SD — ONE truth: the spec's deferred scope DERIVES from the approved approach's decisions[]
+# ======================================================================================
+
+def derive_scope(scope: Optional[SpecScope], decisions: Any) -> Optional[SpecScope]:
+    """The spec's DEFERRED scope, derived at emit from the approved approach's `decisions[].deferred`
+    — never hand-written a second time. The AUTHORIZED surface stays the spec payload's (the approach
+    declares no authorized set); the DEFERRED list is the decisions' deferrals, UNIONED with any the
+    spec payload still declared whose id the decisions did not already cover (dedup by id — the
+    decision is the source of truth).
+
+    Pure and total. Byte-identical when the decisions carry NO deferrals: returns `scope` unchanged
+    (the same object), so a pre-AP-SD approach leaves SI-DEV's scope semantics exactly as today."""
+    derived: List[DeferredItem] = []
+    for d in decisions or []:
+        for df in (getattr(d, "deferred", None) or []):
+            derived.append(DeferredItem(
+                id=getattr(df, "id", "") or "", item=getattr(df, "item", "") or "",
+                paths=tuple(getattr(df, "paths", ()) or ()),
+                markers=tuple(getattr(df, "markers", ()) or ())))
+    if not derived:
+        return scope
+    seen = {i.id for i in derived}
+    authorized = scope.authorized if scope is not None else ()
+    kept = tuple(i for i in (scope.deferred if scope is not None else ()) if i.id not in seen)
+    return SpecScope(authorized=authorized, deferred=tuple(derived) + kept)
+
+
+# ======================================================================================
 # the durable write
 # ======================================================================================
+
+def preview_content(store: Any, spec: Spec) -> str:
+    """The JSON a human PREVIEWS for a spec emit — with the scope DERIVED exactly as
+    `spec_commit` will write it (AP-SD-FU). The derivation lives in the committer, so the raw
+    payload preview understated the deferred items the approved approach's `decisions[].deferred`
+    adds; this projects them into the preview so the human sees precisely what lands. Pure display:
+    the durable write is still `spec_commit` (which derives), so what is WRITTEN is unchanged. Reads
+    decisions from the SAME `store` the paired `spec_commit` uses, so preview and write never diverge;
+    byte-identical to `json.dumps(spec.to_dict())` when the approach records no deferrals."""
+    from ..brainstorm import load_decisions
+    derived = derive_scope(spec.scope, load_decisions(store))
+    shown = spec if derived is spec.scope else replace(spec, scope=derived)
+    return json.dumps(shown.to_dict())
+
 
 def _corpus_after(current: Any, spec: Spec) -> List[Dict[str, Any]]:
     """The corpus with `spec` recorded — replacing a same-titled entry, else appended, capped at
@@ -156,6 +198,12 @@ def spec_commit(store: Any, spec: Spec, *, version: int = 1,
         if isinstance(previous, dict):
             store.write(archive_key, previous)          # vN superseded — NEVER deleted
 
+    # AP-SD ONE-truth — the deferred scope derives from the approved approach's decisions[] at emit,
+    # so it is never hand-written twice. Every emit surface (CLI/pipeline/MCP) lands here, so one
+    # wiring binds them all. A no-op (byte-identical) when the approach records no deferrals.
+    from ..brainstorm import load_decisions
+    spec.scope = derive_scope(spec.scope, load_decisions(store))
+
     data = dict(spec.to_dict())
     data["version"] = version
     store.write(SPEC_STATE_KEY, data)
@@ -177,7 +225,7 @@ def commit_spec(store: Any, spec: Spec, *, gate: WriteGate,
     durable, previewable, ledgered write."""
     box: Dict[str, int] = {}
     out = gate.submit(
-        WriteRequest(EMIT_KIND, EMIT_TARGET, content=json.dumps(spec.to_dict()),
+        WriteRequest(EMIT_KIND, EMIT_TARGET, content=preview_content(store, spec),
                      tool=EMIT_TOOL, surface=surface),
         commit=lambda: box.update(size=spec_commit(store, spec)),
         assume_yes=assume_yes, confirm=confirm, human_approved=human_approved)
@@ -277,5 +325,6 @@ def spec_from_payload(payload: Dict[str, Any]) -> "tuple[Spec, List[TestRef]]":
 
 __all__ = [
     "EMIT_KIND", "EMIT_TARGET", "EMIT_TOOL", "MAX_CORPUS",
-    "EmitOutcome", "commit_spec", "emit_spec", "spec_commit", "spec_from_payload",
+    "EmitOutcome", "commit_spec", "derive_scope", "emit_spec", "preview_content",
+    "spec_commit", "spec_from_payload",
 ]

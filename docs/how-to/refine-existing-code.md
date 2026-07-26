@@ -11,7 +11,7 @@ It's the counterpart to `brainstorm` (which is for *new* problems).
 ## Run it
 
 ```bash
-# inside Claude Code (plugin): /mokata:refine focus auth + security
+# inside Claude Code: /refine focus auth + security
 # CLI (engine view):
 mokata run refine            # shows the protocol + what it can ground in right now
 mokata enter refine          # enter the pipeline at the refine front-end

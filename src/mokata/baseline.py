@@ -19,8 +19,14 @@ from typing import Any, Optional
 
 # settings.baseline.test_command — the project's test command (mokata never guesses one).
 BASELINE_SETTINGS_KEY = "baseline"
-# How long the baseline test command may run before we report (not crash) a timeout.
+# How long the baseline test command may run before we report (not crash) a timeout. This is the
+# TERMINAL / `mokata baseline` (CLI) bound: a human at a terminal can afford a full 10-minute suite.
 BASELINE_TIMEOUT_SECONDS = 600
+# MCP-R.D0 · R7 — the MCP-SURFACE bound (the two-bound split). `baseline` is a READ tool, but on the
+# MCP surface it must NEVER block stdio for 10 minutes of silence: the MCP `baseline` tool caps its
+# subprocess far below 600s so a client sees a bounded report, not dead air. Only the MCP surface is
+# capped — the CLI/terminal path above keeps its longer bound.
+BASELINE_MCP_TIMEOUT_SECONDS = 120
 
 GREEN = "green"
 RED = "red"

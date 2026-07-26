@@ -57,24 +57,33 @@ resolved WITHOUT guessing (SI.2's contract, extended to all three run-scoped key
 
     1. the `MOKATA_SESSION_ID` pin, if the hook's env carries one   (exact)
     2. else, if exactly ONE run id has run-scoped state in this repo, that run  (unambiguous)
-    3. else AMBIGUOUS -> fail OPEN + a once-per-session notice. Never a block.
+    3. else, with two or more candidate runs, NARROW on the MS.S2 live-session registry (R-MCP):
+       the candidates whose MCP process is ALIVE and rooted at this repo. Exactly ONE survivor ->
+       that run (its window is the real driver). Zero or 2+ -> stay ambiguous.
+    4. else AMBIGUOUS -> fail OPEN + a once-per-session notice. Never a block.
 
-Rule 3 is what makes wrong-window blocking STRUCTURALLY impossible: with two or more candidate runs
-the hook does not pick one, so it can never enforce window A's RED against window B's editor — no
-matter which of them is red. Enforcement lands where the repo has one run's state (the common case)
-or where the pin is set; everywhere else the honest answer is "I cannot tell", and the honest
-behaviour is to get out of the way.
+Rules 3–4 are what make wrong-window blocking STRUCTURALLY impossible: the registry can only ever
+REMOVE ambiguity (name the single live driver), never manufacture a pick — with two live windows on
+one repo the narrowing yields two survivors and the hook still declines to choose, so it can never
+enforce window A's RED against window B's editor no matter which of them is red. Enforcement lands
+where the repo has one run's state, where the pin is set, or where the registry resolves the repo to
+a single live run; everywhere else the honest answer is "I cannot tell", and the honest behaviour is
+to get out of the way.
 
-Deliberately NOT used for disambiguation: the MS.S2 live-session registry. It cannot narrow the
-candidates soundly — it is written by the SessionStart HOOK (whose pid dies instantly and whose
-minted id is not the MCP process's `run_id`), while the MCP process self-registers ONLY if the user
-happens to call the `session_windows` tool. Narrowing on it would make enforcement depend on whether
-someone ran `mokata windows`. Predictable fail-open beats unpredictable enforcement.
+Now USED for disambiguation (this is R-MCP's change): the MS.S2 live-session registry. It became a
+SOUND narrower once the MCP server started self-registering its run on the FIRST tool call
+(`mcp/server._with_registration`) — registration is now STRUCTURAL, not user-dependent, so it no
+longer matters whether anyone ran `mokata windows`. `_live_runs` reads it (never prunes — a read,
+not a write) and keeps only pid-alive entries rooted here; an absent/unreadable registry simply
+narrows nothing and the hook falls open exactly as rule 4. (The SessionStart hook's own transient
+registration is unrelated — its pid dies instantly and is pruned; only the live MCP process survives
+the pid-alive filter.)
 
 Cheap by construction: stdlib + `state` + `tdd_state` (SI.2's surface — no engine, no govern, no
-config/manifest/router). At most four small JSON reads, no lock taken (every write lands by
-`os.replace`, so a lock-free read can never see a torn file). Never raises: any error, anywhere,
-degrades to ALLOW.
+config/manifest/router). At most four small JSON reads, plus — on the AMBIGUOUS path only — ONE more
+for the registry narrowing (`_live_runs`); the happy paths (pin, single candidate) read nothing new.
+No lock taken (every write lands by `os.replace`, so a lock-free read can never see a torn file).
+Never raises: any error, anywhere, degrades to ALLOW.
 
 Stdlib-only; clean-room. Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
@@ -107,13 +116,30 @@ BLOCK_EXIT = 2
 GATE_TDD = "no-code-without-failing-test"
 GATE_SPEC = "spec-persisted"
 GATE_SCOPE = "spec-scope"
-GATES: Tuple[str, ...] = (GATE_SPEC, GATE_TDD, GATE_SCOPE)
+
+# PH-GATE.S0 — the PHASE-write gate. Its id IS the pipeline's brainstorm boundary
+# (`pipeline.PHASE_GATES["brainstorm"].id`), so the hook is a NET UNDER that boundary, not a second
+# opinion — the same "same id, new enforcement point" discipline as the three above. Enforcing it
+# here is what turns the `approach-approval` boundary from advisory into a BACKED gate (doc 76 FU-1;
+# pinned to the pipeline id by test_ph_gate_s0). It fires only inside a REGISTERED run (a
+# `pipeline_run__<run_id>` checkpoint on disk) whose phase is still brainstorm — no approach
+# approved, no spec emitted — so a native implementation write before an approach exists is blocked.
+GATE_PHASE = "approach-approval"
+GATES: Tuple[str, ...] = (GATE_SPEC, GATE_TDD, GATE_SCOPE, GATE_PHASE)
 
 # The run-scoped state keys this hook reads. Literals for the same reason (owners:
 # `brainstorm.APPROACH_STATE_KEY`, `engine.spec_gate.SPEC_STATE_KEY`, `tdd_state.TDD_STATE_PREFIX`).
 # The `__<run_id>` suffix is `session_state.SessionScopedStore._phys`'s physical naming.
 APPROACH_PREFIX = "approved_approach__"
 SPEC_PREFIX = "emitted_spec__"
+
+# The pipeline-run checkpoint (owner: `govern.resume.CHECKPOINT_PREFIX`). A literal here for the
+# same cheap-import reason as the gate-id literals — pinned to its owner by test_ph_gate_s0. Its
+# mere EXISTENCE is what PH-GATE.S0 binds on: a checkpoint means a mokata pipeline run is REGISTERED
+# and under way (RUN-REG made that structural — protocol-start writes it), which the run resolver
+# and the phase gate both now read. Keyed by run_id (== session_id), so it is read as a plain
+# pass-through key, exactly like the three above.
+CHECKPOINT_PREFIX = "pipeline_run__"
 
 # The P14 session-scoped override (written by `mokata gate override`, read here). Keyed by run_id,
 # so it EXPIRES with the run: a new session mints a new run_id, which has no override file, and
@@ -293,7 +319,7 @@ def _run_ids(directory: str) -> Set[str]:
                 name = entry.name
                 if not name.endswith(".json"):
                     continue
-                for prefix in (TDD_STATE_PREFIX, APPROACH_PREFIX, SPEC_PREFIX):
+                for prefix in (TDD_STATE_PREFIX, APPROACH_PREFIX, SPEC_PREFIX, CHECKPOINT_PREFIX):
                     if name.startswith(prefix):
                         found.add(name[len(prefix):-len(".json")])
                         break
@@ -303,11 +329,66 @@ def _run_ids(directory: str) -> Set[str]:
     return found
 
 
+def _live_runs(root: str, candidates: Set[str]) -> list:
+    """The candidate run ids whose MCP process is registered ALIVE and rooted at this repo (R-MCP).
+
+    ONE registry read, taken only on the ambiguous path (`resolve_run`, 2+ candidates). A candidate
+    survives iff the MS.S2 live-session registry (`session_registry.SESSION_REGISTRY_KEY`, the
+    shared pass-through key in this repo's `state_dir`) holds an entry for it whose `pid` is alive
+    and whose `repo_root` resolves to this repo. This is only sound because the MCP server now
+    self-registers every run on its first tool call (`mcp/server._with_registration`) — the whole
+    point of this stage.
+
+    A read, never a write: it uses `StateStore.read`, NOT `list_sessions` (which prunes), so the
+    hook keeps its never-writes contract even against a stale registry. Degrade-clean: an
+    absent/unreadable/torn registry, or a wrong-shape entry, narrows NOTHING (returns []), so the
+    caller falls open exactly as before — the registry can only ever REMOVE ambiguity, never add a
+    wrong-window block."""
+    from .session_registry import SESSION_REGISTRY_KEY, pid_alive
+    try:
+        data = StateStore(state_dir(root)).read(SESSION_REGISTRY_KEY)
+    except OSError:
+        return []
+    if not isinstance(data, dict):
+        return []
+    sessions = data.get("sessions")
+    if not isinstance(sessions, dict):
+        return []
+    try:
+        here = os.path.realpath(root)
+    except OSError:
+        here = ""
+    survivors = []
+    for run_id in candidates:
+        entry = sessions.get(run_id)
+        if not isinstance(entry, dict) or not pid_alive(entry.get("pid")):
+            continue
+        entry_root = entry.get("repo_root")
+        if not isinstance(entry_root, str) or not entry_root:
+            continue
+        if _same_repo(entry_root, here):
+            survivors.append(run_id)
+    return survivors
+
+
+def _same_repo(entry_root: str, here: str) -> bool:
+    """True when a registry entry's `repo_root` names THIS repo — realpath-compared so a
+    symlinked/`/tmp` vs `/private/tmp` root still matches. Degrade-clean: unresolvable -> not-same
+    (so a broken path narrows nothing rather than mis-enforcing)."""
+    if not here:
+        return False
+    try:
+        return os.path.realpath(entry_root) == here
+    except OSError:
+        return False
+
+
 def resolve_run(root: str, run_id: Optional[str] = None) -> RunResolution:
     """Which run's gates apply to a write in `root` — see the module docstring's resolution order.
 
-    Never guesses: two or more candidate runs with no pin is `ambiguous`, which the caller MUST
-    fail open on. That is the whole guarantee against wrong-window blocking."""
+    Never guesses: two or more candidate runs that the live-session registry cannot narrow to
+    exactly one is `ambiguous`, which the caller MUST fail open on. That is the whole guarantee
+    against wrong-window blocking."""
     if run_id:
         return RunResolution(run_id)
     pinned = os.environ.get("MOKATA_SESSION_ID", "").strip()
@@ -318,6 +399,14 @@ def resolve_run(root: str, run_id: Optional[str] = None) -> RunResolution:
         return RunResolution(None)                       # no run has state — nothing to enforce
     if len(candidates) == 1:
         return RunResolution(next(iter(candidates)))
+    # AMBIGUOUS on disk. R-MCP: the MS.S2 registry now records every MCP process's run structurally
+    # (its first tool call self-registers), so it can soundly narrow — a candidate whose process is
+    # ALIVE and rooted here is the real driver. Exactly one such run -> enforce against it; zero or
+    # 2+ survivors -> still ambiguous, fail open unchanged (two live windows on one repo stay
+    # un-decidable, which is what keeps wrong-window blocking structurally impossible).
+    survivors = _live_runs(root, candidates)
+    if len(survivors) == 1:
+        return RunResolution(survivors[0])
     return RunResolution(None, ambiguous=True, candidates=tuple(sorted(candidates)))
 
 
@@ -356,6 +445,15 @@ def _exists(store: StateStore, prefix: str, run_id: str) -> bool:
         return store.exists(prefix + run_id)
     except OSError:
         return False
+
+
+def _run_registered(store: StateStore, run_id: str) -> bool:
+    """Is a mokata pipeline run REGISTERED for `run_id` — i.e. a `pipeline_run__<run_id>` checkpoint
+    is on disk? PH-GATE.S0's phase gate binds on this: a registered run with no approach and no spec
+    is a run still in its brainstorm phase. Degrade-clean: an unreadable checkpoint reads as
+    NOT-registered, so the phase gate falls OPEN on a state it cannot read (a broken checkpoint must
+    never manufacture a block — the same fail-open discipline as every other read here)."""
+    return _exists(store, CHECKPOINT_PREFIX, run_id)
 
 
 def _red_set(store: StateStore, run_id: str) -> Optional[Set[str]]:
@@ -442,11 +540,27 @@ def check_write(root: str, path: str, run_id: Optional[str] = None,
     spec_data = _read(store, SPEC_PREFIX + run.run_id)
     has_spec = spec_data is not None or _exists(store, SPEC_PREFIX, run.run_id)
 
-    # The positive trigger. No approach, no spec -> this run is not driving a pipeline, so this is
-    # ordinary hand-editing in a mokata repo. Not policed (P14's spirit: guardrails on the pipeline,
-    # not house arrest).
+    # The positive trigger. No approach, no spec -> nothing past the brainstorm phase is on record.
+    # SPLIT by whether a run is REGISTERED (a checkpoint on disk):
+    #   * PH-GATE.S0 — a run IS registered ⇒ its persisted phase is still brainstorm (an approach
+    #     is not yet approved and no spec is emitted), so an implementation write is premature. This
+    #     is the idea→code jump doc 76 FU-1 names; it now exits 2, escapable only by the P14 override.
+    #   * NO registered run ⇒ ordinary hand-editing in a mokata repo. Not policed — the SI.1
+    #     fail-open floor, byte-identical (and it stays cheap: the override read is skipped here).
     if not has_approach and not has_spec:
-        return GateOutcome(True, "no active mokata run — not policed")
+        if not _run_registered(store, run.run_id):
+            return GateOutcome(True, "no active mokata run — not policed")
+        if GATE_PHASE in read_override(root, run.run_id):
+            return GateOutcome(True, f"{GATE_PHASE}: overridden for this session",
+                               gate=GATE_PHASE, overridden=True)
+        return GateOutcome(
+            False,
+            f"{GATE_PHASE}: brainstorm in progress — approve an approach first. "
+            f"{os.path.basename(path)} is implementation, but no approach is approved for this run "
+            f"yet. Explore and approve one approach (/mokata:brainstorm), or override: "
+            f"mokata gate override {GATE_PHASE} --reason \"<why>\"",
+            gate=GATE_PHASE,
+        )
 
     overrides = read_override(root, run.run_id)
 
@@ -581,8 +695,9 @@ def notice_once(root: str, session_id: str, message: str) -> Optional[str]:
 
 
 __all__ = [
-    "BLOCK_EXIT", "GATES", "GATE_SCOPE", "GATE_SPEC", "GATE_TDD", "GateOutcome", "RunResolution",
-    "APPROACH_PREFIX", "SPEC_PREFIX", "OVERRIDE_PREFIX", "MAX_SCAN_BYTES",
+    "BLOCK_EXIT", "GATES", "GATE_PHASE", "GATE_SCOPE", "GATE_SPEC", "GATE_TDD", "GateOutcome",
+    "RunResolution", "APPROACH_PREFIX", "SPEC_PREFIX", "CHECKPOINT_PREFIX", "OVERRIDE_PREFIX",
+    "MAX_SCAN_BYTES",
     "check_write", "find_mokata_root", "is_implementation_path", "is_test_path",
     "notice_once", "override_key", "read_override", "resolve_run", "target_content", "target_path",
 ]

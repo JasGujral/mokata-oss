@@ -50,15 +50,15 @@ jobs:
   mokata-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7        # Node-24 majors, tag-pinned
         with:
           fetch-depth: 0                 # full history so the base diff resolves
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: python -m pip install --quiet mokata
       - id: check
-        uses: JasGujral/mokata-oss/.github/actions/mokata-check@v0.0.13
+        uses: JasGujral/mokata-oss/.github/actions/mokata-check@v0.0.15
         with:
           base: ${{ github.event.pull_request.base.sha }}
           fail-on-block: "true"          # set "false" for report-only (never fails the job)

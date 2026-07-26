@@ -349,8 +349,10 @@ class TestNoNewGate(unittest.TestCase):
     def test_backed_gate_set_is_unchanged(self):
         self.assertEqual(
             sorted(g for g, r in GATES.items() if r.backed),
-            ["completeness", "deviation", "hard-rule", "no-code-without-failing-test",
-             "secret-guard", "ship-readiness", "spec-persisted", "write-gate"])
+            # PH-GATE.S0 (0.0.14) backed `approach-approval`; this stage still adds no gate.
+            ["approach-approval", "completeness", "deviation", "hard-rule",
+             "no-code-without-failing-test", "secret-guard", "ship-readiness", "spec-persisted",
+             "write-gate"])
 
     def test_each_domain_feeds_an_existing_gate_or_instrument(self):
         # deprecation → the EXISTING deviation backed gate; docs-adr → the EXISTING write-gate backed

@@ -16,17 +16,18 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
-from .mcp import tools_read, tools_write  # noqa: F401 - register every tool into TOOLS
+from .mcp import tools_approve, tools_read, tools_write  # noqa: F401 - register tools into TOOLS
 from .mcp.registry import (SERVER_NAME, TOOLS, ToolSpec, read_tool_names,
                            tool_names, write_tool_names)
 from .mcp.server import build_server, main, mcp_available
+from .mcp.tools_approve import *  # noqa: F401,F403 - re-export the AP-MCP `approve` tool
 from .mcp.tools_read import *   # noqa: F401,F403 - re-export the read tool functions
 from .mcp.tools_write import *  # noqa: F401,F403 - re-export the write tool functions
 
 __all__ = [
     "SERVER_NAME", "TOOLS", "ToolSpec", "tool_names", "read_tool_names",
     "write_tool_names", "build_server", "main", "mcp_available",
-    *tools_read.__all__, *tools_write.__all__,
+    *tools_read.__all__, *tools_write.__all__, *tools_approve.__all__,
 ]
 
 

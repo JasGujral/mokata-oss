@@ -2,6 +2,17 @@
 
 {% block extrahead %}
   {{ super() }}
+  <!-- LP-PRO: social/OG cards — brand assets referenced, never re-drawn (BRAND.md) -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="mokata">
+  <meta property="og:title" content="mokata — the memory + seatbelt for your AI coding agent">
+  <meta property="og:description" content="Open-source, spec-driven TDD for Claude Code: RED before GREEN, a mandatory codebase graph, memory that can't be poisoned, and every durable write human-gated. Local-first, Apache-2.0.">
+  <meta property="og:url" content="{{ config.site_url }}">
+  <meta property="og:image" content="{{ config.site_url }}assets/brand/mokata-wordmark-dark.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="mokata — the memory + seatbelt for your AI coding agent">
+  <meta name="twitter:description" content="Spec-driven TDD, a mandatory codebase graph, unpoisonable memory, human-gated writes. Open source, local-first.">
+  <meta name="twitter:image" content="{{ config.site_url }}assets/brand/mokata-wordmark-dark.png">
   <style>
     /* landing page only: hide sidebars, full-width content */
     .md-sidebar { display: none !important; }
@@ -26,9 +37,16 @@
         a codebase knowledge graph, self-healing memory, token governance, and a full audit
         trail. Every durable write human-gated. Nothing leaves your machine.
       </p>
+      <div class="mk-install" id="mk-install">
+        <span class="mk-install__prompt">$</span>
+        <code class="mk-install__cmd">pip install mokata &amp;&amp; mokata setup claude</code>
+        <button class="mk-install__copy" type="button" aria-label="Copy install command"
+                onclick="navigator.clipboard&&navigator.clipboard.writeText('pip install mokata && mokata setup claude').then(()=>{this.textContent='✓';setTimeout(()=>{this.textContent='copy'},1600)})">copy</button>
+      </div>
       <div class="mk-hero__cta">
-        <a class="mk-btn mk-btn--primary" href="{{ config.repo_url }}">★ Star on GitHub</a>
-        <a class="mk-btn" href="getting-started/">Get started</a>
+        <a class="mk-btn mk-btn--primary" href="getting-started/">Get started</a>
+        <a class="mk-btn" href="{{ config.repo_url }}">★ Star on GitHub</a>
+        <a class="mk-btn mk-btn--ghost" href="tutorials/catches-a-bad-change/">60-second demo →</a>
       </div>
     </div>
 
@@ -36,19 +54,32 @@
     <div class="mk-term">
       <div class="mk-term__bar">
         <span class="mk-term__dot"></span><span class="mk-term__dot"></span><span class="mk-term__dot mk-term__dot--go"></span>
-        <span class="mk-term__title">mokata · story-042 · live</span>
+        <span class="mk-term__title">mokata · seatbelt · live</span>
       </div>
       <pre>
 <span class="dim">$</span> pip install mokata && mokata setup claude
-<span class="dim">$</span> mokata run story-042
+<span class="dim">$</span> mokata init --mode seatbelt
 
-<span class="ok">✓</span> spec drafted          <span class="dim">7 acceptance criteria</span>
+<span class="ok">✓</span> approach approved     <span class="dim">prior-art step ran · scope bound</span>
+<span class="ok">✓</span> spec persisted        <span class="dim">7 acceptance criteria</span>
 <span class="ok">✓</span> ac → test map         <span class="dim">7/7 mapped · completeness gate</span>
 <span class="ok">✓</span> red gate              <span class="dim">7 tests failing — as they should</span>
 <span class="ok">✓</span> green                 <span class="dim">42 passed · 0 skipped</span>
-<span class="ok">✓</span> spec compliance       <span class="dim">reviewed against spec</span>
-<span class="wait">⏸</span> human gate            <span class="dim">approve durable writes? [y/N]</span></pre>
+<span class="ok">✓</span> review                <span class="dim">checked back against the spec</span>
+<span class="wait">⏸</span> AWAITING APPROVAL     <span class="dim">waiting on a human — not an error</span></pre>
     </div>
+  </section>
+
+  <!-- positioning: the category line -->
+  <section class="mk-position">
+    <p class="mk-position__line">Your agent is the fast car.<br>
+      <em>mokata is the seatbelt — and the black-box recorder.</em></p>
+    <p class="mk-position__why">
+      Why not just prompts and rules files? Because they're advice — a model can ignore them,
+      and you'll never know it did. mokata's gates are code: a hook that blocks the write, an
+      approval only a human can mint, a ledger that records every decision. Structure, not
+      suggestion.
+    </p>
   </section>
 
   <!-- video left · quick start right -->
@@ -57,18 +88,23 @@
       <div>
         <div class="mk-features__kicker">// see it in action</div>
         <h2>Skills, explained in one video</h2>
-        <div class="mk-video">
+        <div class="mk-video mk-video--framed">
+          <div class="mk-term__bar">
+            <span class="mk-term__dot"></span><span class="mk-term__dot"></span><span class="mk-term__dot mk-term__dot--go"></span>
+            <span class="mk-term__title">mokata · skills tour</span>
+          </div>
           <video controls preload="metadata" playsinline>
             <source src="assets/mokata-skills.mp4" type="video/mp4">
             Your browser doesn't support embedded video —
             <a href="assets/mokata-skills.mp4">download it instead</a>.
           </video>
+          <p class="mk-video__caption">The skills tour — what ships in the box, in motion.</p>
         </div>
       </div>
       <div class="mk-quick">
         <div class="mk-features__kicker">// get running in 60s</div>
         <h2>Install, wire, run</h2>
-        <div class="mk-quick__cmd"><span class="dim">$</span> pip install mokata && mokata setup claude</div>
+        <div class="mk-quick__cmd"><span class="dim">$</span> pip install mokata &amp;&amp; mokata setup claude</div>
         <p class="mk-quick__note">One package, zero required dependencies. mokata never calls a
         model itself — the brain always comes from your harness.</p>
         <ul class="mk-quick__links">
@@ -84,13 +120,55 @@
   <section class="mk-features">
     <div class="mk-features__kicker">// what mokata gives you</div>
     <h2>One governed engine</h2>
-    <div class="mk-grid">
+    <div class="mk-grid mk-grid--bento">
+
+      <div class="mk-card mk-card--wide">
+        <span class="mk-card__icon">⛨ seatbelt</span>
+        <h3>A Structural Seatbelt</h3>
+        <p>Four run-state gates are enforced by a hook, so they hold for your agent's <em>native</em> edits — not just mokata's own tools. No approved approach, no persisted spec, or no failing test, and the write is blocked outright.</p>
+        <span class="mk-card__tag">9 backed gates · 4 run-state</span>
+      </div>
+
+      <div class="mk-card mk-card--wide">
+        <span class="mk-card__icon">∞ mem</span>
+        <h3>Memory That Can't Be Poisoned</h3>
+        <p>Typed, governed memory — rules, guardrails, decisions, context — that surfaces itself when relevant. <strong>There is no code path that writes memory without a human-minted approval</strong>, so it cannot be poisoned by content you never approved. The defense is structural, not a filter.</p>
+        <span class="mk-card__tag">no auto-writes · typed</span>
+      </div>
+
+      <div class="mk-card">
+        <span class="mk-card__icon">◉ graph</span>
+        <h3>Codebase Graph — Mandatory by Default</h3>
+        <p>Blast radius is answered structurally, not by grep. An embedded stdlib-AST floor ships in the box (no adoption step), and adopted graphs layer on top. A <em>degraded</em> answer is <strong>refused</strong> as decision input unless you accept a ledgered, session-scoped escape.</p>
+        <span class="mk-card__tag">ast floor · degrade refused</span>
+      </div>
+
+      <div class="mk-card">
+        <span class="mk-card__icon">⌕ recall</span>
+        <h3>Retrieval That Tells the Truth</h3>
+        <p>Lexical recall ranks <em>in the database</em> (SQLite FTS5 + bm25, Postgres tsvector + ts_rank). A real semantic tier installs on consent. Both degrade independently — and <code>mokata doctor</code> names which engine is actually ranking your recall.</p>
+        <span class="mk-card__tag">fts5 · consented embeddings</span>
+      </div>
+
+      <div class="mk-card">
+        <span class="mk-card__icon">≣ audit</span>
+        <h3>Every Decision, Reviewed</h3>
+        <p>Every gate verdict, rule application, and durable write is recorded. Reconstruct any run — what changed, why, which criterion it served, and who approved it.</p>
+        <span class="mk-card__tag">traceable runs</span>
+      </div>
+
+      <div class="mk-card">
+        <span class="mk-card__icon">⌂ local</span>
+        <h3>Local-First &amp; Private</h3>
+        <p>Nothing leaves your machine unless you wire it. mokata never calls a model itself — the brain always comes from your harness.</p>
+        <span class="mk-card__tag">zero exfiltration</span>
+      </div>
 
       <div class="mk-card">
         <span class="mk-card__icon">≡ spec</span>
         <h3>Spec-Driven Pipeline</h3>
-        <p>Brainstorm → spec → tests → code → review. Seven phases, each gated. No code is written until every acceptance criterion maps to a test.</p>
-        <span class="mk-card__tag">7 phases · gated</span>
+        <p>Brainstorm → spec → test → develop → review → ship, each stage gated. Brainstorm alone runs seven gated phases before it will emit a spec. A deferred item can't be built later without a re-gated spec amendment.</p>
+        <span class="mk-card__tag">gated stages · scope-bound</span>
       </div>
 
       <div class="mk-card">
@@ -101,24 +179,24 @@
       </div>
 
       <div class="mk-card">
-        <span class="mk-card__icon">◉ graph</span>
-        <h3>Codebase Knowledge Graph</h3>
-        <p>An adopted code graph with typed queries, incremental indexing, staleness detection, and drift anchors — with a grep floor as fallback.</p>
-        <span class="mk-card__tag">typed queries · incremental</span>
-      </div>
-
-      <div class="mk-card">
-        <span class="mk-card__icon">∞ mem</span>
-        <h3>Self-Healing Memory</h3>
-        <p>Persistent, decision, and episodic memory that surfaces itself when relevant and consolidates over time. Pluggable backends. On by default.</p>
-        <span class="mk-card__tag">on by default</span>
-      </div>
-
-      <div class="mk-card">
         <span class="mk-card__icon">⏸ gate</span>
-        <h3>Human-Gated Writes</h3>
-        <p>Every durable write — memory, graph, rules, code — stops at a gate you approve. The agent proposes; you decide.</p>
+        <h3>Human-Minted Approval</h3>
+        <p>Every durable write stops at a gate you approve. Approvals are single-use, content-bound and expiring, minted by you — the model cannot type its own consent. An in-chat approve tool exists but ships <strong>off</strong> by default.</p>
         <span class="mk-card__tag">you approve · always</span>
+      </div>
+
+      <div class="mk-card">
+        <span class="mk-card__icon">◷ waiting</span>
+        <h3>Waiting Is Legible, Not Silence</h3>
+        <p>Every MCP call is bounded — 60s interactive, 120s for <code>baseline</code> — and an overrun returns a <code>timed_out</code> status naming the operation. A gated write says <em>AWAITING APPROVAL: waiting on a human, this is not an error</em>. You can always tell waiting from stuck.</p>
+        <span class="mk-card__tag">bounded · never silent</span>
+      </div>
+
+      <div class="mk-card">
+        <span class="mk-card__icon">◐ adopt</span>
+        <h3>Adopt It Gradually</h3>
+        <p><code>mokata init --mode seatbelt</code> gives you the gates and the graph. <code>--mode memory</code> adds typed persistent memory. <code>--mode full</code> turns on everything. Each mode prints the quickstart for that step — you never swallow the whole framework on day one.</p>
+        <span class="mk-card__tag">seatbelt → memory → full</span>
       </div>
 
       <div class="mk-card">
@@ -129,26 +207,40 @@
       </div>
 
       <div class="mk-card">
-        <span class="mk-card__icon">⌂ local</span>
-        <h3>Local-First & Private</h3>
-        <p>Nothing leaves your machine unless you wire it. mokata never calls a model itself — the brain always comes from your harness.</p>
-        <span class="mk-card__tag">zero exfiltration</span>
-      </div>
-
-      <div class="mk-card">
-        <span class="mk-card__icon">≣ audit</span>
-        <h3>Full Audit Trail</h3>
-        <p>Every gate decision, rule application, and durable write is recorded. Reconstruct any run — what changed, why, and who approved it.</p>
-        <span class="mk-card__tag">traceable runs</span>
-      </div>
-
-      <div class="mk-card">
         <span class="mk-card__icon">∅ deps</span>
-        <h3>Zero Dependencies</h3>
-        <p>Pure Python ≥ 3.10 with no required runtime dependencies. Apache-2.0, clean-room, works with Claude Code, CLI, Gemini, Codex, or CI.</p>
+        <h3>One Dependency</h3>
+        <p>Pure Python ≥ 3.10. The engine is stdlib-only and the MCP SDK is the single runtime dependency, so the MCP server works out of the box. Apache-2.0, clean-room, and it runs from Claude Code, the CLI, Gemini, Codex, or CI.</p>
         <span class="mk-card__tag">pip install mokata</span>
       </div>
 
+    </div>
+  </section>
+
+  <!-- data-rich strip: every number below is derived from the shipping code -->
+  <section class="mk-features">
+    <div class="mk-features__kicker">// what ships in the box</div>
+    <h2>At a glance</h2>
+    <div class="mk-stats">
+      <div class="mk-stat"><span class="mk-stat__n">26</span><span class="mk-stat__l">Agent Skills<br><em>16 curated · 10 domain</em></span></div>
+      <div class="mk-stat"><span class="mk-stat__n">37</span><span class="mk-stat__l">slash commands<br><em>wired into Claude Code</em></span></div>
+      <div class="mk-stat"><span class="mk-stat__n">67</span><span class="mk-stat__l">CLI subcommands<br><em>harness-independent</em></span></div>
+      <div class="mk-stat"><span class="mk-stat__n">55</span><span class="mk-stat__l">MCP tools<br><em>35 read · 19 write · 1 approve</em></span></div>
+      <div class="mk-stat"><span class="mk-stat__n">9</span><span class="mk-stat__l">backed gates<br><em>4 enforced on native writes</em></span></div>
+      <div class="mk-stat"><span class="mk-stat__n">1</span><span class="mk-stat__l">runtime dependency<br><em>the MCP SDK</em></span></div>
+    </div>
+  </section>
+
+  <!-- closing install band -->
+  <section class="mk-band">
+    <div class="mk-band__inner">
+      <h2>Put the seatbelt on.</h2>
+      <div class="mk-install mk-install--band">
+        <span class="mk-install__prompt">$</span>
+        <code class="mk-install__cmd">pip install mokata &amp;&amp; mokata setup claude</code>
+        <button class="mk-install__copy" type="button" aria-label="Copy install command"
+                onclick="navigator.clipboard&&navigator.clipboard.writeText('pip install mokata && mokata setup claude').then(()=>{this.textContent='✓';setTimeout(()=>{this.textContent='copy'},1600)})">copy</button>
+      </div>
+      <p class="mk-band__meta">Apache-2.0 · pure Python ≥ 3.10 · one runtime dependency · nothing leaves your machine</p>
     </div>
   </section>
 

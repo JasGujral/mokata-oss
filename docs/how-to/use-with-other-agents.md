@@ -2,9 +2,9 @@
 
 mokata is not Claude-Code-only. It runs behind a thin **harness boundary**, so the same
 engine — the spec-driven pipeline, the completeness gate, the knowledge graph, self-healing
-memory, governance — works under the AI coding agent you already use. mokata wires the
-`/mokata:` command set into each agent's **native** command surface and degrades **clearly**
-where an agent lacks a capability (it never pretends).
+memory, governance — works under the AI coding agent you already use. mokata wires its command
+set into each agent's **native** command surface (as `/<name>` — e.g. `/brainstorm`, `/spec`) and
+degrades **clearly** where an agent lacks a capability (it never pretends).
 
 > One command per agent: `mokata setup <agent>` (human-gated, idempotent, reversible with
 > `mokata unsetup <agent>`). See the live matrix any time with `mokata harness`.
@@ -22,7 +22,7 @@ where an agent lacks a capability (it never pretends).
 | **Aider** (`aider`) | ❌ reference prompts only¹ | ✅ conventions / `--read` | ❌ *degrades* | ❌ *degrades* | manual / none |
 
 ¹ Aider has **no user-authored slash-command file system** (its `/commands` are built-in), so
-mokata declares `commands` **absent** for it and ships the `/mokata:` prompts as **reference**
+mokata declares `commands` **absent** for it and ships the mokata prompts as **reference**
 files (`.aider/mokata-commands/`) you `/read` or paste — never pretended to be native commands.
 
 ### What "degrades clearly" means
@@ -40,14 +40,14 @@ capability — never a silent no-op of a gate:
       holds where it counts: mokata's **own** gated CLI/MCP `WriteGate` scans for secrets,
       human-gates, and audits **every** durable write regardless of the hook. Route writes
       through `mokata` (or its MCP tools), not raw, and you keep this.
-    - **The run-state gates enforce NOTHING.** `spec-persisted`,
-      `no-code-without-failing-test`, and `spec-scope` live *only* in the gate-guard hook. With
+    - **The run-state gates enforce NOTHING.** All four — `approach-approval`, `spec-persisted`,
+      `no-code-without-failing-test`, and `spec-scope` — live *only* in the gate-guard hook. With
       no hook there is no interception of a native `Write`/`Edit`, so on these agents the agent
-      **can** write implementation code before the spec is emitted, before a failing test is on
-      record, or outside the spec's authorized surface — and nothing will stop it. The
-      `/mokata:` commands still run the pipeline, and `/mokata:review` still catches divergence
-      after the fact, but the *hard* seatbelt is Claude-Code-only. Nothing mokata ships works
-      around this; there is no non-hook substitute. If enforced TDD is why you're here, use
+      **can** write implementation code before an approach is approved, before the spec is emitted,
+      before a failing test is on record, or outside the spec's authorized surface — and nothing
+      will stop it. The mokata commands still run the pipeline, and `/review` still catches
+      divergence after the fact, but the *hard* seatbelt is Claude-Code-only. Nothing mokata ships
+      works around this; there is no non-hook substitute. If enforced TDD is why you're here, use
       Claude Code.
 
 - **No native subagents**: parallel fan-out falls back to mokata's sequential gated flow

@@ -42,6 +42,19 @@ Local mode is untouched: `record_team_write` is a no-op guard in local mode (the
 write path), so zero-config stays byte-for-byte the default. The journal file is append-only
 JSONL (crash-safe: state is replayed, never rewritten in place).
 
+J-PERF makes the READ path stop paying for that history. Every team-mode read replayed the ENTIRE
+file — `pending`/`pending_count`/`conflicts`/`blocked` each re-opened and re-parsed it, so one
+`flush` replayed three times and the memory overlay replayed once per read — and the append-only
+file never shrank, so every read got slower for the life of the repo. Two changes, no new infra:
+
+  * **The replay is cached on file identity** (`(st_mtime_ns, st_size)`, re-stat'd on EVERY access).
+    Sound because BOTH writers of the file hold the append lock and move that pair one-directionally
+    — see `_identity` for the full argument, including the cross-process case.
+  * **A settled flush compacts** past `COMPACT_FLUSHED_THRESHOLD` flushed entries. Append-only is
+    still the rule for every WRITE; compaction is a separate, atomic (`R-MAN`), append-locked
+    rewrite that only ever REMOVES whole lines that the replay has already resolved to FLUSHED —
+    entries whose audit record lives durably on the LEDGER, not here. See `TeamJournal.compact`.
+
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
 
@@ -54,7 +67,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from . import TEMP_LOCAL_DIRNAME, run_mode as _rm, teamdb
-from .atomicfile import lock_path_for
+from .atomicfile import atomic_write_text, lock_path_for
 from .degrade import FAILURE_UNREACHABLE, note_degraded
 from .oslock import DEFAULT_TIMEOUT, LockTimeout, file_lock
 from .errors import DegradedCapability
@@ -95,6 +108,14 @@ FLUSH_LOCK_TIMEOUT = 0.0
 # ∅→APPEND. Bounded (appends are tiny and uncontended in the common case); a timeout is a genuine
 # stuck-lock error and PROPAGATES rather than dropping the write on the floor.
 APPEND_LOCK_TIMEOUT = DEFAULT_TIMEOUT
+
+# J-PERF — COMPACTION THRESHOLD. Past this many FLUSHED entries in the replayed state, a successful
+# flush rewrites the journal without them (see `TeamJournal.compact`). Deliberately a plain, tunable
+# constant rather than a setting: it trades a rare O(n) rewrite against the read cost of carrying
+# dead history forever, and there is no user decision in it. 500 is ~a month of heavy team writing
+# on one repo — high enough that a normal session NEVER compacts (the flush stays exactly what it
+# was), low enough that the file cannot grow without bound for the life of the repo.
+COMPACT_FLUSHED_THRESHOLD = 500
 
 # The durable memory ops a journal entry can carry (TM.S5c). Every gated store method passes one so
 # the flush picks the right compare-and-set: `put` = a believed-new INSERT-or-conflict, `update` =
@@ -192,15 +213,23 @@ class SyncResult:
 
 # --------------------------------------------------------------------------- the journal
 class TeamJournal:
-    """The append-only local write journal for team mode. State is REPLAYED from the log (never
-    rewritten in place), so a crash mid-flush loses nothing: an un-acked write simply replays as
-    still-pending on the next run."""
+    """The append-only local write journal for team mode. State is REPLAYED from the log, so a
+    crash mid-flush loses nothing: an un-acked write simply replays as still-pending on the next
+    run. Every WRITE is an append (`_append` is the sole funnel); the only rewrite is J-PERF's
+    `compact`, which drops already-flushed lines atomically under the append lock and leaves the
+    replayed state — and therefore every caller-visible read — bit-for-bit identical."""
 
     def __init__(self, path: str) -> None:
         self.path = path
         parent = os.path.dirname(path)
         if parent:
             os.makedirs(parent, exist_ok=True)
+        # J-PERF — the replay cache. PER INSTANCE and nothing wider: no module-level dict, no
+        # daemon, no cross-instance sharing. A `TeamJournal` is constructed per call site, so the
+        # cache's whole lifetime is one logical operation — it can never outlive the state it
+        # describes the way a process-global cache would.
+        self._cache_identity: Optional[tuple] = None
+        self._cache: Optional[tuple] = None
 
     @classmethod
     def for_surface(cls, surface: Any) -> "TeamJournal":
@@ -262,26 +291,89 @@ class TeamJournal:
                       "remote_revision": remote_revision})
 
     # --- replay --------------------------------------------------------------
-    def _records(self) -> List[Dict[str, Any]]:
+    def _lines(self) -> List[tuple]:
+        """Every parseable record as `(raw_line, parsed)`. The RAW line is carried alongside the
+        parse for exactly one caller — `compact`, which writes surviving lines back BYTE-FOR-BYTE
+        rather than re-serialising them. Re-dumping would be a schema change by accident (key
+        order, unicode escaping, separators); keeping the bytes means compaction can only ever
+        REMOVE lines, never alter the shape of one."""
         if not os.path.exists(self.path):
             return []
-        out: List[Dict[str, Any]] = []
+        out: List[tuple] = []
         with open(self.path, encoding="utf-8") as fh:
             for line in fh:
-                line = line.strip()
-                if line:
+                stripped = line.strip()
+                if stripped:
                     try:
-                        out.append(json.loads(line))
+                        out.append((line, json.loads(stripped)))
                     except json.JSONDecodeError:  # pragma: no cover - skip a torn last line
                         pass
         return out
 
+    def _records(self) -> List[Dict[str, Any]]:
+        return [rec for _line, rec in self._lines()]
+
+    def _identity(self) -> Optional[tuple]:
+        """J-PERF — the file-identity the replay cache is keyed on: `(st_mtime_ns, st_size)`, or
+        `None` when the journal does not exist (itself a valid, cacheable state: "empty").
+
+        WHY THIS IS A SOUND INVALIDATION SIGNAL. There are exactly TWO writers of `self.path`:
+        `_append` (every marker and every write record funnels through it — MS.S8) and `compact`
+        (J-PERF). Both hold the APPEND lock, and their effects on the pair are one-directional:
+        an append strictly GROWS `st_size`; a compaction strictly SHRINKS it (it only ever removes
+        whole lines, and only runs when there is at least one to remove). There is no in-place,
+        same-size overwrite anywhere in the module — no `seek`+write, no fixed-width field, no
+        truncate-and-rewrite — so a content change without a size change is not a shape this file
+        can take. `st_mtime_ns` is the second axis and the defense against the one pathological
+        interleaving size alone would miss (append → compact → append back to the identical byte
+        count): all three are separate `fsync`'d writes under a lock, which cannot land inside one
+        nanosecond tick.
+
+        CROSS-PROCESS. This is a STAT, taken on EVERY access — the cache stores the PARSE, never
+        the stat. Another process's append is taken under the same append lock and moves the pair,
+        so the very next read here re-parses and sees it. That is the whole cross-process argument:
+        we never assume our own writes are the only ones."""
+        try:
+            st = os.stat(self.path)
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def _invalidate(self) -> None:
+        self._cache_identity = None
+        self._cache = None
+
     def _replay(self):
+        """The replayed state, cached on file identity (J-PERF). Re-stats every call (cheap) and
+        re-parses ONLY when the journal actually changed — so `flush`'s three reads, and the
+        overlay's per-read `pending()`, cost one parse between them instead of one each.
+
+        The cached tuple is returned BY REFERENCE. That is safe because the replayed state is
+        read-only by contract: every caller (`pending`/`conflicts`/`blocked`/the overlay/the flush
+        loop) reads the entries and builds its own list; nothing mutates a `JournalEntry` it was
+        handed. The one mutation in the module (`base_revision` on a `kept-local` resolve) happens
+        DURING the build, off the record, not on a returned object."""
+        identity = self._identity()
+        if self._cache is not None and self._cache_identity == identity:
+            return self._cache
+        state = self._replay_uncached()
+        self._cache_identity = identity
+        self._cache = state
+        return state
+
+    def _replay_uncached(self):
+        return self._replay_records(self._records())
+
+    def _replay_records(self, records):
         entries: Dict[str, JournalEntry] = {}
         status: Dict[str, str] = {}
         conflicts: Dict[str, ConflictView] = {}
         order: List[str] = []
-        for rec in self._records():
+        # J-PERF — the membership set beside `order`. `order` still IS the order (the replay's
+        # output shape is unchanged); the set only answers "have I seen this id", which used to be
+        # a linear scan of a growing list INSIDE the per-record loop — O(n²) over the journal.
+        seen: set = set()
+        for rec in records:
             k, rid = rec.get("kind"), rec.get("id")
             if not rid:
                 continue
@@ -293,7 +385,8 @@ class TeamJournal:
                     actor=rec.get("actor", "user"), base_revision=rec.get("base_revision"),
                     source=rec.get("source", "write"))
                 status[rid] = _PENDING
-                if rid not in order:
+                if rid not in seen:
+                    seen.add(rid)
                     order.append(rid)
             elif k == _FLUSHED:
                 status[rid] = _FLUSHED
@@ -338,6 +431,77 @@ class TeamJournal:
 
     def has_pending_key(self, key: str) -> bool:
         return any(e.key == key for e in self.pending())
+
+    # --- compaction (J-PERF) -------------------------------------------------
+    def flushed_count(self) -> int:
+        """How many entries the replay resolves to FLUSHED — the dead weight compaction removes."""
+        _e, status, _c, _o = self._replay()
+        return sum(1 for s in status.values() if s == _FLUSHED)
+
+    def compact(self) -> int:
+        """Rewrite the journal without its FLUSHED entries. Returns the number of lines dropped.
+
+        WHAT IS PRUNABLE, AND WHY IT IS ONLY THIS. A FLUSHED entry is DONE: it is in Postgres, and
+        `ledger.record("team_flush", ...)` wrote the durable audit row that links it back to the
+        human approval that authorised it (C5). The LEDGER is the audit trail, not the journal —
+        nothing in the codebase reads a flushed journal record. The replay is the journal's only
+        reader, and its four outputs are consumed solely as `pending`/`pending_count`/`conflicts`/
+        `blocked`; a FLUSHED id appears in none of them. So dropping a flushed id's records is
+        invisible to every caller, which is precisely the bar.
+
+        Everything else STAYS: PENDING entries (still to flush), CONFLICT entries and their
+        `ConflictView` detail (awaiting the human gate in `sync`), BLOCKED entries (awaiting a
+        removed secret), and the `base_revision` each carries for its CAS. DROPPED (`kept-remote`)
+        entries stay too — they are terminal and unread, but keeping them costs nothing and
+        pruning them is a second argument this stage does not need to make.
+
+        Records are filtered BY ID, so an entry's `write` record and its `flushed` marker leave
+        together — never one without the other (dropping a marker while keeping its write would
+        RESURRECT a flushed write as pending, which is the one way compaction could lose data).
+
+        WHICH LOCK PROTECTS THE REWRITE: the APPEND lock, taken here. NOT the flush mutex — the
+        flush mutex excludes other FLUSHERS and nothing else, which is the very gap MS.S8 added the
+        append lock to close (a gated write appends under the LEDGER lock, `resolve` under no lock
+        at all). Holding the append lock across read→filter→replace is what makes "an append racing
+        the compact window" impossible: the appender either lands before we read (its line is in
+        `kept`) or blocks until the replace is done (it appends to the new file). Taking it here is
+        also cycle-free — the append lock is a LEAF, and FLUSH→APPEND is the order the flusher's own
+        `mark_flushed` already runs in. Nothing inside this window calls `_append`, so the
+        non-reentrant `oslock` is never asked to nest.
+
+        The rewrite itself is `atomic_write_text` (R-MAN): same-directory temp, fsync, `os.replace`.
+        A crash at any point leaves the WHOLE old journal — which is the correct outcome, since the
+        old journal is a superset of the new one and simply replays the same live state."""
+        dropped = 0
+        with file_lock(self.append_lock_path, timeout=APPEND_LOCK_TIMEOUT):
+            # Re-read INSIDE the lock: whatever a concurrent appender landed before we got here is
+            # part of the input, so it survives into the rewritten file.
+            lines = self._lines()
+            _e, status, _c, _o = self._replay_records([rec for _l, rec in lines])
+            prunable = {rid for rid, s in status.items() if s == _FLUSHED}
+            if not prunable:
+                return 0
+            kept = [raw for raw, rec in lines if rec.get("id") not in prunable]
+            dropped = len(lines) - len(kept)
+            if not dropped:
+                return 0
+            # Byte-preserving: `kept` holds the ORIGINAL lines, so the file can only ever have had
+            # lines removed. Nothing is written here that was not already in the journal.
+            atomic_write_text(self.path, "".join(kept))
+        self._invalidate()
+        return dropped
+
+    def compact_if_needed(self, *, threshold: Optional[int] = None) -> int:
+        """Compact past `threshold` FLUSHED entries; below it, the journal is left byte-untouched.
+
+        The default is resolved HERE, at call time, not bound into the signature — so the module
+        constant is the single source of truth and stays patchable (a default argument would
+        snapshot it at import and silently ignore every later change)."""
+        if threshold is None:
+            threshold = COMPACT_FLUSHED_THRESHOLD
+        if self.flushed_count() <= threshold:
+            return 0
+        return self.compact()
 
 
 # --------------------------------------------------------------------------- record (entry)
@@ -662,6 +826,18 @@ def _flush_locked(surface: Any, journal: TeamJournal, *, environ: Optional[dict]
         else:
             journal.mark_conflict(entry.id, detail=outcome.detail, remote=outcome.remote)
             conflicts += 1
+
+    # J-PERF — compact the dead history this flush (and every flush before it) left behind. Here,
+    # at the END of a successful pass, is the one moment the journal is at its most settled: we are
+    # the sole flusher (the mutex is held by our caller), every entry we could resolve has its
+    # marker on disk, and no further append is coming from this pass. Past the threshold only — a
+    # normal flush leaves the file untouched. Best-effort by construction: compaction is pure
+    # housekeeping, so a failure to take the append lock (a stuck concurrent writer) must never turn
+    # a SUCCESSFUL flush into an error. The dead lines simply stay and the next flush tries again.
+    try:
+        journal.compact_if_needed()
+    except (LockTimeout, OSError):
+        pass
 
     return FlushResult(flushed=flushed, conflicts=conflicts, blocked=blocked, already_applied=already,
                        pending=len(journal.pending()), skipped=False, verdict=verdict)

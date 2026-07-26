@@ -1,6 +1,10 @@
 ---
 template: home.html
 title: mokata — The memory + seatbelt for your AI coding agent
+description: >-
+  Open-source, spec-driven TDD for Claude Code — RED before GREEN, a mandatory
+  codebase graph, memory that can't be poisoned, and every durable write
+  human-gated. Local-first, Apache-2.0.
 hide:
   - navigation
   - toc
@@ -12,10 +16,20 @@ mokata is an open-source framework for Claude Code that brings the strongest ide
 AI-assisted coding into one governed engine. It brainstorms the problem with you, drafts a
 spec, refuses to write code until every acceptance criterion maps to a test (RED before
 GREEN), and reviews the result back against the spec. Around that engine sit a codebase
-knowledge graph, persistent self-healing memory (on by default), active token governance,
+graph that is **mandatory by default** (an embedded stdlib-AST floor ships in the box, so
+blast radius is answered structurally rather than by grep), typed persistent memory with
+in-database lexical recall and an optional consented semantic tier, active token governance,
 and a full audit trail — with **every durable write human-gated** (the model proposes; *you*
 mint the approval in your own terminal with `mokata approve <id>` — a model can never approve
 its own write) and **nothing leaving your machine** unless you wire it.
+
+Four of those gates are enforced by a hook rather than by mokata's own tools, so they hold for
+your agent's **native** edits too: no approved approach, no persisted spec, or no failing test,
+and the write is blocked outright. And because no code path writes memory without a
+human-minted approval, mokata's memory **cannot be poisoned** by content you never approved.
+
+You don't have to adopt all of it at once — `mokata init --mode seatbelt` wires just the gates
+and the graph, `--mode memory` adds persistent memory, `--mode full` turns on everything.
 
 mokata is pure Python (≥ 3.10) — the engine is stdlib-only, and the MCP SDK is its single
 runtime dependency, so the MCP server works out of the box. It is Apache-2.0 under
@@ -60,17 +74,21 @@ This site follows the [Diátaxis](https://diataxis.fr/) model:
 
 | Part | Area | Highlights |
 |---|---|---|
-| A | Spine | manifest, capability router, detection + graceful degradation, bootstrap, `init` |
-| B | Knowledge | adopted code graph + grep floor, typed queries, incremental index + staleness, drift anchors |
-| C | Memory | persistent / decision / episodic, self-healing (surfacing), pluggable backends, consolidation |
-| D | Engine | 7-phase pipeline, provable completeness gate, AC-mapper, pre-mortem, spec-compliance, dry-run |
+| A | Spine | manifest, capability router, detection + graceful degradation, bootstrap, `init` (incl. the `--mode seatbelt\|memory\|full` on-ramp) |
+| B | Knowledge | codebase graph **mandatory by default** — embedded stdlib-AST floor in the box, adopted graphs layered on top, grep beneath; a degraded blast radius is refused as decision input unless a ledgered escape is accepted; typed queries, incremental index + staleness, drift anchors |
+| C | Memory | typed persistent / decision / episodic memory, self-healing (surfacing), **no auto-writes — the poisoning defense**; in-database lexical recall (SQLite FTS5 + bm25, Postgres tsvector + ts_rank) with an optional consented semantic tier, `doctor` reporting which is live; `memory export`/`import` backs it up to `.mokata/backups/` |
+| D | Engine | brainstorm → spec → test → develop → review → ship, each gated (brainstorm alone runs 7 gated phases); provable completeness gate, AC-mapper, pre-mortem, prior-art step, spec-compliance, dry-run; a deferred item needs a re-gated `spec amend` before it can be built |
 | E | TDD & execution | RED-before-GREEN, model routing, bug/debug/optimize engines, execution-mode selector |
 | F | Token governance | tracker, JIT retrieval, handback caps, output density, budget, cache-stable prefixes |
 | G | Rules & governance | 4-tier rules, taxonomy, sync/async hooks, Karpathy gates, rule-learning, skill authoring |
-| I | Safety & audit | secret protection, human-gated writes, audit ledger, lethal-trifecta gate, revert, resume |
-| J | Distribution | plugin/marketplace packaging, cross-harness boundary, shareable stack manifests |
-| K | Config | per-layer/tool toggles, profiles, local-first, committed config, trust dial, doctor, reset |
+| I | Safety & audit | secret protection, human-minted single-use approvals, **9 backed gates (4 enforced on your agent's native writes by a hook)**, audit ledger, lethal-trifecta gate, revert, resume |
+| J | Distribution | cross-harness boundary, shareable stack manifests, portable sessions (transport derived from the repo's mode) |
+| K | Config | per-layer/tool toggles, profiles, local-first, committed config, trust dial, doctor (incl. the DSN deep-check and retrieval-stack line), reset |
 | L | Composability | standalone commands, mid-pipeline entry, direct skills, catalog, chaining, suggestions |
+| M | MCP surface | 55 tools (35 read · 19 write · 1 opt-in approve), every call bounded with a `timed_out` status that names the operation, typed annotations, structured `response_format`, cursor pagination, and a loud `AWAITING APPROVAL` head so waiting-on-a-human never reads as a hang |
+
+Counts in the box today: **26 Agent Skills** (16 curated + 10 domain) · **37 slash commands** ·
+**67 CLI subcommands** · **55 MCP tools** · **9 backed gates** · **1 runtime dependency**.
 
 Published docs: <https://mokata.ai/> · Source & issues:
 <https://github.com/JasGujral/mokata-oss>.

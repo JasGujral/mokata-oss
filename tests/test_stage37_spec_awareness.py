@@ -39,6 +39,19 @@ def _silent(_):
     pass
 
 
+def _set_graph_not_required(root):
+    """GR.S3 — turn OFF `settings.graph.required` so a graph-less repo's degraded spec-check runs
+    (byte-identical to pre-GR.S3) instead of being refused. No migration write elsewhere touches it."""
+    import json
+    from mokata import MANIFEST_FILENAME, MOKATA_DIR
+    p = os.path.join(root, MOKATA_DIR, MANIFEST_FILENAME)
+    with open(p, encoding="utf-8") as fh:
+        m = json.load(fh)
+    m.setdefault("settings", {}).setdefault("graph", {})["required"] = False
+    with open(p, "w", encoding="utf-8") as fh:
+        json.dump(m, fh)
+
+
 def _spec(title, *ac_texts):
     return Spec(title=title,
                 criteria=[AcceptanceCriterion(id=f"AC{i+1}", text=t)
@@ -212,6 +225,10 @@ class TestCorpusLoading(unittest.TestCase):
 class TestCliSpecCheck(unittest.TestCase):
     def _repo_with_spec(self, d):
         init_repo(root=d, profile="full", assume_yes=True, out=_silent)
+        # GR.S3 — these tests exercise the DEGRADED (lexical/file overlap) spec-check mechanics on a
+        # graph-less repo. Under the default `graph.required=true` a degraded touch-set is refused;
+        # opt out so the conflict-detection behaviour under test is byte-identical to pre-GR.S3.
+        _set_graph_not_required(d)
         surface = Surface.load(d)
         surface.state.write(SPEC_STATE_KEY,
                             _spec("Payments",

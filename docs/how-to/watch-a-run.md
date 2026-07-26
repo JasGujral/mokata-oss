@@ -14,7 +14,7 @@ durable state, never gate, and never mutate a run — and nothing leaves your ma
 
 ## `mokata progress` — the enriched, at-a-glance view
 
-`mokata progress` (or **`/mokata:progress`** inside Claude Code) is the max-detail read of the
+`mokata progress` (or **`/progress`** inside Claude Code) is the max-detail read of the
 active run. Alongside the 7-phase pipeline tracker it now surfaces:
 
 - the **five user-stage arc** — `brainstorm → spec → develop → review → ship`, each marked

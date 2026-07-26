@@ -30,7 +30,7 @@ jobs:
       id-token: write          # publish results to the OpenSSF API
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Run analysis
@@ -46,6 +46,6 @@ jobs:
           repo_token: ${{ secrets.SCORECARD_PAT }}
           publish_results: true
       - name: Upload SARIF to code-scanning
-        uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3.36.2
+        uses: github/codeql-action/upload-sarif@e0647621c2984b5ed2f768cb892365bf2a616ad1 # v4.37.2
         with:
           sarif_file: results.sarif

@@ -34,7 +34,7 @@ from .store import build_backend
 from ..errors import MokataError
 
 # Backends migrate can move between (each a MemoryBackend with file/db storage).
-SUPPORTED = ("sqlite", "obsidian", "postgres")
+SUPPORTED = ("sqlite", "obsidian", "postgres", "pgvector")
 
 
 class MigrateError(MokataError):
@@ -120,9 +120,39 @@ def build_named_backend(tool: str, root: str,
                 "postgres backend is unreachable or unconfigured (set config.dsn_env, "
                 "install the 'postgres' extra, and ensure the DB is up)")
         return be
+    if tool == "pgvector":
+        # DB.S4 — migrating INTO pgvector is how an existing store gets embedded: every `put`
+        # computes the item's vector, so the migration IS the initial embed. NON-degrading like
+        # postgres above (a silent landing in the SQLite floor would mean the team's memory never
+        # arrived), and a stamp mismatch refuses here too — `build_pgvector_backend` reports it and
+        # the message below names the re-embed command rather than a generic "unreachable".
+        from .embed import make_embedder
+        from .vector import build_pgvector_backend
+        reasons: List[Exception] = []
+        be = build_pgvector_backend(config, make_embedder(config.get("embedder") or "auto"),
+                                    project=project, on_unavailable=reasons.append)
+        if be is None:
+            why = str(reasons[0]) if reasons else (
+                "set config.dsn_env, install the postgres extra, and run "
+                "`mokata team init --vector`")
+            raise MigrateError(f"pgvector backend unavailable: {why}")
+        return be
+    if tool == "native-memory":
+        # SIMP.S2 — native-memory is a valid migration SOURCE (deprecated → canonical). It needs a
+        # wired client; `build_backend` would DEGRADE a missing client to the SQLite floor, which for
+        # a migration means silently reading the WRONG store. NON-degrading here: refuse loudly.
+        client = (clients or {}).get("native-memory")
+        if client is None:
+            raise MigrateError(
+                "native-memory has no wired client — cannot read it to migrate (a client is the "
+                "external store; without it there is nothing to read, and falling back to the "
+                "local floor would migrate the wrong data)")
+        from .backends import NativeMemoryBackend
+        return NativeMemoryBackend(client)
     if tool in ("sqlite", "obsidian"):
         return build_backend(tool, root, clients=clients, config=config)
-    raise MigrateError(f"unsupported migrate backend '{tool}'; choose one of {SUPPORTED}")
+    raise MigrateError(f"unsupported migrate backend '{tool}'; choose one of {SUPPORTED} "
+                       f"(source may also be native-memory)")
 
 
 def _resolved_memory_tool(surface: Any) -> str:
@@ -152,6 +182,7 @@ def migrate_memory(surface: Any, to_backend: str, from_backend: Optional[str] = 
                    assume_yes: bool = False, drop_source: bool = False,
                    drop_confirm: Optional[Callable[[str], bool]] = None,
                    ledger: Any = None, policy: Any = None,
+                   clients: Optional[dict] = None,
                    out: Optional[Callable[[str], None]] = None) -> MigrateResult:
     """Migrate all memory items from `from_backend` (default: the resolved store) to
     `to_backend`, with provenance, human-gated, idempotent, and non-destructive."""
@@ -167,10 +198,11 @@ def migrate_memory(surface: Any, to_backend: str, from_backend: Optional[str] = 
                              error=f"unsupported destination '{to_backend}' "
                                    f"(one of {SUPPORTED})")
 
-    # Build the source (its config from the manifest).
+    # Build the source (its config from the manifest). `clients` carries an injected native-memory
+    # client (SIMP.S2) so a deprecated native-memory store can be READ as a migration source.
     try:
         source = build_named_backend(src_tool, root, manifest.tool_config(src_tool),
-                                     project=project)
+                                     clients=clients, project=project)
     except MigrateError as exc:
         return MigrateResult(from_backend=src_tool, to_backend=to_backend, aborted=True,
                              error=f"source '{src_tool}' unavailable: {exc}")

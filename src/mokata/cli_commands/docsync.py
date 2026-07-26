@@ -27,6 +27,26 @@ def cmd_docsync(args: argparse.Namespace) -> int:
     degradation = AuditDegradation.from_facts(facts)
     target = getattr(args, "target", None)
 
+    # GR.S2 rider — when a real code graph is wired, drive the symbol-reference drift check
+    # through it (authoritative existence). Degrade-clean: no init / no graph -> resolve stays
+    # None and the symbol check is the same silent default as before.
+    resolve = None
+    import os as _os
+    from .. import MANIFEST_FILENAME, MOKATA_DIR
+    from ..config import ConfigError
+    from ..manifest import ManifestError
+    # Only reach for a graph when the repo is actually initialised — docsync itself needs no
+    # init (it audits docs against src/), so don't provoke the not-initialised guard here.
+    if _os.path.exists(_os.path.join(args.path, MOKATA_DIR, MANIFEST_FILENAME)):
+        try:
+            from ..docsync import graph_symbol_resolver
+            from ..knowledge import KnowledgeLayer
+            from ._common import _load_surface
+            layer = KnowledgeLayer.from_surface(_load_surface(args.path))
+            resolve = graph_symbol_resolver(layer, degradation)
+        except (ConfigError, ManifestError, OSError):
+            resolve = None
+
     if getattr(args, "reconcile", False):
         if not target:
             print("error: `docsync --reconcile` needs a target doc "
@@ -55,7 +75,8 @@ def cmd_docsync(args: argparse.Namespace) -> int:
 
     if target:
         try:
-            findings = audit_doc(target, facts=facts, degradation=degradation)
+            findings = audit_doc(target, facts=facts, resolve=resolve,
+                                 degradation=degradation)
         except OSError as exc:
             print(f"error: cannot read {target}: {exc}", file=sys.stderr)
             return 1

@@ -5,13 +5,14 @@ the emitted spec, and any in-progress brainstorm. It lives under **`.mokata/temp
 and gitignored, so by default it does **not** travel.
 
 `mokata session` makes it portable. **push** packages the session into a **machine-path-free,
-versioned, content-hashed, provenance-stamped** bundle and shares it as a **local file** under a
-tag; on another machine (or for a teammate) **pull** re-hydrates it so **`mokata resume`** picks up
-exactly where you left off.
+versioned, content-hashed, provenance-stamped** bundle and shares it under a tag; on another
+machine (or for a teammate) **pull** re-hydrates it so **`mokata resume`** picks up exactly where
+you left off.
 
-The default bundle lives at **`.mokata/session-bundles/<tag>.json`** in the repo root — like the
-vault, it's outside `temp_local/`, so it travels with the repo (commit/sync it, or hand the file
-over). No service is required (local-first).
+On a **solo** repo the bundle is a file at **`.mokata/session-bundles/<tag>.json`** in the repo root
+— outside `temp_local/`, so it travels with the repo (commit/sync it, or hand the file over). On a
+**team-connected** repo it goes to the team's shared Postgres instead. No service is required for
+the solo path (local-first).
 
 ## Where the bundle travels — transports
 
@@ -20,9 +21,36 @@ gates are identical on every one; only the byte store changes:
 
 | Transport | Where | Use it for |
 |---|---|---|
-| `local` (default) | `.mokata/session-bundles/<tag>.json` | this machine / committing the file |
-| `vault` | `.mokata/vault/sessions/<tag>.json` | **travels with the repo** — a teammate who clones/pulls the repo pulls the session |
+| `local` | `.mokata/session-bundles/<tag>.json` | this machine / committing the file |
+| `vault` *(deprecated)* | `.mokata/vault/sessions/<tag>.json` | the old committed-artifact route — still works, warns once (see below) |
 | `postgres` | a shared, owned DB table (`mokata_session_bundle`) | a **shared team store** — everyone pushes/pulls one place |
+
+### The default is DERIVED from your repo's mode
+
+You usually don't pass `--to` / `--from` at all. The transport is **derived from the repo mode**:
+a **team-connected** repo pushes and pulls over **`postgres`**, a **solo** repo over **`local`**.
+That way a teammate on a shared repo never quietly writes a private local file while believing they
+shared it. An explicit `--to` / `--from` value is always honored verbatim.
+
+Two escape hatches:
+
+- **`--file`** forces the **local file** transport regardless of mode — the explicit way to keep a
+  bundle off the team DB on a team-connected repo.
+- **mode resolution fails closed.** If the manifest is unreadable, mokata refuses rather than
+  guessing `local` — *cannot determine repo mode … fix `.mokata/manifest.json` or pass an explicit
+  transport / `--file`*.
+
+!!! warning "`--to vault` / `--from vault` is deprecated (removal: 0.0.17)"
+    The vault session transport **still works** and nothing has been removed — it warns once per
+    repo on first use, naming the replacement and the migration. Re-home existing bundles onto the
+    mode-derived transport with the one-time, human-gated:
+
+    ```bash
+    mokata migrate vault          # gated · previewed · idempotent · non-destructive
+    ```
+
+    It is **one-time** (a re-run reports "already migrated"; `--force` re-runs it) and leaves the
+    source in place — deleting the old bundles is your call.
 
 **Postgres is opt-in & local-first.** It reads its DSN from `MOKATA_SESSION_PG_DSN` (or the shared
 `MOKATA_PG_DSN`) — never inline in the committed manifest. Its table (`mokata_session_bundle`) is
@@ -56,9 +84,10 @@ Nothing in flight yet → a friendly no-op (start a brainstorm/run first).
 ## Push the current session (human-gated)
 
 ```bash
-mokata session push auth-refactor
-# choose a transport:        --to vault       (travels with the repo)
+mokata session push auth-refactor          # transport derived from the repo mode
+# override it:               --to local       (a file in this repo)
 #                            --to postgres    (the shared team store; needs a DSN)
+#                            --file           (force the local file, whatever the mode)
 # optionally: --run <id> (scope to one run; default: every recorded run)  --author alice
 ```
 
@@ -97,7 +126,7 @@ check below is **replaced by an origin label** the receiver sees at the gate ("c
 ```bash
 mokata session push auth-refactor --save-first                       # snapshot + share, atomically
 mokata session push spike --allow-in-progress                        # share the thinking so far
-mokata session push auth-reqs --requirements-only --to vault         # hand the requirements over
+mokata session push auth-reqs --requirements-only --file             # hand the requirements over
 ```
 
 ### Never a silent clobber
@@ -119,8 +148,8 @@ mokata session list      # spans local + the committed vault (+ shared Postgres 
 Sync the repo (or copy the bundle file) to the other machine, then:
 
 ```bash
-mokata session pull auth-refactor                         # re-hydrate into this repo (local)
-mokata session pull auth-refactor --from vault            # pull from the committed vault store
+mokata session pull auth-refactor                         # transport derived from the repo mode
+mokata session pull auth-refactor --from local            # force the local file store
 mokata session pull auth-refactor --from postgres         # pull from the shared team store
 mokata session pull auth-refactor --into /path/to/clone   # or target another repo
 mokata resume                                             # continues from the bundle's resume point
@@ -189,22 +218,23 @@ is what `push` / `pull` / `resume` and the status badge read.
 
 ## In Claude Code
 
-The same flow is one step inside the plugin:
+The same flow is one step from the slash commands `mokata setup claude` wires:
 
 ```text
-/mokata:session push auth-refactor --to vault
-/mokata:session list
-/mokata:session pull auth-refactor --from vault
-/mokata:session name explore auth-refactor
-/mokata:resume
+/session push auth-refactor
+/session list
+/session pull auth-refactor
+/session name explore auth-refactor
+/resume
 ```
 
 The MCP tools mirror the CLI: `session_list` is read-only (and spans transports), and
 `session_push` / `session_pull` / `session_name` are **propose-only** — they hand back a
 `proposal_id` and write nothing until *you* approve it out-of-band with `mokata approve <id>`
-(consistent with the vault and memory write tools; `approve=true` on the tool call commits
-nothing). Each carries a `transport` argument
-(`local` | `vault` | `postgres`); an unreachable remote returns a clean `unavailable` status.
+(bare `mokata approve` lists what's waiting; consistent with the vault and memory write tools —
+`approve=true` on the tool call commits nothing). Each carries a `transport` argument
+(`local` | `vault` | `postgres`), defaulting to the mode-derived one; an unreachable remote
+returns a clean `unavailable` status.
 
 See also [share a design vault](share-a-design-vault.md) and
 [the pipeline & gates](../concepts/pipeline.md).

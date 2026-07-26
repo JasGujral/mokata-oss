@@ -366,7 +366,9 @@ class TestWhoDidWhatSpans(unittest.TestCase):
             with _EnvActor("carol"):
                 view = TA.team_audit_view(root_a, surf_a, client=pg)
             self.assertTrue(view.available)
-            self.assertEqual(view.actors, ["alice", "bob"])
+            # KB.S1: init records a bootstrap `setup` entry authored by "cli", so a shared audit now
+            # legitimately spans that third actor alongside the two human sharers.
+            self.assertEqual(view.actors, ["alice", "bob", "cli"])
             lines = TA.render_team_timeline(view)
             joined = "\n".join(lines)
             self.assertIn("alice", joined)          # who-did-what attribution surfaces

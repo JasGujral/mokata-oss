@@ -10,7 +10,7 @@ leap.
 ## See it work first — `mokata tour` (read-only)
 
 ```bash
-mokata tour            # or /mokata:tour inside Claude Code
+mokata tour            # or /tour inside Claude Code
 ```
 
 A 60-second, **read-only** walk through three things on a tiny sample — it writes **nothing** to
@@ -24,7 +24,7 @@ your repo:
 
 ## The guided first run — the wizard
 
-Run `mokata init` interactively (or `/mokata:setup` inside Claude Code) and you get a guided
+Run `mokata init` interactively (or `/setup` inside Claude Code) and you get a guided
 **Q&A wizard** instead of flag-wrangling:
 
 1. **Pick a profile** — `minimal` (engine only), `standard` (engine + graph + memory on lean
@@ -50,8 +50,15 @@ The flag path is unchanged and never prompts:
 
 ```bash
 mokata init --profile standard --yes      # scaffold, no wizard, no prompts
+mokata init --mode seatbelt --yes         # or name an on-ramp instead of a profile
 mokata setup claude --yes                 # wire the harness non-interactively
 ```
+
+`--mode {seatbelt,memory,full}` is the graduated on-ramp (mutually exclusive with `--profile`):
+`seatbelt` = the gates + the AST code graph they need, `memory` = that plus typed persistent
+memory, `full` = everything the spine can wire. It resolves to a profile and only the profile is
+persisted. Under `--yes` the interactive extras offers never fire, so a CI init can never reach
+`pip`. Full detail: [Getting started](../getting-started.md).
 
 ## When you mistype a command
 
@@ -61,7 +68,7 @@ mokata helps instead of just erroring:
 $ mokata statuss
 mokata: 'statuss' is not a mokata command.
 Did you mean 'status'?  (try `mokata status --help`)
-Next: run `mokata init` (or `/mokata:setup` inside Claude Code) to set up this repo …
+Next: run `mokata init` (or `/setup` inside Claude Code) to set up this repo …
 ```
 
 It suggests the closest real command (a `difflib` match over the command set) and the single most
@@ -74,7 +81,7 @@ already-set-up repo to **change what's wired** — it re-detects your tools, sho
 current→proposed diff, and applies behind one gate:
 
 ```bash
-mokata reconfigure                                   # interactive — or /mokata:reconfigure
+mokata reconfigure                                   # interactive — or /reconfigure
 mokata reconfigure --add postgres --yes              # wire a now-installed integration
 mokata reconfigure --remove obsidian --yes           # cleanly unwire one (no residue)
 mokata reconfigure --profile full --yes              # switch the profile
@@ -105,6 +112,6 @@ to replace one. (Full flags: the [CLI reference](../reference/cli.md).)
 
 ## Next
 
-Once you're wired, start your first governed change with `/mokata:brainstorm`, or read
+Once you're wired, start your first governed change with `/brainstorm`, or read
 [the pipeline & gates](../concepts/pipeline.md). To change what's wired later, use
 `mokata reconfigure` (above); to remove mokata entirely, `mokata unsetup` / `mokata reset`.

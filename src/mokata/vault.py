@@ -270,7 +270,13 @@ def vault_pull(root: str, name: str, dest: Optional[str] = None) -> Tuple[str, V
             # Ledger BEFORE the raise — the copy has not happened and never will, but the fact that
             # this vault served corrupt bytes must survive the exception.
             _record_integrity_failure(root, name, entry.content_hash, actual)
-            raise VaultError(f"vault entry '{name}' failed its content-hash check (corrupted)")
+            # SIMP.S2 — the vault is DEPRECATED (removal scheduled for 0.0.17); a corrupt artifact is refused
+            # LOUDLY and the refusal NAMES the migration, never a silent import of tampered bytes.
+            raise VaultError(
+                f"vault entry '{name}' failed its content-hash check (corrupted) — refusing to "
+                f"serve it. The vault is deprecated — scheduled for removal in 0.0.17; it works "
+                f"today. Migrate with "
+                f"`mokata migrate vault`.")
     if dest is not None:
         parent = os.path.dirname(dest)
         if parent:

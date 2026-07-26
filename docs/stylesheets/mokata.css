@@ -415,3 +415,208 @@
   .mk-hero--split .mk-term { margin: 0 auto; max-width: 720px; }
   .mk-duo { grid-template-columns: 1fr; }
 }
+
+/* LP-15 — the data-rich "at a glance" strip. Every number is derived from the shipping code
+   (skills/commands/tools/gates), so it stays docsync-provable rather than marketing-shaped.
+   Reuses the existing surface/border/green tokens: no new colours, per BRAND.md rule 2. */
+.mk-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.9rem;
+}
+.mk-stat {
+  background: var(--mk-surface);
+  border: 1px solid var(--mk-border);
+  border-radius: 10px;
+  padding: 1rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.mk-stat__n {
+  font-family: var(--mk-mono);
+  font-size: 1.9rem;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--mk-green);
+}
+.mk-stat__l {
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--mk-heading);
+  font-family: var(--md-text-font-family, sans-serif);
+}
+.mk-stat__l em {
+  display: block;
+  color: var(--mk-muted);
+  font-style: normal;
+  font-size: 0.66rem;
+}
+
+@media (max-width: 600px) {
+  .mk-stats { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+  .mk-stat__n { font-size: 1.5rem; }
+}
+
+/* ==========================================================================
+   LP-PRO (2026-07-22) — product-polish pass. Elevation only: section rhythm,
+   bento accents, framed video, positioning + install bands, motion restraint.
+   BRAND.md rule 2 holds: every colour below is an existing token or an alpha
+   of the brand greens/borders — no new colour literals.
+   ========================================================================== */
+
+/* section rhythm — consistent vertical beat down the page */
+.mk-home .mk-features { margin: 4.2rem auto; }
+.mk-hero--split { margin: 3.4rem auto 2.6rem; }
+
+/* hero: a quiet radial glow behind the terminal (brand green, low alpha) */
+.mk-hero--split .mk-term {
+  position: relative;
+  background:
+    radial-gradient(120% 90% at 80% 0%, var(--mk-green-glow), transparent 60%),
+    var(--mk-surface);
+}
+
+/* install chip — the primary interaction */
+.mk-install {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  background: var(--mk-surface);
+  border: 1px solid var(--mk-border);
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  margin: 0 0 1.1rem;
+  max-width: 480px;
+  font-size: 0.74rem;
+}
+.mk-install__prompt { color: var(--mk-muted); user-select: none; }
+.mk-install__cmd {
+  background: transparent;
+  color: var(--mk-text);
+  padding: 0;
+  white-space: nowrap;
+  overflow-x: auto;
+  flex: 1;
+}
+.mk-install__copy {
+  font-family: var(--mk-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  color: var(--mk-green);
+  background: var(--mk-green-glow);
+  border: 1px solid rgba(61, 245, 140, 0.25);
+  border-radius: 5px;
+  padding: 0.22rem 0.6rem;
+  cursor: pointer;
+  transition: box-shadow 0.15s ease, color 0.15s ease;
+}
+.mk-install__copy:hover { box-shadow: 0 0 16px var(--mk-green-glow); }
+.mk-install__copy:focus-visible { outline: 2px solid var(--mk-green); outline-offset: 2px; }
+
+/* ghost CTA (tertiary) */
+.mk-btn--ghost { border-color: transparent; color: var(--mk-muted); }
+.mk-btn--ghost:hover { color: var(--mk-green); border-color: transparent; }
+
+/* positioning band — the category line */
+.mk-position {
+  max-width: 760px;
+  margin: 3.2rem auto;
+  padding: 0 1rem;
+  text-align: center;
+}
+.mk-position__line {
+  font-family: var(--mk-mono);
+  font-size: clamp(1.15rem, 2.6vw, 1.6rem);
+  font-weight: 700;
+  line-height: 1.45;
+  color: var(--mk-heading);
+  letter-spacing: -0.02em;
+  margin: 0 0 0.9rem;
+}
+.mk-position__line em {
+  font-style: normal;
+  color: var(--mk-green);
+  text-shadow: 0 0 28px var(--mk-green-glow);
+}
+.mk-position__why {
+  font-size: 0.78rem;
+  line-height: 1.75;
+  color: var(--mk-muted);
+  font-family: var(--md-text-font-family, sans-serif);
+  max-width: 620px;
+  margin: 0 auto;
+}
+
+/* framed video — same chrome as the hero terminal, so the two panes rhyme */
+.mk-video--framed video { border-radius: 0; }
+.mk-video__caption {
+  font-size: 0.66rem;
+  color: var(--mk-muted);
+  padding: 0.6rem 0.9rem;
+  margin: 0;
+  border-top: 1px solid var(--mk-border);
+  font-family: var(--mk-mono);
+}
+
+/* bento accents: two wide anchor cards + a lift on hover */
+@media (min-width: 720px) {
+  .mk-grid--bento .mk-card--wide { grid-column: span 2; }
+}
+.mk-card {
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+.mk-card:hover { transform: translateY(-2px); }
+.mk-card--wide {
+  background:
+    radial-gradient(90% 120% at 100% 0%, var(--mk-green-glow), transparent 55%),
+    var(--mk-surface);
+}
+.mk-card--wide h3 { font-size: 0.98rem; }
+
+/* stats: hover lift to match the cards */
+.mk-stat { transition: border-color 0.15s ease, transform 0.15s ease; }
+.mk-stat:hover { border-color: rgba(61, 245, 140, 0.45); transform: translateY(-2px); }
+
+/* closing install band */
+.mk-band {
+  max-width: 1060px;
+  margin: 4.2rem auto;
+  padding: 0 1rem;
+}
+.mk-band__inner {
+  background:
+    radial-gradient(110% 140% at 50% 0%, var(--mk-green-glow), transparent 60%),
+    var(--mk-surface);
+  border: 1px solid var(--mk-border);
+  border-radius: 14px;
+  padding: 2.6rem 1.4rem 2.2rem;
+  text-align: center;
+}
+.mk-band__inner h2 {
+  font-size: 1.4rem;
+  color: var(--mk-heading);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0 0 1.2rem;
+}
+.mk-install--band { margin: 0 auto 0.9rem; }
+.mk-band__meta {
+  font-size: 0.66rem;
+  color: var(--mk-muted);
+  font-family: var(--mk-mono);
+  letter-spacing: 0.04em;
+  margin: 0;
+}
+
+/* motion restraint — honor the user's preference */
+@media (prefers-reduced-motion: reduce) {
+  .mk-card, .mk-stat, .mk-btn, .mk-install__copy { transition: none; }
+  .mk-card:hover, .mk-stat:hover { transform: none; }
+}
+
+@media (max-width: 600px) {
+  .mk-install { font-size: 0.66rem; }
+  .mk-position__line { font-size: 1.05rem; }
+  .mk-band__inner { padding: 1.8rem 1rem 1.6rem; }
+}

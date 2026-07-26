@@ -6,7 +6,8 @@ merely asserted:
 
   - `no_network()` — a context manager that turns every outbound socket connection
     into a loud `NetworkEgressBlocked` error. Wrap any code path in it to *prove* the
-    path makes zero connections (the minimal profile runs its whole path inside it).
+    path makes zero connections. This is a test-facing proof harness with no production
+    caller — it is deliberately tests-only; mokata's own code never enters the guard.
   - `network_capable_tools()` — lists the enabled tools in a manifest that *could*
     egress (kinds `mcp` / `external`). Local-only kinds (cli / library / builtin)
     never appear; minimal and standard wire none.

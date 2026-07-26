@@ -30,8 +30,8 @@ jobs:
         python: ["3.10", "3.11", "3.12", "3.13"]
         jsonschema: ["absent", "present"]
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
       - name: Install (jsonschema per matrix leg)
@@ -54,8 +54,8 @@ jobs:
     permissions:
       contents: read        # checkout only (explicit least-privilege)
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
       - name: Version consistency (tag == pyproject == plugin == marketplace) + manifest validation
@@ -94,8 +94,8 @@ jobs:
       id-token: write        # Sigstore OIDC for the provenance attestation (scoped to THIS job)
       attestations: write    # store the build-provenance attestation
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
       - name: Install cosign (keyless artifact signing)
@@ -150,7 +150,7 @@ jobs:
             --output-format JSON --outfile dist/sbom.cdx.json
           echo "SBOM written:"; head -c 400 dist/sbom.cdx.json; echo
       - name: Attest build provenance (Sigstore) for the artifacts + SBOM
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           # SBOM now lives in dist/ alongside the wheel+sdist, so dist/* covers all three.
           subject-path: dist/*
@@ -177,7 +177,7 @@ jobs:
           done
           echo "Signature assets:"; ls -l dist/*.sig dist/*.pem dist/*.sigstore.json
       - name: Upload artifacts for the release job
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           # Archive rooted at dist/ (flat) → download-artifact restores dist/*.whl, dist/*.tar.gz,
           # dist/sbom.cdx.json exactly where the github-release job's globs expect them.
@@ -191,7 +191,7 @@ jobs:
     permissions:
       contents: write        # publish the GitHub Release (scoped to THIS job)
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Download the built artifacts + SBOM
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -207,7 +207,7 @@ jobs:
           ' CHANGELOG.md > RELEASE_NOTES.md
           [ -s RELEASE_NOTES.md ] || echo "See CHANGELOG.md for details." > RELEASE_NOTES.md
       - name: Create GitHub Release (attach signed artifacts + SBOM)
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           body_path: RELEASE_NOTES.md
           generate_release_notes: true
@@ -255,6 +255,6 @@ jobs:
       - name: Publish to PyPI (Trusted Publishing) — the reproducible, attested artifact
         # No `python -m build` here BY DESIGN: a rebuild would yield a DIFFERENT, unsigned wheel
         # than the one attached to the GitHub Release. We upload the downloaded dist verbatim.
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
         with:
           packages-dir: dist

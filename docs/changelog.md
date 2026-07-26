@@ -8,6 +8,30 @@ The full, versioned changelog lives in the repository's
 > a stabilizing phase and are collapsed into this entry; 0.0.1 is the honest starting point for an
 > early, fast-moving project.
 
+## 0.0.14
+
+**Graph mandatory + trust fixes. No breaking changes; additive; no schema change; local stays the
+zero-config default.** The codebase graph becomes a first-class, always-on structural layer with an
+honest fallback. An **embedded stdlib-AST floor** ships in the box — on a Python repo it answers
+callers/callees/imports/blast-radius structurally (`degraded=false`) with zero dependencies, a floor
+**above** grep; adopt a richer graph with `mokata graph adopt [code-review-graph|serena]` (human-gated)
+and see which backend answers with `mokata graph status`. **`graph.required` now defaults on**: a
+degraded (grep-floor) blast radius is **refused** as a decision input unless you accept it for the
+session with the TTY-reconfirmed, ledgered `--allow-degraded` escape (the result stays marked
+degraded). Every graph query now **checks freshness before answering** — a known-stale graph rebuilds
+first, and a rebuild failure degrades loudly to the AST floor on current files, never stale structure.
+**Trust:** a **ninth backed gate** (`approach-approval`) physically blocks the idea→code jump — a
+native `Write`/`Edit` before an approved approach is refused (exit 2); an **opt-in, default-OFF**
+in-chat `mcp__mokata__approve` tool performs the same human-minted, single-use, content-bound approval
+and still prompts you on every call, so the model can't approve its own write; approved approaches
+carry typed **`decisions[]`** the spec's deferred scope derives from (never hand-written twice) behind
+a **prior-art bound step**; the statusline is **session-true** and a **shipped run retires** from the
+badge and `mokata progress` (nothing deleted). The six CLI setup one-shots 0.0.13 filed are now
+**ledgered** (`KNOWN_BYPASS` is empty; a sweep fails CI on any ungated durable writer), and `mokata
+reset` writes a tombstone that survives `.mokata`'s removal. **Fixes:** simulated exec batches report
+zero actual spend and a `simulated` (never green) review; `offer_text_once` never raises; the `reset`
+propose→approve→redeem round trip no longer crashes.
+
 ## 0.0.13
 
 **Correctness & Trust — the seatbelt is enforced, not advertised. No breaking changes; additive; no
@@ -82,7 +106,7 @@ gate (never silent last-writer-wins). Access is governed by **scoped consent**; 
 --consent show|grant|revoke` manages a revocable standing consent for the batched audit-publish
 (per-publish secret-scan still hard-blocks). Also: `mokata branch-protection-check` verifies the
 public default branch is protected (fail-closed); a team ops kit (`docker-compose.team.yml` +
-`.env.example` + `llms.txt`); the in-Claude-Code MCP repair skill is renamed to **`/mokata:mcp-repair`**;
+`.env.example` + `llms.txt`); the in-Claude-Code MCP repair skill is renamed to **`/mcp-repair`**;
 `mokata setup claude` surfaces a permission-grant step when wiring the MCP server; and **Python ≥ 3.10**
 is the supported floor.
 
@@ -90,8 +114,8 @@ is the supported floor.
 
 **"Inside Claude Code" — richer in-terminal UX, a gated settings wizard, a `doctor` coverage
 matrix, and three hook/setup fixes. No breaking changes; additive; no new dependencies.** A new
-command palette (`mokata menu` / `/mokata:menu`) lists every mokata command and skill on one screen
-with gate markers, derived from the shipped files (single source, no drift). `/mokata:docs [topic]`
+command palette (`mokata menu` / `/menu`) lists every mokata command and skill on one screen
+with gate markers, derived from the shipped files (single source, no drift). `/docs [topic]`
 points to the published docs — listing topics with their URLs and resolving a topic to its page
 (read online; not bundled in the wheel; never fetches at runtime). An interactive, gated settings
 wizard (`mokata config wizard`) walks you through mokata's settings, routing every change through the
@@ -114,7 +138,7 @@ the wheel) — no repo clone needed; the bundled MCP server's SDK is a default d
 3.10+, so `mokata-mcp` runs out of the box (on 3.9 the CLI still works and the MCP server prints a
 clear upgrade message). `mokata setup claude` registers the MCP server at an absolute path, verifies
 the connection (`CONNECTED ✓`), and wires commands + skills + the status line; new `mokata mcp start |
-status | install` plus a `/mokata:mcp-repair` repair skill re-register the server from inside Claude Code.
+status | install` plus a `/mcp-repair` repair skill re-register the server from inside Claude Code.
 Re-running `mokata setup claude` now syncs the Agent Skills and prunes stale/removed mokata skills
 (your own skills are never touched).
 
@@ -173,7 +197,7 @@ proposals, read-only); `mokata audit --why` (what + decision + why timeline; dec
 rationale); `mokata sessions`/`resume` + a mid-brainstorm checkpoint (leave a brainstorm and come
 back, HARD-GATE intact); opt-in git-worktree isolation for parallel/paused work; cross-harness
 portability (claude/codex/cowork adapters + `mokata harness` matrix, degrade-clear); `mokata
-version`/`upgrade` (offline info, opt-in update check, human-gated upgrade) + `/mokata:version`.
+version`/`upgrade` (offline info, opt-in update check, human-gated upgrade) + `/version`.
 Hardened: secret guard broadened to 18 formats + fuzz invariant (paths/URLs/UUIDs/hex digests no
 longer false-positive); Dependabot/CodeQL/Scorecard/CODEOWNERS; live-DB CI (Postgres+pgvector+
 Neo4j containers); README + CLI-reference audit with a docs-vs-code drift guard.
@@ -210,7 +234,7 @@ framework for Claude Code whose spine is a real codebase **knowledge graph**, pe
 - **Memory** — persistent + decision + **typed** parts (rule/guardrail/best-practice/context/
   reference), on by default, self-healing; **tiered retrieval** (lexical → graph → semantic, with
   a pluggable embedder / pgvector); **sharing** via export/import, migrate, and a team Postgres
-  store mokata owns; **`/mokata:onboard`** guided typed capture; a **team design vault**.
+  store mokata owns; **`/onboard`** guided typed capture; a **team design vault**.
 - **Engine & correctness** — the 7-phase pipeline, a provable completeness gate (RED before
   GREEN), spec-persisted precondition, ground-in-code discipline, **spec-awareness regression
   guard**, and a verified `ship` step (never auto-merge).

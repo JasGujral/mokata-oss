@@ -5,7 +5,7 @@ a signature moves under a doc's feet. **docsync** is mokata's skill for catching
 the public docs against the live code, and reconciles the drift through the same human-gated
 WriteGate everything else rides. It's how this very doc set stays honest.
 
-docsync is both **user-invocable** (`mokata docsync` / `/mokata:docsync`) and **model-invocable**
+docsync is both **user-invocable** (`mokata docsync` / `/docsync`) and **model-invocable**
 (it auto-fires on drift). It adds **no new runtime gate**: the audit is read-only and the reconcile
 rides the existing WriteGate.
 
@@ -29,7 +29,7 @@ single sources the rest of mokata reads — never a hand-kept copy:
 |---|---|---|
 | **skill count** (`N skills`) | the curated registry (16) + shipped domain skills (26 total) | Blocking |
 | **command name** (`mokata <cmd>`) | the live CLI parser | Blocking |
-| **slash skill** (`/mokata:<name>`) | the shipped skill set | Blocking |
+| **slash skill** (`/<name>`) | the shipped skill set | Blocking |
 | **install path** (`pip install …`) | the canonical `pip install mokata` | Blocking |
 | **version example** (`mokata==x.y.z`) | the shipping version constant | Info |
 | **symbol reference** (`module.symbol`) | the code graph, when one is injected | Minor |

@@ -68,7 +68,14 @@ class PlaybookResult:
 
     @property
     def ok(self) -> bool:
-        if not all(self.checks.get(k) is True for k in _REQUIRED):
+        for k in _REQUIRED:
+            v = self.checks.get(k)
+            if v is True:
+                continue
+            # B3-rider — an honestly-simulated exec (no runner) reports review_passed="simulated";
+            # that is not a pipeline failure, so it does not fail the smoke.
+            if k == "review_passed" and v == "simulated":
+                continue
             return False
         if self.checks.get("memory_enabled"):
             return self.checks.get("memory_written") is True
@@ -147,13 +154,20 @@ def run_playbook(surface: Any, exec_choice: Optional[ExecutionChoice] = None,
         _layer = None
     try:
         from .memory import MemoryStore
-        _mem_items = MemoryStore.from_surface(surface).peek_active()
+        _mem_store = MemoryStore.from_surface(surface)
+        _mem_items = _mem_store.peek_active()
     except (ImportError, OSError, sqlite3.Error):
+        _mem_store = None
         _mem_items = []
     session.assess_impacts(layer=_layer, memory_items=_mem_items)
     for _a in session.approaches:
         session.record_design_fit(_a.name, DesignFitVerdict(_a.name, FITS, [],
                                   rationale="golden-path self-test approach"))
+    # GR-PA — the prior-art bound step RUNS before approval (a step-RAN check, not a graph-quality
+    # gate). The golden path performs the mandatory step honestly: since GR-PA-WIRE, the emit surface
+    # refuses an approval whose prior-art step was skipped, so a playbook that skipped it would fail
+    # its own spec-emit. Degrade-clean over the wired layer/memory (absent tier still records ran).
+    session.assess_prior_art(layer=_layer, memory_store=_mem_store)
     session.approve("playbook", STORY["chosen"])
     # Stage 6p — approval ALSO saves the plan as a durable file under .mokata/plans/ (BEFORE the
     # spec). Degrade-clean: a plan-write failure never breaks this hand-off.
@@ -199,8 +213,15 @@ def run_playbook(surface: Any, exec_choice: Optional[ExecutionChoice] = None,
     # Informational (a toggle state, not a pass/fail gate): "on" only with --dense or the
     # manifest toggle; "off" is the frugal default.
     checks["output_density"] = "on" if density.enabled else "off"
-    reviews = [two_stage_review(tk, rs) for tk, rs in zip(tasks, run.results)]
-    checks["review_passed"] = bool(reviews) and all(r.passed for r in reviews)
+    if run.simulated:
+        # B3-rider — no runner executed these tasks, so there is nothing to review. Running the
+        # two-stage review over simulated results (the default reviewer passes on `ok and output`)
+        # would report a GREEN review for work nothing ran. Report the honest marker instead; a
+        # simulated exec is not a pipeline failure (see PlaybookResult.ok).
+        checks["review_passed"] = "simulated"
+    else:
+        reviews = [two_stage_review(tk, rs) for tk, rs in zip(tasks, run.results)]
+        checks["review_passed"] = bool(reviews) and all(r.passed for r in reviews)
     checks["exec_mode"] = exec_choice.mode
     checks["within_budget"] = run.within_budget
 

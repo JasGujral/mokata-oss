@@ -17,9 +17,18 @@ from ..adapters import AdapterContract, negotiate, overlapping_capabilities
 from ..config import Surface
 from ..engine import preview_pipeline
 from ..govern import AuditLedger, BudgetReport, diagnose
-from ..knowledge import KnowledgeLayer
+from ..knowledge import QUERY_KINDS, KnowledgeLayer
 from ..memory import MemoryStore
+from .pagination import DEFAULT_PAGE_LIMIT, paginate
 from .registry import _mokata_dir, _surface, _tool
+from .response_format import LazyRender, apply_response_format
+from .validation import validate_comma_list, validate_enum
+
+# MCP-R.D1d — the allowed `kind` values of the `query` tool, grounded on the router it feeds:
+# `knowledge.layer.run_query` handles `semantic` itself and delegates every other kind to the
+# backends, all three of which reject anything outside `QUERY_KINDS`. Composed here (rather than
+# hard-coded) so a new structural kind added to the graph layer is accepted by the tool for free.
+QUERY_TOOL_KINDS = tuple(QUERY_KINDS) + ("semantic",)
 
 __all__ = [
     "query", "recall", "doctor", "coverage", "budget", "audit", "status", "preview",
@@ -35,9 +44,15 @@ __all__ = [
 def query(path: str = ".", kind: str = "callers", target: str = "",
           depth: int = 2) -> Dict[str, Any]:
     """Run a structural code query (graph backend if present, else the grep floor). `kind`
-    is one of callers/callees/implementers/imports/blast_radius. Read-only."""
+    is one of callers/callees/implementers/imports/blast_radius, or `semantic` when an adopted
+    graph exposes a semantic index (GR.S2; degrades honestly on the floor). Read-only."""
+    from ..knowledge.layer import run_query
+    # D1d — validate BEFORE the layer is built: an unknown kind used to travel all the way to the
+    # backend and raise `ValueError` (reclaimed as a server `error`), after paying for the surface
+    # load and backend selection. It is a caller typo, so it refuses here, up front, for free.
+    validate_enum(kind, QUERY_TOOL_KINDS, "kind")
     layer = KnowledgeLayer.from_surface(_surface(path))
-    return layer._run(kind, target, depth=depth).to_dict()
+    return run_query(layer, kind, target, depth=depth).to_dict()
 
 
 @_tool("recall", "read")
@@ -89,58 +104,69 @@ def _with_degrade(store: Any, resp: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @_tool("doctor", "read")
-def doctor(path: str = ".") -> Dict[str, Any]:
+def doctor(path: str = ".", response_format: str = "concise") -> Dict[str, Any]:
     """Diagnose the manifest/config: missing providers, broken adapters, role conflicts,
-    bad trust dials. Read-only."""
+    bad trust dials. Read-only. `response_format` {concise (default), detailed}: concise
+    answers with `ok`; detailed adds the rendered `report` (P22)."""
     report = diagnose(_surface(path))
-    return {"ok": report.ok, "report": report.render()}
+    return apply_response_format(response_format,
+                                 {"ok": report.ok, "report": LazyRender(report.render)})
 
 
 @_tool("coverage", "read")
-def coverage(path: str = ".") -> Dict[str, Any]:
+def coverage(path: str = ".", response_format: str = "concise") -> Dict[str, Any]:
     """Report capability coverage, unmet gaps, and overlaps for the current stack.
-    Read-only."""
+    Read-only. `response_format` {concise (default), detailed}: concise answers with the
+    structured `overlaps`; detailed adds the rendered coverage `report` (P22)."""
     m = _surface(path).manifest
     adapters = [AdapterContract(name=tid, provides=[t.get("provides")],
                                 kind=t.get("kind", "external"))
                 for tid, t in m.tools.items() if t.get("provides")]
     report = negotiate(list(m.capabilities), adapters)
     overlaps = overlapping_capabilities(m)
-    return {"report": report.render(),
-            "overlaps": {need: providers for need, providers in overlaps.items()}}
+    return apply_response_format(response_format, {
+        "report": LazyRender(report.render),
+        "overlaps": {need: providers for need, providers in overlaps.items()}})
 
 
 @_tool("budget", "read")
-def budget(path: str = ".") -> Dict[str, Any]:
-    """Show token savings recorded in the audit ledger (live budget readout). Read-only."""
+def budget(path: str = ".", response_format: str = "concise") -> Dict[str, Any]:
+    """Show token savings recorded in the audit ledger (live budget readout). Read-only.
+    `response_format` {concise (default), detailed}: concise answers with the `events` count;
+    detailed adds the rendered `report` (P22)."""
     ledger = AuditLedger.from_mokata_dir(_mokata_dir(path))
     report = BudgetReport.from_ledger(ledger)
     if not report.events:
-        return {"events": 0, "report": "budget: no savings recorded yet."}
-    return {"events": len(report.events), "report": report.render()}
+        return apply_response_format(response_format, {
+            "events": 0, "report": LazyRender(lambda: "budget: no savings recorded yet.")})
+    return apply_response_format(response_format, {
+        "events": len(report.events), "report": LazyRender(report.render)})
 
 
 @_tool("audit", "read")
-def audit(path: str = ".", limit: int = 0, team: bool = False) -> Dict[str, Any]:
-    """Show the append-only audit ledger (every gate decision + tool call). `limit` keeps
-    the most recent N entries (0 = all). With `team=true` (Stage 71) show the TEAM-WIDE
-    who-did-what over the SHARED log instead — spanning all actors, on the team's OWN storage
-    (NO telemetry, nothing phoned home). Degrade-clean: sharing off / backend absent → available
-    false with a clear message. Read-only."""
+def audit(path: str = ".", limit: int = DEFAULT_PAGE_LIMIT, offset: int = 0,
+          team: bool = False) -> Dict[str, Any]:
+    """Show the append-only audit ledger (every gate decision + tool call), PAGED newest-first:
+    `offset=0` is the most recent `limit` entries and paging forward walks BACK in time, each page
+    chronological inside itself. `limit` defaults to 50 (MCP-R.D1c — the whole ledger is an
+    unbounded payload); pass `limit=0` to explicitly opt out and get everything. The result carries
+    `count` (this page), `total` (the whole ledger), `has_more`, and `next_offset` (null at the end)
+    so you know when there is more. With `team=true` (Stage 71) show the TEAM-WIDE who-did-what over
+    the SHARED log instead — spanning all actors, on the team's OWN storage (NO telemetry, nothing
+    phoned home), paged the same way. Degrade-clean: sharing off / backend absent → available false
+    with a clear message. Read-only."""
     if team:
         from ..team_audit import render_team_timeline, team_audit_view
         view = team_audit_view(path, _surface(path))
         if not view.available:
             return {"team": True, "available": False, "message": view.message,
                     "count": 0, "entries": []}
-        entries = view.entries[-limit:] if limit and limit > 0 else view.entries
         return {"team": True, "available": True, "actors": view.actors,
-                "count": len(view.entries), "entries": entries,
+                **paginate(view.entries, key="entries", limit=limit, offset=offset,
+                           from_end=True),
                 "who_did_what": render_team_timeline(view)}
     entries = AuditLedger.from_mokata_dir(_mokata_dir(path)).entries()
-    if limit and limit > 0:
-        entries = entries[-limit:]
-    return {"count": len(entries), "entries": entries}
+    return paginate(entries, key="entries", limit=limit, offset=offset, from_end=True)
 
 
 @_tool("status", "read")
@@ -179,35 +205,42 @@ def preview(path: str = ".", start: Optional[str] = None,
 
 
 @_tool("progress", "read")
-def progress(path: str = ".", run: Optional[str] = None) -> Dict[str, Any]:
+def progress(path: str = ".", run: Optional[str] = None,
+             response_format: str = "concise") -> Dict[str, Any]:
     """Where are we? The run-progress tracker (done/current/pending + counts) derived from
     the persisted run-state. Read-only; with no active run it returns a clean, inactive view
-    (never an error). `run` selects a specific run id (default: the active/most-recent)."""
+    (never an error). `run` selects a specific run id (default: the active/most-recent).
+    `response_format` {concise (default), detailed}: detailed adds the rendered `block` view;
+    concise returns the structured tracker only (P22 — no ASCII table you didn't ask for)."""
     from ..progress import build_progress, render_progress
     surface = _surface(path)
     p = build_progress(surface.state, run_id=run)
     out = p.to_dict()
     # Stage 6d — MAX detail: the phase tracker + the 5 user-stage arc + 6c develop sub-counter
     # + what's pending this session, all derived from the same _badge_state single source.
-    out["block"] = render_progress(p, surface=surface)
-    return out
+    # MCP-R.D1b — the rendered `block` is a LazyRender: dropped under concise (the default), built
+    # only under `response_format:detailed` (byte-identical to today). Never computed under concise.
+    out["block"] = LazyRender(lambda: render_progress(p, surface=surface))
+    return apply_response_format(response_format, out)
 
 
 @_tool("lanes", "read")
 def lanes(path: str = ".", run: Optional[str] = None,
-          ascii_only: bool = False) -> Dict[str, Any]:
+          ascii_only: bool = False, response_format: str = "concise") -> Dict[str, Any]:
     """The PARALLEL-aware lane view: one lane per concurrent subagent
     (running/done/blocked/degraded) under the run's phase header, derived from run-state +
     the execmode records in a bounded ledger tail (Stage 40). Read-only; a sequential run
     shows a single lane; no run/ledger degrades to a friendly empty view (never an error).
-    `run` selects a specific run id (default: the active/most-recent)."""
+    `run` selects a specific run id (default: the active/most-recent). `response_format`
+    {concise (default), detailed}: detailed adds the rendered `block`; concise returns the
+    structured lanes only (P22)."""
     from ..progress import build_run_lanes, render_lanes
     surface = _surface(path)
     ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
     rl = build_run_lanes(surface.state, ledger=ledger, run_id=run)
     out = rl.to_dict()
-    out["block"] = render_lanes(rl, ascii_only=ascii_only)
-    return out
+    out["block"] = LazyRender(lambda: render_lanes(rl, ascii_only=ascii_only))
+    return apply_response_format(response_format, out)
 
 
 @_tool("watch", "read")
@@ -322,12 +355,14 @@ def suggest(path: str = ".", fresh: bool = False, spec: bool = False,
 
 
 @_tool("lat_check", "read")
-def lat_check(path: str = ".") -> Dict[str, Any]:
+def lat_check(path: str = ".", response_format: str = "concise") -> Dict[str, Any]:
     """Scan @lat anchors and flag concept drift (B5). Degrades cleanly when absent (no
-    anchors → no drift). Read-only."""
+    anchors → no drift). Read-only. `response_format` {concise (default), detailed}: concise
+    answers with `has_drift`; detailed adds the rendered `report` (P22)."""
     from ..knowledge import lat_check as _lat
     report = _lat(_surface(path).root)
-    return {"has_drift": report.has_drift, "report": report.render()}
+    return apply_response_format(response_format,
+                                 {"has_drift": report.has_drift, "report": LazyRender(report.render)})
 
 
 @_tool("index_status", "read")
@@ -368,8 +403,10 @@ def ci_check(path: str = ".", files: str = "", symbols: str = "") -> Dict[str, A
     reviewer and PRODUCES the comment; it never posts to GitHub. DEGRADE-CLEAN: no saved spec /
     no corpus / uninitialized repo → nothing to check → PASS (never a false block)."""
     from .. import ci_check as CI
-    fl = [f.strip() for f in files.split(",") if f.strip()]
-    sy = [s.strip() for s in symbols.split(",") if s.strip()] or None
+    # D1d — same parse as before, but a non-empty list with no usable entries now REFUSES instead of
+    # silently degrading to the unscoped default (which returned PASS over an unchecked change).
+    fl = validate_comma_list(files, "files")
+    sy = validate_comma_list(symbols, "symbols") or None
     res = CI.run_ci_check(path, fl, changed_symbols=sy)
     # D5 — `degraded` rides the structured response too: an agent reading this dict must be able to
     # tell "checked, and clean" from "could not check" without parsing the prose.
@@ -381,11 +418,13 @@ def ci_check(path: str = ".", files: str = "", symbols: str = "") -> Dict[str, A
 
 
 @_tool("baseline", "read")
-def baseline(path: str = ".", cmd: str = "") -> Dict[str, Any]:
+def baseline(path: str = ".", cmd: str = "", response_format: str = "concise") -> Dict[str, Any]:
     """Report the test suite green/red at baseline (Stage 34B) so a later failure is
     attributable to your change. Degrades clean if no test command is known (mokata never
-    guesses a framework). Read-only — runs the existing suite, writes nothing."""
-    from ..baseline import baseline_command, baseline_status
+    guesses a framework). Read-only — runs the existing suite, writes nothing. `response_format`
+    {concise (default), detailed}: concise answers with `ok`; detailed adds the rendered
+    `report` (P22)."""
+    from ..baseline import BASELINE_MCP_TIMEOUT_SECONDS, baseline_command, baseline_status
     from ..config import ConfigError
     manifest = None
     if Surface.is_initialized(path):
@@ -397,30 +436,39 @@ def baseline(path: str = ".", cmd: str = "") -> Dict[str, Any]:
             # back to the explicit `cmd` override or reports that no test command is known — mokata
             # never guesses a framework, so the degrade is visible in the baseline report itself.
             manifest = None
-    result = baseline_status(baseline_command(manifest, override=cmd or None), cwd=path)
-    return {"ok": result.ok, "report": result.render()}
+    # MCP-R.D0 · R7 — cap the subprocess far below its 600s terminal bound: on the MCP surface a
+    # read tool must never block stdio for 10 minutes of silence (the `_serve` wall-clock backstops
+    # it too). The CLI/`mokata baseline` path keeps the longer default.
+    result = baseline_status(baseline_command(manifest, override=cmd or None), cwd=path,
+                             timeout=BASELINE_MCP_TIMEOUT_SECONDS)
+    return apply_response_format(response_format,
+                                 {"ok": result.ok, "report": LazyRender(result.render)})
 
 
 @_tool("sessions", "read")
-def sessions(path: str = ".") -> Dict[str, Any]:
-    """List past + active runs (id, phases passed, resume point) — read-only, bounded, with a
-    friendly empty state. Continue one via the /mokata:resume slash; the gates still apply on
-    resume (mokata never auto-runs the pipeline)."""
+def sessions(path: str = ".", limit: int = DEFAULT_PAGE_LIMIT, offset: int = 0) -> Dict[str, Any]:
+    """List past + active runs (id, phases passed, resume point) — read-only, with a friendly
+    empty state. PAGED from the start of the run listing (`limit` defaults to 50, `limit=0` opts
+    out); the result carries `count` (this page), `total`, `has_more`, and `next_offset`. Continue
+    one via the /mokata:resume slash; the gates still apply on resume (mokata never auto-runs the
+    pipeline)."""
     from ..progress import list_sessions
     rows = list_sessions(_surface(path).state)
-    return {"count": len(rows),
-            "sessions": [{"run_id": s.run_id, "done": s.done, "total": s.total,
-                          "complete": s.complete, "active": s.active,
-                          "resume_phase": s.resume_phase, "last_passed": s.last_passed}
-                         for s in rows]}
+    return paginate([{"run_id": s.run_id, "done": s.done, "total": s.total,
+                      "complete": s.complete, "active": s.active,
+                      "resume_phase": s.resume_phase, "last_passed": s.last_passed}
+                     for s in rows], key="sessions", limit=limit, offset=offset)
 
 
 @_tool("session_windows", "read")
-def session_windows(path: str = ".") -> Dict[str, Any]:
+def session_windows(path: str = ".", limit: int = DEFAULT_PAGE_LIMIT,
+                    offset: int = 0) -> Dict[str, Any]:
     """MS.S2 — list the LIVE Claude Code windows on this repo (each window is its own MCP process):
     short id, when it started, alive|stale, and its current pipeline phase. Read-only — the caller's
-    own window self-registers, and stale (dead-pid) windows are pruned lazily. Distinct from
-    `sessions` (which lists pipeline RUNS) and `session_list` (shareable session bundles)."""
+    own window self-registers, and stale (dead-pid) windows are pruned lazily. PAGED from the start
+    of the registry listing (`limit` defaults to 50, `limit=0` opts out); the result carries `count`
+    (this page), `total`, `has_more`, and `next_offset`. Distinct from `sessions` (which lists
+    pipeline RUNS) and `session_list` (shareable session bundles)."""
     from .. import session_registry as SR
     from ..repo_identity import worktree_label
     surface = _surface(path)
@@ -434,13 +482,13 @@ def session_windows(path: str = ".") -> Dict[str, Any]:
         # three OSes, and a listing must never die because a registry write did.
         pass                                 # degrade-clean: listing must never fail on upkeep
     rows = SR.list_sessions(surface)
-    result: Dict[str, Any] = {
-        "count": len(rows),
-        "windows": [{"session_id": r.session_id, "short_id": r.short_id,
-                     "started": r.started_at, "last_seen": r.last_seen,
-                     "alive": r.alive, "phase": r.phase,
-                     "worktree": worktree_label(r.repo_root) if r.repo_root else "main",
-                     "scope": r.scope} for r in rows]}
+    result: Dict[str, Any] = paginate(
+        [{"session_id": r.session_id, "short_id": r.short_id,
+          "started": r.started_at, "last_seen": r.last_seen,
+          "alive": r.alive, "phase": r.phase,
+          "worktree": worktree_label(r.repo_root) if r.repo_root else "main",
+          "scope": r.scope} for r in rows],
+        key="windows", limit=limit, offset=offset)
     # WT.S1 — a ONE-TIME human-gated worktree offer when a live sibling is on this repo (data, not
     # an action; never creates anything). Degrade-clean.
     try:
@@ -460,7 +508,7 @@ def session_windows(path: str = ".") -> Dict[str, Any]:
 @_tool("session_save", "read")
 def session_save(path: str = ".", brainstorm: Optional[Dict[str, Any]] = None,
                  passed: Optional[list] = None, run_id: str = "",
-                 turn: bool = False) -> Dict[str, Any]:
+                 turn: bool = False, register: bool = False) -> Dict[str, Any]:
     """SS.S0 — snapshot THIS session's full in-flight state so an interrupted brainstorm/pipeline
     is recoverable. UNGATED by design: a local save is the user's own transient state (P2-exempt);
     the human gate sits at the SHARE boundary (`session_push`), NOT here — so there is no
@@ -481,19 +529,38 @@ def session_save(path: str = ".", brainstorm: Optional[Dict[str, Any]] = None,
     `SessionFlow.turn()` (one atomic write, no gate/checkpoint), fired after each answered Q&A turn
     so a kill −9 loses at most the single in-flight turn. The default (`turn=False`) is byte-for-byte
     the SS.S1 coarse checkpoint; `passed`/`run_id` are ignored on the turn path (a turn is
-    brainstorm-only)."""
+    brainstorm-only).
+
+    RUN-REG — `register=True` REGISTERS this run (writes its `pipeline_run__<rid>` checkpoint if
+    absent) as the brainstorm protocol's FIRST step, so a run driven conversationally is tracked
+    from the start: `progress` reports it, `spec` can attach, and the phase gate has state to bind
+    on. Idempotent and non-destructive; the result carries `registered: <run_id>`."""
     from ..session_flow import SessionFlow
-    flow = SessionFlow(_surface(path))
+    surface = _surface(path)
+    flow = SessionFlow(surface)
+    # RUN-REG — `register=True` is the brainstorm protocol's FIRST step: it REGISTERS this run (a
+    # `pipeline_run__<rid>` checkpoint) so conversational execution cannot silently bypass tracking.
+    # Rides the existing write path, idempotent, and never resets a run already past its first gate.
+    registered = None
+    if register:
+        from ..session_save import register_run
+        registered = register_run(surface, run_id=run_id or None)
     if turn:
         res = flow.turn(brainstorm or {})
     else:
         res = flow.checkpoint(
             brainstorm=brainstorm, passed=passed, run_id=run_id or None, moment="session_save")
     if res is None:
-        return {"ok": True, "empty": True, "degraded": True,
-                "message": "local state persist degraded (see the warning) — your work is not "
-                           "blocked; retry once the disk/permissions recover"}
-    return res.to_dict()
+        out = {"ok": True, "empty": True, "degraded": True,
+               "message": "local state persist degraded (see the warning) — your work is not "
+                          "blocked; retry once the disk/permissions recover"}
+        if registered:
+            out["registered"] = registered
+        return out
+    out = res.to_dict()
+    if registered:
+        out["registered"] = registered
+    return out
 
 
 @_tool("plan_list", "read")
@@ -523,12 +590,15 @@ def plan_show(path: str = ".", slug: str = "") -> Dict[str, Any]:
 
 
 @_tool("session_list", "read")
-def session_list(path: str = ".", transport: str = "") -> Dict[str, Any]:
+def session_list(path: str = ".", transport: str = "", limit: int = DEFAULT_PAGE_LIMIT,
+                 offset: int = 0) -> Dict[str, Any]:
     """Stage 55a/55b — list the tagged, shareable session bundles (tag, provenance, resume point,
     transport). Read-only; a friendly empty state when there are none. With no `transport` it
     spans LOCAL + the committed VAULT (+ shared Postgres when a DSN is configured); pass a single
-    transport name to scope it. A missing/unavailable remote is skipped clean. Push/pull/rename
-    are the human-gated `session_push`/`session_pull`/`session_name` write tools."""
+    transport name to scope it. A missing/unavailable remote is skipped clean. PAGED from the start
+    of the listing (`limit` defaults to 50, `limit=0` opts out); the result carries `count` (this
+    page), `total`, `has_more`, and `next_offset`. Push/pull/rename are the human-gated
+    `session_push`/`session_pull`/`session_name` write tools."""
     from .. import session_bundle as SB
     from .. import session_transport as STX
     if transport:
@@ -545,12 +615,11 @@ def session_list(path: str = ".", transport: str = "") -> Dict[str, Any]:
             except STX.SessionTransportUnavailable:
                 pass
     infos = SB.list_session_bundles_across(path, transports)
-    return {"count": len(infos),
-            "bundles": [{"tag": i.tag, "author": i.author, "created": i.created,
-                         "source": i.source, "run_id": i.run_id,
-                         "resume_phase": i.resume_phase, "done": i.done, "total": i.total,
-                         "transport": i.transport}
-                        for i in infos]}
+    return paginate([{"tag": i.tag, "author": i.author, "created": i.created,
+                      "source": i.source, "run_id": i.run_id,
+                      "resume_phase": i.resume_phase, "done": i.done, "total": i.total,
+                      "transport": i.transport}
+                     for i in infos], key="bundles", limit=limit, offset=offset)
 
 
 @_tool("config_get", "read")
@@ -582,13 +651,15 @@ def export_preview(path: str = ".", file: str = "") -> Dict[str, Any]:
 
 
 @_tool("decompose", "read")
-def decompose(path: str = ".") -> Dict[str, Any]:
+def decompose(path: str = ".", response_format: str = "concise") -> Dict[str, Any]:
     """Propose an independent-subtask split of the emitted spec's acceptance criteria, with a
     dependency plan (Stage 54f): one subtask per AC, with `depends_on` edges where subtasks
     touch the same symbol/file (the code graph verifies independence when wired; the lexical
     floor otherwise — in which case the split stays UNVERIFIED and sequential is recommended).
     READ-ONLY: it only PROPOSES the split; nothing fans out (the confirm + execution stay the
-    human-gated `mokata decompose --run` / exec flow). Degrades clean with no spec/ACs."""
+    human-gated `mokata decompose --run` / exec flow). Degrades clean with no spec/ACs.
+    `response_format` {concise (default), detailed}: detailed adds the rendered `block`; concise
+    returns the structured split only (P22)."""
     from ..engine import load_emitted_spec
     from ..execmode.decompose import decompose as _decompose
     surface = _surface(path)
@@ -600,34 +671,40 @@ def decompose(path: str = ".") -> Dict[str, Any]:
     plan = _decompose(spec, layer=KnowledgeLayer.from_surface(surface))
     out = plan.to_dict()
     out["available"] = True
-    out["block"] = plan.render()
-    return out
+    out["block"] = LazyRender(plan.render)
+    return apply_response_format(response_format, out)
 
 
 # --------------------------------------------------------------------------------------
 # Vault READ tools — list/search/pull are safe reads over the team design vault.
 # --------------------------------------------------------------------------------------
 @_tool("vault_list", "read")
-def vault_list(path: str = ".") -> Dict[str, Any]:
+def vault_list(path: str = ".", limit: int = DEFAULT_PAGE_LIMIT,
+               offset: int = 0) -> Dict[str, Any]:
     """List the team design vault's entries (brainstorm/spec artifacts) with name, kind,
-    author, and date. Read-only."""
+    author, and date. Read-only. PAGED from the start of the name-sorted listing (`limit` defaults
+    to 50, `limit=0` opts out); the result carries `count` (this page), `total`, `has_more`, and
+    `next_offset`."""
     from ..vault import vault_list as _list
     entries = _list(path)
-    return {"count": len(entries),
-            "entries": [{"name": e.name, "kind": e.kind, "title": e.title,
-                         "author": e.author, "version": e.version,
-                         "updated_at": e.updated_at} for e in entries]}
+    return paginate([{"name": e.name, "kind": e.kind, "title": e.title,
+                      "author": e.author, "version": e.version,
+                      "updated_at": e.updated_at} for e in entries],
+                    key="entries", limit=limit, offset=offset)
 
 
 @_tool("vault_search", "read")
-def vault_search(path: str = ".", query: str = "") -> Dict[str, Any]:
-    """Search the design vault by name/title/body (lexical), ranked. Read-only."""
+def vault_search(path: str = ".", query: str = "", limit: int = DEFAULT_PAGE_LIMIT,
+                 offset: int = 0) -> Dict[str, Any]:
+    """Search the design vault by name/title/body (lexical), ranked. Read-only. PAGED down the
+    ranking, best hit first (`limit` defaults to 50, `limit=0` opts out); the result carries `count`
+    (this page), `total`, `has_more`, and `next_offset`."""
     from ..vault import vault_search as _search
     hits = _search(path, query)
-    return {"count": len(hits),
-            "hits": [{"name": h.entry.name, "kind": h.entry.kind, "title": h.entry.title,
+    return paginate([{"name": h.entry.name, "kind": h.entry.kind, "title": h.entry.title,
                       "score": round(h.score, 4), "author": h.entry.author,
-                      "updated_at": h.entry.updated_at} for h in hits]}
+                      "updated_at": h.entry.updated_at} for h in hits],
+                    key="hits", limit=limit, offset=offset)
 
 
 @_tool("vault_pull", "read")
@@ -649,32 +726,40 @@ def vault_pull(path: str = ".", name: str = "", dest: str = "") -> Dict[str, Any
 # NO hosted marketplace: publish is over git/the vault; the index is a reviewable index.json.
 # --------------------------------------------------------------------------------------
 @_tool("stacks_list", "read")
-def stacks_list(path: str = ".", source: str = "") -> Dict[str, Any]:
+def stacks_list(path: str = ".", source: str = "", limit: int = DEFAULT_PAGE_LIMIT,
+                offset: int = 0) -> Dict[str, Any]:
     """List the curated community-stack catalog (per-framework governed stacks). `source` is an
     optional git-org/vault catalog dir or index.json; default is the bundled curated index.
-    Read-only. There is NO hosted marketplace — this reads a versioned index.json."""
+    Read-only. There is NO hosted marketplace — this reads a versioned index.json. PAGED from the
+    start of the name-sorted catalog (`limit` defaults to 50, `limit=0` opts out); the result
+    carries `count` (this page), `total`, `has_more`, and `next_offset`."""
     from .. import stacks as ST
     try:
         index = ST.load_index(source or None)
     except ST.StackError as exc:
         return {"status": "error", "message": str(exc)}
     entries = ST.list_stacks(index)
-    return {"status": "ok", "hosted": False, "count": len(entries), "stacks": entries,
+    return {"status": "ok", "hosted": False,
+            **paginate(entries, key="stacks", limit=limit, offset=offset),
             "note": ST.HONEST_NOTE}
 
 
 @_tool("stacks_search", "read")
-def stacks_search(path: str = ".", query: str = "", source: str = "") -> Dict[str, Any]:
+def stacks_search(path: str = ".", query: str = "", source: str = "",
+                  limit: int = DEFAULT_PAGE_LIMIT, offset: int = 0) -> Dict[str, Any]:
     """Search the community-stack catalog by name/framework/summary/tags (lexical), ranked.
-    Read-only. `source` optionally points at a git-org/vault index.json instead of the bundled one."""
+    Read-only. `source` optionally points at a git-org/vault index.json instead of the bundled one.
+    PAGED down the ranking, best hit first (`limit` defaults to 50, `limit=0` opts out); the result
+    carries `count` (this page), `total`, `has_more`, and `next_offset`."""
     from .. import stacks as ST
     try:
         index = ST.load_index(source or None)
     except ST.StackError as exc:
         return {"status": "error", "message": str(exc)}
     hits = ST.search_stacks(query, index)
-    return {"status": "ok", "count": len(hits),
-            "hits": [dict(h.entry, score=round(h.score, 4)) for h in hits]}
+    return {"status": "ok",
+            **paginate([dict(h.entry, score=round(h.score, 4)) for h in hits],
+                       key="hits", limit=limit, offset=offset)}
 
 
 @_tool("stacks_show", "read")

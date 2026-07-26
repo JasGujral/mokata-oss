@@ -13,6 +13,7 @@ Layout under a repo root:
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 from dataclasses import dataclass
@@ -127,7 +128,7 @@ class Surface:
         from .plans import PLANS_DIRNAME
         return os.path.join(self.temp_local_dir, PLANS_DIRNAME)
 
-    @property
+    @functools.cached_property
     def state(self):
         """The governed store for transient pipeline state under
         .mokata/temp_local/state/. Downstream phases read the brainstorm phase's approved
@@ -138,7 +139,28 @@ class Surface:
         so two Claude Code windows on one repo never clobber each other, while shared repo state
         (memory stats, spec corpus, the registry) passes through global. Scoping is transparent to a
         single-session flow (same keys, same value format); only the physical file NAME gains the
-        session dimension, with a one-way legacy fallback for pre-upgrade runs (see session_state)."""
+        session dimension, with a one-way legacy fallback for pre-upgrade runs (see session_state).
+
+        MCP-SURF — `cached_property`, not `property`: this was rebuilding a StateStore AND re-running
+        `scoped_store` (which resolves the session identity) on EVERY one of ~70 `surface.state` reads,
+        and a single MCP tool call touches it many times. The cache is PER-SURFACE-INSTANCE, and that
+        is what makes it safe rather than a staleness bug:
+
+          * a `Surface` is per-invocation — built fresh inside a tool call / CLI command and dropped,
+            never memoized at module level or shared across calls, so a cached store cannot outlive
+            the operation that made it;
+          * neither cached object holds READ data. `StateStore` and `SessionScopedStore` are stateless
+            path resolvers — every read/write still hits disk on every call, so a value written by
+            anyone (this process or another window) is still seen immediately. What is cached is the
+            *addressing*, not the state;
+          * the only input the addressing binds is the session_id, which `session.current_session()`
+            mints ONCE per process and holds immutable by design.
+
+        The one pattern this would break is a single Surface held across a session-identity change
+        (`session.reset_for_test()` between two `.state` reads on the SAME instance). That is a test-
+        only shape, and no test does it: production session identity is immutable, and the registry
+        key that IS read across resets (`session_registry`) is deliberately NOT session-scoped, so its
+        physical name is identical either way."""
         base = StateStore(os.path.join(self.temp_local_dir, STATE_DIRNAME))
         from .session_state import scoped_store
         return scoped_store(base)

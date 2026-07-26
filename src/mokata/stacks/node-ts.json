@@ -20,9 +20,10 @@
   },
   "capabilities": {
     "code_graph": {
-      "description": "Structural codebase queries (callers/callees, imports, blast-radius); grep is the universal fallback.",
+      "description": "Structural codebase queries (callers/callees, imports, blast-radius); the embedded AST floor answers on Python, grep is the universal fallback.",
       "layer": "knowledge",
       "fallback": [
+        "ast",
         "ripgrep",
         "grep"
       ]
@@ -36,6 +37,15 @@
     }
   },
   "tools": {
+    "ast": {
+      "provides": "code_graph",
+      "kind": "builtin",
+      "version": null,
+      "detect": {
+        "type": "python_files"
+      },
+      "enabled": true
+    },
     "ripgrep": {
       "provides": "code_graph",
       "kind": "cli",

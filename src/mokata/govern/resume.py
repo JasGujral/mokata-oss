@@ -7,6 +7,7 @@ loses state. Built on the state store + the spine's PIPELINE_PHASES.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, List, Optional
 
 from ..brainstorm import PIPELINE_PHASES
@@ -27,9 +28,35 @@ class PipelineCheckpoint:
         # contract). The state file is already broken; treating it as fresh is the safe floor.
         passed = data.get("passed") if isinstance(data, dict) else None
         self.passed: List[str] = list(passed) if isinstance(passed, list) else []
+        # B-LIFE — WHEN the run finished (it reached the terminal `ship` stage), stamped once by
+        # `mark_completed`. Keyed on SHIP, NOT the final pipeline phase: a complete checkpoint means
+        # the spec emitted and the user is AT develop (active), not that the run finished. Additive —
+        # old checkpoints without the key read as None; old readers of `{run_id, passed}` are
+        # unaffected. Absent stamp never means "not finished" (a legacy shipped run may lack it); it
+        # only records the WHEN when present.
+        ca = data.get("completed_at") if isinstance(data, dict) else None
+        self.completed_at: Optional[str] = ca if isinstance(ca, str) and ca else None
 
     def _save(self) -> None:
-        self.store.write(self.key, {"run_id": self.run_id, "passed": self.passed})
+        payload = {"run_id": self.run_id, "passed": self.passed}
+        if self.completed_at:
+            payload["completed_at"] = self.completed_at
+        self.store.write(self.key, payload)
+
+    def ensure_registered(self) -> bool:
+        """PH-GATE.S0 / RUN-REG — REGISTER this run: persist an empty checkpoint iff none exists yet,
+        so `progress`/`spec` find the run and the phase gate has state to bind on. Idempotent and
+        non-destructive: an already-persisted checkpoint (any `passed`) is left exactly as it is, so
+        re-registering can never reset progress. Returns True only when it created the checkpoint.
+
+        This registers RUN STATE, not a durable artifact (the checkpoint is transient run-tracking
+        under temp_local, keyed by run_id) — so it stays UNGATED, exactly like `mark_passed`."""
+        if self.store.read(self.key) is not None:
+            return False
+        self._save()
+        if self.ledger is not None:
+            self.ledger.record("checkpoint", run=self.run_id, phase="registered")
+        return True
 
     def mark_passed(self, phase: str) -> None:
         """Record a passed gate and persist immediately (crash-safe)."""
@@ -38,6 +65,23 @@ class PipelineCheckpoint:
             self._save()
             if self.ledger is not None:
                 self.ledger.record("checkpoint", run=self.run_id, phase=phase)
+
+    def mark_completed(self) -> bool:
+        """B-LIFE — stamp `completed_at` when the run reaches its terminal END-OF-RUN signal (the
+        `stage_enter: ship` recorded by `mokata progress mark ship`), so `build_progress` / the
+        dashboard can report the run as finished-THEN rather than current-NOW.
+
+        Keyed on SHIP, not on the final pipeline phase: a complete pipeline checkpoint means the spec
+        emitted and the user is AT `develop` (a healthy ACTIVE state), NOT that the run finished —
+        develop/review/ship live in the progress-event log, not this checkpoint. Idempotent (a set
+        stamp is left as-is), additive (old `{run_id, passed}` readers are unaffected), persisted
+        immediately (crash-safe). Returns True only when it newly stamped. DISPLAY-only run-state:
+        it records WHEN a run finished, never gates or deletes anything (P17)."""
+        if self.completed_at is not None:
+            return False
+        self.completed_at = datetime.now(timezone.utc).isoformat()
+        self._save()
+        return True
 
     def regress(self, drop) -> bool:
         """SI-DEV — a FORCED phase regression: un-pass `drop` so those gates must run again.

@@ -114,7 +114,13 @@ def offer_text_once(surface: Any, *, rows: Optional[List[Any]] = None,
         return None
     if not sibs:
         return None
-    key = repo_identity(getattr(surface, "root", "."))
+    # D5-rider(2) — `repo_identity` sat OUTSIDE the guard: a torn/unresolvable repo id (ValueError)
+    # or an unreadable path (OSError) could escape into the read-only surfaces that call this. The
+    # offer is best-effort — its absence costs nothing — so a fault yields no offer, never a raise.
+    try:
+        key = repo_identity(getattr(surface, "root", "."))
+    except (OSError, ImportError, ValueError):
+        return None
     if key in store:
         return None
     store.add(key)

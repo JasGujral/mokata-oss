@@ -32,6 +32,10 @@ one, so the plugin install above is the route here.
 
 ## The `/mokata:*` surface
 
+> **Command form ↔ install route.** This page uses the **plugin** render, `/mokata:<name>`. Via
+> the pip-first `mokata setup claude` path the same commands appear **bare** — `/<name>` (drop the
+> `mokata:` prefix).
+
 Everything the plugin ships is harness-agnostic — the same `templates/commands/*.md` and the
 bundled `mokata-mcp` server — so the slash commands work in Cowork:
 
@@ -67,10 +71,12 @@ guaranteed to fire in Cowork, so **do not rely on either** — and they fail dif
   write is still blocked in Cowork; a secret written by a *raw* tool call that bypasses mokata is
   not caught the way the Claude Code hook would catch it.
 - **The run-state gate-guard** (in Claude Code: blocks a native implementation write that breaks
-  the run's methodology — `spec-persisted`, `no-code-without-failing-test`, `spec-scope`). Here
+  the run's methodology — all four of `approach-approval`, `spec-persisted`,
+  `no-code-without-failing-test`, `spec-scope`). Here
   there is **no fallback at all.** These gates live *only* in the hook, so in Cowork they
-  **enforce nothing**: the agent can write implementation code before the spec is emitted, before
-  a failing test exists, or outside the spec's authorized surface, and nothing intercepts it. The
+  **enforce nothing**: the agent can write implementation code before an approach is approved,
+  before the spec is emitted, before a failing test exists, or outside the spec's authorized
+  surface, and nothing intercepts it. The
   `/mokata:*` pipeline still runs and `/mokata:review` still flags divergence after the fact —
   but that is a review, not a seatbelt. Say it plainly: **hard TDD enforcement is Claude-Code-only.**
 

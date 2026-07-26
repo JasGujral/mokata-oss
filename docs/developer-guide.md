@@ -11,7 +11,8 @@ Everything else is optional and **degraded over when absent**, never fatal:
 |---|---|---|
 | `schema` | `jsonschema>=4.0` | the built-in structural validator still validates the manifest |
 | `postgres` | `psycopg>=3.1` | memory degrades to the SQLite floor |
-| `neo4j` | the Neo4j driver | `code_graph` degrades to the ripgrep → grep floor |
+| `neo4j` | `neo4j>=5.0` | `code_graph` degrades to the ast → ripgrep → grep floor |
+| `embeddings` | `model2vec>=0.3`, `numpy>=1.24` | the semantic tier falls to the zero-dep hashing floor (token-hash overlap, **not** meaning) — `mokata doctor` reports which tier is actually ranking recall |
 | `mcp` | *(no-op alias of the default dep — kept so `mokata[mcp]` still resolves)* | — |
 
 Every optional import is **lazy**, so the core, the CLI and every default profile run with all of
@@ -40,8 +41,9 @@ capability router, and the unified `Surface`.
 
 ### Part B — Knowledge (`knowledge/`)
 `query.py` (typed `QueryResult`/`Reference`, 5 query kinds), `grep_backend.py` (the
-lexical floor), `graph_backend.py` (the adopted code-review-graph adapter via an injected
-client), `layer.py` (`KnowledgeLayer` — backend chosen through the router, story bridge),
+lexical floor), `ast_backend.py` (the embedded stdlib-AST floor — non-degraded structural
+queries on Python, a floor above grep), `graph_backend.py` (the adopted code-review-graph
+adapter via an injected client), `layer.py` (`KnowledgeLayer` — backend chosen through the router, story bridge),
 `index.py` (incremental fingerprint index + staleness surfacing), `anchors.py` (`@lat`
 drift anchors + `lat_check`).
 
@@ -50,6 +52,15 @@ drift anchors + `lat_check`).
 `ObsidianBackend`, `NativeMemoryBackend`), `store.py` (the logic: gated writes, toggles,
 instrumentation, consolidation), `healing.py` (surfacing detection), `episodic.py`
 (searchable turns, lexical fallback), `consolidation.py` (proposal-only).
+
+Retrieval is **tiered and honest about it**: `tiered.py` (the ranking pipeline), `embed.py` +
+`vector.py` (the opt-in semantic tier — `model2vec` via `mokata[embeddings]`, else the zero-dep
+hashing floor), `reembed.py` (the gated re-embed that resolves a stamp mismatch), and
+`tier_report.py` (the `retrieval stack` lines `mokata doctor` prints — which engines are actually
+ranking a recall). The lexical tier runs **in the database** where the backend supports it (SQLite
+FTS5/bm25, Postgres tsvector/ts_rank) and degrades to a Python Jaccard floor otherwise.
+`share.py` is the `.mokata/backups/` export/import surface; `migrate.py` ports the live store
+between backends; `review.py` is the Draft→Published proposal workflow.
 
 ### Part D — Engine (`engine/`)
 `spec.py`, `acmapper.py` (AC → test traceability), `completeness.py` (the blocking gate),
@@ -75,10 +86,10 @@ reaching past them. Read `gate_hook.py`'s module docstring first — it is the d
 - `approval.py` — the **human-minted approval**: `propose` / `redeem`, content-hashed and
   session-scoped proposal ids. `approve=true` on a tool call is inert by construction; only
   `mokata approve <id>` (a human, out-of-band) mints one, and it licenses exactly one commit.
-- `gate_hook.py` — the **decision** for the three run-state gates (`spec-persisted`,
-  `no-code-without-failing-test`, `spec-scope`) on a native `Write`/`Edit`. Pure, total, never
-  raises; every uncertainty (no run, ambiguous run, unreadable state, undeclared scope) resolves
-  to **ALLOW**.
+- `gate_hook.py` — the **decision** for the four run-state gates (`approach-approval`,
+  `spec-persisted`, `no-code-without-failing-test`, `spec-scope`) on a native `Write`/`Edit`.
+  Pure, total, never raises; every uncertainty (no run, ambiguous run, unreadable state,
+  undeclared scope) resolves to **ALLOW**.
 - `hook_cli.py` — the I/O for all three shipped hooks (`session-start`, `secret-guard`,
   `gate-guard`), launched via the `mokata-hook` console entry point. Blocks with exit code 2.
 - `spec_scope.py` — a spec's authorized surface + its **deferred** items (paths and literal
@@ -94,6 +105,16 @@ reaching past them. Read `gate_hook.py`'s module docstring first — it is the d
 commands + MCP + the three hooks), `share.py` (export/import stacks), `compose.py` (chaining +
 suggestions), `playbook.py` (the end-to-end integration runner), `packaging.py`
 (plugin/marketplace validators), `team*.py` (the opt-in shared Postgres store).
+
+### The MCP server (`mcp/`)
+`registry.py` is the single source of truth for the tool set — **55 tools: 35 read, 19 write, 1
+approve** — and `server.py` builds the `mokata-mcp` server from it. Every write tool is
+propose-only; `tools_approve.py` is the default-off, opt-in in-chat approval
+(`settings.approvals.in_chat`). The robustness layer is shared by every tool rather than
+re-implemented per tool: `tool_annotations.py` (read-only / destructive hints),
+`response_format.py`, `pagination.py`, and `validation.py` (input validation at the boundary).
+`../awaiting.py` supplies the "what is waiting on YOU" head that the statusline, the notification,
+and `mokata doctor` all render from one place.
 
 ## Dev setup
 
@@ -118,8 +139,10 @@ pip install "jsonschema>=4.0"
 python -m unittest discover -s tests -t tests
 ```
 
-CI runs both states across Python 3.10–3.13 plus a `mokata playbook` smoke run. Tests are
-written RED-before-GREEN.
+CI runs **both jsonschema states on `ubuntu-latest` and `windows-latest`**, on **Python 3.12**,
+plus a `mokata playbook` smoke run. (The matrix is deliberately light — the package floor stays
+Python ≥ 3.10 and the classifiers cover 3.10–3.13; see
+[platform support](reference/platform-support.md#ci-coverage).) Tests are written RED-before-GREEN.
 
 ## Contributing
 
