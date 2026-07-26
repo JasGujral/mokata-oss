@@ -257,6 +257,44 @@ def resolve_pg_dsn(dsn_env: Optional[str] = None, *, data: Optional[dict] = None
     return None
 
 
+def transport_kind_for_mode(root: Optional[str]) -> str:
+    """SIMP.S1 — DERIVE the session transport from the repo's MODE (never picked from a channel
+    zoo). A TEAM-CONNECTED repo → 'postgres' (the ONE configured Postgres DSN, the same DB shared
+    memory/journal use); otherwise → 'local' (SQLite+files). The team signal is `team.connect_status`
+    — the CM.S1 one-DSN resolver state (`settings.team.dsn_env` + postgres in the memory chain), the
+    SAME persisted signal the memory/journal side keys on (C-1: never a second mode-resolution path).
+    It reflects team-CONNECT config, NOT whether the DSN env var VALUE is currently exported — so a
+    team member with an unset DSN still derives 'postgres' and gets a clean refusal from
+    `make_transport` (deliverable 4), never a silent downgrade to a local file.
+
+    FAIL CLOSED on unknown mode. This function decides WHERE DURABLE BYTES GO, so it must never
+    GUESS 'local' when the mode is undetermined:
+      * manifest ABSENT / repo uninitialized → 'local' (genuinely not a team repo);
+      * manifest PRESENT but unreadable / torn / invalid → raise `SessionTransportUnavailable`
+        (mode is unknown — guessing 'local' would write a PRIVATE file while a team human believes
+        it reached the shared store: deliverable 4's silent downgrade through the config-read door).
+    The explicit-kind and `--file` overrides remain the human's escape hatch and MUST still work on
+    such a repo. Returns a kind NAME only (never a DSN value)."""
+    if not root:
+        return "local"
+    from .config import ConfigError, Surface
+    # `is_initialized` is a bare `os.path.exists` (never raises): manifest ABSENT → genuinely not a
+    # team repo → 'local'. Only a PRESENT manifest reaches `load`, so the except below can only mean
+    # "manifest present but broken", never "no repo here".
+    if not Surface.is_initialized(root):
+        return "local"
+    try:
+        surface = Surface.load(root)
+    except (ConfigError, OSError, ValueError) as exc:
+        # FAIL CLOSED: manifest present but unreadable/torn/invalid — mode is UNKNOWN. Refuse loudly
+        # rather than silently downgrade a team repo to a private local file.
+        raise SessionTransportUnavailable(
+            "cannot determine repo mode — manifest unreadable; fix .mokata/manifest.json or pass "
+            "an explicit transport / --file") from exc
+    from .team import connect_status
+    return "postgres" if connect_status(surface) else "local"
+
+
 def make_transport(kind: Optional[str], root: str, *, dsn_env: Optional[str] = None,
                    client: Any = None, project: Any = _PROJECT_CURRENT) -> Any:
     """Build a transport by name (`local` default, `vault`, `postgres`). The Postgres leg is
@@ -269,6 +307,10 @@ def make_transport(kind: Optional[str], root: str, *, dsn_env: Optional[str] = N
     if kind == "local":
         return LocalTransport(root)
     if kind == "vault":
+        # SIMP.S2 — the vault transport kind is DEPRECATED (removed 0.0.17). It keeps working
+        # (the shim), warning once per repo, with `mokata migrate vault` to re-home the bundles.
+        from . import deprecation
+        deprecation.warn_deprecated("vault", os.path.join(root, MOKATA_DIR))
         return VaultTransport(root)
     if kind == "postgres":
         from .project import derive_project_id

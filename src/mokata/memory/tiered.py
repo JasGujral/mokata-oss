@@ -61,10 +61,72 @@ def _text(item: Any) -> str:
     return f"{item.subject} {item.value}"
 
 
+# DB.S3 — how many ranked rows to pull from the FTS index. Wider than `top_k` because the DB ranks
+# over ALL rows while the caller only sees the SCOPE-VISIBLE ones: a hit the identity may not read
+# is dropped after the query, so a bare `top_k` could come back short. Still bounded — this is a
+# top-N, not the full-store scan it replaces.
+LEXICAL_CANDIDATE_FLOOR = 50
+
+
+def lexical_tier(store: Any, query: str, items: List[Any], top_k: int,
+                 degrade_out: Optional[Callable[[str], None]] = None) -> tuple:
+    """DB.S3 — the lexical tier: ONE ranked SQL query when the backend can search, the Jaccard
+    scan when it can't. Returns `({item_id: score}, mode)`.
+
+    Before DB.S3 this WAS `{it.id: lexical_score(query, _text(it)) for it in items}` — a full-store
+    Python scan whose cost grows with the store, and which ranks by Jaccard (token overlap over the
+    UNION), so a long document containing every query term scores BELOW a short one sharing a
+    single term. Now a backend that can rank in the database (`lexical_search`) does, and only
+    matching rows are ever scored.
+
+    Three outcomes, and the difference between the last two is the honesty:
+      * FTS live       — the DB's normalized scores, intersected with what the caller may SEE;
+      * floor by DESIGN — a backend with no `lexical_search` at all (Obsidian's files, the native
+        client). Jaccard is that backend's lexical tier, not a loss. NO notice: one that always
+        fires is noise, and D5's whole point is that a notice MEANS something;
+      * floor by DEGRADE — a SQL backend that SHOULD have FTS and doesn't (FTS5 not compiled), or
+        whose search raised. The user asked for FTS recall and is getting keyword overlap, so say
+        so ONCE (`note_degraded`) — the exact silence D5 was written to end.
+    """
+    from .backends import LEXICAL_MODE_JACCARD
+    backend = getattr(store, "backend", None)
+    search = getattr(backend, "lexical_search", None)
+    mode = getattr(backend, "lexical_mode", LEXICAL_MODE_JACCARD)
+
+    if search is not None and mode != LEXICAL_MODE_JACCARD:
+        try:
+            ranked = search(query, top_k=max(top_k * 4, LEXICAL_CANDIDATE_FLOOR))
+            # The scope/access filter still WINS: `items` is what this identity may read, and a
+            # hit outside it is dropped. The FTS predicate composes with visibility (the backend
+            # already applied its project scope); it never overrides it.
+            visible = {it.id for it in items}
+            return {it.id: float(s) for it, s in ranked if it.id in visible}, mode
+        except Exception as exc:
+            # Broad for the same reason the semantic tier's handler is: `lexical_search` spans a
+            # psycopg driver error (an OPTIONAL extra, not nameable at module scope), a sqlite3
+            # error, and the decode of each stored doc. Narrowing to what we CAN name would let a
+            # driver error crash every recall — a swallow turned into an outage.
+            note_degraded("memory-lexical", failure_class_of(exc) or FAILURE_UNREACHABLE,
+                          fallback="lexical recall fell back to keyword overlap (jaccard)",
+                          fix="run `mokata doctor` to check the memory store",
+                          detail=f"{type(exc).__name__}: {exc}", out=degrade_out)
+    elif search is not None:
+        # A SQL backend reporting the floor = the FTS5 capability probe came back False.
+        note_degraded("memory-lexical", FAILURE_UNREACHABLE,
+                      fallback="lexical recall is keyword overlap (jaccard) — FTS is unavailable",
+                      fix="use a sqlite3 built with FTS5, or run `mokata doctor`",
+                      detail="this sqlite3 has no FTS5 compiled in", out=degrade_out)
+
+    return {it.id: lexical_score(query, _text(it)) for it in items}, LEXICAL_MODE_JACCARD
+
+
 def tiered_recall(store: Any, query: str, *, embedder: Optional[Embedder] = None,
                   graph_scorer: Optional[GraphScorer] = None, top_k: int = DEFAULT_TOP_K,
-                  semantic: bool = True) -> List[RetrievalHit]:
-    """Fuse lexical + graph + semantic into one ranked, top-k result (see module docstring)."""
+                  semantic: bool = True,
+                  degrade_out: Optional[Callable[[str], None]] = None) -> List[RetrievalHit]:
+    """Fuse lexical + graph + semantic into one ranked, top-k result (see module docstring).
+
+    `degrade_out` redirects a tier's degrade notice (default: stderr, once per subsystem)."""
     # TM.S6 — candidates are the scope-path UNION (byte-identical to all_active when the store
     # has no scope context). Falls back to all_active for any store-like object lacking the method.
     candidates = getattr(store, "scoped_active", None) or store.all_active
@@ -72,17 +134,19 @@ def tiered_recall(store: Any, query: str, *, embedder: Optional[Embedder] = None
     if not items:
         return []
 
-    lex = {it.id: lexical_score(query, _text(it)) for it in items}
+    # DB.S3 — the lexical tier is a SQL FTS query where the backend can run one, and the Jaccard
+    # scan (this line's former body) only where it can't.
+    lex, _lexical_mode = lexical_tier(store, query, items, top_k, degrade_out)
 
     sem: dict = {}
     if semantic and embedder is not None:
         backend = store.backend
-        # D5-rider(3) — NOT-YET-REACHABLE on any shipped config: the only backend exposing
-        # `semantic_search` is PgVectorBackend, which no shipped store selects (export-only until
-        # DB.S4 wires pgvector for real in 0.0.15). KEPT rather than deleted — this is the exact
-        # shape DB.S4 will consume, so removing it would only force DB.S4 to re-add it. Today it is
-        # exercised solely by test_r_13f_d5_rider_3 (an injected `semantic_search` backend), so the
-        # branch is covered-and-marked, never dead-and-silent.
+        # DB.S4 — REACHABLE. The D5-rider(3) not-yet-reachable marker that stood here has been
+        # retired because it fired: `selection._select_raw_backend` now has a `pgvector` branch, so
+        # a team that opts into the semantic store reaches this line on a real config. The marker
+        # did its job — it kept the branch (rather than deleting a shape DB.S4 would have had to
+        # re-add) and kept it honestly labelled while it waited. `test_r_13f_d5_rider_3` still pins
+        # both sub-paths; DB.S4's own suite pins the live selection that reaches them.
         if hasattr(backend, "semantic_search"):
             # index-backed top-k (e.g. pgvector) — no full-store scan
             try:

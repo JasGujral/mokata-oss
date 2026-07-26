@@ -56,6 +56,13 @@ To use a different profile:
 - **At init:** `mokata init --profile full` (or `minimal` / `custom`). To switch an existing
   project, re-run with `--force`: `mokata init --profile full --force` (human-gated; an
   overwrite guard protects your committed config).
+- **Or name an on-ramp instead:** `mokata init --mode {seatbelt,memory,full}` is a graduated
+  adoption alias — `seatbelt` and `memory` both resolve to `standard`, `full` to `full` — plus a
+  printed 5-minute quickstart. It is mutually exclusive with `--profile`, and **only the profile
+  is persisted**: a manifest written by `--mode memory` is byte-identical to one written by
+  `--profile standard`, so nothing here becomes a second config axis. The modes differ in
+  *flavour*, not in wiring — `memory`/`full` additionally offer the optional local embeddings
+  model when run interactively, `seatbelt` never does.
 - **Fine-tune by hand:** edit `.mokata/manifest.json` — flip a layer's `enabled`, or a
   tool's `enabled` flag — then `mokata validate`. `mokata doctor` flags any problems.
 - **See what's active:** `mokata status` (live capabilities) and `mokata coverage`

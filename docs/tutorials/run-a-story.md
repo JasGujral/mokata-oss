@@ -23,6 +23,11 @@ mokata status
 stdlib-AST floor) on a Python repo, `grep` only on a non-Python one, and `memory_store` to
 `sqlite` unless richer tools are installed.
 
+> **Adopting gradually?** `mokata init --mode {seatbelt,memory,full}` is an alias for a profile
+> plus a printed quickstart, so you can take the gates first (`seatbelt`) and add memory later.
+> It's mutually exclusive with `--profile`; this tutorial uses `--profile standard` so every
+> layer below is switched on.
+
 ## 2. See the plan before doing anything (dry-run)
 
 ```bash
@@ -59,8 +64,10 @@ mokata playbook
 The playbook runs the real flow and prints PASS/FAIL per checkpoint:
 
 ```
-brainstorm_approved … gate_blocked_initially … gate_passed_after_tests …
-red_before_green … review_passed … memory_written … RESULT: PASS
+  [PASS] brainstorm_approved      [PASS] gate_blocked_initially
+  [PASS] gate_passed_after_tests  [PASS] red_before_green
+  [info] review_passed = simulated
+  [PASS] memory_written           RESULT: PASS
 ```
 
 What happened under the hood:
@@ -68,7 +75,10 @@ What happened under the hood:
 - **completeness gate** first **blocked** emit (no tests mapped), then **passed** once every
   acceptance criterion mapped to a test — this is the provable-completeness guarantee.
 - **RED-before-GREEN** was enforced: implementing a test that hadn't failed first is blocked.
-- the **two-stage review** ran; on `standard`/`full`, memory recorded the decision.
+- on `standard`/`full`, memory recorded the decision.
+- the **two-stage review** reports `simulated`, not a pass — the bare CLI has no LLM to run it, and
+  mokata refuses to print a green checkmark for work nothing did. Drive the same playbook from
+  Claude Code and the review actually runs.
 
 ## 5. Try the parallel path
 

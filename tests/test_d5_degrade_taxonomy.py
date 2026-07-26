@@ -54,6 +54,13 @@ DEGRADE_FAMILY = {
     "PostgresUnavailable": FAILURE_UNREACHABLE,     # → the SQLite floor
     "Neo4jUnavailable": FAILURE_UNREACHABLE,        # → the grep floor
     "VectorUnavailable": FAILURE_UNREACHABLE,       # → the lexical floor
+    # DB.S4 — two embeddings-tier degrades, and they are ENGINE, not UNREACHABLE, on purpose.
+    # `unreachable` renders as "the shared database is unreachable", and that sentence is false
+    # for both: one is a local model file that would not load, the other is a perfectly healthy
+    # index whose vectors were written by a different embedder. A misclassified failure sends the
+    # user to check a connection that was never the problem.
+    "ModelUnavailable": FAILURE_ENGINE,             # model2vec absent/unloadable → hashing
+    "EmbedderStampMismatch": FAILURE_ENGINE,        # embedder ≠ the stamp → lexical, + re-embed
     "SessionTransportUnavailable": FAILURE_UNREACHABLE,
     "SharedAuditUnavailable": FAILURE_UNREACHABLE,  # → the log stays LOCAL
     "SubagentUnavailable": FAILURE_UNREACHABLE,     # → sequential flow
@@ -74,8 +81,18 @@ HARD_ERRORS = {
     "ManifestShareError", "MeasureFirstError", "MemoryDisabledError", "MemoryDocTooNew",
     "MemoryError", "MemoryShareError", "MigrateError", "NetworkEgressBlocked", "OptimizeError",
     "PhaseError", "PlanError", "ProvisionError", "RedBeforeGreenError", "RefineError",
-    "RefineGateError", "ReproRequiredError", "RevertError", "RootCauseRequiredError",
+    "RefineGateError",
+    # DB.S4 — the re-embed migration could not OPEN the vector index. Hard, not degraded, and
+    # deliberately unlike every other memory path: a recall has a floor to fall to (lexical), a
+    # MIGRATION has none. Silently doing nothing while reporting success is how a user ends up
+    # trusting a stale index — the exact outcome the stamp binding exists to prevent.
+    "ReembedError",
+    "ReproRequiredError", "RevertError", "RootCauseRequiredError",
     "SessionBundleError", "SetupError", "SkillNotFound", "SkillSourceError", "StackError",
+    # MCP-R.D1d — a caller-side bad ARGUMENT on the MCP surface. Hard, not degraded: nothing fell
+    # back to a floor and no weaker answer was substituted, the call simply did not run. It
+    # propagates to `_serve`, which converts it to a `status:"refused"` result.
+    "ValidationError",
     "VaultError",
 }
 
@@ -398,14 +415,18 @@ def _live_classes():
     from mokata.execmode import tasks
     from mokata.govern import authoring, graph_required, revert, tdd
     from mokata.knowledge import crg_client, neo4j_backend, query
-    from mokata.memory import backends, item, migrate, share as mshare, store, vector
+    # DB.S4 adds `embed` (ModelUnavailable) and `reembed` (ReembedError) to the sweep's reach.
+    from mokata.memory import (backends, embed, item, migrate, reembed,
+                               share as mshare, store, vector)
     from mokata.modes import bug, debug, optimize
+    # MCP-R.D1d — the MCP surface's input-validation fault (SDK-free to import).
+    from mokata.mcp import validation as mcp_validation
 
     mods = (netguard, oslock, skills, stacks, teamdb, team_audit, team_journal, vault, config,
             config_cmd, brainstorm, dsn, manifest, pipeline, plans, refine, agent_skills,
             harness_setup, session_bundle, session_transport, share, tasks, authoring,
-            graph_required, revert, tdd, crg_client, neo4j_backend, query, backends, item, migrate,
-            mshare, store, vector, bug, debug, optimize)
+            graph_required, revert, tdd, crg_client, neo4j_backend, query, backends, embed, item,
+            migrate, reembed, mshare, store, vector, bug, debug, optimize, mcp_validation)
     live = {"MokataError": MokataError}
     for mod in mods:
         for name in dir(mod):

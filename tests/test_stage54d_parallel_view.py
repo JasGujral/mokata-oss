@@ -85,7 +85,7 @@ class TestLanesTool(unittest.TestCase):
             surface = _repo(d)
             _active_run(surface)
             _parallel_batch(surface)
-            res = M.lanes(path=d)
+            res = M.lanes(path=d, response_format="detailed")    # MCP-R.D1b: block is opt-in
             self.assertTrue(res["active"])
             self.assertEqual(res["mode"], "parallel")
             self.assertEqual(len(res["lanes"]), 3)               # 1 done + 1 blocked + 1 running
@@ -94,7 +94,7 @@ class TestLanesTool(unittest.TestCase):
     def test_no_run_degrades_clean(self):
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
-            res = M.lanes(path=d)
+            res = M.lanes(path=d, response_format="detailed")    # MCP-R.D1b: block is opt-in
             self.assertFalse(res["active"])
             self.assertTrue(res["block"])                        # a friendly message, not an error
 

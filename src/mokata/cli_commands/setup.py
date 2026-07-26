@@ -4,6 +4,12 @@ from __future__ import annotations
 import argparse
 import sys
 
+from ..adoption_modes import (
+    mode_names,
+    offer_mode_extras,
+    profile_for_mode,
+    render_quickstart,
+)
 from ._common import (
     Surface,
     init_repo,
@@ -20,11 +26,21 @@ from ._common import (
 
 
 def cmd_init(args: argparse.Namespace) -> int:
+    # G1 — graduated adoption. `--mode` is an ALIAS onto an existing profile plus an onboarding
+    # flavour; the manifest it writes is byte-identical to the same init via `--profile`.
+    # `--profile` and `--mode` are mutually exclusive at the parser (two names for one axis).
+    mode = getattr(args, "mode", None)
+    profile = profile_for_mode(mode) if mode else args.profile
+
     if getattr(args, "preview", False):
         # Dry-run for the human gate (Stage 23): print the plan, write nothing, exit 0.
         # Used by /mokata:init to preview before the user approves the real write.
-        print(render_plan(plan_init(args.path, args.profile)))
+        print(render_plan(plan_init(args.path, profile)))
         return 0
+
+    if mode:
+        return _init_with_mode(args, mode, profile)
+
     # Stage 56 — the magical first-run: when run INTERACTIVELY on a fresh repo (or with an
     # explicit --wizard / --setup-harness), use the guided Q&A wizard. The non-interactive
     # --yes/--profile path is preserved verbatim for CI/scripts.
@@ -47,6 +63,30 @@ def cmd_init(args: argparse.Namespace) -> int:
     if result.aborted:
         print(f"\n{result.message}", file=sys.stderr)
         return 1
+    return 0
+
+
+def _init_with_mode(args: argparse.Namespace, mode: str, profile: str) -> int:
+    """G1 — the mode-flavoured init: the SAME `init_repo` write, then the mode's consented
+    offers, then its printed quickstart.
+
+    `--mode` never routes through the wizard: the mode IS the answer the wizard would ask for,
+    and re-asking it would be a second config axis wearing a prompt. The durable write stays
+    human-gated by `init_repo` (P2); the offers are interactive-only, so a `--yes`/CI init in
+    ANY mode reaches neither the ask nor `pip` (the DB.S4 posture)."""
+    result = init_repo(
+        root=args.path,
+        profile=profile,
+        assume_yes=args.yes,
+        force=args.force,
+    )
+    if result.aborted:
+        print(f"\n{result.message}", file=sys.stderr)
+        return 1
+
+    interactive = sys.stdin.isatty() and not args.yes
+    offer_mode_extras(args.path, mode, interactive=interactive)
+    print(render_quickstart(mode))
     return 0
 
 
@@ -123,11 +163,23 @@ def register(sub, common):
         "init", parents=[common],
         help="scaffold config; detect tools; pick profile",
     )
-    p_init.add_argument(
+    # G1 — `--profile` and `--mode` are two names for ONE axis (a mode resolves to a profile),
+    # so they are mutually exclusive: passing both is a contradiction, and silently letting one
+    # win would write a manifest the user did not ask for. argparse reports it as a usage error.
+    p_init_axis = p_init.add_mutually_exclusive_group()
+    p_init_axis.add_argument(
         "--profile",
         default=DEFAULT_PROFILE,
         choices=profile_names(),
         help=f"starting profile (default: {DEFAULT_PROFILE})",
+    )
+    p_init_axis.add_argument(
+        "--mode",
+        default=None,
+        choices=mode_names(),
+        help="graduated adoption on-ramp: seatbelt (the gates) / memory (gates + persistent "
+             "memory) / full (everything). An alias for a profile plus a printed quickstart; "
+             "memory and full additionally OFFER the local embeddings model when interactive",
     )
     p_init.add_argument(
         "--yes", action="store_true", help="non-interactive; skip the write prompt"
@@ -193,8 +245,9 @@ def register(sub, common):
                          help=f"profile to init with if not already set up "
                               f"(default: {DEFAULT_PROFILE})")
     p_setup.add_argument("--no-hooks", action="store_true",
-                         help="skip wiring all three hooks (SessionStart briefing + secret-guard "
-                              "+ run-state gate-guard)")
+                         help="skip wiring mokata's hooks (SessionStart briefing + secret-guard "
+                              "+ run-state gate-guard + dirty-track) — this also skips the MCP "
+                              "tool grant, which shares settings.json")
     p_setup.add_argument("--no-grant", action="store_true",
                          help="don't grant Claude Code permission for mokata's MCP tools / "
                               "enable the server in settings.json (default: grant, so Claude "

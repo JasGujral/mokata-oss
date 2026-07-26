@@ -345,6 +345,22 @@ def build_bootstrap(
         # absence costs nothing and must never break the briefing, so the swallow stays.
         pass
 
+    # B-SKILLS — if THIS root has no mokata skills/commands wired (a worktree / fresh checkout /
+    # never-set-up root — the new-session repro), append a ONE-LINE human-gated offer so the
+    # session SAYS why the `/` menu is empty and names the fix. Never writes; a root that IS wired
+    # gets no offer, so its briefing is byte-identical. Local FS reads only — no subprocess, no
+    # handshake — so the async SessionStart path is never blocked/slowed. Degrade-clean.
+    try:
+        from .skills_visibility import briefing_offer
+        offer = briefing_offer(surface.root)
+        if offer:
+            text = text.rstrip("\n") + "\n" + offer + "\n"
+            tokens = estimate_tokens(text)
+    except Exception:
+        # A briefing offer is an OFFER — its absence costs nothing and must never break the
+        # briefing. The check itself never raises; this guards a half-installed package.
+        pass
+
     if tokens > budget:
         # Defensive truncation: keep the briefing inside budget no matter what, and
         # say so plainly rather than silently dropping context. Guaranteed to fit even

@@ -17,7 +17,7 @@ Each item carries provenance, a TTL (`expires_at` / `valid_for`), and
 ## Typed memory — the project "brain" (Stage 36)
 
 On top of the storage type, each item carries a first-class **`kind`** — the institutional
-knowledge a team wants mokata to honour, captured via the guided **`/mokata:onboard`**
+knowledge a team wants mokata to honour, captured via the guided **`/onboard`**
 ([how-to](../how-to/capture-project-rules-and-context.md)) and stored **structured, not
 verbatim** (the LLM distils, types, normalises, and dedups the input):
 
@@ -42,10 +42,14 @@ more tokens per run.
 ## Pluggable backends (C4) — storage only
 
 Chosen through the router (`memory_store`): **SQLite** (default, stdlib, the guaranteed
-floor), **Obsidian** (a markdown vault), **native-memory** (an adapter delegating to an
-injected client), or **Postgres** (a shared database — below). Storage only — the memory
-*logic* is mokata's own. When a richer backend isn't reachable, selection degrades to the
-SQLite floor.
+floor) or **Postgres** (a shared database — below). Storage only — the memory *logic* is
+mokata's own. When a richer backend isn't reachable, selection degrades to the SQLite floor.
+
+> **Deprecated backends (removal in 0.0.17).** **Obsidian** (a markdown vault) and
+> **native-memory** (an adapter delegating to an injected client) are **deprecated**. They
+> **still work**, and using one prints a **once-per-repo warning** naming the canonical shape
+> and the migration. Move off with the one-time, human-gated `mokata migrate obsidian` /
+> `mokata migrate native-memory`. Nothing is dropped and nothing is removed before 0.0.17.
 
 ### Shared team memory — Postgres (mokata owns the schema)
 
@@ -70,49 +74,94 @@ extra) is absent or the DB is unreachable it **degrades to the SQLite floor** �
 failure. The same `MemoryBackend` contract generalizes to any database. See
 [configure storage backends & paths](../how-to/configure-storage-backends.md).
 
-### Share by file — `memory export` / `memory import`
+### Back up & restore — `memory export` / `memory import`
 
-For teams who don't run a shared DB, `mokata memory export` writes a **committable** share
-artifact (`.mokata/memory-share.json`, at the root — not `temp_local/`) carrying the active
-items **with provenance**; it's read-only on the source. A teammate runs `mokata memory
-import <file>` — a **human-gated** merge that dedups, gate-adds new items, and routes a
-conflicting fact through the self-healing old→new surface (**never a silent overwrite**),
-preserving provenance. It's opt-in and local-first: nothing egresses — sharing rides the
-file/VCS the team already uses. (MCP: `memory_export` / `memory_import`, propose-only.)
+This is the **backup** surface, **not** a sharing channel — cross-repo/team sharing is the
+team Postgres above and nothing else.
+
+`mokata memory export` writes a **committable**, human-readable JSON **backup** you own —
+by default a UTC-timestamped `.mokata/backups/memory-<UTC>.json`, so successive backups
+**never clobber** each other — carrying the active items **with provenance**; it's read-only
+on the source. `mokata memory import <file>` is a **human-gated restore**: it previews
+(counts + a keys-only sample), dedups, gate-adds new items, and routes a conflicting fact
+through the self-healing old→new surface (**never a silent overwrite**), preserving
+provenance. Every restored item lands through the one `WriteGate` and is secret-scanned on
+ingest, so a round trip is content-identical. It's local-first: nothing egresses — the backup
+is a file you keep, not a mokata service. (MCP: `memory_export` / `memory_import`,
+propose-only.)
+
+> **Deprecated channel (removal in 0.0.17).** The legacy `memory-share.json` path **still
+> works** as an export destination, but it is **deprecated** and writing to it **warns once**.
+> Move its contents into the canonical store with the one-time, human-gated
+> `mokata migrate memory-share`.
 
 ### Move the store — `memory migrate`
 
-`mokata memory migrate --to <backend>` ports the **live store** between `sqlite` / `obsidian` /
-`postgres` — e.g. your local SQLite onto the team's shared Postgres (the on-ramp to the live
-store above), or into the Obsidian vault, and back. It's **human-gated**, **idempotent**
-(re-run upserts by id), and **non-destructive** (the source stays unless you add the separately
-gated `--drop-source`); if the destination can't be built it reports and writes nothing — your
-data is never lost. Where `export/import` shares content as a *file*, `migrate` moves the
-*store* between databases. See [the CLI reference](../reference/cli.md).
+`mokata memory migrate --to <backend>` ports the **live store** between `sqlite` / `postgres` /
+`pgvector` (and the deprecated `obsidian`) — e.g. your local SQLite onto the team's shared
+Postgres (the on-ramp to the live store above). It's **human-gated**, **idempotent** (re-run
+upserts by id), and **non-destructive** (the source stays unless you add the separately gated
+`--drop-source`); if the destination can't be built it reports and writes nothing — your data
+is never lost. Where `export/import` backs the store up to a *file*, `migrate` moves the
+*store* between databases.
+
+Distinct from it, `mokata migrate <channel>` — `obsidian` · `native-memory` · `memory-share` ·
+`vault` — is the **one-time, human-gated migration off a deprecated channel** into the
+canonical shape. See [the CLI reference](../reference/cli.md).
 
 ## Tiered retrieval — lexical → graph → semantic
 
 `recall_relevant(query)` pulls the memory *relevant to the task*, not the whole corpus (P11),
 by fusing up to three tiers into one ranked, top-k result with a deterministic ordering:
 
-1. **lexical** — keyword overlap; the always-present **floor** (zero deps).
+1. **lexical** — a **real search engine, ranked in the database**: SQLite **FTS5 + `bm25()`**,
+   or Postgres **`tsvector` + `ts_rank()`** — one ranked SQL query returning top-k, not a
+   Python scan over the whole store. Where a backend can't rank in SQL (or `sqlite3` was built
+   without FTS5), it **degrades honestly** to **Jaccard** keyword overlap — the always-present
+   zero-dep floor — and says so. `mokata doctor` prints which engine is actually ranking you
+   (`fts5` / `tsvector` / `jaccard`), so the tier is never a mystery.
 2. **graph-proximity** — a code-graph-keyed boost that is **live by default**: when a memory
    store is built from a repo, it auto-wires the [knowledge layer](knowledge.md), so an item
    referencing a symbol the **code graph confirms** is real and related to the query is lifted.
-   It degrades clean — on the grep floor (no real graph) the tier silently contributes nothing
-   and lexical + semantic hold. With an external graph (e.g. [Neo4j](../how-to/use-a-codebase-graph.md))
-   wired, the boost is keyed on that graph.
+   It keys on an **adopted** graph specifically: on either floor — the embedded AST floor or
+   grep — the tier silently contributes nothing and lexical + semantic hold. A graph that
+   *errors* mid-recall is reported rather than looking like a graph that simply found no
+   anchor.
 3. **semantic** — embedding similarity (the top tier), via a **vector backend** (pgvector —
    mokata owns the `mokata_memory_vectors` schema and queries the index, no full-store scan)
    or, for any other backend, the embedding **stamped on each item at write time**.
 
-The **embedder is a pluggable seam**: the default `HashingEmbedder` is deterministic, local,
-and dependency-free, so semantic recall works with **zero deps and no network**; real
-providers are wired by `settings.memory.embedder`. It's **opt-in** — with **no embedder
-configured the semantic tier is simply OFF** and lexical (+ graph) still work. Degrade-clean
-end to end: no `psycopg` / no `pgvector` / no embedder ⇒ semantic silently absent, nothing
+The **embedder is a pluggable seam** wired by `settings.memory.embedder`, and the tier is
+**opt-in**: with **no embedder configured the semantic tier is simply OFF** and lexical
+(+ graph) still work. Two embedders ship:
+
+- **`hashing`** — deterministic, local, dependency-free. It works with **zero deps and no
+  network**, and mokata says plainly that it is **token-hash overlap, *not* meaning**.
+- **`model2vec`** — the blessed extra, `mokata[embeddings]` (static embeddings, numpy-only,
+  no torch, CPU-fast, ~30MB, runs locally, no API key). This is what makes semantic recall
+  *actually semantic*.
+
+**The extra is consented, never assumed.** mokata **asks once** — during the onboarding
+wizard, and on `mokata init --mode memory|full` when interactive — then installs, **verifies
+the import**, and records the decision. It **fails closed**: with no TTY it does not install,
+because "nobody answered" is not consent. A **decline is remembered** (user-scoped), so mokata
+never nags; `pip install 'mokata[embeddings]'` any time. `--mode seatbelt` structurally never
+offers it. `settings.memory.embedder = auto` then picks the extra when it is usable and
+**falls back to hashing** when it isn't.
+
+Vectors from two different embedders are not comparable, so a vector index is **stamped** with
+the embedder that built it; a mismatch **refuses** rather than ranking nonsense, and the way
+out is the gated, previewed **`mokata memory reembed`** (it shows the item count and both
+embedder ids before writing anything).
+
+Degrade-clean end to end: no `psycopg` / no `pgvector` / no embedder / a model that won't load
+⇒ semantic silently absent (or honestly downgraded to hashing, with the reason), nothing
 crashes, no partial writes. Frugal: embeddings are computed **once, on the gated write**;
 recall embeds only the query and returns only the top-k.
+
+`mokata doctor` prints the **retrieval stack** — the semantic and lexical engines actually
+ranking your recall, each with an honest label — so a hashing+jaccard install is a supported,
+legible configuration rather than a silent one.
 
 ### Explainable retrieval (Stage 59)
 
@@ -184,7 +233,7 @@ auto-prunes** memory. **Degrade-clean:** a healthy store nudges nothing (the lin
 When a **correction recurs** — a write you declined, a change you reverted, a spec conflict —
 mokata distils it into a guardrail-rule **proposal** (the G5 `learn_from_ledger` pass). These
 proposals are surfaced where you'd act on them: `mokata rules`, the `rules` MCP tool, and the
-**`/mokata:onboard`** capture flow. They are **proposal-only** — you approve, edit, or reject
+**`/onboard`** capture flow. They are **proposal-only** — you approve, edit, or reject
 each through the normal gated capture; mokata **never auto-adds a rule**. Quiet and bounded
 when there are none.
 

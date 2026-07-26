@@ -76,9 +76,21 @@ to the same inviolables as every other mokata write — on **both** ends of the 
 
 ## Where it sits
 
-The bundle file lives at `.mokata/session-bundles/<tag>.json` — in the `.mokata/` root, *not* under
-`temp_local/`, so (like the [design vault](../how-to/share-a-design-vault.md) and the memory-share
-file) it travels with the repo. 55a is the **local file share**: you sync the repo or copy the file.
+**The transport is derived from the repo, not guessed at.** `push`/`pull` take
+`--to`/`--from {local,vault,postgres}`, but you rarely pass either: the default is **derived
+from the repo's mode** — a **team-connected** repo (one shared Postgres DSN) travels over
+**postgres**, a **solo** repo over a **local file**. An explicit value is honoured verbatim,
+and `--file` forces the local file transport even on a team-connected repo (the explicit
+escape hatch).
+
+On the local transport the bundle file lives at `.mokata/session-bundles/<tag>.json` — in the
+`.mokata/` root, *not* under `temp_local/` — so it travels with the repo: you sync the repo or
+copy the file.
+
+> **Deprecated transport (removal in 0.0.17).** `vault` — the committed/synced artifact +
+> session-transport channel — is **deprecated**. It **still works** and warns **once per
+> repo**; sessions now travel over the mode-derived transport above. Move off it with the
+> one-time, human-gated `mokata migrate vault`.
 
 See the [portable-sessions how-to](../how-to/portable-sessions.md) for the commands, and
 [governance & audit](governance.md) for the gate it shares with every other durable write.

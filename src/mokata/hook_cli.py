@@ -608,7 +608,19 @@ def _mokata_segment(cwd: str, session_name: Optional[str],
         # TM.S1 — the statusline segment prefixes the run mode (local|team) so a session is
         # never ambiguous about which mode it's in, then the pipeline-stage badge. B-BADGE — the
         # payload's `session_id` scopes the stage strip to THIS session (see `badge_run`).
-        return statusline_badge(surface, session_name=session_name, session_id=session_id)
+        badge = statusline_badge(surface, session_name=session_name, session_id=session_id)
+        # MCP-R.D2 (UX-NOTIFY) — the mokata-OWNED wait signal, for the waits that raise no harness
+        # notification. A gated write returning a proposal does NOT trigger a permission prompt
+        # (the `mcp__mokata__*` allow-grant is what stops it prompting), so Claude Code's
+        # Notification event never fires and the wait is invisible until someone notices silence.
+        # This is the channel mokata owns, and it costs nothing: the pending set is already on
+        # disk, so it renders on the statusline tick the harness was going to run anyway — no
+        # daemon, no watcher, no new dependency.
+        #
+        # Appended, never substituted: a session with nothing pending gets a byte-identical badge.
+        from .awaiting import statusline_segment
+        wait = statusline_segment(root)
+        return f"{badge}  {wait}" if wait else badge
     except Exception:
         return ""
 

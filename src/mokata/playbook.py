@@ -154,13 +154,20 @@ def run_playbook(surface: Any, exec_choice: Optional[ExecutionChoice] = None,
         _layer = None
     try:
         from .memory import MemoryStore
-        _mem_items = MemoryStore.from_surface(surface).peek_active()
+        _mem_store = MemoryStore.from_surface(surface)
+        _mem_items = _mem_store.peek_active()
     except (ImportError, OSError, sqlite3.Error):
+        _mem_store = None
         _mem_items = []
     session.assess_impacts(layer=_layer, memory_items=_mem_items)
     for _a in session.approaches:
         session.record_design_fit(_a.name, DesignFitVerdict(_a.name, FITS, [],
                                   rationale="golden-path self-test approach"))
+    # GR-PA — the prior-art bound step RUNS before approval (a step-RAN check, not a graph-quality
+    # gate). The golden path performs the mandatory step honestly: since GR-PA-WIRE, the emit surface
+    # refuses an approval whose prior-art step was skipped, so a playbook that skipped it would fail
+    # its own spec-emit. Degrade-clean over the wired layer/memory (absent tier still records ran).
+    session.assess_prior_art(layer=_layer, memory_store=_mem_store)
     session.approve("playbook", STORY["chosen"])
     # Stage 6p — approval ALSO saves the plan as a durable file under .mokata/plans/ (BEFORE the
     # spec). Degrade-clean: a plan-write failure never breaks this hand-off.

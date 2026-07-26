@@ -10,6 +10,117 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.15] — 2026-07-22
+
+**Simplification & retrieval foundation.** One storage shape, real retrieval tiers, consented
+embeddings, a robust MCP surface, and graduated adoption. No breaking changes; no schema-version
+bump; local stays the zero-config default. Requires **Python ≥ 3.10**.
+
+### Added
+
+- **Real lexical retrieval.** Memory recall's lexical tier now ranks **in the database** —
+  SQLite **FTS5 + bm25** locally, Postgres **tsvector + ts_rank** for teams — replacing the
+  Python keyword-overlap scan. The index stays in sync via DB triggers (any writer, any client),
+  a build without FTS5 degrades cleanly back to the keyword floor **and says so**, and
+  `lexical_mode` reports which engine is actually ranking.
+- **Consented semantic tier.** A real embedder ships as the `mokata[embeddings]` extra
+  (model2vec, numpy-only) — **installed only on explicit interactive consent** (decline is
+  recorded once, never re-asked; `--yes`/CI can never reach pip). Zero-dep hashing remains the
+  fallback, honestly labeled. pgvector is wired **opt-in** for teams (HNSW provisioned at
+  `team init`). The index is **stamped with the embedder identity**; changing embedders refuses
+  into a gated `mokata memory reembed` — mixed-embedder vectors can never silently poison
+  recall. `mokata doctor` reports the live retrieval stack.
+- **Team-DB onboarding that catches the classic traps.** `mokata team connect` inspects the
+  connection string's shape (secret-free — the value is never echoed or stored): it names the
+  provider and **flags transaction-mode poolers** (Supabase :6543, Neon `-pooler`, RDS Proxy)
+  before they silently break sessions. `mokata doctor` gains a DSN **deep-check** that names the
+  failing layer — driver / network / auth / pooler / schema-version — each with its fix.
+- **A robust MCP surface.** Every tool call is **bounded** (60s interactive; `baseline` capped at
+  120s instead of 10 minutes of silence) and returns a structured status from one documented
+  vocabulary — `timed_out` names the operation and the CLI fallback; exceptions return in
+  mokata's own voice; no call can return nothing. Tools carry **typed annotations**
+  (read-only/destructive/idempotent/open-world), a `response_format` (concise default), **cursor
+  pagination** (`audit` no longer returns the whole ledger by default), and typed **input
+  validation** with a path-traversal guard. A gated write's result now **leads with
+  `AWAITING APPROVAL`** — proposal id + the exact approve/abort commands — `mokata doctor` shows
+  what's pending, the statusline shows `⏳ awaiting approval`, and every gated tool documents the
+  three outcomes (waiting / human-declined / fault) so waiting is never mistaken for stuck.
+- **Graduated adoption.** `mokata init --mode seatbelt|memory|full` — three named on-ramps, each
+  printing a quickstart whose commands were verified against that mode's real wiring. `memory`
+  and `full` offer the embeddings extra through the consent flow; `seatbelt` never does.
+- **One-time gated migrations.** `mokata migrate <channel>` moves obsidian / native-memory /
+  vault / memory-share data into the canonical store — preview → explicit approval → WriteGate
+  with provenance, idempotent, never destructive of the source.
+- **Backup, done properly.** `mokata memory export` / `import` is now the single backup/restore
+  surface: timestamped files under `.mokata/backups/`, secret-scanned both directions,
+  provenance-stamped on import — and a round trip **never launders approval status**.
+- **`mokata approve --list`** — see every write waiting on you (ids, tools, age; never content).
+- **Prior-art gate, live.** Spec emit (MCP + CLI) now structurally refuses when the bound
+  prior-art step didn't run — reading the durable approval record on both surfaces.
+- **Setup legibility.** `mokata doctor` reports whether mokata's skills/commands are actually
+  wired in *this* root (the empty-`/`-menu case, e.g. a fresh worktree), and a new session on an
+  un-wired root explains why and names the fix.
+- **Homebrew machinery.** The formula is now generated — url, sha256, and all 28 dependency
+  resources rendered from a lockfile by script, verified end-to-end with a real
+  `brew install` + working MCP server. The tap publish follows this release (pip/pipx remain the
+  live paths until it lands).
+
+### Changed
+
+- Crash-safety: every committed-config writer (manifest, constitution, stack import, graph pin)
+  now writes **atomically** — a mid-write crash can no longer corrupt `.mokata/manifest.json`
+  (which, since this release, would loudly refuse rather than silently misbehave).
+- Team-mode journal reads are **cached on file identity** and the journal **compacts** past a
+  flushed-entry threshold — team repos no longer slow down forever.
+- Session transports are **derived from the repo's mode** (solo = local files, team = the one
+  Postgres DSN) with `--file` as the explicit escape hatch; a team repo with no DSN **refuses**
+  rather than silently writing a private local file; a torn manifest fails closed with the fix
+  named.
+- MCP write tools resolve their configuration **once per call** (was three times).
+- The graph status hint now names the **actual answering backend** — the embedded AST floor no
+  longer mislabels itself as "the grep floor".
+- CI actions bumped to **Node-24-native** releases across all workflows (still full-SHA-pinned);
+  the release-consistency check now also **guards the published action pins**, so they can never
+  drift from the release version again.
+- Docs: a ground-up truth pass across every public page (107 findings fixed), a rebuilt landing
+  page, and slash commands documented in the form your `/` menu actually shows (bare `/name` on
+  the pip route) — enforced by a docsync guard.
+
+### Deprecated
+
+- The **Obsidian** and **native-memory** memory backends, the **vault** channel (transport +
+  artifact vault), the **memory-share.json** channel, and the **Neo4j code-graph backend** — each
+  warns once per repo, keeps working, and has a gated migration (`mokata migrate <channel>`).
+  **Removal is scheduled for 0.0.17.** Committed manifests listing deprecated providers still
+  resolve (with the warning) — nothing silently vanishes.
+
+### Fixed
+
+- **Spec-amend no longer reads as stuck.** The amend flow returned instantly but buried the
+  proposal id under the payload; it now leads with the awaiting head — and a bug where
+  `approve=true` silently swallowed the demotion warning is fixed.
+- **The MCP server was dead on arrival on Python 3.12** (a missing typing import at startup) —
+  fixed, and a startup smoke test now stands the real server up over every tool in CI.
+- `ci_check` with a malformed comma-list silently returned PASS over a change it never checked —
+  malformed input is now a typed refusal.
+- The team audit view reported the total count while returning a truncated page — counts are now
+  consistent (page vs total, explicit).
+- The bare `mokata approve` listing leaked memory *values* into a model-readable surface via item
+  summaries — listings are now content-free.
+
+### Honest boundaries
+
+- **Scope filtering is not yet pushed into SQL** — the scope columns exist but aren't populated;
+  pushing them down naïvely would have misfiled every team item as personal, so it waits for the
+  0.0.16 write-path work (filed, guarded by a test that fails if anyone half-ships it).
+- Some **runtime strings still print `/mokata:<name>`** command forms the pip-route `/` menu
+  doesn't show (docs are fixed and guarded; the runtime sweep is filed for 0.0.16).
+- The **live-Postgres CI legs** (real psycopg/tsvector/pgvector semantics) are wired as an opt-in
+  workflow and were proven against a real engine locally; the hosted run awaits its first
+  dispatch.
+- `brew install mokata` is **not live until the post-release tap push** — pip/pipx are the
+  canonical paths today, exactly as the docs state.
+
 ## [0.0.14] — 2026-07-17
 
 **Graph mandatory + trust fixes.** The codebase graph becomes a first-class, always-on structural
@@ -591,6 +702,8 @@ spine.
 - Clean-room throughout: no dependency on, or text copied from, any other framework
   (Apache-2.0, under MoStack).
 
+[0.0.15]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.15
+[0.0.14]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.14
 [0.0.13]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.13
 [0.0.12]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.12
 [0.0.11]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.11

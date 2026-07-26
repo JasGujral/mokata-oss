@@ -18,6 +18,7 @@ from typing import Any, Callable, List, Optional, Tuple
 
 from . import MANIFEST_FILENAME, MOKATA_DIR
 from . import schema
+from .atomicfile import atomic_write_text
 from .govern.gate import WriteGate, WriteRequest
 from .govern.secrets import Finding, scan
 from .manifest import Manifest, ManifestError
@@ -154,8 +155,7 @@ def config_set(
     emit(f"mokata config set {key}: {shown_old} -> {json.dumps(value)}")
 
     def _commit() -> None:
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(new_text)
+        atomic_write_text(path, new_text)       # R-MAN — a crash leaves the OLD manifest, whole
 
     from .govern.trust import (CLI_SURFACE, policy_approved, policy_surface, policy_tool,
                                policy_trust)

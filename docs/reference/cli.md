@@ -9,6 +9,10 @@
 > documented below.) Why two ways:
 > [How mokata uses an LLM: harness vs CLI](../concepts/execution-model.md).
 
+> **Slash-command form ↔ install route.** Where this page cross-references a `/mokata:<name>`
+> slash command, that is the **plugin** render; via the pip-first `mokata setup claude` path (the
+> supported route today) the same command is **bare** — `/<name>` (drop the `mokata:` prefix).
+
 Invoke as `mokata <command>` (console script) or `python -m mokata <command>`.
 `mokata --version` prints the version. Most commands accept a shared **`--path PATH`**
 (repo root to operate on; default the current directory). Commands that need an
@@ -34,11 +38,26 @@ unchanged for CI.
 | Flag | Meaning |
 |---|---|
 | `--profile {minimal,standard,full,custom}` | starting profile (default: `standard`) |
+| `--mode {seatbelt,memory,full}` | graduated adoption on-ramp (mutually exclusive with `--profile`) |
 | `--yes` | non-interactive; skip the write prompt (no wizard) |
 | `--force` | overwrite an existing manifest |
 | `--preview` | print the plan and exit **without writing** (dry-run for the human gate) |
 | `--wizard` | force the guided interactive first-run wizard |
 | `--setup-harness` | in the wizard, also wire mokata into the harness (commands + MCP + hooks) |
+
+**Graduated adoption (`--mode`):** three named on-ramps, each landing a visible win in under
+five minutes and finishing with a printed quickstart naming the ONE command that proves it.
+
+| Mode | Wires | Quickstart proves it with |
+|---|---|---|
+| `seatbelt` | the `standard` profile — the engine, the governance gates, and the built-in AST code graph the blast-radius gate needs to answer structurally | `/brainstorm` |
+| `memory` | the `standard` profile, plus the offer of the local embeddings model | `/onboard` then `mokata memory` |
+| `full` | the `full` profile, plus the embeddings and code-graph offers | `mokata query blast_radius <symbol>` |
+
+A mode is an **alias for a profile plus an onboarding flavour** — the manifest it writes is
+identical to the same init via `--profile`, and nothing named "mode" is persisted. `seatbelt`
+never offers the embeddings model; `memory` and `full` offer it through the same consented,
+interactive-only flow as setup (a `--yes` or non-TTY init never asks and never installs).
 
 `--preview` is the side-effect-free dry-run the `/mokata:init` plugin command runs before
 asking you to approve the real write.
@@ -75,7 +94,7 @@ integration, switch a backend, change profile, or pick up a newly-installed tool
 
 Inside Claude Code this is the **`/mokata:reconfigure`** slash command and the gated `reconfigure`
 MCP tool — which returns the diff plus a `proposal_id` and writes nothing until you approve it with
-[`mokata approve <id>`](#mokata-approve-proposal-id---yes---actor-who).
+[`mokata approve <id>`](#mokata-approve-proposal-id-yes-actor-who).
 
 ### `mokata setup <harness>`
 One command to use mokata in a harness **without the plugin**: runs `init` (if needed),
@@ -356,13 +375,36 @@ conventions, domain context, reference docs) — the same protocol as `/mokata:o
 are distilled, typed, deduped, and **human-gated** before they are stored. Re-runnable any time.
 
 ### `mokata memory export [file]` · `mokata memory import <file> [--yes]`
-Share memory across repos. **export** writes a committable artifact (default
-`<path>/.mokata/memory-share.json` — at the `.mokata/` root, *not* `temp_local/`) carrying the
-active items **with provenance**; it's read-only on the source. **import** is a **human-gated**
-merge into local memory: it dedups, gate-adds new items, and routes a same-subject-different-
-value conflict through the self-healing old→new surface — **never a silent overwrite**;
-provenance is preserved. (MCP: `memory_export` / `memory_import`, propose-only without
-`confirm`.)
+**Back up and restore memory.** **export** writes a readable, committable backup — default
+`<path>/.mokata/backups/memory-<UTC>.json` (at the `.mokata/` root, *not* `temp_local/`, and
+UTC-stamped so a new backup **never clobbers** a prior one) — carrying the active items **with
+provenance**; it's read-only on the source. **import** is the **human-gated** restore/merge: it
+dedups, gate-adds new items, and routes a same-subject-different-value conflict through the
+self-healing old→new surface — **never a silent overwrite**; provenance is preserved.
+(MCP: `memory_export` / `memory_import`, propose-only without `confirm`.)
+
+The older `.mokata/memory-share.json` file-share channel is **deprecated** (it still works and
+warns); move it across for good with [`mokata migrate memory-share`](#mokata-migrate-channel-file-f-force-yes).
+
+### `mokata memory reembed [--yes]`
+Re-compute the **vector index** with the configured embedder (`settings.memory.embedder`) and
+re-stamp it. This is the way out of a **stamp mismatch** — the runtime refuses to rank a query
+against another embedder's vectors (the semantic tier simply turns off), and `reembed` rebuilds
+them. **Human-gated**, previewed with a count first; a decline writes nothing. It builds the
+vector store **non-degrading** (a silent fall to the SQLite floor would report a successful
+re-embed of a store with no vectors at all). See the `retrieval stack` lines in
+[`mokata doctor`](#mokata-doctor-matrix) for which tiers are actually ranking your recall.
+
+### `mokata memory promote <id> --to advisory|soft|hard [--yes]`
+Change a **rule's enforcement binding** — the one gated moment that moves a remembered rule
+between advisory, soft, and hard. **Binding only**: the rule text is untouched. **Human-gated**
+and **ledgered**; a lower `--to` is a (still-gated) demotion, reported honestly.
+
+### `mokata memory review [--submit ID | --approve ID | --reject ID | --publish ID | --rollback ID]`
+Walk a memory proposal through its review states — `Draft → In-Review → Approved → Published`
+(`--submit` / `--approve` / `--publish`), with `--reject` terminal and `--rollback` restoring the
+prior published value. Approval requires **proposer ≠ approver**. With no flag it lists the
+pending proposals (read-only).
 
 ### `mokata memory consolidate`
 Surface **proposal-only** consolidations of the memory store — merges of duplicate facts,
@@ -380,6 +422,21 @@ left intact unless you pass `--drop-source` (separately gated). **Degrade-clean*
 destination can't be built (e.g. Postgres unreachable) it reports and writes nothing; the
 source is never partially migrated. `export/import` shares content as a *file*; `migrate` moves
 the *store* between databases.
+
+### `mokata migrate <channel> [--file F] [--force] [--yes]`
+One-time, **human-gated** migration of a **deprecated channel** into the canonical shape
+(`channel` is one of `obsidian` · `native-memory` · `memory-share` · `vault`). Each deprecated
+channel keeps working but warns once per repo; this command moves its data across for good. It
+**previews** (counts + a sample of keys), asks for approval, then routes the move through the
+existing gated write path — the memory backends (`obsidian`/`native-memory`) through `migrate`,
+`memory-share.json` through the gated import, and `vault` re-homes session bundles onto the
+mode-derived transport. Every item lands via the WriteGate **with provenance**; secrets are
+hard-blocked on ingest. **Non-destructive** (the source is left in place — deletion is your
+choice), **idempotent** (a re-run is a no-op: "already migrated" unless `--force`).
+
+**These channels are deprecated, not gone.** Each still works today and warns once per repo;
+they are **scheduled for removal in 0.0.17**, and this command is the migration path off them
+before then.
 
 ## Design vault (Part 35d)
 
@@ -411,13 +468,18 @@ is idempotent. A session with nothing to save is an honest empty result, not an 
 **autosaves** as you work — that is model-driven, silent on success, and surfaces only on failure;
 you never have to call it.
 
-### `mokata session push <tag> [--to local|vault|postgres] [--run ID] [--author NAME] [--save-first] [--allow-in-progress] [--requirements-only] [--force] [--yes]`
+### `mokata session push <tag> [--to local|vault|postgres] [--file] [--run ID] [--author NAME] [--save-first] [--allow-in-progress] [--requirements-only] [--force] [--yes]`
 Package the **current session** (the resumable run checkpoint(s) + approved approach + emitted
 spec + in-progress brainstorm) into a **machine-path-free, versioned** bundle carrying provenance
-(author, source, created) + a content hash + a repo fingerprint, shared over the chosen
-**transport** (`--to`): `local` (default, `.mokata/session-bundles/<tag>.json`), `vault` (the
-committed/synced `.mokata/vault/sessions/`, so it travels with the repo), or `postgres` (a shared,
-owned DB table reached by `$MOKATA_SESSION_PG_DSN` / `$MOKATA_PG_DSN`). **Human-gated +
+(author, source, created) + a content hash + a repo fingerprint, shared over a **transport**:
+`local` (`.mokata/session-bundles/<tag>.json`), `vault` (the committed/synced
+`.mokata/vault/sessions/`, so it travels with the repo), or `postgres` (a shared, owned DB table
+reached by `$MOKATA_SESSION_PG_DSN` / `$MOKATA_PG_DSN`).
+
+**The transport is DERIVED from the repo's mode by default** — a team-connected repo pushes to
+`postgres`, a solo repo to `local` — so you don't have to remember which one this repo is on. An
+explicit `--to` is honoured verbatim, and **`--file`** forces the local file transport regardless
+of mode (the explicit escape hatch on a team-connected repo). **Human-gated +
 secret-scanned on EVERY transport** (secret = hard block, audit-logged). **Never a silent
 clobber:** an identical re-push is a no-op; a *changed* re-push is refused unless `--force`. No
 session in progress → a friendly no-op. `--run` scopes to one run id (default: every recorded run).
@@ -430,8 +492,9 @@ crash, never a silent fallback to a less-secure store).
 | `--allow-in-progress` | consent to share **unfinished thinking** (a brainstorm with no approved approach). **Required**: without it, such a push is **refused** and nothing is written |
 | `--requirements-only` | bundle **only the distilled requirements** (anchor + goal + constraints + requirement lines) as a **cross-repo handoff** — no approaches, no approval, no transcript; the repo-fingerprint check is replaced by an origin label. An *alternative* consent to `--allow-in-progress` |
 
-### `mokata session pull <tag> [--from local|vault|postgres] [--into REPO] [--force] [--yes]`
-Read the tagged bundle over the chosen transport (`--from`, default `local`), **verify its content
+### `mokata session pull <tag> [--from local|vault|postgres] [--file] [--into REPO] [--force] [--yes]`
+Read the tagged bundle over the chosen transport (`--from`, **derived from the repo mode** by
+default, same as `push`; `--file` forces local), **verify its content
 hash** (corruption caught from any source, not served), then **re-hydrate** it into the target repo
 (`--into`, default this repo) so `mokata resume` continues. The bundle is **untrusted**, so this is
 **human-gated + secret-scanned on pull, on every transport** (a secret is a hard block approval
@@ -476,11 +539,12 @@ approved scope** is blocked by an exit code rather than a sentence the model can
 - `mokata gate override <gate> --reason "<why>"` — stop enforcing **one** gate for **this session**.
 - `mokata gate clear` — drop this session's overrides and enforce again.
 
-**Three** gates are enforced, and only inside an **active mokata run** (a repo you're hand-editing
+**Four** gates are enforced, and only inside an **active mokata run** (a repo you're hand-editing
 outside a run is never policed):
 
 | gate | blocks a native write to an implementation file when… |
 |---|---|
+| `approach-approval` | the run is **registered but still in brainstorm** — no approach approved and no spec emitted — so an implementation write is running ahead of the design decision |
 | `spec-persisted` | an approach is approved for this run but **no spec is emitted** |
 | `no-code-without-failing-test` | the spec is emitted but **no failing test is on record** |
 | `spec-scope` | the write falls **outside the spec's authorized surface**, its content **spells a deferred marker** (even inside an authorized file), or a **`mokata spec amend` is in progress** (the run has regressed to SPEC — every development write is blocked until the amendment lands or is aborted) |
@@ -505,7 +569,7 @@ a methodology gate.
 Ambiguity **fails open**. If two mokata runs have state in one repo and none is pinned, the gates turn
 **off** for that window and say so once: mokata will not guess which run your edits belong to, because
 guessing could block on another window's state. Two ways out — give each window its own working tree
-([`mokata worktree create`](#mokata-worktree-create-topic---yes)), or **pin** the run by exporting
+([`mokata worktree create`](#mokata-worktree-create-topic-yes)), or **pin** the run by exporting
 `MOKATA_SESSION_ID`, which restores enforcement when you *do* want two windows on one tree.
 [`mokata windows`](#mokata-windows) lets you *see* you're in that situation; it is a visibility tool,
 not the disambiguator.
@@ -732,7 +796,7 @@ Diagnose the manifest/config: missing providers, broken adapters, role conflicts
 trust levels, oversized rule tiers, and a broken audit-ledger hash-chain. Exit non-zero if any
 error. Read-only.
 
-It is also where **a degrade stops being invisible**. Four honesty surfaces ride it:
+It is also where **a degrade stops being invisible**. Seven honesty surfaces ride it:
 
 - **What degraded this session.** Degrade notices are *remembered*, not just printed once into a
   scrollback, so doctor can report them:
@@ -756,7 +820,38 @@ It is also where **a degrade stops being invisible**. Four honesty surfaces ride
   oldest waiting 12m; last failure: <class>; auto-retry paused (cap reached) — run `mokata sync` to flush.
   ```
   (This is **not** a count of pending *approvals* — those are listed only by bare
-  [`mokata approve`](#mokata-approve-proposal-id---yes---actor-who).)
+  [`mokata approve`](#mokata-approve-proposal-id-yes-actor-who).)
+- **The DSN deep-check** (team-connected repos only; a local / no-DSN repo is **silent**) — the
+  full `database (team DSN)` section, classifying the shared-DB connection into **named,
+  secret-free** findings (driver · network · auth · **pooler** · schema-version), each with its
+  concrete fix and the env-var **NAME**, never the DSN value. The pooler axis is the one that
+  catches the #1 silent team-DB failure: a **transaction-mode pooler** connection string (a
+  Supabase `*.pooler.supabase.com:6543`, a Neon `-pooler` host, a PgBouncer endpoint) breaks
+  `LISTEN/NOTIFY` and session state, so doctor names it and tells you to use the provider's
+  **direct/session** string instead. A pooler finding is a **warning** (it keeps working); a
+  driver/network/auth failure is an **error** that exits non-zero.
+- **Are mokata's skills actually visible here?** — a new session on a git **worktree**, a second
+  checkout, or a root that was never set up shows an empty `/` menu, and this says why:
+  ```text
+  mokata skills: NOT VISIBLE ✗ — no mokata skills or commands are wired in this root
+    expected 26 skills at <root>/.claude/skills and 37 commands at <root>/.claude/commands — none found.
+    Fix: run `mokata setup claude` in this repo, then restart Claude Code.
+  ```
+  The restart hint rides every state, because Claude Code reads the skill/command list **once per
+  session**. Informational — it never changes doctor's exit code.
+- **The retrieval stack** — which engines actually rank a recall in *this* repo, reported on two
+  axes because they degrade independently:
+  ```text
+  retrieval stack
+    - semantic: off  (no embedder configured — ranking is lexical only)
+    - lexical:  fts5  (SQLite FTS5 + bm25, ranked in the database)
+  ```
+  **Semantic** is `model2vec:<model>` (the `mokata[embeddings]` extra — real meaning), `hashing`
+  (the zero-dep floor, honestly labelled *token-hash overlap, NOT meaning*), or `off`. **Lexical**
+  is `fts5` (SQLite) / `tsvector` (Postgres) — ranked **in the database** — or `jaccard`, the
+  Python keyword-overlap floor. Every state it prints is a supported configuration (`hashing` +
+  `jaccard` is a working zero-dependency install), so it emits no finding and never touches the
+  exit code; saying which one you have **is** the deliverable.
 - **The trust surface truth** (an `info` line, only when `settings.trust` is set) — trust is enforced
   on the **`mcp` write surface**; there the real ladder is `read-only` ▸ write-allowed
   (`propose-only` == `gated-write`, because every MCP write already needs a human-minted `mokata

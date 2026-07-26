@@ -85,6 +85,7 @@ def _session_with_decisions(decisions=None, *, approach="a"):
     s.assess_impacts(layer=None, memory_items=[])
     for a in s.approaches:
         s.record_design_fit(a.name, DesignFitVerdict(a.name, FITS, [], rationale="fits"))
+    s.assess_prior_art(layer=None)          # GR-PA-WIRE — the bound step ran before approval
     for d in (decisions or []):
         s.propose_decision(approach, d)
     s.approve("jas", approach)

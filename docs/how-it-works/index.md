@@ -31,9 +31,9 @@ config, or a git action — happens without an explicit human approval.
 │  to a REAL gate below (not prose)                              │
 ├───────────────────────────────────────────────────────────────┤
 │  PIPELINE — brainstorm → spec → test → develop → review → ship │
-│  real gates: approach-approval · completeness · spec-persisted │
-│  · red-before-green · spec-scope · deviation · WriteGate ·     │
-│  release-gate                                                  │
+│  backed gates: approach-approval · completeness · spec-persisted│
+│  · no-code-without-failing-test · deviation · hard-rule ·      │
+│  ship-readiness · write-gate · secret-guard                    │
 ├───────────────────────────────────────────────────────────────┤
 │  KNOWLEDGE graph   │  MEMORY engine (local + team scopes)      │
 │  structural facts  │  typed, human-gated, precedence-resolved  │
@@ -54,23 +54,28 @@ developer-facing arc is `brainstorm → spec → test → develop → review →
 7-phase spec engine (`brainstorm → analysis → strawman → pre_mortem → probes → completeness_gate
 → emit`) turns an approved approach into testable acceptance criteria.
 
-The gates are real code, not advice:
+The gates are real code, not advice. **Nine are *backed*** — each names the module that enforces
+it (`skill_contracts.GATES`):
 
 | Gate | Where | Blocks on |
 |---|---|---|
 | `approach-approval` | brainstorm | no approach explicitly approved |
 | `completeness` | spec | any acceptance criterion with no mapped test (or an empty spec) |
 | `spec-persisted` | before develop/test | no saved spec with ≥1 acceptance criterion |
-| `red-before-green` | test → develop | implementing before a failing test exists |
+| `no-code-without-failing-test` | test → develop | implementing before a recorded RED test exists |
 | `spec-scope` | develop | a write outside the spec's authorized surface, or one spelling a deferred item's marker |
 | `deviation` | spec/refine/develop | a change that would break a saved spec or recorded decision |
-| WriteGate | emit, ship, memory, config | an un-approved durable write |
-| `release-gate` | ship | landing before green tests + met ACs + a passed review |
+| `hard-rule` | any phase | an in-scope hard governance rule (fail-closed, no runtime override) |
+| `write-gate` + `secret-guard` | emit, ship, memory, config | an un-approved durable write; a secret in the payload |
+| `ship-readiness` | ship | landing before green tests + met ACs + a passed review |
 
-Three of them — `spec-persisted`, `no-code-without-failing-test` and `spec-scope` — are also
-enforced **outside** mokata's own tools, on the harness's native `Write`/`Edit`, by the
+Four of them — `approach-approval`, `spec-persisted`, `no-code-without-failing-test` and
+`spec-scope` — are also enforced **outside** mokata's own tools, on the harness's native
+`Write`/`Edit`, by the
 [gate-guard hook](skills-and-gates.md#the-gate-guard-the-gates-enforced-on-native-edits) (§7). That
-is what makes them structural rather than advisory.
+is what makes them structural rather than advisory. Everything else a skill states as its headline
+(`red-before-green`, `spec-then-quality`, `measure-first`, …) is an **advisory protocol boundary**,
+labelled as such in the code rather than dressed up as enforcement.
 
 You can run the whole thing (`mokata playbook`), enter a slice (`mokata enter <phase>`), or run
 one skill standalone (`mokata run <skill>`) — the gates apply either way. Full detail:
@@ -79,7 +84,7 @@ one skill standalone (`mokata run <skill>`) — the gates apply either way. Full
 ## 2. The skills layer
 
 Every mokata capability is a **skill**: a `SKILL.md` Claude Code can auto-engage from its
-description, backed by the identical protocol the `/mokata:<name>` command runs. There are two
+description, backed by the identical protocol the `/<name>` command runs. There are two
 groups — the **16 pipeline/capability skills** (the registry `mokata skills` prints) and the
 **10 domain skills** below, for **26 in total**.
 
@@ -115,7 +120,9 @@ what a change's blast-radius is, where a symbol is defined. Brainstorm grounds a
 develop pulls it JIT for the symbols in play, review reads it for the architecture axis, and the
 domain classifier derives the domains-in-play from it. The layer answers structurally from an
 **embedded, zero-dependency stdlib-AST floor** out of the box, and lets you adopt an external
-graph (code-review-graph / serena / Neo4j) for cross-language precision. `graph.required` is on
+graph (`code-review-graph` / `serena`) for cross-language precision. (The Neo4j backend still
+works but is **deprecated**, scheduled for removal in 0.0.17 — the graph is derived data, so
+re-index with a supported backend rather than migrating.) `graph.required` is on
 by default: mokata refuses to present a *degraded* (grep-floor) blast radius as decision input
 unless you accept it (`--allow-degraded`, ledgered). See
 [Knowledge layer](../concepts/knowledge.md).
@@ -154,16 +161,20 @@ mokata integrates with Claude Code through two harness surfaces:
   the harness's own file-mutation tools and **block on exit code 2**: the **secret-guard** (a
   *security* block — `Write`/`Edit`/`MultiEdit`/`Bash`, never overridable) and the **gate-guard**
   (a *methodology* block — `Write`/`Edit`/`MultiEdit`/`NotebookEdit`, holding the run-state gates
-  `spec-persisted` · `no-code-without-failing-test` · `spec-scope`, overridable only by an
+  `approach-approval` · `spec-persisted` · `no-code-without-failing-test` · `spec-scope`,
+  overridable only by an
   explicit, re-confirmed, ledgered `mokata gate override`). Sync hooks block; async hooks only
   observe. `mokata setup` writes the hook wiring with an absolute entry-point path so it resolves
   even under a GUI-launched minimal PATH, and `--no-hooks` skips it cleanly. **Claude Code is the
   only harness that declares the `hooks` capability** — elsewhere the gate-guard is never wired and
   the run-state gates enforce nothing. Deep-dive:
   [the gate-guard](skills-and-gates.md#the-gate-guard-the-gates-enforced-on-native-edits).
-- **MCP.** mokata exposes read-only tools (`progress`, `lanes`, `watch`, `govern`, `query`, …)
-  over MCP so the pipeline's state and the graph are reachable from inside the harness without
-  leaving the chat. See [Command surfaces (CLI ↔ slash ↔ MCP)](../reference/command-surfaces.md).
+- **MCP.** mokata's `mokata-mcp` server exposes **55 tools** — **35 read** (`progress`, `lanes`,
+  `watch`, `govern`, `query`, …), **19 write**, and **1 approve** — so the pipeline's state and the
+  graph are reachable from inside the harness without leaving the chat. Every *write* tool is
+  **propose-only**: it returns a `proposal_id` and commits nothing until a human mints the approval
+  out-of-band with `mokata approve <id>` (bare `mokata approve` lists what is awaiting one). See
+  [Command surfaces (CLI ↔ slash ↔ MCP)](../reference/command-surfaces.md).
 
 ## 8. Team mode
 

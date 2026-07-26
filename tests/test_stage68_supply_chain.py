@@ -384,7 +384,7 @@ class TestSyncPublicBoundaryHardened(unittest.TestCase):
     # Stage 3c.2. Each must appear in BOTH the rsync --exclude list and the INTERNAL_PATHS guard.
     REQUIRED = (
         "docs/build", "docs/launch", "docs/marketing", "CLAUDE.md",
-        "scripts/sync-public.sh", "scripts/release.sh", "scripts/release-0.0.1.sh",
+        "scripts/sync-public.sh", "scripts/release.sh",
         "build", "dist", "release-backup-*",
     )
 

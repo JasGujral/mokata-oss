@@ -51,7 +51,7 @@ Install:
 2. **human-gates** applying it (`--yes` approves non-interactively; declining writes nothing);
 3. records the curated **guardrails** + recommended **skills** in your manifest's
    `settings.stack` — reviewable config you can promote to enforced, typed guardrails via
-   [`/mokata:onboard`](capture-project-rules-and-context.md).
+   [`/onboard`](capture-project-rules-and-context.md).
 
 It's an audited, reversible config write (re-import a prior stack to undo).
 
@@ -84,7 +84,7 @@ mokata skills develop          # reveal one skill's gate + phase + prompt
 
 ## Inside Claude Code
 
-`/mokata:stacks` mirrors all of this, and the `stacks_list` / `stacks_search` / `stacks_show`
+`/stacks` mirrors all of this, and the `stacks_list` / `stacks_search` / `stacks_show`
 (read) + `stacks_install` (human-gated write) MCP tools make the catalog reachable without
 leaving the harness. See [Command surfaces](../reference/command-surfaces.md) and
 [Install mokata](install-mokata.md).

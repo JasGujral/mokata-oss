@@ -4,14 +4,14 @@ mokata can answer **structural** questions about your code — who calls a funct
 implements an interface, what the blast radius of a change is — by orchestrating a codebase
 graph tool. There are three tiers, tried in order:
 
-1. an **adopted graph** (`code-review-graph` / `serena` / an external Neo4j) — full,
+1. an **adopted graph** (`code-review-graph` / `serena`, or a deprecated external Neo4j) — full,
    cross-language structural precision;
 2. the **embedded stdlib-AST floor** — ships with mokata, zero-dependency, answers structural
    queries **cleanly (`degraded=False`)** on Python out of the box;
 3. the **grep floor** — the universal lexical emergency floor beneath everything, marked
    `degraded=True`.
 
-**Graph is mandatory-by-default in 0.0.14.** `settings.graph.required` defaults to **true**, so
+**Graph is mandatory-by-default.** `settings.graph.required` defaults to **true**, so
 mokata will *refuse to present a degraded (grep-floor) blast radius as decision input* — you
 either adopt a real graph or explicitly accept the degraded evidence for the session (see
 [Graph is mandatory-by-default](#graph-is-mandatory-by-default) below). This guide shows how to
@@ -26,15 +26,22 @@ tell which tier you're on and how to wire a real graph.
 code graph active (code-review-graph) — use `mokata query callers <sym>` / `callees <sym>` /
 `blast_radius <sym>` for structural queries.
 
+# the embedded AST floor (the default on a Python repo with no graph adopted):
+code graph: floor 'ast' — the embedded AST floor is answering structurally (real Python
+call/import edges, no install needed) and you can run `mokata query callers <sym>` /
+`callees <sym>` / `blast_radius <sym>` today. It is not a full graph: adopt one for
+cross-language and dynamic edges (plus semantic search) — `mokata graph adopt`, or
+`mokata init --profile full`.
+
 # only the grep floor:
-no codebase graph wired — running on the grep floor (safe, but lexical). To enable richer
+code graph: floor 'grep' — no codebase graph wired, and no AST floor here (the embedded AST
+floor answers Python repos), so answers are lexical (safe, but approximate). To enable richer
 structural queries, install a graph tool (code-review-graph or serena) and wire it:
 `mokata init --profile full`, or add it via `mokata config set tools.<graph>...` / the manifest.
 ```
 
-> On a Python repo the embedded **AST floor** answers structural queries cleanly even while this
-> hint still reads "grep floor" — the hint names only the *adopted* graph. `mokata graph status`
-> is the precise report of which backend actually answers today.
+> The hint names the backend that **actually answers** — the same vocabulary `mokata graph
+> status` uses — so the two surfaces can't disagree.
 
 ## Graph is mandatory-by-default
 
@@ -60,15 +67,34 @@ The AST floor answering `degraded=False` on Python is **not** a degraded state �
 
 ## Wire a graph
 
-1. **Install** a supported graph tool — `code-review-graph` or `serena` (each is an external
-   tool mokata orchestrates; neither is a mokata dependency).
-2. **Add it to the project** — either start from a profile that wires the full chain:
+The recommended path is `code-review-graph` **with its embeddings extra** — that enables
+semantic (hybrid FTS + local-embedding) symbol search on top of the structural queries:
+
+1. **Install** it (an external tool mokata orchestrates — not a mokata dependency):
 
    ```bash
-   mokata init --profile full     # wires code-review-graph → serena → ast → ripgrep → grep
+   pip install "code-review-graph[embeddings]"
    ```
 
-   or point the manifest at it / set a custom endpoint (Stage 24A config):
+   The `[embeddings]` extra uses CRG's **bundled local model** (`all-MiniLM-L6-v2`) — no API
+   key, no network egress at query time. Skip the extra and structural queries still work;
+   mokata prints the install hint for the semantic tier and degrades cleanly.
+
+2. **Adopt it** (gated — pins the tool into the committed `code_graph` chain):
+
+   ```bash
+   mokata graph adopt code-review-graph
+   ```
+
+   If the tool isn't installed yet, `graph adopt` offers an assisted install first; on adopt it
+   also provisions the semantic index when the extra is present. `serena` is the supported
+   alternative: `mokata graph adopt serena`.
+
+   Wiring alternatives: on a **fresh** repo, `mokata init --profile full` wires the whole chain
+   (`code-review-graph → serena → ast → ripgrep → grep`); on an **already-initialized** repo use
+   `mokata reconfigure --profile full` (see
+   [configure a profile](configure-a-profile.md#switch-an-existing-repos-profile-eg-up-to-full)),
+   or point the manifest at a custom endpoint (Stage 24A config):
 
    ```bash
    mokata config set tools.code-review-graph.config.endpoint http://localhost:7000
@@ -76,9 +102,24 @@ The AST floor answering `degraded=False` on Python is **not** a degraded state �
 
    A configured path/endpoint is reflected back in the `status`/`doctor` hint so you can
    confirm what's live.
-3. **Confirm** with `mokata status` — you should see *code graph active (...)*.
 
-## Wire an external graph database (Neo4j)
+3. **Confirm** with `mokata graph status` — the precise report of which backend answers
+   (adopted graph / AST floor / grep) — or `mokata status` for the one-line hint.
+
+## Wire an external graph database (Neo4j) — deprecated
+
+!!! warning "The Neo4j backend is deprecated (removal: 0.0.17)"
+    It **still works**, and nothing about it has been removed — but a third database contradicts
+    mokata's two-stores shape, so the backend is on its way out. On first use in a repo mokata
+    prints the notice once:
+
+    > ⚠ deprecated: the Neo4j code-graph backend is deprecated and will be REMOVED in mokata
+    > 0.0.17. The canonical code graph is the embedded AST floor / adopted CRG. No migration
+    > needed — the graph is derived data; re-index with your current code-graph backend.
+
+    There is **no `mokata migrate neo4j`** and there deliberately isn't one: a code graph is
+    derived data, so the move is to adopt `code-review-graph` (or `serena`) and re-index. The
+    section below documents the backend as it works today.
 
 If your team already populates a **Neo4j** graph of the codebase, mokata can query it directly
 — it becomes an optional provider for the `code_graph` capability, sitting in front of the grep

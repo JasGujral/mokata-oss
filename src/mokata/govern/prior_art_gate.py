@@ -12,8 +12,15 @@ to the lexical/recall tier but still records `ran=True`. The only way to be refu
 skip looking; the fix is to look. The refusal reuses `BrainstormGateError`'s verdict class (raised by
 `BrainstormSession.approve`), and the verdict shape follows doc 85 §3 (`*Outcome` = gate verdict).
 
-The CLI skill loop and the MCP loop both compute this ONE verdict via `brainstorm_prior_art_gate`
-(the MCP loop over the restored persisted session), so the refusal is identical across surfaces.
+Both production emit surfaces compute this ONE verdict and enforce it identically: the MCP
+`spec_emit` tool (over `surface.state`) and the CLI `mokata spec emit` (over the run-scoped store,
+`run_id == session_id`) each read the CHOSEN approach's step-ran evidence from the DURABLE
+`approved_approach` Handoff (`handoff.prior_art`) via `handoff_prior_art_gate`, so the refusal is
+byte-identical across surfaces. The Handoff is the source of truth on purpose — it is guaranteed
+present exactly when there is an approved approach to gate, unlike the resume-state
+`brainstorm_progress` snapshot GR.S3's sibling refusal happens to read (see the call-site note).
+`brainstorm_prior_art_gate` computes the SAME verdict from a live/restored session — the in-session
+path the brainstorm skill and the pipeline use before an approval is persisted.
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
@@ -69,10 +76,28 @@ def check_prior_art_ran(*, ran: bool, tier: str = "", consumer: str = CONSUMER) 
 
 
 def brainstorm_prior_art_gate(session: Any, approach_name: str) -> PriorArtGateOutcome:
-    """The step-ran verdict the CLI skill AND the MCP loop both compute the same way: read whether the
-    chosen approach has recorded prior-art evidence in the session's run state, and return the shared
-    verdict. Pass the result to `BrainstormSession.approve(prior_art_gate=...)`."""
+    """The IN-SESSION step-ran verdict: read whether the named approach has recorded prior-art
+    evidence in the LIVE session's run state, and return the shared verdict. Used before an approval
+    is persisted (the brainstorm skill / pipeline path); pass the result to
+    `BrainstormSession.approve(prior_art_gate=...)`. The production EMIT surfaces read the persisted
+    Handoff instead — see `handoff_prior_art_gate`."""
     res = (getattr(session, "prior_art", {}) or {}).get(approach_name)
     ran = bool(getattr(res, "ran", False))
     tier = getattr(res, "tier", "") if res is not None else ""
+    return check_prior_art_ran(ran=ran, tier=tier)
+
+
+def handoff_prior_art_gate(handoff: Any) -> PriorArtGateOutcome:
+    """The EMIT-seam step-ran verdict — the ONE both production surfaces (MCP `spec_emit`, CLI
+    `mokata spec emit`) compute. Read the CHOSEN approach's step-ran evidence from the DURABLE
+    `approved_approach` Handoff (`handoff.prior_art`, stamped at approval in
+    `BrainstormSession.handoff`) and return the shared `check_prior_art_ran` verdict.
+
+    FAIL-CLOSED by design: a legacy/absent `handoff.prior_art` reads as `ran=False` and REFUSES,
+    naming the road back (re-run the prior-art pass, then re-approve) — never a silent pass, never a
+    dead-end. This is why the emit gate reads the Handoff and not `brainstorm_progress`: the Handoff
+    is guaranteed present exactly when there is an approved approach to gate."""
+    pa = getattr(handoff, "prior_art", None)
+    ran = bool(getattr(pa, "ran", False))
+    tier = getattr(pa, "tier", "") if pa is not None else ""
     return check_prior_art_ran(ran=ran, tier=tier)

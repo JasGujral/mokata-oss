@@ -22,18 +22,18 @@ mokata mcp status                # expect: mokata-mcp: CONNECTED ✓
 
 > Requires **Python ≥ 3.10**.
 
-You now have the workflow commands — `/mokata:brainstorm`, `/mokata:refine`, `/mokata:spec`,
-`/mokata:test`, `/mokata:develop`, `/mokata:review`, `/mokata:debug`, `/mokata:optimize`, `/mokata:bug` — plus the SessionStart briefing
+You now have the workflow commands — `/brainstorm`, `/refine`, `/spec`,
+`/test`, `/develop`, `/review`, `/debug`, `/optimize`, `/bug` — plus the SessionStart briefing
 and two blocking guards on Claude's own file writes, all automatic: the **secret-guard** (a
 secret-bearing write is blocked outright — never overridable) and the **gate-guard** (inside an
 active run, an implementation write that skips the spec or the failing test, or strays outside the
 spec's scope, is blocked — overridable, with a reason, on the ledger). Hooks are on by default;
 `mokata setup claude --no-hooks` opts out. Full guide: [Use mokata without the plugin](how-to/use-without-plugin.md).
 
-A typical run: `/mokata:brainstorm` → approve an approach → `/mokata:spec` (blocked until acceptance
-criteria map to tests) → `/mokata:test` → `/mokata:develop` (RED-before-GREEN) → `/mokata:review`. Working on code
-you already have? Start with [`/mokata:refine`](how-to/refine-existing-code.md) instead of
-`/mokata:brainstorm` — review → approve a scoped set → the same flow.
+A typical run: `/brainstorm` → approve an approach → `/spec` (blocked until acceptance
+criteria map to tests) → `/test` → `/develop` (RED-before-GREEN) → `/review`. Working on code
+you already have? Start with [`/refine`](how-to/refine-existing-code.md) instead of
+`/brainstorm` — review → approve a scoped set → the same flow.
 
 ### The CLI, with any AI tool
 
@@ -78,6 +78,19 @@ above do the same thing.
 mokata init                 # default profile: standard (lean, local: grep + SQLite)
 # mokata init --profile full  # or: wire every graph + memory provider (degrade to floors)
 ```
+
+Prefer to start small and grow? `--mode` is a graduated on-ramp — three named starting points,
+each an alias for a profile plus a printed 5-minute quickstart (mutually exclusive with
+`--profile`):
+
+```bash
+mokata init --mode seatbelt   # just the gates (+ the AST code graph they need) → profile standard
+mokata init --mode memory     # the gates + typed project memory that persists → profile standard
+mokata init --mode full       # everything the spine can wire → profile full
+```
+
+`memory` and `full` also **offer** the optional local embeddings model for semantic recall when
+run interactively; `seatbelt` never does. See [Getting started](getting-started.md).
 
 This is a **human-gated** write: `init` shows exactly what it will create
 (`.mokata/manifest.json` + `.mokata/constitution.md`) and which tools it detected, then

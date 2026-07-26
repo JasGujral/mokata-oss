@@ -106,6 +106,15 @@ def select_backends(
 
     if res is not None and res.available and res.tool in GRAPH_TOOLS:
         if res.tool == "neo4j":
+            # SIMP.S2 (0.0.15): the Neo4j code-graph backend is DEPRECATED (a 3rd DB contradicts
+            # two-modes-one-shape). WARN once per repo the first time it is selected; removed
+            # 0.0.17. No migration — the graph is derived data (the warn says re-index). Guarded on
+            # a real repo dir so a bare `root="."` unit call fabricates no `.mokata`.
+            import os as _os
+            from .. import MOKATA_DIR as _MD, deprecation as _dep
+            _md = _os.path.join(root, _MD)
+            if _os.path.isdir(_md):
+                _dep.warn_deprecated("neo4j", _md)
             # External Neo4j graph (Stage 35f): build its client from env; if it can't be
             # built (no driver / no NEO4J_* env / DB down) degrade cleanly to the grep floor.
             #
@@ -355,8 +364,21 @@ def graph_guidance(surface: Any) -> str:
     """An ACTIONABLE one-line hint for doctor/status (Stage 25 Part B).
 
     When a real graph is wired, point at the structural queries it unlocks (reflecting any
-    configured path/endpoint from the tool's `config` block, Stage 24A). When only the grep
-    floor is active, give a concrete next step to wire one — not just a status line."""
+    configured path/endpoint from the tool's `config` block, Stage 24A). When only a floor is
+    active, give a concrete next step to wire one — not just a status line.
+
+    GRAPH-HINT (0.0.15) — the hint is keyed on the ACTUAL ANSWERING BACKEND, three ways: real
+    graph / embedded AST floor / grep floor. It used to branch on `uses_graph` alone, which is
+    False for BOTH floors (`AstBackend.is_graph = False` deliberately — a floor above grep, not
+    a graph), so the default CRG-less Python install — exactly the install GR.S3 made important
+    — was told "no codebase graph wired — running on the grep floor" while the AST floor was
+    answering structurally and `degraded=False`. Both halves were false (P16). The fix is the
+    MESSAGE only: `is_graph`/`uses_graph` semantics and backend selection are untouched.
+
+    The floor branches lead with `floor '<backend_name>'` — the SAME vocabulary `mokata graph
+    status` prints (graph.py: `code graph: floor '{layer.backend_name}'`) — so the two surfaces
+    cannot disagree about which backend answers."""
+    from .ast_backend import AstBackend
     layer = KnowledgeLayer.from_surface(surface)
     if layer.uses_graph:
         tool = layer.backend_name
@@ -369,11 +391,25 @@ def graph_guidance(surface: Any) -> str:
             cfg = ""            # the SAME call is narrowly caught in `select_backends` above
         return (f"code graph active ({tool}){cfg} — use `mokata query callers <sym>` / "
                 f"`callees <sym>` / `blast_radius <sym>` for structural queries.")
+    if isinstance(layer.primary, AstBackend):
+        # The DEFAULT on a CRG-less Python repo. Structural, embedded, zero-install — and still
+        # a floor, so the actionable next step (adopt a real graph) is kept, not dropped.
+        return (
+            f"code graph: floor '{layer.backend_name}' — the embedded AST floor is answering "
+            "structurally (real Python call/import edges, no install needed) and you can run "
+            "`mokata query callers <sym>` / `callees <sym>` / `blast_radius <sym>` today. It is "
+            "not a full graph: adopt one for cross-language and dynamic edges (plus semantic "
+            "search) — `mokata graph adopt`, or `mokata init --profile full`."
+        )
+    # The lexical EMERGENCY floor. Reached when the chain resolves past `ast` — a repo with no
+    # `.py` files, a chain wired to a lexical tool, or a configured graph that degraded here.
+    # The original wording stays because for actual-grep it was always CORRECT.
     return (
-        "no codebase graph wired — running on the grep floor (safe, but lexical). To enable "
-        "richer structural queries, install a graph tool (code-review-graph or serena) and "
-        "wire it: `mokata init --profile full`, or add it via `mokata config set "
-        "tools.<graph>...` / the manifest."
+        f"code graph: floor '{layer.backend_name}' — no codebase graph wired, and no AST floor "
+        "here (the embedded AST floor answers Python repos), so answers are lexical (safe, but "
+        "approximate). To enable richer structural queries, install a graph tool "
+        "(code-review-graph or serena) and wire it: `mokata init --profile full`, or add it via "
+        "`mokata config set tools.<graph>...` / the manifest."
     )
 
 

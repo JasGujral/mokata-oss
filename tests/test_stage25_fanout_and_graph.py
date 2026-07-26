@@ -184,8 +184,14 @@ class TestDoctorAndStatusHints(unittest.TestCase):
                 rc = main(["status", "--path", d])
             self.assertEqual(rc, 0)
             out = buf.getvalue()
-            # standard profile resolves to the grep floor -> the enable hint
-            self.assertIn("grep floor", out)
+            # An empty temp repo has no `.py`, so the chain resolves past the AST floor to the
+            # lexical floor -> the enable hint. GRAPH-HINT (0.0.15) re-keyed the wording on the
+            # ACTUAL backend, so the assertion is on the floor naming + the actionable step,
+            # not the old "grep floor" phrase (the floor is named 'ripgrep' where rg is
+            # installed and 'grep' where it isn't — machine-dependent, so never hardcode it).
+            self.assertIn("no codebase graph wired", out)
+            self.assertIn("code graph: floor '", out)
+            self.assertIn("--profile full", out)
 
     def test_doctor_cli_emits_hint(self):
         with tempfile.TemporaryDirectory() as d:
@@ -193,7 +199,10 @@ class TestDoctorAndStatusHints(unittest.TestCase):
             buf = io.StringIO()
             with redirect_stdout(buf):
                 main(["doctor", "--path", d])
-            self.assertIn("grep floor", buf.getvalue())
+            # see test_status_cli_emits_hint — GRAPH-HINT re-keyed the wording on the backend
+            out = buf.getvalue()
+            self.assertIn("no codebase graph wired", out)
+            self.assertIn("code graph: floor '", out)
 
 
 if __name__ == "__main__":

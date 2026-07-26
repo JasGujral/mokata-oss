@@ -14,6 +14,8 @@ shared Postgres.
 ## Core commands
 
 - `mokata init --profile standard --yes` — set mokata up in a repo (creates `.mokata/`).
+  `--mode {seatbelt,memory,full}` is a graduated on-ramp alias for a profile (mutually exclusive
+  with `--profile`); only the profile is persisted.
 - `mokata onboard` — capture the project brain (rules, guardrails, conventions, key decisions).
 - `mokata brainstorm` — structured brainstorming that ends in an approved, spec-ready plan.
 - `mokata memory ...` — recall / propose / review durable memory (facts, rules, decisions).
@@ -40,13 +42,14 @@ argument and the id changes), session-scoped, and expires in 15 minutes.
 ## Run-state gates: writing code before the spec is BLOCKED
 
 Inside an active mokata run, a PreToolUse hook blocks native `Write`/`Edit` to implementation files
-(exit 2, with the reason on stderr) under three gates: `spec-persisted` (an approach is approved but
-no spec is emitted), `no-code-without-failing-test` (no failing test is on record), and `spec-scope`
-(the write is outside the spec's authorized surface, spells a deferred marker, or a spec amend is in
+(exit 2, with the reason on stderr) under four gates: `approach-approval` (the run is still in
+brainstorm — no approach approved yet), `spec-persisted` (an approach is approved but no spec is
+emitted), `no-code-without-failing-test` (no failing test is on record), and `spec-scope` (the write
+is outside the spec's authorized surface, spells a deferred marker, or a spec amend is in
 progress). **Test files are always writable** — write the failing test first; RED is the permission
-to implement. Do not work around a block: emit the spec (`/mokata:spec`), write the failing test
-(`/mokata:test`), or ask the user to override it explicitly (`mokata gate override <gate> --reason
-"<why>"` — ledgered, session-scoped, and a human's call, not yours).
+to implement. Do not work around a block: approve an approach (`/brainstorm`), emit the spec
+(`/spec`), write the failing test (`/test`), or ask the user to override it explicitly (`mokata gate
+override <gate> --reason "<why>"` — ledgered, session-scoped, and a human's call, not yours).
 
 ## Team mode (shared memory over one Postgres)
 

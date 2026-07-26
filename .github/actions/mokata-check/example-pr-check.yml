@@ -18,11 +18,13 @@ jobs:
   mokata-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Node-24 action majors (tag-pinned: consumer examples track the tag, so a copied
+      # workflow keeps receiving patch fixes. mokata's own workflows SHA-pin instead.)
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0          # full history so the base diff resolves
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -33,7 +35,7 @@ jobs:
       # Run the completeness gate + spec-awareness over the PR's changed files.
       # `fail-on-block: true` makes a real block fail the check (set false for report-only).
       - id: check
-        uses: JasGujral/mokata-oss/.github/actions/mokata-check@v0.0.14
+        uses: JasGujral/mokata-oss/.github/actions/mokata-check@v0.0.15
         with:
           base: ${{ github.event.pull_request.base.sha }}
           fail-on-block: "true"

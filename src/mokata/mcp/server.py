@@ -15,9 +15,12 @@ from __future__ import annotations
 
 import functools
 import sys
-from typing import Any, Callable, List, Optional
+import threading
+from typing import Any, Callable, Dict, List, Optional
 
+from . import status as _status
 from .registry import SERVER_NAME, TOOLS
+from .validation import ValidationError, refusal, validate_surface_params
 # tools_read / tools_write / tools_approve populate the shared TOOLS registry as an import side
 # effect (tools_approve = AP-MCP's default-off in-chat `approve` tool).
 from . import tools_read, tools_write, tools_approve  # noqa: F401
@@ -72,17 +75,169 @@ def _register_this_window(path: str) -> None:
             detail=str(exc))
 
 
-def _with_registration(fn: Callable[..., Any]) -> Callable[..., Any]:
-    """Wrap a tool fn so THIS window self-registers just before the tool runs (R-MCP).
+# ======================================================================================
+# MCP-R.D0 — `_serve`: the ONE systemic dispatch wrapper (doc 88 §D0)
+# ======================================================================================
+#
+# `_with_registration` only fired a self-registration side effect then `return fn(...)`. It is
+# expanded here into `_serve`, so EVERY served tool call is guaranteed a bounded, machine-legible
+# outcome instead of a client-side timeout into silence (P16 legibility, P14 no-unbounded-hang):
+#
+#   R5  the self-registration pre-hook runs CONCURRENTLY (a daemon thread we never join on the
+#       served path), so its up-to-10s cross-process lock wait (root cause 4) can NEVER delay or
+#       stall the tool the user asked for. Its failure stays best-effort + D5-classed, as before.
+#   R1  the tool BODY runs in a worker thread under a wall-clock MCP-SURFACE budget; on expiry we
+#       return a structured `status:"timed_out"` naming the operation + the CLI fallback, and the
+#       orphaned worker (a daemon, backstopped by the tool's own inner bound) dies on its own —
+#       the teamdb.probe daemon-join pattern, applied to the front door.
+#   R2  one try/except turns ANY uncaught exception into mokata's OWN `status:"error"` shape
+#       (isError + reason + hint), reclaiming the voice from FastMCP's generic handler.
+#   R3  a None / non-dict return is coerced to the same structured `error`.
+#   R6  every status the wrapper emits comes from the single-source vocab (`mcp.status`).
+#
+# R4 (progress/heartbeat) is a documented degrade-clean NO-OP this stage: `Context.report_progress`
+# is a coroutine that must be injected as a tool parameter and awaited on the event loop — a
+# synchronous, SDK-free tool body running in a worker thread cannot reach it without changing the
+# tool schema, which the schema-transparency constraint forbids this stage. Liveness is delivered
+# by the bounded budget + `timed_out`/`running` statuses instead; a real progress channel is D1's.
+R4_PROGRESS_NOOP = True
+
+# The interactive MCP-surface wall-clock budget (R1). NAMED and distinct from any tool's internal
+# subprocess/DB bound — this is the front-door cap, not a tool's own timeout.
+MCP_SURFACE_TIMEOUT_SECONDS = 60.0
+
+# R5 — fire-and-forget self-registration threads, tracked so tests/diagnostics can drain them. The
+# SERVED path never joins these; draining is a test/diagnostic affordance only.
+_REG_LOCK = threading.Lock()
+_REG_THREADS: "List[threading.Thread]" = []
+
+
+def _spawn_registration(path: str) -> "threading.Thread":
+    """R5 — self-register THIS window off the served path, in a daemon thread we do not join. A
+    stalled registry (a contended cross-process lock) therefore cannot delay the tool call."""
+    t = threading.Thread(target=_register_this_window, args=(path,),
+                         name="mokata-mcp-register", daemon=True)
+    with _REG_LOCK:
+        _REG_THREADS[:] = [x for x in _REG_THREADS if x.is_alive()]   # prune finished
+        _REG_THREADS.append(t)
+    t.start()
+    return t
+
+
+def _await_registrations(timeout: float = 5.0) -> None:
+    """Test/diagnostic seam: block until the spawned self-registrations finish (bounded). NOT on the
+    served path — the server never calls this. Registration is fire-and-forget by design (R5); a
+    test that asserts the registry side effect calls this to remove the inherent race."""
+    with _REG_LOCK:
+        threads = list(_REG_THREADS)
+    for t in threads:
+        t.join(timeout)
+
+
+def _mcp_timeout_for(op: str) -> float:
+    """The wall-clock MCP-surface budget for `op` (R1). `baseline` — a READ tool that runs the whole
+    test suite — gets its own named cap far below its 600s terminal bound (R7); everything else gets
+    the interactive default. Read at CALL time so the budget is patchable/tunable."""
+    if op == "baseline":
+        from ..baseline import BASELINE_MCP_TIMEOUT_SECONDS
+        return BASELINE_MCP_TIMEOUT_SECONDS
+    return MCP_SURFACE_TIMEOUT_SECONDS
+
+
+def _timed_out(op: str, budget: float) -> Dict[str, Any]:
+    """R1 — the bounded-budget verdict. Names the OPERATION and the CLI fallback; NEVER the args (a
+    timed-out call must not echo a DSN/path/arg into the render)."""
+    return {
+        "status": _status.TIMED_OUT, "isError": True, "operation": op, "committed": False,
+        "reason": (f"the '{op}' operation did not finish within mokata's {int(budget)}s MCP "
+                   f"surface budget"),
+        "hint": (f"nothing was half-committed by this; run it from your terminal with "
+                 f"`mokata {op}` (no MCP time budget) or retry."),
+    }
+
+
+def _as_error(op: str, exc: BaseException) -> Dict[str, Any]:
+    """R2 — reclaim the voice from FastMCP's generic handler. Only the exception TYPE name surfaces:
+    `str(exc)` can carry a DSN/path/arg and must not leak into the render."""
+    return {
+        "status": _status.ERROR, "isError": True, "operation": op, "committed": False,
+        "reason": f"the '{op}' operation raised {type(exc).__name__}",
+        "hint": ("this is a mokata-side error, not a refusal or a missing approval; retry, and if "
+                 "it persists run `mokata doctor`."),
+    }
+
+
+def _coerce(op: str, result: Any) -> Dict[str, Any]:
+    """R3 — a tool must return a structured dict; a None / non-dict is coerced to `error` rather than
+    handed to the client as ambiguous nothing. A dict passes through BYTE-IDENTICAL (same object)."""
+    if isinstance(result, dict):
+        return result
+    return {
+        "status": _status.ERROR, "isError": True, "operation": op, "committed": False,
+        "reason": f"the '{op}' operation returned no structured result",
+        "hint": "this is a mokata-side defect; retry, and if it persists run `mokata doctor`.",
+    }
+
+
+def _serve(fn: Callable[..., Any], name: Optional[str] = None,
+           kind: Optional[str] = None) -> Callable[..., Any]:
+    """The ONE systemic dispatch wrapper (MCP-R.D0). Every served tool call self-registers this
+    window (R5, off the served path), runs under a wall-clock MCP-surface budget (R1), and returns
+    a structured, single-vocab `status` — `timed_out` on expiry (R1), `error` on any uncaught
+    exception (R2) or None/non-dict return (R3) — reclaiming the outcome from silence.
+
+    R4 progress/heartbeat is a documented degrade-clean NO-OP this stage (see the module note): the
+    bounded budget + `timed_out` status carry liveness in its place.
 
     Signature-transparent: `functools.wraps` sets `__wrapped__`, which `inspect.signature` follows,
-    so the FastMCP tool schema built from the wrapper is byte-identical to the unwrapped fn (no
-    behaviour change to any tool's inputs/outputs — registration is a pure side effect)."""
+    so the FastMCP tool schema built from the wrapper is byte-identical to the unwrapped fn (D1a's
+    annotations stage depends on this) — no tool's inputs/outputs change. `name`/`kind` label the
+    operation for the timeout/error render + the per-tool budget; `name` defaults to the fn name."""
+    op = name or getattr(fn, "__name__", "operation")
+
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        _register_this_window(_call_path(args, kwargs))
-        return fn(*args, **kwargs)
+        # MCP-R.D1d — the shared input pre-step, FIRST. It runs ahead of the R5 registration (which
+        # itself calls `Surface.load(path)`) and ahead of the body thread, so a traversing `path`
+        # causes no filesystem read whatsoever. A caller-side argument fault is `refused`, NOT the
+        # `error` a mokata-side fault gets (R6) — the agent must be able to tell "fix your call"
+        # from "the server broke" by branching on `status` alone.
+        try:
+            validate_surface_params(args, kwargs)
+        except ValidationError as bad:
+            return refusal(bad, op)
+
+        _spawn_registration(_call_path(args, kwargs))     # R5 — concurrent, never gates the body
+        budget = _mcp_timeout_for(op)                     # R1/R7 — per-tool wall-clock cap
+        box: Dict[str, Any] = {}
+
+        def _run() -> None:
+            try:
+                box["result"] = fn(*args, **kwargs)
+            except Exception as exc:                      # noqa: BLE001 - R2: reclaim ANY failure
+                box["exc"] = exc
+
+        worker = threading.Thread(target=_run, name=f"mokata-mcp-{op}", daemon=True)
+        worker.start()
+        worker.join(budget)
+
+        if worker.is_alive():                             # R1 — over budget, still running
+            return _timed_out(op, budget)
+        if "exc" in box:
+            # D1d — a tool-local validator (an enum / comma-list whose vocabulary is the TOOL's, not
+            # the surface's) raises from inside the body. It is still a caller fault, so it converts
+            # through the SAME single site as the pre-step's, ahead of R2's server-fault reclaim.
+            if isinstance(box["exc"], ValidationError):
+                return refusal(box["exc"], op)
+            return _as_error(op, box["exc"])              # R2 — reclaim the exception
+        return _coerce(op, box.get("result"))             # R3 — never None / non-dict
+
     return wrapper
+
+
+# Back-compat alias — the historical seam name (R-MCP wired `build_server` and its tests through
+# `_with_registration`). It now IS `_serve`, so every call inherits the D0 robustness unchanged.
+_with_registration = _serve
 
 
 def mcp_available() -> bool:
@@ -113,17 +268,29 @@ def build_server() -> Any:
     unconditional dependency, so this succeeds on any healthy `pip install mokata`."""
     try:
         from mcp.server.fastmcp import FastMCP
+        from mcp.types import ToolAnnotations
     except ImportError as exc:  # pragma: no cover - exercised only in a stripped/broken env
         raise RuntimeError(
             "the MCP SDK is not installed; reinstall mokata (`pip install -U mokata`) to "
             "restore the mokata MCP server"
         ) from exc
 
+    from .tool_annotations import annotations_for, description_for
+
     server = FastMCP(SERVER_NAME)
     for spec in TOOLS:
-        # R-MCP: every served tool call self-registers this window first (see `_with_registration`).
-        server.add_tool(_with_registration(spec.fn), name=spec.name,
-                        description=(spec.fn.__doc__ or "").strip())
+        # MCP-R.D0: every served tool call rides `_serve` — self-registers this window (R5), runs
+        # under the MCP-surface budget (R1), and returns a single-vocab structured status (R2/R3/R6).
+        # MCP-R.D1a: project the tool's `kind` (+ the grounded open-world set) into MCP annotations
+        # so the client can reason read-vs-write / reaches-out BEFORE calling — metadata only, it
+        # leaves the inputSchema (D0's parity guarantee) and every tool result byte-identical.
+        # MCP-R.D2: a gated write's description carries the shared OUTCOMES contract (proposal /
+        # human-declined / server-error + the `mokata approve --list` fallback), appended once from
+        # `kind` rather than re-prosed per tool. Read tools stay byte-identical. Metadata only —
+        # like D1a's annotations it changes no input schema and no tool result.
+        server.add_tool(_serve(spec.fn, name=spec.name, kind=spec.kind), name=spec.name,
+                        description=description_for(spec.kind, spec.name, spec.fn.__doc__ or ""),
+                        annotations=ToolAnnotations(**annotations_for(spec.kind, spec.name)))
     return server
 
 

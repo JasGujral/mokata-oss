@@ -2,12 +2,10 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 
 from ._common import (
     _current_user,
-    MOKATA_DIR,
     AuditLedger,
     MemoryStore,
     _load_surface,
@@ -38,11 +36,17 @@ def cmd_memory(args: argparse.Namespace) -> int:
 
     action = getattr(args, "action", None)
     if action == "export":
+        from .. import deprecation
         from ..govern import WriteGate, WriteRequest
         from ..govern.trust import CLI_SURFACE
-        from ..memory import (MEMORY_SHARE_FILENAME, export_memory,
-                              export_payload)
-        dest = args.file or os.path.join(args.path, MOKATA_DIR, MEMORY_SHARE_FILENAME)
+        from ..memory import (default_backup_path, export_memory,
+                              export_payload, is_legacy_share_dest)
+        # 35b — a backup is a FILE the human owns (P23): default to a timestamped
+        # `.mokata/backups/memory-<UTC>.json`, NOT the SIMP.S2-deprecated `memory-share.json`
+        # channel. An explicit --file wins; writing to the legacy path still works but warns once.
+        dest = args.file or default_backup_path(args.path)
+        if is_legacy_share_dest(dest):
+            deprecation.warn_deprecated("memory-share", surface.mokata_dir)
         data = export_memory(store)              # read-only on the source; scans every value
         blocked = data["blocked"]
         # SI.6 (74 C2): the CLI export had the SAME scanning hole as the MCP one — it wrote a
@@ -69,20 +73,23 @@ def cmd_memory(args: argparse.Namespace) -> int:
         if not outcome.committed:
             print(f"memory export: {outcome.reason} — nothing written.", file=sys.stderr)
             return 1
-        print(f"exported {len(data['items'])} memory item(s) (with provenance) to {dest}")
+        print(f"backed up {len(data['items'])} memory item(s) (with provenance) to {dest}")
         return 0
     if action == "import":
-        from ..memory import import_memory, load_memory_share
+        from ..memory import import_memory, load_memory_share, plan_memory_import
         if not args.file:
-            print("error: `memory import <file>` requires a file", file=sys.stderr)
+            print("error: `memory import <file>` requires a backup file", file=sys.stderr)
             return 2
         try:
             data = load_memory_share(args.file)
         except (OSError, ValueError) as exc:
             print(f"error: cannot read {args.file}: {exc}", file=sys.stderr)
             return 1
+        # 35b — preview-then-approve (the SIMP.S2 plan/run shape): show counts + a keys-only sample
+        # (never a value) FIRST, then run the gated, secret-scanned, provenance-stamped restore.
+        print(plan_memory_import(store, data, source=args.file).render())
         ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
-        res = import_memory(store, data, assume_yes=args.yes, ledger=ledger)
+        res = import_memory(store, data, assume_yes=args.yes, ledger=ledger, source=args.file)
         print(res.render())
         return 1 if res.aborted else 0
     if action == "migrate":
@@ -96,6 +103,13 @@ def cmd_memory(args: argparse.Namespace) -> int:
                              assume_yes=args.yes, drop_source=args.drop_source, ledger=ledger)
         print(res.render())
         return 1 if res.aborted else 0
+    if action == "reembed":
+        # DB.S4 — the GATED re-embed migration. The one way out of a stamp mismatch: the runtime
+        # refuses to rank a query against another embedder's vectors (turning the semantic tier
+        # off), and this re-computes every vector with the configured embedder, then re-stamps.
+        # Previewed before the gate — a count is what makes the question answerable — and a
+        # decline writes nothing.
+        return _memory_reembed(surface, args)
     if action == "edit":
         return _memory_edit(store, args)
     if action == "promote":
@@ -185,6 +199,31 @@ def cmd_memory(args: argparse.Namespace) -> int:
     if nudge:
         print(f"\n{nudge}")
     return 0
+
+
+def _memory_reembed(surface, args) -> int:
+    """DB.S4 — `mokata memory reembed`: re-compute the vector index with the configured embedder.
+
+    Builds the pgvector store NON-degrading (via the migrate path): degrading to the SQLite floor
+    here would report a successful re-embed of a store that has no vectors at all."""
+    from ..govern import AuditLedger
+    from ..memory.migrate import MigrateError, build_named_backend
+    from ..memory.reembed import run_reembed
+    from ..project import project_id
+    project = project_id(surface)
+    try:
+        backend = build_named_backend("pgvector", surface.mokata_dir,
+                                      surface.manifest.tool_config("pgvector"), project=project)
+    except MigrateError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    try:
+        res = run_reembed(backend, assume_yes=args.yes, project=project,
+                          ledger=AuditLedger.from_mokata_dir(surface.mokata_dir))
+    finally:
+        backend.close()
+    print(res.render())
+    return 1 if res.aborted else 0
 
 
 def _memory_edit(store, args) -> int:
@@ -311,25 +350,26 @@ def _memory_review(store, args) -> int:
 def register(sub, common):
     p_mem = sub.add_parser(
         "memory", parents=[common],
-        help="surface memory (read-only); `export`/`import` to share it across repos",
+        help="surface memory (read-only); `export` backs it up to a file, `import` restores it",
     )
     p_mem.add_argument("action", nargs="?",
-                       choices=("export", "import", "migrate", "edit", "consolidate",
+                       choices=("export", "import", "migrate", "reembed", "edit", "consolidate",
                                 "promote", "review"),
                        default=None,
-                       help="export/import a share file, migrate the store, edit an entry, "
+                       help="export (back up memory to a file) / import (restore a backup, gated), "
+                            "migrate the store, reembed the vector index (gated), edit an entry, "
                             "consolidate (propose-only), promote a rule's enforcement binding, or "
-                            "review pending memory proposals (PM workflow)")
+                            "review pending memory proposals")
     p_mem.add_argument("file", nargs="?", default=None,
-                       help="share file (export/import), the subject to edit, or the item id "
-                            "to promote")
+                       help="backup file (export dest / import source), the subject to edit, or "
+                            "the item id to promote")
     p_mem.add_argument("--kind", default=None,
                        help="filter the view to one kind (rule/guardrail/best-practice/"
                             "context/reference/decision), or retype an entry on `edit`")
     p_mem.add_argument("--value", default=None,
                        help="new value (with `edit`)")
     p_mem.add_argument("--to", default=None,
-                       help="migrate destination backend (sqlite|obsidian|postgres), or the "
+                       help="migrate destination backend (sqlite|obsidian|postgres|pgvector), or the "
                             "target enforcement (advisory|soft|hard) with `promote`")
     p_mem.add_argument("--from", dest="from_backend", default=None,
                        help="migrate source backend (default: the resolved store)")

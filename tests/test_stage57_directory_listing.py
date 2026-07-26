@@ -104,7 +104,10 @@ class TestWowDemo(unittest.TestCase):
         # beat 2 (0.0.13) — the gate-guard hook blocking a NATIVE Write, exit 2
         self.assertIn("BLOCKED [no-code-without-failing-test]", demo)
         self.assertIn("status: blocked", demo)                   # real output of beat 3
-        self.assertIn("audit ledger — 7 entries", demo)          # the audit punchline
+        # The audit punchline. 7 → 8 at the 0.0.15 doc gate: KB.S1 (0.0.14) ledgered the CLI
+        # one-shots, so `mokata init` now emits a `setup` row as #1 and the demo's ledger is 8
+        # entries. The doc and this pin were stale together; verified against a real run.
+        self.assertIn("audit ledger — 8 entries", demo)
         # (the internal 60-second screencast shot-list was removed from this public tutorial)
 
     def test_demo_is_registered_in_the_nav(self):

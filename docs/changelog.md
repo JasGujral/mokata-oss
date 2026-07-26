@@ -106,7 +106,7 @@ gate (never silent last-writer-wins). Access is governed by **scoped consent**; 
 --consent show|grant|revoke` manages a revocable standing consent for the batched audit-publish
 (per-publish secret-scan still hard-blocks). Also: `mokata branch-protection-check` verifies the
 public default branch is protected (fail-closed); a team ops kit (`docker-compose.team.yml` +
-`.env.example` + `llms.txt`); the in-Claude-Code MCP repair skill is renamed to **`/mokata:mcp-repair`**;
+`.env.example` + `llms.txt`); the in-Claude-Code MCP repair skill is renamed to **`/mcp-repair`**;
 `mokata setup claude` surfaces a permission-grant step when wiring the MCP server; and **Python ≥ 3.10**
 is the supported floor.
 
@@ -114,8 +114,8 @@ is the supported floor.
 
 **"Inside Claude Code" — richer in-terminal UX, a gated settings wizard, a `doctor` coverage
 matrix, and three hook/setup fixes. No breaking changes; additive; no new dependencies.** A new
-command palette (`mokata menu` / `/mokata:menu`) lists every mokata command and skill on one screen
-with gate markers, derived from the shipped files (single source, no drift). `/mokata:docs [topic]`
+command palette (`mokata menu` / `/menu`) lists every mokata command and skill on one screen
+with gate markers, derived from the shipped files (single source, no drift). `/docs [topic]`
 points to the published docs — listing topics with their URLs and resolving a topic to its page
 (read online; not bundled in the wheel; never fetches at runtime). An interactive, gated settings
 wizard (`mokata config wizard`) walks you through mokata's settings, routing every change through the
@@ -138,7 +138,7 @@ the wheel) — no repo clone needed; the bundled MCP server's SDK is a default d
 3.10+, so `mokata-mcp` runs out of the box (on 3.9 the CLI still works and the MCP server prints a
 clear upgrade message). `mokata setup claude` registers the MCP server at an absolute path, verifies
 the connection (`CONNECTED ✓`), and wires commands + skills + the status line; new `mokata mcp start |
-status | install` plus a `/mokata:mcp-repair` repair skill re-register the server from inside Claude Code.
+status | install` plus a `/mcp-repair` repair skill re-register the server from inside Claude Code.
 Re-running `mokata setup claude` now syncs the Agent Skills and prunes stale/removed mokata skills
 (your own skills are never touched).
 
@@ -197,7 +197,7 @@ proposals, read-only); `mokata audit --why` (what + decision + why timeline; dec
 rationale); `mokata sessions`/`resume` + a mid-brainstorm checkpoint (leave a brainstorm and come
 back, HARD-GATE intact); opt-in git-worktree isolation for parallel/paused work; cross-harness
 portability (claude/codex/cowork adapters + `mokata harness` matrix, degrade-clear); `mokata
-version`/`upgrade` (offline info, opt-in update check, human-gated upgrade) + `/mokata:version`.
+version`/`upgrade` (offline info, opt-in update check, human-gated upgrade) + `/version`.
 Hardened: secret guard broadened to 18 formats + fuzz invariant (paths/URLs/UUIDs/hex digests no
 longer false-positive); Dependabot/CodeQL/Scorecard/CODEOWNERS; live-DB CI (Postgres+pgvector+
 Neo4j containers); README + CLI-reference audit with a docs-vs-code drift guard.
@@ -234,7 +234,7 @@ framework for Claude Code whose spine is a real codebase **knowledge graph**, pe
 - **Memory** — persistent + decision + **typed** parts (rule/guardrail/best-practice/context/
   reference), on by default, self-healing; **tiered retrieval** (lexical → graph → semantic, with
   a pluggable embedder / pgvector); **sharing** via export/import, migrate, and a team Postgres
-  store mokata owns; **`/mokata:onboard`** guided typed capture; a **team design vault**.
+  store mokata owns; **`/onboard`** guided typed capture; a **team design vault**.
 - **Engine & correctness** — the 7-phase pipeline, a provable completeness gate (RED before
   GREEN), spec-persisted precondition, ground-in-code discipline, **spec-awareness regression
   guard**, and a verified `ship` step (never auto-merge).

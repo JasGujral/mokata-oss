@@ -76,10 +76,14 @@ class TestTeamConnect(unittest.TestCase):
             msgs = []
             res = team.team_connect(d, surface, "MOKATA_PG_DSN", assume_yes=True,
                                     out=msgs.append)
-            # no crash; clear, honest readiness message about degrade-clean
+            # no crash; clear, honest readiness message. SIMP.S2 reconcile: memory degrades to the
+            # local floor, but a session REFUSES rather than silently degrading to a local transport
+            # (SIMP.S1 transport-from-mode) — the message no longer claims the latter.
             blob = (" ".join(msgs) + " " + res.message).lower()
             self.assertFalse(res.readiness.active)
             self.assertTrue("degrade" in blob or "until" in blob or "not set" in blob)
+            self.assertIn("refus", blob)                       # sessions refuse, not silent-local
+            self.assertNotIn("sessions to the local transport", blob)
             # never persisted the DSN value
             self.assertNotIn(_FAKE_DSN, _manifest_text(d))
 

@@ -286,6 +286,12 @@ def _surfaces() -> List[CommandSurface]:
         CommandSurface("unsetup", exempt=(
             "install plumbing — reverses `setup`; a harness-config + filesystem teardown "
             "run from the shell, the mirror of `setup`.")),
+        CommandSurface("migrate", exempt=(
+            "SIMP.S2 — a one-time, human-gated migration of a DEPRECATED channel (obsidian / "
+            "native-memory / memory-share / vault) into the canonical store, run from the shell. "
+            "The DETECT+OFFER is in-harness: the once-per-repo deprecation WARN a read emits names "
+            "the migration command (the `worktree` pattern), so the gap is disclosed, not silent. "
+            "Removed with the channels at 0.0.17.")),
         CommandSurface("graph", exempt=(
             "GR.S2 code-graph adoption. `graph adopt` is a DELIBERATE human-gated durable "
             "manifest write (P2) — the same class as `reconfigure`/`config set`, best made at a "

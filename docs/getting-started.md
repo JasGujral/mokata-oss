@@ -19,9 +19,9 @@ Verify it worked:
 mokata mcp status           # expect: mokata-mcp: CONNECTED ✓
 ```
 
-Then, inside Claude Code, start with `/mokata:brainstorm` (a new problem) or `/mokata:refine`
+Then, inside Claude Code, start with `/brainstorm` (a new problem) or `/refine`
 (existing code). If the MCP tools ever stop showing up, just tell Claude "mokata mcp isn't working"
-and the `/mokata:mcp-repair` repair skill will re-register it (you'll need to restart Claude Code after).
+and the `/mcp-repair` repair skill will re-register it (you'll need to restart Claude Code after).
 
 > **Python version.** mokata requires **Python ≥ 3.10**; the MCP server ships and runs out of the
 > box on a plain `pip install mokata`.
@@ -50,6 +50,35 @@ and even when enabled Claude Code prompts you on every call.)
   files are always writable, and editing your repo outside a run is never policed.
   `mokata gate status` shows what's enforced here; `mokata gate override <gate> --reason "…"`
   lifts one gate for the session — explicit, re-confirmed, and on the audit ledger.
+
+## Pick how much you want on — `--mode`
+
+You don't have to take everything at once. `mokata init --mode` is a graduated on-ramp: three
+named starting points, each of which wires a working setup and prints the one command that
+proves it.
+
+```bash
+mokata init --mode seatbelt    # just the gates (and the code graph they need to be real)
+mokata init --mode memory      # the gates + typed project memory that survives every session
+mokata init --mode full        # everything the spine can wire
+```
+
+A mode is an **alias for a profile plus an onboarding flavour**, never a second thing to
+configure. It resolves to an existing profile, and the profile is the only thing persisted — a
+manifest written by `--mode memory` is byte-identical to one written by `--profile standard`.
+`--mode` and `--profile` are mutually exclusive; pass whichever you think in.
+
+| Mode | Profile it aliases | What you get |
+|---|---|---|
+| `seatbelt` | `standard` | The spec-driven TDD engine, the governance gates, and the built-in AST code graph the blast-radius gate needs to answer structurally instead of by grep. |
+| `memory` | `standard` | Everything seatbelt gives you, plus typed project memory on the local SQLite store — rules, decisions and context that outlive the session. |
+| `full` | `full` | The gates, persistent memory, and every graph and memory provider the spine knows about (each degrades to its floor when absent). |
+
+`memory` and `full` additionally **offer** the optional local embeddings model for semantic
+recall — an interactive, one-time ask you can decline; `seatbelt` structurally never offers it.
+No offer ever fires non-interactively, so `--yes` and CI runs can never reach `pip`.
+
+Not sure? Plain `mokata init` (profile `standard`) is the same wiring as `seatbelt`.
 
 ## Path B — Terminal CLI (any AI tool, CI, scripting)
 

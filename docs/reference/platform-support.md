@@ -34,8 +34,8 @@ capability: `claude` is the only harness that declares `hooks` in the
 | `aider` | — | — | ✓ | — |
 
 **What that means concretely:** on every harness *except* Claude Code the `gate-guard` is never
-wired, so the **run-state gates** (`spec-persisted`, `no-code-without-failing-test`, `spec-scope`)
-**enforce nothing** there — they degrade with a clear message rather than pretend. The `secret-guard`
+wired, so the **run-state gates** (`approach-approval`, `spec-persisted`,
+`no-code-without-failing-test`, `spec-scope`) **enforce nothing** there — they degrade with a clear message rather than pretend. The `secret-guard`
 is the same hook mechanism, so it too is only enforced where `hooks` is declared; mokata's other
 secret layers (the gated CLI/MCP write path) still hard-block. The engine itself is
 harness-agnostic: a missing capability degrades clearly, never a silent no-op of a gate.

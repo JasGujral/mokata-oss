@@ -265,7 +265,11 @@ class TestExportIsScanned(unittest.TestCase):
             rc = main(["memory", "export", "--path", d])
             self.assertEqual(rc, 0)
 
-            dest = os.path.join(d, ".mokata", "memory-share.json")
+            # 35b — the default backup dest is a timestamped `.mokata/backups/memory-<UTC>.json`.
+            import glob
+            backups = glob.glob(os.path.join(d, ".mokata", "backups", "memory-*.json"))
+            self.assertEqual(len(backups), 1)
+            dest = backups[0]
             with open(dest, encoding="utf-8") as fh:
                 raw = fh.read()
             self.assertNotIn(fake_secret(), raw, "the CLI export must not exfiltrate a secret")
@@ -603,6 +607,21 @@ UNGATED_BY_DESIGN = {
         "durable write. Recording the human's explicit 'no' is like temp_local run-state, not a "
         "silent project change (P2 governs project code/config/memory writes); the OPT-IN adopt "
         "that DOES write the project manifest goes through the gate (graph_adopt._commit, GATED).",
+    ("extras_install.py", "record_extra_decline"): "DB.S4 — the SAME class as "
+        "`user_prefs.record_graph_decline` directly above, generalised: the USER's standing 'no' "
+        "to an optional extra (the embeddings model), recorded in ~/.mokata/extra_declines.json. "
+        "Not a governed PROJECT write — nothing in the repo changes, and the whole point of the "
+        "record is that the human is never asked again. The consent it guards is the gate; this "
+        "is only its memory. (The ACCEPT path writes no project file at all — it runs pip.)",
+    ("memory/reembed.py", "run_reembed"): "DB.S4 — human-gated, but NOT through the WriteGate, "
+        "and the distinction is real: this writes NO new content. It re-derives each item's "
+        "EMBEDDING from that item's own already-gated subject/value — a recomputed index, like "
+        "rebuilding an FTS index, not a change to what memory SAYS. Nothing a reviewer approved "
+        "is altered, so there is no new content for a gate to show them. It still carries its own "
+        "preview→confirm gate (count + both embedder names, fail-closed off a TTY) because it is "
+        "a bulk rewrite of shared infrastructure, and it is ledgered (`memory_reembed`, embedder "
+        "name + count, never memory content). If it ever gained the ability to change item "
+        "CONTENT, it would belong in GATED instead.",
     ("govern/lifecycle.py", "_write_tombstone"): "KB.S1 — the USER-scoped removal TOMBSTONE in "
         "~/.mokata/removals.json (repo identity + when + actor, NO repo content). Same class as "
         "user_prefs above: a user-profile record, not a governed PROJECT write. It exists BECAUSE "
@@ -625,6 +644,26 @@ UNGATED_BY_DESIGN = {
                                     "held for them, which is precisely how MS.S8's Windows "
                                     "append-clobber survived review: `_append` now takes its OWN "
                                     "append lock, because nothing above it does.",
+    ("team_journal.py", "compact"): "J-PERF — journal COMPACTION, and the one rewrite in a "
+                                    "file that is otherwise append-only. It is not a durable "
+                                    "write in the governed sense because it adds NOTHING: it "
+                                    "rewrites the temp_local journal with a subset of its own "
+                                    "existing lines (kept byte-for-byte — no re-serialisation), "
+                                    "dropping only ids the replay has already resolved to "
+                                    "FLUSHED. Those entries are done and their audit record "
+                                    "lives on the LEDGER (`team_flush`, C5), not here; nothing "
+                                    "reads a flushed journal record. Every caller-visible read "
+                                    "(pending/conflicts/blocked) is identical across it, so "
+                                    "there is no change for a gate to show a human. Same class "
+                                    "as `_append` above — journal bookkeeping over already-"
+                                    "gated entries — and it runs under the APPEND lock (not the "
+                                    "flush mutex, which excludes flushers only) with "
+                                    "`atomic_write_text`, so a crash leaves the whole old file.",
+    ("migrate_channels.py", "_write_marker"): "SIMP.S2 — the once-migrated idempotence marker "
+                                              "under temp_local/deprecations/ (run-state; the "
+                                              "MIGRATION itself is gated via migrate_memory / "
+                                              "import_memory — this marker only makes a re-run a "
+                                              "no-op).",
     ("progress_events.py", "append_event"): "append-only run telemetry under temp_local/",
     ("state.py", "_atomic_write"): "StateStore — process/run state under temp_local/",
     ("state.py", "delete"): "StateStore — process/run state under temp_local/",

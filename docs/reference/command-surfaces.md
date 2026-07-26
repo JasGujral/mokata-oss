@@ -6,6 +6,11 @@ the secondary "use-anywhere" surface; the harness is the primary one. Two comman
 [`approve` and `gate`](#deliberately-human-only-no-mcp-tool-no-slash-command) — are deliberately
 exempt: a surface the *model* can call is not a gate the model is under.
 
+> **Command form ↔ install route.** Installed as the Claude Code **plugin**, commands are
+> namespaced — `/mokata:<name>`. Installed via the pip-first `mokata setup claude` path (the
+> supported route today), they render **bare** — `/<name>` (drop the `mokata:` prefix). This
+> reference uses the namespaced form throughout.
+
 **Beyond Claude Code (Stage 63):** the same `/mokata:` command set is materialized into each
 supported agent's **native** surface — Cursor `.cursor/commands/*.md`, Copilot
 `.github/prompts/*.prompt.md`, Windsurf `.windsurf/workflows/*.md`, Gemini
@@ -19,6 +24,10 @@ This table is generated from the **coverage matrix** in `mokata.parity` (the sin
 truth). A CI parity test derives the command set from the live CLI parser and **fails** if any
 command lacks a Claude Code surface *or* an explicit exemption — so this can never silently
 regress.
+
+**The MCP surface today: 55 tools — 35 read, 19 write, and 1 approve** (the default-off in-chat
+approval described below). The registry in `mokata.mcp.registry` is the single source of that
+count.
 
 **How surfaces are chosen:** read-only inspection → an MCP **read** tool; a durable write → a
 **human-gated** MCP **write** tool (the universal WriteGate — secret-scan + human gate + audit;
@@ -93,7 +102,7 @@ hard-blocked **even when approved**.
 
 `approve=true` / `confirm=true` are still accepted on the tool call (schema stability) but **commit
 nothing**. They never were consent: they are flags the *model* types, and a gate the gated party can
-open is not a gate. See [`mokata approve`](cli.md#mokata-approve-proposal-id---yes---actor-who).
+open is not a gate. See [`mokata approve`](cli.md#mokata-approve-proposal-id-yes-actor-who).
 
 **Project scoping of the shared backends (Stage 71a).** The `memory`, `session`, and `audit --team`
 review surfaces are scoped by a stable **project key** (`settings.project.id`, else derived from the
@@ -131,3 +140,5 @@ rationale, and the parity test asserts they carry an exemption:
 | `release-check` | Release plumbing — a pure/offline preflight asserting every version field equals the intended tag; run in CI during a release cut, the version mirror of `validate`. |
 | `branch-protection-check` | Release plumbing — a fail-closed preflight asserting the public mirror's default branch is protected before a cut; run from the shell by the release script. |
 | `bootstrap` | Hook plumbing — prints the SessionStart briefing; invoked *by* the SessionStart hook, never typed by a user. |
+| `graph` | Adoption plumbing — `graph adopt` is a deliberate human-gated durable manifest write (the same class as `reconfigure` / `config set`), best made at a terminal rather than model-invocable; the detect-and-**offer** path already surfaces it in-flow at setup. `graph status` is diagnostic and overlaps `index` / `doctor`'s backend line. The embedded AST floor answers without adoption, so no in-harness surface is a gap. |
+| `migrate` | Migration plumbing — a **one-time, human-gated** move of a **deprecated** channel (`obsidian` / `native-memory` / `memory-share` / `vault`) into the canonical store, run from the shell. The detect-and-offer **is** in-harness: the once-per-repo deprecation warning a read emits names this command (the `worktree` pattern), so the gap is disclosed, not silent. It retires with the channels at 0.0.17. |

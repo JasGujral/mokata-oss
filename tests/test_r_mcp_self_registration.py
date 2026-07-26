@@ -93,7 +93,13 @@ def _self_register(root, run_id, tool=TR.sessions):
     os.environ[S.SESSION_ID_ENV] = run_id
     S.reset_for_test()
     try:
-        return MS._with_registration(tool)(path=root)
+        result = MS._with_registration(tool)(path=root)
+        # MCP-R.D0 · R5: self-registration is now FIRE-AND-FORGET (off the served path), so the
+        # registry side effect is asynchronous. Drain it here — while env is still pinned — so these
+        # tests can observe it deterministically (the production hook path reads the registry later,
+        # after the write has long landed; this removes the inherent read-after-spawn race in-test).
+        MS._await_registrations()
+        return result
     finally:
         os.environ.pop(S.SESSION_ID_ENV, None)
         S.reset_for_test()
@@ -190,6 +196,8 @@ class TestSelfRegistration(_Base):
             SR.touch = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
             try:
                 result = MS._with_registration(TR.sessions)(path=d)
+                MS._await_registrations()   # R5: drain the fire-and-forget registration so its
+                                            # swallowed failure + D5 notice are observable here
             finally:
                 SR.touch = orig
             self.assertIsInstance(result, dict)                  # the tool STILL returned

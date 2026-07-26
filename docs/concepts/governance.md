@@ -44,7 +44,9 @@ captured). Two sync `PreToolUse` hooks ship, and they differ in the **kind of bl
 | `mokata-hook secret-guard` | `Write` `Edit` `MultiEdit` `Bash` | **security** — **never** overridable |
 | `mokata-hook gate-guard` | `Write` `Edit` `MultiEdit` `NotebookEdit` | **methodology** (run-state) — **is** overridable: explicitly, re-confirmed, and on the ledger |
 
-The async hook is `mokata-hook session-start` (the SessionStart briefing). Both guards are wired
+Two **async** hooks ship alongside them: `mokata-hook session-start` (the SessionStart briefing)
+and `mokata-hook dirty-track` (a `PostToolUse` observability lane that records touched paths for
+the code graph's freshness check — it **always exits 0** and can never block). All four are wired
 by `mokata setup claude` (on by default; `--no-hooks` opts out) or by the plugin — and **only
 Claude Code declares the `hooks` capability**, so on any other harness they are never wired and
 the run-state gates below enforce nothing.
@@ -110,7 +112,7 @@ offers the override:
 
 ```text
 BLOCKED [no-code-without-failing-test] no failing test is on record for this run — auth.py is
-implementation. Write the failing test first and watch it fail (/mokata:test), or override:
+implementation. Write the failing test first and watch it fail (/test), or override:
 mokata gate override no-code-without-failing-test --reason "<why>"
 ```
 
@@ -166,7 +168,7 @@ review. Together: *mokata did exactly what you approved — or it asked.*
 
 ## Independent review — a fresh pair of eyes, not a self-check
 
-The closing `/mokata:review` is the gate before you land — so by default it runs as a
+The closing `/review` is the gate before you land — so by default it runs as a
 **fresh-context subagent**, not as the builder re-reading its own work. mokata hands that
 subagent a **self-contained brief** — the emitted spec + its acceptance criteria, the approved
 approach/refinement set, the **diff** under review, and how to run the tests — and *no* builder
@@ -179,7 +181,7 @@ Where a harness has **no subagents** (or you set `settings.review.independent = 
 (or the equivalent config note) and continues. Independence is the **default**, never a hard
 requirement — mokata never blocks just because a harness can't spawn a subagent.
 
-The verdict is **persisted as evidence**, and `/mokata:ship` reads it: ship **blocks** unless a
+The verdict is **persisted as evidence**, and `/ship` reads it: ship **blocks** unless a
 **passing** review is on record (no verdict, or a failed one, stops the finish), and it surfaces
 whether that review was `independent ✓` or merely `inline` so the strength of the signal is
 always visible and logged. Turn independence off (or back on) with:
@@ -233,7 +235,7 @@ them mutate the state they show:
   SessionStart briefing line (within the 2k budget; absent on a first session or when nothing
   changed). Read-only — it bumps no counter and the snapshot capture is read-only on the
   governed state.
-- **End-of-run "what I changed and WHY."** Finishing a run (`/mokata:ship`) folds in a bounded
+- **End-of-run "what I changed and WHY."** Finishing a run (`/ship`) folds in a bounded
   `audit --why` recap of this run — what changed and the why behind each gate decision — so
   landing it is a reviewed decision. Shipping stays **human-gated**: mokata records the landing
   choice but **never merges / opens a PR / deletes** on its own.

@@ -38,6 +38,11 @@ narrative: **[Getting started](../getting-started.md)** · full detail:
 > durable delete is human-gated, the removal is shown for approval first. Note: Claude Code
 > **caches the skill list**, so **restart Claude Code** after the sync to see the change.
 
+> **Command form ↔ install route.** The tables below use the **plugin** render, `/mokata:<name>`.
+> Because the supported route today is the pip-first `mokata setup claude` path, the commands
+> actually appear **bare** in your `/` menu — `/<name>` (drop the `mokata:` prefix). The one-click
+> plugin (which would namespace them) is planned, not yet available.
+
 ## What you get
 
 ### 1. Slash commands (the workflow)
@@ -122,7 +127,8 @@ All three hooks are declared in `hooks/hooks.json`:
   send a secret. **Un-overridable:** approval is a methodology gate, never a security override.
 - **Gate guard** (`gate_guard.py`, **PreToolUse, sync run-state, exit code 2** — matches
   `Write|Edit|MultiEdit|NotebookEdit`) — blocks a *native* write that breaks the run's
-  methodology. Three gates: **`spec-persisted`** (an approach is approved but no spec is
+  methodology. Four gates: **`approach-approval`** (the run is still in brainstorm — no approach
+  approved yet), **`spec-persisted`** (an approach is approved but no spec is
   emitted), **`no-code-without-failing-test`** (the spec is emitted but no failing test is on
   record), and **`spec-scope`** (the write is outside the spec's authorized surface, spells a
   **deferred** marker you agreed *not* to build, or a spec amend is in progress).

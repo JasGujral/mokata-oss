@@ -29,6 +29,7 @@ from typing import Any, Callable, List, Optional
 
 from .. import MANIFEST_FILENAME, MOKATA_DIR, TEMP_LOCAL_DIRNAME
 from .. import schema
+from ..atomicfile import atomic_write_text
 from ..govern.gate import WriteGate, WriteRequest
 from ..govern.secrets import scan
 from ..profiles import TOOL_CATALOG
@@ -133,8 +134,7 @@ def adopt_graph(
     emit(f"mokata graph adopt {tool}: pin into code_graph -> {chain}")
 
     def _commit() -> None:
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(new_text)
+        atomic_write_text(path, new_text)       # R-MAN — a crash leaves the OLD manifest, whole
 
     from ..govern.trust import (CLI_SURFACE, policy_approved, policy_surface, policy_tool,
                                 policy_trust)
@@ -200,14 +200,37 @@ def offer_graph_at_setup(
         return OfferResult(adopted=False, declined=True, message="declined")
 
     # accepted: assisted install, then the gated pin.
+    #
+    # DB.S4 — the CRG SEAM-REUSE HOOK. This used to PRINT a command and hope; the default is now
+    # the shared `extras_install.install_extra` primitive: one bounded pip subprocess (no
+    # unbounded hang), verified by import rather than by pip's exit code, degrade-clean on
+    # failure. `install_fn` stays the seam — GR.S2-FU's opt-in CI leg drives the SAME path to
+    # install the real `code-review-graph` and adopt it, so what CI exercises is the code users
+    # run, not a shell line written twice.
     if install_fn is not None:
         install_fn()
     else:
-        emit("Install with:  pip install code-review-graph[embeddings]   "
-             "(bundled local embedding; no API key)")
+        from ..extras_install import install_extra
+        res = install_extra("code-review-graph[embeddings]",
+                            verify=_crg_importable, out=emit)
+        if not res.ok:
+            emit(f"note: {res.message}. Install manually with:  "
+                 f"pip install 'code-review-graph[embeddings]'   "
+                 f"(bundled local embedding; no API key)")
     res = adopt_graph(root, tool="code-review-graph", assume_yes=assume_yes,
                       out=out, ledger=ledger, client=client)
     return OfferResult(adopted=res.committed, message=res.message)
+
+
+def _crg_importable() -> bool:
+    """Verify the CRG install by IMPORTING it — pip's exit code says a wheel landed, not that the
+    package is usable from this interpreter (a different `pip` on PATH is the classic way those
+    two diverge)."""
+    try:
+        import code_review_graph                                  # noqa: F401  # type: ignore
+        return True
+    except ImportError:
+        return False
 
 
 def detected_graph_overlay(router: Any, root: str) -> Optional[str]:

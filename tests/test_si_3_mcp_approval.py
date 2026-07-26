@@ -274,12 +274,14 @@ class TestTheModelCannotMint(unittest.TestCase):
 
     def test_grep_guard_no_bare_assume_yes_gate_remains(self):
         """The `_approved(approve, confirm)` gate is GONE from the source, not merely bypassed."""
+        # PRE-SIMP (0.0.15) — the consent boundary moved tools_write.py -> mcp/consent.py; the
+        # greppable single-location property now anchors there (same check, same strength).
         src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                           "src", "mokata", "mcp", "tools_write.py")
+                           "src", "mokata", "mcp", "consent.py")
         with open(src, encoding="utf-8") as fh:
             text = fh.read()
         self.assertNotIn("def _approved(", text,
-                         "the model-settable gate function still exists in tools_write")
+                         "the model-settable gate function still exists in the consent boundary")
         # every `assume_yes=True` handed downstream must sit under a granted consent, which is only
         # obtainable from `_consent(...)`. Pin that the consent helper is what every tool calls.
         self.assertIn("def _consent(", text)

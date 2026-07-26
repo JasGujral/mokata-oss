@@ -30,8 +30,9 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from . import __version__
-from .harness_paths import (MCP_SERVER_NAME, MCP_TOOL_PERMISSION,
-                            claude_mcp_config_path, claude_settings_path)
+from .harness_paths import (MCP_APPROVE_TOOL_ASK, MCP_SERVER_NAME,
+                            MCP_TOOL_PERMISSION, claude_mcp_config_path,
+                            claude_settings_path)
 from .plugin_cache import read_plugin_root
 
 
@@ -238,6 +239,14 @@ class GrantStatus:
     permitted: bool                     # mcp__mokata__* in permissions.allow
     enabled_source: Optional[Path] = None
     permitted_source: Optional[Path] = None
+    # MCP-R.D2 (UX-STUCK grant legibility): mcp__mokata__approve in permissions.ask — the
+    # INTENTIONAL consent exception (AP-MCP, doc 85 §5 D26). `_merge_grant` writes it in the same
+    # breath as the allow-wildcard precisely because the wildcard already MATCHES the approve tool;
+    # without the explicit ask, the auto-grant would silently cover the one call that must always
+    # reach a human. So its ABSENCE alongside a present wildcard is not a missing convenience —
+    # it is SI.3's hole re-opened, and doctor has to be able to say so.
+    approve_asked: bool = False
+    approve_asked_source: Optional[Path] = None
 
 
 def _read_settings(path: Path) -> Optional[dict]:
@@ -258,8 +267,8 @@ def grant_status(root: str = ".", home: Optional[str] = None) -> GrantStatus:
     `mokata`, or `enableAllProjectMcpServers` is true) and whether its tools are PERMITTED
     (`mcp__mokata__*` — or the whole-server `mcp__mokata` — in `permissions.allow`). A grant in
     EITHER scope counts (Claude Code merges them). Never raises."""
-    enabled = permitted = False
-    en_src = pm_src = None
+    enabled = permitted = approve_asked = False
+    en_src = pm_src = ask_src = None
     server_wide = f"mcp__{MCP_SERVER_NAME}"          # allow-all-tools form of the grant
     for scope in ("project", "user"):
         try:
@@ -274,13 +283,21 @@ def grant_status(root: str = ".", home: Optional[str] = None) -> GrantStatus:
             if data.get("enableAllProjectMcpServers") is True or (
                     isinstance(servers, list) and MCP_SERVER_NAME in servers):
                 enabled, en_src = True, path
+        perms = data.get("permissions") if isinstance(data.get("permissions"), dict) else None
         if not permitted:
-            perms = data.get("permissions")
-            allow = perms.get("allow") if isinstance(perms, dict) else None
+            allow = perms.get("allow") if perms else None
             if isinstance(allow, list) and (
                     MCP_TOOL_PERMISSION in allow or server_wide in allow):
                 permitted, pm_src = True, path
-    return GrantStatus(enabled, permitted, en_src, pm_src)
+        # MCP-R.D2: the AP-MCP consent exception. A grant in EITHER scope counts, same as above
+        # (Claude Code merges them), and the whole-server `mcp__mokata` ask form counts too — it
+        # covers the approve tool just as the explicit entry does.
+        if not approve_asked:
+            ask = perms.get("ask") if perms else None
+            if isinstance(ask, list) and (
+                    MCP_APPROVE_TOOL_ASK in ask or server_wide in ask):
+                approve_asked, ask_src = True, path
+    return GrantStatus(enabled, permitted, en_src, pm_src, approve_asked, ask_src)
 
 
 # --------------------------------------------------------------------------------------
@@ -331,6 +348,23 @@ def full_status(root: str = ".", home: Optional[str] = None,
                          "(the stuck-loop)")
             lines.append(f"    Fix: run `{_INSTALL_FIX}` "
                          f"(adds {MCP_TOOL_PERMISSION} to permissions.allow).")
+        # MCP-R.D2 (UX-STUCK grant legibility): the consent EXCEPTION, reported as its own axis so
+        # a reader can tell an auto-granted surface from an ungoverned one. Present is the SHIPPED,
+        # CORRECT state — say so, because "why does approve still prompt me?" is a question the
+        # silent version of this line was answering nowhere.
+        if g.approve_asked:
+            lines.append(f"  approve-ask ✓ ({MCP_APPROVE_TOOL_ASK} in permissions.ask — the "
+                         f"in-chat approve tool always prompts a human; intentional, SI.3)")
+        elif g.permitted:
+            # The dangerous combination, and the whole reason this axis is reported: the wildcard
+            # MATCHES the approve tool, so an allow-grant without the ask lets the model's own
+            # approve call sail through un-prompted.
+            lines.append("  approve-ask ✗ the mcp__mokata__* allow-grant currently COVERS "
+                         "mcp__mokata__approve — approvals may not prompt a human")
+            lines.append(f"    Fix: run `{_INSTALL_FIX}` "
+                         f"(restores {MCP_APPROVE_TOOL_ASK} to permissions.ask).")
+        else:
+            lines.append("  approve-ask — n/a (no allow-grant, so every call already prompts)")
 
         connected = False
         if registered:

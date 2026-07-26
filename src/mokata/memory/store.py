@@ -12,20 +12,22 @@ detection path; SQLite is the guaranteed floor.
 
 from __future__ import annotations
 
-from ..prompt import read_yes_no
-
-import os
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .. import TEMP_LOCAL_DIRNAME
-from ..manifest import ManifestError
-from .backends import (
-    MemoryBackend,
-    NativeMemoryBackend,
-    ObsidianBackend,
-    SQLiteBackend,
-    build_postgres_backend,
+from .backends import MemoryBackend
+# PRE-SIMP (0.0.15) — backend build/select/scope/identity resolution moved to `selection.py` (the
+# deprecated-backend selection branches land in ONE file for the 0.0.17 SIMP.S3 removal). Re-exported
+# here so every existing `from .store import build_backend` / `from ..memory.store import X` caller
+# works unchanged — no caller edits needed.
+from .selection import (  # noqa: F401 - re-export shim (import-compat)
+    MEMORY_DIRNAME,
+    _identity_and_access_for,
+    _overlay_for_team,
+    _scope_context_for,
+    _select_raw_backend,
+    build_backend,
+    select_memory_backend,
 )
 from .consolidation import (
     MERGE,
@@ -42,7 +44,6 @@ from ..errors import MokataError
 
 MEMORY_SETTINGS_KEY = "memory"     # manifest.settings["memory"] = {type: bool}
 MEMORY_STATS_KEY = "memory_stats"  # StateStore key
-MEMORY_DIRNAME = "memory"
 
 # TM.S5c — the journal op labels (mirror team_journal.OP_*), passed per team-mode call site so the
 # flush's compare-and-set picks the right operation: put = believed-new INSERT, update = revision-
@@ -71,219 +72,6 @@ def enabled_memory_types(manifest: Any) -> Tuple[str, ...]:
         return ()
     settings = manifest.setting(MEMORY_SETTINGS_KEY, {}) or {}
     return tuple(t for t in MEMORY_TYPES if settings.get(t, True))
-
-
-# -------------------------------------------------------------- backend selection
-def _overlay_for_team(backend: MemoryBackend, routing: Any, root: str) -> MemoryBackend:
-    """CM.S3 (C-3) — in TEAM mode, wrap `backend` in the read-your-writes `JournalOverlay` so reads
-    merge the pending journaled-but-unflushed team writes over the backend. Applies whether the read
-    is served by the live shared backend or the degraded LOCAL floor — a just-approved write is
-    visible either way. LOCAL mode / no routing (from_router / migrate — no surface) returns the
-    backend UNWRAPPED: the zero-network local hot path is byte-identical and consults no journal."""
-    from .. import run_mode as _rm
-    if routing is None or getattr(routing, "mode", _rm.LOCAL) != _rm.TEAM:
-        return backend
-    # The SAME path TeamJournal.for_surface(surface) resolves (root == surface.mokata_dir), so the
-    # overlay reads exactly the journal the team-write path appends to.
-    from ..team_journal import JOURNAL_FILENAME, TeamJournal
-    from .overlay import JournalOverlay
-    journal = TeamJournal(os.path.join(root, TEMP_LOCAL_DIRNAME, JOURNAL_FILENAME))
-    return JournalOverlay(backend, journal)
-
-
-def build_backend(tool: str, root: str,
-                  clients: Optional[Dict[str, Any]] = None,
-                  config: Optional[Dict[str, Any]] = None,
-                  project: Optional[str] = None,
-                  routing: Any = None) -> MemoryBackend:
-    """Build the backend the router resolved to, honoring the tool's per-tool `config`
-    (Stage 24A) and degrading to the SQLite floor when a chosen backend needs external
-    wiring that isn't present. `config` is the manifest's `tools.<id>.config` block;
-    defaults are unchanged when it's absent. `project` (Stage 71a) SCOPES the shared
-    Postgres backend to the current project; None spans all (review). Local SQLite/Obsidian
-    are already per-repo and ignore it.
-
-    CM.S2 (C-2): `routing` is the ONE read-routing decision (`degrade.resolve_read_routing`).
-    For the shared Postgres tool it GATES the choice on the SAME cached E2 health verdict the
-    badge/doctor use — a troubled verdict routes straight to the LOCAL floor (no redundant
-    connect) and the fall-back is marked degraded on `routing`, so a team-mode read served
-    locally is never silent. When `routing` is None (from_router / migrate — no surface) the
-    behaviour is byte-identical to before (the local, non-team path).
-
-    CM.S3 (C-3): in TEAM mode the resolved backend is wrapped ONCE, at this boundary, in the
-    read-your-writes `JournalOverlay` — so a journaled-but-unflushed team write is visible to the
-    very next read. This is applied for WHATEVER team mode resolved to (the live shared backend OR
-    the degraded local floor), because the journal-first write path activates on team MODE, not on
-    a particular tool. LOCAL / no routing returns the raw backend UNWRAPPED (byte-identical
-    zero-network hot path; the journal is never consulted). This RETIRES the B3 read-through
-    cache (D7): stores are per-call and the overlay supplies coherence."""
-    backend = _select_raw_backend(tool, root, clients or {}, config or {}, project, routing)
-    return _overlay_for_team(backend, routing, root)
-
-
-def _select_raw_backend(tool: str, root: str, clients: Dict[str, Any], config: Dict[str, Any],
-                        project: Optional[str], routing: Any) -> MemoryBackend:
-    """Resolve the concrete storage backend (NO overlay — `build_backend` applies that). This is
-    the CM.S2 selection body verbatim: the shared-Postgres choice is gated on the routing verdict,
-    and any unavailability degrades to the guaranteed SQLite floor."""
-    # Default runtime stores are transient: under .mokata/temp_local/memory/ (Stage 24D).
-    # A user-set config.path/config.vault overrides this and may point anywhere.
-    mem_dir = os.path.join(root, TEMP_LOCAL_DIRNAME, MEMORY_DIRNAME)
-    floor = lambda: SQLiteBackend(os.path.join(mem_dir, "memory.db"))  # noqa: E731
-
-    if tool == "obsidian":
-        vault = config.get("vault")
-        vault = os.path.expanduser(vault) if vault else os.path.join(mem_dir, "vault")
-        return ObsidianBackend(vault)
-    if tool == "sqlite":
-        path = config.get("path")
-        path = os.path.expanduser(path) if path else os.path.join(mem_dir, "memory.db")
-        return SQLiteBackend(path)
-    if tool == "postgres":
-        # opt-in remote store; degrade to the SQLite floor if unset/unreachable (P8).
-        # Stage 71a — scoped to the current project so one shared DSN hosts many, no bleed.
-        # CM.S2 — when the ONE routing decision (from the shared E2 health verdict) already
-        # says degraded, route straight to the LOCAL floor: no redundant connect, and the
-        # loud degrade marker on `routing` is what the read surfaces (never a silent fallback).
-        if routing is not None and getattr(routing, "degraded", False):
-            return floor()
-        # D1 — capture WHY the build failed. A schema failure (unprovisioned / out of range /
-        # a DML-only role that cannot CREATE) is not an unreachable database, and telling the
-        # user to `mokata sync` a healthy connection is how this bug stayed invisible.
-        failures: List[Exception] = []
-        backend = build_postgres_backend(config, project=project,
-                                         on_unavailable=failures.append)
-        if backend is None:
-            # Residual race: health said OK but the live backend build still failed, so the
-            # read really did fall back. Mark it degraded so the store stays honest (never a
-            # silent team→local fall-through) — mirrors the routing-gated case above.
-            if routing is not None and getattr(routing, "served_by_team", False):
-                from ..degrade import FAILURE_UNREACHABLE
-                exc = failures[0] if failures else None
-                routing.mark_degraded_from_build_failure(
-                    failure_class=getattr(exc, "failure_class", FAILURE_UNREACHABLE),
-                    detail=(str(exc) if exc else "shared backend unavailable at read time"),
-                    fix=getattr(exc, "fix", ""))
-            return floor()          # unavailable → LOCAL SQLite floor
-        return backend
-    if tool == "native-memory":
-        client = clients.get("native-memory")
-        if client is not None:
-            return NativeMemoryBackend(client)
-        # no client wired -> degrade to the guaranteed floor (not a second detection)
-        return floor()
-    # "ripgrep"/unknown, or unavailable -> SQLite floor
-    return floor()
-
-
-def select_memory_backend(router: Any, root: str,
-                          clients: Optional[Dict[str, Any]] = None,
-                          project: Optional[str] = None,
-                          routing: Any = None) -> MemoryBackend:
-    try:
-        res = router.resolve("memory_store")
-    except (ManifestError, AttributeError):
-        res = None
-    tool = res.tool if (res is not None and res.available and res.tool) else "sqlite"
-    config: Dict[str, Any] = {}
-    try:
-        config = router.manifest.tool_config(tool)
-    except AttributeError:
-        config = {}
-    # CM.S2 — thread the ONE read-routing decision so the shared-tool choice is gated on the
-    # SAME E2 health verdict (never a second, divergent availability answer). None → unchanged.
-    return build_backend(tool, root, clients, config, project=project, routing=routing)
-
-
-def _scope_context_for(surface: Any, project: Any) -> Any:
-    """TM.S6 — the working scope context (doc 62 §2) for a store built from a surface.
-
-    LOCAL mode (the default) → None: NO scope filtering, so recall is byte-identical to
-    pre-TM.S6. TEAM mode → a shared context whose PROJECT element is the current project key
-    (mapping the Stage-71a project onto the project level); the personal element matches any
-    personal item (per-user identity is TM.S10) so existing personal items are never dropped.
-    Fail-closed + degrade-clean: any error reads as local (None)."""
-    try:
-        from .. import run_mode as _rm
-        if _rm.read_mode(surface) != _rm.TEAM:
-            return None
-        from .scope import ScopeContext
-        proj = project if isinstance(project, str) and project else None
-        category = (surface.manifest.setting("memory", {}) or {}).get("category")
-        return ScopeContext(project=proj, category=category or None, user=None)
-    except (ImportError, AttributeError, ManifestError):
-        # D5 — the real raisers: a half-installed package (ImportError), a duck-typed surface with
-        # no `.manifest`/a non-mapping `memory` block (AttributeError), and a broken manifest
-        # (ManifestError). None → LOCAL/no scope filtering, the fail-closed default this docstring
-        # already promises: an unresolvable scope NEVER silently widens a team read.
-        return None
-
-
-def _identity_and_access_for(surface: Any) -> Tuple[Any, Any]:
-    """TM.S10 — the run identity + access policy for a store built from a surface (doc 52 M-1/M-2).
-
-    Identity is the run identity (`team_audit.actor()`) in BOTH modes — the real author is always
-    stamped (M-1, "no more `user` everywhere"). The access POLICY only ENFORCES in team mode (doc 62
-    §6): team mode → an enforcing policy from `settings.access.grants`; local mode → None. None IS
-    the local contract — no enforcement, byte-identical recall, single-user full personal access —
-    so local is NOT a degrade and never earns a notice.
-
-    D5b — the TEAM-mode fallback is now genuinely FAIL-CLOSED, which is what this docstring always
-    claimed and the code did not do. A team store whose grants could not be READ (an unreadable
-    `.manifest.data`) fell back to `access = None`, and None turns enforcement OFF: the broken
-    manifest — the very case enforcement has to survive — was the one case that disabled it. The
-    fallback is now a DENY-BY-DEFAULT policy (`enforce=True`, zero grants): every shared
-    (team/project/global) item becomes unreadable and uneditable, and only the identity's OWN
-    personal items stay reachable (`AccessPolicy.roles_for`'s owner rule — and if the identity is
-    unresolvable too, not even those). A teammate's private items cannot leak out of a degrade.
-
-    The ONE residual fail-open, named rather than papered over: a half-installed package
-    (ImportError) leaves neither the mode resolver nor the policy ENGINE importable, and code that
-    cannot import `AccessPolicy` cannot construct a deny-by-default one. Forcing enforcement on what
-    may well be a LOCAL store would break local's zero-config contract, so the floor there stays
-    local — but LOUDLY (`note_degraded`), never as a secret. Neither path crashes the store."""
-    try:
-        from ..team_audit import actor
-        identity = actor()
-    except Exception:
-        # D5 — deliberately left BROAD, with no narrow class to name: `team_audit.actor()`'s own
-        # contract is never-raise (it resolves the run identity and falls back to a placeholder),
-        # so there is no honest class to enumerate here. An unresolvable identity is not a degrade
-        # of a capability — the write path stamps a placeholder author and carries on.
-        identity = None
-    try:
-        from .. import run_mode as _rm
-        from .access import AccessPolicy
-    except ImportError as exc:
-        # D5b — a half-installed package: the mode resolver and/or the policy engine are absent.
-        # The mode is UNKNOWABLE here (only `run_mode` can answer it), so a deny-by-default policy
-        # would be imposed on local stores too — breaking the zero-config contract for a fault that
-        # is not theirs. Local is the honest floor; the notice is what stops it being a silent one.
-        from ..degrade import FAILURE_ENGINE, note_degraded
-        note_degraded("memory-access", FAILURE_ENGINE,
-                      fallback="access enforcement is OFF — the policy engine could not be imported",
-                      fix="reinstall mokata (`pip install -U mokata`), then run `mokata doctor`",
-                      detail=str(exc))
-        return identity, None
-
-    access = None
-    if _rm.read_mode(surface) == _rm.TEAM:      # never raises; an unknown mode is NEVER team
-        try:
-            settings = surface.manifest.data.get("settings") or {}
-            access = AccessPolicy.from_settings(settings, enforce=True)
-        except AttributeError as exc:
-            # D5b — the real (and only) raiser left: a surface whose `.manifest.data` is absent or
-            # is not a mapping — a duck-typed surface, a half-written/torn manifest. `read_mode`
-            # never raises and `from_settings` is itself fail-closed, so nothing else reaches here.
-            # FAIL-CLOSED: deny by default rather than disable enforcement.
-            from ..degrade import FAILURE_CORRUPT, note_degraded
-            access = AccessPolicy(grants={}, enforce=True)
-            note_degraded("memory-access", FAILURE_CORRUPT,
-                          fallback="team access DENIED by default — the manifest's grants could "
-                                   "not be read",
-                          fix="repair the manifest (`mokata doctor`), then retry",
-                          detail=str(exc))
-    return identity, access
 
 
 # -------------------------------------------------------------- instrumentation (C8)
@@ -371,6 +159,10 @@ class ReviewResult:
 
 
 def _default_confirm(text: str) -> bool:
+    # PRE-SIMP (0.0.15) — the default confirm callable. `read_yes_no` (the terminal prompt, an L4
+    # surface concern) is imported LAZILY here so this L2 domain module carries NO module-top import
+    # of the prompt/UI layer (LAYER-LINT's seed). Same prompt text, byte-identical behaviour.
+    from ..prompt import read_yes_no
     return read_yes_no(text, "Approve?")
 
 
@@ -386,8 +178,15 @@ class MemoryStore:
                  scope_context: Any = None,
                  identity: Any = None,
                  access: Any = None,
-                 read_routing: Any = None) -> None:
+                 read_routing: Any = None,
+                 team_writer: Any = None) -> None:
         self.backend = backend
+        # PRE-SIMP (0.0.15) — the injected TEAM-mode write strategy (doc 91 layering seed). None
+        # (from_router / direct construction) => resolved lazily to the default `TeamWriter` on first
+        # team write, so behaviour is byte-identical whether injected or not. Set (from_surface) =>
+        # the collab-layer writer resolved where the surface is built, so `store` no longer reaches
+        # UP to team_journal/team_audit/teamdb itself — SIMP.S3 can evolve the writers behind it.
+        self._team_writer = team_writer
         # CM.S2 (C-2) — the ONE read-routing decision (degrade.ReadRoutingDecision) for this
         # store. None (local/zero-config/direct construction) => never degraded, byte-identical.
         # Set (from_surface) => carries whether a team-mode read is served from the LOCAL
@@ -468,12 +267,16 @@ class MemoryStore:
         # local/zero-config gets identity stamping but NO enforcement (byte-identical), so a single
         # user keeps full personal access. Fail-safe: any error degrades to no identity / no policy.
         identity, access = _identity_and_access_for(surface)
+        # PRE-SIMP (0.0.15) — resolve the TEAM-writer strategy HERE, where the surface is built, so
+        # the store never imports the collab layer (team_journal/team_audit/teamdb) at its own edge.
+        from .team_writer import TeamWriter
         return cls(backend, enabled_types=enabled_memory_types(surface.manifest),
                    stats_store=surface.state,
                    ledger=AuditLedger.from_mokata_dir(surface.mokata_dir),
                    embedder=embedder, knowledge_layer=knowledge_layer, surface=surface,
                    scope_context=_scope_context_for(surface, scope),
-                   identity=identity, access=access, read_routing=routing)
+                   identity=identity, access=access, read_routing=routing,
+                   team_writer=TeamWriter())
 
     # --- scope (TM.S6, doc 62 §2) -------------------------------------------
     def scoped_active(self, mtype: Optional[str] = None) -> List[MemoryItem]:
@@ -704,6 +507,15 @@ class MemoryStore:
         else:
             backend_call()
 
+    def _resolve_team_writer(self) -> Any:
+        """The injected TEAM-writer strategy, or a lazily-constructed default `TeamWriter` (PRE-SIMP,
+        0.0.15). Only ever reached on the team-mode write path (guarded by `_team_mode()`), so a
+        directly-constructed store that forces team mode still gets the identical default writer."""
+        if self._team_writer is None:
+            from .team_writer import TeamWriter
+            self._team_writer = TeamWriter()
+        return self._team_writer
+
     def _journal_team_write(self, item: MemoryItem, ledger_id: Any, *,
                             op: str = _OP_PUT,
                             base_revision: Optional[int] = None) -> None:
@@ -711,50 +523,21 @@ class MemoryStore:
         instead of writing direct-to-backend. `ledger_id` is the gate's approval id (C5/P2): the
         deferred flush re-records it, so deferred durability inherits the human decision. `op`
         (put/update/delete) + `base_revision` drive the flush's compare-and-set (TM.S5/S5c), so a
-        concurrent change SURFACES as a conflict — never silently last-writer-wins."""
-        import json as _json
-        from .. import team_journal, teamdb
-        from ..project import project_id
-        # D5 — both handlers below are deliberately left BROAD, with no narrow class to name:
-        # `project.derive_project_id` ("Never raises") and `team_audit.actor` (never-raise by
-        # contract) both promise not to raise, so there is no honest class to enumerate for either.
-        # Naming a made-up class here would be worse than the broad catch it replaced.
-        try:
-            project = project_id(self._surface)
-        except Exception:
-            project = None
-        try:
-            from ..team_audit import actor as _actor
-            who = _actor()
-        except Exception:
-            who = "user"
-        # D6 — `to_doc` (not `to_dict`): the DURABLE serializer, which refuses a doc newer than the
-        # schema this build speaks. The journal is a durable write like any other — a stripped doc
-        # journaled here would flush to the shared table and destroy a teammate's approved fields.
-        payload = {"id": item.id, "mtype": item.mtype, "subject": item.subject,
-                   "status": item.status, "doc": _json.dumps(item.to_doc()),
-                   "project": project}
-        # base_revision None → a believed-new row (INSERT ... ON CONFLICT DO NOTHING at flush; a
-        # concurrent create SURFACES as a conflict); an int → the revision-guarded UPDATE/DELETE
-        # base. Either way, never a silent overwrite.
-        team_journal.record_team_write(
-            self._surface, op=op, table=teamdb.MEMORY_TABLE, key=item.id,
-            payload=payload, ledger_id=ledger_id, project=project, actor=who,
-            base_revision=base_revision)
+        concurrent change SURFACES as a conflict — never silently last-writer-wins.
+
+        PRE-SIMP (0.0.15) — delegates to the injected team-writer seam so `store` no longer reaches
+        UP to team_journal/team_audit/teamdb itself; the resolved write is byte-identical."""
+        self._resolve_team_writer().journal_write(
+            self._surface, item, ledger_id, op=op, base_revision=base_revision)
 
     def _best_effort_flush(self) -> None:
         """After a healthy gated team write, flush the journal so the write reaches Postgres
         immediately (doc 48 E3: 'flush when healthy'). NEVER blocks and NEVER raises — offline
         returns skipped (the write stays journaled: work-locally, nothing lost; `mokata sync`
-        reconciles later). The committed gate decision is never undone by a flush hiccup."""
-        try:
-            from .. import flush_liveness
-            # CM.S4 — the liveness-aware flush: a failed flush is now retried with bounded backoff
-            # on subsequent touchpoints (no daemon) and the pending backlog is counted/surfaced,
-            # instead of silently waiting. Healthy writes drain immediately (byte-identical).
-            flush_liveness.flush_with_liveness(self._surface, ledger=self._ledger)
-        except Exception:  # pragma: no cover - flush is best-effort by construction
-            pass
+        reconciles later). The committed gate decision is never undone by a flush hiccup.
+
+        PRE-SIMP (0.0.15) — delegates to the injected team-writer seam (byte-identical flush)."""
+        self._resolve_team_writer().flush(self._surface, self._ledger)
 
     def remember(self, item: MemoryItem,
                  confirm: Optional[Callable[[str], bool]] = None,

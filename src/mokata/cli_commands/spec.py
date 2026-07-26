@@ -85,6 +85,25 @@ def cmd_spec_emit(args: argparse.Namespace) -> int:
         print(f"error: {err}", file=sys.stderr)
         return 1
 
+    # GR-PA-WIRE — the prior-art step-ran gate at the CLI emit seam (mirrors the gate-computation
+    # placement `knowledge.py` uses for spec-check). Reads the CHOSEN approach's step-ran evidence
+    # from the DURABLE `approved_approach` Handoff on the run-scoped store — the SAME key and SAME
+    # `check_prior_art_ran` verdict the MCP `spec_emit` reads (run_id == session_id, so the run-scoped
+    # store resolves the exact file the agent wrote). Degrade-clean: no persisted approach (a
+    # standalone spec) → no gate. Fail-CLOSED: a legacy/missing `handoff.prior_art` refuses, naming
+    # the road back. NOTE the deliberate seam difference from GR.S3, whose emit refusal reads
+    # `brainstorm_progress`; the Handoff is the durable approval record (see govern/prior_art_gate).
+    from ..brainstorm import load_approved_approach
+    from ..govern.prior_art_gate import handoff_prior_art_gate
+    handoff = load_approved_approach(store)
+    if handoff is not None:
+        pa_gate = handoff_prior_art_gate(handoff)
+        if pa_gate.refused:
+            print(f"[BLOCK] prior-art — {pa_gate.render()}")
+            print("\nRe-run the prior-art pass for the chosen approach and re-approve, then emit "
+                  "again. Nothing was written.")
+            return 1
+
     ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
     # The human sees the whole spec — every AC and the test that covers it — before the question.
     # Off a TTY `read_yes_no` fails CLOSED (P2): a non-interactive shell cannot emit by accident;

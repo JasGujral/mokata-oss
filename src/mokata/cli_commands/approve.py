@@ -66,7 +66,11 @@ def cmd_approve(args: argparse.Namespace) -> int:
 
     root = _root(args.path)
 
-    if not args.proposal_id:
+    # `--list` is the road back for a human who lost the id, and it is the command mokata itself
+    # EMITS (`awaiting.LIST_CMD`) from every propose-path result, from doctor, and from the
+    # description contract on every gated write. A bare `mokata approve` lists too — the flag is
+    # the spelling the product advertises, so the product must accept it.
+    if args.list_pending or not args.proposal_id:
         return _list(root)
 
     p = approval.load(root, args.proposal_id)
@@ -109,21 +113,38 @@ def cmd_approve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _age(seconds: float) -> str:
+    m = int(max(0.0, seconds)) // 60
+    if m < 1:
+        return "just now"
+    return f"{m // 60}h{m % 60:02d}m ago" if m >= 60 else f"{m}m ago"
+
+
 def _list(root: str) -> int:
-    """What is waiting on the human (read-only)."""
+    """What is waiting on the human — id, tool, age, and the command that resolves it.
+
+    READ-ONLY, and deliberately CONTENT-FREE. This is the one approve surface that is
+    non-interactive, so unlike `mokata approve <id>` — which fails closed off a TTY and shows the
+    write in full because a human asked at their own terminal — this one can be run by the model
+    and its output can land in a transcript. So it obeys the `awaiting` module's discipline
+    exactly: ids, tools and commands, never `summary`, `preview`, or `target` (a memory write's
+    target is `memory:<subject>` — the user's own words). The full write is one command away, at
+    the human's terminal, where it belongs."""
+    import time
+
     from .. import approval
 
     items = approval.pending(root)
     if not items:
-        print("no durable writes are waiting for your approval.")
+        print("mokata · nothing is waiting on you ✓ — no durable writes are pending.")
         return 0
+    now = time.time()
     print(f"mokata · {len(items)} durable write(s) waiting for your approval:\n")
     for p in items:
         mark = "APPROVED (redeemable once)" if p.approved else "awaiting your approval"
         print(f"  {p.proposal_id}  {p.tool:16} {mark}")
-        print(f"    {p.summary or p.target}")
-        print(f"    expires in {p.expires_in() // 60}m — approve with: "
-              f"mokata approve {p.proposal_id}")
+        print(f"    proposed {_age(now - p.created_at)} — expires in {p.expires_in(now) // 60}m")
+        print(f"    see it in full and approve it with: mokata approve {p.proposal_id}")
         print()
     return 0
 
@@ -134,6 +155,9 @@ def register(sub, common):
         help="approve ONE proposed durable write (the human act an MCP tool cannot perform)")
     p_approve.add_argument("proposal_id", nargs="?", default="",
                            help="the proposal id the model showed you (omit to list pending)")
+    p_approve.add_argument("--list", dest="list_pending", action="store_true",
+                           help="list the writes waiting on you — id, tool and age, read-only "
+                                "(the same as passing no id; this is the spelling mokata emits)")
     p_approve.add_argument("--actor", default="human",
                            help="who is approving (default: human; recorded to the ledger)")
     p_approve.add_argument("--yes", action="store_true",
