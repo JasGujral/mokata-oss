@@ -141,7 +141,18 @@ class _NoPinnedSession(unittest.TestCase):
         os.environ.pop("MOKATA_SESSION_ID", None)
 
 
-@unittest.skipIf(os.geteuid() == 0, "root can read a 0o000 file — the fault cannot be staged")
+def _is_root() -> bool:
+    """True when the process can read/write through a mode it has no permission for.
+
+    `os.geteuid` is POSIX-ONLY and this is evaluated at IMPORT time (a class decorator), so a bare
+    call raises `AttributeError` on Windows and collapses the WHOLE module during unittest
+    discovery — reddening every job that merely imports it, including the hooks-execute legs whose
+    own steps pass. Windows has no euid: report "not root" and let the permission-mode tests run
+    (or be skipped by their own guards)."""
+    return getattr(os, "geteuid", lambda: 1)() == 0
+
+
+@unittest.skipIf(_is_root(), "root can read a 0o000 file — the fault cannot be staged")
 class _NeedsPermissions(_NoPinnedSession):
     pass
 
@@ -270,7 +281,7 @@ class TestCliRecordFailsLoudly(_NoPinnedSession):
             _persist_run(d, "solo")
             state_root = os.path.dirname(_log(surface).path)
             os.makedirs(state_root, exist_ok=True)
-            if os.geteuid() == 0:
+            if _is_root():
                 self.skipTest("root writes through a 0o500 directory")
             before = stat.S_IMODE(os.stat(state_root).st_mode)
             os.chmod(state_root, 0o500)                 # read+execute, no write

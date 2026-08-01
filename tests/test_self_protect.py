@@ -106,6 +106,11 @@ def _hook(cwd, path=None, command=None, tool=None, env=None, run_cwd=None):
         [sys.executable, "-c",
          "import sys; from mokata.hook_cli import gate_guard_main; sys.exit(gate_guard_main([]))"],
         input=_envelope(cwd, path=path, command=command, tool=tool), text=True,
+        # `text=True` alone decodes with the LOCALE encoding — cp1252 on a Windows console — so
+        # mokata's UTF-8 refusal text came back mojibake ('—' as 'â€"') and a byte-identical
+        # comparison failed on content that was in fact correct. mokata writes UTF-8 everywhere
+        # (see docs/reference/platform-support.md); the test must read it as UTF-8 too.
+        encoding="utf-8",
         capture_output=True, env=e, timeout=60, cwd=run_cwd or cwd)
     return proc.returncode, proc.stderr
 
@@ -1126,7 +1131,8 @@ class TestRefusalsNameNoContent(unittest.TestCase):
             proc = subprocess.run(
                 [sys.executable, "-c", "import sys; from mokata.hook_cli import gate_guard_main; "
                                        "sys.exit(gate_guard_main([]))"],
-                input=envelope, text=True, capture_output=True, env=e, timeout=60, cwd=d)
+                input=envelope, text=True, encoding="utf-8",   # not the cp1252 console locale
+                capture_output=True, env=e, timeout=60, cwd=d)
             self.assertEqual(proc.returncode, 2)
             self.assertIn(os.path.realpath(target), proc.stderr)
             self.assertNotIn(secret, proc.stderr)
@@ -1142,6 +1148,94 @@ class TestRefusalsNameNoContent(unittest.TestCase):
             code, err = _hook(d, command=f"echo 'AWS_SECRET=abc123XYZ' > {target}")
             self.assertEqual(code, 2)
             self.assertNotIn("AWS_SECRET", err)
+
+
+# ======================================================================================
+# WINDOWS — a separator is a separator. ONE defect that broke containment BOTH ways.
+# ======================================================================================
+
+class TestWindowsSeparatorsSurviveTokenization(unittest.TestCase):
+    r"""`\` is Windows' PATH SEPARATOR but posix-mode `shlex`'s ESCAPE character.
+
+    Eating it broke rule (a) and rule (c) in OPPOSITE directions on Windows (see
+    `selfprotect._tokenize`). These pin the tokenizer on BOTH platforms, so the POSIX escape
+    semantics can never be quietly traded away to buy the Windows fix."""
+
+    WIN_TARGET = r"C:\repo\venv\lib\python3.12\site-packages\pkg\mod.py"
+
+    def test_a_windows_path_keeps_its_separators_on_windows(self):
+        tokens = SP._tokenize(f"sed -i s/a/b/ {self.WIN_TARGET}")
+        if os.name == "nt":
+            self.assertIn(self.WIN_TARGET, tokens)
+            # …and with the separators intact there IS a `site-packages` component for rule (a).
+            self.assertIn("site-packages", SP._components(self.WIN_TARGET))
+        else:
+            # POSIX: `\` is a REAL shell escape and stays one — byte-identical, deliberately.
+            self.assertIn("C:repovenvlibpython3.12site-packagespkgmod.py", tokens)
+
+    def test_posix_escape_semantics_are_untouched(self):
+        if os.name == "nt":
+            self.skipTest(r"`\ ` is not an escape on Windows — the platform's own rule")
+        # An escaped space is ONE file. The Windows fix must never turn this into two tokens.
+        self.assertEqual(SP._tokenize(r"tee /tmp/a\ b.py"), ["tee", "/tmp/a b.py"])
+
+    def test_quotes_and_operators_tokenize_identically_on_both_platforms(self):
+        self.assertEqual(SP._tokenize("echo a && echo b; echo c 2>&1"),
+                         ["echo", "a", "&&", "echo", "b", ";", "echo", "c", "2", ">&", "1"])
+        self.assertEqual(SP._tokenize("sed -i 's/x/y/' out.py"),
+                         ["sed", "-i", "s/x/y/", "out.py"])
+
+
+class TestContainmentHoldsOnTheRunningPlatform(unittest.TestCase):
+    r"""BOTH DIRECTIONS, on whatever path shape the running OS actually produces.
+
+    On the Windows CI leg every path below is a real `C:\…` path with backslashes — precisely
+    the shape that used to defeat the parser — so these run as Windows pins there and as POSIX
+    pins on Linux/macOS."""
+
+    def test_an_ordinary_in_repo_write_is_allowed(self):
+        with tempfile.TemporaryDirectory() as d:
+            for cmd in (f"echo hi > {os.path.join(d, 'notes.md')}",
+                        f"sed -i s/a/b/ {os.path.join(d, 'src', 'app.py')}"):
+                with self.subTest(cmd=cmd):
+                    self.assertTrue(SP.check_command(cmd, workspace_root=d).allowed, cmd)
+
+    def test_an_installed_tree_write_is_still_blocked(self):
+        with tempfile.TemporaryDirectory() as d:
+            target = _fake_site_packages(d)
+            out = SP.check_command(f"sed -i s/installed/hacked/ {target}", workspace_root=d)
+            self.assertFalse(out.allowed, target)
+            self.assertEqual(out.rule, SP.RULE_INSTALLED)
+
+    def test_a_real_out_of_root_write_is_still_blocked(self):
+        # Deliberately NOT under the system temp root: that carries a documented scratch
+        # allowance, so a tempdir target would prove nothing about containment. An absolute
+        # path on the current drive is out-of-root on every platform.
+        outside = os.path.abspath(os.path.join(os.sep, "mokata-out-of-root-pin", "x.py"))
+        with tempfile.TemporaryDirectory() as d:
+            out = SP.check_command(f"echo hi > {outside}", workspace_root=d)
+            self.assertFalse(out.allowed, outside)
+            self.assertEqual(out.rule, SP.RULE_OUT_OF_ROOT)
+
+
+class TestTheNulByteIsRejectedOnEveryPlatform(unittest.TestCase):
+    """A cwd that cannot be resolved must yield NO root on BOTH platforms.
+
+    `posixpath.realpath` raises on an embedded NUL; `ntpath.realpath` SWALLOWS it and falls back.
+    Leaning on that difference let rule (c) judge containment against a fabricated root on
+    Windows — a fail-OPEN that POSIX never had."""
+
+    def test_resolve_target_refuses_a_nul_byte(self):
+        self.assertIsNone(SP.resolve_target("\x00"))
+        self.assertIsNone(SP.resolve_target("some/path\x00.py"))
+
+    def test_workspace_root_for_yields_no_root_for_a_nul_byte(self):
+        self.assertIsNone(SP.workspace_root_for("\x00"))
+
+    def test_a_nul_target_is_declined_rather_than_mis_judged(self):
+        outcome = SP.check_target("\x00", workspace_root=os.getcwd())
+        self.assertTrue(outcome.allowed)     # declines to guess (the OS refuses it anyway)…
+        self.assertIsNone(outcome.target)    # …and never reports a resolved path it invented
 
 
 if __name__ == "__main__":

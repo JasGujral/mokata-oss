@@ -149,8 +149,18 @@ def resolve_target(path: str, base_dir: Optional[str] = None) -> Optional[str]:
 
     Degrade-clean, per `_same_repo`: unresolvable -> None, and the caller treats None as an ALLOW
     it cannot judge. The only real sources are a NUL byte (ValueError) and a cwd that no longer
-    exists (OSError) — and a path carrying a NUL is refused by the OS `open()` anyway."""
+    exists (OSError) — and a path carrying a NUL is refused by the OS `open()` anyway.
+
+    The NUL is rejected EXPLICITLY rather than left to `realpath`. That used to be load-bearing
+    platform behaviour: `posixpath.realpath` raises ValueError for an embedded NUL on 3.12, but
+    `ntpath.realpath` SWALLOWS it and falls back to the abspath'd string. The NUL therefore
+    survived on Windows, `workspace_root_for` walked up to a real marker, and a cwd that cannot
+    be resolved at all yielded a ROOT where POSIX correctly answered None — rule (c) judged
+    containment against a root the caller never had. POSIX already answered None, so this is a
+    Windows-only correction and POSIX behaviour is byte-identical."""
     if not path:
+        return None
+    if "\x00" in path:
         return None
     try:
         expanded = os.path.expanduser(path)
@@ -509,16 +519,35 @@ def _python_targets(code: str) -> List[str]:
 
 
 def _tokenize(command: str) -> Optional[List[str]]:
-    """Shell-like tokens, with OPERATORS as their own tokens.
+    r"""Shell-like tokens, with OPERATORS as their own tokens.
 
     `shlex.split` is NOT enough and that is a real bug this stage hit: it splits on whitespace and
     honours quotes, but it does not know `;`/`&&`/`>` are operators — so `cd /tmp; tee <path>`
     tokenized to `['cd', '/tmp;', 'tee', …]` and the segment split never happened, letting the
     write through. `punctuation_chars=True` is the documented recipe for shell-like lexing: it makes
     `();<>|&` punctuation and groups runs of them, so `>>`, `2>>` (`2`, `>>`) and `2>&1`
-    (`2`, `>&`, `1`) all come apart correctly. None on an unparseable command."""
+    (`2`, `>&`, `1`) all come apart correctly. None on an unparseable command.
+
+    WINDOWS — `lex.escape`. In posix mode `\` is the ESCAPE character, but on Windows it is the
+    PATH SEPARATOR. Left as an escape it silently ate the separators out of every Windows path,
+    and that one defect broke containment in BOTH directions:
+
+      * UNDER-block — `sed -i s/x/y/ C:\…\site-packages\pkg\mod.py` collapsed to the single token
+        `C:…site-packagespkgmod.py`. With no separator left there is no `site-packages`
+        COMPONENT for rule (a) to match, and `_looks_like_path` no longer sees a path at all, so
+        the write was not even judged: exit 0 where 2 was required.
+      * OVER-block — `echo hi > C:\…\repo/notes.md` collapsed to `C:…repo/notes.md`, which is
+        RELATIVE. Resolved against the process cwd it lands outside the workspace, so rule (c)
+        refused an ordinary in-repo write.
+
+    Clearing `escape` on Windows makes `\` an ordinary character; quote-stripping, whitespace
+    splitting and operator grouping are untouched. POSIX is deliberately left alone — there `\`
+    really is the shell's escape (`/tmp/a\ b.py` is ONE file) and changing it would break real
+    quoting, so this is platform-gated and POSIX tokenization stays byte-identical."""
     lex = shlex.shlex(command, posix=True, punctuation_chars=True)
     lex.whitespace_split = True
+    if os.name == "nt":
+        lex.escape = ""
     try:
         return list(lex)
     except ValueError:

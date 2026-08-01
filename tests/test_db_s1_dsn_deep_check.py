@@ -339,7 +339,7 @@ class TestDoctorWiring(unittest.TestCase):
                     pass
             self.assertIn("database (team DSN):", out)
             self.assertIn("team DB OK", out)
-            self.assertEqual(rc, 0)                       # healthy → doctor OK
+            self.assertEqual(rc, 0, out)                  # healthy → doctor OK
             for secret in _SECRETS:                        # secret-safety on real stdout
                 self.assertNotIn(secret, out)
 
@@ -387,7 +387,7 @@ class TestDoctorWiring(unittest.TestCase):
                 with _doctor(d, home, {_ENV: _POOLED_DSN, "NO_COLOR": "1"}) as (rc, out):
                     pass
             self.assertIn(db_doctor.AXIS_POOLER, out)      # the pooler warning shows…
-            self.assertEqual(rc, 0)                        # …but a reachable+healthy DB stays OK
+            self.assertEqual(rc, 0, out)                   # …but a reachable+healthy DB stays OK
 
     def test_db_s1_doctor_solo_silent(self):
         # A solo / no-DSN repo must render NO db section and never reach the DB.S1 probe (P8).
@@ -406,7 +406,7 @@ class TestDoctorWiring(unittest.TestCase):
                     pass
             self.assertNotIn("database (team DSN):", out)  # zero section noise (P8)
             self.assertEqual(probed, [])                   # zero network probe (no DSN to probe)
-            self.assertEqual(rc, 0)
+            self.assertEqual(rc, 0, out)
 
 
 # ================================================================= 4) bounded (never hangs doctor)

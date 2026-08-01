@@ -37,6 +37,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from _support import sample_manifest_data  # noqa: F401  (path fix side-effect)
 
@@ -678,6 +679,33 @@ class TestAdversarialLaundering(_RepoCase):
                 with self.assertRaises(IgnoreError):
                     add_ignore(self.root, SURVIVOR, bad, reason="x", assume_yes=True,
                                out=lambda _m: None)
+
+    def test_route_8b_a_cross_drive_target_is_refused_not_crashed(self):
+        r"""WINDOWS: `ntpath.relpath` RAISES across drives ("path is on mount 'D:', start on
+        mount 'C:'"). A rooted-but-driveless target like `/etc/passwd` resolves against the
+        CURRENT drive, so on the Windows CI leg this laundering route escaped as a ValueError
+        TRACEBACK instead of the governed refusal every other out-of-repo path gets."""
+        from mokata.govern.secret_ignore import IgnoreError, add_ignore
+        if os.name != "nt":
+            self.skipTest("drive letters (and cross-drive relpath) are a Windows concept")
+        drive = os.path.splitdrive(os.path.realpath(self.root))[0].upper()
+        other = "Z:" if drive != "Z:" else "Y:"
+        with self.assertRaises(IgnoreError):
+            add_ignore(self.root, SURVIVOR, other + os.sep + "outside.py", reason="x",
+                       assume_yes=True, out=lambda _m: None)
+
+    def test_route_8c_an_unrelatable_path_is_a_refusal_on_every_platform(self):
+        """The ValueError->refusal conversion itself, pinned without needing two real drives:
+        whatever leaves `relpath` unable to answer, the verdict is a governed IgnoreError and
+        never a crash. Runs on Linux and macOS too, so the guard cannot rot between Windows runs."""
+        from mokata.govern import secret_ignore as SI
+
+        def _boom(_target, _start):
+            raise ValueError("path is on mount 'D:', start on mount 'C:'")
+
+        with mock.patch.object(os.path, "relpath", _boom):
+            with self.assertRaises(SI.IgnoreError):
+                SI.normalize_target(self.root, "src/app.py")
 
     def test_route_9_a_directory_or_glob_cannot_be_scoped(self):
         from mokata.govern.secret_ignore import IgnoreError, add_ignore

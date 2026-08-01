@@ -79,8 +79,16 @@ class _MinimalPath:
 
 
 def _exe_of(command: str) -> str:
-    """The resolved executable token from a wired hook command string."""
-    return shlex.split(command)[0]
+    r"""The resolved executable token from a RENDERED hook command string (`"<exe>" <sub>`).
+
+    `posix=False` matters on Windows: in posix mode `\` is an ESCAPE, so an UNQUOTED Windows
+    path silently loses its separators (`C:\Users\…\bin\mokata-hook` parses to
+    `C:UsersRUNNER~1…binmokata-hook`) and it is the PARSE, not the product, that then fails
+    `isabs`. Non-posix mode keeps the quotes attached, so they are stripped explicitly."""
+    token = shlex.split(command, posix=False)[0]
+    if len(token) >= 2 and token[0] == token[-1] == '"':
+        token = token[1:-1]
+    return token
 
 
 class TestSharedResolverMinimalPath(unittest.TestCase):
@@ -148,10 +156,18 @@ class TestSetupWritesAbsoluteHookPath(unittest.TestCase):
             for event in ("SessionStart", "PreToolUse"):
                 for entry in settings["hooks"][event]:
                     for h in entry["hooks"]:
-                        exe = _exe_of(h["command"])
+                        # EXEC form: `command` IS the executable (`args` carries the subcommand),
+                        # so it is read STRAIGHT — never shell-parsed. Parsing it as a shell word
+                        # is what used to mangle the Windows path and fake a product failure.
+                        exe = h["command"]
                         self.assertTrue(os.path.isabs(exe),
                                         f"{event}: hook not absolute: {exe!r}")
                         self.assertEqual(Path(exe), bindir / HOOK_COMMAND)
+                        # HOOK-RESOLVE, the property that actually matters on Windows: an
+                        # absolute path that names nothing is a silently dead gate — exactly
+                        # the failure class B1 exists to prevent.
+                        self.assertTrue(os.path.exists(exe),
+                                        f"{event}: wired hook does not resolve: {exe!r}")
 
 
 class TestNoHooksSkips(unittest.TestCase):

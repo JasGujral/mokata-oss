@@ -168,7 +168,19 @@ def normalize_target(root: str, path: str) -> str:
     root_abs = os.path.realpath(root)
     target = raw if os.path.isabs(raw) else os.path.join(root_abs, raw)
     target = os.path.realpath(target)
-    rel = os.path.relpath(target, root_abs)
+    try:
+        rel = os.path.relpath(target, root_abs)
+    except ValueError:
+        # WINDOWS — `ntpath.relpath` RAISES when the two paths sit on different drives
+        # ("path is on mount 'D:', start on mount 'C:'"); there is no relative path between
+        # them to compute. A rooted-but-driveless target like '/etc/passwd' resolves against
+        # the CURRENT drive, so an out-of-repo laundering attempt crashed the caller with a
+        # ValueError instead of being REFUSED. A target that cannot even be expressed relative
+        # to the root is, by definition, outside the repo — so it takes the same refusal as
+        # every other out-of-root path, and this stays a governed 'no', never a traceback.
+        raise IgnoreError(
+            f"'{raw}' is outside the repo — an ignore only ever applies to a file in this "
+            f"repository, because that is what makes it reviewable in the diff")
     if rel == os.curdir or rel.startswith(os.pardir + os.sep) or rel == os.pardir:
         raise IgnoreError(
             f"'{raw}' is outside the repo — an ignore only ever applies to a file in this "

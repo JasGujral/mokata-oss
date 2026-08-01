@@ -662,8 +662,17 @@ class TestBothSurfaces(_Base):
             from mokata.session import short_id
             rc, out = run_cli(["worktree", "list", "--path", d])
             self.assertEqual(rc, 0)
+            # Separator-agnostic for the PATH: `git worktree list --porcelain` reports POSIX
+            # separators even on Windows (`C:/Users/…`), while `res.path` is built with
+            # `os.path.join` and is native (`C:\Users\…`). Which convention git prints is git's
+            # business, not a property this test is pinning — what it pins is that the worktree
+            # IS named. Compared with both sides folded to `/`.
+            def _sep(text: str) -> str:
+                return text.replace("\\", "/")
+
+            self.assertIn(_sep(res.path), _sep(out))
             # the SHORT id, exactly as `mokata windows` names a session — one id form, not two.
-            for expected in (res.branch, res.path, "orphan", WL.VERDICT_ACTIVE,
+            for expected in (res.branch, "orphan", WL.VERDICT_ACTIVE,
                              short_id("run-alpha"), "auth rework"):
                 with self.subTest(expected=expected):
                     self.assertIn(expected, out)
