@@ -44,6 +44,13 @@ _SECRET_DSN = f"postgres://{_SECRET_USER}:{_SECRET_PW}@{_SECRET_HOST}:5432/postg
 # A pooled Supabase transaction-mode string (the DB.S0 trap shape).
 _POOLED_DSN = f"postgres://{_SECRET_USER}:{_SECRET_PW}@aws-0-eu.pooler.supabase.com:6543/postgres"
 _SECRETS = (_SECRET_PW, _SECRET_HOST, _SECRET_USER, _SECRET_DSN)
+# The bounded/hanging-connect test gets its OWN DSN. `teamdb.probe` abandons its worker on the
+# budget but the thread lives on, so ~2s later it installs a connection into the process-global
+# `_pg._MANAGER` under whatever DSN it probed — AFTER `_mock_psycopg.__exit__` already ran
+# `reset_manager()`. Sharing `_SECRET_DSN` therefore poisoned every later test on that key
+# (WIN-DOCTOR-SCHEMA). A distinct key means the orphan cannot collide with anything.
+# Precedent: the sibling bounded probe test uses its own `postgres://h/db`.
+_BOUNDED_DSN = "postgres://bounded-h/db"
 
 
 # --------------------------------------------------------------- ProbeResult / inspection doubles
@@ -198,7 +205,15 @@ class _FakeConn:
         for key, rows in self._rows_for.items():
             if key in sql:
                 return _FakeCursor(rows)
-        return _FakeCursor([(1,)])
+        if sql.strip().upper() == "SELECT 1":
+            return _FakeCursor([(1,)])     # the reachability round-trip — the ONE untaught answer
+        # A double that answers questions it was never taught is a LIAR: the old silent
+        # `_FakeCursor([(1,)])` fallback is exactly what turned a wrong CONNECTION into a
+        # plausible wrong ANSWER ("the shared schema is v1") in WIN-DOCTOR-SCHEMA. Anything
+        # this fake was not taught is now a loud failure, not a fabricated `1`.
+        raise AssertionError(
+            f"_FakeConn was asked SQL it was never taught: {sql!r}. Teach it via "
+            f"rows_for=/error_for= — do NOT restore a silent default.")
 
     def close(self):
         self.closed = 1
@@ -435,7 +450,7 @@ class TestBounded(unittest.TestCase):
             surface = _repo(d, mode="team")
             with _mock_psycopg(_FakePsycopg(connect_sleep=2.0)):
                 start = time.monotonic()
-                check = db_doctor.deep_check(surface, environ={_ENV: _SECRET_DSN}, budget_ms=150)
+                check = db_doctor.deep_check(surface, environ={_ENV: _BOUNDED_DSN}, budget_ms=150)
                 elapsed = (time.monotonic() - start) * 1000
         self.assertIsNotNone(check)
         self.assertEqual(check.primary.axis, db_doctor.AXIS_NETWORK)

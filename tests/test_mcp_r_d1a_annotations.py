@@ -215,6 +215,12 @@ class TestResultsUnchanged(unittest.TestCase):
             _repo(d)
             direct = TR.doctor(path=d)                    # the tool called directly
             served = MS._serve(TR.doctor, name="doctor", kind="read")(path=d)   # via D0 wrapper
+            # `_serve` fires a self-registration daemon thread it deliberately never joins (R5).
+            # That thread holds an open fd on `…/state/.session_registry.json.lock`; POSIX unlinks
+            # an open file happily, Windows raises WinError 32 and the TemporaryDirectory teardown
+            # below dies (WIN-LOCKHANDLE). Drain it INSIDE the block — `_await_registrations` is
+            # the seam that exists for exactly this race.
+            MS._await_registrations(5.0)
         # a read tool's output carries NONE of the annotation keys...
         self.assertFalse(annotation_keys & set(direct))
         # ...and the served result is byte-identical to the direct call (annotations are metadata)
