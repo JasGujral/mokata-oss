@@ -86,7 +86,21 @@ def _register(relpath, entries):
 #     have hidden a bug in this module.
 
 _register("team_journal.py", {
-    "_flush_locked": (DEGRADES_LOUD,
+    "_edges_present": (DEGRADES_LOUD,
+        "DB.S7a — the v5 EDGE-TABLE capability probe on the FLUSH connection, and what makes "
+        "'a v4 team degrades byte-identically' (E3) true rather than hoped-for. It must be a PROBE "
+        "and not a try/except around the projection itself, and the reason is specific to Postgres: "
+        "a statement that errors inside an open transaction ABORTS that transaction, so a "
+        "'just try it and catch the missing table' projection would poison the approval group's "
+        "transaction and turn a v4 store's every flush into a rollback. Broad for `_apply`'s reason "
+        "one entry down — psycopg is an optional extra whose error classes cannot be named at "
+        "module scope — and fail-CLOSED, because unknown is not permission. LOUD: a real v4 store "
+        "answers NULL without raising and never lands here, so this handler firing means a v5 store "
+        "silently stopped projecting; `note_degraded('memory-edges', SCHEMA)` names the drift and "
+        "the fix. NOTE the memoizing `setattr` below it carries NO handler on purpose — psycopg3's "
+        "Connection has no `__slots__` (checked against the live driver), so guarding it would hide "
+        "a genuinely novel connection object behind a silent per-entry re-probe."),
+    "_apply_approval_group._apply": (DEGRADES_LOUD,
         "The per-entry DB failure handler, and the reason `_read_remote` can now propagate safely. "
         "A statement (or the CAS-miss re-read) that fails mid-apply leaves the entry PENDING — no "
         "marker is appended, so the replay still reads it as pending and the next healthy flush "
@@ -94,11 +108,42 @@ _register("team_journal.py", {
         "Broad because `conn` is a psycopg connection and psycopg is an OPTIONAL extra whose error "
         "class cannot be named at module scope — narrowing it wrong would turn a transient DB blip "
         "into a CRASHED flush, which is worse than the swallow."),
-    "_decide_conflict": (DEGRADE_CLEAN,
+    "_ask_conflict": (DEGRADE_CLEAN,
         "Non-interactive stdin → `read_yes_no` raises → fail-CLOSED to 'defer'. The signal comes "
         "out loudly and by contract: the conflict stays CONFLICTED, is counted in "
         "`SyncResult.deferred`, and `mokata sync` prints 'some conflicts need your decision'. It "
-        "never silently picks a winner — deferring is the whole point of the handler."),
+        "never silently picks a winner — deferring is the whole point of the handler. "
+        "(DB.S6/R4 renamed it from `_decide_conflict`: it now only ASKS — the state change moved "
+        "to the ONE resolver, `MemoryStore.apply_proposal`.)"),
+    "_ask_group": (DEGRADE_CLEAN,
+        "DB.S7d — `_ask_conflict`'s handler, one approval wider, and identical in kind: "
+        "non-interactive stdin → `read_yes_no` raises → fail-CLOSED to 'defer'. Deferring is "
+        "LOUDER here than in the single case, not quieter: every member of the approval stays "
+        "CONFLICTED and ALL of them are counted in `SyncResult.deferred`, so a group that could "
+        "not be asked about reports as N un-decided writes rather than as a clean pass. Broad for "
+        "the same reason as `_ask_conflict`: `read_yes_no` raises `EOFError` under unittest and "
+        "`OSError` under pytest's captured stdin for the same condition, and a handler that names "
+        "one of them silently stops fail-closing under the other runner."),
+    "_conflict_resolver": (DEGRADES_LOUD,
+        "DB.S6/R4 — building the ONE resolver means building a `MemoryStore`, which composes the "
+        "configured backend chain (SQLite, Postgres via an OPTIONAL driver, the vault backend); "
+        "its raisable set spans classes this module cannot name without depending on the optional "
+        "extras. The fallback resolves NOTHING: every conflict stays conflicted and is counted as "
+        "deferred, so `sync` reports 'some conflicts need your decision' rather than a clean pass "
+        "over conflicts it silently could not touch. Loud: `note_degraded('sync-conflicts', "
+        "UNREACHABLE)`."),
+    "_group_transaction": (DEGRADE_CLEAN,
+        "DB.S6/I1 — a connection object that HAS a `transaction` attribute but cannot produce a "
+        "context manager from it. Broad because `conn` is a third-party driver object (or an "
+        "injected double) whose failure classes cannot be named at module scope. Returning None "
+        "is the documented degrade and it is not silent in effect: the caller falls back to "
+        "per-entry apply and announces any PARTIAL outcome through `FAILURE_PARTIAL_APPLY`."),
+    "_mark_group_conflicted": (DEGRADE_CLEAN,
+        "DB.S6/I1 — the post-rollback re-read of each member's remote row, used only to make the "
+        "conflict prompt richer. Broad because it is the same psycopg surface as the apply. The "
+        "fallback keeps whatever remote the outcome already carried; what must NOT be skipped is "
+        "the conflict MARKER itself, which is why the handler wraps only the read. Losing the "
+        "marker would leave the entry pending and retried forever against a row it cannot win."),
     "sync": (DEGRADE_CLEAN,
         "Floor recovery is best-effort and MUST NOT break sync — but it now PRINTS: `emit(f'floor "
         "recovery skipped: {exc}')`. This is the loud channel `_floor_rows` propagates into, so a "
@@ -164,6 +209,17 @@ _register("memory/tiered.py", {
         "driver error (an OPTIONAL, lazily imported extra, not nameable at module scope), a "
         "sqlite3 error, and the decode of each stored doc; narrowing to what we CAN name would "
         "turn a swallow into a crash on every recall."),
+    "_expansion_tier": (DEGRADES_LOUD,
+        "DB.S7b (K1) — the ≤2-hop edge expansion. A failed traversal must not take a recall down "
+        "with it: the direct matches are already ranked correctly and that IS the pre-DB.S7b "
+        "answer, so the fallback is right. The SILENCE would have been the bug, and specifically "
+        "so here — with no notice, `the walk failed` is indistinguishable from `this store has no "
+        "edges`, and the second is the normal case. A user whose expansion is quietly broken would "
+        "see a perfectly plausible recall forever. It announces "
+        "`note_degraded('memory-expansion', ...)` and falls back to direct-match ranking. BROAD "
+        "for the identical reason as the two handlers above: `expand_from` spans a psycopg driver "
+        "error (an OPTIONAL, lazily imported extra — not nameable at module scope), a sqlite3 "
+        "error on a store mid-migration, and any third-party adapter's own classes."),
 })
 
 
@@ -201,6 +257,25 @@ _register("memory/vector.py", {
         "in earliest. The case the binding EXISTS for — a readable stamp that disagrees — still "
         "refuses loudly (`verify_stamp` → `EmbedderStampMismatch` → a named finding naming the "
         "re-embed migration). BROAD because the raiser is the optional psycopg driver's tree."),
+})
+
+# ------------------------------------------------------- M-4/R5: the injected SUMMARY DRAFTER seam
+_register("memory/consolidation.py", {
+    "_draft_summary": (DEGRADES_LOUD,
+        "M-4/R5's INJECTED SUMMARY DRAFTER (D9: the harness agent, never an in-process LLM). Broad "
+        "by construction — the seam calls FOREIGN caller code (a harness callback that may reach a "
+        "subprocess, a socket, or a timeout), so its raisables are unknowable at module scope, the "
+        "`embedder_identity` situation exactly. It must not raise: a drafted summary is a nicety, "
+        "the consolidation pass is not, and a dead drafter may not take the merge/prune/archive "
+        "proposals riding beside it down with it. LOUD rather than clean because the fallback is "
+        "VISUALLY INDISTINGUISHABLE from success — the placeholder line reads like a summary, so a "
+        "human at the gate would otherwise approve mechanical text believing the turns had been "
+        "read. `note_degraded('memory-summary-drafter', PROVIDER)` names the fallback in those "
+        "terms — PROVIDER and not ENGINE because the engine loaded fine and a reinstall fixes "
+        "nothing; what failed is caller code across a seam. "
+        "Only MALFUNCTIONS speak: no drafter is the documented default (a notice on every default "
+        "install is noise — the embed.py lesson) and a None return is an explicit decline, which is "
+        "an answer, not a fault."),
 })
 
 _register("memory/tier_report.py", {
@@ -352,6 +427,13 @@ _register("progress.py", {
         "The brainstorm-restore probe. On failure the badge falls through to the checkpoint-derived "
         "stage below — still TRUE, just less specific."),
     "_user_stage_arc_lines": (SUPPRESS_OK, "Guards `_badge_state` (documented: caller guards); no arc rendered."),
+    "_worktree_lines": (SUPPRESS_OK,
+        "WT.S4. The run's worktree standing appended to the read-only run-progress block. Both "
+        "things it can render are ADDITIVE and cosmetic — a binding LINE and a one-per-run OFFER "
+        "that creates nothing — so their absence costs a suggestion, never a capability or a "
+        "warning. Broad because the callee spans git-worktree probing + the session registry across "
+        "three OSes, and `mokata progress` / the `progress` MCP tool must never die rendering a "
+        "footnote."),
     "build_stage_badge": (SUPPRESS_OK, "Guards `_badge_state` + `badge_verbosity`; falls back to no badge / BADGE_FULL."),
     "active_skill_surface": (SUPPRESS_OK, "Guards `_badge_state`; no skill surface rendered."),
     "build_todo_items": (SUPPRESS_OK, "An unreadable checkpoint → an empty todo list, not a crashed surface."),
@@ -366,8 +448,9 @@ _register("progress.py", {
 })
 
 
-# badge_run.py (B-BADGE) — session-scoped run resolution for the statusline BADGE only. EVERY handler
-# here guards a COSMETIC badge read or a best-effort convenience write; none guards a decision, a
+# badge_run.py (B-BADGE) — session-scoped run resolution: the statusline BADGE, plus REVIEW-FIX.R1's
+# verdict key (`resolve_verdict_run`, registered last with its own reasoning). Every BADGE handler
+# here guards a COSMETIC read or a best-effort convenience write; none guards a decision, a
 # governed write, or enforcement. The silence is right for the SAME two reasons as progress.py:
 # nothing a user relies on for correctness degrades (resolution just falls open to the clean/no-run
 # badge or to live-narrowing), and the harness re-runs the statusline on EVERY state change, so a
@@ -393,6 +476,27 @@ _register("badge_run.py", {
     "maybe_bind_on_session_start": (SUPPRESS_OK,
         "The SessionStart writer — async/observability, must NEVER block a session. On any failure "
         "no binding is written; the badge falls open to live-narrowing."),
+    # REVIEW-FIX.R1 — the verdict-key resolver. Not cosmetic: it feeds the SHIP GATE, and that is
+    # exactly why silence is correct here. Its failure value (None) is the STRICTEST outcome — the
+    # caller BLOCKS with a legible remedy naming `--run` — so nothing a real failure could hide can
+    # pass a gate. The remedy line IS the loud half; a second notice would fire on the read-only
+    # statusline path that shares these tiers.
+    "resolve_verdict_run": (SUPPRESS_OK,
+        "Any resolution error → None, which makes `ship_review_gate` BLOCK ('no run to attribute "
+        "it to' + the `--run` remedy). A swallowed failure can only ever make ship STRICTER, never "
+        "let an unreviewed change through; the state/registry IO announces itself at its owner."),
+    "_bound_run": (SUPPRESS_OK,
+        "The tier-(i) binding read (checkpoint existence) → None, i.e. treated as no binding: the "
+        "badge falls to live-narrowing and the verdict key falls to the gate hook's resolver, which "
+        "refuses on ambiguity. Never a wrong run, only a narrower one."),
+    # RE-ENTRY — the approval-key resolver, the third consumer of these tiers. Same reasoning as
+    # `resolve_verdict_run`: its failure value is the STRICTEST one available.
+    "resolve_run_for_evidence": (SUPPRESS_OK,
+        "Any resolution error → None, and None makes `mcp.consent._approval_run` fall back to this "
+        "PROCESS's own session id — the narrowest possible key, i.e. exactly the pre-RE-ENTRY "
+        "behaviour. A swallowed failure can therefore only ever make an approval HARDER to redeem "
+        "(a refusal the human resolves by re-approving), never easier; it cannot widen who may "
+        "redeem and cannot reach a commit. The state/registry IO announces itself at its owner."),
 })
 
 
@@ -436,6 +540,21 @@ _register("session_worktree.py", {
         "failed (<exc>) — nothing created.' and returns `WorktreeCreateResult(created=False, "
         "reason=…)`. (2) `session_registry.touch(scope=…)` AFTER the worktree was created: transient "
         "upkeep of a scope LABEL; the worktree exists and is reported either way."),
+    "binding_line": (SUPPRESS_OK,
+        "WT.S4. The run↔worktree binding rendered onto the read-only run-progress block. A binding "
+        "that cannot be resolved is indistinguishable from no binding — which is what an unbound "
+        "run (the common case) looks like — so None is both the safe and the HONEST answer. Broad "
+        "because it spans the registry + `repo_identity` path resolution."),
+    "emit_run_start_offer_once": (SUPPRESS_OK,
+        "WT.S4. The run-start worktree OFFER. It is TEXT that creates nothing, so its absence "
+        "costs a suggestion and never a capability — and the failure direction is the SAFE one: no "
+        "offer means no worktree, which is exactly the never-automatic posture the offer exists to "
+        "protect. Broad because it spans git probing + the registry."),
+    "merge_ready_handoff": (SUPPRESS_OK,
+        "WT.S4. Ship's merge-ready branch handoff. None is the same answer an UNBOUND run gets, "
+        "and an unbound run is defined to produce no handoff prose and no error — so the fallback "
+        "lands ship exactly where it landed before WT.S4 rather than breaking the phase. The work "
+        "is not lost by the silence: the branch and the worktree are both still on disk."),
 })
 
 _register("session_registry.py", {
@@ -493,6 +612,51 @@ _register("mcp/tools_spec.py", {
         "never on an inability to read. Broad because loading the Handoff spans state IO + JSON "
         "parsing. (Distinct from the fail-CLOSED verdict itself: a legacy/missing prior_art is a "
         "read that SUCCEEDS and returns not-run → refusal; this handler only catches read FAULTS.)"),
+    "_code_anchor_emit_refusal": (SUPPRESS_OK,
+        "H-6 S4 WIRE — the MCP-loop enforcement of the code-anchor freshness gate, and the third "
+        "member of the family directly above: it reads the durable `approved_approach` Handoff and "
+        "refuses `spec_emit` when the chosen approach's prior-art CITATIONS are anchored to code "
+        "that has moved. Fails OPEN for the same reason both siblings do — a fault reading "
+        "persisted state must never become a NEW failure mode for a write the user asked for, and "
+        "that argument is stronger here because this gate is itself a new failure mode (a "
+        "deliberate contract change, CHANGELOG 0.0.16). Unlike the prior-art sibling it is ALSO "
+        "fail-open on absent EVIDENCE, not just on read faults: no baseline is no opinion (H-6 "
+        "decision #6), so there is no not-run-shaped verdict to refuse on. Broad because the frame "
+        "spans state IO, JSON parsing, a per-anchor file hash, and (for symbol anchors) an ADOPTED "
+        "graph client whose failure classes are a third party's."),
+    "_knowledge_layer": (SUPPRESS_OK,
+        "H-6 S4 WIRE — builds the adopted code graph for the gate above, the same way "
+        "`MemoryStore.from_surface` does (`store.py:267`, itself registered SUPPRESS_OK for this "
+        "reason). NO GRAPH IS A VALID ANSWER, not a fault: the overwhelmingly common case is a repo "
+        "that has adopted none, and `None` is exactly what the anchor-shape split expects — symbol "
+        "anchors then decline. Announcing it would fire on every emit in every un-adopted repo to "
+        "report the absence of an optional capability."),
+})
+_register("cli_commands/spec.py", {
+    "_emit_knowledge_layer": (SUPPRESS_OK,
+        "H-6 S4 WIRE — the CLI twin of `mcp/tools_spec.py:_knowledge_layer` directly above, "
+        "identical reasoning and identical fallback. It is a SEPARATE function rather than a shared "
+        "import because the two surfaces already keep their gate plumbing separate (see the "
+        "`_prior_art_emit_refusal` / CLI pair); what must be shared is the VERDICT, and that is "
+        "`handoff_code_anchor_gate`, which both call."),
+})
+_register("mcp/consent.py", {
+    # RE-ENTRY — the two new reads at the consent boundary. NEITHER can reach a commit: one picks
+    # the KEY a proposal is filed under, the other only formats a surfacing line.
+    "_approval_run": (SUPPRESS_OK,
+        "Resolving WHICH run an approval belongs to. On any fault it falls back to "
+        "`session.current_run_id()` — this process's own id, the NARROWEST key there is and exactly "
+        "the pre-RE-ENTRY behaviour. So a swallowed failure can only make an approval harder to "
+        "redeem (a named refusal the human clears by re-approving), never easier: it cannot widen "
+        "who may redeem, cannot skip `_verify`, and cannot reach a commit — consent still requires "
+        "an on-disk record a human minted out-of-band. Broad because resolution spans state IO, "
+        "JSON parsing, env and the registry read; narrowing it would just re-list those."),
+    "_other_pending": (SUPPRESS_OK,
+        "The 'other writes already awaiting you' ids for the shared `awaiting_block` head. Purely "
+        "ADDITIVE surfacing over `approval.pending`: on any fault it names no others, which is the "
+        "pre-RE-ENTRY result — the proposal, its id and both commands out are unaffected. A "
+        "surfacing read must never be able to fail the propose it is decorating (the same "
+        "discipline as the `awaiting` reporters). The store IO announces itself at its owner."),
 })
 _register("mcp/tools_approve.py", {
     "_in_chat_enabled": (DEGRADE_CLEAN,
@@ -555,6 +719,14 @@ _register("memory/selection.py", {
 # memory/team_writer.py (the injected team-writer seam); their broad guards ride the TeamWriter
 # methods now (store's `_journal_team_write`/`_best_effort_flush` are thin, except-free delegators).
 _register("memory/team_writer.py", {
+    "TeamWriter._item": (DEGRADE_CLEAN,
+        "DB.S6/R3 — parsing one side of a conflict out of a JSON doc written by ANOTHER machine, "
+        "possibly by another mokata version. Broad because every way that blob can be wrong (torn "
+        "JSON, a non-dict, a missing key, a type the item model rejects) lands here and the answer "
+        "to all of them is the same one: this side cannot be shown. It degrades to None, which the "
+        "conflict prompt renders honestly as 'theirs: unreadable' rather than inventing a value the "
+        "human would resolve against. Narrowing it would let a teammate's malformed row break a "
+        "READ path (`detect_issues`), which is the failure this arm exists to prevent."),
     "TeamWriter.journal_write": (SUPPRESS_OK,
         "Two guards, both around never-raise callees: `project.derive_project_id` ('Never raises') "
         "and `team_audit.actor`. The journal entry is written either way — only its `project` label "
@@ -565,7 +737,54 @@ _register("memory/team_writer.py", {
         "journaled locally and NOT yet flushed to the team DB' — so a swallow here cannot hide a "
         "stranded write; the journal still holds it and the surfaces still say so."),
 })
+_register("memory/staleness.py", {
+    "read_index_epoch": (DEGRADES_LOUD,
+        "DB.S7c2 (STALE-REF) — reading the minting store's `index_epoch` to stamp onto a citation. "
+        "Broad because every way it can fail says ONE thing to the caller — we could not establish "
+        "an epoch — and none of them are nameable at module scope (psycopg is an optional extra). "
+        "The MISSING-capability path never reaches the handler: the SQLite floor has no "
+        "`index_epoch` at all and is answered by the `hasattr` probe above, silently and correctly, "
+        "because STALE-REF was never on there. So arriving HERE means a backend that CLAIMS the "
+        "capability could not answer — and that is precisely the case that must not be silent: "
+        "citations go out un-stamped, the approve-path check never fires again, and a team that "
+        "switched STALE-REF on by moving to Postgres would go on believing it is protecting them. "
+        "Nothing downstream would ever attribute a never-firing gate to a driver error weeks "
+        "earlier. Degrading to OFF (not raising) is still the right direction — a stamp is "
+        "evidence, and evidence that cannot be gathered is absent evidence, never a broken recall. "
+        "`note_degraded('stale-ref', SCHEMA)` names the loss and its fix."),
+})
 _register("memory/store.py", {
+    "MemoryStore._moved_code_anchors": (DEGRADES_LOUD,
+        "H-6 S3 — the code-anchor evidence behind the CODE_ANCHOR_STALE arm. It must not take the "
+        "OTHER arms down with it (contradiction, near-dup and cross-writer are unaffected by a "
+        "failure to hash a file), so it degrades to 'no moved anchors' and `detect_issues` still "
+        "answers. LOUD for the reason `_attach_subgraph` directly below is: silence here is "
+        "uniquely misleading. This arm is the ONLY thing that would tell a human the code under a "
+        "decision moved, and a clean governance view is exactly what they would read as "
+        "confirmation that their anchors are current — the reassurance-shaped failure. It "
+        "announces `note_degraded('memory-code-anchors', LOCAL_IO)`. Broad because the frame spans "
+        "a JSON record read, per-file hashing, and (for symbol anchors) an ADOPTED graph client "
+        "whose failure classes are a third-party's and not nameable at module scope."),
+    "MemoryStore._attach_subgraph": (DEGRADES_LOUD,
+        "DB.S7c1 (K2) — the edge read behind a conflict's subgraph. It must NOT take the conflict "
+        "down with it: a CAS conflict is an approved write that has not landed, and dropping it to "
+        "protect a piece of context would invert the priority the whole arm exists to set. So it "
+        "falls back to `subgraph=None` and the conflict still surfaces. LOUD because the silence "
+        "is uniquely misleading here — showing no relations is indistinguishable from an item that "
+        "genuinely has none, which is the COMMON case, so a broken read reads to a human as "
+        "reassurance right before they overwrite something. It announces "
+        "`note_degraded('memory-subgraph', ...)`. BROAD for the same reason as the expansion and "
+        "recall handlers: `open_edges` spans a psycopg driver error (an OPTIONAL, lazily imported "
+        "extra not nameable at module scope), a sqlite3 error on a store mid-migration, and any "
+        "third-party adapter's own classes."),
+    "MemoryStore._subgraph_visible": (SUPPRESS_OK,
+        "DB.S7c1 — silence is correct and the FALLBACK is the whole point: an unreadable scope set "
+        "returns an EMPTY set, not None. None means 'no scope context' and prunes nothing, which "
+        "would show every dst id to an identity whose visibility we just failed to establish; the "
+        "empty set prunes every item-target edge instead, so the subgraph degrades to code anchors "
+        "and discloses nothing. No second notice is owed — the `_attach_subgraph` handler above "
+        "already announces a broken store read, and two notices for one failure trains the reader "
+        "to skim them."),
     "MemoryStore._team_mode": (SUPPRESS_OK,
         "Guards `run_mode.read_mode`, whose docstring says 'Never raises'. False = LOCAL = the "
         "fail-closed direction (an unknown mode is NEVER team)."),
@@ -592,6 +811,33 @@ _register("memory/store.py", {
     "MemoryStore.promote_scope": (SUPPRESS_OK,
         "Guards `AccessPolicy.can_promote_scope` (itself fail-closed/never-raises). The refusal is "
         "returned to the user: 'access denied: <who> lacks the promotion-approver role for …'."),
+    "MemoryStore._superseded_items": (SUPPRESS_OK,
+        "M-1/R9 (S2) — resolves the items a write would RETIRE, purely so the gate prompt can show "
+        "whose approved memory is about to be displaced. Silence is correct because the failure "
+        "costs a DECORATION, and raising would cost the DECISION: this runs inside `render_write`, "
+        "i.e. while building the approval prompt itself, so an unreadable backend or a dangling id "
+        "would take out the human's ability to approve anything about that item — a cosmetic defect "
+        "escalated into a gate outage. Nothing is suppressed about the WRITE: the item still goes "
+        "through the WriteGate, the secret scan and the human gate unchanged, and a missing prior "
+        "renders as one fewer provenance line, which is honest (we could not read it, so we do not "
+        "claim it). Deliberately no notice — the reader is looking at the prompt right now, and the "
+        "absent block IS the signal."),
+    "MemoryStore.record_usage": (SUPPRESS_OK,
+        "DB.S5 — THE degrade-clean seam for usage telemetry, and the whole reason it is a seam. "
+        "This is a WRITE riding a READ, so the failure it must never have is turning a recall into "
+        "something that can fail: a failed counter bump is swallowed and reported as False, and "
+        "the recall it rode has already produced its answer. Deliberately SILENT (no notice): it "
+        "fires on a read-only store, a v3 team schema or a locked file — none of which the user "
+        "needs to hear about mid-recall, and none of which makes the returned answer wrong. Broad "
+        "by necessity: it spans a psycopg driver error (an OPTIONAL extra, not nameable at module "
+        "scope), a sqlite3 error, and any third-party adapter's own classes."),
+    "MemoryStore.usage_signals": (DEGRADE_CLEAN,
+        "DB.S5 — the READ half of the same telemetry. Returns `{}`, and `{}` is the ZERO signal, "
+        "which the fusion scores as 0.0 recency + 0.0 usage — i.e. the PRE-DB.S5 three-term "
+        "ranking, which is a correct ranking. The signal is a ranking BOOST, not a result, so "
+        "losing it costs an improvement and never a row. No notice on purpose: a notice would be "
+        "an announcement that a feature failed to make things better, which is noise. Broad for "
+        "the same reason as the writer above."),
 })
 
 _register("memory/migrate.py", {
@@ -622,6 +868,21 @@ _register("memory/_pg.py", {
 })
 
 _register("memory/backends.py", {
+    "PostgresBackend._read_edges_present": (DEGRADES_LOUD,
+        "DB.S7a — the v5 EDGE-TABLE capability probe on the shared store, and the exact twin of "
+        "`team_journal._edges_present` (registered there with the same reasoning; two call sites, "
+        "one contract). Broad because every way it can fail says the same thing to the caller: an "
+        "ancient server without `to_regclass`, a psycopg error class that cannot be named at module "
+        "scope (optional extra), a dead connection — none of them establish that the table is "
+        "there, and unknown is not permission. Fail-CLOSED to False, because projecting into a "
+        "table that may not exist would ABORT the caller's Postgres transaction, which is a far "
+        "worse outcome than skipping a derived projection. LOUD rather than silent, and this is the "
+        "load-bearing half: a genuinely v4 store answers this probe SUCCESSFULLY with NULL and "
+        "never reaches the handler, so arriving here means something else went wrong on a store "
+        "that may well be v5 — and the consequence (a projection that quietly stops tracking its "
+        "docs) is exactly the kind of drift nobody would attribute to the cause. "
+        "`note_degraded('memory-edges', SCHEMA)` names it and its fix (`mokata team init`, whose "
+        "backfill re-derives the whole projection)."),
     "PostgresBackend.close": (NARROW_IS_HONEST,
         "Teardown `close()` on a psycopg connection — the driver's classes are not nameable without "
         "a hard dependency on the optional extra, and the connection is being dropped either way."),
@@ -639,6 +900,17 @@ _register("memory/backends.py", {
         "backfill's json_extract rejects. None of it justifies failing a whole store's "
         "construction: False ⇒ the Jaccard floor, which is what the floor is FOR, and the degrade "
         "is announced by `tiered.lexical_tier` on the first recall."),
+    "PostgresBackend._read_scope_backfilled": (SUPPRESS_OK,
+        "DB.S2b's BACKFILL-STAMP PROBE — a capability probe like `fts5_available` directly above, "
+        "and the handler IS the answer. It asks 'has this shared store's scope backfill run?' by "
+        "reading `mokata_schema_version.scope_backfilled`; a missing column (a pre-DB.S2b "
+        "artifact), a missing table, or any driver fault are all the SAME answer — not proven, so "
+        "no. False ⇒ no scope predicate is pushed and `scope.union_read` filters from the item "
+        "`doc` instead, which is the pre-DB.S2b read path: the RESULT IS IDENTICAL, only slower. "
+        "So nothing a caller relies on can pass through unannounced — there is no degraded answer "
+        "to announce, and this is the fail-CLOSED direction (a True on doubt would filter on stale "
+        "columns and silently drop another tenant's rows). A genuine connection fault does not "
+        "hide here either: the very next real query raises it loudly."),
 })
 
 _register("memory/vector.py", {
@@ -757,15 +1029,66 @@ _register("visibility.py", {
 
 _register("mcp/tools_read.py", {
     "status": (SUPPRESS_OK,
-        "An ADDITIVE, optional `pending` key on an otherwise-complete status response. "
-        "`resolve_read_routing` never raises on the read path and carries its own DegradeNotice, so "
-        "the degrade is reported elsewhere; the only thing this can lose is a COUNT."),
+        "Two handlers, both guarding ADDITIVE, optional keys on an otherwise-complete status "
+        "response. (a) `pending`: `resolve_read_routing` never raises on the read path and carries "
+        "its own DegradeNotice, so the degrade is reported elsewhere; the only thing this can lose "
+        "is a COUNT. (b) DOC-ONBOARD `wiring`: `hook_wiring.wiring_drift` is itself never-raise "
+        "(it returns `checked=False` rather than throwing), and the same verdict also reaches the "
+        "user via the SessionStart briefing and `mokata doctor --wiring` — so this can only ever "
+        "cost one advisory key on one of three surfaces."),
     "session_windows": (SUPPRESS_OK,
         "Two handlers: (a) `SR.touch` — WRITE-side self-registration inside a READ tool; failing to "
         "register affects only whether THIS window appears in the list, and corrupts nothing. (b) "
         "`SW.offer_text_once` — a one-time, purely ADDITIVE worktree offer (data, never an action). "
         "Both are broad because they span PID probing + transient-file IO across three OSes, and "
         "neither may break a listing that is otherwise complete."),
+    # REVIEW-FIX.R3 (0.0.16) — the 6r review loop's in-harness half. Both mirror the CLI twins
+    # registered above under `cli_commands/runviews.py`, deliberately: one truth source read and
+    # written through two surfaces must not degrade in two different directions. R4 moved BOTH
+    # pairs together, which is what R3 left the blur here FOR.
+    "review_status": (DEGRADE_CLEAN,
+        "Fail-CLOSED by construction, and that is where the signal comes out: the ONLY thing this "
+        "handler can produce is `blocks: True` — a STOP the caller must act on — so an unreadable "
+        "gate can never let an unreviewed change ship. Documented in the tool's own docstring "
+        "('an unreadable gate reports a block rather than raising'), and it is the same contract "
+        "the CLI twin `cmd_progress_review_status` carries. Broad because the span reaches run "
+        "resolution (session registry + `state/` probing) and a JSONL scan across three OSes. "
+        "`{exc}` is NOT echoed into the message — a parse error can quote the offending log line, "
+        "and a `review_verdict` line carries FINDINGS text, which may quote project content; this "
+        "tool's contract is that no findings reach any answer, including this one. REVIEW-FIX.R4 "
+        "made that bar binding on the CLI twin too, and closed the last divergence: this answer no "
+        "longer claims 'review hasn't run' when the read RAISED — it reports `readable: false` with "
+        "the shared read-error sentences, the same pair the CLI prints."),
+    "review_record": (DEGRADE_CLEAN,
+        "Returns the failure IN the result, and REVIEW-FIX.R4 made it LOUD: `recorded: false`, "
+        "`status: 'error'`, `satisfies_gate: false`, a `reason` naming `{exc}`, and a `message` "
+        "from the SAME `review_record_failed_line` builder its CLI twin prints as it exits "
+        "non-zero. Broad because appending to the shared progress-event JSONL spans filesystem, "
+        "locking and encoding faults, and the review skill must never break on the act of writing "
+        "down its own verdict. Safe in the same direction as its twin: nothing recorded means the "
+        "ship gate finds no verdict and BLOCKS. Echoing `{exc}` is safe here (unlike "
+        "`review_status`) because this is a WRITE fault carrying no log content, and the findings "
+        "text is the CALLER'S OWN argument on this call."),
+})
+
+_register("worktree_list.py", {
+    "build_worktree_report": (DEGRADE_CLEAN,
+        "The registry read behind the session half of the join. Where the signal comes out: this "
+        "handler's ONLY effect is `registry_ok=False`, which is on the returned report, PRINTED by "
+        "`render()` ('the session registry could not be read'), carried in the MCP payload, and — "
+        "the part that makes it a (i) rather than a swallow — FORCES every unresolvable worktree to "
+        "the `unknown` verdict instead of the false `no-session`. A read failure is reported as a "
+        "read failure, never as evidence of absence (P16). The callee `list_sessions` contracts "
+        "never to raise and emits its own classed notice on the way, so this guard is "
+        "belt-and-braces over a documented never-raiser; broad because that callee spans PID "
+        "probing + transient-file IO across three OSes."),
+    "_row": (SUPPRESS_OK,
+        "Guards `run_for_branch`, whose own contract is degrade-clean (it returns None on any "
+        "registry/identity fault — session_worktree.py). The only outcome this handler can produce "
+        "is 'no run resolved', which is the SAME state an unbound worktree already has and is "
+        "handled explicitly below it; it can promote nothing and hide no verdict. Broad because "
+        "the callee reaches the session registry + repo identity across three OSes, and a "
+        "read-only lister must never traceback into the surface it is rendering."),
 })
 
 _register("schema.py", {
@@ -898,6 +1221,14 @@ _register("engine/emit.py", {
         "silently resumed from the WRONG point. `phases.py:_mark_gate_passed` already handled the "
         "IDENTICAL failure loudly via `session_flow.note_persist_failure`; emit simply never called "
         "it. Now it does — the existing channel, not a second one."),
+    "note_supersede": (DEGRADES_LOUD,
+        "SPEC-REEMIT-CLOBBER. The ledger entry is what makes a SUPERSEDED spec reachable (no "
+        "archive-read tool ships), so losing it silently would leave the archived version sitting "
+        "at a key nothing names — history that exists but cannot be found. The spec itself is "
+        "already committed and must NOT be failed by its own bookkeeping, so this rides the same "
+        "`session_flow.note_persist_failure` channel `mark_emitted` above uses, with its own key. "
+        "BROAD ON PURPOSE, exactly as there: the ledger is a caller-supplied object whose failure "
+        "modes are not knowable here."),
 })
 _register("engine/phases.py", {
     "_mark_gate_passed": (DEGRADE_CLEAN,
@@ -928,6 +1259,20 @@ _register("govern/graph_required.py", {
         "`progress.statusline_enabled`: a config read that falls to its documented default, not a "
         "capability degrade. Broad because a malformed manifest can raise from any layer of the "
         "settings read."),
+})
+_register("govern/gate.py", {
+    "WriteGate._carried_forward_seq": (SUPPRESS_OK,
+        "UX-CONFIRM (D7b) — reads the ledger to answer 'has this exact content already been "
+        "approved in this run'. The guarded call is `ledger.entries()`, i.e. file I/O, and the "
+        "failure direction is what makes silence correct: this function's only power is to say "
+        "'do not ask again', so failing to read it means the human IS asked. An unreadable ledger "
+        "costs an extra confirmation prompt — never a skipped one, never a skipped gate. That is "
+        "the fail-CLOSED direction, and it is the same call `approval.from_state` makes (an "
+        "unreadable record is not an approval, so it grants nothing). "
+        "Nothing is suppressed about the WRITE: self-protect, the trust dial, the secret scan and "
+        "governance enforcement all run BEFORE this is consulted and are untouched by it. "
+        "Deliberately no notice — a degrade notice for 'you were asked to confirm something' would "
+        "fire on exactly the safe outcome, and the extra prompt is itself the visible signal."),
 })
 _register("govern/enforce.py", {
     "evaluate": (DEGRADE_CLEAN,
@@ -1024,6 +1369,29 @@ _register("awaiting.py", {
         "MCP-R.D2/UX-NOTIFY — 'will the statusline segment actually reach a human?'. Unknown reads "
         "as False, which only DROPS a channel from an advisory classification; it never suppresses "
         "the wait itself (the tool-result head is unconditional) and never gates a write."),
+})
+_register("hook_wiring.py", {
+    "hook_wiring_report": (DEGRADES_LOUD,
+        "HOOK-RESOLVE — the read-only wiring check that answers 'would the gates actually fire?'. "
+        "Broad on purpose: it runs inside `mokata doctor`, the command you reach for when things "
+        "are ALREADY wrong, so a hand-mangled settings.json or an exotic home must not crash the "
+        "diagnosis. What it must never do is fall to a bare EMPTY report — empty is the honest "
+        "answer for 'no mokata hooks are wired here', so returning it for 'the check blew up' "
+        "would tell a plugin user their enforcement plane is fine when nobody looked, which is "
+        "the exact class of silence this whole stage exists to kill. The failure is carried out "
+        "as `HookWiringReport.unverifiable`, which `govern.doctor.hook_resolution_findings` "
+        "reports as an error-severity `hooks-unverifiable` finding naming the cause. "
+        "`_resolves` is NOT registered because it is no longer broad — it narrowed to "
+        "(ImportError, OSError, ValueError), the whole of what a which/path-exists probe raises."),
+    "wiring_drift": (SUPPRESS_OK,
+        "DOC-ONBOARD — 'is the wiring STALE?', a different question from the one above and with a "
+        "different honest failure answer. It runs on the SessionStart path and inside every MCP "
+        "`status` call, so it is broad for the same reason `hook_wiring_report` is: a weird "
+        "settings.json must not break a session. It cannot lose a verdict the way an empty report "
+        "could, because it does NOT fall back to 'current' — it returns `checked=False`, which "
+        "every caller renders as SILENCE, never as a clean bill of health. The loud story for an "
+        "unreadable wiring surface is already owned by `hooks-unverifiable` above, and saying it "
+        "twice in two voices is how a user learns to ignore both."),
 })
 _register("skills_visibility.py", {
     "skills_visibility": (DEGRADE_CLEAN,
@@ -1130,6 +1498,18 @@ _register("brainstorm_impact.py", {
         "flag `spec_awareness.expand_touch_set` was NOT setting (see above) — same situation, and "
         "this module already got it right."),
 })
+_register("memory/intelligence.py", {
+    "_field": (SUPPRESS_OK,
+        "M-1/R9 (S2) — one provenance FIELD rendered as text for the gate's highlight block. The "
+        "guarded call is `str(value)`, and the only way it raises is a value whose `__str__` does: "
+        "a provenance dict is doc JSON, so it can be hand-edited, imported, or written by a build "
+        "that modelled the field differently. It degrades to the literal word `unknown`, which is "
+        "the module's honest answer for an absent fact anyway — so the failure mode and the "
+        "no-data mode render identically, and neither overstates what mokata knows. Silence is "
+        "right for the same reason as `_superseded_items`: this is the approval PROMPT being "
+        "built, and a render that threw would deny the human the decision. Read-only — it computes "
+        "nothing durable and mutates no item."),
+})
 _register("prior_art.py", {
     "_safe": (SUPPRESS_OK,
         "GR-PA — the per-query wrap for the prior-art step, the exact parallel of "
@@ -1148,11 +1528,33 @@ _register("cli_commands/runviews.py", {
     "cmd_progress_mark": (SUPPRESS_OK,
         "Two handlers: transient run-registry upkeep (commented 'registry upkeep never breaks "
         "recording a stage' — the stage IS recorded, only the index is best-effort), and one that "
-        "PRINTS `could not record '{stage}' ({exc}); continuing`."),
-    "cmd_progress_record_review": (DEGRADE_CLEAN,
-        "PRINTS the failure, and ship's gate fails closed downstream anyway (no verdict ⇒ block)."),
+        "PRINTS `could not record '{stage}' ({exc}); continuing`. REVIEW-FIX.R4 left the return-0 "
+        "posture here DELIBERATELY while making its `record-review` sibling exit non-zero, and the "
+        "code says why: a `stage_enter` moves a BADGE, a `review_verdict` is the GATE EVIDENCE ship "
+        "refuses to proceed without. Losing the first costs a cosmetic; do not unify by symmetry."),
+    "cmd_progress_record_review": (DEGRADES_LOUD,
+        "REVIEW-FIX.R4 — was a (i): it printed `could not record the verdict ({exc}); continuing` "
+        "and returned 0, so a review whose verdict was LOST exited GREEN and nothing reading the "
+        "exit code could tell it from a recorded one. It now prints the shared "
+        "`review_record_failed_line` — the failure, its CONSEQUENCE ('ship's review gate will BLOCK "
+        "as if review never ran'), and the terminal remedy — and returns "
+        "`RECORD_REVIEW_FAILED_EXIT` (1, not the cluster's gate-BLOCK 2; the reasoning is at the "
+        "constant). Still broad, and still must not raise: appending to the shared JSONL spans "
+        "filesystem, locking and encoding faults, and the review skill must not break on the act of "
+        "writing down its own verdict. `{exc}` is echoed because this is a WRITE fault — it carries "
+        "no log CONTENT, unlike the read path's (see `cmd_progress_review_status`)."),
     "cmd_progress_review_status": (DEGRADE_CLEAN,
-        "Fail-CLOSED: prints `({exc})` and returns 2."),
+        "Fail-CLOSED: returns 2, unchanged and non-negotiable — an unreadable gate can never let an "
+        "unreviewed change ship. REVIEW-FIX.R4 fixed WHAT IT SAYS on the way out. It printed "
+        "`review hasn't run — run /mokata:review first ({exc})`, which was two defects in one line: "
+        "it named a remedy (re-run review) that cannot fix a log that will not read, and it echoed "
+        "`{exc}` — a parse fault quotes the offending line, and a `review_verdict` line carries "
+        "FINDINGS text, which may quote project content. It now prints the shared "
+        "`review_read_error_message`/`_unblock` pair: fault named by KIND, located by PATH, no "
+        "`{exc}`. Broad because the span reaches surface load, run resolution (session registry + "
+        "`state/` probing) and a JSONL scan across three OSes. This handler covers only a read that "
+        "RAISED; the unreadable/damaged-log distinction itself lives in `ship_review_gate`, so both "
+        "surfaces get the same two answers from one place."),
     "cmd_windows": (SUPPRESS_OK,
         "Degrade-clean self-registration + a one-time worktree OFFER. The rows still list; the offer "
         "is advisory (P14) and asserts nothing when absent."),
@@ -1197,6 +1599,16 @@ _register("knowledge/freshness.py", {
     "_sid": (SUPPRESS_OK,
         "Session-id resolution falls back to 'default' if identity can't be resolved — cosmetic "
         "scoping of a transient run-state file; nothing is lost."),
+    "FreshnessController._anchor_signal": (SUPPRESS_OK,
+        "H-6 S2 — the code-anchor tripwire's input. It degrades to NO anchor signal, which is "
+        "byte-identical to the pre-H-6 reconcile: the other three signals (dirty-set, HEAD, cold "
+        "walk) still land, and a test pins exactly that rather than the weaker 'it still answers' "
+        "(which `ensure_fresh`'s own DEGRADES_LOUD handler above would satisfy on its own — but "
+        "only by ABANDONING a dirty-set `drain_dirty` has already consumed, losing the edit it "
+        "named). Silent because the outcome is the ABSENCE of a fourth signal, not a wrong answer, "
+        "and because `ensure_fresh` is already the loud voice for a reconcile that genuinely broke. "
+        "Broad because the frame spans a JSON read, file hashing and a bounded scan, and none of "
+        "those failures changes what the caller should do."),
     "FreshnessController._store": (SUPPRESS_OK,
         "Lazily resolves the transient StateStore; None ⇒ freshness simply doesn't persist state "
         "(byte-identical to no freshness). GR.S1-cache precedent."),
@@ -1245,9 +1657,18 @@ _register("knowledge/graph_backend.py", {
         "GR.S4/GR.S2(k) proactive re-index. Degrade-clean → False, which the freshness controller "
         "treats as a rebuild failure ⇒ answer from the AST floor with a LOUD note (announced there, "
         "not swallowed here). Broad because the client's refresh spans subprocess/transport errors."),
+    "CodeReviewGraphBackend.supports_kind": (SUPPRESS_OK,
+        "CRG-NAV capability PROBE, not an operation: it asks an adopted client whether its interface "
+        "maps a kind. It cannot hide a real failure — the fallback is the PERMISSIVE answer (True), "
+        "which sends the query down the ordinary graph path where a genuine failure IS loud "
+        "(BackendError → `note_degraded` in `_run`). Broad because the client is third-party."),
 })
 
 _register("knowledge/layer.py", {
+    "_supports_kind": (SUPPRESS_OK,
+        "The layer-side half of the SAME CRG-NAV capability probe. Identical reasoning: it fails "
+        "PERMISSIVE (assume the backend answers), so nothing is skipped silently — the query still "
+        "runs and any real failure is announced by the loud degrade path below it."),
     "KnowledgeLayer._run": (SUPPRESS_OK,
         "Belt-and-braces around `ensure_fresh`, which is ITSELF the registered loud guard and never "
         "raises — so this is effectively unreachable; if freshness somehow raised, the query still "
@@ -1265,12 +1686,93 @@ _register("hook_cli.py", {
         "fails a tool call — the outer `except` IS the exit-0 floor. A failed dirty-set append just "
         "means the next query reconciles via the HEAD/mtime path instead. Silence is the correct "
         "loudness for the async lane (mirrors `session_start`/`statusline`)."),
+    "user_prompt_submit_main": (SUPPRESS_OK,
+        "H-1a UserPromptSubmit ASYNC CONTEXT-INJECTION hook, and the ONE place where the usual D5 "
+        "answer (`note_degraded`, so the fallback stops being a secret) is the WRONG one. The "
+        "asymmetry is the event: this hook fires on EVERY prompt the human submits, so a notice "
+        "here is not one line about a broken subsystem, it is a line in the human's transcript "
+        "every single turn — and the thing being announced is that a turn got LESS context than "
+        "it could have, never that a guarantee was broken. Nothing is enforced here and nothing "
+        "the user relies on is lost: mokata's rules are still enforced by the gates, and the "
+        "SessionStart briefing still carries the always-on set. Compare `gate_guard_main`, which "
+        "IS loud for the opposite reason — a gate failing open enforces NOTHING while the badge "
+        "says governance is on, which is a lie in the proof (P16). The outer `except` is also the "
+        "FAIL-OPEN floor itself: on this event a non-zero exit does not block a tool call, it "
+        "eats the human's turn, so every arm must reach `return 0`."),
+})
+
+_register("knowledge/anchor_fingerprints.py", {
+    "read_record": (SUPPRESS_OK,
+        "H-6 S1. Absent, unreadable and malformed all mean ONE thing to every caller — there is no "
+        "baseline — and the module's central rule (decision #6, `memory.staleness.is_stale`'s "
+        "direction) is that no baseline is NO OPINION. So the degrade is not a quieter version of "
+        "the answer, it IS the answer: every anchor declines, no proposal is raised and no approval "
+        "is refused. Nothing is lost that a human relies on, because the thing lost is a claim "
+        "mokata would otherwise have had no evidence for. Broad because a corrupt JSON file, a "
+        "permission error and a torn read are indistinguishable from the reader's side and none is "
+        "nameable in a way that would change the outcome."),
+    "_defining_paths": (SUPPRESS_OK,
+        "The SYMBOL arm's graph read. A client/process failure yields `DECLINE_GRAPH_FAILED`, and "
+        "the decline is REPORTED on the verdict rather than swallowed — `AnchorVerdict.reason` "
+        "carries it to whichever surface asked. This is `about_code.py:8-11`'s fail-OPEN rule, "
+        "which is a governing contract rather than a degrade: mokata never manufactures a "
+        "'this code moved' claim from a graph that could not answer. A `note_degraded` here would "
+        "fire on every adopted-graph hiccup for a feature whose correct behaviour in that case is "
+        "to say nothing at all."),
+    "evaluate_anchors": (SUPPRESS_OK,
+        "Per-anchor isolation on a batch read: one anchor that blows up must not cost the other "
+        "anchors their verdicts. The failure is NOT silent — it becomes a DECLINED verdict carrying "
+        "the exception text in `reason`, which is the same channel every other decline uses, and "
+        "the surfaces above render it."),
+    "record_anchors": (SUPPRESS_OK,
+        "Derived bookkeeping on a read path — the `knowledge.freshness.mark_dirty` / "
+        "`injection_ledger.record_injected` pattern, same class of transient-directory state. A "
+        "failed mint degrades to 'no baseline for this anchor', which by decision #6 means the "
+        "anchor declines: strictly the pre-H-6 behaviour, never a wrong claim. Announcing it would "
+        "put a line in the human's transcript about a bookkeeping miss whose entire consequence is "
+        "one more session with nothing to compare against."),
+})
+
+_register("injection_ledger.py", {
+    "_sid": (SUPPRESS_OK,
+        "Identical to `knowledge.freshness._sid`, which this module's whole shape is copied from, "
+        "and registered for the same reason: resolving the session identity is a LOOKUP with a "
+        "documented floor (`\"default\"`), so a failure is not a degraded capability — it is the "
+        "fallback bucket the function already promises. There is nothing to announce."),
+    "record_injected": (SUPPRESS_OK,
+        "H-1a S4 bookkeeping on the async context-injection lane. A ledger write that fails "
+        "degrades to \"we don't know what was injected this session\", whose entire consequence is "
+        "that one item may be injected twice — the exact state this feature exists to improve on, "
+        "and strictly no worse than not having the ledger at all. Announcing it would put a line "
+        "in the human's transcript, potentially every turn, about a bookkeeping miss that costs "
+        "them one duplicated memory line. Mirrors `knowledge.freshness.mark_dirty`, the same "
+        "pattern on the same class of transient run-state."),
 })
 
 _register("bootstrap.py", {
+    "build_injection": (SUPPRESS_OK,
+        "H-1a's per-turn recall pack, and it shares its reasoning with — and is the OTHER HALF of "
+        "— `hook_cli.user_prompt_submit_main` (see that entry). One thing worth stating separately: "
+        "the memory-read failure this swallows is ALREADY announced loudly on the surface that owns "
+        "it. `bootstrap._always_on_rule_lines` calls `note_degraded('memory-rules', …)` when the "
+        "store cannot be read at SessionStart — the loudest degrade in the codebase, and rightly, "
+        "because there it means the project's guardrails are not being applied. Repeating it here "
+        "would not add information; it would add it ONCE PER PROMPT until the user stops reading "
+        "the channel, which is how a warning that matters gets tuned out before the day it does. "
+        "The pack degrades to EMPTY, the hook then emits no channel at all, and the turn proceeds "
+        "exactly as it did before H-1a existed."),
     "_graph_structure_line": (SUPPRESS_OK,
         "The briefing wrapper for the GR.S4 structure line: None on any failure ⇒ absent line, "
         "byte-identical briefing. The briefing must never crash on a cosmetic addition."),
+    "_wiring_drift_line": (SUPPRESS_OK,
+        "DOC-ONBOARD. The briefing wrapper for the stale-wiring advisory: None on any failure ⇒ "
+        "absent line, byte-identical briefing — the same shape (and the same reasoning) as "
+        "`_graph_structure_line` directly above. Nothing is lost that the user relies on: the "
+        "verdict it renders is `hook_wiring.wiring_drift`, which is itself never-raise, and the "
+        "SAME verdict is carried by `mokata doctor --wiring` and the `status` MCP tool — so a "
+        "swallow here costs one advisory line on one of three surfaces, never the answer. "
+        "Broad because it spans settings.json parsing + `shutil.which` probing + the harness "
+        "expectation import."),
 })
 
 _register("mcp/tools_memory.py", {

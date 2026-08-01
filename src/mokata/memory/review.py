@@ -124,22 +124,34 @@ def diff_line(base: Any, proposal: Any) -> str:
 def render_transition(proposal: Any, base: Any, frm: str, to: str, actor: str) -> str:
     """The legible human-gate surface for a state transition — the rendered diff + who + from→to,
     honest that nothing changes without approval. The store shows this at the WriteGate."""
+    from .intelligence import provenance_block
     subject = getattr(proposal, "subject", "")
     return (
         f"mokata · review [{frm or 'new'} → {to}]  {subject}\n"
         f"  what changed: {diff_line(base, proposal)}\n"
-        f"  by: {actor}\n"
-        "Nothing changes unless you approve — every transition is ledgered (P2)."
+        f"  by: {actor}"
+        # R9 — the BASE's provenance, not the proposal's. This surface exists to approve a change
+        # to a published item, and separation of duties already says the approver is not the
+        # proposer; showing whose work is being changed, and on whose approval it stands, is what
+        # makes that check something the human can actually exercise rather than a role lookup.
+        + provenance_block(base, label="the item being changed") +
+        "\nNothing changes unless you approve — every transition is ledgered (P2)."
     )
 
 
 def render_rollback(current: Any, prior: Any) -> str:
     """The human-gate surface for a rollback (restore the prior via supersede lineage)."""
+    from .intelligence import provenance_block
     subject = getattr(current, "subject", "")
     cv = getattr(current, "value", "")
     pv = getattr(prior, "value", "")
     return (
         f"mokata · ROLLBACK {subject}\n"
-        f"  restore: {cv!r} -> {pv!r} (the superseded prior)\n"
-        "Nothing changes unless you approve — the rollback is ledgered (P2)."
+        f"  restore: {cv!r} -> {pv!r} (the superseded prior)"
+        # R9 — BOTH sides. A rollback retires a live approved item and reinstates an older one, so
+        # the reader needs the provenance of what they are discarding AND of what they are bringing
+        # back: reinstating a prior nobody can account for is its own way to poison a store.
+        + provenance_block(current, label="discarding (current)")
+        + provenance_block(prior, label="restoring (prior)") +
+        "\nNothing changes unless you approve — the rollback is ledgered (P2)."
     )

@@ -36,6 +36,18 @@ def _join_note(existing: str, add: str) -> str:
     return f"{existing} | {add}" if existing else add
 
 
+def _supports_kind(backend: Any, kind: str) -> bool:
+    """CRG-NAV — does `backend` have an op for `kind`? A backend that predates the declaration
+    (or a test double) is assumed to answer everything, so nothing existing changes route."""
+    fn = getattr(backend, "supports_kind", None)
+    if not callable(fn):
+        return True
+    try:
+        return bool(fn(kind))
+    except Exception:
+        return True
+
+
 def _floor_backend(router: Any, root: str) -> GraphBackend:
     """The honest degrade target BENEATH a real graph: the AST floor on a Python repo
     (answers real structural edges), the grep emergency floor otherwise. GR.S2(k): when the
@@ -218,6 +230,23 @@ class KnowledgeLayer:
             self._surface_index_staleness(floor)
             self.history.append(floor)
             return floor
+        # CRG-NAV (b)+(d) — a MAPPING gap is not a FAILURE. When the adopted graph declares it has
+        # no op for this kind (code-review-graph exposes no definition-site pattern), route the
+        # kind to the floor DIRECTLY: no doomed graph call, no wasted `recover()` re-probe, and no
+        # `note_degraded` alarm blaming a tool that is perfectly healthy. The answer says which
+        # backend produced it and why, and the FLOOR's own verdict decides `degraded` — the AST
+        # floor answers `defs` exactly on a Python repo, so it is not a degraded answer at all.
+        if self.fallback is not None and not _supports_kind(self.primary, kind):
+            floor = self.fallback.query(kind, target, depth=depth)
+            floor.note = _join_note(
+                floor.note,
+                f"the adopted graph '{self.primary.name}' exposes no '{kind}' op; "
+                f"answered by the '{floor.backend}' floor")
+            if fresh is not None and fresh.note:
+                floor.note = _join_note(floor.note, fresh.note)
+            self._surface_index_staleness(floor)
+            self.history.append(floor)
+            return floor
         try:
             result = self.primary.query(kind, target, depth=depth)
         except BackendError:
@@ -244,7 +273,13 @@ class KnowledgeLayer:
                            f"{kind}({target}) and did not recover")
                 result = self.fallback.query(kind, target, depth=depth)
                 result.degraded = True
-                result.note = (
+                # CRG-NAV (d): JOIN, never overwrite. This used to ASSIGN, which threw away the
+                # note the floor itself attached — including the honest "grep floor — install
+                # <graph> for full navigation" line — so the one answer that MOST needed the
+                # floor note (a graph that failed mid-navigation) was the one that lost it. The
+                # pipe-join is the same convention every other note site in this file uses.
+                result.note = _join_note(
+                    result.note,
                     f"primary backend '{self.primary.name}' failed and did not recover; "
                     f"fell back to '{self.fallback.name}'"
                 )
@@ -284,6 +319,14 @@ class KnowledgeLayer:
 
     def imports(self, target: str) -> QueryResult:
         return self._run("imports", target)
+
+    def defs(self, symbol: str) -> QueryResult:
+        """CRG-NAV (b) — where is this symbol DEFINED (and does it exist)?"""
+        return self._run("defs", symbol)
+
+    def refs(self, symbol: str) -> QueryResult:
+        """CRG-NAV (b) — everywhere this symbol is REFERENCED."""
+        return self._run("refs", symbol)
 
     def blast_radius(self, symbol: str, depth: int = 2) -> QueryResult:
         return self._run("blast_radius", symbol, depth=depth)

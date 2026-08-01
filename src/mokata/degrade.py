@@ -88,6 +88,34 @@ FAILURE_ENGINE = "engine-unavailable"
 # fields you didn't understand") is precisely the bug.
 FAILURE_DOC_SCHEMA = "doc-schema"
 
+# M-4/R5 — an INJECTED CALLABLE mokata was handed (the harness agent's summary drafter) raised or
+# returned garbage. Coined on the same rule as FAILURE_WAL and FAILURE_DOC_SCHEMA above — not for
+# symmetry, but because the nearest class renders a FALSE sentence. FAILURE_ENGINE says "the mokata
+# engine could not be loaded", and every word of that is wrong here: the engine loaded, mokata is
+# fully installed, and a reinstall fixes nothing. What failed is CALLER code on the other side of a
+# seam — which is also why this is its own class rather than a stretched one: the remediation never
+# points at mokata (it drafts nothing and cannot), it points at whatever was injected. Its raisers
+# are unknowable by construction: foreign callables reaching subprocesses, sockets and timeouts.
+FAILURE_PROVIDER = "provider-failed"
+
+# DB.S6/I1 — ONE human approval's writes landed only PARTLY in the shared store. Coined on the same
+# rule as the three classes above: the nearest existing class renders a FALSE sentence. This is not
+# FAILURE_UNREACHABLE — the database was reachable and half the approval is IN it, so "shared
+# database unreachable" would send the reader to check a connection that is fine while the real
+# problem (a subject whose old fact is retired and whose new fact never arrived) goes unnamed. It is
+# also the only class here that describes REMOTE STATE rather than a local capability, which is why
+# its remediation is `mokata sync` + re-read the subject, not "reconnect and retry".
+FAILURE_PARTIAL_APPLY = "partial-apply"
+
+# DB.S6/I2b — an APPROVED durable write is not in the shared store at all: it lost its CAS to a
+# teammate's concurrent change and is sitting conflicted in the local journal. Coined for the same
+# documented reason as the classes above — every existing class renders a false sentence here. The
+# database is reachable (not UNREACHABLE), the schema is fine (not SCHEMA), local state reads
+# perfectly (not LOCAL_IO/CORRUPT) and the approval did not land partly (not PARTIAL_APPLY): it did
+# not land. The distinction matters because the reader's next move is a DECISION (`mokata sync`,
+# keep yours or theirs), not a repair.
+FAILURE_CONFLICTED_WRITE = "write-conflicted"
+
 _CLASS_LABEL = {
     FAILURE_UNSET: "env var not set",
     FAILURE_UNREACHABLE: "shared database unreachable",
@@ -97,6 +125,11 @@ _CLASS_LABEL = {
     FAILURE_CORRUPT: "local mokata state is present but unreadable/corrupt",
     FAILURE_ENGINE: "the mokata engine could not be loaded",
     FAILURE_DOC_SCHEMA: "written by a NEWER mokata than this one",
+    FAILURE_PROVIDER: "an injected provider failed — mokata is fine, the callable is not",
+    FAILURE_PARTIAL_APPLY: ("one approval reached the shared store only PARTLY — it is "
+                            "inconsistent for that decision"),
+    FAILURE_CONFLICTED_WRITE: ("an approved write is NOT in memory — it conflicted with another "
+                               "writer and is waiting on your decision"),
 }
 
 

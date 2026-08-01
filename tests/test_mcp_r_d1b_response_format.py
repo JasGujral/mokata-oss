@@ -43,7 +43,13 @@ from mokata.mcp.registry import TOOLS
 
 # The tools D1b touches — the 3 DOUBLE (block) sites + the 5 RENDER-ONLY (report) sites. This set is
 # the schema-diff contract: exactly these gain `response_format`, and no other tool does.
-TOUCHED = {"progress", "lanes", "decompose", "doctor", "coverage", "budget", "lat_check", "baseline"}
+# HANDOFF.G1 (0.0.16) adds `spec_show`: a read tool built to the D1b contract from birth — its human
+# view is a `LazyRender` block, so it is a DOUBLE site and carries `response_format` by construction.
+# REVIEW-FIX.R3 (0.0.16) adds `review_status` on the same footing — its human view is the ONE line
+# `mokata progress review-status` prints, wrapped in a `LazyRender`. Its sibling `review_record`
+# has NO render (it reports a recorded fact, not a view), so it stays out of the set by design.
+TOUCHED = {"progress", "lanes", "decompose", "doctor", "coverage", "budget", "lat_check", "baseline",
+           "spec_show", "review_status"}
 
 
 def _repo(d, profile="standard"):

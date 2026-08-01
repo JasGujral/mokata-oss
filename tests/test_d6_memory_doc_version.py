@@ -470,14 +470,24 @@ class NoBehaviourChange(unittest.TestCase):
     def setUp(self):
         degrade.reset_degrade_notices()
 
-    def test_the_stamp_is_the_only_new_key(self):
+    def test_the_stamp_is_the_only_new_key_d6_added(self):
+        """D6's own additive claim: the version STAMP was the only key D6 introduced.
+
+        The pin names every key added SINCE, rather than being loosened, so it keeps failing for
+        any un-declared new key while staying true about what D6 did. DB.S5 added `valid_from` /
+        `valid_to` (the bi-temporal window) additively under doc v1 — the same call doc 95's D6
+        decision made for the M-1/R9 fields — so `MEMORY_DOC_VERSION` does NOT move: the shape only
+        ever grew, and an older reader tolerates unknown siblings by carrying them in `extra`."""
         item = MemoryItem.create("s", "v")
         before_d6 = {
             "id", "subject", "value", "mtype", "status", "kind", "provenance", "expires_at",
             "supersedes", "depends_on", "scope_level", "scope_id", "pin", "priority",
             "enforcement", "applicability", "review", "about_code",
         }
-        self.assertEqual({DOC_VERSION_KEY}, set(item.to_dict()) - before_d6)
+        added_since_d6 = ({"valid_from", "valid_to"}                                # DB.S5
+                          | {"approved_by", "approved_at", "approval_ledger_id"})   # M-1/R9
+        self.assertEqual({DOC_VERSION_KEY},
+                         set(item.to_dict()) - before_d6 - added_since_d6)
 
     def test_same_version_round_trip_is_byte_identical(self):
         item = MemoryItem.create("s", "v", kind=RULE, enforcement="hard")

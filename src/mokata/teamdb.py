@@ -39,6 +39,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Optional, Type
 from .degrade import FAILURE_SCHEMA
 from .errors import DegradedCapability, MokataError
+from .memory import edges as _edges
+from .memory import lifecycle as _lifecycle
 
 # The shared-schema version this build of mokata speaks. `team init` (TM.S3) writes/migrates
 # the row in `mokata_schema_version`; the probe reads it and refuses on a mismatch. Bump this
@@ -53,21 +55,55 @@ from .errors import DegradedCapability, MokataError
 # v2 → v3 (TM.S6, doc 62 §2–3): `mokata_memory` gains the scope + precedence fields
 # (`scope_level`, `scope_id`, `pin`, `priority`) so a shared item records its home level in the
 # broad→narrow hierarchy and its precedence hints. Same idempotent ADD-COLUMN-IF-NOT-EXISTS
-# migration, owned by `team init`; the authoritative scope value also lives in the item's `doc`
-# JSON (so a runtime read needs no schema change), while these columns are provisioned for
-# future SQL-side scope filtering (memory-at-scale, 0.1.3). An existing team upgrades by
+# migration, owned by `team init`. DB.S2b made these columns LOAD-BEARING: `put()` now populates
+# them in the same statement that writes `doc`, `provision_sql()` backfills the rows that predate
+# that, and `filter_clause_for` pushes a scope predicate at them. An existing team upgrades by
 # RE-RUNNING `mokata team init`; the S2 incompatible-version check fail-closes older clients
 # until they do.
-TEAM_SCHEMA_VERSION = 3
+#
+# v3 → v4 (DB.S5, doc 62 lifecycle): `mokata_memory` gains the bi-temporal validity window
+# (`valid_from`, `valid_to`) and the usage telemetry (`hit_count`, `last_recalled_at`). Same
+# idempotent ADD-COLUMN-IF-NOT-EXISTS migration + a `valid_from` backfill, owned by `team init`.
+# Note what does NOT move with it: `TEAM_SCHEMA_MIN_SUPPORTED` stays at 3, because unlike the v3
+# scope columns NOTHING in the runtime REQUIRES these. A v3 team keeps working exactly as it does
+# today — it simply carries no usage signal (the fusion falls back to its three original terms) and
+# no explicit windows (every item reads as open). Raising the floor would fail-close every existing
+# team on upgrade for a purely additive feature, which is the opposite of what a floor is for.
+#
+# v4 → v5 (DB.S7a, doc 55 K3 + doc 84 DB.S7): the shared schema gains `mokata_memory_edges` — the
+# closed typed-edge table, with the R3 validity window (`valid_from`/`valid_to`, ONE axis — see
+# `memory/edges.py`) and doc 55's `created_at` provenance. Purely ADDITIVE: a NEW TABLE plus its
+# partial unique index, and not one column on `mokata_memory` moves. Same idempotent seam as v2–v4
+# (CREATE TABLE IF NOT EXISTS + an add-then-backfill that is idempotent by predicate), owned by
+# `team init` alone (C4) — no runtime DDL. `TEAM_SCHEMA_MIN_SUPPORTED` stays 3 for the DB.S5 reason,
+# restated below where the floor lives.
+TEAM_SCHEMA_VERSION = 5
 SCHEMA_VERSION_TABLE = "mokata_schema_version"
 
 # D2 — the OLDEST shared schema this build can still serve. Not a guess: the live SQL SELECTs
 # `revision` (memory/backends `SELECT doc, revision …`; the flush's revision-guarded CAS in
-# team_journal), which arrived in v2. NOTHING in the runtime SQL touches a v3 column — v3's
-# scope/precedence fields are provisioned for future SQL-side filtering while the authoritative
-# value lives in the item `doc` JSON. So v2 is genuinely the floor, and a v2 team keeps working
-# (with an upgrade warning) instead of being partitioned off by a version bump.
-TEAM_SCHEMA_MIN_SUPPORTED = 2
+# team_journal), which arrived in v2 — AND, since DB.S2b, it filters on `scope_level`/`scope_id`,
+# which arrived in v3. The v3 columns used to be inert provisioning, which is exactly why the
+# floor sat at 2; they are now read by the runtime SQL, so a v2 table (which does not HAVE them)
+# can no longer be served. Raised 2 → 3 in lockstep with that activation.
+#
+# What happens to a store that can't upgrade: a v2 store is out of range → `compatibility()`
+# returns `schema-too-old` and team mode FAILS CLOSED with "run `mokata team init`" (which is the
+# migration: idempotent ADD COLUMN + the backfill below). It is refused loudly, never silently
+# mis-filtered — the one outcome that would be worse than refusing it. Nothing is lost: the local
+# journal keeps queueing writes, and LOCAL mode is untouched by any of this.
+#
+# DB.S7a holds the floor at 3 for the DB.S5 reason, and states the TRIPWIRE explicitly so the next
+# stage does not have to re-derive it: **the day any runtime read becomes MANDATORY on
+# `mokata_memory_edges`, THIS FLOOR MOVES IN THE SAME CHANGE.** Right now nothing requires the edge
+# table — the projection is DERIVED from inline doc fields that a v4 store already carries, every
+# edge read is capability-probed and absent-degrades to the inline lists, and the flush skips the
+# projection entirely on a store that has no such table (so a v4 team keeps flushing byte-identically).
+# That is what earns the additive treatment. A mandatory edge read would make a v4 store genuinely
+# unservable, and serving it anyway would mean silently answering a graph question from a table that
+# is not there — the exact class of failure the floor exists to refuse LOUDLY. Floor and requirement
+# move together or the floor is a lie.
+TEAM_SCHEMA_MIN_SUPPORTED = 3
 
 # A pre-D2 artifact is a bare `version` row with no `min_supported` column: it declares no range.
 # Read its floor as its OWN version — it certainly served the build that wrote it, and it made no
@@ -77,6 +113,24 @@ TEAM_SCHEMA_MIN_SUPPORTED = 2
 # 40 versions AHEAD of it and read/write columns it has never heard of — the silent corruption D6
 # exists to forbid. Unknown is not permission.
 MIN_SUPPORTED_COLUMN = "min_supported"
+
+# DB.S2b — the BACKFILL STAMP, and the reason it has to exist separately from the version number.
+#
+# The version stamp alone cannot answer the question the scope pushdown must ask. `team init`
+# wrote `version=3` from TM.S6 onward, when v3 meant only "the four columns EXIST" — every row
+# still carried the DDL default. DB.S2b changes what v3 must mean: "the columns exist AND are a
+# faithful projection of each row's `doc`". Those are different guarantees wearing the same
+# number, and a store provisioned by a pre-DB.S2b `team init` is indistinguishable from a
+# backfilled one by version alone. Pushing a scope predicate at that store would drop every row
+# whose real home scope isn't `personal` — the cross-tenant visibility bug this stage exists to
+# make impossible.
+#
+# So the stamp is explicit: `provision_sql()` runs the backfill and sets this column true in the
+# same ordered run. The runtime READS it and pushes a scope predicate only when it is true;
+# otherwise it emits no scope clause at all and the caller's `scope.union_read` filters from the
+# doc as before — slower, and CORRECT. Unknown (no column, no row, unreadable) reads as FALSE:
+# unknown is not permission, exactly as for `min_supported` above.
+SCOPE_BACKFILLED_COLUMN = "scope_backfilled"
 
 
 def effective_min(db_version: int, db_min_supported: Optional[int]) -> int:
@@ -217,11 +271,29 @@ MEMORY_REVISION_COLUMN = "revision"
 MEMORY_UPDATED_AT_COLUMN = "updated_at"
 
 # v3 scope + precedence columns on the memory table (TM.S6, doc 62 §2–3). Provisioned by
-# `team init`; the item `doc` JSON remains the authoritative store of these values.
+# `team init`. The item `doc` JSON remains AUTHORITATIVE — these columns are its projection, not a
+# second source of truth, and every write path derives them from the doc it is writing
+# (`memory.backends.scope_columns_from_doc`). Since DB.S2b they are load-bearing: `scope_level` +
+# `scope_id` carry the runtime's scope predicate, so the schema floor rose to v3 to match. `pin` +
+# `priority` are populated and backfilled on the same terms but nothing filters on them yet — they
+# feed `precedence.resolve_items` after the read.
 MEMORY_SCOPE_LEVEL_COLUMN = "scope_level"
 MEMORY_SCOPE_ID_COLUMN = "scope_id"
 MEMORY_PIN_COLUMN = "pin"
 MEMORY_PRIORITY_COLUMN = "priority"
+
+# v4 lifecycle columns on the memory table (DB.S5). Aliased from `memory.lifecycle`, which is THE
+# definition — a rename there moves both engines at once and cannot leave Postgres on the old name.
+#
+# The two halves are governed differently and it matters at the schema level too. `valid_from` /
+# `valid_to` are a PROJECTION of the doc (like the v3 scope columns): every write path derives them
+# from the doc it is writing, and the doc stays authoritative. `hit_count` / `last_recalled_at` are
+# NOT a projection of anything — they exist ONLY as columns, are written ONLY by `record_usage` on
+# the read path (transient run-state, D5), and no doc, export or bundle carries them.
+MEMORY_VALID_FROM_COLUMN = _lifecycle.VALID_FROM_COLUMN
+MEMORY_VALID_TO_COLUMN = _lifecycle.VALID_TO_COLUMN
+MEMORY_HIT_COUNT_COLUMN = _lifecycle.HIT_COUNT_COLUMN
+MEMORY_LAST_RECALLED_AT_COLUMN = _lifecycle.LAST_RECALLED_AT_COLUMN
 
 # The mokata-OWNED shared tables `team init` provisions (doc 48 §3). Each name mirrors the
 # table the corresponding runtime backend already uses, so a runtime connect finds it present
@@ -230,10 +302,17 @@ MEMORY_PRIORITY_COLUMN = "priority"
 #   session bundles -> session_transport.PostgresTransport
 #   audit ledger    -> team_audit.SharedAuditLog (append-only)
 #   events          -> provisioned only; local-first population until a later UI (doc 48)
+#   memory edges    -> memory/edges.py (DB.S7a, v5) — rows in the store that already exists,
+#                      traversed with recursive CTEs. NEVER a second graph DB.
 MEMORY_TABLE = "mokata_memory"
 SESSION_TABLE = "mokata_session_bundle"
 AUDIT_TABLE = "mokata_audit_log"
 EVENTS_TABLE = "mokata_events"
+
+# v5 (DB.S7a) — the shared typed-edge table. Aliased from `memory.edges`, which is THE definition
+# of the name, the closed kind set, the column list and the idempotency predicate, exactly as the
+# v4 columns above are aliased from `memory.lifecycle`: one rename moves both engines at once.
+EDGES_TABLE = _edges.SHARED_EDGES_TABLE
 
 # doc 48 E2 — the session-start health probe is hard-capped at 500ms wall-clock.
 PROBE_BUDGET_MS = 500
@@ -492,6 +571,175 @@ class ProvisionResult:
     statements: "list[str]"
     version: int
     tables: "list[str]"
+    # DB.S7a (E7) — how many item→item edge refs the v5 migration SKIPPED because their target
+    # item is not in the store. It is a REPORT, never a failure: a dangling ref is a fact about a
+    # store that has been pruned or partially imported, and refusing to migrate the other ten
+    # thousand relations because of it would be the wrong trade in every direction. Surfaced by
+    # `team init` so the skip is visible rather than silent — a silently-skipped edge is
+    # indistinguishable from a migration that simply did not run.
+    skipped_dangling_edges: int = 0
+
+
+# ---------------------------------------------------------------- v5 · the edge migration (DB.S7a)
+# The three WIRED kinds and the doc-JSON array each is stored in. Read from `memory.edges`, which
+# owns the mapping, so the SQL cannot wire a kind the module does not declare (and a kind added
+# there without a producer here would be caught by the closed-set pin, not shipped silently).
+def _wired_jsonb_sources() -> "list[tuple]":
+    """(edge kind, the `doc` JSON array it is stored in, does its dst have to BE an item)."""
+    return [(kind, _edges._ITEM_FIELD[kind], kind in _edges.ITEM_TARGET_KINDS)
+            for kind in _edges.WIRED_KINDS]
+
+
+def _item_approval_id_sql(alias: str = "m") -> str:
+    """M-1/R9 — the SQL that reads an item's stamped `approval_ledger_id` off its doc, or NULL.
+
+    This is `memory.item.approval_ledger_id_of` spelled in SQL, and it has to stay that way: the
+    Python coercion and this expression answer the same question about the same doc key, and an
+    edge whose id disagreed with its item's would be worse than an edge with no id at all.
+
+    Two guards, and both are load-bearing rather than defensive habit:
+      * `jsonb_typeof(...) = 'number'` — a JSON `true` is a boolean here, not a `1`. Postgres would
+        not silently fold it the way Python's `bool`-is-an-`int` does, but excluding it keeps the
+        two implementations answering identically on the same doc, which is the point.
+      * `~ '^[0-9]+$'` on the TEXT form — a `number` in JSON may be `1.5` or `-3`, and casting
+        either to BIGINT raises and would fail the whole provisioning pass. A ledger seq is a
+        positive integer; anything else is not an id we can join on.
+
+    Everything that fails either guard — absent key, JSON `null`, a string, a float, the journal's
+    `"floor-recovery"` sentinel — yields NULL. **Unknown stays NULL. Nothing here invents an id.**
+    """
+    key = "approval_ledger_id"
+    return (f"CASE WHEN jsonb_typeof({alias}.doc::jsonb->'{key}') = 'number' "
+            f"       AND ({alias}.doc::jsonb->>'{key}') ~ '^[0-9]+$' "
+            f"      THEN ({alias}.doc::jsonb->>'{key}')::bigint END")
+
+
+def _edge_approval_backfill_sql() -> str:
+    """M-1/R9 — fill the `approval_ledger_id` the DB.S7a migration had to leave NULL.
+
+    DB.S7a migrated the three implicit doc-JSON edge kinds into real rows, and could only stamp
+    them `NULL::bigint` because the ITEM carried no approval id to inherit — its own comment said
+    so, naming this stage as the thing that would close it ("that is M-1/R9's `approved_by`, still
+    open"). Now that items are stamped, a migrated edge can inherit the approval its item carries,
+    which is exactly what the LIVE projection already does for every edge written through the flush
+    (`team_journal._project_edges_for` passes `entry.ledger_id`). Same rule, same source, both
+    halves — a relation's link back to the human decision that created it should not depend on
+    whether the relation happened to be written before or after the graph existed.
+
+    DERIVED, never invented, and the WHERE clause is the whole guarantee:
+      * `e.approval_ledger_id IS NULL` — only ever fills a hole. An edge that already carries an
+        id (every live-projected one) is untouched, so this cannot rewrite a real approval with a
+        derived one, and cannot disagree with the flush.
+      * the item's id `IS NOT NULL` — a ROW-CHURN guard, and worth naming accurately rather than
+        overselling: the rows it excludes are ones this UPDATE would set from NULL to NULL, so it
+        changes no value (confirmed by mutation against a live server). What it buys is that a
+        re-run does not rewrite every unstamped edge in the store. The never-invent guarantee is
+        `_item_approval_id_sql`'s, not this predicate's: an item with no readable stamp yields NULL
+        there, so pre-M-1/R9 items are not retro-approved by this pass — "we do not know" stays
+        "we do not know", the same call `_backfill_lifecycle_columns` made for the usage columns.
+
+    IDEMPOTENT by construction: the second run finds no NULL where the item has an id, so it
+    updates zero rows. Ordinary DML (it creates no schema), so it re-runs safely under the same
+    role that owns the rest of the migration, and it is placed AFTER `_edge_backfill_sql` so the
+    rows it fills exist by the time it runs.
+    """
+    return (f"UPDATE {EDGES_TABLE} e "                                          # nosec B608
+            f"   SET {_edges.APPROVAL_LEDGER_COLUMN} = src.approval_id "
+            f"  FROM (SELECT m.id, {_item_approval_id_sql('m')} AS approval_id "
+            f"          FROM {MEMORY_TABLE} m "
+            f"         WHERE m.doc IS NOT NULL "
+            f"           AND jsonb_typeof(m.doc::jsonb) = 'object') src "
+            f" WHERE e.{_edges.SRC_COLUMN} = src.id "
+            f"   AND e.{_edges.APPROVAL_LEDGER_COLUMN} IS NULL "
+            f"   AND src.approval_id IS NOT NULL")
+
+
+def _edge_backfill_sql() -> "list[str]":
+    """One INSERT…SELECT per wired kind: every ref in every doc becomes an OPEN edge row.
+
+    Per-kind rather than one UNION ALL because each kind reads a different JSON array and only some
+    are existence-checked — three short statements each doing one legible thing beat one statement
+    nobody can review. All three are ordinary DML (they create no schema), so they are safe to
+    re-run and safe for the same role that already owns the migration.
+
+    `valid_from` is `coalesce(doc->>'valid_from', doc->'provenance'->>'created_at', '')` — the SQL
+    spelling of `memory.edges.open_window_of`, which is itself `lifecycle.open_window`. The edge's
+    window opens when its ITEM's did, so an edge rebuilt by this migration lands on the same instant
+    as the edge the live projection would have written. `created_at` on the ROW is `now()` — this
+    row was written now, and that provenance/validity split is doc 02 decision #1 in one line of SQL.
+
+    Degrades clean on a malformed doc, like every backfill before it: a `doc` that is not valid JSON
+    or whose field is not an array yields no rows for that item instead of failing the pass.
+    """
+    stmts: "list[str]" = []
+    cols = ", ".join(_edges.EDGE_COLUMNS)
+    valid_from = (f"coalesce(nullif(m.doc::jsonb->>'{_edges.VALID_FROM_COLUMN}', ''), "
+                  f"         m.doc::jsonb->'provenance'->>'created_at', '')")
+    for kind, field, item_target in _wired_jsonb_sources():
+        exists = ""
+        if item_target:
+            exists = (f"   AND EXISTS (SELECT 1 FROM {MEMORY_TABLE} t WHERE t.id = ref.value) ")
+        stmts.append(
+            f"INSERT INTO {EDGES_TABLE} ({cols}) "                              # nosec B608
+            f"SELECT DISTINCT m.id, ref.value, '{kind}', {valid_from}, NULL, "
+            f"       to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"+00:00\"'), "
+            # M-1/R9 — the migrated edge INHERITS the approval its item carries. This was
+            # `NULL::bigint` at DB.S7a, honestly, because the item had no id to inherit; the
+            # comment there named this stage as the one that would close it. `_item_approval_id_sql`
+            # is already BIGINT-typed (or NULL), so the DB.S7a typing note it replaces still holds:
+            # an untyped NULL in a SELECT list is `text`, and Postgres refuses to insert text into
+            # a BIGINT column (observed — the un-cast form failed the provision outright).
+            #
+            # An item with no stamp still yields NULL here, and the separate
+            # `_edge_approval_backfill_sql` pass fills rows that an EARLIER run of this migration
+            # already created as NULL. Both derive from the same expression, so a store lands in
+            # the same state whether it migrated before or after items were stamped.
+            f"       coalesce(m.doc::jsonb->'provenance'->>'author', ''), "
+            f"       {_item_approval_id_sql('m')} "
+            f"  FROM {MEMORY_TABLE} m, "
+            f"       LATERAL jsonb_array_elements_text("
+            f"           CASE jsonb_typeof(m.doc::jsonb->'{field}') WHEN 'array' "
+            f"                THEN m.doc::jsonb->'{field}' ELSE '[]'::jsonb END) AS ref "
+            f" WHERE m.doc IS NOT NULL AND jsonb_typeof(m.doc::jsonb) = 'object' "
+            f"   AND nullif(ref.value, '') IS NOT NULL "
+            + exists +
+            f"   AND NOT EXISTS (SELECT 1 FROM {EDGES_TABLE} e "
+            f"                    WHERE e.{_edges.SRC_COLUMN} = m.id "
+            f"                      AND e.{_edges.DST_COLUMN} = ref.value "
+            f"                      AND e.{_edges.KIND_COLUMN} = '{kind}' "
+            f"                      AND e.{_edges.VALID_TO_COLUMN} IS NULL)")
+    return stmts
+
+
+def dangling_edge_refs_sql() -> str:
+    """COUNT the item→item refs the backfill SKIPPED — E7's surfaced number.
+
+    Deliberately a SEPARATE statement rather than a `RETURNING`/rowcount off the INSERT, because the
+    two answer different questions: the INSERT's rowcount is "how many edges did this RUN create",
+    which is ZERO on the second (correctly idempotent) pass, while this is "how many refs in this
+    store point at an item that is not here" — a property of the DATA, stable across re-runs and
+    still true the tenth time someone asks. Reporting the rowcount would tell a re-running operator
+    that the dangling refs had gone away.
+
+    It counts DISTINCT (item, ref, kind) so a store is not reported as having ten problems when one
+    item lists the same missing target in two fields.
+    """
+    unions = []
+    for kind, field, item_target in _wired_jsonb_sources():
+        if not item_target:
+            continue                    # an `about_code` dst is a code path — it cannot dangle
+        unions.append(
+            f"SELECT m.id, ref.value, '{kind}' AS k "                            # nosec B608
+            f"  FROM {MEMORY_TABLE} m, "
+            f"       LATERAL jsonb_array_elements_text("
+            f"           CASE jsonb_typeof(m.doc::jsonb->'{field}') WHEN 'array' "
+            f"                THEN m.doc::jsonb->'{field}' ELSE '[]'::jsonb END) AS ref "
+            f" WHERE m.doc IS NOT NULL AND jsonb_typeof(m.doc::jsonb) = 'object' "
+            f"   AND nullif(ref.value, '') IS NOT NULL "
+            f"   AND NOT EXISTS (SELECT 1 FROM {MEMORY_TABLE} t WHERE t.id = ref.value)")
+    if not unions:                                       # pragma: no cover - WIRED_KINDS is non-empty
+        return "SELECT 0"
+    return "SELECT count(*) FROM (SELECT DISTINCT * FROM (" + " UNION ALL ".join(unions) + ") u) d"
 
 
 def provision_sql(project_id: Optional[str] = None) -> "list[str]":
@@ -531,6 +779,77 @@ def provision_sql(project_id: Optional[str] = None) -> "list[str]":
         "BOOLEAN NOT NULL DEFAULT FALSE",
         f"ALTER TABLE {MEMORY_TABLE} ADD COLUMN IF NOT EXISTS {MEMORY_PRIORITY_COLUMN} "
         "INT NOT NULL DEFAULT 0",
+        # DB.S2b — THE BACKFILL, and it MUST sit here: after the ADD COLUMNs that create the
+        # columns (they cannot be populated before they exist) and before the version row that
+        # stamps the store as backfilled. Ordering is the safety property, not a preference.
+        #
+        # Every row written before DB.S2b carries the DDL default while its true scope sits in the
+        # `doc` JSON, so each row is corrected FROM ITS OWN DOC — the doc is authoritative, this
+        # only projects it into the columns. DML, not DDL: it rewrites no schema, so it is safe to
+        # re-run and safe for the same `team init` role that already owns the migration.
+        #
+        # Idempotent by predicate, not by luck: the WHERE compares each column against what the
+        # doc says it should be, so a second run matches ZERO rows and touches nothing. Degrades
+        # clean on a malformed doc — `->>` yields NULL, `coalesce` supplies the item model's own
+        # default, so a bad row lands on `personal`/''/false/0 (the conservative NARROWEST scope,
+        # which leaks nothing) instead of failing the migration.
+        f"UPDATE {MEMORY_TABLE} SET "
+        f"  {MEMORY_SCOPE_LEVEL_COLUMN} = coalesce(nullif(doc::jsonb->>'scope_level', ''), "
+        f"'personal'), "
+        f"  {MEMORY_SCOPE_ID_COLUMN} = coalesce(doc::jsonb->>'scope_id', ''), "
+        f"  {MEMORY_PIN_COLUMN} = coalesce((doc::jsonb->>'pin')::boolean, FALSE), "
+        f"  {MEMORY_PRIORITY_COLUMN} = coalesce((doc::jsonb->>'priority')::int, 0) "
+        f"WHERE {MEMORY_SCOPE_LEVEL_COLUMN} IS DISTINCT FROM "
+        f"    coalesce(nullif(doc::jsonb->>'scope_level', ''), 'personal') "
+        f"   OR coalesce({MEMORY_SCOPE_ID_COLUMN}, '') IS DISTINCT FROM "
+        f"    coalesce(doc::jsonb->>'scope_id', '') "
+        f"   OR {MEMORY_PIN_COLUMN} IS DISTINCT FROM "
+        f"    coalesce((doc::jsonb->>'pin')::boolean, FALSE) "
+        f"   OR {MEMORY_PRIORITY_COLUMN} IS DISTINCT FROM "
+        f"    coalesce((doc::jsonb->>'priority')::int, 0)",
+        # v4 (DB.S5, doc 62 lifecycle) — the bi-temporal window + the usage telemetry. The SAME
+        # idempotent ADD-COLUMN-IF-NOT-EXISTS seam the v2 and v3 blocks above use, so re-running
+        # `team init` migrates a v3 table in place. Every column is nullable or defaulted, so the
+        # ALTER is instant on a populated table and an older client is unaffected by columns it
+        # never names.
+        f"ALTER TABLE {MEMORY_TABLE} ADD COLUMN IF NOT EXISTS {MEMORY_VALID_FROM_COLUMN} TEXT",
+        f"ALTER TABLE {MEMORY_TABLE} ADD COLUMN IF NOT EXISTS {MEMORY_VALID_TO_COLUMN} TEXT",
+        f"ALTER TABLE {MEMORY_TABLE} ADD COLUMN IF NOT EXISTS {MEMORY_HIT_COUNT_COLUMN} "
+        "INT NOT NULL DEFAULT 0",
+        f"ALTER TABLE {MEMORY_TABLE} ADD COLUMN IF NOT EXISTS "
+        f"{MEMORY_LAST_RECALLED_AT_COLUMN} TIMESTAMPTZ",
+        # DB.S5 — OPEN every pre-existing row's validity window, from its own doc. Ordered after
+        # the ADD COLUMNs for the same reason the v3 backfill is (a column cannot be populated
+        # before it exists) and BEFORE the version row that claims it all ran.
+        #
+        # `valid_from` ONLY, and the restraint is the safety property: an untouched `valid_to` is
+        # an OPEN window, which is the truth about every item that exists today. Writing anything
+        # into `valid_to` here would retire the entire shared corpus on upgrade — the precise
+        # opposite of the never-delete invariant this column exists to serve. `hit_count` /
+        # `last_recalled_at` are likewise NOT backfilled: an item nobody has recalled under a build
+        # that could count has honestly been recalled zero times, and synthesising a count would
+        # feed invented usage straight into the ranking.
+        #
+        # Idempotent by PREDICATE, in the v3 backfill's exact `IS DISTINCT FROM` shape rather than
+        # a looser "where it is null" — the column is a faithful PROJECTION of the doc (the same
+        # one `backends.validity_columns_from_doc` writes), so the honest predicate is "where the
+        # column disagrees with the doc". A second run matches zero rows, and a column that somehow
+        # drifted from its doc is re-converged rather than left wrong.
+        #
+        # Degrades clean on a malformed doc — `->>` yields NULL, `coalesce` supplies '' — so a bad
+        # row simply keeps an unset window instead of failing the migration.
+        f"UPDATE {MEMORY_TABLE} SET {MEMORY_VALID_FROM_COLUMN} = "
+        f"  coalesce(nullif(doc::jsonb->>'valid_from', ''), "
+        f"           doc::jsonb->'provenance'->>'created_at', '') "
+        f"WHERE coalesce({MEMORY_VALID_FROM_COLUMN}, '') IS DISTINCT FROM "
+        f"  coalesce(nullif(doc::jsonb->>'valid_from', ''), "
+        f"           doc::jsonb->'provenance'->>'created_at', '')",
+        # DB.S2b — the stamp the runtime reads before it dares push a scope predicate. Added here
+        # (not on the memory table) because it describes the STORE, and read by the same probe
+        # that already reads the version range. See SCOPE_BACKFILLED_COLUMN for why the version
+        # number alone cannot carry this.
+        f"ALTER TABLE {SCHEMA_VERSION_TABLE} ADD COLUMN IF NOT EXISTS "
+        f"{SCOPE_BACKFILLED_COLUMN} BOOLEAN NOT NULL DEFAULT FALSE",
         # DB.S3 — the lexical tier's GIN index over the searchable text (subject + the doc's
         # `value`), matching `PostgresBackend.lexical_search`'s expression EXACTLY so the planner
         # can actually use it. Core Postgres: `to_tsvector` needs no `CREATE EXTENSION`, so this
@@ -544,6 +863,69 @@ def provision_sql(project_id: Optional[str] = None) -> "list[str]":
         f"CREATE INDEX IF NOT EXISTS {MEMORY_TABLE}_fts ON {MEMORY_TABLE} USING GIN ("
         f"to_tsvector('english', coalesce(subject, '') || ' ' || "
         f"coalesce((doc::jsonb->>'value'), '')))",
+        # ---------------------------------------------------------------- v5 (DB.S7a) memory edges
+        # A NEW TABLE, not a column on `mokata_memory` — so the v5 migration cannot rewrite a single
+        # existing row, and an older client that has never heard of it reads and writes the memory
+        # table exactly as before. That is why the floor stays at 3 (see TEAM_SCHEMA_MIN_SUPPORTED).
+        #
+        # `valid_to` is NULLABLE and NULL means OPEN — the same convention the item window uses, and
+        # the reason the unique index below can be PARTIAL.
+        f"CREATE TABLE IF NOT EXISTS {EDGES_TABLE} ("
+        f"  {_edges.SRC_COLUMN} TEXT NOT NULL,"
+        f"  {_edges.DST_COLUMN} TEXT NOT NULL,"
+        f"  {_edges.KIND_COLUMN} TEXT NOT NULL,"
+        f"  {_edges.VALID_FROM_COLUMN} TEXT,"
+        f"  {_edges.VALID_TO_COLUMN} TEXT,"
+        f"  {_edges.CREATED_AT_COLUMN} TEXT,"
+        f"  {_edges.CREATED_BY_COLUMN} TEXT,"
+        f"  {_edges.APPROVAL_LEDGER_COLUMN} BIGINT,"
+        f"  seq BIGSERIAL PRIMARY KEY)",
+        # AT MOST ONE OPEN EDGE per (src, dst, kind) — a PARTIAL unique index, not a primary key,
+        # and the difference is the whole never-delete story. A plain PK would force a relation that
+        # is withdrawn and later re-asserted either to rewrite its own closed window or to be
+        # refused; the partial index lets the closed row stay on disk forever as history while a new
+        # OPEN window is inserted beside it. It is also what makes the `WHERE NOT EXISTS` predicate
+        # in `memory/edges.insert_open_sql` an INDEX probe rather than a scan.
+        f"CREATE UNIQUE INDEX IF NOT EXISTS {EDGES_TABLE}_open "
+        f"  ON {EDGES_TABLE} ({_edges.SRC_COLUMN}, {_edges.DST_COLUMN}, {_edges.KIND_COLUMN})"
+        f"  WHERE {_edges.VALID_TO_COLUMN} IS NULL",
+        # The traversal index. DB.S7b's ≤2-hop expansion walks src→dst over OPEN edges; without
+        # this every hop is a sequential scan. Provisioned HERE for the same reason DB.S3's GIN and
+        # DB.S4's HNSW are: the query is CORRECT without it and merely slow, so the index is an
+        # artifact of the init path and never something a runtime connect conjures (D1/C4).
+        f"CREATE INDEX IF NOT EXISTS {EDGES_TABLE}_dst "
+        f"  ON {EDGES_TABLE} ({_edges.DST_COLUMN}, {_edges.KIND_COLUMN})"
+        f"  WHERE {_edges.VALID_TO_COLUMN} IS NULL",
+        # THE v5 BACKFILL — migrate the three IMPLICIT doc-JSON edge kinds into explicit rows.
+        # Ordered here for the reason the v3 and v4 backfills are: after the DDL that creates the
+        # table it populates, before the version row that claims the whole pass ran.
+        #
+        # Read the three properties this statement is built to have, because each is a pin:
+        #
+        #   * ZERO HUMAN RE-APPROVAL (E2). It moves relations a human ALREADY approved — every ref
+        #     it reads is a field of an already-gated `doc`, and it derives no new content, changes
+        #     no item, and asks nothing. Re-prompting for the migration of a fact that was approved
+        #     when it was written would be asking the same question twice.
+        #   * IDEMPOTENT BY PREDICATE (E1), the DB.S2b/DB.S5 shape: `NOT EXISTS (an open edge
+        #     already saying this)`. A second `team init` matches zero rows. `DISTINCT` collapses a
+        #     doc that lists the same ref twice, which the partial unique index would otherwise
+        #     refuse mid-migration.
+        #   * SKIP-AND-REPORT ON A DANGLING REF (E7). The `EXISTS (… mokata_memory …)` clause is
+        #     the skip: a `supersedes`/`depends_on` ref whose target item is not in the store yields
+        #     NO edge rather than an edge into nothing, and the migration keeps going. The COUNT of
+        #     what it skipped is reported separately (`dangling_edge_refs_sql`) and surfaced by
+        #     `team init`, so a silent skip is impossible — this degrades clean exactly as
+        #     `_backfill_lifecycle_columns` does, and never orphans an edge or fails the pass.
+        #
+        # `about_code` is deliberately NOT existence-checked: its dst is a code path/symbol that
+        # lives in the repo, not a row in this table, so "no such item" is not a defect there and
+        # counting it as one would report a dangling ref for every correctly-formed code anchor.
+        *_edge_backfill_sql(),
+        # M-1/R9 — fill the approval id DB.S7a had to leave NULL on edges it migrated before items
+        # were stamped. AFTER the inserts above (the rows must exist to be filled), derived only
+        # from an item that actually carries a stamp, and it only ever writes into a NULL — so it
+        # never overwrites the id a live-projected edge already inherited from the flush.
+        _edge_approval_backfill_sql(),
         # session bundles — the ONE definition (session_transport verifies it, never creates it).
         f"CREATE TABLE IF NOT EXISTS {SESSION_TABLE} ("
         "  tag TEXT, blob TEXT, seq BIGSERIAL, project TEXT,"
@@ -562,10 +944,18 @@ def provision_sql(project_id: Optional[str] = None) -> "list[str]":
         # the schema-version row LAST — the (current, min_supported) RANGE (D2). ON CONFLICT DO
         # UPDATE (not DO NOTHING) so re-running init also refreshes the range on an artifact that
         # already carries this version but predates the range column. Idempotent either way (E5).
-        f"INSERT INTO {SCHEMA_VERSION_TABLE} (version, {MIN_SUPPORTED_COLUMN})"
-        f"  VALUES ({TEAM_SCHEMA_VERSION}, {TEAM_SCHEMA_MIN_SUPPORTED})"
+        #
+        # DB.S2b — the backfill stamp rides the SAME row, and is set here, LAST, for the same
+        # reason the version row has always been last: it is the claim that everything above it
+        # ran. A pre-DB.S2b artifact already stamped `version=3` gets the flag flipped by this
+        # `DO UPDATE` — and only after the backfill statement above has actually corrected its
+        # rows. The runtime's scope pushdown activates on that flag, never on the version alone.
+        f"INSERT INTO {SCHEMA_VERSION_TABLE} (version, {MIN_SUPPORTED_COLUMN}, "
+        f"{SCOPE_BACKFILLED_COLUMN})"
+        f"  VALUES ({TEAM_SCHEMA_VERSION}, {TEAM_SCHEMA_MIN_SUPPORTED}, TRUE)"
         f"  ON CONFLICT (version) DO UPDATE SET "
-        f"{MIN_SUPPORTED_COLUMN} = EXCLUDED.{MIN_SUPPORTED_COLUMN}",
+        f"{MIN_SUPPORTED_COLUMN} = EXCLUDED.{MIN_SUPPORTED_COLUMN}, "
+        f"{SCOPE_BACKFILLED_COLUMN} = EXCLUDED.{SCOPE_BACKFILLED_COLUMN}",
     ]
 
 
@@ -627,24 +1017,35 @@ def provision_vector(dsn: str, *, dim: int, embedder_id: str = "") -> ProvisionR
                     [VECTOR_TABLE, VECTOR_STAMP_TABLE])
 
 
-def _run_ddl(dsn: str, stmts: "list[Any]", tables: "list[str]") -> ProvisionResult:
+def _run_ddl(dsn: str, stmts: "list[Any]", tables: "list[str]",
+             *, report_sql: str = "") -> ProvisionResult:
     """Execute an idempotent DDL pass. The ONLY function in mokata that writes schema — every
     caller is an init path, and the AST guard in the D1 test enforces that.
 
     An entry may be a bare SQL string or a `(sql, params)` pair (DB.S4's stamp UPSERT): a value
-    that is not a mokata constant travels as a BOUND parameter, never interpolated into the text."""
+    that is not a mokata constant travels as a BOUND parameter, never interpolated into the text.
+
+    `report_sql` (DB.S7a) is an optional single-scalar SELECT run LAST, in the same pass, whose
+    value rides back on the result. It is inside the same `try` as the DDL on purpose: it reads a
+    table this pass has just created, so a failure there is not a "degraded report" to swallow — it
+    means the pass did not do what it claims, and the pass already fails closed and clean."""
     from .memory import _pg
     conn = _pg.get_connection(dsn, ProvisionError)
+    skipped = 0
     try:
         for stmt in stmts:
             if isinstance(stmt, tuple):
                 conn.execute(stmt[0], stmt[1])
             else:
                 conn.execute(stmt)
+        if report_sql:
+            row = conn.execute(report_sql).fetchone()
+            skipped = int(row[0]) if row and row[0] is not None else 0
     except Exception as exc:                              # any DDL failure fails closed + clean
         raise ProvisionError(f"provisioning failed: {exc}") from exc
     reset_schema_cache()             # the schema just changed — the verify cache is now stale.
-    return ProvisionResult(statements=stmts, version=TEAM_SCHEMA_VERSION, tables=tables)
+    return ProvisionResult(statements=stmts, version=TEAM_SCHEMA_VERSION, tables=tables,
+                           skipped_dangling_edges=skipped)
 
 
 def provision(dsn: str, *, project_id: Optional[str] = None) -> ProvisionResult:
@@ -652,7 +1053,9 @@ def provision(dsn: str, *, project_id: Optional[str] = None) -> ProvisionResult:
     mokata — runtime connects (incl. the probe) never run these. Raises `ProvisionError` on a
     missing driver / unreachable DB / DDL failure (the caller surfaces the S2 fail-closed fixes)."""
     return _run_ddl(dsn, provision_sql(project_id),
-                    [SCHEMA_VERSION_TABLE, MEMORY_TABLE, SESSION_TABLE, AUDIT_TABLE, EVENTS_TABLE])
+                    [SCHEMA_VERSION_TABLE, MEMORY_TABLE, EDGES_TABLE, SESSION_TABLE, AUDIT_TABLE,
+                     EVENTS_TABLE],
+                    report_sql=dangling_edge_refs_sql())
 
 
 # ------------------------------------------------------------------- E5 · the idempotent pass

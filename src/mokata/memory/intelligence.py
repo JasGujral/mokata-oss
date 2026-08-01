@@ -10,6 +10,14 @@ rebuilds NONE of them:
     neighbour pulled it in, and its kind. Pure + deterministic (no LLM, no wall-clock); ONE
     short phrase per hit, so the JIT frugality bound (top-k, no corpus dump) still holds.
 
+  * PROVENANCE HIGHLIGHT (R9) — `provenance_lines(item)` renders where an EXISTING item came
+    from (who wrote it, from what source, when) and who approved it, for the human staring at a
+    gate prompt that is about to overwrite it. The gate-side twin of `why_surfaced`, and it
+    inherits that function's discipline exactly: say only what the data proves, and say "unknown"
+    out loud rather than filling a gap with something plausible. Doc 83's poisoning row is the
+    whole reason it exists — "a poisoned proposal a human rubber-stamps still lands" — and a
+    provenance panel that guessed would make rubber-stamping easier, not harder.
+
   * MEMORY-HEALTH NUDGE — `assess_health` / `MemoryHealth.nudge()` turns the existing
     self-healing detection (stale / contradictory, from `detect_issues`) and the C8
     read/write ratio (the UNUSED-memory signal) into ONE actionable line that points at the
@@ -37,7 +45,7 @@ from dataclasses import dataclass
 from typing import Any, List, Optional
 
 from ..errors import DegradedCapability
-from .healing import CONTRADICTION, STALE
+from .healing import CONTRADICTION, CROSS_WRITER, NEAR_DUP, STALE
 from .item import ALWAYS_ON_KINDS
 
 # A dependency-free word tokenizer matching the lexical-score tokenizer (clean-room copy so
@@ -58,20 +66,39 @@ def _text(item: Any) -> str:
 
 
 # ----------------------------------------------------------------- explainable retrieval
-def why_surfaced(query: str, item: Any, *, tiers: Optional[dict] = None) -> str:
+def why_surfaced(query: str, item: Any, *, tiers: Optional[dict] = None,
+                 path: Any = None) -> str:
     """A short, deterministic "why it surfaced" phrase for one recall hit — frugal (ONE
     phrase). Names the strongest signal that pulled the item in, plus its kind:
 
         [context] matched "auth"               (lexical keyword overlap — the JIT floor)
         [reference] semantically near          (an embedding neighbour — semantic tier)
         [context] graph-anchored "load_config" (a code-graph anchor — graph tier)
+        [decision] via depends_on → decided_in (DB.S7b — reached by a ≤2-hop edge walk)
         [guardrail] always-on (project rule)   (an always-on rule/guardrail, no query signal)
 
     `tiers` is the optional per-tier score dict from a `RetrievalHit` (lexical/graph/semantic);
     without it (a bare `jit_recall` MemoryItem) the phrase falls back to the matched token.
-    Read-only; computes nothing durable."""
+    Read-only; computes nothing durable.
+
+    **DB.S7b — `path` is the ACTUAL walked route (an `expansion.ExpansionPath`), and it is the ONLY
+    thing this function may say a traversal from.** The item's own inline `supersedes` /
+    `depends_on` / `about_code` lists are deliberately NOT consulted: they would let this render a
+    fluent, plausible sentence about a relation the traversal never crossed — a "why" that is
+    wrong precisely when it matters, since the reader's whole reason for asking is that the item
+    did not match their query. If no path reached this hit, no path is claimed.
+    """
     kind = getattr(item, "effective_kind", "") or "memory"
     matched = sorted(_tokens(query) & _tokens(_text(item)))
+
+    # The PATH leads, when there is one: an item reached by a hop is one the query did not match,
+    # so "matched nothing, but here is the route" is the only honest thing to say about it.
+    if path is not None:
+        steps = getattr(path, "steps", ()) or ()
+        if steps:
+            chain = " → ".join(s.kind for s in steps)
+            hops = "hop" if len(steps) == 1 else "hops"
+            return f'[{kind}] via {chain} ({len(steps)} {hops} from "{path.seed}")'
 
     if tiers:
         sem = float(tiers.get("semantic", 0.0) or 0.0)
@@ -93,6 +120,93 @@ def why_surfaced(query: str, item: Any, *, tiers: Optional[dict] = None) -> str:
     return f'[{kind}] relevant to your query'
 
 
+# ----------------------------------------------------------------- R9 · provenance highlight
+# What an absent fact renders as. ONE word, used for every field, so a reader learns it once and
+# it can never be confused with a value: an author literally named "unknown" is not a thing this
+# renders, because the word only ever appears where the doc carried nothing.
+UNKNOWN = "unknown"
+
+# The advisory label on `approved_by`. Doc 52 M-1 bound M-1's attribution this way and the binding
+# holds here: `team_audit.actor()` reads a name out of the environment, so it ATTRIBUTES rather
+# than authenticates, and a surface that showed it bare would be claiming more than mokata knows.
+# `approval_ledger_id` carries no such label on purpose — it names a hash-chained entry, and that
+# one IS checkable (`mokata audit`).
+ADVISORY = "advisory"
+
+
+def _field(value: Any) -> str:
+    """One provenance field as text, or UNKNOWN. Total: any type, any junk, never raises."""
+    try:
+        text = str(value).strip() if value is not None else ""
+    except Exception:                     # pragma: no cover - a __str__ that raises
+        return UNKNOWN
+    return text or UNKNOWN
+
+
+def provenance_lines(item: Any, *, label: str = "provenance") -> List[str]:
+    """R9 — the provenance block for an item a gate is about to CHANGE. Read-only, and TOTAL.
+
+    Rendered at every gate/review surface that overwrites, retires or re-scopes an item that
+    already exists, because that is the moment doc 83 is about: the human is being asked to
+    approve a change to content someone else wrote and someone else approved, and until now the
+    prompt showed neither. `render_write`'s own surface showed the mtype, the subject and the
+    value and nothing else — a poisoned edit to a trusted memory looked exactly like a clean one.
+
+    Two rules, and they are the whole design:
+
+    **Say only what the doc proves.** Every field is read straight off the item; nothing is
+    derived, defaulted, or inferred from a neighbouring field. An unstamped item renders
+    `approved: unknown` — NOT the current actor, not `created_at` standing in for `approved_at`,
+    not "you". This is `why_surfaced`'s rule ("if no path reached this hit, no path is claimed")
+    applied to the surface where being plausibly wrong is most expensive: the reader's whole
+    reason for looking is that they do not already know where this came from.
+
+    **Never raise into the gate.** A provenance dict is doc JSON — it can be hand-edited,
+    imported, or written by a build that modelled it differently, so it can be any shape at all.
+    A render that threw on a malformed one would take out the APPROVAL PROMPT, turning a cosmetic
+    defect into an inability to approve anything about that item. Every read is defensive and
+    every failure degrades to UNKNOWN, which is both honest and harmless.
+
+    Returns lines (not a string) so each caller controls its own indentation and can drop the
+    block entirely; empty `item` yields no block rather than a block full of unknowns.
+    """
+    if item is None:
+        return []
+    prov = getattr(item, "provenance", None)
+    if not isinstance(prov, dict):
+        prov = {}
+
+    author = _field(prov.get("author"))
+    source = _field(prov.get("source"))
+    created = _field(prov.get("created_at"))
+    approver = _field(getattr(item, "approved_by", ""))
+    approved_at = _field(getattr(item, "approved_at", ""))
+    ledger_id = getattr(item, "approval_ledger_id", None)
+
+    # The approval line names the ledger entry when there is one, because that is the element a
+    # reader can actually go and check. With no id there is nothing to point at, and saying so is
+    # the point — an item approved through a path that recorded nothing must not look verified.
+    if isinstance(ledger_id, int) and not isinstance(ledger_id, bool):
+        approval = f"{approver} ({ADVISORY}) at {approved_at} · ledger #{ledger_id}"
+    elif approver != UNKNOWN:
+        approval = f"{approver} ({ADVISORY}) at {approved_at} · no ledger entry recorded"
+    else:
+        approval = f"{UNKNOWN} — this item carries no recorded approval"
+
+    return [
+        f"  {label}:",
+        f"    written by : {author} (source: {source}, {created})",
+        f"    approved by: {approval}",
+    ]
+
+
+def provenance_block(item: Any, *, label: str = "provenance") -> str:
+    """`provenance_lines` as a trailing block, or "" when there is nothing to show. Convenience for
+    the renders that build one f-string."""
+    lines = provenance_lines(item, label=label)
+    return ("\n" + "\n".join(lines)) if lines else ""
+
+
 @dataclass
 class RecallExplanation:
     """One recall hit paired with its short, deterministic "why it surfaced" phrase."""
@@ -112,10 +226,13 @@ def explain_recall(query: str, results: List[Any]) -> List[RecallExplanation]:
     out: List[RecallExplanation] = []
     for r in results:
         if hasattr(r, "item") and hasattr(r, "tiers"):       # a RetrievalHit
-            item, tiers = r.item, r.tiers()
+            # DB.S7b — `path` is read off the hit, never reconstructed here. `getattr` with a
+            # default so a hand-built hit (or a third-party one) predating the field still works.
+            item, tiers, path = r.item, r.tiers(), getattr(r, "path", None)
         else:                                                # a bare MemoryItem
-            item, tiers = r, None
-        out.append(RecallExplanation(item=item, why=why_surfaced(query, item, tiers=tiers)))
+            item, tiers, path = r, None, None
+        out.append(RecallExplanation(item=item,
+                                     why=why_surfaced(query, item, tiers=tiers, path=path)))
     return out
 
 
@@ -145,10 +262,16 @@ class MemoryHealth:
     unused: int
     reads: int
     writes: int
+    # DB.S6 — additive WITH defaults, so every existing construction site and every pinned
+    # zero-state read is unchanged. `cross_writer` is the count that makes I2a true: a teammate's
+    # concurrent change is visible on the health surface without anyone running `mokata sync`.
+    cross_writer: int = 0
+    near_dup: int = 0
 
     @property
     def total_issues(self) -> int:
-        return self.stale + self.contradictory + self.unused
+        return (self.stale + self.contradictory + self.unused
+                + self.cross_writer + self.near_dup)
 
     @property
     def healthy(self) -> bool:
@@ -161,11 +284,20 @@ class MemoryHealth:
         if self.healthy:
             return ""
         dot = " - " if ascii_only else " · "
-        counts = dot.join([
+        parts = [
             f"{self.stale} stale",
             f"{self.contradictory} contradictory",
             f"{self.unused} unused",
-        ])
+        ]
+        # DB.S6 — appended only when non-zero, so the healthy-team line stays exactly the line
+        # every pre-DB.S6 surface (and its tests) already renders. A cross-writer conflict is the
+        # loudest of these: it means an APPROVED write of yours is not in the shared store.
+        if self.near_dup:
+            parts.append(f"{self.near_dup} near-duplicate")
+        if self.cross_writer:
+            parts.append(f"{self.cross_writer} cross-writer conflict"
+                         f"{'s' if self.cross_writer != 1 else ''}")
+        counts = dot.join(parts)
         return (f"mokata · memory health: {counts} — review with `mokata memory` (gated) / "
                 f"`mokata govern`; nothing changes until you approve.")
 
@@ -174,10 +306,12 @@ def memory_health(proposals: List[Any], reads: int, writes: int) -> MemoryHealth
     """Derive a `MemoryHealth` from ALREADY-COMPUTED self-healing proposals + the C8 counters
     — no extra store reads (so a caller that already has both, e.g. the govern view, reuses
     them). Read-only + deterministic."""
-    stale = sum(1 for p in proposals if getattr(p, "kind", "") == STALE)
-    contradictory = sum(1 for p in proposals if getattr(p, "kind", "") == CONTRADICTION)
-    return MemoryHealth(stale=stale, contradictory=contradictory,
-                        unused=_unused_count(reads, writes), reads=reads, writes=writes)
+    def _count(kind: str) -> int:
+        return sum(1 for p in proposals if getattr(p, "kind", "") == kind)
+
+    return MemoryHealth(stale=_count(STALE), contradictory=_count(CONTRADICTION),
+                        unused=_unused_count(reads, writes), reads=reads, writes=writes,
+                        cross_writer=_count(CROSS_WRITER), near_dup=_count(NEAR_DUP))
 
 
 def _backend_read_errors() -> tuple:

@@ -128,7 +128,12 @@ class _PgShim:
                    id TEXT UNIQUE, mtype TEXT, subject TEXT, status TEXT, doc TEXT,
                    project TEXT, revision INTEGER NOT NULL DEFAULT 1,
                    scope_level TEXT NOT NULL DEFAULT 'personal', scope_id TEXT,
-                   pin INTEGER NOT NULL DEFAULT 0, priority INTEGER NOT NULL DEFAULT 0
+                   pin INTEGER NOT NULL DEFAULT 0, priority INTEGER NOT NULL DEFAULT 0,
+                   -- DB.S5 (v4): the shim mirrors the shared DDL, so it must carry the
+                   -- lifecycle columns `teamdb.provision_sql` provisions or `put()` fails here
+                   -- for a reason that has nothing to do with what this file tests.
+                   valid_from TEXT, valid_to TEXT,
+                   hit_count INTEGER NOT NULL DEFAULT 0, last_recalled_at TEXT
                )"""
         )
         self._c.create_function("to_tsvector", 2, lambda cfg, t: " ".join(sorted(_ts_tokens(t))))
@@ -637,11 +642,22 @@ class BackfillTest(unittest.TestCase):
             ids = [it.id for it, _ in hits]
             self.assertEqual(len(ids), len(set(ids)), f"reopening duplicated index rows: {ids}")
 
-    def test_db_s3_does_not_bump_the_team_schema_version(self):
-        """A version bump is a real break for older clients (the DB.S2b lesson). The Postgres
-        side is an ADDITIVE GIN index, so the version stays where MCP-SURF left it."""
+    def test_db_s3_does_not_break_older_clients(self):
+        """A version bump is a real break for older clients (the DB.S2b lesson). DB.S3's Postgres
+        side is an ADDITIVE GIN index — no column, no row change — so it costs older clients
+        nothing.
+
+        Re-expressed at DB.S5, which DID bump the version (3 → 4, adding the lifecycle columns).
+        Pinning the literal `TEAM_SCHEMA_VERSION == 3` was only ever a proxy for the real claim,
+        and it stopped being a true proxy the moment a LATER stage bumped it for its own reasons.
+        The claim itself is about the FLOOR: `TEAM_SCHEMA_MIN_SUPPORTED` is what refuses an older
+        client, and DB.S3 neither raised it nor gave anyone a reason to."""
         from mokata import teamdb
-        self.assertEqual(teamdb.TEAM_SCHEMA_VERSION, 3)
+        self.assertEqual(teamdb.TEAM_SCHEMA_MIN_SUPPORTED, 3)
+        index = [s for s in teamdb.provision_sql() if "USING GIN" in s.upper()]
+        self.assertEqual(len(index), 1)
+        self.assertIn("IF NOT EXISTS", index[0].upper())
+        self.assertNotIn("ALTER TABLE", index[0].upper())
 
     def test_db_s3_postgres_index_is_provisioned_by_team_init(self):
         """No runtime DDL (D1/C4): the GIN index ships in `provision_sql`, which `team init`

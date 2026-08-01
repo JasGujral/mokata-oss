@@ -28,7 +28,7 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .init import init_repo
 from . import MOKATA_DIR, MANIFEST_FILENAME, package_data_root
@@ -99,15 +99,55 @@ HOOK_COMMAND = "mokata-hook"
 # PreToolUse matchers (mirror hooks/hooks.json). TWO independent hooks share this event:
 #   secret-guard — the SECURITY block (G4/I1). Also matches Bash: a secret can leak through a
 #                  shell command (`echo $KEY >> ...`, a curl with a token), not just a file write.
-#   gate-guard   — the SI.1 RUN-STATE GATE block. File-mutation tools ONLY: it decides from a target
-#                  PATH, and a Bash command has none to decide on (shelling out to `sed -i` is a
-#                  known, documented hole — closing it needs command parsing, not a wider matcher).
+#   gate-guard   — TWO decisions on one event (see `hook_cli.gate_guard_main`): SELF-PROTECT (the
+#                  0.0.16 non-overridable block on writes to installed / out-of-workspace code) and
+#                  then the SI.1 RUN-STATE GATES.
+#                  It now matches Bash TOO — SELF-PROTECT's doing. The run-state gates still decide
+#                  from a target PATH and are UNCHANGED (a Bash call reaches them with no path and
+#                  exits before them), but an absolute path block that a one-line `sed -i` walks
+#                  around is theatre, so the self-protect lane parses the command for write
+#                  destinations. `sed -i` was the known, documented hole this closes; the parser's
+#                  bounds are stated honestly in `selfprotect`'s Bash-lane note.
 HOOK_PRETOOL_MATCHER = "Write|Edit|MultiEdit|Bash"
-HOOK_GATE_MATCHER = "Write|Edit|MultiEdit|NotebookEdit"
+HOOK_GATE_MATCHER = "Write|Edit|MultiEdit|NotebookEdit|Bash"
 #   dirty-track  — GR.S4 PostToolUse ASYNC OBSERVABILITY hook. File-mutation tools only (it
 #                  records the written PATH into the graph dirty-set). NEVER blocks (exit 0
 #                  always) — it is not a security lane; the sync PreToolUse blockers are untouched.
 HOOK_DIRTY_MATCHER = "Write|Edit|MultiEdit|NotebookEdit"
+#   user-prompt-submit — H-1a UserPromptSubmit ASYNC CONTEXT-INJECTION hook. Like SessionStart it
+#                  takes NO matcher (the event carries no tool), only ADDS `additionalContext`,
+#                  and ALWAYS exits 0. Exit 2 on this event does not block a tool call — it eats
+#                  the human's TURN — so it is fail-open at every arm.
+
+# DOC-ONBOARD — THE SHAPE `mokata setup claude` WIRES, in one place.
+#
+# It is declared here rather than inline in `plan_setup` because a SECOND reader needs it:
+# `hook_wiring.wiring_drift` asks "is the wiring on disk the wiring THIS mokata writes?", and
+# that question is only answerable against the same source the writer uses. Two hand-kept
+# copies would drift the instant an event/matcher moved — and a drift check that itself
+# drifts is worse than none, because it would nag a current install or bless a stale one.
+# `plan_setup` builds `hook_commands` from this; the drift check reads `expected_hook_wiring()`.
+_EXPECTED_HOOK_WIRING: Dict[str, List[Dict[str, Optional[str]]]] = {
+    "SessionStart": [{"script": "session_start.py", "matcher": None}],
+    "UserPromptSubmit": [{"script": "user_prompt_submit.py", "matcher": None}],
+    "PreToolUse": [{"script": "secret_guard.py", "matcher": HOOK_PRETOOL_MATCHER},
+                   {"script": "gate_guard.py", "matcher": HOOK_GATE_MATCHER}],
+    "PostToolUse": [{"script": "dirty_track.py", "matcher": HOOK_DIRTY_MATCHER}],
+}
+
+
+def expected_hook_wiring() -> Dict[str, List[Dict[str, Optional[str]]]]:
+    """`{event: [{"subcommand", "matcher"}]}` — what a CURRENT `mokata setup claude` wires.
+
+    The declarative half of the wiring (which events, which `mokata-hook` subcommand, which
+    matcher) with the install-specific half (the resolved absolute executable) deliberately
+    left out: an absolute path differs legitimately between two healthy installs, so comparing
+    it would report drift where there is none. Everything here is what a stale wiring actually
+    gets WRONG."""
+    return {event: [{"subcommand": _HOOK_SUBCOMMAND[spec["script"]],
+                     "matcher": spec["matcher"]}
+                    for spec in specs]
+            for event, specs in _EXPECTED_HOOK_WIRING.items()}
 
 
 def repo_root() -> Path:
@@ -192,11 +232,14 @@ class SetupPlan:
     targets: Targets
     command_files: List[str]          # basenames to copy
     needs_init: bool                  # .mokata/manifest.json absent
-    # SI.1: event -> the LIST of hook entries mokata wires on it, each `{"command", "matcher"?}`.
-    # It was one command per event until PreToolUse had to carry BOTH the secret-guard (security)
-    # and the gate-guard (run-state) hooks, with DIFFERENT matchers — so the value is a list and the
-    # matcher travels with its own command instead of being assumed per event.
-    hook_commands: Dict[str, List[Dict[str, str]]] = field(default_factory=dict)
+    # SI.1: event -> the LIST of hook entries mokata wires on it, each
+    # `{"command", "args", "matcher"?}`. It was one command per event until PreToolUse had to
+    # carry BOTH the secret-guard (security) and the gate-guard (run-state) hooks, with
+    # DIFFERENT matchers — so the value is a list and the matcher travels with its own command
+    # instead of being assumed per event.
+    # HOOK-SHELL-AGNOSTIC: `command` is the bare executable and `args` the argument vector
+    # (EXEC form) — NOT a shell command line. See `_hook_exec`.
+    hook_commands: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     mcp_auto: bool = True             # auto-register the MCP server (claude); else manual
     grant: bool = False               # grant CC permission for mokata's MCP tools (claude)
     unsupported: List[str] = field(default_factory=list)  # capabilities this harness lacks
@@ -206,25 +249,58 @@ class SetupPlan:
 
 # The hook scripts (kept as standalone shims) map to `mokata-hook` subcommands.
 _HOOK_SUBCOMMAND = {"session_start.py": "session-start", "secret_guard.py": "secret-guard",
-                    "gate_guard.py": "gate-guard", "dirty_track.py": "dirty-track"}
+                    "gate_guard.py": "gate-guard", "dirty_track.py": "dirty-track",
+                    "user_prompt_submit.py": "user-prompt-submit"}
+
+
+def _hook_exec(script: str) -> Dict[str, Any]:
+    """The EXEC-FORM hook spec `mokata setup claude` wires: `{"command": <exe>, "args": [...]}`.
+
+    Stage 53b / B1: hooks launch the `mokata-hook` console entry point — the SAME mechanism
+    (and the SAME resolver, `resolved_console_script`) the bundled `mokata-mcp` server uses —
+    instead of a bare `python3` or the `sh launch.sh` chain. `mokata setup` runs from the
+    installed package, so `mokata-hook` is a guaranteed sibling console script; B1 resolves it
+    to an ABSOLUTE path (via the interpreter-sibling fallback `which` alone misses) so hooks
+    fire under the GUI-launched minimal PATH.
+
+    HOOK-SHELL-AGNOSTIC — why this is EXEC form and not a command string. Absent `args`, the
+    harness runs a hook in SHELL form, and "no `shell` key" selects the DEFAULT shell, which on
+    a Windows box without Git Bash is PowerShell. The string this used to emit —
+    `"<abs>\\mokata-hook.exe" secret-guard` — opens PowerShell in EXPRESSION mode on its leading
+    quote, making the path a string literal and the subcommand a bare word after it: a parse
+    error, so the gate never ran. Exec form is spawned directly with no shell on any platform,
+    so no quoting rule and no executable-extension search can reach it, and each argument stays
+    exactly one argument. On Windows exec form requires a REAL executable, which is precisely
+    what `resolved_console_script`'s `.exe` branch already returns.
+
+    The PLUGIN path cannot do this: a static hooks.json cannot bake in an install-time path and
+    so must keep the self-resolving shim, which is not a spawnable executable on Windows. It
+    names its shell instead (`"shell": "bash"` in `hooks/hooks.json`) so the Git-Bash-less case
+    fails LOUD with the harness's own named error rather than silently."""
+    exe = resolved_console_script(HOOK_COMMAND)
+    sub = _HOOK_SUBCOMMAND[script]
+    args = [sub]
+    if sub == "session-start":
+        # Forward the clone root so /mokata:init can locate the bundled engine (manual setup
+        # has no ${CLAUDE_PLUGIN_ROOT}). Its OWN argv element — never a quoted blob a shell
+        # would have had to re-split, which is the whole point of exec form.
+        # `str(...)`: argv elements must be strings — `repo_root()` is a Path, and a Path here
+        # would not survive the JSON write into settings.json.
+        args += ["--plugin-root", str(repo_root())]
+    return {"command": exe, "args": args}
 
 
 def _hook_command(script: str) -> str:
-    # Stage 53b / B1: wire hooks as the `mokata-hook` console entry point — the SAME mechanism
-    # (and now the SAME resolver, `resolved_console_script`) the bundled `mokata-mcp` server
-    # uses — instead of a bare `python3` (which a minimal PATH or Windows wouldn't resolve) or
-    # the `sh launch.sh` chain. `mokata setup` runs from the installed package, so `mokata-hook`
-    # is a guaranteed sibling console script; B1 resolves it to an ABSOLUTE path (via the
-    # interpreter-sibling fallback `which` alone misses) so hooks fire under the GUI-launched
-    # minimal PATH; the plugin's `launch.sh` stays the documented fallback if nothing resolves.
-    exe = resolved_console_script(HOOK_COMMAND)
-    sub = _HOOK_SUBCOMMAND[script]
-    cmd = f'"{exe}" {sub}'
-    if sub == "session-start":
-        # Forward the clone root so /mokata:init can locate the bundled engine (manual
-        # setup has no ${CLAUDE_PLUGIN_ROOT}).
-        cmd += f' --plugin-root "{repo_root()}"'
-    return cmd
+    """The same hook rendered as a human-readable command line, for DISPLAY only.
+
+    What `setup` previews and what doctor prints; NOT what is wired (see `_hook_exec` — the
+    wiring is exec form and never goes through a shell). Rendered from `_hook_exec` so the two
+    can never drift."""
+    spec = _hook_exec(script)
+    parts = [f'"{spec["command"]}"']
+    for arg in spec["args"]:
+        parts.append(f'"{arg}"' if " " in arg else arg)
+    return " ".join(parts)
 
 
 def _statusline_command(wrap_command: Optional[str] = None) -> str:
@@ -291,24 +367,20 @@ def plan_setup(
     manifest_path = Path(root).resolve() / MOKATA_DIR / MANIFEST_FILENAME
     needs_init = not manifest_path.exists()
 
-    hook_commands: Dict[str, List[Dict[str, str]]] = {}
+    # Built from `_EXPECTED_HOOK_WIRING` — the SAME declaration `hook_wiring.wiring_drift`
+    # checks against, so "what we write" and "what we call stale" can never disagree. The
+    # PreToolUse pair (secret-guard security + gate-guard run-state) and the PostToolUse
+    # GR.S4 async-observability lane are declared there with their own matchers.
+    hook_commands: Dict[str, List[Dict[str, Any]]] = {}
     if with_hooks:
-        hook_commands = {
-            "SessionStart": [{"command": _hook_command("session_start.py")}],
-            "PreToolUse": [
-                {"command": _hook_command("secret_guard.py"),
-                 "matcher": HOOK_PRETOOL_MATCHER},
-                {"command": _hook_command("gate_guard.py"),
-                 "matcher": HOOK_GATE_MATCHER},
-            ],
-            # GR.S4 — the ASYNC OBSERVABILITY lane: record touched paths for the read-time graph
-            # freshness contract. Exits 0 always; the sync PreToolUse security blockers above are
-            # untouched.
-            "PostToolUse": [
-                {"command": _hook_command("dirty_track.py"),
-                 "matcher": HOOK_DIRTY_MATCHER},
-            ],
-        }
+        for event, specs in _EXPECTED_HOOK_WIRING.items():
+            entries: List[Dict[str, Any]] = []
+            for spec in specs:
+                entry = dict(_hook_exec(str(spec["script"])))
+                if spec["matcher"]:
+                    entry["matcher"] = spec["matcher"]
+                entries.append(entry)
+            hook_commands[event] = entries
 
     # Agent Skills — the model-invocable twin of the slash commands. Only where the harness has
     # that surface (claude); degrade-clean (empty list) everywhere else. The curated set renders
@@ -504,7 +576,10 @@ def resolved_console_script(name: str) -> str:
     (1) `shutil.which` on the current PATH; (2) a console-script sibling of the running
     interpreter (`<sys.executable dir>/<name>[.exe]`) — this covers a venv/install whose bin
     dir isn't on PATH, which is precisely the silent-killer case `which` can't see; (3) the bare
-    name as a last resort (e.g. `-e` source runs), which the plugin's `launch.sh` still backs."""
+    name as a last resort (e.g. `-e` source runs). The PLUGIN route can't call this at all (its
+    manifests are static), so it runs the SAME ladder at hook time via
+    `hooks/mokata-hook-launch`, and `mokata doctor` reports any wired command that won't resolve
+    (`govern.doctor.hook_resolution_findings`) — HOOK-RESOLVE."""
     found = shutil.which(name)
     if found:
         return found
@@ -596,7 +671,14 @@ def _merge_hooks(path: Path, hook_commands: Dict[str, List[Dict[str, str]]]) -> 
         # Idempotent: drop any prior mokata-wired entry for this event, then add fresh.
         entries = [e for e in entries if not (isinstance(e, dict) and _is_mokata_hook(e))]
         for spec in entries_to_wire:
-            block: Dict = {"hooks": [{"type": "command", "command": spec["command"]}]}
+            hook: Dict = {"type": "command", "command": spec["command"]}
+            # HOOK-SHELL-AGNOSTIC — `args` is what makes the hook EXEC form (spawned directly,
+            # no shell, no quoting rule, no executable-extension search). It must reach disk or
+            # the wiring silently degrades to the shell form that cannot run under PowerShell.
+            args = spec.get("args")
+            if args is not None:
+                hook["args"] = list(args)
+            block: Dict = {"hooks": [hook]}
             matcher = spec.get("matcher")
             if matcher:
                 block["matcher"] = matcher

@@ -73,6 +73,8 @@ nav:
   - How-to guides:
       - Your first run (quickstart): how-to/first-run.md
       - Install mokata (pip/pipx/uv/brew): how-to/install-mokata.md
+      - Which setup command? (init vs setup vs plugin) + upgrading: how-to/which-setup-command.md
+      - "Fix: `mokata-hook: command not found`": how-to/fix-mokata-hook-command-not-found.md
       - mokata as a PR check: how-to/mokata-as-a-pr-check.md
       - Install the Claude plugin: how-to/install-plugin.md
       - Use the plugin in Claude Code: how-to/use-the-plugin.md

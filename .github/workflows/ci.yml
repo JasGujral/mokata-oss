@@ -79,6 +79,52 @@ jobs:
           mokata init --profile standard --yes --path "$tmp"
           mokata playbook --path "$tmp"
 
+  hooks-execute:
+    # HOOK-SHELL-AGNOSTIC — the deliverable that string assertions cannot replace.
+    #
+    # The falsified premise (that cmd.exe completes the extension-less shim path through the
+    # Windows executable-extension search) survived precisely BECAUSE every existing test
+    # asserted what mokata WIRES. A hook can be wired correctly and still never run, because
+    # whether the shell can launch it is a separate question. So each leg here EXECUTES a hook
+    # against a planted secret canary and demands exit 2 — a leg that cannot block is red.
+    #
+    # The shells are the ones the harness actually uses for a hook `command`, read out of the
+    # shipped Claude Code rather than assumed: `sh -c` on macOS/Linux, Git Bash on Windows, or
+    # PowerShell on Windows when Git Bash is absent. There is deliberately NO cmd.exe leg —
+    # cmd.exe is never a hook shell, so a cmd leg would test a route the product never takes.
+    name: hooks-execute · ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  label: "linux · bash",         shell: bash, runner_shell: bash }
+          - { os: macos-latest,   label: "macos · zsh",          shell: zsh,  runner_shell: bash }
+          - { os: windows-latest, label: "windows · git bash",   shell: bash, runner_shell: bash }
+          # The PowerShell leg is the one this stage exists for: a Windows box WITHOUT Git Bash.
+          # The exec-form route must still block here — that is the whole fix. The shell-form
+          # (plugin shim) half cannot run under PowerShell and the check REPORTS that skip
+          # rather than passing it silently.
+          - { os: windows-latest, label: "windows · powershell", shell: none, runner_shell: pwsh }
+    defaults:
+      run:
+        shell: ${{ matrix.runner_shell }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install mokata
+        run: pip install -e .
+      - name: EXECUTE the hooks and prove the gate blocks
+        # Plants a real canary, runs the hook exactly as wired, asserts exit 2; a clean write
+        # must exit 0. Non-zero here means mokata's enforcement plane is off on this leg.
+        run: python tests/hook_execution_check.py --shell ${{ matrix.shell }}
+      - name: Wiring assertions (the same legs, from the unit suite)
+        run: python -m unittest discover -s tests -t tests -k test_hook_shell_agnostic
+
   live-db:
     name: live-db (postgres + pgvector + neo4j)
     runs-on: ubuntu-latest

@@ -115,9 +115,16 @@ def cmd_version(args: argparse.Namespace) -> int:
 
 def cmd_upgrade(args: argparse.Namespace) -> int:
     # 45b — easy, HUMAN-GATED upgrade. `--check` just reports; never auto-runs an install.
+    #
+    # DOC-ONBOARD — and it FINISHES THE JOB. Installing the package was never the whole upgrade:
+    # `.claude/settings.json` still carries the wiring the previous version wrote, so a gate
+    # added since the user's last `mokata setup claude` is silently missing. After the gated pip
+    # run, the tail re-wires (through `setup`'s own preview-diff gate — nothing silent) and then
+    # verifies. Human-gated end to end: the pip run has its gate, the settings write has setup's.
     from ..version import (
         check_for_update,
         detect_install_method,
+        finish_upgrade,
         run_pip_upgrade,
         upgrade_steps,
     )
@@ -134,6 +141,8 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
         return 0
     steps = upgrade_steps(method)
     if method == "source":
+        # A source checkout can't be upgraded FOR you (it's your working tree), so the tail
+        # rides the printed recipe instead of the runner — the same two steps, same order.
         print("Source checkout — upgrade with:")
         for step in steps:
             print(f"  {step}")
@@ -146,6 +155,14 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
             return 0
     run_pip_upgrade()
     print(f"ran: {steps[0]}")
+    if getattr(args, "no_refresh", False):
+        # Opting out of the tail must still leave the user holding the step they now owe —
+        # an upgrade that stops here is exactly the half-done state this deliverable exists for.
+        print("wiring refresh skipped (--no-refresh). Your harness wiring is still the "
+              "previous version's — run `mokata setup claude`, then `mokata doctor --wiring`.")
+        return 0
+    finish_upgrade(root=args.path, scope=getattr(args, "scope", "project"),
+                   assume_yes=args.yes)
     return 0
 
 
@@ -230,6 +247,11 @@ def register(sub, common):
     p_up.add_argument("--yes", action="store_true",
                       help="approve the pip upgrade non-interactively (never auto-runs "
                            "without this or a confirm)")
+    p_up.add_argument("--scope", choices=("project", "user"), default="project",
+                      help="scope for the post-upgrade harness re-wiring (default: project)")
+    p_up.add_argument("--no-refresh", action="store_true",
+                      help="don't refresh the harness wiring after upgrading (you must then "
+                           "run `mokata setup claude` yourself, or the new gates stay unwired)")
     p_up.set_defaults(func=cmd_upgrade)
 
 

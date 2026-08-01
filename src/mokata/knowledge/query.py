@@ -16,7 +16,30 @@ from typing import Any, Dict, List, Optional
 from ..errors import DegradedCapability
 
 # The structural questions the API answers. Stable across backends.
-QUERY_KINDS = ("callers", "callees", "implementers", "imports", "blast_radius")
+#
+# CRG-NAV (b): `defs` and `refs` are the two NAVIGATION intents the graph-first prose names that
+# previously had no op behind them — "where is this defined / does this symbol exist" and
+# "everywhere this is referenced". They are ADDITIVE kinds on the existing typed API (the MCP
+# `query` tool derives its enum from this tuple, so it accepts them for free); no new tool.
+QUERY_KINDS = ("callers", "callees", "implementers", "imports", "blast_radius",
+               "defs", "refs")
+
+# CRG-NAV — the NAVIGATION subset: "where does this symbol live / who touches it". `blast_radius`
+# is deliberately NOT here: that is the IMPACT question (GRAPH-FIRST-IMPACT owns it), and the
+# navigation floor note below must not attach itself to impact answers.
+NAVIGATION_KINDS = ("defs", "refs", "callers", "callees", "implementers", "imports")
+
+# CRG-NAV (d) — the chain's most-preferred REAL structural graph. The honest floor note binds to
+# THE CHAIN through this one symbol (`graph_adopt.ADOPTABLE_GRAPH_TOOLS` heads with it too), so a
+# later re-ordering of the backend chain (backlog GRAPH-SWEEP) moves the note with it instead of
+# leaving prose that names a product mokata no longer prefers.
+PREFERRED_GRAPH_TOOL = "code-review-graph"
+
+# The one honest sentence a NAVIGATION answer carries when the LEXICAL floor produced it: what
+# answered, and the single step that buys the full chain. Attached by the grep floor itself, so
+# it rides every route to that floor (direct, via the AST floor's fallthrough, or via the layer's
+# degrade) without a second mechanism.
+GREP_FLOOR_NAV_NOTE = f"grep floor — install {PREFERRED_GRAPH_TOOL} for full navigation"
 
 
 class BackendError(DegradedCapability):
@@ -88,3 +111,13 @@ class GraphBackend(ABC):
     @abstractmethod
     def query(self, kind: str, target: str, depth: int = 1) -> QueryResult:
         ...
+
+    def supports_kind(self, kind: str) -> bool:
+        """CRG-NAV (b/d): whether THIS backend has an op for `kind`.
+
+        The floors answer every kind, so the default is True. An adopted graph whose real
+        interface exposes no mapping for a kind (code-review-graph has no definition-site
+        pattern) says so HERE, and the layer routes that one kind straight to the floor with an
+        honest note — instead of the graph raising, burning a recovery attempt, and reporting a
+        mapping gap as if the tool had failed."""
+        return kind in QUERY_KINDS

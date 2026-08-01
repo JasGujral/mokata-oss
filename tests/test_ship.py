@@ -69,9 +69,12 @@ class TestPluginReferences(unittest.TestCase):
         hooks_json = json.loads(read(hooks_rel))
         blob = json.dumps(hooks_json)
         # Stage 53b: wired via the `mokata-hook` console entry point (no bare python3/sh).
+        # HOOK-RESOLVE: and no longer by BARE name — the static plugin manifest invokes the
+        # self-resolving shim under ${CLAUDE_PLUGIN_ROOT}, which execs `mokata-hook` once it
+        # resolves and fails LOUD (exit 1) when it cannot, instead of the hook being dropped.
         for sub in HOOK_SUBCOMMANDS:
-            self.assertIn(f"mokata-hook {sub}", blob,
-                          f"hooks.json does not wire `mokata-hook {sub}`")
+            self.assertIn(f"mokata-hook-launch\\\" {sub}", blob,
+                          f"hooks.json does not wire the shim for `{sub}`")
         for shim in HOOK_SHIMS:                 # the fallback shims still ship
             self.assertTrue(os.path.exists(os.path.join(ROOT, "src", "mokata", "hooks", shim)))
         # the security hook is wired on a tool-use event; session-start on session start
