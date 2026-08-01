@@ -142,17 +142,43 @@ class _NoPinnedSession(unittest.TestCase):
 
 
 def _is_root() -> bool:
-    """True when the process can read/write through a mode it has no permission for.
+    """True when the process reads/writes through a mode it has no permission for.
 
     `os.geteuid` is POSIX-ONLY and this is evaluated at IMPORT time (a class decorator), so a bare
     call raises `AttributeError` on Windows and collapses the WHOLE module during unittest
     discovery — reddening every job that merely imports it, including the hooks-execute legs whose
-    own steps pass. Windows has no euid: report "not root" and let the permission-mode tests run
-    (or be skipped by their own guards)."""
+    own steps pass. Windows has no euid, so it answers "not root" and the platform check below
+    is what speaks for it."""
     return getattr(os, "geteuid", lambda: 1)() == 0
 
 
-@unittest.skipIf(_is_root(), "root can read a 0o000 file — the fault cannot be staged")
+def _unstageable_reason() -> str:
+    """Why a MODE-based fault cannot be staged in this environment, or '' when it can.
+
+    These tests stage a REAL fault (`chmod 0o000` on a file, `0o500` on a directory) and assert
+    mokata reports it honestly. Two environments cannot express "unreadable/unwritable to me",
+    so the fault never comes into being and the assertion fails against a file that is in fact
+    perfectly readable — a false failure about the ENVIRONMENT, not about the code:
+
+      * root — mode bits do not apply to it (the long-standing guard);
+      * WINDOWS — permissions are ACLs, not mode bits. `os.chmod` there only toggles the
+        READ-ONLY flag: it cannot remove READ access, and the owner keeps writing into a
+        `0o500` directory. Unguarded, these surfaced as 4 Windows failures the moment the
+        module started importing there at all.
+
+    Same reasoning as the root guard, one platform wider — NOT a blanket Windows skip: every
+    other test in this module runs there."""
+    if os.name == "nt":
+        return "Windows: os.chmod cannot remove read access (permissions are ACLs, not mode bits)"
+    if _is_root():
+        return "root reads a 0o000 file regardless of mode"
+    return ""
+
+
+_UNSTAGEABLE = _unstageable_reason()
+
+
+@unittest.skipIf(_UNSTAGEABLE, f"the fault cannot be staged here — {_UNSTAGEABLE}")
 class _NeedsPermissions(_NoPinnedSession):
     pass
 
@@ -281,8 +307,8 @@ class TestCliRecordFailsLoudly(_NoPinnedSession):
             _persist_run(d, "solo")
             state_root = os.path.dirname(_log(surface).path)
             os.makedirs(state_root, exist_ok=True)
-            if _is_root():
-                self.skipTest("root writes through a 0o500 directory")
+            if _UNSTAGEABLE:
+                self.skipTest(f"the unwritable directory cannot be staged here — {_UNSTAGEABLE}")
             before = stat.S_IMODE(os.stat(state_root).st_mode)
             os.chmod(state_root, 0o500)                 # read+execute, no write
             try:

@@ -318,6 +318,23 @@ def _doctor(d, home, env):
     old_env = dict(os.environ)
     os.environ.clear()
     os.environ.update(env)
+    if os.name == "nt":
+        # WINDOWS: `Path.home()` has NO pwd-style fallback. `diagnose()` does not thread doctor's
+        # `--home` down to the hook-wiring check, so it legitimately calls `Path.home()` — and with
+        # the environment cleared wholesale that raises RuntimeError("Could not determine home
+        # directory."), which doctor then reports (CORRECTLY) as a loud `hooks-unverifiable` ERROR
+        # and exits 1. POSIX never noticed: there `Path.home()` falls back to the pwd database by
+        # uid, so it answers with no environment at all.
+        #
+        # That environment cannot exist on a real Windows box — USERPROFILE is always set — so
+        # clearing it FABRICATES a failure rather than testing one. Point home at the test's OWN
+        # isolated `home` tempdir: more realistic than the real user's home AND still fully
+        # isolated. POSIX is untouched, so its behaviour stays byte-identical.
+        os.environ.setdefault("SYSTEMROOT", old_env.get("SYSTEMROOT", r"C:\Windows"))
+        os.environ.setdefault("PATH", old_env.get("PATH", ""))
+        os.environ["USERPROFILE"] = str(home)
+        drive, tail = os.path.splitdrive(str(home))
+        os.environ["HOMEDRIVE"], os.environ["HOMEPATH"] = drive, tail
     try:
         with contextlib.redirect_stdout(buf):
             rc = cmd_doctor(args)
