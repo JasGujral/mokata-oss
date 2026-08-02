@@ -64,13 +64,17 @@ import json
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import TEMP_LOCAL_DIRNAME, run_mode as _rm, teamdb
 from .atomicfile import atomic_write_text, lock_path_for
-from .degrade import FAILURE_UNREACHABLE, note_degraded
+from .degrade import (FAILURE_PARTIAL_APPLY, FAILURE_SCHEMA, FAILURE_UNREACHABLE,
+                      note_degraded)
+from .memory import edges as _edges                   # DB.S7a — the ONE edge projection
+from .memory import item as _item                     # DB.S7a — `now_iso`, the one clock
+from .memory.backends import scope_columns_from_doc   # DB.S2b — the ONE scope-column projection
 from .oslock import DEFAULT_TIMEOUT, LockTimeout, file_lock
-from .errors import DegradedCapability
+from .errors import ControlSignal, DegradedCapability
 
 JOURNAL_FILENAME = "team_journal.jsonl"
 
@@ -233,7 +237,18 @@ class TeamJournal:
 
     @classmethod
     def for_surface(cls, surface: Any) -> "TeamJournal":
-        return cls(os.path.join(surface.mokata_dir, TEMP_LOCAL_DIRNAME, JOURNAL_FILENAME))
+        return cls(cls.path_for(surface))
+
+    @staticmethod
+    def path_for(surface: Any) -> str:
+        """This surface's journal path, resolved WITHOUT touching the disk.
+
+        DB.S6/I6 — `__init__` creates the parent directory, which is right for a writer and wrong
+        for the propose-only detection arm: constructing a journal just to ask "are there any
+        conflicts?" would make a read path create `.mokata/temp_local/`. The detector resolves the
+        path through here and only constructs when the file already exists, so detection writes
+        nothing at all — not a row, not a file, not a directory."""
+        return os.path.join(surface.mokata_dir, TEMP_LOCAL_DIRNAME, JOURNAL_FILENAME)
 
     @property
     def flush_lock_path(self) -> str:
@@ -251,14 +266,29 @@ class TeamJournal:
 
     # --- append-only writers -------------------------------------------------
     def _append(self, rec: Dict[str, Any]) -> None:
+        """One record through the funnel — the single-record case of `_append_all`."""
+        self._append_all([rec])
+
+    def _append_all(self, recs: List[Dict[str, Any]]) -> None:
         """The ONE funnel every journal record goes through — and therefore the one place the append
         lock has to be taken (MS.S8). Held across open→write→fsync, because on Windows `open(path,
         "a")` is a SEEK then a WRITE, not an atomic append: without this, a gated write (LEDGER lock)
         and a flusher's marker (FLUSH mutex) can both seek to EOF and both write there, and one
-        record is silently overwritten. See `APPEND_LOCK_TIMEOUT`."""
+        record is silently overwritten. See `APPEND_LOCK_TIMEOUT`.
+
+        DB.S7d — takes a LIST, and that is the whole atomicity mechanism for a group decision. All
+        records are serialised into ONE buffer and written with ONE `write` under ONE lock hold, so
+        a set of records either reaches the log together or not at all. Appending them one at a time
+        would leave N-1 windows in which a crash lands a half-resolved approval on disk — the
+        durable form of exactly the half-decided state `group_decision_refusal` exists to prevent.
+        Serialising BEFORE the open matters too: a record that cannot be encoded raises with the
+        file untouched rather than after its siblings are already down."""
+        if not recs:
+            return
+        blob = "".join(json.dumps(rec) + "\n" for rec in recs)
         with file_lock(self.append_lock_path, timeout=APPEND_LOCK_TIMEOUT):
             with open(self.path, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(rec) + "\n")
+                fh.write(blob)
                 fh.flush()
                 try:
                     os.fsync(fh.fileno())    # crash-safe: the write is durable before we return
@@ -287,8 +317,18 @@ class TeamJournal:
         """Human decision on a conflict (P2). `kept-local` re-queues the local write at the
         CURRENT remote revision (so a re-flush CAS overwrites remote — an explicit choice);
         `kept-remote` drops the local write."""
-        self._append({"kind": "resolved", "id": entry_id, "resolution": resolution,
-                      "remote_revision": remote_revision})
+        self.resolve_group([(entry_id, resolution, remote_revision)])
+
+    def resolve_group(self, decisions: List["Tuple[str, str, Optional[int]]"]) -> None:
+        """DB.S7d — commit N human decisions as ONE durable act (`resolve` is the 1-member case).
+
+        A whole-approval verdict that reached the log one record at a time would not be a group
+        decision: a crash between two appends replays as an approval where some members are settled
+        and the rest are still conflicted, which is precisely the half-decided state the surface
+        exists to remove. Routed through `_append_all`, the set is one buffer, one write, one lock
+        hold — the members land together or not at all."""
+        self._append_all([{"kind": "resolved", "id": eid, "resolution": res,
+                           "remote_revision": rev} for eid, res, rev in decisions])
 
     # --- replay --------------------------------------------------------------
     def _lines(self) -> List[tuple]:
@@ -521,13 +561,23 @@ def record_team_write(surface: Any, *, op: str, table: str, key: str,
 
 
 # --------------------------------------------------------------------------- CAS apply
+# DB.S2b — the flush is a memory WRITE PATH, so it populates the scope/precedence columns like
+# every other one. It was easy to miss: the row reaches Postgres through the journal here, NOT
+# through `PostgresBackend.put`, so leaving it out would have left team-flushed rows carrying the
+# DDL default while locally-written rows carried the truth — a projection gap that only appears in
+# team mode, i.e. exactly where the cross-tenant filter runs. The values come from the entry's own
+# `doc` via `scope_columns_from_doc`, the same single definition the two `put()`s use.
 _INSERT_SQL = (
     f"INSERT INTO {teamdb.MEMORY_TABLE} (id, mtype, subject, status, doc, project, "  # nosec B608
+    f"{teamdb.MEMORY_SCOPE_LEVEL_COLUMN}, {teamdb.MEMORY_SCOPE_ID_COLUMN}, "
+    f"{teamdb.MEMORY_PIN_COLUMN}, {teamdb.MEMORY_PRIORITY_COLUMN}, "
     f"{teamdb.MEMORY_REVISION_COLUMN}, {teamdb.MEMORY_UPDATED_AT_COLUMN}) "
-    "VALUES (%s, %s, %s, %s, %s, %s, 1, now()) ON CONFLICT (id) DO NOTHING"
+    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1, now()) ON CONFLICT (id) DO NOTHING"
 )
 _UPDATE_SQL = (
     f"UPDATE {teamdb.MEMORY_TABLE} SET mtype=%s, subject=%s, status=%s, doc=%s, project=%s, "  # nosec B608
+    f"{teamdb.MEMORY_SCOPE_LEVEL_COLUMN}=%s, {teamdb.MEMORY_SCOPE_ID_COLUMN}=%s, "
+    f"{teamdb.MEMORY_PIN_COLUMN}=%s, {teamdb.MEMORY_PRIORITY_COLUMN}=%s, "
     f"{teamdb.MEMORY_REVISION_COLUMN}={teamdb.MEMORY_REVISION_COLUMN}+1, "
     f"{teamdb.MEMORY_UPDATED_AT_COLUMN}=now() "
     f"WHERE id=%s AND {teamdb.MEMORY_REVISION_COLUMN}=%s"
@@ -584,6 +634,30 @@ def _canon_doc(value: Any) -> Optional[str]:
     return str(value)                           # pragma: no cover - defensive
 
 
+def _doc_mapping(value: Any) -> Dict[str, Any]:
+    """DB.S2b — a journal payload's `doc` as a plain mapping, for projecting the scope columns.
+
+    Same input variety `_canon_doc` already copes with (a JSON string, or a dict when the column is
+    jsonb-typed), and the same refusal to raise: anything unparseable degrades to `{}`, which
+    `scope_columns_from_doc` turns into the item model's defaults. A malformed doc must not fail a
+    flush — and defaulting lands the row at the NARROWEST scope, which is the direction that
+    cannot leak."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            value = value.decode("utf-8")
+        except UnicodeDecodeError:              # pragma: no cover - undecodable bytes
+            return {}
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (json.JSONDecodeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
 def _already_applied(remote: Optional[Dict[str, Any]], entry: JournalEntry) -> bool:
     """MS.S5 (M-5) — does the remote row ALREADY hold exactly the end state this entry wants?
 
@@ -606,6 +680,116 @@ def _already_applied(remote: Optional[Dict[str, Any]], entry: JournalEntry) -> b
     return _canon_doc(remote.get("doc")) == mine
 
 
+# --------------------------------------------------------------- DB.S7a · the edge projection
+# The attribute the v5 capability probe is memoized under, ON THE CONNECTION. Per-connection
+# because that is what the answer is about: one flush applies several entries against one
+# connection, and re-asking the catalog per entry would be a round trip per write to learn
+# something that cannot change mid-flush (only `team init` creates the table, and it is not
+# running concurrently with this — the single-flusher mutex sees to that).
+_EDGES_PRESENT_ATTR = "_mokata_edges_present"
+
+
+def _edges_present(conn: Any) -> bool:
+    """Does the shared store carry the v5 edge table? Probed, memoized, and FAIL-CLOSED.
+
+    **This is what "a v4 team degrades byte-identically" is made of (E3).** A v4 store has no
+    `mokata_memory_edges`, so this returns False and `_project_edges_for` below does nothing at
+    all: the flush issues exactly the statements it issued before DB.S7a, in the same order, with
+    the same outcomes. Nothing about the CAS, the conflicts, the markers or the ledger moves.
+
+    It must be a PROBE and not a try/except around the projection, and the reason is specific to
+    Postgres: a statement that errors inside an open transaction ABORTS that transaction, so a
+    "just try it and catch the missing table" projection would poison the approval group's
+    transaction and turn a v4 store's every flush into a rollback. Asking first is the only shape
+    that degrades instead of breaking.
+
+    HONEST BOUNDARY of the per-connection memo, stated rather than left to be discovered: a process
+    that probed a v4 store and cached False keeps that answer for the life of the connection, so if
+    a TEAMMATE migrates the store to v5 underneath it, this process stops short of projecting until
+    its connection is replaced. That is a lag, not a loss, and the reason it is acceptable is the
+    same reason the projection can be derived at all — the inline doc fields are authoritative and
+    still flush normally, and the next `team init` backfill re-derives every missing edge
+    idempotently. Re-probing per entry would trade a real per-write round trip for a window that
+    closes itself.
+    """
+    cached = getattr(conn, _EDGES_PRESENT_ATTR, None)
+    if cached is not None:
+        return bool(cached)
+    try:
+        row = conn.execute("SELECT to_regclass(%s)", (teamdb.EDGES_TABLE,)).fetchone()
+        present = bool(row and row[0])
+    except Exception as exc:
+        # D5 — deliberately BROAD, deliberately fail-CLOSED, and LOUD. There is no narrower class
+        # worth naming: an old server without `to_regclass`, a driver error and an injected double
+        # that does not model the catalog all mean the same thing to this caller — we could not
+        # establish that the table is there, and unknown is not permission.
+        #
+        # But it is NOT silent, and that distinction matters more here than the fallback does. A
+        # genuinely v4 store answers this probe successfully with NULL and never reaches this
+        # handler, so arriving here means something ELSE went wrong on a store that may well be v5
+        # — and the consequence is a projection that quietly stops tracking its docs. The notice is
+        # what makes that recoverable: it names the drift and the fix (`mokata team init`, whose
+        # backfill re-derives the whole projection). Once per subsystem per process, so a flush of
+        # fifty entries cannot turn one bad connection into fifty lines.
+        note_degraded("memory-edges", FAILURE_SCHEMA, detail=str(exc),
+                      fallback="edge projection skipped — the item write is unaffected",
+                      fix="run `mokata team init` to (re-)provision and re-derive the edges")
+        present = False
+    # No try/except on the memoization, and that is a decision rather than an omission: psycopg3's
+    # Connection is a plain class (no `__slots__` — checked against the live driver), so this cannot
+    # fail for any connection mokata actually uses. A guard here would hide a genuinely novel
+    # connection object behind a silent per-entry re-probe instead of surfacing it.
+    setattr(conn, _EDGES_PRESENT_ATTR, present)
+    return present
+
+
+def _project_edges_for(conn: Any, entry: JournalEntry) -> None:
+    """Maintain the edge projection for an entry whose compare-and-set JUST MATCHED.
+
+    **CAS-guarded by CONSTRUCTION, not by a second CAS (E4).** Every call site below sits on the
+    `rowcount > 0` branch — the branch reached only when Postgres itself decided this writer won
+    the row. A losing writer returns a conflict several lines earlier and never arrives here, so
+    two writers racing one item can no more produce two conflicting edge sets than they can produce
+    two item rows. Inventing a revision column for edges would have added a second, weaker CAS over
+    data that is derived from the first one's result.
+
+    It also runs INSIDE whatever transaction the caller holds. For a multi-entry approval group
+    that is the group's explicit BEGIN/COMMIT (I1), so a rollback takes the edges with it: an
+    approval that does not land as a whole leaves no half of it behind, edges included.
+
+    Skipped entirely when the entry carries no parseable doc — the projection is derived FROM the
+    doc, so no doc means nothing to derive, not an error.
+    """
+    if not _edges_present(conn):
+        return
+    doc = _doc_mapping(entry.payload.get("doc"))
+    if not doc:
+        return
+    doc = dict(doc)
+    doc.setdefault("id", entry.payload.get("id") or entry.key)
+    _edges.project_edges(conn, teamdb.EDGES_TABLE, doc, now=_item.now_iso(), placeholder="%s",
+                         # C5 / P2 — the edge rows carry the SAME approval id the item write
+                         # inherits, so the audit trail from a relation back to the human decision
+                         # that created it is a column, not an inference.
+                         approval_ledger_id=entry.ledger_id)
+
+
+def _close_edges_for(conn: Any, entry: JournalEntry) -> None:
+    """A gated PRUNE (`OP_DELETE`) removed the item — close its OPEN edges, never delete them.
+
+    Never-delete applies to the projection too. The item row is gone (that is what a prune IS), but
+    the relations it asserted were TRUE for a while, and a closed window says so honestly while a
+    `DELETE FROM memory_edges` would erase the only record that they ever held. Same CAS guarantee
+    as `_project_edges_for`: reached only after the revision-guarded DELETE matched a row.
+    """
+    if not _edges_present(conn):
+        return
+    now = _item.now_iso()
+    for kind in _edges.WIRED_KINDS:
+        sql, params = _edges.close_withdrawn_sql(teamdb.EDGES_TABLE, kind, (), placeholder="%s")
+        conn.execute(sql, (now, entry.payload.get("id") or entry.key, kind, *params))
+
+
 def apply_memory_write(conn: Any, entry: JournalEntry) -> ApplyOutcome:
     """Compare-and-set a memory write against the shared table (doc 48 C1). A believed-new row
     is an INSERT ... ON CONFLICT DO NOTHING; an update is a revision-guarded UPDATE; a delete
@@ -617,7 +801,12 @@ def apply_memory_write(conn: Any, entry: JournalEntry) -> ApplyOutcome:
     already landed and the entry is `ok`/`already_applied`: marked flushed, not re-applied, and NOT
     reported as a conflict. Only a genuine divergence still surfaces as a conflict."""
     p = entry.payload
-    cols = (p.get("mtype"), p.get("subject"), p.get("status"), p.get("doc"), p.get("project"))
+    # DB.S2b — the scope/precedence columns are projected from the entry's OWN `doc`, so a flushed
+    # row lands in Postgres as faithful a projection as a locally-`put()` one. `_doc_mapping`
+    # degrades to `{}` on an unparseable payload, which `scope_columns_from_doc` turns into the
+    # item model's defaults (personal/''/false/0) — the narrowest scope, which leaks nothing.
+    cols = (p.get("mtype"), p.get("subject"), p.get("status"), p.get("doc"), p.get("project"),
+            *scope_columns_from_doc(_doc_mapping(p.get("doc"))))
     if entry.op == OP_DELETE:
         # TM.S5c — a PRUNE in team mode. Revision-guarded so a concurrent writer's change is NOT
         # silently destroyed: the delete only lands if the row is still at the base revision.
@@ -632,6 +821,7 @@ def apply_memory_write(conn: Any, entry: JournalEntry) -> ApplyOutcome:
                                        "exists remotely (a concurrent state)", remote=remote)
         cur = conn.execute(_DELETE_SQL, (p.get("id"), entry.base_revision))
         if (getattr(cur, "rowcount", 0) or 0) > 0:
+            _close_edges_for(conn, entry)      # DB.S7a — the pruned item's edges CLOSE, never drop
             return ApplyOutcome("ok")
         remote = _read_remote(conn, entry.key)
         if remote is None:
@@ -648,6 +838,7 @@ def apply_memory_write(conn: Any, entry: JournalEntry) -> ApplyOutcome:
     if entry.base_revision is None:
         cur = conn.execute(_INSERT_SQL, (p.get("id"), *cols))
         if (getattr(cur, "rowcount", 0) or 0) > 0:
+            _project_edges_for(conn, entry)    # DB.S7a — the row landed; project its edges with it
             return ApplyOutcome("ok", new_revision=1)
         remote = _read_remote(conn, entry.key)
         if _already_applied(remote, entry):
@@ -660,6 +851,7 @@ def apply_memory_write(conn: Any, entry: JournalEntry) -> ApplyOutcome:
                             remote=remote)
     cur = conn.execute(_UPDATE_SQL, (*cols, p.get("id"), entry.base_revision))
     if (getattr(cur, "rowcount", 0) or 0) > 0:
+        _project_edges_for(conn, entry)        # DB.S7a — only the CAS WINNER projects (E4)
         return ApplyOutcome("ok", new_revision=int(entry.base_revision) + 1)
     remote = _read_remote(conn, entry.key)
     if _already_applied(remote, entry):
@@ -751,6 +943,481 @@ def flush(surface: Any, *, environ: Optional[dict] = None, health: Any = None,
                            contended=True, reason=CONTENDED_REASON)
 
 
+class _GroupRollback(ControlSignal):
+    """Raised INSIDE a group's transaction block to roll the whole group back. Never escapes
+    `_apply_approval_group`; it exists only because a transaction context manager rolls back on an
+    exception, and "one member conflicted" is not an error worth propagating to the caller.
+
+    A `ControlSignal`, NOT a `MokataError`, and the base is load-bearing rather than decorative.
+    This is not a failure being reported: nothing broke, nothing degraded, the compare-and-set did
+    precisely its job and the human is about to be asked. Filing it under the error base meant a
+    caller doing the one thing that base exists for — `except MokataError`, to catch a failure
+    mokata DEFINED — would intercept a rollback signal mid-transaction and leave the group
+    half-applied with no marker on any member. The signal base makes that unrepresentable; the D5
+    sweep still sees the class, so opting out of the error taxonomy is a NAMED decision, not a gap.
+    """
+
+
+def _approval_groups(pend: List[JournalEntry]) -> List[List[JournalEntry]]:
+    """Partition the pending entries into ATOMIC UNITS: the writes that one human approval
+    authorised (DB.S6/I1).
+
+    Why `ledger_id`, and why only an INT one. A gated store method that makes several durable
+    writes — `apply_proposal` on a contradiction supersedes the old row AND updates the winner —
+    computes `len(ledger)+1` for each of them inside ONE WriteGate hold, so they carry the SAME
+    approval seq. That shared int IS the approval, which makes it the correct atomic boundary: one
+    decision by one human should have one durable outcome, not two independent ones that can half
+    land. Anything that is not an int is deliberately NOT grouped: `None` (no ledger) would collapse
+    every unrelated write into one giant transaction, and `"floor-recovery"` (the recovery
+    migration's shared marker) would do the same to a whole rescued corpus.
+
+    JOURNAL ORDER IS PRESERVED EVERYWHERE — across groups and within them. Sorting a group by key
+    was tempting (a fleet-wide lock order makes a cross-machine deadlock unrepresentable) and is
+    deliberately NOT done: "flush order is journal order" is a contract MS.S5 pinned, and a
+    reordering that only pays off in a rare cross-machine cycle is not worth quietly breaking it.
+    The cycle is already handled safely without it — Postgres detects the deadlock and aborts one
+    side, which reaches the flush as a mid-apply exception, and that path leaves every entry
+    PENDING with no marker, so the next flush simply re-applies the group."""
+    groups: Dict[Any, List[JournalEntry]] = {}
+    order: List[Any] = []
+    for i, e in enumerate(pend):
+        key = _approval_key(e)
+        key = key if key is not None else ("_solo", i)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(e)
+    return [groups[key] for key in order]
+
+
+def _approval_key(entry: JournalEntry) -> Optional[int]:
+    """The approval this entry belongs to — an INT `ledger_id`, or None for "no group".
+
+    Extracted so that the flush's partition (`_approval_groups`) and the resolver's membership
+    question (`retire_without_replace_refusal`) cannot drift: "same approval" has to mean the same
+    thing to the code that applies a group atomically and to the code that refuses to break one up
+    by hand, or the guard would protect a boundary the flush does not actually use. `None` and
+    `"floor-recovery"` deliberately do NOT group (see `_approval_groups`), and `bool` is excluded
+    because `True == 1` would silently fold a flag into approval #1."""
+    led = entry.ledger_id
+    return led if isinstance(led, int) and not isinstance(led, bool) else None
+
+
+# I1b — the payload statuses that TAKE a fact out of the active set. `superseded` is the one the
+# heal path actually writes (`apply_proposal` on a contradiction sets it on `p.old`); the rest are
+# listed because they are the other ways an item stops being live, and a status that retires a fact
+# must not slip past a guard that only knew about one word for it.
+_RETIRING_STATUSES = frozenset({"superseded", "stale", "rejected", "archived", "deleted"})
+
+_KEPT_LOCAL = "kept-local"
+
+
+def _retires_a_fact(entry: JournalEntry) -> bool:
+    """Does landing this write REMOVE a fact from the active set? A delete always does; otherwise
+    it is the plain `status` column the flush already writes — read from the payload rather than
+    the embedded doc, because that column is what the shared row is actually SET to."""
+    if entry.op == OP_DELETE:
+        return True
+    return str((entry.payload or {}).get("status") or "").lower() in _RETIRING_STATUSES
+
+
+def retire_without_replace_refusal(journal: "TeamJournal", conflict_id: str,
+                                   resolution: str) -> Optional[str]:
+    """I1b — the FAIL-CLOSED guard on resolving ONE member of a rolled-back approval group.
+    Returns the refusal text, or None to allow.
+
+    WHY THIS EXISTS ON TOP OF I1. The group transaction makes the FLUSH all-or-nothing, so a heal
+    can no longer half-land by accident. But a rolled-back group surfaces as N SEPARATE conflicts
+    and the resolver settles them one prompt at a time — so the very end state the transaction
+    prevents is still reachable by hand: approve the write that retires the old fact, discard (or
+    simply never decide) the write that installs its replacement, and the subject is left with no
+    active value at all. Atomicity at the flush, non-atomicity at the resolution.
+
+    THE ONE DIRECTION IT CLOSES is retire-without-replace, because that is the one that LOSES a
+    fact silently. Keeping both sides is the opposite failure — two active facts on one subject —
+    and that is visible, reviewable, and already surfaced as a contradiction proposal; nothing is
+    lost while it waits. So this refuses, and nothing more: it does not decide the group, re-order
+    the prompts, or offer a group verdict. Deciding a whole approval in one prompt is the
+    group-decision surface, and it is DB.S7/K2 — building half of it here would be worse than the
+    gap, because a half-built group verdict is one a human would trust.
+
+    ALLOWED, deliberately: the replacement is PENDING (re-queued by a `kept-local` resolution, or
+    never conflicted — either way it is landing on the next flush) or already FLUSHED. REFUSED: it
+    is still CONFLICT (nobody has decided), DROPPED (`kept-remote` — discarded), or BLOCKED (a
+    secret means it will never publish). A member that was compacted away is a member that FLUSHED,
+    which is why an absent sibling reads as "landed" rather than as "missing".
+
+    Costs an extra pass when the human resolves in journal order — the retirement comes first, is
+    refused, and lands after the replacement is decided. That is the intended shape of a minimal
+    guard: it never loses a fact, and the ergonomics of one-prompt group resolution are DB.S7's."""
+    if resolution != _KEPT_LOCAL:
+        # `kept-remote` DROPS the local retirement, so the fact stays active in the shared row.
+        # Only publishing the retirement can lose anything.
+        return None
+    entries, status, _conflicts, order = journal._replay()
+    entry = entries.get(conflict_id)
+    if entry is None or not _retires_a_fact(entry):
+        return None
+    key = _approval_key(entry)
+    if key is None:
+        return None
+    members = [i for i in order if _approval_key(entries[i]) == key]
+    if len(members) < 2:
+        return None
+    stranded = [(i, status.get(i)) for i in members
+                if i != conflict_id and not _retires_a_fact(entries[i])
+                and status.get(i) not in (_PENDING, _FLUSHED)]
+    if not stranded:
+        return None
+    why = ", ".join(f"'{entries[i].key}' {_STRANDED_WORDS.get(s, 'is not going to land')}"
+                    for i, s in stranded)
+    return (f"refused: this write RETIRES '{entry.key}', and it is "
+            f"{members.index(conflict_id) + 1} of {len(members)} writes approved together — but "
+            f"its replacement {why}. Publishing the retirement on its own leaves the subject with "
+            f"NO active fact at all, and nothing anywhere saying so. Nothing was changed; the "
+            f"whole approval is still open — resolve them together, deciding the replacement "
+            f"first.")
+
+
+_STRANDED_WORDS = {_CONFLICT: "is still undecided", _DROPPED: "was discarded",
+                   _BLOCKED: "is blocked — a secret was found in it"}
+
+
+def duplicate_both_active_refusal(journal: "TeamJournal", conflict_id: str,
+                                  resolution: str) -> Optional[str]:
+    """DB.S7d — the MIRROR of `retire_without_replace_refusal`, and the direction DB.S6 left open.
+
+    WHY IT WAS LEFT OPEN, AND WHY IT CLOSES NOW. I1b guards the resolution that LOSES a fact. This
+    guards the one that DUPLICATES it: drop the retirement (`kept-remote`, so the teammate's row —
+    still the old fact, still active — stands) while the replacement lands, and the subject carries
+    two active facts from a single approval nobody decided as a whole. DB.S6 judged that benign
+    because nothing is lost, and it was right that nothing is lost. But nothing-lost is not
+    decided: the approval ends up half-settled, in silence, by a human who never saw its two halves
+    as one thing. The reason it could not be refused THERE is that refusing it would have been a
+    deadlock — there was no way to settle the group as a unit. `group_decision_refusal` +
+    `TeamJournal.resolve_group` are that way, so the refusal now has an exit and can exist.
+
+    BOTH ORDERS, because the human can arrive either way and it is always the SECOND decision that
+    creates the duplicate: dropping the retirement while the replacement is already landing, or
+    landing the replacement when the retirement was already dropped. Guarding one order only would
+    leave a guard that fires on the ordering it was written for and waves the other one through.
+
+    NARROW BY CONSTRUCTION, so the DB.S6 allowances survive: an UNDECIDED retirement is not a
+    dropped one (nothing is duplicated yet — `test_the_replacement_side_is_never_blocked_by_the_
+    guard` still passes), and keeping THEIRS on both sides duplicates nothing at all."""
+    entries, status, _conflicts, order = journal._replay()
+    entry = entries.get(conflict_id)
+    if entry is None:
+        return None
+    key = _approval_key(entry)
+    if key is None:
+        return None
+    members = [i for i in order if _approval_key(entries[i]) == key and i != conflict_id]
+    if not members:
+        return None
+    retires = _retires_a_fact(entry)
+    if resolution == _KEPT_LOCAL and not retires:
+        # Landing a replacement. The duplicate exists iff its retiring sibling was DISCARDED — the
+        # old fact will stay active on the shared row with this one beside it.
+        other = [i for i in members
+                 if _retires_a_fact(entries[i]) and status.get(i) == _DROPPED]
+        dropped, kept = entry.key, (entries[other[0]].key if other else "")
+    elif resolution != _KEPT_LOCAL and retires:
+        # Discarding a retirement. The duplicate exists iff a replacement sibling IS going to land —
+        # PENDING (re-queued by a `kept-local`, landing on the next flush) or already FLUSHED. Still
+        # CONFLICT, DROPPED or BLOCKED means nothing is coming, so nothing is duplicated.
+        other = [i for i in members
+                 if not _retires_a_fact(entries[i]) and status.get(i) in (_PENDING, _FLUSHED)]
+        dropped, kept = (entries[other[0]].key if other else ""), entry.key
+    else:
+        return None
+    if not other:
+        return None
+    return (f"refused: this leaves TWO ACTIVE facts on one subject. Discarding the retirement of "
+            f"'{kept}' keeps it live on the shared row, and '{dropped}' — approved in the SAME "
+            f"group of {len(members) + 1} writes — lands beside it. Nothing is lost, but half the "
+            f"approval has now been decided one way and half the other, with nothing recording "
+            f"that. Nothing was changed: decide the WHOLE APPROVAL in one prompt instead, or keep "
+            f"the retirement so the replacement actually replaces something.")
+
+
+class _ProjectedJournal:
+    """The journal as it WOULD replay if a set of resolutions had been committed.
+
+    This is what lets a group verdict be checked by the very guards that police one-at-a-time
+    resolution, instead of by a group-shaped re-derivation of them. Both guards ask their question
+    of `journal._replay()`, and the replay is a pure function of the record list
+    (`_replay_records`) — so "what would the state be after this verdict" is just the records plus
+    the resolutions it would write. The guards are then run UNCHANGED against that.
+
+    It matters that this is a projection and not a rewrite of the predicates: a member the verdict
+    is about to settle must not read as stranding its siblings (every member of a `kept-local`
+    verdict is PENDING in the projection, so none of them strands another), while a member settled
+    in an EARLIER pass keeps whatever state that pass left it in — which is exactly the case a
+    fresh group-shaped predicate would have been most likely to miss."""
+
+    def __init__(self, journal: "TeamJournal",
+                 decisions: Sequence[Tuple[str, str, Optional[int]]]) -> None:
+        extra = [{"kind": "resolved", "id": eid, "resolution": res, "remote_revision": rev}
+                 for eid, res, rev in decisions]
+        self._state = journal._replay_records(list(journal._records()) + extra)
+
+    def _replay(self):
+        return self._state
+
+
+def group_decision_refusal(journal: "TeamJournal",
+                           decisions: Sequence[Tuple[str, str, Optional[int]]]) -> Optional[str]:
+    """DB.S7d — every per-member guard, run against the state this whole-approval verdict WOULD
+    produce, BEFORE any of it is committed. Returns the first refusal, or None to allow.
+
+    THE POINT OF THIS FUNCTION IS WHAT IT DOES NOT DO. A one-prompt group verdict looks safe by
+    construction — one decision for every member, so no member can strand another — and that
+    reasoning is true only for members STILL CONFLICTED. A member settled in an earlier
+    one-at-a-time pass is already outside the group's reach: discard the replacement on Monday, and
+    Tuesday's "keep local for the whole approval" has one member left to decide, lands the
+    retirement, and the fact is gone in a single prompt the human trusted precisely because it
+    claimed to cover everything. DB.S6's docstring named this in advance: a half-built group
+    verdict is worse than the gap it fills.
+
+    So the group path runs `retire_without_replace_refusal` and `duplicate_both_active_refusal`
+    THEMSELVES — the shipped functions, on the shipped predicates, resolved through the module
+    globals so there is exactly one definition of each question in the codebase and no second copy
+    to drift. All the group layer contributes is the state they are asked about."""
+    projected = _ProjectedJournal(journal, decisions)
+    for entry_id, resolution, _rev in decisions:
+        for guard in (retire_without_replace_refusal, duplicate_both_active_refusal):
+            refusal = guard(projected, entry_id, resolution)
+            if refusal is not None:
+                return refusal
+    return None
+
+
+def approval_group_conflicts(journal: "TeamJournal", conflict_id: str) -> List[str]:
+    """The still-CONFLICTED entry ids sharing this conflict's approval, in journal order.
+
+    Membership is `_approval_key`'s answer and nothing else, so the group a human DECIDES is the
+    same group the flush APPLIES — the drift `_approval_key`'s own docstring exists to prevent. A
+    conflict with no approval key (`None`, or the `floor-recovery` marker) is a group of ONE rather
+    than an error: the surface must degrade to the single-member case, never refuse to open."""
+    entries, status, _conflicts, order = journal._replay()
+    entry = entries.get(conflict_id)
+    if entry is None:
+        return []
+    key = _approval_key(entry)
+    if key is None:
+        return [conflict_id]
+    return [i for i in order
+            if _approval_key(entries[i]) == key and status.get(i) == _CONFLICT]
+
+
+def _group_transaction(conn: Any) -> Any:
+    """A transaction context manager for `conn`, or None if it cannot offer one.
+
+    I1 — psycopg3's `conn.transaction()` works on an AUTOCOMMIT connection: it emits an explicit
+    BEGIN/COMMIT around the block and leaves autocommit behaviour outside it untouched (measured
+    on a live PG 16 before this was written). So mokata's connection posture does not have to
+    change to get all-or-nothing, and the file locks the flush relies on — the single-flusher mutex
+    and the append lock — are not DB-level constructs and are unaffected either.
+
+    Returning None is the honest degrade for a connection object that has no `transaction` (an
+    injected double). The caller then falls back to per-entry apply and reports any partial
+    outcome LOUDLY, rather than pretending an atomicity it did not get."""
+    factory = getattr(conn, "transaction", None)
+    if not callable(factory):
+        return None
+    try:
+        return factory()
+    except Exception:  # pragma: no cover - a driver that has the name but not the behaviour
+        return None
+
+
+def _record_flushed(journal: TeamJournal, entry: JournalEntry, outcome: ApplyOutcome,
+                    ledger: Any) -> None:
+    journal.mark_flushed(entry.id, remote_revision=outcome.new_revision)
+    if ledger is not None:
+        # C5 / P2 — the flush INHERITS the original approval; record its ledger id so the audit
+        # trail links deferred durability back to the human decision (no bypass). `already_applied`
+        # keeps that trail HONEST about the M-5 case: this pass recognised the write as already
+        # landed and marked it flushed, rather than applying it twice.
+        ledger.record("team_flush", journal_id=entry.id, table=entry.table,
+                      key=entry.key, actor=entry.actor,
+                      approval_ledger_id=entry.ledger_id, revision=outcome.new_revision,
+                      already_applied=outcome.already_applied,
+                      reason=("already applied by another flush — marked flushed, NOT "
+                              "re-applied (exactly-once, MS.S5)"
+                              if outcome.already_applied
+                              else "flush inherits the original human approval (P2)"))
+
+
+def _apply_approval_group(conn: Any, journal: TeamJournal, group: List[JournalEntry], *,
+                          ledger: Any, out: Optional[Callable[[str], None]],
+                          do_scan: Callable[[JournalEntry], list]) -> tuple:
+    """Apply ONE approval's writes. Returns `(flushed, conflicts, blocked, already_applied)`.
+
+    A single-entry group is byte-identical to the pre-DB.S6 loop: same scan, same apply, same
+    markers, same ledger record, and no transaction is opened at all.
+
+    A MULTI-entry group is the case I1 exists for. `apply_proposal` on a contradiction issues two
+    durable writes — retire the old fact, install the new one — under one human decision. Applied
+    independently, the first can land and the second lose its CAS, which leaves the shared store
+    with the old fact retired and the new one absent: the subject has NO active value, and nothing
+    anywhere says so. That is silent fact-loss, and it is the reachable-by-accident kind.
+
+    So the group is applied inside ONE transaction and any conflict rolls back ALL of it. The human
+    then sees the whole approval as conflicted — N proposals carrying a detail that says they are
+    one unit — instead of a half-applied heal nobody can see.
+
+    A secret in ANY member blocks the WHOLE group: the offending entries are marked blocked and the
+    rest are left PENDING (no marker, so the next flush retries them). Publishing the innocent half
+    of a blocked approval would be the same partial apply by another route."""
+    solo = len(group) == 1
+
+    # --- secret scan first: nothing in a group publishes if any member is blocked.
+    findings = {e.id: do_scan(e) for e in group}
+    if any(findings.values()):
+        blocked = 0
+        for e in group:
+            if findings[e.id]:
+                journal.mark_blocked(
+                    e.id, detail="blocked: secret detected in the payload — NOT published")
+                blocked += 1
+                if out:
+                    out(f"⚠ blocked publish of {e.key}: secret detected "
+                        f"(remove it, then re-sync)")
+        if not solo and out:
+            out(f"⚠ the other {len(group) - blocked} write(s) approved alongside it were NOT "
+                f"published either — one approval lands as a unit (they stay pending)")
+        return 0, 0, blocked, 0
+
+    def _apply(entry: JournalEntry) -> Optional[ApplyOutcome]:
+        try:
+            return apply_memory_write(conn, entry)
+        except Exception as exc:
+            # D5 — the DB failed MID-APPLY (the statement, or `_read_remote`'s CAS-miss re-read,
+            # which no longer lies about it). Broad by necessity: `conn` is a psycopg connection
+            # and psycopg is an OPTIONAL extra, so its error class cannot be named at module scope
+            # — and narrowing it wrong here would turn a transient DB blip into a CRASHED flush.
+            #
+            # The entry is simply left PENDING: we append NO marker, so the replay still reads it
+            # as pending and the next healthy flush re-applies it (idempotently — MS.S5). That is
+            # the ONLY safe outcome. Marking it flushed on a failed read is precisely the false
+            # success this fix removes; marking it conflicted would invent a concurrent writer that
+            # does not exist. Loud once per process, and `pending` stays true.
+            note_degraded("team-flush", FAILURE_UNREACHABLE,
+                          fallback="the entry stays PENDING — nothing is lost",
+                          fix="run `mokata sync` once the connection is healthy",
+                          detail=f"{type(exc).__name__}: {exc}")
+            return None
+
+    if solo:
+        outcome = _apply(group[0])
+        if outcome is None:
+            return 0, 0, 0, 0
+        if outcome.status == "ok":
+            _record_flushed(journal, group[0], outcome, ledger)
+            return 1, 0, 0, (1 if outcome.already_applied else 0)
+        journal.mark_conflict(group[0].id, detail=outcome.detail, remote=outcome.remote)
+        return 0, 1, 0, 0
+
+    txn = _group_transaction(conn)
+    if txn is None:
+        return _apply_group_without_transaction(conn, journal, group, ledger=ledger, out=out,
+                                                apply=_apply)
+
+    outcomes: Dict[str, ApplyOutcome] = {}
+    try:
+        with txn:
+            for entry in group:
+                outcome = _apply(entry)
+                if outcome is None or outcome.status != "ok":
+                    outcomes[entry.id] = outcome or ApplyOutcome(
+                        "conflict", detail="the database was unreachable mid-apply")
+                    raise _GroupRollback
+                outcomes[entry.id] = outcome
+    except _GroupRollback:
+        _mark_group_conflicted(conn, journal, group, outcomes, out=out)
+        return 0, len(group), 0, 0
+
+    already = 0
+    for entry in group:
+        _record_flushed(journal, entry, outcomes[entry.id], ledger)
+        already += 1 if outcomes[entry.id].already_applied else 0
+    return len(group), 0, 0, already
+
+
+def _mark_group_conflicted(conn: Any, journal: TeamJournal, group: List[JournalEntry],
+                           outcomes: Dict[str, ApplyOutcome], *,
+                           out: Optional[Callable[[str], None]]) -> None:
+    """Roll-back bookkeeping: EVERY member of the group is marked conflicted, including the ones
+    whose statement succeeded before the rollback undid it.
+
+    The remote state is re-read per member rather than reused from the outcome, because the members
+    that "succeeded" have no remote to report and a `ConflictView` with `remote=None` renders the
+    other writer's value as unreadable — which would be a worse conflict prompt than one extra
+    SELECT costs. The detail names the group, so the human resolving these knows they belong to one
+    approval and should be decided together."""
+    n = len(group)
+    for entry in group:
+        own = outcomes.get(entry.id)
+        try:
+            remote = _read_remote(conn, entry.key)
+        except Exception:
+            # A re-read that fails after a rollback costs only the richness of the prompt; the
+            # conflict marker itself must still land, or the entry would silently stay pending and
+            # be retried forever against a row it can never win.
+            remote = own.remote if own is not None else None
+        detail = (own.detail if own is not None and own.status == "conflict"
+                  else "rolled back with the rest of this approval")
+        journal.mark_conflict(
+            entry.id,
+            detail=(f"{detail} — this write is 1 of {n} approved together and the whole approval "
+                    f"was rolled back atomically (nothing partial was published); resolve all "
+                    f"{n} together"),
+            remote=remote)
+    if out:
+        out(f"⚠ an approval of {n} writes hit a conflict — ALL {n} were rolled back "
+            f"(nothing partial was published). Resolve them together: `mokata sync`")
+
+
+def _apply_group_without_transaction(conn: Any, journal: TeamJournal, group: List[JournalEntry], *,
+                                     ledger: Any, out: Optional[Callable[[str], None]],
+                                     apply: Callable[[JournalEntry], Optional[ApplyOutcome]]
+                                     ) -> tuple:
+    """The DETECT-AND-SURFACE fallback for a connection that cannot open a transaction.
+
+    Every real deployment takes the prevention path — psycopg3 offers `transaction()` on an
+    autocommit connection, which is measured, not assumed. This branch exists for an injected
+    connection object that does not (a test double, an exotic adapter), and its contract is
+    narrower and honest: it applies per entry exactly as the pre-DB.S6 flush did, and if the
+    approval lands only PARTLY it says so LOUDLY through the degrade channel rather than returning
+    a clean-looking verdict over a half-written heal."""
+    flushed = conflicts = already = 0
+    for entry in group:
+        outcome = apply(entry)
+        if outcome is None:
+            continue
+        if outcome.status == "ok":
+            _record_flushed(journal, entry, outcome, ledger)
+            flushed += 1
+            already += 1 if outcome.already_applied else 0
+        else:
+            journal.mark_conflict(entry.id, detail=outcome.detail, remote=outcome.remote)
+            conflicts += 1
+    if flushed and (conflicts or flushed != len(group)):
+        message = (f"{flushed} of {len(group)} writes from ONE approval landed — the rest did "
+                   f"not. The shared store is in a PARTIAL state for this decision.")
+        note_degraded("team-flush", FAILURE_PARTIAL_APPLY,
+                      fallback=message,
+                      fix=("run `mokata sync` and resolve the remaining conflicts, then re-check "
+                           "`mokata memory` for this subject"),
+                      detail="this connection could not open a transaction, so the approval could "
+                             "not be applied atomically")
+        if out:
+            out(f"⚠ {message}")
+    return flushed, conflicts, 0, already
+
+
 def _flush_locked(surface: Any, journal: TeamJournal, *, environ: Optional[dict], health: Any,
                   probe: Optional[Callable[[str], Any]], connect: Optional[Callable[..., Any]],
                   ledger: Any, scan: Optional[Callable[[JournalEntry], list]],
@@ -779,53 +1446,13 @@ def _flush_locked(surface: Any, journal: TeamJournal, *, environ: Optional[dict]
 
     do_scan = scan or _default_scan
     flushed = conflicts = blocked = already = 0
-    for entry in pend:
-        findings = do_scan(entry)
-        if findings:
-            journal.mark_blocked(entry.id,
-                                 detail="blocked: secret detected in the payload — NOT published")
-            blocked += 1
-            if out:
-                out(f"⚠ blocked publish of {entry.key}: secret detected (remove it, then re-sync)")
-            continue
-        try:
-            outcome = apply_memory_write(conn, entry)
-        except Exception as exc:
-            # D5 — the DB failed MID-APPLY (the statement, or `_read_remote`'s CAS-miss re-read,
-            # which no longer lies about it). Broad by necessity: `conn` is a psycopg connection and
-            # psycopg is an OPTIONAL extra, so its error class cannot be named at module scope — and
-            # narrowing it wrong here would turn a transient DB blip into a CRASHED flush.
-            #
-            # The entry is simply left PENDING: we append NO marker, so the replay still reads it as
-            # pending and the next healthy flush re-applies it (idempotently — MS.S5). That is the
-            # ONLY safe outcome. Marking it flushed on a failed read is precisely the false success
-            # this fix removes; marking it conflicted would invent a concurrent writer that does not
-            # exist. Loud once per process, and `pending` (re-read off the journal below) stays true.
-            note_degraded("team-flush", FAILURE_UNREACHABLE,
-                          fallback="the entry stays PENDING — nothing is lost",
-                          fix="run `mokata sync` once the connection is healthy",
-                          detail=f"{type(exc).__name__}: {exc}")
-            continue
-        if outcome.status == "ok":
-            journal.mark_flushed(entry.id, remote_revision=outcome.new_revision)
-            if ledger is not None:
-                # C5 / P2 — the flush INHERITS the original approval; record its ledger id so the
-                # audit trail links deferred durability back to the human decision (no bypass).
-                # `already_applied` keeps that trail HONEST about the M-5 case: this pass recognised
-                # the write as already landed and marked it flushed, rather than applying it twice.
-                ledger.record("team_flush", journal_id=entry.id, table=entry.table,
-                              key=entry.key, actor=entry.actor,
-                              approval_ledger_id=entry.ledger_id, revision=outcome.new_revision,
-                              already_applied=outcome.already_applied,
-                              reason=("already applied by another flush — marked flushed, NOT "
-                                      "re-applied (exactly-once, MS.S5)"
-                                      if outcome.already_applied
-                                      else "flush inherits the original human approval (P2)"))
-            flushed += 1
-            already += 1 if outcome.already_applied else 0
-        else:
-            journal.mark_conflict(entry.id, detail=outcome.detail, remote=outcome.remote)
-            conflicts += 1
+    for group in _approval_groups(pend):
+        f, c, b, a = _apply_approval_group(conn, journal, group, ledger=ledger, out=out,
+                                           do_scan=do_scan)
+        flushed += f
+        conflicts += c
+        blocked += b
+        already += a
 
     # J-PERF — compact the dead history this flush (and every flush before it) left behind. Here,
     # at the END of a successful pass, is the one moment the journal is at its most settled: we are
@@ -852,15 +1479,22 @@ def _conflict_prompt(c: ConflictView) -> str:
             f"[y = keep local / n = keep remote]")
 
 
-def _decide_conflict(c: ConflictView, *, assume_yes: bool,
-                     confirm: Optional[Callable[[str], bool]],
-                     emit: Callable[[str], None]) -> str:
-    """One human decision per conflict → 'local' | 'remote' | 'defer'. NEVER silently picks a
-    winner: with no way to ask (non-interactive, no `confirm`) it DEFERS (leaves the entry
-    conflicted) rather than last-writer-wins."""
+def _ask_conflict(c: ConflictView, *, assume_yes: bool,
+                  confirm: Optional[Callable[[str], bool]],
+                  emit: Callable[[str], None]) -> str:
+    """ASK the human which side wins → 'approve' (keep yours) | 'discard' (keep theirs) | 'defer'.
+
+    DB.S6/R4 — this only ASKS. It settles nothing: the decision is handed to
+    `MemoryStore.apply_proposal`, which is the ONE place a conflict's state actually changes. That
+    split is the whole point of R4 — `sync` used to own a second, independent resolver, so
+    resolving here and resolving through the healing path could drift apart.
+
+    NEVER silently picks a winner: with no way to ask (non-interactive, no `confirm`) it DEFERS
+    (leaves the entry conflicted) rather than last-writer-wins. The vocabulary is the healing
+    path's, so the two entry points cannot disagree about what a word means."""
     emit(_conflict_prompt(c))
     if confirm is not None:
-        return "local" if confirm(_conflict_prompt(c)) else "remote"
+        return "approve" if confirm(_conflict_prompt(c)) else "discard"
     if assume_yes:
         return "defer"                         # can't decide safely without a human
     from .prompt import read_yes_no
@@ -869,7 +1503,109 @@ def _decide_conflict(c: ConflictView, *, assume_yes: bool,
                                  "Keep your LOCAL version (overwrite the remote)?")
     except Exception:                          # non-interactive stdin → fail-closed to defer
         return "defer"
-    return "local" if keep_local else "remote"
+    return "approve" if keep_local else "discard"
+
+
+def _group_prompt(group: List[ConflictView]) -> str:
+    """DB.S7d — the ONE question for a whole rolled-back approval. It lists every member, for the
+    same reason `render_group_decision` does: a single prompt that hides how many durable writes it
+    covers is worse than the N honest prompts it replaces."""
+    rows = "\n".join(f"    · '{c.key}': {c.detail}" for c in group)
+    return (f"mokata · sync conflict — {len(group)} writes approved TOGETHER all lost their CAS:\n"
+            f"{rows}\n"
+            f"  They were one approval, so they are decided as one: keeping only some of them is "
+            f"how a fact gets retired with nothing in its place, or duplicated on the shared row.\n"
+            f"  Keep your LOCAL versions for ALL of them (overwrite the remote)?  "
+            f"[y = keep local / n = keep remote]")
+
+
+def _ask_group(group: List[ConflictView], *, assume_yes: bool,
+               confirm: Optional[Callable[[str], bool]],
+               emit: Callable[[str], None]) -> str:
+    """ASK once for the whole approval → 'approve' | 'discard' | 'defer'. Settles nothing, exactly
+    as `_ask_conflict` settles nothing: the decision is handed to `MemoryStore
+    .apply_group_decision`, which is where the guards run and the state changes."""
+    prompt = _group_prompt(group)
+    emit(prompt)
+    if confirm is not None:
+        return "approve" if confirm(prompt) else "discard"
+    if assume_yes:
+        return "defer"                         # can't decide safely without a human
+    from .prompt import read_yes_no
+    try:
+        keep_local = read_yes_no(prompt, "Keep your LOCAL versions for ALL of them?")
+    except Exception:                          # non-interactive stdin → fail-closed to defer
+        return "defer"
+    return "approve" if keep_local else "discard"
+
+
+def _conflict_groups(journal: "TeamJournal",
+                     conflicts: List[ConflictView]) -> List[List[ConflictView]]:
+    """Partition the conflicts into approvals, computed ONCE from the pre-resolution snapshot.
+
+    Deriving it up front rather than per iteration matters: resolving one group rewrites the
+    journal, and a membership question asked mid-loop would be answered against a state the
+    partition was not built from."""
+    by_id = {c.id: c for c in conflicts}
+    groups: List[List[ConflictView]] = []
+    seen: set = set()
+    for c in conflicts:
+        if c.id in seen:
+            continue
+        ids = [i for i in approval_group_conflicts(journal, c.id) if i in by_id] or [c.id]
+        seen.update(ids)
+        groups.append([by_id[i] for i in ids])
+    return groups
+
+
+def _conflict_resolver(surface: Any, ledger: Any) -> Callable[..., bool]:
+    """R4 — the delegation seam: `(ConflictView, decision) -> committed?`, routed through
+    `MemoryStore.apply_proposal`.
+
+    `sync` no longer knows HOW a conflict is settled; it only knows who to ask and who to tell.
+    The projection into plain fields happens where it belongs (the memory layer's team-writer
+    boundary), so the same `CROSS_WRITER` proposal object drives both entry points — resolving via
+    `sync` and resolving via `apply_proposal` are the same code, not two implementations that
+    happen to agree today (I8).
+
+    `assume_yes=True` on the store call is NOT a bypass of the human gate: the human has already
+    been asked, one prompt above, exactly as `mokata memory edit` has done since Stage 54c. The
+    WriteGate's SECRET hard-block still fires — approve cannot override a security block.
+
+    Degrade-clean: if the store cannot be built at all (memory disabled, an unreachable backend),
+    the conflict is simply not resolved and stays conflicted, which is the safe state and the one
+    `sync` already reports as deferred."""
+    from .memory.store import MemoryStore
+    try:
+        store = MemoryStore.from_surface(surface)
+    except Exception as exc:
+        # D5 — BROAD by necessity: `from_surface` composes the configured backend chain (SQLite,
+        # Postgres via an OPTIONAL driver, the vault backend), so its raisable set spans classes
+        # this module cannot name without depending on the optional extras. The fallback is the
+        # SAFE direction and it is LOUD: every conflict stays conflicted and is counted as
+        # deferred, so `sync` prints "some conflicts need your decision" rather than reporting a
+        # clean pass over conflicts it silently could not touch.
+        note_degraded("sync-conflicts", FAILURE_UNREACHABLE,
+                      fallback="conflicts stay CONFLICTED — none were resolved",
+                      fix="run `mokata doctor`, then `mokata sync` again",
+                      detail=f"{type(exc).__name__}: {exc}")
+        return lambda _c, _d: False
+
+    def _resolve(c: ConflictView, decision: str, *, whole_group: bool = False) -> bool:
+        # Looked up FRESH per conflict rather than snapshotted: resolving one conflict re-queues a
+        # write and can flush, so a snapshot taken before the loop would carry stale remote
+        # revisions into later decisions — and a stale revision is exactly what a CAS is for.
+        proposal = next((p for p in store.cross_writer_proposals() if p.conflict_id == c.id), None)
+        if proposal is None:                   # already resolved (a sibling window got there first)
+            return False
+        # DB.S7d — the group verdict is the SAME resolver, one method along: `apply_group_decision`
+        # runs the identical guards and the identical gate, then commits every member in one
+        # append. `sync` still settles nothing itself (R4).
+        if whole_group:
+            return bool(store.apply_group_decision(proposal, decision, assume_yes=True).changed)
+        return bool(store.apply_proposal(proposal, decision, assume_yes=True).changed)
+
+    return _resolve
 
 
 def sync(surface: Any, *, environ: Optional[dict] = None, assume_yes: bool = False,
@@ -897,21 +1633,42 @@ def sync(surface: Any, *, environ: Optional[dict] = None, assume_yes: bool = Fal
     journal = TeamJournal.for_surface(surface)
     conflicts = journal.conflicts()
     resolved_local = resolved_remote = deferred = 0
-    for c in conflicts:
-        decision = _decide_conflict(c, assume_yes=assume_yes, confirm=confirm, emit=emit)
-        remote_rev = (c.remote or {}).get("revision")
-        if decision == "local":
-            journal.resolve(c.id, "kept-local", remote_revision=remote_rev)
-            resolved_local += 1
-        elif decision == "remote":
-            journal.resolve(c.id, "kept-remote", remote_revision=remote_rev)
-            resolved_remote += 1
+    if conflicts:
+        # R4 — ONE resolver. `sync` asks; the STORE settles. Built once, outside the loop, because
+        # `apply_proposal` is the same gated path `mokata memory` drives, and a per-conflict store
+        # would re-open the backend for every decision.
+        resolve = _conflict_resolver(surface, ledger)
+    # DB.S7d — conflicts are settled by APPROVAL, not one row at a time. A rolled-back approval
+    # surfaces as N conflicts, and deciding them separately is what produced both half-decided end
+    # states the guards refuse; it also cost an extra `mokata sync` pass, because the retirement
+    # comes first in journal order and is refused until its replacement is decided. A group of one
+    # takes the byte-identical single-conflict path below.
+    for group in (_conflict_groups(journal, conflicts) if conflicts else []):
+        whole_group = len(group) > 1
+        c = group[0]
+        decision = (_ask_group(group, assume_yes=assume_yes, confirm=confirm, emit=emit)
+                    if whole_group
+                    else _ask_conflict(c, assume_yes=assume_yes, confirm=confirm, emit=emit))
+        if decision == "defer":
+            deferred += len(group)
+            continue
+        if not resolve(c, decision, whole_group=whole_group):
+            # The store refused (a guard, the gate declined, or a secret was found in the value
+            # being re-published). Every entry stays CONFLICTED — which is the safe state — and the
+            # next `detect_issues` surfaces them again. Counting them as deferred keeps the verdict
+            # honest: nothing was resolved.
+            deferred += len(group)
+            continue
+        if decision == "approve":
+            resolved_local += len(group)
         else:
-            deferred += 1
-        if ledger is not None and decision != "defer":
-            ledger.record("team_sync_conflict", journal_id=c.id, key=c.key,
-                          decision=f"kept-{decision}", remote_revision=remote_rev,
-                          reason="human-gated sync conflict resolution (P2)")
+            resolved_remote += len(group)
+        if ledger is not None:
+            for member in group:
+                ledger.record("team_sync_conflict", journal_id=member.id, key=member.key,
+                              decision=("kept-local" if decision == "approve" else "kept-remote"),
+                              remote_revision=(member.remote or {}).get("revision"),
+                              reason="human-gated sync conflict resolution (P2)")
 
     # re-flush the kept-local entries (now re-queued at the current remote revision).
     r2 = FlushResult()

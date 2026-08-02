@@ -9,7 +9,7 @@ non-ASCII content write correctly even under Windows' legacy code page.
 
 | Area | Cross-platform behaviour |
 |---|---|
-| **Hooks** | Wired as the `mokata-hook` **console entry point** (Stage 53b) — a PATH-resolved executable, the same mechanism as the `mokata-mcp` server. No bare `python3`, **no `sh launch.sh`**. Resolves identically on Windows, GUI-launched macOS, and minimal-PATH shells. |
+| **Hooks** | Wired as the `mokata-hook` **console entry point** (Stage 53b) — a PATH-resolved executable, the same mechanism as the `mokata-mcp` server. No bare `python3`. `mokata setup` pins it to an **absolute** path. The **plugin** route can't (its manifest is static), so it invokes a self-resolving shim — `hooks/mokata-hook-launch` on POSIX, `mokata-hook-launch.cmd` on Windows (cmd.exe completes the extension-less path via PATHEXT) — which runs the same ladder at hook time and, if nothing resolves, **fails loud (exit 1) naming `mokata setup claude`** instead of leaving a silently dead gate. `mokata doctor` reports any wired hook command that won't resolve. |
 | **Statusline** | The Claude Code `statusLine` is the same `mokata-hook statusline` console entry — no shell dependency. |
 | **Paths & separators** | All state, `temp_local/`, bundle, and dashboard paths use `os.path.join`; nothing assumes `/`. |
 | **Portable bundles** | The machine-path-free invariant strips **Windows** absolute paths (`C:\…`, UNC `\\host\…`) and POSIX paths alike — a bundle built on one OS resumes cleanly on another. |

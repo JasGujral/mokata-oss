@@ -19,7 +19,10 @@ import re
 from typing import List, Optional, Tuple
 
 from .. import languages
-from .query import QUERY_KINDS, GraphBackend, QueryResult, Reference
+from .query import (GREP_FLOOR_NAV_NOTE, NAVIGATION_KINDS, QUERY_KINDS, GraphBackend,
+                    QueryResult, Reference)
+
+LEXICAL_NOTE = "lexical fallback (no structural graph; results are approximate)"
 
 # Kept as a module symbol for back-compat; the default walk now spans every known language.
 SOURCE_EXTENSIONS = languages.SOURCE_EXTENSIONS
@@ -48,12 +51,23 @@ class GrepBackend(GraphBackend):
             refs = self._implementers(target)
         elif kind == "imports":
             refs = self._imports(target)
+        elif kind == "defs":
+            refs = self._defs(target)
+        elif kind == "refs":
+            refs = self._refs(target)
         else:
             refs = self._blast_radius(target, depth)
+        # CRG-NAV (d): a NAVIGATION answer produced by the lexical floor says so, and names the
+        # one step that buys the full chain. Attached here — at the floor itself — so it rides
+        # every route that reaches it (the layer's degrade, the AST floor's fallthrough, or a
+        # direct grep-only repo) with no second mechanism. Impact (`blast_radius`) is excluded:
+        # that is GRAPH-FIRST-IMPACT's surface, not this row's.
+        note = LEXICAL_NOTE
+        if kind in NAVIGATION_KINDS:
+            note = f"{note} | {GREP_FLOOR_NAV_NOTE}"
         return QueryResult(
             kind=kind, target=target, references=refs, backend=self.name,
-            degraded=True,
-            note="lexical fallback (no structural graph; results are approximate)",
+            degraded=True, note=note,
         )
 
     # --- file helpers --------------------------------------------------------
@@ -151,6 +165,35 @@ class GrepBackend(GraphBackend):
             for i, line in enumerate(lines):
                 if lang.is_import_line(line) and word.search(line):
                     out.append(Reference(self._rel(path), i + 1, line.strip(), None))
+        return out
+
+    def _defs(self, target: str) -> List[Reference]:
+        """CRG-NAV (b) — WHERE the symbol is defined. The per-language `defines` heuristic is
+        already the predicate `_callers` uses to EXCLUDE a definition line; here it is the
+        predicate we select on, so the floor answers "find this symbol" with the same lexical
+        table rather than a second set of patterns."""
+        out: List[Reference] = []
+        for path in self._files():
+            lang = self._lang(path)
+            lines = self._read(path)
+            for i, line in enumerate(lines):
+                if lang.defines(line, target):
+                    out.append(Reference(self._rel(path), i + 1, line.strip(), target))
+        return out
+
+    def _refs(self, target: str) -> List[Reference]:
+        """CRG-NAV (b) — EVERYWHERE the symbol is referenced. Word-boundary matches across the
+        source walk: the lexical superset (a comment or a same-named local counts), which is
+        exactly the floor's contract — approximate, marked degraded, and honest about it."""
+        word = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(target) + r"(?![A-Za-z0-9_])")
+        out: List[Reference] = []
+        for path in self._files():
+            lang = self._lang(path)
+            lines = self._read(path)
+            for i, line in enumerate(lines):
+                if word.search(line):
+                    out.append(Reference(self._rel(path), i + 1, line.strip(),
+                                         self._enclosing(lang, lines, i)))
         return out
 
     def _blast_radius(self, target: str, depth: int) -> List[Reference]:

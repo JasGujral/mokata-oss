@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from .config import Surface
 from .router import Resolution
@@ -24,9 +24,34 @@ from .router import Resolution
 # ever grows it.
 BOOTSTRAP_TOKEN_BUDGET = 2000
 
+# H-1a — the PER-TURN recall injection budget (`UserPromptSubmit`). A HARD 300 tokens, not a
+# target: the check is `estimate_tokens(<the emitted text>) <= 300`, on the bytes that actually
+# leave the hook, with `cap_summary` as the closing arithmetic backstop.
+#
+# It is declared HERE, beside the briefing budget, on purpose. The two are one claim — "mokata's
+# automatic context injection costs at most this much per session and this much per turn" — and a
+# claim split across two modules is a claim nobody can check. Doc 84's constraint on the injection
+# layer says the same thing from the other side: H-1 must SHARE the budget accounting, never open
+# a second competing channel. Both budgets live here; both are spent through `_emit`.
+#
+# Why 300 and not more: it is paid EVERY TURN. A 2k briefing costs 2k once; 300 tokens across a
+# 40-turn session is already 12k. The frugality is the feature (P11) — the budget is what forces
+# the injection to be the few items relevant to THIS turn rather than a standing corpus dump.
+INJECTION_TOKEN_BUDGET = 300
+
 # Stage 36 — how many captured rule/guardrail lines the briefing surfaces. A small, capped
 # always-on set (P11): the rest stay retrievable via `mokata memory --kind rule`, never dumped.
 BRIEFING_RULES_MAX_LINES = 12
+
+# H-1a — the RESERVED always-on slice inside the per-turn budget. Rules and guardrails are the
+# always-on set: they are what the turn must not violate, so they get a floor the ranked recall
+# cannot squeeze out. Small (the briefing already carried the full set at session start); ranked
+# by the turn's query so the reserved slots go to the rules this turn is most likely to touch.
+INJECTION_RULES_MAX_LINES = 4
+
+# H-1a — how many JIT items are CONSIDERED for the remainder. The budget, not this number, is what
+# decides how many survive; this only bounds the ranking work.
+INJECTION_JIT_TOP_K = 5
 
 # Inviolable gates, surfaced every session (P2 + P8 — cannot be configured away).
 _INVIOLABLE_GATES = [
@@ -108,6 +133,12 @@ def _render(surface: Surface) -> str:
     lines.append("Active gates (inviolable):")
     for gate in _INVIOLABLE_GATES:
         lines.append(f"- {gate}")
+    # DOC-ONBOARD — immediately under the gates, because that is what stale wiring costs you:
+    # the gates listed above are the ones this mokata HAS, not necessarily the ones wired. One
+    # line, only when actually drifted (a current install's briefing is byte-identical).
+    drift_line = _wiring_drift_line(surface)
+    if drift_line:
+        lines.append(drift_line)
     lines.append("")
 
     # Live capability routing — the heart of "what stack am I in right now".
@@ -196,6 +227,28 @@ def _render(surface: Surface) -> str:
         "stated NOT-when."
     )
     return "\n".join(lines) + "\n"
+
+
+def _wiring_drift_line(surface: Surface) -> Optional[str]:
+    """DOC-ONBOARD — ONE line when the harness wiring is older than the installed mokata, and
+    None (byte-identical briefing) when it is current.
+
+    This is the channel that reaches the user who never runs `doctor`: the session they are
+    already in. It is honest about its own blind spot — if the wiring is dead rather than merely
+    stale, this hook did not run and nothing here printed, which is exactly why the same verdict
+    also rides the MCP `status` surface and `mokata upgrade`.
+
+    Derived, never re-derived: the verdict is `hook_wiring.wiring_drift` and the wording is
+    `wiring_drift_line`, the same two the doctor finding and the MCP surface read. Fully
+    guarded — a briefing must never fail because a diagnostic did."""
+    try:
+        from .hook_wiring import wiring_drift, wiring_drift_line
+        return wiring_drift_line(wiring_drift(surface.root))
+    except Exception:
+        # The floor: this is an ADVISORY line on the SessionStart path. Anything it could raise
+        # (an exotic settings.json, a half-installed package) must cost the user the line, never
+        # the briefing — and `wiring_drift` is itself never-raise, so this is belt-and-braces.
+        return None
 
 
 def _graph_structure_line(surface: Surface) -> Optional[str]:
@@ -374,3 +427,220 @@ def build_bootstrap(
         tokens = estimate_tokens(text)
 
     return BootstrapResult(text=text, token_estimate=tokens, budget=budget)
+
+
+# ==========================================================================================
+# H-1a — the PER-TURN recall injection pack (`UserPromptSubmit`)
+# ==========================================================================================
+# The briefing answers "what project am I in"; this answers "what does THIS turn need to know".
+# Memory stops being a once-per-session briefing and becomes per-turn inbuilt RAG.
+#
+# Three deliberate limits, each of which is a decision rather than an omission:
+#
+#   * ANCHOR-FREE. Items only — no code anchors, no graph handles. Binding the injection to the
+#     code graph is H-6's job, and inheriting that coupling here would create it by accident
+#     instead of by decision.
+#
+#   * LEXICAL FLOOR ONLY. `jit_recall` + `always_on_lines`, never `store.recall_relevant` — and
+#     the reason is not the ranking, it is the WRITE. `recall_relevant` STAMPS the hits it
+#     returns (`record_usage`, DB.S5's recency/usage telemetry), so routing a per-turn injection
+#     through it would perform a durable write on EVERY turn, which is precisely the defect
+#     H-1a C1 just fixed one layer down. The wider tiered retrieval (semantic + graph + K1 edge
+#     expansion) is genuinely better ranking and is worth having here — the route is a
+#     `recall_relevant(stamp=False)` seam, FILED (doc 84) rather than improvised now, because it
+#     needs the stamp to become optional at the store rather than suppressed at the caller.
+#
+#   * WHOLE LINES. When the pack is over budget, whole lines are dropped lowest-relevance-first
+#     and the drop is DECLARED (`+N more`). A half-sentence of a guardrail is worse than an
+#     absent one: it reads as complete, and nobody can tell it was cut.
+
+
+@dataclass
+class InjectionResult:
+    """The per-turn pack, plus what it cost and what it left out.
+
+    `item_ids` is what was actually injected (in emitted order) — the S4 dedup ledger keys on it,
+    and it is also what makes "was this item injected this turn" answerable rather than inferred
+    from the rendered text."""
+
+    text: str
+    token_estimate: int
+    budget: int
+    rules_shown: int = 0
+    items_shown: int = 0
+    dropped: int = 0
+    item_ids: List[str] = None          # noqa: RUF012 - populated in __post_init__
+
+    def __post_init__(self) -> None:
+        if self.item_ids is None:
+            self.item_ids = []
+
+    @property
+    def within_budget(self) -> bool:
+        return self.token_estimate <= self.budget
+
+
+_INJECTION_HEADER = "mokata memory — relevant to this turn:"
+
+
+def _dropped_notice(n: int) -> str:
+    return (f"- (+{n} more relevant item(s) not shown — over the per-turn injection budget; "
+            f"ask, or run `mokata memory`)")
+
+
+def _fit_to_budget(header: str, reserved: List[str], ranked: List[str], budget: int):
+    """Assemble `header` + `reserved` + `ranked` into at most `budget` tokens, dropping WHOLE
+    lines lowest-relevance-first and DECLARING every line dropped.
+
+    Returns `(text, kept_reserved, kept_ranked, dropped)`. Two rules decide the drop order:
+
+      * the ranked JIT tail goes first, and `jit_recall` already returned it sorted by relevance
+        descending — so "drop from the end" IS "drop the least relevant";
+      * `reserved` (the always-on rules) is the floor and is only touched once `ranked` is empty.
+        A rule the turn must not violate outranks a context item that merely might help.
+
+    `dropped` counts EVERYTHING omitted, reserved lines included. Counting only the JIT tail
+    would print "+5 more" on a turn that also silently dropped four guardrails — an honest-looking
+    number that is wrong in the one direction that matters.
+
+    The `+N more` notice COSTS tokens, so it is inside the fit test rather than appended after it;
+    appending afterwards is how an "enforced" budget ends up exceeded by exactly one line."""
+    def _render(keep_reserved: int, keep_ranked: int, dropped: int) -> str:
+        lines = [header] + reserved[:keep_reserved] + ranked[:keep_ranked]
+        if dropped:
+            lines.append(_dropped_notice(dropped))
+        return "\n".join(lines) + "\n"
+
+    total = len(reserved) + len(ranked)
+    # 1 — drop the ranked tail, lowest relevance first; the reserved slice is untouched.
+    for keep in range(len(ranked), -1, -1):
+        text = _render(len(reserved), keep, total - len(reserved) - keep)
+        if estimate_tokens(text) <= budget:
+            return text, len(reserved), keep, total - len(reserved) - keep
+    # 2 — the reserved always-on slice is over budget on its own. Give up slots there too,
+    # rather than emit something that silently exceeds the number this module publishes.
+    for keep_reserved in range(len(reserved) - 1, -1, -1):
+        text = _render(keep_reserved, 0, total - keep_reserved)
+        if estimate_tokens(text) <= budget:
+            return text, keep_reserved, 0, total - keep_reserved
+    return "", 0, 0, total
+
+
+def _ranked_injection_items(store: Any, query: str, exclude: "set",
+                            kinds: tuple, jit_recall: Any) -> list:
+    """The ranked half of the per-turn pack: the FULL tiered stack, degrading to the lexical floor.
+
+    JIT-STAMP-SEAM. `recall_relevant(stamp=False, kinds=…)` is what makes this legal on a hook that
+    fires every prompt — it suppresses both instrumentation writes (the DB.S5 usage stamp and the
+    read counter) at the STORE, so the contract and the behaviour agree. Three properties are
+    preserved exactly as H-1a shipped them, and each is preserved by construction rather than by
+    hoping the new path happens to keep it:
+
+      * **DEDUP BEFORE THE CUT (S4).** `recall_relevant` has no `exclude_ids`, so the exclusion is
+        paid for by OVER-FETCHING exactly `len(exclude)` extra slots and dropping the seen items
+        from the result. That is equivalent to excluding from the candidate set for the property
+        that matters: if every excluded item lands in the top `k + len(exclude)`, removing them
+        still leaves `k` unseen items, so the freed budget promotes what the session has not seen
+        instead of silencing the channel. Filtering a plain top-`k` is what would silence it.
+
+      * **ADMISSION (C2).** A ranked list has no admission threshold — `recall_relevant` returns
+        the top-k of whatever it ranked, matching or not. `injection_admits` is re-applied here so
+        a turn that matches nothing injects nothing. KNOWN RESIDUAL, recorded not hidden: the
+        floor's order is admit → rank → cut, and this is rank → cut → admit, so a turn CAN inject
+        fewer than `k` items where the floor would have found `k`. It is bounded and points the
+        right way (what it drops are items the ranker put below `k` genuinely-relevant ones), and
+        on the FTS path it is nearly unreachable because only matches are candidates at all.
+
+      * **DEGRADE.** Any failure falls back to `jit_recall` — the exact pre-seam behaviour, not an
+        empty pack. A store with no tiered path (a duck-typed double, a backend without
+        `recall_relevant`) is a normal outcome here, not an error.
+    """
+    from .memory.brain import injection_admits
+    recall = getattr(store, "recall_relevant", None)
+    if recall is not None:
+        try:
+            # The tiers' degrade notices go to a SINK, not to stderr, and that is a deliberate
+            # exception rather than an oversight — it is the same one `build_injection`'s own
+            # handler already carries in prose. A tier notice ("edge expansion was bounded",
+            # "semantic recall is OFF") is written for someone who RAN a recall and got a worse
+            # answer than they asked for. Here nobody asked: the hook fires on every prompt, so
+            # the identical notice would print every turn and what it would report is that one
+            # turn got less context than it could have — never that a guarantee was broken. The
+            # same degrade still announces loudly on every path a human actually invoked.
+            hits = recall(query, top_k=INJECTION_JIT_TOP_K + len(exclude),
+                          stamp=False, kinds=kinds, degrade_out=lambda _msg: None)
+            items = [h.item for h in hits if h.item.id not in exclude
+                     and injection_admits(query, h.item)]
+            return items[:INJECTION_JIT_TOP_K]
+        except Exception:  # noqa: BLE001
+            # The tiered stack is an UPGRADE over a floor that still works. Falling back to it is
+            # the designed outcome, and announcing it every turn would train the user to ignore
+            # the channel (the same reasoning `build_injection`'s own handler carries).
+            pass
+    return jit_recall(store, query, top_k=INJECTION_JIT_TOP_K, exclude_ids=exclude)
+
+
+def build_injection(surface: Surface, query: str,
+                    budget: int = INJECTION_TOKEN_BUDGET,
+                    exclude_ids: "Optional[set]" = None) -> InjectionResult:
+    """The per-turn pack for `query`, guaranteed to fit `budget`.
+
+    Never raises: every failure (an unreadable store, a half-installed package, a store that
+    cannot be constructed) yields an EMPTY pack, and the hook emits nothing at all. This is the
+    async context-injection lane — it only ever adds context, so having nothing to add is a
+    perfectly ordinary outcome and not a condition worth announcing every turn.
+
+    `exclude_ids` is the S4 already-injected set (repeating an item the model was handed three
+    turns ago spends the budget on nothing)."""
+    if not query or budget <= 0:
+        return InjectionResult(text="", token_estimate=0, budget=budget)
+
+    exclude = exclude_ids or set()
+    try:
+        from .memory import JIT_KINDS, MemoryStore, always_on_lines, jit_recall, render_item_line
+        store = MemoryStore.from_surface(surface)
+        # Both reads are NON-COUNTING and scope/readability filtered (H-1a C1) — a per-turn
+        # injection must move no durable state and must never surface a teammate's private item.
+        reserved, _overflow = always_on_lines(store, INJECTION_RULES_MAX_LINES, query=query)
+        # `exclude_ids` goes INTO the recall, not around it: filtering the RESULT would leave the
+        # already-seen items occupying the top k, so a session would fall silent while unseen
+        # items sat at rank k+1. The whole point of the ledger is to promote what is new.
+        # The always-on slice is deliberately NOT deduped — a guardrail is not "already known"
+        # because it scrolled out of the window.
+        #
+        # JIT-STAMP-SEAM (2026-08-01) — the ranked half now runs the FULL tiered stack
+        # (lexical + semantic + graph + K1 ≤2-hop expansion, R-1 bounded candidate selection)
+        # instead of the Jaccard floor, via the `stamp=False` seam that makes it legal on a hook
+        # firing every prompt. Two defects closed at once, and they were the same defect:
+        #   QUALITY — the pack was delivering arm A while arm D measures +33.3pp recall (DB.S8f).
+        #   SCALE   — `jit_recall` reads the WHOLE visible active set, which is the pre-R-1 read
+        #             R-1 removed from `recall_relevant` and left here (975 ms/turn at 100k).
+        # `stamp=False` suppresses BOTH instrumentation writes (`record_usage` AND the read
+        # counter), so the read-only guarantee H-1a pins by byte snapshot is unchanged.
+        hits = _ranked_injection_items(store, query, exclude, JIT_KINDS, jit_recall)
+    except Exception:  # noqa: BLE001
+        # (iv) SUPPRESS-OK, and the one place the usual "announce the degrade" answer is wrong:
+        # see the D5 register entry for `hook_cli.user_prompt_submit_main`. This runs on EVERY
+        # prompt, and what it would announce is that one turn got less context than it could
+        # have — never that a guarantee was broken. The rules are still enforced by the gates and
+        # the always-on set still reached the SessionStart briefing, which DOES announce a broken
+        # memory read loudly (`_briefing_rule_lines`). Saying it again every turn buys nothing
+        # and trains the user to ignore the channel.
+        return InjectionResult(text="", token_estimate=0, budget=budget)
+
+    ranked = [render_item_line(i) for i in hits]
+    if not reserved and not ranked:
+        return InjectionResult(text="", token_estimate=0, budget=budget)
+
+    text, kept_rules, kept, dropped = _fit_to_budget(_INJECTION_HEADER, reserved, ranked, budget)
+
+    # The closing ARITHMETIC backstop. `_fit_to_budget` drops whole lines and can therefore fail
+    # in one shape it cannot fix: a single line longer than the entire budget (a very long rule,
+    # a pathologically small budget). `cap_summary` cannot fail in that shape — it truncates to
+    # `budget * 4` chars and marks the cut — so the published number holds unconditionally rather
+    # than "unless someone captured a 400-token guardrail".
+    from .govern.compaction import cap_summary
+    handback = cap_summary(text, budget)
+    return InjectionResult(text=handback.summary, token_estimate=handback.tokens, budget=budget,
+                           rules_shown=kept_rules, items_shown=kept, dropped=dropped,
+                           item_ids=[i.id for i in hits[:kept]])

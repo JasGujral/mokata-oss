@@ -58,6 +58,17 @@ credential patterns), **entropy** (high-entropy tokens), **path** (`.env`, `id_r
 `*.pem`, …), **egress** (any secret in outbound content is fatal) — catching secrets
 before they're written, committed, or sent.
 
+The entropy layer is **identifier-aware**, because the thing that makes a scanner get
+switched off is flagging a variable name. A high-entropy token is only reported when it
+*also* has a mixed character class and *no word structure* — where word structure means
+human-placed boundaries (separators or casing transitions) splitting the token into
+word-shaped segments, so `getUserAuthTokenFromRequest` and `MOKATA_SESSION_ID_OVERRIDE`
+read as identifiers rather than credentials. Underneath that sits a **known-shape floor**:
+a small set of anchored vendor formats (AWS, GitHub, OpenAI, Slack, Google, JWT) matched
+against both the raw token and its separator-stripped form, so a real key cannot buy an
+exemption by looking word-shaped or by being broken into chunks. A floor match blocks
+without consulting any exemption.
+
 ## Human-gated writes (I2) + trust dial (K3)
 
 Every durable write goes through the `WriteGate`: secret scan (an un-overridable security

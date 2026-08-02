@@ -25,7 +25,11 @@ team that accepts the named residual risk redeem an approval in-flow. See `parit
                          never a tool parameter the model can type.
   * **single-use**     — the approval licenses exactly ONE commit of exactly the content you saw
                          (content-hashed), then it is burned.
-  * **session-scoped** — it dies with the run that proposed it, and expires on a clock.
+  * **run-scoped**     — it belongs to the PIPELINE run it was proposed for, and expires on a
+                         clock. RE-ENTRY: that is the run holding the approved approach / emitted
+                         spec, NOT the MCP process that happened to be alive — so restarting the
+                         server or going back to /brainstorm no longer kills an approval you just
+                         gave (`mcp.consent._approval_run`).
   * **ledgered**       — who / when / which write / which hash, on the hash-chained audit ledger.
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.

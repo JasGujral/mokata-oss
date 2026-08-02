@@ -17,19 +17,39 @@ import _support  # noqa: F401 - puts src/ on the path
 SNAPSHOT_FULL = [
     'query', 'recall', 'doctor', 'coverage', 'budget', 'audit', 'status', 'preview', 'progress',
     'lanes', 'watch', 'govern', 'rules', 'skills', 'suggest', 'lat_check', 'index_status', 'tour',
-    'ci_check', 'baseline', 'sessions', 'session_windows', 'session_save', 'plan_list', 'plan_show',
-    'session_list', 'config_get', 'export_preview', 'decompose', 'vault_list', 'vault_search',
+    'ci_check', 'baseline', 'sessions', 'session_windows',
+    # WT-LIST (FR-WT-1, 0.0.16) — the read-only worktree×session join, registered beside the
+    # window listing it joins to. APPENDED to the snapshot, not a reorder: every pre-existing
+    # entry keeps its position, which is what this test exists to protect.
+    'worktree_list',
+    'session_save', 'plan_list', 'plan_show',
+    'session_list', 'config_get', 'export_preview', 'decompose',
+    'spec_show',                       # HANDOFF.G1 (0.0.16) — the run's spec, as a read tool
+    # REVIEW-FIX.R3 (0.0.16) — the 6r review loop in-harness. Both are READ-kind: recording a
+    # verdict is observability-tier (append-only + UNGATED, like the CLI twin), so neither joins
+    # SNAPSHOT_WRITE and neither faces the SI.3 propose-only sweep.
+    'review_status', 'review_record',
+    'vault_list', 'vault_search',
     'vault_pull', 'stacks_list', 'stacks_search', 'stacks_show',
+    # M-4/R5 (0.0.16) — the drafting-request read tool, appended to the tail of the READ block
+    # (reads register before writes), so no pre-existing position moves.
+    'consolidate_proposals',
     'remember', 'import_stack', 'reset', 'apply_proposal', 'memory_export', 'memory_import',
     'vault_push', 'session_push', 'session_pull', 'session_name', 'audit_share', 'spec_emit',
     'spec_amend', 'spec_check', 'init', 'reconfigure', 'config_set', 'export_stack',
-    'stacks_install', 'approve',
+    'stacks_install',
+    # M-4/R5 (0.0.16) — the drafted-summary submit, appended to the tail of the WRITE block rather
+    # than slotted beside the memory tools it belongs with by domain, so every pre-existing
+    # position is unchanged (the rule this snapshot exists to enforce, same as WT-LIST above).
+    'consolidate',
+    'approve',
 ]
 SNAPSHOT_WRITE = [
     'remember', 'import_stack', 'reset', 'apply_proposal', 'memory_export', 'memory_import',
     'vault_push', 'session_push', 'session_pull', 'session_name', 'audit_share', 'spec_emit',
     'spec_amend', 'spec_check', 'init', 'reconfigure', 'config_set', 'export_stack',
     'stacks_install',
+    'consolidate',                     # M-4/R5 — appended, see SNAPSHOT_FULL
 ]
 
 

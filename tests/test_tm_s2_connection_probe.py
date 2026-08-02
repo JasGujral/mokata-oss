@@ -51,7 +51,14 @@ class _FakeConn:
         for key, rows in self._rows_for.items():
             if key in sql:
                 return _FakeCursor(rows)
-        return _FakeCursor([(1,)])
+        if sql.strip().upper() == "SELECT 1":
+            return _FakeCursor([(1,)])     # the reachability round-trip — the ONE untaught answer
+        # A double that answers questions it was never taught is a LIAR. The old silent
+        # `_FakeCursor([(1,)])` fallback let an untaught (or plain WRONG) connection fabricate
+        # "the shared schema is v1" — see WIN-DOCTOR-SCHEMA. Do NOT restore it.
+        raise AssertionError(
+            f"_FakeConn was asked SQL it was never taught: {sql!r}. Teach it via "
+            f"rows_for=/error_for= — do NOT restore a silent default.")
 
     def close(self):
         self.closed = 1
@@ -236,9 +243,13 @@ class TestProbe(unittest.TestCase):
     def test_unreachable_is_wall_clock_bounded_when_connect_hangs(self):
         from mokata import teamdb
         # connect sleeps far past the budget → the probe must still return promptly.
+        # Its OWN DSN, never the shared `postgres://h/db`: the abandoned worker outlives the
+        # budget and installs a bare `_FakeConn` into the process-global `_pg._MANAGER` ~2s
+        # later, defeating the `reset_manager()` teardown already ran. Sharing the key poisons
+        # every later probe on it (WIN-DOCTOR-SCHEMA, same landmine, different file).
         with _mock_psycopg(_FakePsycopg(connect_sleep=2.0)):
             start = time.monotonic()
-            res = teamdb.probe("postgres://h/db", budget_ms=150)
+            res = teamdb.probe("postgres://hang-h/db", budget_ms=150)
             elapsed = (time.monotonic() - start) * 1000
         self.assertFalse(res.reachable)
         self.assertLess(elapsed, 1000, "probe exceeded its wall-clock budget")

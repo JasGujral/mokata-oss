@@ -143,7 +143,7 @@ ANATOMY: Dict[str, Anatomy] = {
                "is exactly the banned path."),
         ),
         verification=(
-            "a persisted spec (emitted_spec.json) exists",
+            "a persisted spec exists for this run (`spec_show` returns it)",
             "a failing test demanded every behaviour you added",
             "the call sites of every changed shared symbol were checked",
             "scope/approach/ACs/design are unchanged — or the deviation gate was used",

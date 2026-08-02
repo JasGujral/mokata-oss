@@ -33,6 +33,25 @@ WARN_NO_DECISIONS = ("no structured decisions[] on the approved approach — the
                      "record decisions in brainstorm to enable it)")
 
 
+# SPEC-STANDALONE-SILENT — THE sentence for "this spec has no upstream approved direction".
+#
+# Standalone spec is a SUPPORTED path (`skills/spec/SKILL.md`: "this command runs on its own — no
+# upstream pipeline phase is required") and the gate below degrades clean into it. What was missing
+# was never a gate; it was a WORD. `emit_spec` built the GateResult and discarded it, and the MCP
+# `spec_emit` threaded only `gr.reason`, so NEITHER emit surface said anything at all — a supported
+# path was indistinguishable from a silent failure, which is the P16 shape `awaiting.py` exists to
+# kill on the wait path and this kills on the informational one.
+#
+# ONE constant, read by every surface (the R3/R4 single-source discipline). `render()` below reads
+# it too, rather than keeping the second copy it used to carry — a wording that lives in two places
+# is a wording that drifts, and this one now reaches a human's approval terminal.
+STANDALONE_NOTE = (
+    "STANDALONE: no approved brainstorm approach or refinement set is on record for this spec — "
+    "it stands alone. That is a SUPPORTED path, not an error and not a failure. To give this spec "
+    "an approved direction, run /mokata:brainstorm (or /mokata:refine), approve an approach, then "
+    "emit.")
+
+
 @dataclass
 class GateResult:
     passed: bool
@@ -47,6 +66,13 @@ class GateResult:
     # AP-SD — non-blocking advisories that do NOT flip `passed` (e.g. the approved approach carries
     # no decisions[]). Empty on the happy path; named so a warning is legible, never a silent gap.
     warnings: List[str] = field(default_factory=list)
+
+    @property
+    def standalone(self) -> bool:
+        """SPEC-STANDALONE-SILENT — this spec has NO approved direction behind it (neither a
+        brainstorm approach nor a refinement set). Exactly the condition `render()`'s else-branch
+        has always described; named so every surface asks the gate instead of re-deriving it."""
+        return not (self.approach_present or self.refinements_present)
 
     def render(self) -> str:
         head = "PASS" if self.passed else "BLOCK"
@@ -64,8 +90,8 @@ class GateResult:
         elif self.refinements_present:
             lines.append(f"  approved refinements: {self.refinements}")
         else:
-            lines.append("  approved direction: none on record "
-                         "(brainstorm/refine not run)")
+            # The SHARED constant, not a second copy of it (SPEC-STANDALONE-SILENT).
+            lines.append(f"  {STANDALONE_NOTE}")
         if not self.passed:
             # Stage 54c — every block names the single next action that clears it.
             from ..legibility import unblock_hint
@@ -122,6 +148,20 @@ def run_completeness_gate(spec: Spec, tests: List[TestRef],
         refinements=refinements.label if refinements is not None else None,
         warnings=warnings,
     )
+
+
+def standalone_note(result: GateResult) -> str:
+    """SPEC-STANDALONE-SILENT — the informational line for `result`, or "" when a direction IS on
+    record. THE shared builder both emit surfaces call; no tool writes this sentence itself.
+
+    INFORMATIONAL, NOT A GATE. It is derived from a verdict that has already been decided and it
+    cannot change one: a standalone spec still passes on AC→test mapping alone and still emits.
+    Turning "no brainstorm ran" into a refusal would break the standalone path `skills/spec`
+    documents as supported — the defect was silence, and the fix for silence is a sentence.
+
+    Pure, total and read-only: it reads two booleans off the result and returns a module constant.
+    """
+    return "" if not result.standalone else STANDALONE_NOTE
 
 
 # Wire the executable check to the existing pipeline phase (single pipeline, no parallel).

@@ -162,10 +162,12 @@ implementation, but no approach is approved for this run yet. Explore and approv
 (/brainstorm), or override: mokata gate override approach-approval --reason "<why>"
 ```
 
-It brings mokata to **9 backed gates** — gates with a real enforcement mechanism behind them, not
+It brought mokata to **9 backed gates** — gates with a real enforcement mechanism behind them, not
 prose — of which **4 are run-state gates** enforced on the agent's native `Write`/`Edit` by the
 `gate-guard` hook (see §4). Like the other three, it is a *methodology* block a human can lift on
-the record.
+the record. (`self-protect` has since landed as the **tenth**, in 0.0.16. It runs in the same hook
+lane but *ahead* of every run-state gate, because it keys on the target path alone — and unlike a
+methodology block it is security-class and **cannot** be overridden.)
 
 ### D30 · Prior-art bound step · D31 · Typed approach `decisions[]`
 
@@ -250,7 +252,7 @@ this is NOT the write that was approved — the arguments changed since the huma
 that approval was already used — an approval licenses exactly one write
 ```
 
-`approve=true` / `confirm=true` are still *accepted* on all 19 write tools (nothing breaks), but
+`approve=true` / `confirm=true` are still *accepted* on all 20 write tools (nothing breaks), but
 they **commit nothing** — the tool answers with a proposal and this note:
 
 ```text

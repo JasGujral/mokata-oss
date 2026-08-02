@@ -1,0 +1,158 @@
+#!/bin/sh
+# mokata plugin hook launcher (HOOK-RESOLVE) — the SELF-RESOLVING entry point for the
+# PLUGIN route.
+#
+# Why this exists. A plugin `hooks.json` is STATIC: it ships in the marketplace checkout
+# and cannot bake in the absolute console-script path that `mokata setup` writes (B1 /
+# `harness_setup.resolved_console_script`). So it used to invoke a BARE `mokata-hook` — and
+# on a GUI-launched Claude Code (launchd/Explorer, no shell profile, minimal PATH that omits
+# the pip console-script dir) that bare name never resolves. Claude Code then drops the hook,
+# and mokata's PreToolUse enforcement plane — secret-guard AND gate-guard — is silently OFF.
+# A gate that silently does not run is worse than no gate (P14).
+#
+# `hooks.json` therefore invokes THIS shim via "${CLAUDE_PLUGIN_ROOT}", and the shim runs the
+# SAME resolution ladder B1 runs, at hook time, in the hook's own environment:
+#
+#   0. $MOKATA_HOOK        — an explicit override the user pinned themselves
+#   1. `mokata-hook` on PATH        (identical to the pre-HOOK-RESOLVE behaviour)
+#   2. the `mokata-hook` console-script SIBLING of a resolved Python 3 — B1's rule, and
+#      precisely the case `command -v` cannot see (an installed venv/bin not on PATH)
+#   3. that interpreter running the PACKAGED module directly:
+#      `python3 -m mokata.hook_cli`, with this plugin checkout's `src/` on PYTHONPATH —
+#      mokata's core is dependency-free, so this works with NO pip install at all
+#   4. nothing resolved → ONE line on stderr naming the fix, and exit 1 (NEVER a silent 0)
+#
+# EXIT CODES ARE THE HOOK'S OWN. Every success path `exec`s, so the subcommand's exit code
+# reaches Claude Code untouched — secret-guard's exit 2 still BLOCKS. Exit 1 here is the
+# reserved MISCONFIGURATION code (`hook_cli.main`'s convention); exit 2 is reserved for a
+# real security BLOCK (`hook_cli.BLOCK_EXIT`) and this shim never invents one.
+#
+# WHICH SHELL RUNS THIS (HOOK-SHELL-AGNOSTIC — read out of Claude Code 2.1.220, not assumed).
+# A hook `command` is spawned by exactly one of three routes:
+#   args present           -> spawn(command, args)                     NO shell at all
+#   shell === "powershell" -> spawn(pwsh, [...flags, "-Command", cmd])
+#   otherwise              -> spawn(cmd, [], {shell: gitBash | true})
+# The default shell is bash: `sh -c` on macOS/Linux, Git Bash on Windows, or PowerShell when
+# Git Bash is absent. **cmd.exe is NEVER a hook shell.** An earlier comment here claimed
+# `hooks.json` names this file extension-less so cmd.exe would complete it to the `.cmd`
+# through the Windows executable-extension search — that was FALSE, and it is why the gap
+# survived an audit. No such completion ever happens on the hook path.
+#
+# So `hooks.json` pins `"shell": "bash"` on all four hooks. POSIX and Windows-with-Git-Bash run
+# THIS file (Git Bash honours the shebang); a Windows box WITHOUT Git Bash gets Claude Code's
+# own named error telling the user to install Git for Windows — LOUD, with a remedy, instead of
+# falling through to PowerShell where a quoted path followed by an argument parses as a string
+# literal and the gate silently never runs.
+#
+# `mokata-hook-launch.cmd` still ships beside this file for anyone invoking it directly, but it
+# is NOT on the hook path: nothing in the harness routes a hook through cmd.exe.
+#
+# The `mokata setup claude` route does not need any of this — it wires EXEC form
+# (`command` + `args`, see `harness_setup._hook_exec`), which no shell parses on any platform.
+#
+# Usage:  mokata-hook-launch <subcommand> [args...]
+#
+# Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
+
+set -u
+
+_fail() {
+    echo "mokata: hooks are NOT firing — could not resolve \`mokata-hook\` or a Python 3 to run it ($1). Fix: run \`mokata setup claude\`." >&2
+    exit 1
+}
+
+if [ $# -eq 0 ]; then
+    _fail "no subcommand given"
+fi
+
+# NOTHING BELOW MAY CALL AN EXTERNAL BINARY. `dirname`, `basename` and friends live in /usr/bin
+# — the very directory a stripped PATH omits — so using them here would break the shim in
+# exactly the environment it exists to survive. Only shell BUILTINS (`command -v`, `cd`, `[`,
+# parameter expansion) are used to resolve anything.
+_dirname() {           # ${1%/*} with the no-slash and root cases handled
+    case $1 in
+        */*) _dirname_out=${1%/*}; [ -n "$_dirname_out" ] || _dirname_out=/ ;;
+        *)   _dirname_out=. ;;
+    esac
+}
+
+# This shim lives at <plugin>/src/mokata/hooks/ — so ../.. is the packaged source root that
+# makes `mokata` importable without any install.
+_dirname "$0"
+_src_dir=$(CDPATH= cd -- "$_dirname_out/../.." 2>/dev/null && pwd) || _src_dir=""
+
+# Does the given command run as Python 3?  ("$@" lets us pass `py -3` as one command.)
+_is_py3() {
+    "$@" -c 'import sys; raise SystemExit(0 if sys.version_info[0] == 3 else 1)' \
+        >/dev/null 2>&1
+}
+
+# Put the plugin's own source tree on PYTHONPATH so `-m mokata.hook_cli` works with no
+# install. PREPENDED, and an existing PYTHONPATH is preserved.
+_export_pythonpath() {
+    if [ -n "$_src_dir" ]; then
+        PYTHONPATH="$_src_dir${PYTHONPATH:+:$PYTHONPATH}"
+        export PYTHONPATH
+    fi
+}
+
+# Given a resolved interpreter, prefer ITS console-script sibling (B1's rule), else run the
+# packaged module. Always `exec`s — the hook's exit code is the subcommand's.
+_run_with() {
+    _py=$1
+    shift
+    _dirname "$_py"
+    if [ -x "$_dirname_out/mokata-hook" ]; then
+        exec "$_dirname_out/mokata-hook" "$@"
+    fi
+    _export_pythonpath
+    exec "$_py" -m mokata.hook_cli "$@"
+}
+
+# 0 — an explicit override wins.
+if [ -n "${MOKATA_HOOK:-}" ] && [ -x "${MOKATA_HOOK}" ]; then
+    exec "$MOKATA_HOOK" "$@"
+fi
+
+# 1 — the console entry point on PATH. When this resolves, behaviour is EXACTLY what the
+#     bare `mokata-hook` command did before: same process, same args, same exit code.
+if command -v mokata-hook >/dev/null 2>&1; then
+    exec mokata-hook "$@"
+fi
+
+# 2/3 — resolve an interpreter, then its sibling console script, else the packaged module.
+if [ -n "${MOKATA_PYTHON:-}" ] && _is_py3 "$MOKATA_PYTHON"; then
+    _run_with "$MOKATA_PYTHON" "$@"
+fi
+
+for _cand in python3 python; do
+    if command -v "$_cand" >/dev/null 2>&1 && _is_py3 "$_cand"; then
+        _abs=$(command -v "$_cand")
+        _run_with "$_abs" "$@"
+    fi
+done
+
+# The Windows Python launcher (reachable from Git Bash); it has no console-script sibling
+# to prefer, so it goes straight to the packaged module.
+if command -v py >/dev/null 2>&1 && _is_py3 py -3; then
+    _export_pythonpath
+    exec py -3 -m mokata.hook_cli "$@"
+fi
+
+# Common install locations a minimal PATH (macOS GUI launch) omits. Overridable for testing.
+_dirs=${MOKATA_PYTHON_DIRS-/opt/homebrew/bin:/usr/local/bin:/usr/bin:${HOME:-}/.pyenv/shims}
+_oldifs=${IFS-}
+IFS=:
+for _dir in $_dirs; do
+    [ -n "$_dir" ] || continue
+    for _name in python3 python; do
+        if [ -x "$_dir/$_name" ] && _is_py3 "$_dir/$_name"; then
+            IFS=$_oldifs
+            _run_with "$_dir/$_name" "$@"
+        fi
+    done
+done
+IFS=$_oldifs
+
+# 4 — nothing resolved. LOUD and non-zero: a dead gate must never look like a passing one.
+_fail "subcommand $1"

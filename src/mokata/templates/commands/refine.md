@@ -14,11 +14,13 @@ refinements and hand off to the `spec` skill.
 
 ## 1. Ground in the real code (don't guess, don't file-dump)
 
-Use the codebase graph for structure — callers, callees, imports, and blast_radius of the
-target — and memory for prior decisions/conventions. Read ONLY the code the user points at;
-pull related context through the graph + memory, not by pasting the repo. If the graph or
-memory is absent, read/grep the target and state your structural assumptions. Depth comes
-from better grounding, not from spending more tokens.
+Navigate GRAPH-FIRST (see Grounding discipline): use the codebase graph for structure —
+`mokata query defs|refs|callers|callees|imports|blast_radius <symbol>` — and memory for prior
+decisions/conventions. Locating a symbol, its definition, or its references is a `mokata query`
+FIRST; Read ONLY the code the user points at (and the lines the graph found), and pull related
+context through the graph + memory, not by pasting the repo. If the graph or memory is absent,
+read/grep the target, say that the answer came from the lexical floor (degraded), and state
+your structural assumptions. Depth comes from better grounding, not from spending more tokens.
 
 ## 2. Deep, comprehensive review (the default is thorough)
 

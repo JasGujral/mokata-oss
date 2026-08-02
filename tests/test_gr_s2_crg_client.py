@@ -83,6 +83,11 @@ def _rich_rows():
         "imports": [{"path": "svc/api.py", "line": 1, "symbol": "svc.db"}],
         "implementers": [{"path": "svc/impl.py", "line": 3, "symbol": "svc.impl.Impl"}],
         "blast_radius": [{"path": "svc/caller.py", "line": 9, "symbol": "svc.caller.run"}],
+        # CRG-NAV — the two navigation kinds. `refs` is CRG-backed (the union of the inbound
+        # patterns); `defs` is the one kind the REAL client declares unmapped, but the BACKEND
+        # is client-agnostic, so a client that does answer it still gets a graph answer here.
+        "defs": [{"path": "svc/api.py", "line": 12, "symbol": "svc.api.handle"}],
+        "refs": [{"path": "svc/api.py", "line": 40, "symbol": "svc.api.handle"}],
     }
 
 

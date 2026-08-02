@@ -148,6 +148,12 @@ axis. See [Getting started](docs/getting-started.md).
 > A `pip` CLI install is **terminal-only** — it runs the deterministic engine with no LLM
 > attached. It does **not** put mokata inside Claude Code; for that, install the plugin or run
 > `mokata setup claude`. ([Why two ways](https://mokata.ai/concepts/execution-model/).)
+>
+> `mokata init` = **your repo** (`.mokata/`). `mokata setup claude` = **your agent** (`.claude/`,
+> and it runs `init` for you). Upgrading? `mokata upgrade` does the pip install *and* refreshes
+> the harness wiring, both human-gated — a bare `pip install -U` leaves the old wiring in place.
+> Decision table + upgrade runbook:
+> [Which setup command do I need?](https://mokata.ai/how-to/which-setup-command/)
 
 Full walkthrough: [`docs/quickstart.md`](docs/quickstart.md) · full hands-on guide → [the Complete Guide](https://mokata.ai/tutorials/mokata-complete-guide/) (with a downloadable PDF) · published docs: <https://mokata.ai/>
 
@@ -178,7 +184,7 @@ Per-layer / per-tool toggles, the trust dial (per write surface or per tool — 
 
 `mokata skills` lists the catalog — **16 curated skills** Claude can auto-engage (each also a slash command — bare `/<name>` on the pip + `mokata setup claude` route): the pipeline (`brainstorm`, `refine`, `onboard`, `spec`, `test`, `develop`, `review`, `debug`, `optimize`, `bug`, `ship`) plus standalone/auto-firing `govern`, `session`, `playbook`, `docsync` (docs↔code reconciler, human-gated fixes), and `mcp-repair` — and **10 domain-knowledge skills** (API design, security, performance, frontend/accessibility, browser testing, CI/CD, git workflow, deprecation, docs/ADRs, shipping) that attach to the pipeline phase where they apply. Utilities like `version` stay CLI-only.
 
-The CLI exposes 67 subcommands, including:
+The CLI exposes 69 subcommands, including:
 
 - **Pipeline & skills** — `brainstorm`, `spec` (`show`/`amend`), `test`, `develop`, `review`, `ship`, `refine`, `debug`, `bug`, `optimize`, `onboard`, plus `run`/`enter`/`exec`/`playbook` (`--dense`)/`preview`/`chain` and `skill author`.
 - **Approvals & gates (the seatbelt)** — `approve [<id>]` (mint the approval for a proposed write in *your* terminal; bare `approve` lists what's pending. There is no approve slash command; the in-chat MCP approve tool (`mcp__mokata__approve`) is opt-in and **default-OFF**, and even when enabled Claude Code prompts you on every call — the model never mints its own consent unprompted) and `gate` (`status`/`override`/`clear` — the run-state gates; an override needs a reason and is ledgered).

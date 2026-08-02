@@ -52,6 +52,69 @@ def template_params(template: str) -> List[str]:
     return out
 
 
+# ---------------------------------------------------------------- the TYPED ENVELOPE (DB.S5)
+# The locked 2026-07-14 decision, landed: a formula's applicability is a TYPED ENVELOPE — a fixed
+# set of named fields with declared shapes — rather than a free-form dict, and every read of it
+# goes through `normalize_applicability` so the type is enforced at the boundary rather than
+# assumed at each use site.
+#
+# The gap this closes was real, not theoretical. `make_formula` has always BUILT a well-shaped
+# envelope, but nothing VALIDATED one that arrived any other way — from a hand-edited doc, a
+# teammate's client, an older build's `extra`, or an import. A doc carrying
+# `{"triggers": "auth"}` (a bare string where a list belongs) fed `any(_term_matches(t, …) for t
+# in "auth")`, which iterates the CHARACTERS 'a','u','t','h' and silently matches on single
+# letters — a formula that fires on almost every query, with no error anywhere to attribute it to.
+# A typed envelope makes that unrepresentable at the read boundary instead of trusting the writer.
+ENVELOPE_FIELDS = ("triggers", "topic", "params")
+
+
+def normalize_applicability(raw: Any) -> dict:
+    """Coerce ANY applicability payload into the typed envelope `{triggers: [str], topic: str,
+    params: [str]}`. Total: it never raises and always returns all three fields.
+
+    Coercion, not rejection, and deliberately so: this sits on the READ path of items a human
+    already approved, so refusing a malformed envelope would make a mis-typed field silently
+    delete a live formula from recall. Coercing makes it behave as its shape honestly permits.
+
+      * a bare STRING where a list belongs becomes a ONE-ELEMENT list, never a character
+        iteration — the specific bug above, fixed at its cause;
+      * a non-string scalar in a list is stringified; empty/whitespace entries are dropped
+        (an empty trigger is a blank wildcard, and `_term_matches` already refuses to match one);
+      * a non-string `topic` is stringified, `None` becomes "";
+      * anything that is not a mapping at all (a list, a string, None) yields the EMPTY envelope,
+        which never matches — the correct answer for metadata we cannot read as metadata.
+
+    Order is preserved and duplicates are dropped, so the envelope is deterministic for a given
+    input and two clients reading the same doc agree on the same trigger list.
+    """
+    if not isinstance(raw, dict):
+        return {"triggers": [], "topic": "", "params": []}
+    return {"triggers": _string_list(raw.get("triggers")),
+            "topic": "" if raw.get("topic") is None else str(raw.get("topic")),
+            "params": _string_list(raw.get("params"))}
+
+
+def _string_list(value: Any) -> List[str]:
+    """A field declared as a list of strings, from whatever arrived. A bare string is ONE entry
+    (never iterated character-by-character); a mapping is not a list and yields none."""
+    if value is None or isinstance(value, dict):
+        return []
+    items = [value] if isinstance(value, (str, bytes)) else (
+        value if isinstance(value, (list, tuple, set)) else [value])
+    out: List[str] = []
+    for entry in items:
+        text = (entry.decode("utf-8", "replace") if isinstance(entry, bytes) else str(entry)).strip()
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def applicability_of(item: Any) -> dict:
+    """The typed envelope for `item` — THE one accessor. Every read of `item.applicability` in
+    this module goes through here, so no use site can be handed a raw dict again."""
+    return normalize_applicability(getattr(item, "applicability", None))
+
+
 # ---------------------------------------------------------------- construct a formula item
 def make_formula(subject: str, template: str, *,
                  triggers: Optional[Sequence[str]] = None,
@@ -62,11 +125,13 @@ def make_formula(subject: str, template: str, *,
     trigger/topic APPLICABILITY metadata (+ named params) carried in `item.applicability`. `params`
     default to the template's own named slots. Extra kwargs (id / scope_level / scope_id / author
     / …) pass straight to `MemoryItem.create`, so a formula is scoped + gated like any other item."""
-    applicability = {
-        "triggers": [str(t) for t in (triggers or []) if str(t).strip()],
-        "topic": topic or "",
-        "params": list(params) if params is not None else template_params(template),
-    }
+    # Built through the same normalizer every read uses, so an authored envelope and a parsed one
+    # are the identical shape — the constructor cannot mint something the reader would coerce.
+    applicability = normalize_applicability({
+        "triggers": triggers,
+        "topic": topic,
+        "params": params if params is not None else template_params(template),
+    })
     return MemoryItem.create(subject, template, kind=FORMULA,
                              applicability=applicability, **kw)
 
@@ -81,10 +146,9 @@ def formula_params(item: Any) -> List[str]:
     derived from the template (`item.value`). `[]` for a non-formula item."""
     if not is_formula(item):
         return []
-    applic = getattr(item, "applicability", {}) or {}
-    params = applic.get("params")
+    params = applicability_of(item)["params"]
     if params:
-        return list(params)
+        return params
     return template_params(getattr(item, "value", "") or "")
 
 
@@ -104,11 +168,13 @@ def applies_to(item: Any, query: str, *, context: Any = None) -> bool:
     forward-compatibility (scope filtering is applied by the store's union read, not here)."""
     if not is_formula(item):
         return False
-    applic = getattr(item, "applicability", {}) or {}
+    # Through the TYPED ENVELOPE, never the raw dict: a doc whose `triggers` is a bare string used
+    # to be iterated character-by-character here, matching on single letters.
+    applic = applicability_of(item)
     qtokens = _tokens(query)
-    if any(_term_matches(t, qtokens) for t in (applic.get("triggers") or [])):
+    if any(_term_matches(t, qtokens) for t in applic["triggers"]):
         return True
-    return _term_matches(applic.get("topic") or "", qtokens)
+    return _term_matches(applic["topic"], qtokens)
 
 
 def recall_applicable(items: Sequence[Any], query: str, *, context: Any = None) -> List[Any]:

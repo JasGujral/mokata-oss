@@ -54,6 +54,10 @@ inspection, and wiring into other harnesses rather than writing code on its own.
 > use mokata *in* Claude Code (Claude as the brain, gated workflow), run **`mokata setup
 > claude`** (above). Why there are two ways:
 > [How mokata uses an LLM: harness vs CLI](concepts/execution-model.md).
+>
+> `mokata init` configures **this repo** (`.mokata/`); `mokata setup claude` wires **your agent**
+> (`.claude/`, and it runs `init` for you). Side-by-side, plus the upgrade runbook:
+> [Which setup command do I need?](how-to/which-setup-command.md).
 
 <!-- mokata:directory-listing:start -->
 > ⏳ **Pending Claude plugin-directory approval.** A one-click Claude Code **plugin** is

@@ -5,7 +5,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "mokata-hook session-start --plugin-root \"${CLAUDE_PLUGIN_ROOT}\""
+            "shell": "bash",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" session-start --plugin-root \"${CLAUDE_PLUGIN_ROOT}\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" user-prompt-submit"
           }
         ]
       }
@@ -16,16 +28,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "mokata-hook secret-guard"
+            "shell": "bash",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" secret-guard"
           }
         ]
       },
       {
-        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "mokata-hook gate-guard"
+            "shell": "bash",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" gate-guard"
           }
         ]
       }
@@ -36,7 +50,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "mokata-hook dirty-track"
+            "shell": "bash",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" dirty-track"
           }
         ]
       }

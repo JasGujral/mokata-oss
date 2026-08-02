@@ -548,6 +548,13 @@ class BrainstormSession:
         `decisions` is the dormant AP-SD hook (GR.S2(m) precedent): None = recall-only; a structured
         `decisions[]` activates about_code enrichment. Returns the per-approach map."""
         rec = recall
+        epoch = ""
+        if memory_store is not None:
+            # DB.S7c2 STALE-REF — read the minting store's `index_epoch` ONCE, here, and stamp it
+            # onto every citation this pass records. One read, then N comparisons at approve time;
+            # `read_index_epoch` answers OFF on the SQLite floor, which leaves citations un-stamped.
+            from .memory.staleness import read_index_epoch
+            epoch = read_index_epoch(getattr(memory_store, "backend", None))
         if rec is None and memory_store is not None:
             # the SAME tiered recall channel the rest of brainstorm uses — never a second surface.
             rec = lambda q: [getattr(h, "item", h)                       # noqa: E731
@@ -561,7 +568,7 @@ class BrainstormSession:
                 dec = a.decisions
             self.prior_art[a.name] = run_prior_art(
                 a.name, a.targets, layer=layer, recall=rec, query=a.summary,
-                top_n=top_n, decisions=dec)
+                top_n=top_n, decisions=dec, index_epoch=epoch)
         self._log(f"assess prior art: {sorted(self.prior_art)}")
         return self.prior_art
 
@@ -676,7 +683,8 @@ class BrainstormSession:
     # --- the HARD-GATE ------------------------------------------------------
     def approve(self, approver: str, approach_name: str,
                 at: Optional[str] = None, *, graph_gate: Any = None,
-                prior_art_gate: Any = None) -> Approach:
+                prior_art_gate: Any = None, stale_ref_gate: Any = None,
+                code_anchor_gate: Any = None) -> Approach:
         """Explicitly approve one approach. This is the human gate the whole phase
         turns on; nothing downstream proceeds without it.
 
@@ -722,6 +730,22 @@ class BrainstormSession:
         # owns the degraded-radius refusal; this stage adds no duplicate refusal semantics).
         if prior_art_gate is not None and getattr(prior_art_gate, "refused", False):
             raise BrainstormGateError(prior_art_gate.render())
+        # DB.S7c2 STALE-REF — the chosen approach's prior-art CITATIONS must not have been minted
+        # against an older memory index (a `StaleRefOutcome`, computed by the caller via
+        # `govern.stale_ref_gate.brainstorm_stale_ref_gate`). Distinct from GR-PA above: that one
+        # asks whether the step ran, this one whether what it found is still current. Absent — a
+        # legacy caller, or the SQLite floor where STALE-REF is OFF — it is a no-op, byte-identical.
+        if stale_ref_gate is not None and getattr(stale_ref_gate, "refused", False):
+            raise BrainstormGateError(stale_ref_gate.render())
+        # H-6 S4 STALE-REF, the CODE-ANCHOR half — the chosen approach's prior-art citations must
+        # not be anchored to code that has MOVED since those decisions were recorded (a
+        # `CodeAnchorOutcome`, computed by the caller via
+        # `govern.code_anchor_gate.brainstorm_code_anchor_gate`). Its own id and its own message,
+        # distinct from the memory-handle half above: that one asks whether the memory INDEX moved
+        # under a citation, this one whether the CODE did. Absent — a legacy caller, or a repo with
+        # no recorded anchors — it is a no-op, byte-identical.
+        if code_anchor_gate is not None and getattr(code_anchor_gate, "refused", False):
+            raise BrainstormGateError(code_anchor_gate.render())
         self.chosen = chosen
         self.approved = True
         self.approver = approver

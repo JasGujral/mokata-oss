@@ -202,8 +202,11 @@ class EmittedCommandRoundTrip(unittest.TestCase):
         from mokata.mcp import tool_annotations as TA
         described = [s.name for s in REG.TOOLS if s.kind != TA.READ
                      and A.LIST_CMD in TA.description_for(s.kind, s.name, s.fn.__doc__ or "")]
-        self.assertEqual(len(described), 20,
-                         f"all twenty gated writes must still name the listing: {described}")
+        # 20 -> 21 at M-4/R5 (0.0.16): `consolidate`, the drafted-summary submit. The CONTRACT is
+        # unchanged and it satisfies it — a new gated write inherits the `--list` pointer from
+        # `description_for`, which is exactly what this count is here to keep true.
+        self.assertEqual(len(described), 21,
+                         f"all twenty-one gated writes must still name the listing: {described}")
         with _Repo() as r:
             r.propose()
             code, _out = _run(shlex.split(A.LIST_CMD)[1:] + ["--path", r.path])

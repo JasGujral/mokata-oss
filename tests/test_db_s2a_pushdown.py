@@ -17,10 +17,12 @@ Proven here:
   * perf SHAPE (structural, not wall-clock) — with a filter given the SQL carries a WHERE on the
     column and the backend materializes only matching rows.
 
-Scope note: the v3 scope/precedence columns are NOT touched here. No write path populates them
-(every row carries the DDL default while the authoritative value lives in the doc), so filtering on
-them would return wrong rows. Activating them needs a write-path backfill + schema-min bump —
-that is DB.S2b, deferred.
+Scope note: the v3 scope/precedence columns are not filtered on HERE — an unscoped `all()` must
+never acquire a scope predicate — but they are no longer inert. DB.S2b populated them at the write
+layer, backfilled the rows that predate it, bumped the schema floor to v3 and activated the scope
+predicate for callers that pass a scope path. Its semantics live in
+tests/test_db_s2b_scope_pushdown.py; what this file still pins is that the mtype/status pushdown is
+unchanged and that scope filtering stays opt-in.
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
@@ -111,7 +113,12 @@ class _PgShim:
                    id TEXT UNIQUE, mtype TEXT, subject TEXT, status TEXT, doc TEXT,
                    project TEXT, revision INTEGER NOT NULL DEFAULT 1,
                    scope_level TEXT NOT NULL DEFAULT 'personal', scope_id TEXT,
-                   pin INTEGER NOT NULL DEFAULT 0, priority INTEGER NOT NULL DEFAULT 0
+                   pin INTEGER NOT NULL DEFAULT 0, priority INTEGER NOT NULL DEFAULT 0,
+                   -- DB.S5 (v4): the shim mirrors the shared DDL, so it must carry the
+                   -- lifecycle columns `teamdb.provision_sql` provisions or `put()` fails here
+                   -- for a reason that has nothing to do with what this file tests.
+                   valid_from TEXT, valid_to TEXT,
+                   hit_count INTEGER NOT NULL DEFAULT 0, last_recalled_at TEXT
                )"""
         )
         self.sql_log = []
@@ -455,10 +462,14 @@ class NonSqlBackendsUnchangedTest(unittest.TestCase):
 
 # ==================================================== 7 · scope columns deliberately untouched
 class ScopeColumnsNotPushedTest(unittest.TestCase):
-    """DB.S2b's guard rail. No write path populates the v3 scope columns, so a row's `scope_level`
-    column is the DDL default regardless of what its doc says. If a future edit pushes scope into
-    the WHERE without first fixing the write path, this test fails LOUDLY rather than shipping a
-    cross-tenant visibility bug."""
+    """The DB.S2a/DB.S2b boundary, kept as a pin on BOTH sides.
+
+    DB.S2a deferred scope filtering because no write path populated the v3 columns — a row's
+    `scope_level` was the DDL default whatever its doc said. DB.S2b closed that: the write path
+    populates them, so the second test below now asserts what it was written to anticipate (the
+    column and the doc agree), and the first still guards the other half — an UNSCOPED read must
+    not acquire a scope predicate by accident. Scope filtering happens only when a caller asks for
+    it; the full DB.S2b semantics live in tests/test_db_s2b_scope_pushdown.py."""
 
     def test_db_s2a_does_not_filter_on_scope_columns(self):
         backend, shim = _seeded_pg(_corpus())
@@ -468,10 +479,13 @@ class ScopeColumnsNotPushedTest(unittest.TestCase):
         for column in ("scope_level", "scope_id", "pin", "priority"):
             self.assertNotIn(column, sql)
 
-    def test_db_s2a_scope_column_is_stale_versus_the_doc(self):
-        """The evidence for the deferral, pinned as a test: a team-scoped item's DOC says `team`
-        while its stored COLUMN still says `personal`. Filtering on the column would lose the row.
-        When DB.S2b fixes the write path, this test should be updated to assert they AGREE."""
+    def test_db_s2b_scope_column_now_matches_the_doc(self):
+        """The deferral's evidence, inverted — this is the DB.S2b projection property.
+
+        The column used to read `personal` while the doc read `team`. Filtering on it would have
+        lost the row; that gap was the entire reason DB.S2a pushed only mtype/status. The write
+        path now populates the column in the same statement as the doc, so the two agree and the
+        column is safe to filter on."""
         shim = _PgShim()
         backend = PostgresBackend(project="proj-a", conn=shim)
         item = MemoryItem(subject="team-rule", value="v", mtype=PERSISTENT,
@@ -479,10 +493,13 @@ class ScopeColumnsNotPushedTest(unittest.TestCase):
         backend.put(item)
 
         row = shim._c.execute(
-            "SELECT scope_level, doc FROM mokata_memory WHERE id=?", ("team-rule",)).fetchone()
-        self.assertEqual(row[0], "personal")                    # the column: never written
-        self.assertEqual(json.loads(row[1])["scope_level"], "team")   # the doc: authoritative
-        # ...and the item still reads back correctly, because reads use the doc.
+            "SELECT scope_level, scope_id, doc FROM mokata_memory WHERE id=?",
+            ("team-rule",)).fetchone()
+        doc = json.loads(row[2])
+        self.assertEqual(row[0], "team")                        # the column: now written
+        self.assertEqual(row[0], doc["scope_level"])            # ...and it matches the doc
+        self.assertEqual(row[1], doc["scope_id"])
+        # ...and the item still reads back correctly, because reads still use the doc.
         self.assertEqual(backend.get("team-rule").scope_level, "team")
 
 

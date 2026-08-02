@@ -180,6 +180,11 @@ def _run_one(task: Task, choice: ExecutionChoice, runner, reviewer, ledger,
     tracker.add(f"task:{task.id}", input_tokens=res.input_tokens,
                 output_tokens=res.output_tokens)
     if ledger is not None:
+        # `review_passed` here is the E3 two-stage review of ONE SUBAGENT'S task output, and it is
+        # DISPLAY-ONLY: it feeds the lane view / dashboard (`progress._subagent_state`) and nothing
+        # else. It is NOT ship-gating evidence and no gate reads it. The single ship-gating review
+        # truth is the persisted `review_verdict` progress event (REVIEW-FIX.R3) — written by
+        # `progress_events.record_review_verdict`, read by `ship_review_gate`.
         ledger.record("subagent", task=task.id, ok=res.ok, isolated=res.isolated,
                       review_passed=(res.review.passed if res.review else None))
     return res

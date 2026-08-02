@@ -1,10 +1,15 @@
 """Stage 34 — `ship` (finish) skill + clean-test-baseline check.
 
 Both jsonschema states. `ship` is in the catalog (mokata · prefix, grounding clause);
-`mokata run ship` emits the verify/summarize/present-options protocol; readiness BLOCKS when
-tests/ACs/review are unsatisfied and is READY when they're met; the protocol never instructs
-an unconfirmed merge/PR/delete; the finish decision is recorded in the ledger; the baseline
-check reports green/red and degrades cleanly with no command.
+`mokata run ship` emits the verify/summarize/present-options protocol; the protocol never
+instructs an unconfirmed merge/PR/delete; the finish decision is recorded in the ledger; the
+baseline check reports green/red and degrades cleanly with no command.
+
+REVIEW-FIX.R3 (2026-07-27) — the `check_ship_readiness` coverage that lived here is GONE with
+the function itself: it was an orphaned second answer to "has review passed?" off a
+caller-supplied boolean. The ONE ship-gating truth is the persisted `review_verdict` progress
+event, covered by `test_stage6r_independent_review` / `test_review_fix_r1` / `_r2`, and the
+deletion itself is pinned by `test_review_fix_r3`. Everything else in this file is untouched.
 """
 
 import io
@@ -26,33 +31,18 @@ from mokata.cli import main
 from mokata.config import Surface
 from mokata.engine import (
     LANDING_OPTIONS,
-    AcceptanceCriterion,
-    Spec,
-    check_ship_readiness,
     record_finish_decision,
 )
-from mokata.engine.spec_gate import SPEC_STATE_KEY
 from mokata.govern import AuditLedger
 from mokata.init import init_repo
 from mokata.manifest import Manifest
 from mokata.skills import command_markdown, get_skill, skill_names
-from mokata.state import StateStore
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _silent(_):
     pass
-
-
-def _store(d):
-    return StateStore(os.path.join(d, "state"))
-
-
-def _persist_spec(store, n=2):
-    spec = Spec(title="x", criteria=[AcceptanceCriterion(f"AC-{i}", f"c{i}")
-                                     for i in range(1, n + 1)])
-    store.write(SPEC_STATE_KEY, spec.to_dict())
 
 
 # ----------------------------------------------------------------- the skill
@@ -87,51 +77,16 @@ class TestShipSkill(unittest.TestCase):
             self.assertEqual(fh.read(), command_markdown(get_skill("ship")))
 
 
-# ----------------------------------------------------------------- readiness
+# ----------------------------------------------------------------- the landing decision
 
-class TestShipReadiness(unittest.TestCase):
-    def test_blocks_when_tests_red(self):
+class TestFinishDecision(unittest.TestCase):
+    def test_finish_is_audited(self):
         with tempfile.TemporaryDirectory() as d:
-            store = _store(d)
-            _persist_spec(store)
-            r = check_ship_readiness(store, tests_green=False, review_passed=True)
-            self.assertFalse(r.ready)
-            self.assertTrue(any("test suite" in b for b in r.blockers))
-
-    def test_blocks_when_review_not_passed(self):
-        with tempfile.TemporaryDirectory() as d:
-            store = _store(d)
-            _persist_spec(store)
-            r = check_ship_readiness(store, tests_green=True, review_passed=False)
-            self.assertFalse(r.ready)
-            self.assertTrue(any("review" in b for b in r.blockers))
-
-    def test_blocks_when_no_spec(self):
-        with tempfile.TemporaryDirectory() as d:
-            r = check_ship_readiness(_store(d), tests_green=True, review_passed=True)
-            self.assertFalse(r.ready)
-            self.assertTrue(any("spec" in b for b in r.blockers))
-
-    def test_ready_when_all_satisfied(self):
-        with tempfile.TemporaryDirectory() as d:
-            store = _store(d)
-            _persist_spec(store, n=3)
-            r = check_ship_readiness(store, tests_green=True, review_passed=True)
-            self.assertTrue(r.ready)
-            self.assertEqual(r.blockers, [])
-            self.assertEqual(r.spec_acs, 3)
-
-    def test_readiness_and_finish_are_audited(self):
-        with tempfile.TemporaryDirectory() as d:
-            store = _store(d)
-            _persist_spec(store)
             led = AuditLedger(os.path.join(d, "ledger.jsonl"))
-            check_ship_readiness(store, tests_green=True, review_passed=True, ledger=led)
             dec = record_finish_decision(led, "keep", approve=True, note="WIP branch")
             self.assertEqual(dec.choice, "keep")
             self.assertTrue(dec.approved)
             kinds = [e["kind"] for e in led.entries()]
-            self.assertIn("ship", kinds)        # readiness recorded
             self.assertIn("finish", kinds)      # landing decision recorded
             finish = [e for e in led.entries() if e["kind"] == "finish"][-1]
             self.assertEqual(finish["choice"], "keep")

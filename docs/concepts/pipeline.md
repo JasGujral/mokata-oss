@@ -98,7 +98,7 @@ re-confirmed, ledgered). The full model — including what the hook does *not* p
 **Spec before code, enforced.** The `spec-persisted` gate is enforced **twice over**: as a
 precondition on the implementation entry points (`/develop`, `/test`, and
 `mokata run develop`/`test`), firing *ahead of* the test gate; and by the hook, on any native
-write. Both block unless a saved spec with ≥1 acceptance criterion exists (`emitted_spec.json`,
+write. Both block unless a saved spec with ≥1 acceptance criterion exists (`emitted_spec__<run_id>.json` — one spec per run,
 written by the human-gated `emit` only after the completeness gate passes). Jump straight to
 `develop` with no saved spec and mokata stops with a clear next step — *"no saved spec — draft
 and emit it first (`/spec`)"* — and logs the decision. So "spec written **and** saved

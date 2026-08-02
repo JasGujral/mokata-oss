@@ -106,11 +106,17 @@ class TestImplementationPromptsClause(unittest.TestCase):
         return prompt, template
 
     def test_develop_and_test_say_emit_spec_first(self):
+        # HANDOFF.G1 (0.0.16): this used to assert the literal `emitted_spec.json` — a filename that
+        # does not exist. The real artifact is run-scoped (`emitted_spec__<run_id>.json`), so the
+        # instruction now names the INSTRUMENT that fetches it (`spec_show`) instead of a path an
+        # agent can only fail to open. The precondition itself (a persisted spec, or STOP) is
+        # unchanged and still asserted below.
         for name in ("develop", "test"):
             prompt, template = self._both(name)
             for text in (prompt, template):
                 low = text.lower()
-                self.assertIn("emitted_spec.json", low)
+                self.assertNotIn("emitted_spec.json", low)
+                self.assertIn("spec_show", low)
                 self.assertIn("emit the spec first", low.replace("produce + ", ""))
                 self.assertIn("stop", low)
             # the rendered template also carries the spec-persisted precondition section

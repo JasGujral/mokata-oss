@@ -70,8 +70,12 @@ class _FakeMemPg:
                          "CREATE UNIQUE INDEX")):
             return _Cur()
         if h.startswith("INSERT"):
-            # memory: (id,mtype,subject,status,doc,project) · vector adds embedding before project
-            id_, doc, project = params[0], params[4], params[-1]
+            # memory: (id,mtype,subject,status,doc,project) · vector adds embedding before project.
+            # DB.S2b appends the four scope/precedence columns AFTER project on the memory insert,
+            # so `project` is no longer the last parameter there — read it by NAME position rather
+            # than assuming the tail, or this fake silently records `priority` as the project.
+            id_, doc = params[0], params[4]
+            project = params[5] if "SCOPE_LEVEL" in h else params[-1]
             self.rows[id_] = (doc, project)
             return _Cur(rowcount=1)
         if h.startswith("SELECT DISTINCT PROJECT"):

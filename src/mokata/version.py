@@ -12,7 +12,7 @@ import json
 import os
 import platform
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional
 
 from . import __version__
@@ -60,8 +60,12 @@ def detect_install_method(home: Optional[str] = None,
         src = os.path.abspath(os.path.join(root, "src"))
         if pkg == os.path.join(src, "mokata") or pkg.startswith(src + os.sep):
             return "plugin"
-    if (os.sep + "site-packages" + os.sep) in pkg or \
-            (os.sep + "dist-packages" + os.sep) in pkg:
+    # SELF-PROTECT (0.0.16 stage 3): this WAS the codebase's only site-/dist-packages predicate,
+    # inline and cosmetic. It is now single-sourced in `selfprotect.in_installed_tree`, where it is
+    # load-bearing (rule (a) of the non-overridable write block) — one predicate, two callers, so
+    # the label a user reads and the tree the gate refuses can never drift apart.
+    from .selfprotect import in_installed_tree
+    if in_installed_tree(pkg):
         return "pip"
     return "source"
 
@@ -150,14 +154,39 @@ def check_for_update(current: Optional[str] = None, *,
 
 
 # --- human-gated upgrade --------------------------------------------------------
+# DOC-ONBOARD — THE TAIL. Installing the new code is not upgrading mokata: `pip install -U`
+# replaces the package and leaves `.claude/settings.json` exactly as the PREVIOUS version wrote
+# it, so a hook added — or a matcher widened — since the user's last `mokata setup claude` is
+# silently absent. The upgrade is not finished until the wiring is refreshed and verified, so
+# these steps are part of the recipe, not an afterthought a user is expected to know.
+#
+# They are declared here, once, and used twice: printed for a hand-upgrader (`upgrade_steps`)
+# and RUN for the one-command story (`finish_upgrade`). Same steps, same order, no divergence
+# between what we document and what we do.
+UPGRADE_TAIL_STEPS = (
+    "mokata setup claude   # refresh the harness wiring (previews the change, asks first)",
+    "mokata doctor --wiring   # confirm the gates resolve and the wiring is current",
+)
+
+# The plugin route gets the VERIFY step only. `mokata setup claude` is not its remedy — a plugin
+# install is rewired by the plugin update itself — and printing a fix that does nothing for the
+# reader is worse than printing none.
+PLUGIN_TAIL_STEPS = (
+    "mokata doctor --wiring   # confirm the plugin's hooks resolve after the update",
+)
+
+
 def upgrade_steps(method: str) -> List[str]:
-    """The upgrade recipe for an install method (display-only; the CLI gates the run)."""
+    """The upgrade recipe for an install method (display-only; the CLI gates the run).
+
+    Every route ends with the same question answered — is the wiring current? — because that
+    is the half of an upgrade that used to be left to the user to know about."""
     if method == "plugin":
-        return list(PLUGIN_UPDATE_STEPS)
+        return list(PLUGIN_UPDATE_STEPS) + list(PLUGIN_TAIL_STEPS)
     if method == "source":
         return ["git pull   # you're on a source checkout",
-                "pip install -e .   # reinstall the editable package"]
-    return ["pip install -U mokata"]
+                "pip install -e .   # reinstall the editable package"] + list(UPGRADE_TAIL_STEPS)
+    return ["pip install -U mokata"] + list(UPGRADE_TAIL_STEPS)
 
 
 def pip_upgrade_command() -> List[str]:
@@ -171,3 +200,78 @@ def run_pip_upgrade(runner: Optional[Callable[[List[str]], Any]] = None) -> List
     runner = runner or (lambda c: __import__("subprocess").run(c, check=False))
     runner(cmd)
     return cmd
+
+
+# --- DOC-ONBOARD: finishing the job ---------------------------------------------
+@dataclass
+class UpgradeTail:
+    """What the post-install half of the upgrade actually did."""
+    commands: List[List[str]] = field(default_factory=list)
+    wiring_refreshed: bool = False
+    doctor_ok: Optional[bool] = None      # None = never ran (the refresh was declined)
+
+
+def upgrade_tail_commands(root: str = ".", *, scope: str = "project",
+                          assume_yes: bool = False) -> List[List[str]]:
+    """The two commands that finish an upgrade, spawned as SUBPROCESSES of the NEW mokata.
+
+    This indirection is the whole correctness of the feature. `pip install -U` has just
+    replaced the package on disk, but THIS process still holds the OLD modules in memory —
+    every matcher, every hook spec, every path resolver. Re-wiring in-process would faithfully
+    write the wiring of the version the user just upgraded AWAY from, which is worse than not
+    re-wiring at all: it would look done and leave them stale. `-m mokata` re-enters through
+    the freshly-installed code.
+
+    `--yes` propagates only when the human passed it to `mokata upgrade`. Without it, the
+    spawned `setup` shows its preview diff and asks — the same gate, unchanged, and the only
+    thing standing between an upgrade and a settings.json write."""
+    base = [sys.executable, "-m", "mokata"]
+    setup_cmd = base + ["setup", "claude", "--path", str(root), "--scope", scope]
+    if assume_yes:
+        setup_cmd.append("--yes")
+    return [setup_cmd, base + ["doctor", "--wiring", "--path", str(root)]]
+
+
+def _default_tail_runner(cmd: List[str]) -> int:
+    """Run a tail step with the parent's stdio INHERITED — so `setup`'s preview diff prints to
+    the user's terminal and its y/N gate reads the user's keyboard. A captured runner here would
+    silently convert the human gate into a fail-closed decline.
+
+    The flush is not cosmetic. Our own `print` output sits in Python's buffer while the child
+    writes straight to the file descriptor, so without it the line explaining WHY a preview diff
+    is about to appear arrives after the diff it was introducing."""
+    import subprocess
+    sys.stdout.flush()
+    sys.stderr.flush()
+    return subprocess.run(cmd, check=False).returncode
+
+
+def finish_upgrade(root: str = ".", *, scope: str = "project", assume_yes: bool = False,
+                   runner: Optional[Callable[[List[str]], int]] = None,
+                   out: Optional[Callable[[str], None]] = None) -> UpgradeTail:
+    """Refresh the harness wiring (human-gated), then verify it — the half of `mokata upgrade`
+    that used to be homework.
+
+    Ordering is deliberate: a DECLINED refresh skips the verification entirely. Nothing was
+    written, so there is nothing new to check, and running doctor anyway would report the stale
+    wiring the user just chose to keep as though it were a fresh failure. They are told the
+    wiring is untouched and given the one command that changes that."""
+    emit = out or print
+    run = runner or _default_tail_runner
+    setup_cmd, doctor_cmd = upgrade_tail_commands(root, scope=scope, assume_yes=assume_yes)
+    tail = UpgradeTail()
+
+    emit("")
+    emit("Finishing the upgrade — the new code is installed; the harness wiring is not yet.")
+    tail.commands.append(setup_cmd)
+    if run(setup_cmd) != 0:
+        emit("harness wiring NOT refreshed (declined, or setup reported a problem) — your "
+             "existing wiring is untouched. Run `mokata setup claude` when you're ready.")
+        return tail
+    tail.wiring_refreshed = True
+
+    tail.commands.append(doctor_cmd)
+    tail.doctor_ok = run(doctor_cmd) == 0
+    if not tail.doctor_ok:
+        emit("the wiring check above found problems — fix them before relying on the gates.")
+    return tail

@@ -123,10 +123,23 @@ def cmd_memory(args: argparse.Namespace) -> int:
             print("memory: disabled for this profile (no memory types enabled).")
             return 0
         ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+        # M-4/R5 PHASE 2 — the agent submits a summary it drafted for one session. Handled before
+        # the listing because it is a different verb on the same noun: `--draft` SUBMITS, the bare
+        # command LISTS.
+        if getattr(args, "draft", None):
+            return _memory_consolidate_draft(store, args, ledger)
         proposals = store.propose_consolidations(ledger=ledger)
+        # M-4/R5 PHASE 1 — the DRAFTING REQUEST, opt-in. Answered BEFORE the empty-case prose
+        # below: this caller is a machine parsing JSON, and handing it an English sentence when
+        # there happens to be nothing to draft is a parse error, not an answer. Nothing to draft is
+        # a valid answer and must be said in the same shape as everything else.
+        if getattr(args, "drafting_request", False):
+            return _memory_consolidate_drafting_request(proposals)
         if not proposals:
             print("memory consolidate: nothing to propose (memory is already consolidated).")
             return 0
+        # The bare command's output below is untouched: a human at a terminal cannot draft a
+        # summary and has no use for a dump of raw turns, so the turns are shown only on request.
         print(f"memory consolidate — {len(proposals)} proposal(s) (PROPOSAL-ONLY; nothing "
               f"changes unless you approve each via the gated apply path):")
         for p in proposals:
@@ -283,6 +296,85 @@ def _memory_edit(store, args) -> int:
     return 0 if res.changed or not res.aborted else 1
 
 
+def _memory_consolidate_drafting_request(proposals) -> int:
+    """M-4/R5 PHASE 1 — print the SUMMARIZE proposals WITH the turns to draft from, as JSON.
+
+    JSON because the consumer is the harness agent, not a human: it has to read the turns back
+    accurately and then submit a draft keyed to the right session, and a prose dump invites both
+    mistakes. The instruction rides IN the payload from the single shared constant, so the CLI and
+    the MCP tool cannot drift into two differently-worded asks."""
+    import json
+
+    from ..memory.consolidation import DRAFTING_INSTRUCTION, drafting_request
+
+    requests = drafting_request(proposals)
+    print(json.dumps({"instruction": DRAFTING_INSTRUCTION, "drafting_requests": requests},
+                     indent=2))
+    return 0
+
+
+def _memory_consolidate_draft(store, args, ledger) -> int:
+    """M-4/R5 PHASE 2 — submit an agent-DRAFTED summary for one session, through the gated apply.
+
+    THE FIRST PRODUCT CALLER of `apply_consolidation`: before this the gated apply existed and was
+    reachable only from library code, so no consolidation of any kind could actually be applied.
+
+    The submitted text is injected as a DRAFTER rather than written onto an item by hand, so it
+    travels the one path a drafted summary has (`constant_drafter` explains why). Then the proposal
+    is applied exactly as `_memory_edit` applies a healing proposal: render the diff, let the human
+    choose, and let `apply_consolidation` do the secret-scan + WriteGate + ledger.
+
+    The agent CANNOT approve its own draft. `--yes` is deliberately NOT honoured here (it is on the
+    parser for the other memory actions): a model that could pass it would be minting the consent
+    for content it just wrote, which is precisely what `approval.py` forbids — the model may
+    reference an approval, never mint one. The human answers at the TTY, or nothing is written."""
+    session = args.draft
+    value = getattr(args, "value", None)
+    if not value:
+        print("error: `memory consolidate --draft <session>` requires --value \"<summary>\" "
+              "(the summary YOU drafted; mokata does not write it)", file=sys.stderr)
+        return 2
+
+    from ..memory.consolidation import constant_drafter, find_summarize
+
+    proposals = store.propose_consolidations(ledger=ledger,
+                                             drafter=constant_drafter(session, value))
+    match = find_summarize(proposals, session)
+    if match is None:
+        print(f"error: no summarize proposal for session '{session}' — run "
+              f"`mokata memory consolidate` to see what is proposed", file=sys.stderr)
+        return 1
+
+    from ..prompt import read_approve_edit_reject
+    resp = read_approve_edit_reject(store.render_consolidation(match), match.new.value)
+    if not resp.is_change:
+        print(f"memory consolidate: '{session}' unchanged (no change).")
+        return 0
+    if resp.action == "edit":
+        # The human rewrote the agent's draft at the gate. Re-derive through the SAME seam so the
+        # human's text is typed and clamped identically — an edited draft is still a drafted
+        # summary, and must not enter by a different door than the one it was proposed through.
+        if not (resp.value or "").strip():
+            print(f"memory consolidate: '{session}' unchanged (empty edit).")
+            return 0
+        edited_proposals = store.propose_consolidations(
+            drafter=constant_drafter(session, resp.value))
+        edited_match = find_summarize(edited_proposals, session)
+        if edited_match is None or edited_match.new is None:
+            # REFUSE rather than fall through. `apply_consolidation(edited=None)` would store
+            # `match.new` — the AGENT's draft — while the human believes they replaced it, which is
+            # the one outcome an edit at the gate must never produce.
+            print(f"error: could not stage your edited summary for '{session}'; nothing was "
+                  f"written", file=sys.stderr)
+            return 1
+        res = store.apply_consolidation(match, "edit", edited=edited_match.new,
+                                        assume_yes=True, ledger=ledger)
+    else:
+        res = store.apply_consolidation(match, "approve", assume_yes=True, ledger=ledger)
+    print(res.message if res.message else ("applied" if res.changed else "no change"))
+    return 0 if res.changed or not res.aborted else 1
+
+
 def _memory_promote(store, args) -> int:
     """TM.S7 — `mokata memory promote <id> --to advisory|soft|hard`: the ONE gated moment that
     changes a rule's ENFORCEMENT binding (doc 62 §4). Binding only — the rule text is untouched;
@@ -367,7 +459,17 @@ def register(sub, common):
                        help="filter the view to one kind (rule/guardrail/best-practice/"
                             "context/reference/decision), or retype an entry on `edit`")
     p_mem.add_argument("--value", default=None,
-                       help="new value (with `edit`)")
+                       help="new value (with `edit`), or the summary you drafted (with "
+                            "`consolidate --draft`)")
+    # M-4/R5 — the two-phase drafted-summary flow. `--drafting-request` is phase 1 (what should be
+    # drafted, with the turns); `--draft` is phase 2 (here is the draft). Both are opt-in, so the
+    # bare `mokata memory consolidate` a human runs is byte-identical to before.
+    p_mem.add_argument("--drafting-request", dest="drafting_request", action="store_true",
+                       help="with `consolidate`: emit the summarize proposals AND the turns to "
+                            "draft from, as JSON (for the agent — mokata never drafts itself)")
+    p_mem.add_argument("--draft", metavar="SESSION", default=None,
+                       help="with `consolidate`: submit the summary you drafted for SESSION "
+                            "(needs --value); human-gated before anything is written")
     p_mem.add_argument("--to", default=None,
                        help="migrate destination backend (sqlite|obsidian|postgres|pgvector), or the "
                             "target enforcement (advisory|soft|hard) with `promote`")

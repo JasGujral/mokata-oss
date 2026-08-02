@@ -21,6 +21,7 @@ Stage 1 commands (the conductor everything else plugs into):
   coverage   A6  capability coverage + unmet gaps + overlaps
   mcp        H4  discover MCP servers and map them to roles
   doctor     K5  diagnose the manifest/config
+  secret     I1  manage secret-scan ignores (entropy-layer false positives only)
   baseline       report the test suite green/red at baseline (degrade-clean)
   config     K1  get/set backend config in the manifest (set is human-gated)
   reset      K6  remove mokata state (uninstall / reset)
@@ -55,7 +56,7 @@ from .config import Surface
 from .cli_commands import (
     setup, core, knowledge, memory, collab, mode, sync, skills, rules, index, mcp, diagnostics,
     distribution, reset, pipeline, runviews, plan, menu, docs, docsync, gate, approve, spec,
-    graph, migrate,
+    graph, migrate, secret,
 )
 from .cli_commands._common import (
     _load_surface, _review_scope, _backend_projects, _SCOPE_CURRENT, _cli_ask, _profile_for,
@@ -155,6 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
     gate.register(sub, common)
     approve.register(sub, common)
     spec.register(sub, common)
+    secret.register(sub, common)
 
     return parser
 

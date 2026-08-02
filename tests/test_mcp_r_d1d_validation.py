@@ -175,8 +175,11 @@ class TestQueryKindEnum(unittest.TestCase):
         # Grounded, not hard-coded: QUERY_KINDS from the knowledge layer + `semantic`, which
         # `run_query` routes itself. A drift in either is a failure here, not a runtime surprise.
         self.assertEqual(TR.QUERY_TOOL_KINDS, tuple(QUERY_KINDS) + ("semantic",))
+        # CRG-NAV added the two NAVIGATION kinds (`defs`/`refs`) to the grounded set — the enum
+        # follows QUERY_KINDS, which is exactly why no new MCP tool was needed for them.
         self.assertEqual(tuple(QUERY_KINDS),
-                         ("callers", "callees", "implementers", "imports", "blast_radius"))
+                         ("callers", "callees", "implementers", "imports", "blast_radius",
+                          "defs", "refs"))
 
     def test_mcp_r_d1d_query_bad_kind(self):
         # THE headline: a bad enum comes back as a structured refusal naming the field and the real

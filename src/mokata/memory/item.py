@@ -116,6 +116,13 @@ STALE = "stale"
 # two statuses are only the storage-lifecycle mirror that keeps un-published drafts out of recall.
 PROPOSED = "proposed"
 REJECTED = "rejected"
+# DB.S5 — the item left the working set because a human APPROVED a budget sweep's archival
+# proposal. It is a status, NOT a deletion: the row stays, the value stays, the provenance stays,
+# and `valid_to` records when the window closed. Distinct from SUPERSEDED (something replaced it)
+# and from STALE (its TTL elapsed and it may be wrong) — an archived item is still TRUE, it is just
+# no longer hot enough to carry in the working set. That distinction is what makes un-archiving a
+# coherent operation later.
+ARCHIVED = "archived"
 
 # Default top-k for by-relevance retrieval (recall_relevant / jit_recall / semantic_search /
 # episodic search) — frugal (P11): retrieval returns a small ranked set, never the corpus.
@@ -174,7 +181,10 @@ DOC_VERSION_KEY = "schema_version"
 DOC_KEYS = frozenset({
     "id", "subject", "value", "mtype", "status", "kind", "provenance", "expires_at",
     "supersedes", "depends_on", "scope_level", "scope_id", "pin", "priority", "enforcement",
-    "applicability", "review", "about_code", DOC_VERSION_KEY,
+    "applicability", "review", "about_code", "derives_from", "valid_from", "valid_to",
+    # M-1/R9 — the consent chain (see `MemoryItem.approved_by`).
+    "approved_by", "approved_at", "approval_ledger_id",
+    DOC_VERSION_KEY,
 })
 
 # The degrade subsystem key (once-per-session notice) — the `memory-*` family memory/tiered.py
@@ -214,6 +224,25 @@ def doc_version(d: Dict[str, Any]) -> int:
     # `bool` is an `int` in Python — `True` is not a version.
     if isinstance(raw, bool) or not isinstance(raw, int) or raw < LEGACY_DOC_VERSION:
         return UNREADABLE_DOC_VERSION
+    return raw
+
+
+def approval_ledger_id_of(raw: Any) -> Optional[int]:
+    """M-1/R9 — the ledger id `raw` names, or None when it names none we can join on.
+
+    Only a real `int` survives. Two exclusions, both deliberate and both copied from
+    `team_journal._approval_key`, which answers the same question about the same value on the
+    journal side (the two must not drift about what "an approval id" is):
+
+      * `bool` — `True == 1` in Python, so a stray flag would silently read as approval #1;
+      * everything else (`None`, `""`, `"floor-recovery"` — the journal's recovery sentinel) — a
+        value that cannot index the ledger is not an approval, and coercing it to one would put a
+        joinable-looking id on an item whose approval nobody can look up.
+
+    Unknown stays None. This function never invents an id, and there is no path that does.
+    """
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return None
     return raw
 
 
@@ -308,9 +337,90 @@ class MemoryItem:
     # TM.S11a — the LIGHTWEIGHT `about_code` link (doc 55 K3 minimal): the code symbols/files this
     # decision or rule CONCERNS. It lets brainstorm's blast-radius lens union code impact with the
     # team DECISIONS an approach touches ("affected team decisions"). A plain list of strings in the
-    # item JSON — NO DDL, NO typed-edge graph (the full graph-native edge model is 0.1.3). Empty
-    # `[]` for every item that names no code, so legacy items round-trip byte-identically.
+    # item JSON. Empty `[]` for every item that names no code, so legacy items round-trip
+    # byte-identically.
+    #
+    # DB.S7a (0.0.16) amended the second half of that sentence, which used to read "NO DDL, NO
+    # typed-edge graph (the full graph-native edge model is 0.1.3)". The SUBSTRATE landed early:
+    # `memory/edges.py` + `memory_edges` / `mokata_memory_edges` now hold this field, `supersedes`
+    # and `depends_on` as explicit typed, bi-temporal rows. What is still 0.1.3 is the FULL model —
+    # bounded traversal at recall (DB.S7b), edge-aware healing (DB.S7c), the five declared-but-
+    # unwired kinds, and the deprecation of these inline lists.
+    #
+    # Until then, and this is the contract that matters to anyone reading this dataclass: **these
+    # three inline fields remain AUTHORITATIVE.** The edge rows are a DERIVED PROJECTION, rebuilt
+    # from exactly these lists by the same gated write that persists them (and re-derivable in full
+    # by the migration). One master per edge kind — an edge that disagreed with the list above it
+    # would be a bug in the projection, never a second opinion. `to_dict`/`from_dict` are therefore
+    # untouched by DB.S7a: the doc is the same bytes it was, and an export, a share and a teammate's
+    # read all still carry the relations in these fields.
     about_code: List[str] = field(default_factory=list)
+    # DERIVES-FROM PRODUCER (2026-08-01) — the items this one was DISTILLED OUT OF. Populated by
+    # exactly one path: an approved SUMMARIZE consolidation, which lands a new summary item and
+    # knows precisely which turns it summarized (`ConsolidationProposal.olds`).
+    #
+    # It is a FOURTH inline list on the same terms as the three above, and deliberately so rather
+    # than as a new mechanism: `edges._ITEM_FIELD` wires an edge kind by naming a persisted
+    # doc-JSON field, so a kind with no field has no producer and cannot be anything but inert.
+    # `derives_from` was the one declared-but-unwired kind with a real producer already in the
+    # codebase and NO open design question — `contradicts` is detected at read time and never
+    # persisted (wiring it would mean inventing edges), `used_by` needs K5 prompt linkage that is
+    # not built, and `decided_in`/`promoted_from` have no producer at all.
+    #
+    # Same contract as the three above, for the same reason: this list is AUTHORITATIVE and the
+    # edge row is a DERIVED PROJECTION rebuilt from it by the gated write that persists it.
+    # Additive and empty by default, so every legacy item round-trips byte-identically.
+    derives_from: List[str] = field(default_factory=list)
+    # DB.S5 — the BI-TEMPORAL VALIDITY WINDOW (doc 62 lifecycle; Graphiti's model). `valid_from` is
+    # when this fact STARTED being true, `valid_to` when it STOPPED; an OPEN window (`valid_to`
+    # empty) is the live state. This is a different axis from `provenance.created_at` (when we
+    # LEARNED it) and from `expires_at` (a one-sided TTL that drives C5 staleness) — all three
+    # coexist and none replaces another.
+    #
+    # It is what "never delete" is made of: an item leaving the working set has its window CLOSED
+    # (`lifecycle.close_window`), never its row removed, so the history of what was true when is
+    # retained and re-openable. Both default to "" — an item that has never had a window carries
+    # none, `valid_from` reads through to `created_at` (`lifecycle.open_window`) and an absent
+    # `valid_to` reads as OPEN, so EVERY pre-DB.S5 item is valid on upgrade without a single write.
+    valid_from: str = ""
+    valid_to: str = ""
+    # M-1/R9 — the item's own CONSENT CHAIN (doc 52 M-1: "the item carries its own consent chain").
+    # The `author` half of M-1 already ships as `provenance.author` (`store._stamp_author`); this is
+    # the approval half, and it answers a different question: `author` is who WROTE it, this is who
+    # let it LAND. On a poisoned proposal those are two different people, which is the whole of R9.
+    #
+    # **THE LEDGER IS AUTHORITATIVE; these three are a PROJECTION.** The consent chain already
+    # exists in full in the hash-chained audit ledger — `approval.record_redemption` records
+    # proposal-hash → who approved → which write, and the gate's own `write_gate`/`approved` entry
+    # is the seq everything joins on. Putting a copy on the item creates NO second source of truth
+    # for who approved what: `approval_ledger_id` is a JOIN KEY back to that ledger entry, and
+    # `approved_by`/`approved_at` are denormalised so a render (and an export, and a teammate
+    # reading a doc with no access to our ledger file) can show the chain without a lookup that may
+    # not be available. **On any disagreement the ledger wins** — the item copy is never evidence
+    # against it. This is exactly the call DB.S7a already made for edge rows, and the wording there
+    # is the contract here too (`team_journal._project_edges_for`): "the audit trail from a relation
+    # back to the human decision that created it is a column, not an inference".
+    #
+    # Written ONLY by the gated write that produced the ledger entry (`store._durable_write`, inside
+    # the WriteGate's commit closure, under its ledger hold). There is deliberately NO way to set
+    # them through `create()` below: an item cannot be CONSTRUCTED carrying an approval, only
+    # STAMPED by the act of being approved. Forging one means forging a ledger entry too.
+    #
+    # `approved_by` is the run identity (`team_audit.actor()` — the same source `_stamp_author`
+    # uses, never a second notion of "who"). It is ADVISORY and labelled as such wherever it is
+    # rendered: it is an environment-derived name, so it attributes rather than authenticates (doc
+    # 52 M-1: "attribution stays honestly labeled advisory (doc 48 C3), but advisory ≠ absent").
+    # `approval_ledger_id` is the element that is NOT advisory — it names a hash-chained entry.
+    #
+    # Empty/None means UNSET, and unset is the honest reading for every pre-M-1/R9 item: they were
+    # approved (P2 was never off), but by a write path that recorded no id ON THE ITEM, and this
+    # build will not invent one. Same shape DB.S5's validity window took — emitted always, empty
+    # when never set, never a forged claim. `Optional[int]`, and only a real int lands: the journal
+    # admits non-int ledger ids (`"floor-recovery"`) and `bool` is an `int` in Python, so both are
+    # coerced away rather than stored as an approval that can be joined to nothing.
+    approved_by: str = ""
+    approved_at: str = ""
+    approval_ledger_id: Optional[int] = None
     # D6 — the doc-schema version this item's JSON declares. A NEW item is born at the version this
     # build writes; a parsed one carries what its doc declared (see `doc_version`), which is how a
     # newer-than-us doc is recognised and refused at every write path.
@@ -351,6 +461,7 @@ class MemoryItem:
         applicability: Optional[Dict[str, Any]] = None,
         review: Optional[Dict[str, Any]] = None,
         about_code: Optional[List[str]] = None,
+        derives_from: Optional[List[str]] = None,
     ) -> "MemoryItem":
         created = created_at or now_iso()
         if expires_at is None and valid_for is not None:
@@ -378,6 +489,8 @@ class MemoryItem:
             review=dict(review or {}),
             # TM.S11a — about_code link; empty for every item that names no code symbols.
             about_code=[str(s) for s in (about_code or [])],
+            # The SUMMARIZE lineage; empty for every item that was not distilled out of others.
+            derives_from=[str(s) for s in (derives_from or [])],
         )
 
     @property
@@ -424,6 +537,20 @@ class MemoryItem:
             "applicability": dict(self.applicability),
             "review": dict(self.review),
             "about_code": list(self.about_code),
+            "derives_from": list(self.derives_from),
+            # DB.S5 — the bi-temporal window. Emitted always (like every other modelled field), and
+            # empty strings for an item that has never had one, so a legacy item's window is
+            # "unset" rather than a forged claim about when it started being true.
+            "valid_from": self.valid_from,
+            "valid_to": self.valid_to,
+            # M-1/R9 — the consent chain. Emitted always, on the same reasoning as the window
+            # above: empty/None says "this item carries no recorded approval", which is the TRUE
+            # statement about every pre-M-1/R9 item, where omitting the keys would leave a reader
+            # unable to tell "not approved through a recording path" from "this build is too old to
+            # have an opinion". Never derived from anything at render time.
+            "approved_by": self.approved_by,
+            "approved_at": self.approved_at,
+            "approval_ledger_id": self.approval_ledger_id,
             # D6 — the stamp. A legacy (unstamped) doc parses as v1 and GAINS it here on its first
             # legitimate write; a newer doc keeps the version it declared (it is never re-stamped
             # DOWN to ours — that would forge a claim this build has no right to make).
@@ -479,6 +606,20 @@ class MemoryItem:
             # TM.S11a — a pre-S11a doc has no `about_code` key → [] (names no code); a linked item
             # round-trips its symbol list verbatim.
             about_code=[str(s) for s in (d.get("about_code", []) or [])],
+            derives_from=[str(s) for s in (d.get("derives_from", []) or [])],
+            # DB.S5 — a pre-S5 doc has no validity keys → "" / "" → `lifecycle.is_open` reads it as
+            # OPEN and `lifecycle.open_window` reads its `created_at` as the window's start. The
+            # whole pre-DB.S5 corpus is therefore valid on upgrade with no migration write; a v4
+            # doc round-trips its window verbatim.
+            valid_from=str(d.get("valid_from") or ""),
+            valid_to=str(d.get("valid_to") or ""),
+            # M-1/R9 — a pre-stamping doc has no approval keys → "" / "" / None, which reads as
+            # "no recorded approval" everywhere and is never upgraded into one. The id goes through
+            # `approval_ledger_id_of`, so a hand-edited doc carrying `true` or `"floor-recovery"`
+            # lands as None rather than as a joinable-looking approval that resolves to nothing.
+            approved_by=str(d.get("approved_by") or ""),
+            approved_at=str(d.get("approved_at") or ""),
+            approval_ledger_id=approval_ledger_id_of(d.get("approval_ledger_id")),
             # D6 — what the doc DECLARES (absent → v1, the frozen legacy floor). Never coerced to
             # ours: an item must carry the truth about its own doc, or nothing downstream can
             # refuse to rewrite it.

@@ -558,7 +558,13 @@ _NAME_WRITERS = {"atomic_write_text", "atomic_write_bytes"}
 _ATTR_WRITERS = {"write_text", "write_bytes", "atomic_write_text", "atomic_write_bytes"}
 _SHUTIL_MUT = {"copy", "copy2", "copytree", "move", "rmtree"}
 _OS_MUT = {"remove", "unlink", "rename", "replace", "rmdir"}
-_BACKEND_MUT = {"put", "update", "delete"}
+# DB.S5 adds `record_usage` — the memory backends' usage-telemetry writer. It is listed HERE, with
+# the three governed mutators, on purpose: it does issue a real UPDATE against the durable store,
+# so the audit must SEE it and someone must classify it. Leaving it off this list would have let a
+# write on the read path stay invisible to the sweep, which is exactly the hole SI.6 exists to
+# close. Its classification (UNGATED_BY_DESIGN, transient run-state) is an answer the register
+# records, not one the detector assumes.
+_BACKEND_MUT = {"put", "update", "delete", "record_usage"}
 _BACKEND_BASES = {"backend", "dest", "source", "self"}
 
 # ---- register 1: GATED. The write executes inside a `commit=` callable handed to WriteGate.submit
@@ -597,10 +603,31 @@ GATED = {
                                  "mcp/tools_write.py:471",
     ("vault.py", "_save_index"): "vault index — written only from within the gated push/claim flows",
     ("govern/revert.py", "write"): "reached only via gated_reversible_write's commit closure",
+    ("govern/secret_ignore.py", "_commit"): "SECRET-IGNORE — WriteGate @govern/secret_ignore.py "
+        "(`_gated_write`, the sole writer of the version-controlled `.mokata/secret-ignores.json`; "
+        "both `add_ignore` and `remove_ignore` route through it). The gate secret-scans the "
+        "rendered store, so a secret pasted into `--reason` is hard-blocked; the store itself "
+        "carries only sha256 hashes, never the flagged literal.",
 }
 
 # ---- register 2: UNGATED BY DESIGN. Not a governed durable write. Each carries its reason.
 UNGATED_BY_DESIGN = {
+    ("memory/store.py", "recall_relevant"): "DB.S5 — the CALL SITE of the usage telemetry below "
+        "(`self.record_usage(...)` on the returned top-k). Registered separately from the writer "
+        "because the sweep sees a caller and a callee and both deserve an answer: this is the read "
+        "path that STAMPS, and it is ungated for the same reason the writer is (transient "
+        "run-state, no approved content touched — see `memory/store.py:record_usage`). The stamp "
+        "runs LAST, after the recall's answer exists, and cannot fail it.",
+    ("memory/store.py", "record_usage"): "DB.S5 — usage TELEMETRY (`hit_count` / "
+        "`last_recalled_at`), transient RUN-STATE per the D5 policy, on the read path. It is not a "
+        "governed durable write and there is nothing an approval could review: it touches NO "
+        "content a human approved — not the `doc`, not the value, not the provenance, not the "
+        "validity window — only two counter columns that exist solely to rank, and the write "
+        "carries no user content to secret-scan (an integer and a clock reading). The `mark_dirty` "
+        "precedent, on the memory store. Degrade-clean at THIS seam: a telemetry failure is "
+        "swallowed so it can never fail the recall it rode. Deliberately does NOT journal in team "
+        "mode — a monotonic counter has no CAS conflict to resolve, and un-approved rows do not "
+        "belong in an approval ledger.",
     ("atomicfile.py", "atomic_write_text"): "the write PRIMITIVE itself — no target of its own",
     ("knowledge/user_prefs.py", "record_graph_decline"): "GR.S2 — the USER's own standing "
         "preference (a graph-adoption decline) recorded in ~/.mokata, NOT a governed PROJECT "
@@ -630,7 +657,7 @@ UNGATED_BY_DESIGN = {
     ("govern/ledger.py", "record"): "the audit ledger IS the record of gate decisions — gating it "
                                     "would recurse",
     ("govern/ledger.py", "_write_counter"): "the ledger's O(1) seq sidecar (MS.S3)",
-    ("team_journal.py", "_append"): "the journal is the PRE-commit buffer. The GATED write path "
+    ("team_journal.py", "_append_all"): "the journal is the PRE-commit buffer. The GATED write path "
                                     "(`append`) reaches it from inside the gate's commit closure "
                                     "(journal-first, C5) — but that is only ONE of its callers, and "
                                     "this entry used to name it as if it were the only one. It is "
@@ -642,8 +669,17 @@ UNGATED_BY_DESIGN = {
                                     "gated entry — so the write stays ungated by design. But the "
                                     "old wording implied a single-lock serialisation that never "
                                     "held for them, which is precisely how MS.S8's Windows "
-                                    "append-clobber survived review: `_append` now takes its OWN "
-                                    "append lock, because nothing above it does.",
+                                    "append-clobber survived review: `_append_all` now takes its OWN "
+                                    "append lock, because nothing above it does. "
+                                    "DB.S7d renamed the funnel `_append` → `_append_all` (it takes "
+                                    "a LIST) and left `_append` as its one-record case, so the "
+                                    "lock/gate posture above is unchanged — but the funnel now also "
+                                    "carries `resolve_group`, a WHOLE-approval verdict. That is "
+                                    "still journal bookkeeping over already-gated entries: the "
+                                    "human decision it records was itself taken inside "
+                                    "`MemoryStore.apply_group_decision`'s WriteGate, and the "
+                                    "multi-record write exists precisely so those N records cannot "
+                                    "land apart from one another.",
     ("team_journal.py", "compact"): "J-PERF — journal COMPACTION, and the one rewrite in a "
                                     "file that is otherwise append-only. It is not a durable "
                                     "write in the governed sense because it adds NOTHING: it "
@@ -679,6 +715,23 @@ UNGATED_BY_DESIGN = {
     ("knowledge/freshness.py", "drain_dirty"): "GR.S4 — consume-and-clear of the temp_local/ graph "
                                               "dirty-set (rename-then-read). Transient run-state, "
                                               "same class as the AST cache; never a governed write.",
+    ("injection_ledger.py", "record_injected"):
+        "H-1a S4 — the per-session already-injected ledger under temp_local/. Transient "
+        "run-state on the GR.S4 dirty-set pattern above, and the same reading: P2 gates DURABLE "
+        "writes (memory, code, config) and this is run-tracking. Stores memory item IDs only, "
+        "never item CONTENT, and it is derived — deleting it costs a session one repeated "
+        "injection and nothing else. Append-only (a single O_APPEND write), no update path, no "
+        "delete path, and it never raises.",
+    ("knowledge/anchor_fingerprints.py", "_write_record"):
+        "H-6 S1 — the DURABLE anchor→fingerprint record under temp_local/ (H-6 plan of record, "
+        "decision #5). It differs from the two GR.S4 entries above in ONE respect and it is worth "
+        "naming, because that difference is the whole slice: this record is NOT session-scoped, it "
+        "outlives the session that wrote it. That does not make it a governed write. P2 gates "
+        "durable writes of FACTS — memory, code, config — and this holds nothing a human said: it "
+        "stores a content HASH per anchored path (never source text, never an item's value), and "
+        "every byte of it is re-derivable by re-hashing the repo. Losing it costs one silent "
+        "re-record and can never cost a fact. The SQLite memory store lives under the same "
+        "directory and outlives every session too — durability is not the gating question.",
     ("session_state.py", "update"): "session run-state under temp_local/",
     ("session_state.py", "delete"): "session run-state under temp_local/",
     ("govern/revert.py", "revert"): "undo of a state write under temp_local/",

@@ -331,8 +331,17 @@ class TestStoreScopedRecall(unittest.TestCase):
         store = self._store()
         self._seed(store)
         store.scope_context = S.ScopeContext(project="P", user="U")
-        subjects = {h.item.subject for h in store.recall_relevant("v", top_k=10)}
-        self.assertNotIn("q", subjects)
+        # The query names every seeded value, INCLUDING the off-path project's. That is the point:
+        # `q` is a genuine lexical match here, so its absence is scope filtering doing its job
+        # rather than the query simply missing it.
+        #
+        # It used to query `"v"`, which matched NOTHING (the values tokenize as `gv`/`pv`/`qv`/`mv`)
+        # and passed only because the pre-R-1 full-set read ranked and returned every active item
+        # whether or not the query touched it. R-1's candidate selection returns what the query
+        # matched, so that phrasing asserted scope filtering over an empty result. This one asserts
+        # it over a result where the excluded item was a real competitor.
+        subjects = {h.item.subject for h in store.recall_relevant("gv pv qv mv", top_k=10)}
+        self.assertNotIn("q", subjects, "an off-path project's LEXICAL MATCH leaked into recall")
         self.assertTrue({"g", "p", "me"} <= subjects)
 
 
@@ -394,9 +403,11 @@ class _FakePg:
         if m:
             self.tables.setdefault(m.group(1), set()).add(m.group(2))
             return self._Cur([])
-        # D2 — the artifact carries a RANGE: (version, min_supported).
-        m = re.match(r"INSERT INTO mokata_schema_version \(version, min_supported\)"
-                     r" VALUES \((\d+), (\d+)\)", h, re.I)
+        # D2 — the artifact carries a RANGE: (version, min_supported). DB.S2b appends the
+        # backfill stamp, so the row is (version, min_supported, scope_backfilled).
+        m = re.match(r"INSERT INTO mokata_schema_version"
+                     r" \(version, min_supported(?:, scope_backfilled)?\)"
+                     r" VALUES \((\d+), (\d+)(?:, (\w+))?\)", h, re.I)
         if m:
             self.versions[int(m.group(1))] = int(m.group(2))   # ON CONFLICT DO UPDATE the floor
             return self._Cur([])
@@ -416,28 +427,39 @@ class _FakePg:
 
 
 class TestSchemaMigration(unittest.TestCase):
-    def test_version_is_bumped_to_v3(self):
-        self.assertEqual(teamdb.TEAM_SCHEMA_VERSION, 3)
+    def test_the_scope_columns_are_at_or_below_the_current_schema_version(self):
+        """TM.S6's claim was "the scope columns shipped at v3", which it expressed as
+        `TEAM_SCHEMA_VERSION == 3` — true only until a later stage bumped the schema for its own
+        reasons (DB.S5 → v4). The durable claim is that v3 is the version the scope columns are
+        served FROM: the floor still admits them, and the current version is at least that."""
+        self.assertGreaterEqual(teamdb.TEAM_SCHEMA_VERSION, 3)
+        self.assertGreaterEqual(teamdb.TEAM_SCHEMA_MIN_SUPPORTED, 3)
 
     def test_provision_sql_adds_idempotent_scope_columns(self):
         sql = " || ".join(teamdb.provision_sql())
         for col in _SCOPE_COLS:
             self.assertIn(f"ADD COLUMN IF NOT EXISTS {col}", sql)
-        # D2 — the version row is now the (current, min_supported) RANGE artifact.
+        # D2 — the version row is the (current, min_supported) RANGE artifact; DB.S2b adds the
+        # backfill stamp to the same row.
         self.assertIn(f"VALUES ({teamdb.TEAM_SCHEMA_VERSION}, "
-                      f"{teamdb.TEAM_SCHEMA_MIN_SUPPORTED})", sql)
+                      f"{teamdb.TEAM_SCHEMA_MIN_SUPPORTED}, TRUE)", sql)
 
     def _apply(self, pg):
         for stmt in teamdb.provision_sql():
             pg.execute(stmt)
 
-    def test_fresh_provision_creates_scope_columns_and_v3(self):
+    def test_fresh_provision_creates_scope_columns_and_stamps_the_current_version(self):
+        # Tracks `TEAM_SCHEMA_VERSION` rather than a literal: this test's SUBJECT is the scope
+        # columns, and the version number is incidental to it. Pinning the literal made every
+        # later stage that legitimately bumped the schema (DB.S5 → v4) fail a TM.S6 test that
+        # was never about the number.
         pg = _FakePg()
         self._apply(pg)
         self.assertTrue(set(_SCOPE_COLS) <= pg.tables[teamdb.MEMORY_TABLE])
-        self.assertEqual(pg.execute(teamdb._VERSION_SQL).fetchone()[0], 3)
+        self.assertEqual(pg.execute(teamdb._VERSION_SQL).fetchone()[0],
+                         teamdb.TEAM_SCHEMA_VERSION)
 
-    def test_v2_to_v3_migration_adds_columns_and_bumps_version(self):
+    def test_a_v2_table_gains_the_scope_columns_and_the_version_advances(self):
         pg = _FakePg()
         # a v2 memory table (no scope columns) + version row = 2
         pg.seed_table(teamdb.MEMORY_TABLE,
@@ -446,7 +468,9 @@ class TestSchemaMigration(unittest.TestCase):
         pg.versions[2] = 2
         self._apply(pg)
         self.assertTrue(set(_SCOPE_COLS) <= pg.tables[teamdb.MEMORY_TABLE])
-        self.assertEqual(pg.execute(teamdb._VERSION_SQL).fetchone()[0], 3)  # 2 → 3
+        stamped = pg.execute(teamdb._VERSION_SQL).fetchone()[0]
+        self.assertEqual(stamped, teamdb.TEAM_SCHEMA_VERSION)
+        self.assertGreater(stamped, 2, "the migration must advance a v2 artifact")
 
     def test_provision_is_idempotent_on_rerun(self):
         pg = _FakePg()
@@ -454,7 +478,8 @@ class TestSchemaMigration(unittest.TestCase):
         cols_after_first = set(pg.tables[teamdb.MEMORY_TABLE])
         self._apply(pg)                              # re-run team init
         self.assertEqual(pg.tables[teamdb.MEMORY_TABLE], cols_after_first)
-        self.assertEqual(pg.versions, {3: teamdb.TEAM_SCHEMA_MIN_SUPPORTED})  # one row
+        self.assertEqual(pg.versions,
+                         {teamdb.TEAM_SCHEMA_VERSION: teamdb.TEAM_SCHEMA_MIN_SUPPORTED})
 
     def test_the_scope_columns_have_ONE_definition_in_the_init_path(self):
         # D1 — `PostgresBackend` used to hand-mirror this DDL and re-run it on every connect.
@@ -469,7 +494,7 @@ class TestSchemaMigration(unittest.TestCase):
         if not dsn:
             self.skipTest("no live $MOKATA_PG_DSN — mock legs cover the migration")
         res = teamdb.provision(dsn)                  # idempotent; raises on failure
-        self.assertEqual(res.version, 3)
+        self.assertEqual(res.version, teamdb.TEAM_SCHEMA_VERSION)
         teamdb.provision(dsn)                        # re-run must be clean
 
 

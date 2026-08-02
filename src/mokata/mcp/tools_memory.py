@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional
 
 from .. import approval
 from ..govern import AuditLedger
-from ..memory import DECISION, MemoryItem, MemoryStore
+from ..memory import CROSS_WRITER, DECISION, MemoryItem, MemoryStore
 from .consent import (_consent, _gated_write, _policy, _propose, _refused,
                       _require)
 from .registry import _surface
@@ -77,16 +77,29 @@ def remember(path: str = ".", subject: str = "", value: str = "",
 def apply_proposal(path: str = ".", subject: str = "", decision: str = "approve",
                    approve: bool = False, confirm: Optional[bool] = None,
                    proposal_id: str = "") -> Dict[str, Any]:
-    """Resolve a surfaced self-healing memory proposal (contradiction/staleness). HUMAN-GATED
-    (SI.3): PROPOSE-ONLY — it shows the staged old->new change and writes nothing. A human mints the
-    approval with `mokata approve <id>`; re-call with that `proposal_id` to apply your `decision`
-    (approve/reject/defer)."""
-    if decision not in ("approve", "reject", "defer"):
+    """Resolve a surfaced self-healing memory proposal (contradiction/staleness/cross-writer).
+    HUMAN-GATED (SI.3): PROPOSE-ONLY — it shows the staged old->new change and writes nothing. A
+    human mints the approval with `mokata approve <id>`; re-call with that `proposal_id` to apply
+    your `decision` (approve/reject/defer, plus `discard` on a cross-writer conflict).
+
+    DB.S6 — `discard` means "keep THEIRS": it drops your own approved-but-unlanded write when a
+    teammate's concurrent change won the CAS. It has its own word rather than riding `reject`
+    because `reject` is where every safe default lands (a dismissed consent, a non-interactive
+    call), and a default that throws away an approved write is exactly the silent loss this stage
+    removes. It is refused on any other kind of proposal."""
+    if decision not in ("approve", "reject", "defer", "discard"):
         return {"status": "error",
-                "message": "decision must be one of approve/reject/defer"}
+                "message": "decision must be one of approve/reject/defer (or discard, on a "
+                           "cross-writer conflict)"}
     surface = _surface(path)
     store = MemoryStore.from_surface(surface)
-    match = next((p for p in store.detect_issues() if p.subject == subject), None)
+    proposals = store.detect_issues()
+    if decision == "discard":
+        # `discard` is only meaningful for a conflict, and a subject can carry BOTH a conflict and
+        # an ordinary contradiction — so select by kind rather than letting first-match decide
+        # which proposal a destructive decision lands on.
+        proposals = [p for p in proposals if p.kind == CROSS_WRITER]
+    match = next((p for p in proposals if p.subject == subject), None)
     if match is None:
         return {"status": "error",
                 "message": f"no pending proposal for subject '{subject}'"}
@@ -106,6 +119,58 @@ def apply_proposal(path: str = ".", subject: str = "", decision: str = "approve"
         surface.mokata_dir, "memory", f"memory:{subject}", match.diff(),
         lambda: store.apply_proposal(match, decision, assume_yes=True).message, gate,
         _policy(path, "apply_proposal", human_approved=True, surface=surface))
+
+
+def consolidate(path: str = ".", session: str = "", value: str = "",
+                approve: bool = False, confirm: Optional[bool] = None,
+                proposal_id: str = "") -> Dict[str, Any]:
+    """M-4/R5 PHASE 2 — submit a summary YOU drafted for an episodic cluster (see the
+    `consolidate_proposals` read tool for what to draft and the turns to draft from).
+
+    mokata calls no model and writes no summary of its own; the text in `value` is yours. HUMAN-GATED
+    (SI.3): PROPOSE-ONLY — this returns a proposal_id and writes nothing. A human mints the approval
+    with `mokata approve <id>`; re-call with that `proposal_id` to commit it, once. You cannot
+    approve your own draft — there is no argument here that reaches a write. A secret in the drafted
+    summary is blocked even when approved."""
+    from ..memory.consolidation import constant_drafter, find_summarize
+    if not session or not value:
+        return {"status": "error",
+                "message": "consolidate needs `session` (from consolidate_proposals) and the "
+                           "`value` you drafted — mokata does not write the summary"}
+    surface = _surface(path)
+    store = MemoryStore.from_surface(surface)
+    if not store.enabled_types:
+        return {"status": "unavailable", "message": "memory is disabled for this profile"}
+
+    # The drafted text rides the DRAFTER SEAM, not a hand-built item: same typing, same always-on
+    # clamp, same secret-scan, same gate render as any drafted summary. See `constant_drafter`.
+    match = find_summarize(store.propose_consolidations(drafter=constant_drafter(session, value)),
+                           session)
+    if match is None:
+        return {"status": "error",
+                "message": f"no summarize proposal for session '{session}' — call "
+                           f"consolidate_proposals to see what wants drafting"}
+
+    args = {"path": path, "session": session, "value": value}
+    gate = _consent(path, "consolidate", args, proposal_id, surface=surface)
+    if gate.refused:
+        return _refused(gate)
+    if not gate.granted:
+        return _propose(path, "consolidate", args,
+                        {"session": session, "kind": match.kind, "diff": match.diff(),
+                         "turns": len(match.olds)},
+                        target=f"memory:summary:{session}",
+                        summary=f"store the drafted summary for '{session}' "
+                                f"({len(match.olds)} turns)",
+                        preview=store.render_consolidation(match),
+                        approve=approve, confirm=confirm)
+    # H4 discipline — scan the SUBJECT and the drafted VALUE: a drafted summary is exactly where a
+    # credential quoted out of a conversation turn would enter.
+    return _gated_write(
+        surface.mokata_dir, "memory", f"memory:summary:{session}",
+        f"{match.new.subject}\n{match.new.value}",
+        lambda: store.apply_consolidation(match, "approve", assume_yes=True).message, gate,
+        _policy(path, "consolidate", human_approved=True, surface=surface))
 
 
 # ======================================================================================

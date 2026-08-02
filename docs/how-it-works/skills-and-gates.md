@@ -44,7 +44,7 @@ a sentence the model is trusted to honour:
 | Skill | Its gate | The real check behind it |
 |---|---|---|
 | `brainstorm` | `approach-approval` | no spec until one approach is explicitly approved (human) |
-| `spec` | `completeness` | every acceptance criterion maps to a test, or `emit` is refused |
+| `spec` | `completeness` | every acceptance criterion maps to a test, or `emit` is refused. A second emit on a run that already has a spec **replaces** it as a new version — the old one is archived and superseded, never edited in place, and the approval preview shows the diff first |
 | `test` | `red-before-green` | a failing test must exist first |
 | `develop` | `no-code-without-failing-test` + `spec-persisted` + `spec-scope` | a saved spec + a RED test precede implementation, and the write stays inside the scope the spec authorized |
 | `review` | `spec-then-quality` | two passes — against the spec, then quality (human) |
@@ -53,10 +53,12 @@ a sentence the model is trusted to honour:
 
 If a skill's prose promised a boundary the engine didn't back, that would be a bug the skill-lint
 catches — Contracts are grounded in a boundary→gate map, so a Contract never claims enforcement
-that isn't there. That map (`skill_contracts.GATES`) marks **9 gates as *backed*** — `write-gate`,
-`secret-guard`, `spec-persisted`, `completeness`, `no-code-without-failing-test`, `deviation`,
-`hard-rule`, `ship-readiness`, `approach-approval` — and only a backed gate may be cited as
-enforcement. The rest (`red-before-green`, `spec-then-quality`, `measure-first`,
+that isn't there. There are **10 *backed* gates** — `write-gate`, `secret-guard`, `spec-persisted`,
+`completeness`, `no-code-without-failing-test`, `deviation`, `hard-rule`, `ship-readiness`,
+`approach-approval` (the nine in the `skill_contracts.GATES` map) and `self-protect` — and only a
+backed gate may be cited as enforcement. `self-protect` sits outside that map because it is not a
+pipeline boundary at all: it keys on the **target path** alone, so it runs ahead of every
+run-state gate and applies with no run registered. The rest (`red-before-green`, `spec-then-quality`, `measure-first`,
 `finish-is-human-landed`, …) are **advisory protocol boundaries**: they are a skill's headline
 copy, never a claim that code stops you.
 

@@ -54,8 +54,12 @@ and even when enabled Claude Code prompts you on every call.)
 ## Pick how much you want on — `--mode`
 
 You don't have to take everything at once. `mokata init --mode` is a graduated on-ramp: three
-named starting points, each of which wires a working setup and prints the one command that
-proves it.
+named starting points, each of which **configures the engine** in this repo and prints the one
+command that proves it.
+
+> `--mode` chooses *how much of the engine* to configure — it is a profile choice, not a wiring
+> choice. **No mode wires Claude Code**; that is `mokata setup claude` (Path A above), which you
+> only need once. See [Which setup command do I need?](how-to/which-setup-command.md).
 
 ```bash
 mokata init --mode seatbelt    # just the gates (and the code graph they need to be real)
@@ -78,7 +82,7 @@ manifest written by `--mode memory` is byte-identical to one written by `--profi
 recall — an interactive, one-time ask you can decline; `seatbelt` structurally never offers it.
 No offer ever fires non-interactively, so `--yes` and CI runs can never reach `pip`.
 
-Not sure? Plain `mokata init` (profile `standard`) is the same wiring as `seatbelt`.
+Not sure? Plain `mokata init` (profile `standard`) is the same configuration as `seatbelt`.
 
 ## Path B — Terminal CLI (any AI tool, CI, scripting)
 
@@ -86,9 +90,14 @@ You get the engine — gates, memory, structural queries, the audit ledger — d
 
 ```bash
 pip install mokata
-mokata init                 # scaffold a governed config in the current repo
+mokata init                 # scaffold a governed config in THIS repo (.mokata/) — not Claude Code
 mokata brainstorm           # or: mokata --help to see every command
 ```
+
+`mokata init` writes `.mokata/` and stops there: it does not add slash commands, Agent Skills,
+the MCP server, or the gate hooks to Claude Code. Path A's `mokata setup claude` is what does
+that (and runs `init` for you). Unsure which you need — or upgrading an existing install? See
+[Which setup command do I need?](how-to/which-setup-command.md).
 
 ## Working as a team
 
