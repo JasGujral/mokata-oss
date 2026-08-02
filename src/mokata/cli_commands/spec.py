@@ -33,7 +33,21 @@ def _read_payload(args: argparse.Namespace) -> dict:
     return json.loads(raw)
 
 
-def _run_scoped_store(surface):
+# HANDOFF.G1 — the two legible recovery lines `mokata spec show` prints when there is nothing to
+# show. Lifted to module constants (VERBATIM, no text change) so the MCP `spec_show` read tool
+# returns the SAME sentence the CLI prints instead of paraphrasing it into a second, drifting copy.
+# Both are pure guidance: neither carries a byte of spec content, which is what makes them safe to
+# hand back on the degrade path (a no-spec answer must never leak the project's words).
+NO_TRACKED_RUN_RECOVERY = (
+    "no tracked run in this repo — mokata has nothing to attach a spec to yet. Start a "
+    "tracked run with /mokata:brainstorm (it registers the run) or resume one with "
+    "/mokata:resume, then emit the spec (/mokata:spec).")
+NO_SPEC_RECOVERY = (
+    "no spec is emitted for this run — draft one and emit it (/mokata:spec, or "
+    "`mokata spec emit --file <spec.json>`).")
+
+
+def _run_scoped_store(surface, run_id: "str | None" = None):
     """The state store scoped to the run the HOOK would enforce — not to this shell's own session.
 
     `mokata spec emit` runs in a SEPARATE process from the agent's session (a human at a terminal,
@@ -46,13 +60,36 @@ def _run_scoped_store(surface):
     So the run is resolved by the hook's OWN resolver (`gate_hook.resolve_run`, the discipline
     `cli_commands/gate.py` already uses for the override): the spec lands on the run being gated.
     `(store, run_id, error)` — `error` is a message when the run cannot be resolved WITHOUT
-    guessing, and the caller must refuse rather than pick a window."""
-    from ..gate_hook import resolve_run
+    guessing, and the caller must refuse rather than pick a window.
+
+    HANDOFF.G1 — `run_id` names the run EXPLICITLY (the MCP `spec_show` tool's optional `run`), and
+    is threaded straight into the SAME resolver rather than resolved a second way: `resolve_run`
+    already short-circuits on an explicit id, so naming a run and letting it be inferred travel one
+    code path. `None` (every CLI caller, unchanged) keeps the infer-from-the-repo behaviour byte for
+    byte — no CLI surface passes this argument.
+
+    RE-ENTRY — an INFERRED run now resolves through `badge_run.resolve_run_for_evidence` rather than
+    `gate_hook.resolve_run` directly. Same tiers, plus ONE: when several runs have state but exactly
+    one holds pipeline EVIDENCE (an approved approach / an emitted spec), that run is the answer.
+    Without it, going back to `/brainstorm` broke this command outright — re-entry REGISTERS a bare
+    `pipeline_run__<new>` checkpoint (RUN-REG), which counts as a second "run with state", so
+    `mokata spec amend --abort` — the escape hatch the regressed-run answer TELLS the user to run —
+    died on "2 mokata runs have state in this repo and none is pinned". Naming a road out that
+    errors is the exact P16 failure the awaiting head exists to prevent.
+
+    Two things it does NOT change. An EXPLICIT `run_id` still goes straight to `resolve_run`'s
+    short-circuit (naming a run and inferring one still travel one code path, HANDOFF.G1). And
+    genuine ambiguity still REFUSES: two runs that BOTH hold evidence fall through to `resolve_run`
+    and the error below, because a bare checkpoint is the only thing this tier learned to see past —
+    it de-ambiguates the re-entry shape, it never guesses between two pipelines."""
+    from ..badge_run import resolve_run_for_evidence
+    from ..gate_hook import RunResolution, resolve_run
     from ..session_state import scoped_store
     from ..state import StateStore
     from ..tdd_state import state_dir
 
-    run = resolve_run(surface.root)
+    inferred = resolve_run_for_evidence(surface.root) if not run_id else None
+    run = RunResolution(inferred) if inferred else resolve_run(surface.root, run_id)
     if run.ambiguous:
         return None, None, (
             f"{len(run.candidates)} mokata runs have state in this repo and none is pinned, so "
@@ -65,6 +102,18 @@ def _run_scoped_store(surface):
         # session IS the run; `surface.state` is already scoped to it.
         return surface.state, None, None
     return scoped_store(StateStore(state_dir(surface.root)), run.run_id), run.run_id, None
+
+
+def _emit_knowledge_layer(surface):
+    """The adopted code graph, or None — built the SAME way `MemoryStore.from_surface` builds it
+    (`memory/store.py:267`) and the same way the MCP twin does. P4 is an EQUALITY: the emit refusal
+    must see exactly the evidence H-6's proposal arm sees, so a gate that quietly passed None would
+    decline symbol anchors the arm fires on."""
+    try:
+        from ..knowledge.layer import KnowledgeLayer
+        return KnowledgeLayer.from_surface(surface)
+    except Exception:                       # noqa: BLE001 — no graph is a valid answer, not a fault
+        return None
 
 
 def cmd_spec_emit(args: argparse.Namespace) -> int:
@@ -103,6 +152,19 @@ def cmd_spec_emit(args: argparse.Namespace) -> int:
             print("\nRe-run the prior-art pass for the chosen approach and re-approve, then emit "
                   "again. Nothing was written.")
             return 1
+        # H-6 S4 — code-anchor freshness, the MCP twin's Gate 1c-ii. A NEW way this command can
+        # refuse (contract change, 0.0.16): the approved approach's prior-art CITATIONS must not be
+        # anchored to code that has moved since those decisions were recorded. Same Handoff, a
+        # different question — 1c asks whether the step ran, this asks whether what it found is
+        # still true of the code. Fail-OPEN on absent evidence: no baseline is no opinion.
+        from ..govern.code_anchor_gate import handoff_code_anchor_gate
+        ca_gate = handoff_code_anchor_gate(handoff, root=surface.root,
+                                           layer=_emit_knowledge_layer(surface))
+        if ca_gate.refused:
+            print(f"[BLOCK] code-anchor — {ca_gate.render()}")
+            print("\nRe-read the changed code, decide whether those decisions still hold, then "
+                  "re-approve and emit again. Nothing was written.")
+            return 1
 
     ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
     # The human sees the whole spec — every AC and the test that covers it — before the question.
@@ -119,6 +181,15 @@ def cmd_spec_emit(args: argparse.Namespace) -> int:
             print(f"  unmapped: {ac} — no test covers it")
         print("\nMap every acceptance criterion to a test, then emit again. Nothing was written.")
         return 1
+    # SPEC-REEMIT-CLOBBER — a re-emit onto a run with work in flight is refused and routed to
+    # `mokata spec amend`. Its own branch, not the write-gate one below: "declined at the write
+    # gate" would tell a human their approval was the problem, when the truth is that no approval
+    # could make this the right tool.
+    if out.blocked_by_reemit:
+        print(f"[BLOCK] re-emit — {out.reason}")
+        print("\nUse `mokata spec amend --file <spec.json> --reason \"...\"` to take the same "
+              "change through the gates a live spec is owed. Nothing was written.")
+        return 1
     if not out.committed:
         print(f"emit declined at the write gate — nothing was written ({out.reason}).")
         return 1
@@ -126,6 +197,15 @@ def cmd_spec_emit(args: argparse.Namespace) -> int:
     where = f" (run {run_id[:8]})" if run_id else ""
     print(f"spec emitted: '{spec.title}' — {out.ac_count} acceptance criteria, all mapped to "
           f"tests.")
+    # SPEC-STANDALONE-SILENT — a spec emitted with NO approved brainstorm/refine behind it says so.
+    # The identical sentence the MCP `spec_emit` returns, from the one shared builder
+    # (`engine.completeness.STANDALONE_NOTE`) — the CLI does not word this for itself. Printed only
+    # when it applies, so a brainstorm-attached emit's output is byte-identical to 0.0.15.
+    if out.standalone:
+        print(f"  {out.standalone_note}")
+    if out.superseded:
+        print(f"  this is v{out.version}: v{out.version - 1} was superseded, not overwritten — "
+              f"it is kept at {out.superseded} and named on the audit ledger.")
     print(f"  saved as this run's spec{where}, and recorded in the shared spec corpus "
           f"({out.corpus_size} spec(s)).")
     print("  implementation is unblocked once a failing test is on record (/mokata:test).")
@@ -146,14 +226,11 @@ def cmd_spec_show(args: argparse.Namespace) -> int:
     # spec to — the conversational-brainstorm repro) from "a run is tracked but no spec is emitted
     # yet". The first names how to START/attach a tracked run; the second, how to emit.
     if run_id is None:
-        print("no tracked run in this repo — mokata has nothing to attach a spec to yet. Start a "
-              "tracked run with /mokata:brainstorm (it registers the run) or resume one with "
-              "/mokata:resume, then emit the spec (/mokata:spec).")
+        print(NO_TRACKED_RUN_RECOVERY)
         return 0
     spec = load_emitted_spec(store)
     if spec is None:
-        print("no spec is emitted for this run — draft one and emit it (/mokata:spec, or "
-              "`mokata spec emit --file <spec.json>`).")
+        print(NO_SPEC_RECOVERY)
         return 0
     print(f"spec: {spec.title}")
     if spec.approach:

@@ -35,9 +35,13 @@ from ..govern.secrets import scan
 from ..profiles import TOOL_CATALOG
 from ..tdd_state import state_dir
 from . import user_prefs
+from .query import PREFERRED_GRAPH_TOOL
 
 # The real structural graphs mokata can pin/adopt (the lexical + AST floors are never "adopted").
-ADOPTABLE_GRAPH_TOOLS = ("code-review-graph", "serena")
+# CRG-NAV (d): the head is `query.PREFERRED_GRAPH_TOOL` — the SAME symbol the honest floor note
+# names — so the note and the adoption chain cannot disagree about which graph mokata prefers,
+# and a later re-order (backlog GRAPH-SWEEP) moves both together.
+ADOPTABLE_GRAPH_TOOLS = (PREFERRED_GRAPH_TOOL, "serena")
 
 _FIRST_USE_PREFIX = "graph_first_use__"
 

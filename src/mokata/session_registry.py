@@ -36,7 +36,13 @@ SESSION_REGISTRY_KEY = "session_registry"
 # The exact entry field set (pinned by the secret-safety test — nothing may be added silently).
 # WT.S1 adds `scope` — the session's stated topic ("what am I working on"), recorded by
 # `worktree create`; runtime-transient like the rest of the entry, and never a secret.
-_ENTRY_FIELDS = ("session_id", "started_at", "pid", "repo_root", "last_seen", "phase", "scope")
+# WT.S4 adds `branch` — the branch `worktree create` cut for this session, which WT.S1 cut and then
+# FORGOT. Because `run_id == session_id` (see `session.py`), this ONE additive field is the whole
+# run↔worktree binding: the entry already carries `repo_root` (⇒ the worktree, via `worktree_label`)
+# and `scope`. It is deliberately NOT a second store — a branch name, on the record that already
+# names the window. Runtime-transient like the rest of the entry, and never a secret.
+_ENTRY_FIELDS = ("session_id", "started_at", "pid", "repo_root", "last_seen", "phase", "scope",
+                 "branch")
 
 
 @dataclass
@@ -49,6 +55,7 @@ class SessionEntry:
     phase: Optional[str]
     alive: bool
     scope: Optional[str] = None
+    branch: Optional[str] = None
 
     @property
     def short_id(self) -> str:
@@ -81,12 +88,14 @@ def pid_alive(pid: Any) -> bool:
     return True
 
 
-def touch(surface: Any, phase: Optional[str] = None, scope: Optional[str] = None) -> None:
+def touch(surface: Any, phase: Optional[str] = None, scope: Optional[str] = None,
+          branch: Optional[str] = None) -> None:
     """Register / refresh THIS window's entry (atomic + cross-process locked, via MS.S1). Upserts
     self only — never prunes a sibling — so a concurrent pair is always both recorded. `started_at`
-    is preserved across touches; `last_seen`/`pid`/`repo_root` refresh; `phase`/`scope` update when
-    given, else the prior value is kept. Raises on a genuine store error (the ungated touchpoint
-    wiring wraps this call degrade-clean; the API itself stays honest for callers/tests)."""
+    is preserved across touches; `last_seen`/`pid`/`repo_root` refresh; `phase`/`scope`/`branch`
+    update when given, else the prior value is kept. Raises on a genuine store error (the ungated
+    touchpoint wiring wraps this call degrade-clean; the API itself stays honest for
+    callers/tests)."""
     from .session import current_session
     sess = current_session()
     root = _safe_root(getattr(surface, "root", ""))
@@ -103,6 +112,9 @@ def touch(surface: Any, phase: Optional[str] = None, scope: Optional[str] = None
             "last_seen": _now_iso(),
             "phase": phase if phase is not None else prev.get("phase"),
             "scope": scope if scope is not None else prev.get("scope"),
+            # WT.S4 — sticky like `phase`/`scope`: an unrelated `touch()` (a stage mark, a
+            # `windows` self-register) must never CLEAR a binding it wasn't asked about.
+            "branch": branch if branch is not None else prev.get("branch"),
         }
         return {"sessions": sessions}
 
@@ -182,6 +194,7 @@ def _entry(session_id: str, e: dict) -> SessionEntry:
         phase=e.get("phase"),
         alive=pid_alive(pid),
         scope=e.get("scope"),
+        branch=e.get("branch"),        # WT.S4 — absent on a pre-WT.S4 entry ⇒ None (additive)
     )
 
 

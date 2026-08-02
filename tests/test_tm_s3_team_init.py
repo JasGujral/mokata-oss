@@ -55,6 +55,7 @@ class _FakePgConn:
         self._tables = set()
         self._version = None
         self._min_supported = None      # D2 — the artifact's declared floor
+        self._scope_backfilled = False  # DB.S2b — set true by the provisioning version row
 
     def execute(self, sql, *args):
         self.executed.append(sql)
@@ -67,10 +68,12 @@ class _FakePgConn:
             return _Cursor([])                       # ADD COLUMN IF NOT EXISTS — idempotent
         if low.startswith("insert into mokata_schema_version"):
             # D2 — the RANGE artifact: VALUES (current, min_supported), ON CONFLICT DO UPDATE.
-            num = re.search(r"values\s*\((\d+),\s*(\d+)\)", low)
+            # DB.S2b added a third value, the backfill stamp, so the shape is (v, min, TRUE).
+            num = re.search(r"values\s*\((\d+),\s*(\d+)(?:,\s*(\w+))?\)", low)
             if num:
                 self._version = int(num.group(1))
                 self._min_supported = int(num.group(2))
+                self._scope_backfilled = (num.group(3) or "false") == "true"
             return _Cursor([])
         if low.startswith("select 1"):
             return _Cursor([(1,)])
@@ -152,10 +155,46 @@ class TestProvisionSql(unittest.TestCase):
         self.assertIn(str(teamdb.TEAM_SCHEMA_VERSION), sql)
 
     def test_every_statement_is_idempotent_shaped(self):
+        """`team init` is re-run to upgrade, so EVERY statement must survive a re-run untouched.
+
+        FOUR shapes qualify. `IF NOT EXISTS` and `ON CONFLICT` are the DDL ones. DB.S2b adds the
+        third: a data-migration `UPDATE` cannot use either, so it is made idempotent by PREDICATE
+        instead — a `WHERE` that describes the un-migrated state, so a second run matches zero
+        rows. The `IS DISTINCT FROM` requirement is what makes that check meaningful rather than a
+        keyword rubber-stamp: an unconditional `UPDATE … SET` (no WHERE) would rewrite every row on
+        every init, and must still fail this test.
+
+        DB.S7a adds the fourth, and it is a genuinely new SHAPE rather than a loosening. The v5 edge
+        migration inserts DERIVED rows (one per ref in one doc-JSON array), so there is nothing to
+        `UPDATE` and no key to `ON CONFLICT` on — the natural target is the PARTIAL unique index,
+        which the two engines spell differently. Its idempotency is the same idea as DB.S2b's
+        expressed for an INSERT: `WHERE NOT EXISTS (the row this would create already exists and is
+        still open)`, so a second run matches zero rows. The check stays meaningful for exactly the
+        DB.S2b reason — a bare `INSERT INTO … SELECT` with no `NOT EXISTS` re-inserts the whole
+        projection on every init and still fails here.
+
+        M-1/R9 adds the fifth: the HOLE-FILL update. Its backfill gives a migrated edge the approval
+        id its item carries, and it deliberately cannot use DB.S2b's `IS DISTINCT FROM` — that
+        predicate means "make this column match the source", which would OVERWRITE the id a
+        live-projected edge already inherited from the flush with a derived one. It is idempotent
+        the strictly stronger way instead: it only ever writes into a NULL (`SET col = … WHERE col
+        IS NULL`), so a second run matches zero rows AND no run can ever change a value that is
+        already there. The check stays meaningful for the same reason as the other two — the WHERE
+        must constrain THE COLUMN BEING SET, so an unconditional `UPDATE … SET` (or one guarded on
+        some unrelated column) still fails here."""
+        import re
+
         from mokata import teamdb
         for stmt in teamdb.provision_sql():
-            up = stmt.upper()
-            ok = ("IF NOT EXISTS" in up) or ("ON CONFLICT" in up)
+            up = " ".join(stmt.upper().split())
+            set_cols = re.findall(r"SET\s+([A-Z_][A-Z0-9_]*)\s*=", up)
+            hole_fill = (up.startswith("UPDATE") and bool(set_cols)
+                         and all(re.search(rf"\b{col}\s+IS NULL\b", up) for col in set_cols))
+            guarded_update = up.startswith("UPDATE") and ("IS DISTINCT FROM" in up or hole_fill)
+            guarded_insert = (up.startswith("INSERT") and " SELECT " in up
+                              and "NOT EXISTS" in up)
+            ok = (("IF NOT EXISTS" in up) or ("ON CONFLICT" in up)
+                  or guarded_update or guarded_insert)
             self.assertTrue(ok, f"non-idempotent DDL: {stmt}")
 
     def test_no_extensions_on_the_golden_path(self):

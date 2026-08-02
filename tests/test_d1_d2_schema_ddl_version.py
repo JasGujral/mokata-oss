@@ -393,10 +393,31 @@ class TestSchemaVersionRange(unittest.TestCase):
         self.assertIn("upgrade mokata", teamdb.schema_fix(v.reason))
 
     def test_this_builds_range_covers_every_schema_its_sql_touches(self):
-        # grounding pin: the live SQL SELECTs `revision` (schema v2) and touches no v3 column,
-        # so v2 is genuinely the oldest schema this build can serve.
-        self.assertEqual(3, teamdb.TEAM_SCHEMA_VERSION)
-        self.assertEqual(2, teamdb.TEAM_SCHEMA_MIN_SUPPORTED)
+        # grounding pin, re-grounded at DB.S2b: the live SQL SELECTs `revision` (v2) AND filters on
+        # `scope_level`/`scope_id` (v3), so v3 is now genuinely the oldest schema this build can
+        # serve — a v2 table does not have the columns the scope predicate names. The floor tracks
+        # what the SQL TOUCHES; when that changed, the floor had to.
+        #
+        # DB.S5 moves the VERSION to 4 and deliberately leaves the FLOOR at 3, which is the point
+        # of pinning them separately rather than as one number. The v4 columns (`valid_from` /
+        # `valid_to` / `hit_count` / `last_recalled_at`) are touched only by paths that degrade
+        # clean when they are absent: `store.record_usage` swallows the failure, `usage_signals`
+        # returns `{}` (and the fusion falls back to its three original terms), and an item with no
+        # window reads as OPEN. NOTHING in the runtime REQUIRES them — unlike the v3 scope
+        # predicate, which is why THAT one raised the floor. Raising it here would fail-close every
+        # existing v3 team on upgrade for a purely additive feature.
+        #
+        # DB.S7a moves the VERSION to 5 and again leaves the FLOOR at 3, for a reason that is one
+        # step stronger than DB.S5's: v5 adds a NEW TABLE (`mokata_memory_edges`) and does not touch
+        # a single column of `mokata_memory`, so a v3/v4 store is not merely degraded-but-servable —
+        # it is UNCHANGED. Nothing in the runtime requires the edge table: the projection is derived
+        # from inline doc fields a v3 store already carries, every edge read is capability-probed
+        # (`PostgresBackend.supports_edges`, `team_journal._edges_present`) and fail-closed, and the
+        # flush skips the projection entirely when the table is absent. The tripwire is written into
+        # the constant's own comment and pinned by `test_db_s7a_edge_substrate` — the day ANY read
+        # becomes mandatory on that table, the floor moves in the same change.
+        self.assertEqual(5, teamdb.TEAM_SCHEMA_VERSION)
+        self.assertEqual(3, teamdb.TEAM_SCHEMA_MIN_SUPPORTED)
         self.assertLessEqual(teamdb.TEAM_SCHEMA_MIN_SUPPORTED, teamdb.TEAM_SCHEMA_VERSION)
 
 
@@ -404,8 +425,18 @@ class TestVersionArtifact(unittest.TestCase):
     def test_the_artifact_carries_the_range(self):
         sql = " || ".join(teamdb.provision_sql())
         self.assertIn("min_supported", sql)
-        # …and the row init writes carries BOTH numbers.
-        self.assertIn(f"({teamdb.TEAM_SCHEMA_VERSION}, {teamdb.TEAM_SCHEMA_MIN_SUPPORTED})", sql)
+        # …and the row init writes carries BOTH numbers (plus, since DB.S2b, the backfill stamp —
+        # see TestVersionArtifact.test_the_artifact_declares_the_backfill_it_performed).
+        self.assertIn(
+            f"({teamdb.TEAM_SCHEMA_VERSION}, {teamdb.TEAM_SCHEMA_MIN_SUPPORTED}, TRUE)", sql)
+
+    def test_the_artifact_declares_the_backfill_it_performed(self):
+        """DB.S2b — the stamp the runtime reads before pushing a scope predicate. It rides the
+        version row, and the version row is written LAST, so it can only claim a backfill that
+        has already run."""
+        sql = teamdb.provision_sql()
+        self.assertIn(teamdb.SCOPE_BACKFILLED_COLUMN, sql[-1])
+        self.assertIn("TRUE", sql[-1])
 
     def test_the_LEGACY_single_version_artifact_parses_as_IN_RANGE(self):
         # an existing deployment's `mokata_schema_version` has no `min_supported` column: the
@@ -422,12 +453,24 @@ class TestVersionArtifact(unittest.TestCase):
         # about clients it never saw).
         self.assertEqual(teamdb.TEAM_SCHEMA_VERSION, res.schema_min_supported)
 
-    def test_an_older_LEGACY_artifact_still_serves_this_build(self):
-        conn = _DmlOnlyConn(version_row=(teamdb.TEAM_SCHEMA_MIN_SUPPORTED,), legacy_artifact=True)
+    def test_a_v2_LEGACY_artifact_is_now_REFUSED_with_a_migrate_instruction(self):
+        """DB.S2b changed this case, deliberately, and it is the cost of the floor bump.
+
+        Before DB.S2b the v3 columns were inert, so a v2 artifact was served with an upgrade
+        WARNING. Now the runtime SQL filters on those columns, so a v2 table cannot be queried at
+        all — the columns are not there. The only honest outcomes are "refuse and say migrate" or
+        "query columns that don't exist", so it refuses, loudly, with the remediation attached.
+
+        Note what this makes of the range: with `min_supported == speaks == 3` the compatible band
+        is a single version. That is not the D2 design eroding — it is D2 reporting the truth that
+        exactly one shared schema currently carries the columns this build reads. The band widens
+        again the moment a v4 lands that keeps them."""
+        conn = _DmlOnlyConn(version_row=(2,), legacy_artifact=True)
         with _psycopg(conn):
             res = teamdb.probe(_DSN)
-        self.assertTrue(res.compatible, res.detail)
-        self.assertIn("team init", res.warning)
+        self.assertFalse(res.compatible)
+        self.assertEqual(teamdb.REASON_SCHEMA_TOO_OLD, res.reason)
+        self.assertIn("team init", teamdb.schema_fix(res.reason))
 
     def test_a_legacy_artifact_AHEAD_of_this_build_is_REFUSED_not_assumed_safe(self):
         # "unknown is not permission": a pre-D2 artifact 41 versions ahead declares no floor, so

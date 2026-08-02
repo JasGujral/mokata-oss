@@ -76,6 +76,46 @@ def cosine(a: List[float], b: List[float]) -> float:
     return dot / (na * nb)
 
 
+# --- the NOISE FLOOR ------------------------------------------------------------------------
+# DB.S8f (K2) — the cosine an embedder returns between a query and an item that has NOTHING to do
+# with it. Every OTHER ranking tier contributes exactly 0.0 to an item it did not reach: no lexical
+# overlap is 0.0, no edge is `EDGE_WEIGHT * 0.0`, no telemetry is 0.0. The semantic tier is the one
+# tier that does not — cosine between two unrelated bags of tokens is a POSITIVE number, so every
+# item in the store sits on a pedestal the fusion reads as evidence.
+#
+# That pedestal is a property of the EMBEDDER, not of mokata, so it is declared by the embedder and
+# the fusion caps the tier's weight against it (`tiered.semantic_weight_for`). A quiet embedder
+# earns its full weight; a noisy one is held to the share of the non-match budget it can be trusted
+# with. See the RANKING PRINCIPLE at the top of `tiered.py`.
+
+#: The probe corpus for an embedder that declares no floor: short query-shaped text against longer
+#: item-shaped text, pairwise UNRELATED but drawn from ordinary shared vocabulary. Shared vocabulary
+#: is the point — a disjoint-token probe measures 0.0 against a bag-of-words embedder and would
+#: certify the noisiest embedder in the tree as silent.
+NOISE_PROBE_QUERIES = (
+    "retry budget", "auth token", "cache eviction", "index rebuild",
+    "queue backoff", "schema migration", "leader election", "rate limit",
+)
+NOISE_PROBE_DOCS = (
+    "the deployment pipeline runs a smoke test after every release to the staging cluster",
+    "quarterly revenue rose on the back of a strong subscription renewal cycle in europe",
+    "the kitchen renovation is blocked on a countertop delivery from the supplier",
+    "a garbage collection pause was observed during the nightly batch reconciliation job",
+    "the onboarding document explains how new engineers request laptop hardware",
+    "seasonal rainfall patterns shifted after the reservoir expansion was completed",
+    "the design review board approved the new typography scale for marketing pages",
+    "a legal hold was placed on the archive pending the outcome of the audit",
+)
+
+#: What an UNPROBEABLE embedder is assumed to be. FAIL-CLOSED, and deliberately the worst possible
+#: value: an embedder we cannot characterize might return 1.0 between unrelated items, and the
+#: principle does not have an exemption for signals we failed to measure. The same posture
+#: `embedder_identity` takes when its dim probe raises (`0` → treated as a stamp mismatch).
+UNCHARACTERIZED_NOISE_FLOOR = 1.0
+
+_FLOOR_CACHE_ATTR = "_mokata_noise_floor"
+
+
 class HashingEmbedder:
     """A deterministic, local, dependency-free embedder: hashes word tokens into a fixed-dim
     bag-of-words vector (L2-normalized). Reproducible across processes (a stable hash, not the
@@ -87,6 +127,18 @@ class HashingEmbedder:
     two is live rather than printing "semantic" over both."""
 
     embedder_id = HASHING_ID
+
+    #: DB.S8f — MEASURED, not estimated, and the number is why this embedder is now weighted the
+    #: way it is. Over the DB.S8 fixture (`tests/_scale_fixture.py`), cosine between a probe query
+    #: and an item that is NOT its answer reaches p99 = 0.6455 at N=2,000 and 0.6124 at N=5,000;
+    #: 0.65 covers both. For scale: the fixture's real answers score 0.71-0.83, so this embedder's
+    #: noise very nearly OVERLAPS its signal — which is doc 52's M-6 ("a test seam, not semantic
+    #: recall") with a number against it.
+    #:
+    #: Declared rather than probed because a canned probe cannot see a corpus: the probe set above
+    #: measures 0.53 for this embedder, which understates what a real store does to it. A declared
+    #: floor that a corpus-scale test re-measures is honest; a probe that flatters it is not.
+    noise_floor = 0.65
 
     def __init__(self, dim: int = EMBED_DIM) -> None:
         self.dim = dim
@@ -187,6 +239,86 @@ def _load_model2vec(model_name: str):
                 os.environ[k] = v
 
 
+def measure_noise_floor(embedder: Embedder,
+                        degrade_out: Optional[Callable[[str], None]] = None) -> float:
+    """Probe `embedder`'s unrelated-pair cosine over `NOISE_PROBE_QUERIES` x `NOISE_PROBE_DOCS`.
+
+    The WORST observed pair, not the mean: this feeds an inequality that has to hold for the worst
+    unrelated item in the store, and a mean would let the tail through by construction. 64 encodes,
+    once, on fixed text — so the answer is deterministic and the ranking stays a pure function of
+    its inputs.
+
+    Raises nothing: an embedder that cannot be probed is UNCHARACTERIZED, which fails closed.
+    """
+    try:
+        qs = [embedder(q) for q in NOISE_PROBE_QUERIES]
+        ds = [embedder(d) for d in NOISE_PROBE_DOCS]
+    except Exception as exc:
+        # D5 — DEGRADES LOUD, and fails CLOSED. Deliberately broad for the reason every other
+        # embedder handler in this module is: an embedder is ANY caller-supplied callable, so its
+        # raisables span a hosted provider's transport errors, an optional extra's own tree, and
+        # plain TypeError from a callable that does not take a string. There is exactly one honest
+        # response to all of them.
+        #
+        # The FALLBACK is right — treat an embedder we could not characterize as maximally noisy,
+        # so the ranking principle is not waived for a signal we failed to measure — but silence
+        # would be the bug: the user's semantic tier has just been collapsed to its budget share
+        # and would rank on almost nothing, with no way to tell that from "the tier is quiet".
+        from ..degrade import note_degraded
+        note_degraded("memory-embedder-noise", FAILURE_ENGINE,
+                      fallback="the embedder could not be characterized — the semantic tier is "
+                               "weighted as if it were maximally noisy",
+                      fix="declare `noise_floor` on the embedder, or run `mokata doctor`",
+                      detail=f"{type(exc).__name__}: {exc}", out=degrade_out)
+        return UNCHARACTERIZED_NOISE_FLOOR
+    worst = 0.0
+    for qv in qs:
+        for dv in ds:
+            worst = max(worst, cosine(qv, dv))
+    return float(worst)
+
+
+def noise_floor_of(embedder: Optional[Embedder]) -> float:
+    """The noise floor the fusion caps the semantic tier against. DECLARED, else PROBED, else 1.0.
+
+    Three tiers of knowledge, and the order is the point:
+
+      1. **DECLARED** (`embedder.noise_floor`) — the embedder characterized itself, ideally against
+         a real corpus. `HashingEmbedder` does; a hosted provider that knows its own distribution
+         can, and skips the probe's round trips by doing so.
+      2. **PROBED** (`measure_noise_floor`) — nobody said, so ask. This is the "capability-PROBED,
+         never assumed" posture `_can_nominate` takes with `lexical_search`, applied to a number
+         instead of to a method. Cached on the instance: 64 encodes once, never per recall.
+      3. **UNCHARACTERIZED** — the probe could not run. Fails closed at 1.0.
+
+    `None` (semantic tier off) answers 0.0: there is no tier to cap, and 0.0 is the value that
+    leaves `semantic_weight_for` returning the declared weight unchanged, so the no-embedder
+    ranking is arithmetically untouched.
+    """
+    if embedder is None:
+        return 0.0
+    declared = getattr(embedder, "noise_floor", None)
+    if declared is not None:
+        try:
+            return max(0.0, min(1.0, float(declared)))
+        except (TypeError, ValueError):
+            # A non-numeric declaration is a broken embedder, not a licence to ignore the bound.
+            return UNCHARACTERIZED_NOISE_FLOOR
+    cached = getattr(embedder, _FLOOR_CACHE_ATTR, None)
+    if cached is not None:
+        return float(cached)
+    floor = measure_noise_floor(embedder)
+    try:
+        setattr(embedder, _FLOOR_CACHE_ATTR, floor)
+    except (AttributeError, TypeError):
+        # `functools.partial`, a builtin, a slotted object — all legal embedders under the seam's
+        # "any callable" contract, and none of them takes an attribute. Re-probing costs 64 encodes
+        # per recall for those, which is a cost, not a wrong answer; declaring `noise_floor` is the
+        # documented way out.
+        pass
+    return floor
+
+
 def embedder_identity(embedder: Optional[Embedder]) -> Tuple[str, int]:
     """The ``(embedder_id, dim)`` STAMPED on a vector index for `embedder`.
 
@@ -245,7 +377,9 @@ def _extra_is_installed() -> bool:
 
 
 # Registry so config can name an embedder; unknown / None -> semantic stays OFF.
-def make_embedder(name: Optional[str]) -> Optional[Embedder]:
+def make_embedder(name: Optional[str], *,
+                  degrade_out: Optional[Callable[[str], None]] = None,
+                  semantic_store: bool = False) -> Optional[Embedder]:
     """Resolve an embedder by name (from `settings.memory.embedder`).
 
       * ``"auto"``               -> DB.S4 detection: the blessed extra if usable, else hashing;
@@ -256,9 +390,46 @@ def make_embedder(name: Optional[str]) -> Optional[Embedder]:
 
     The None default is UNCHANGED from Stage 35e: a repo that has not opted in gets byte-identical
     behaviour, because opting a user into embedding their memory is exactly the kind of thing P2
-    says you ask about first."""
+    says you ask about first.
+
+    EXPLICIT-ASK LEGIBILITY (2026-08-01). An explicit ask that lands on hashing now SAYS SO.
+    `detect_embedder` deliberately stays silent when the extra is merely ABSENT — a notice that
+    fires on every default install is noise, and that reasoning is correct for ``auto``, which is
+    a request to use whatever is best. It is NOT correct for an ask that NAMED the extra: there,
+    silence tells a user who wrote ``memory.embedder: model2vec`` that they got what they asked
+    for, when they got token-hashing instead.
+
+    What changed the severity is DB.S8f's K2 bound. Before it, an unnoticed fallback to hashing
+    meant "semantic recall is worse than you think". After it, `HashingEmbedder`'s 0.65 noise
+    floor weights the tier down to **0.077** — so the tier the user explicitly asked for is very
+    nearly INERT, and nothing anywhere said so. The degrade was always real; it is now large
+    enough that staying quiet about it is misreporting.
+
+    `semantic_store=True` says the caller opted into a semantic STORE (pgvector), which is itself
+    a semantic ask even when `memory.embedder` is unset — the ONE path DB.S8f found that reaches a
+    live embedder without naming one. Landing on hashing there fills a real vector index with
+    token-hash vectors, which is worth exactly as much of a notice as the named ask.
+    """
     if name in ("hashing", "local"):
         return HashingEmbedder()
     if name in ("auto", "model2vec", "embeddings"):
-        return detect_embedder()
+        asked_for_the_extra = semantic_store or name in ("model2vec", "embeddings")
+        embedder = detect_embedder(degrade_out=degrade_out)
+        if asked_for_the_extra and getattr(embedder, "embedder_id", None) == HASHING_ID \
+                and not _extra_is_installed():
+            # ONLY when the extra is ABSENT. When it is installed but the MODEL failed to load,
+            # `detect_embedder` has already said so with the better message (it knows the cause),
+            # and saying it twice for one fallback is how a channel gets tuned out.
+            from ..degrade import FAILURE_ENGINE, note_degraded
+            asked = "a semantic (pgvector) store" if semantic_store else f"`{name}`"
+            note_degraded(
+                "memory-embedder-ask", FAILURE_ENGINE,
+                fallback=f"you asked for {asked}, and semantic recall is TOKEN-HASH (hashing) — "
+                         "the `embeddings` extra is not installed. Its noise floor bounds the "
+                         "semantic tier to a weak tiebreak (weight 0.077), so it is close to off",
+                fix="pip install 'mokata[embeddings]'  (~30MB, numpy-only) — or set "
+                    "`memory.embedder: hashing` to say this is deliberate and silence this",
+                detail=f"asked={name!r} semantic_store={semantic_store} resolved={HASHING_ID}",
+                out=degrade_out)
+        return embedder
     return None

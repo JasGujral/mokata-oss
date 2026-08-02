@@ -106,23 +106,41 @@ class RelatedDecision:
     kind: str = ""
     matched: List[str] = field(default_factory=list)
     source: str = "recall"
+    # DB.S7c2 STALE-REF — the `index_epoch` the minting store was at when this citation was made.
+    # It rides `to_dict`/`from_dict` because that is the WHOLE point: this `id` is persisted into
+    # brainstorm run state and read back after the store that minted it is gone, and the stamp is
+    # the only thing that survives with it. Empty = un-stamped (a `decisions[]` match, which never
+    # crossed a store boundary, or a floor mint where STALE-REF is OFF) — see `memory.staleness`.
+    index_epoch: str = ""
+    # H-6 S4 STALE-REF (code-anchor half) — the `about_code` anchors this cited decision CONCERNS.
+    # It rides `to_dict`/`from_dict` for the same reason `index_epoch` does, and it is the same
+    # reason: this citation is persisted into brainstorm run state and read back after the pass
+    # that made it is gone, so an anchor that did not survive the round trip could never be checked
+    # at approve time. Distinct from `matched`, which is the intersection with THIS approach's
+    # surface (and empty for a `recall`-sourced citation); this is the decision's own anchor list.
+    # Empty for a legacy citation and for a decision that names no code — no anchors, no opinion.
+    about_code: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {"id": self.id, "subject": self.subject, "kind": self.kind,
-                "matched": list(self.matched), "source": self.source}
+                "matched": list(self.matched), "source": self.source,
+                "index_epoch": self.index_epoch, "about_code": list(self.about_code)}
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "RelatedDecision":
         return cls(id=d.get("id", ""), subject=d.get("subject", ""), kind=d.get("kind", ""),
-                   matched=list(d.get("matched", [])), source=d.get("source", "recall"))
+                   matched=list(d.get("matched", [])), source=d.get("source", "recall"),
+                   index_epoch=d.get("index_epoch", ""),
+                   about_code=list(d.get("about_code", [])))
 
     @classmethod
-    def from_item(cls, item: Any) -> "RelatedDecision":
+    def from_item(cls, item: Any, index_epoch: str = "") -> "RelatedDecision":
         return cls(
             id=getattr(item, "id", "") or "",
             subject=getattr(item, "subject", "") or "",
             kind=(getattr(item, "effective_kind", "") or getattr(item, "kind", "") or ""),
-            source="recall")
+            source="recall", index_epoch=index_epoch,
+            about_code=list(getattr(item, "about_code", None) or []))
 
 
 @dataclass
@@ -199,7 +217,7 @@ def tier_display(tier: str) -> str:
 def run_prior_art(approach: str, targets: Sequence[str], *, layer: Any = None,
                   recall: Optional[Callable[[str], Sequence[Any]]] = None, query: str = "",
                   top_n: int = DEFAULT_TOP_N, decisions: Optional[Sequence[Any]] = None,
-                  at: Optional[str] = None) -> PriorArtResult:
+                  at: Optional[str] = None, index_epoch: str = "") -> PriorArtResult:
     """Run the prior-art pass for one approach over its `targets` (the symbols/terms it would touch).
 
     Bounded top-N over the injected `layer` (semantic tier when CRG-adopted, structural/lexical
@@ -227,7 +245,11 @@ def run_prior_art(approach: str, targets: Sequence[str], *, layer: Any = None,
     related: List[RelatedDecision] = []
     if recall is not None and q:
         for item in list(recall(q) or [])[:top_n]:
-            related.append(RelatedDecision.from_item(item))
+            # DB.S7c2 — stamp the MINTING store's `index_epoch` onto the citation. Only the recall
+            # arm is stamped: these ids come FROM the store and get persisted into run state, so
+            # they are the ones that outlive it. `index_epoch=""` (the floor, or no store) leaves
+            # the citation un-stamped, which `memory.staleness.is_stale` reads as "no opinion".
+            related.append(RelatedDecision.from_item(item, index_epoch=index_epoch))
 
     # NAMED HOOK (GR.S2(m) precedent) — dormant until AP-SD's structured `decisions[]` is supplied.
     # When it is, enrich the related set from decisions whose about_code anchors intersect the surface.
@@ -303,7 +325,8 @@ def _enrich_from_decisions(decisions: Sequence[Any], targets: Sequence[str],
             continue
         have.add(did)
         out.append(RelatedDecision(id=did, subject=subject, kind="decision",
-                                   matched=matched, source="decisions[]"))
+                                   matched=matched, source="decisions[]",
+                                   about_code=[str(a) for a in anchors]))
     return out
 
 

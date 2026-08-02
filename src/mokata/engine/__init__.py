@@ -29,9 +29,7 @@ from .spec import AcceptanceCriterion, Spec, TestRef
 from .ship import (
     LANDING_OPTIONS,
     FinishDecision,
-    ShipReadiness,
     build_finish_summary,
-    check_ship_readiness,
     record_finish_decision,
 )
 from .spec_gate import (
@@ -95,11 +93,11 @@ __all__ = [
     "SPEC_PERSISTED_GATE_ID",
     "SPEC_PERSISTED_MESSAGE",
     "SPEC_STATE_KEY",
-    # Stage 34 — ship (finish) readiness + landing decision
-    "check_ship_readiness",
+    # Stage 34 — the ship landing decision. REVIEW-FIX.R3 deleted `check_ship_readiness` +
+    # `ShipReadiness`: the ONE ship-gating review truth is the persisted `review_verdict`
+    # progress event (`progress_events.ship_review_gate`), never a caller-supplied boolean.
     "record_finish_decision",
     "build_finish_summary",
-    "ShipReadiness",
     "FinishDecision",
     "LANDING_OPTIONS",
     # Stage 37 — spec-awareness / regression guard

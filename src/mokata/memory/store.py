@@ -13,7 +13,7 @@ detection path; SQLite is the guaranteed floor.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .backends import MemoryBackend
 # PRE-SIMP (0.0.15) — backend build/select/scope/identity resolution moved to `selection.py` (the
@@ -30,17 +30,23 @@ from .selection import (  # noqa: F401 - re-export shim (import-compat)
     select_memory_backend,
 )
 from .consolidation import (
+    ARCHIVE,
     MERGE,
     PRUNE,
     SUMMARIZE,
     ConsolidationProposal,
+    SummaryDrafter,
+    propose_archival,
     propose_consolidations,
     render_consolidation,
 )
-from .healing import CONTRADICTION, HealingProposal, detect_issues, render_proposal
-from .item import ACTIVE, DECISION, DEFAULT_TOP_K, MEMORY_TYPES, STALE as STATUS_STALE
-from .item import SUPERSEDED, MemoryItem, downgrade_refusal
-from ..errors import MokataError
+from .healing import (CONTRADICTION, CROSS_WRITER, HealingProposal, detect_issues,
+                      render_proposal)
+from .item import ACTIVE, ARCHIVED, DECISION, DEFAULT_TOP_K, MEMORY_TYPES, STALE as STATUS_STALE
+from .item import SUPERSEDED, MemoryItem, approval_ledger_id_of, downgrade_refusal, now_iso
+from . import lifecycle
+from ..degrade import FAILURE_LOCAL_IO, note_degraded
+from ..errors import MokataError, failure_class_of
 
 MEMORY_SETTINGS_KEY = "memory"     # manifest.settings["memory"] = {type: bool}
 MEMORY_STATS_KEY = "memory_stats"  # StateStore key
@@ -284,9 +290,89 @@ class MemoryStore:
         to what the identity may READ (TM.S10). With no scope context AND no access policy
         (local/zero-config) this is exactly `all_active` — byte-identical recall. Counts one read
         (like `all_active`), so instrumentation is unchanged."""
-        items = self.all_active(mtype=mtype)
+        return self._visible_filter(self.all_active(mtype=mtype,
+                                                    scope_context=self.scope_context))
+
+    # --- R-1 (DB.S8) the BOUNDED candidate read -----------------------------
+    def candidate_scope_path(self) -> Optional[List[Any]]:
+        """The scope path to send DOWN with a candidate query, or `None`.
+
+        `None` in exactly the two cases `peek_active` already omits it: no scope context (local /
+        zero-config), or a backend whose backfill has not run. Omitting it is always SAFE — the
+        hydrated set still goes through `_visible_filter`, so this can only ever change how many
+        rows the database returns, never which ones survive.
+        """
+        if self.scope_context is None:
+            return None
+        if not getattr(self.backend, "supports_scope_pushdown", False):
+            return None
+        from .scope import scope_path
+        return scope_path(self.scope_context)
+
+    def hydrate_candidates(self, ids: Any, *, subjects: Any = (),
+                           mtype: Optional[str] = None,
+                           count_read: bool = True) -> List[MemoryItem]:
+        """R-1 — `scoped_active`'s BOUNDED twin: the same visibility rule over the rows the tiers
+        NOMINATED instead of over every active row.
+
+        The visibility half is deliberately unchanged and shares `_visible_filter` with
+        `scoped_active`, so scope union, precedence and readability keep exactly ONE implementation.
+        What changes is only how many rows reach it: ~150 nominated ids and their precedence groups
+        rather than the whole active set (51,606 rows at DB.S8's 100k fixture).
+
+        It COUNTS a read by default, like `scoped_active`, so `memory_stats.reads` — which
+        `/mokata:govern` surfaces as the read/write ratio — keeps meaning the same thing across
+        this change.
+
+        JIT-STAMP-SEAM — `count_read=False` is the NON-COUNTING twin, and it is the same split
+        `peek_visible_active` already makes against `scoped_active`: split the INSTRUMENTATION,
+        never the rule (DB.S7c1). The per-turn injection reads through here on EVERY prompt, and a
+        counted read per turn is exactly the JIT-RECALL-COUNTS-A-READ defect one layer up —
+        `memory_stats.reads` would become a count of turns. Visibility, precedence and readability
+        are untouched by the flag: there is still ONE `_visible_filter` and one rule, and the only
+        thing that moves is whether the counter does.
+        """
+        if count_read:
+            self._bump_read()
+        items = self.backend.hydrate(list(ids), subjects=list(subjects), statuses=(ACTIVE,),
+                                     scope_path=self.candidate_scope_path())
+        if mtype is not None:
+            items = [i for i in items if i.mtype == mtype]
+        return self._visible_filter([i for i in items if i.mtype in self.enabled_types])
+
+    def peek_visible_active(self, mtype: Optional[str] = None) -> List[MemoryItem]:
+        """`scoped_active`'s NON-COUNTING twin — the SAME visible set, read without moving the
+        read counter or persisting stats.
+
+        For the surfaces that AUTO-INJECT memory rather than answer a user's recall: the always-on
+        rules, the JIT context pull (`memory/brain.py`), the governance/visibility views. Merely
+        OFFERING memory must mutate no durable state, or `memory_stats.reads` — which
+        `/mokata:govern` surfaces as the read/write ratio — becomes a count of TURNS.
+
+        DB.S7c1's precedent, made reusable: split the INSTRUMENTATION, never the rule. Visibility
+        (scope union TM.S6 · precedence winner M-A2 · readability TM.S10) still has exactly ONE
+        implementation, `_visible_filter`; only the counting differs. Before this existed, every
+        non-counting caller had to open-code `_visible_filter(peek_active(...))` — and the JIT path
+        simply never did, which is JIT-RECALL-UNSCOPED (doc 84 §4)."""
+        return self._visible_filter(self.peek_active(mtype=mtype,
+                                                     scope_context=self.scope_context))
+
+    def _visible_filter(self, items: List[MemoryItem]) -> List[MemoryItem]:
+        """THE visibility rule — scope union, precedence winner, readability — over an already-read
+        list. Extracted at DB.S7c1 so that "what may this identity see" has exactly ONE
+        implementation while its two callers differ in the ONE way they must: `scoped_active`
+        COUNTS a read (it is recall), and the K2 healing path does NOT (it is a read-only surface
+        that must mutate no durable state, `peek_active`'s contract). Splitting the rule instead of
+        the instrumentation would have given visibility a second definition — the exact thing the
+        `union_read` comment below refuses."""
         if self.scope_context is not None:
             from .scope import union_read
+            # DB.S2b — `union_read` STAYS, even when the backend already pushed the same predicate
+            # into SQL. It is not redundant belt-and-braces: it is what makes the pushdown an
+            # OPTIMIZATION rather than a second, competing definition of visibility. Filtering an
+            # already-filtered list is a no-op, so the result is identical either way — and on any
+            # backend that can't push (a vault, a native client, a store whose backfill hasn't run)
+            # this line is still the ONLY thing doing the scope filtering.
             items = union_read(items, self.scope_context)
             # M-A2 — collapse the union to the single precedence WINNER per key (doc 62 §3), so two
             # conflicting scoped items for one subject never BOTH inject (the reader picks no winner
@@ -392,8 +478,39 @@ class MemoryStore:
             human_approved=policy_approved(policy))
 
     def render_write(self, item: MemoryItem) -> str:
-        return (f"mokata · propose to remember [{item.mtype}] {item.subject} = "
-                f"{item.value!r}\nNothing is stored unless you approve.")
+        """The gate surface for a remember.
+
+        R9 — when this write SUPERSEDES existing items, the human is not being asked to store a
+        new fact; they are being asked to retire someone else's approved one. So the prompt names
+        what is being displaced and where it came from. Doc 83's poisoning row is exactly this
+        moment: "a poisoned proposal a human rubber-stamps still lands", and a prompt that showed
+        only the incoming value gave the reader nothing to be suspicious with.
+
+        A plain remember (superseding nothing) renders byte-identically to before — there is no
+        prior item, so there is no provenance to highlight and no block is added."""
+        from .intelligence import provenance_block
+        base = (f"mokata · propose to remember [{item.mtype}] {item.subject} = "
+                f"{item.value!r}")
+        displaced = ""
+        for prior in self._superseded_items(item):
+            displaced += (f"\n  this REPLACES an existing memory: {prior.subject} = "
+                          f"{prior.value!r}" + provenance_block(prior))
+        return base + displaced + "\nNothing is stored unless you approve."
+
+    def _superseded_items(self, item: MemoryItem) -> List[MemoryItem]:
+        """The existing items this write would retire, for the R9 highlight. Read-only and TOTAL:
+        a missing id, an unreadable backend or any lookup error yields fewer lines, NEVER an
+        exception — a provenance panel must not be able to break the approval prompt it decorates
+        (the whole point of showing it is that the human can still decide)."""
+        out: List[MemoryItem] = []
+        for rid in (getattr(item, "supersedes", None) or []):
+            try:
+                prior = self.get(str(rid))
+            except Exception:
+                prior = None
+            if prior is not None:
+                out.append(prior)
+        return out
 
     # --- identity + access (TM.S10, doc 52 M-1/M-2) -------------------------
     def _stamp_author(self, item: MemoryItem) -> None:
@@ -402,6 +519,59 @@ class MemoryStore:
         a no-op when the store has no identity (local/direct construction — byte-identical)."""
         if self.identity and item.provenance.get("author", "") in ("", "user"):
             item.provenance["author"] = self.identity
+
+    def _stamp_approval(self, item: MemoryItem, ledger_id: Any) -> None:
+        """M-1/R9 — stamp the CONSENT CHAIN on a durable write: who let this content land, when,
+        and which audit-ledger entry says so (doc 52 M-1, "the item carries its own consent chain").
+
+        Called from `_durable_write` only, i.e. inside the WriteGate's commit closure under its
+        ledger hold. That placement IS the contract: the stamp cannot exist without the gated write
+        that produced the ledger entry it names, and there is no second, ungated path that writes
+        these fields. It sits beside `_stamp_author` for the same reason — one act, one place.
+
+        Unlike `_stamp_author`, this OVERWRITES rather than filling a placeholder, and the
+        difference is not an oversight. `author` is who wrote the item and does not change when
+        someone else edits it; the approval names the human decision that licensed the content the
+        item carries RIGHT NOW. An edit, a promotion, a publish or a supersede is a new decision,
+        so it is a new stamp — an item whose content moved under approval #12 must not still claim
+        approval #7, which is precisely the "approved once, mutated later" hole R9 exists to close.
+
+        `approved_by` is `self.identity` — `team_audit.actor()`, the SAME source `_stamp_author`
+        uses. Deliberately not a second notion of "who": the gate's `WriteRequest.actor` is the
+        literal `"memory"` (the subsystem, not a person) and would be a lie in this field. With no
+        identity (direct/local construction) it stays "" rather than guessing.
+
+        Degrades to a no-op on the id alone: an unjoinable ledger id leaves `approval_ledger_id`
+        None while `approved_by`/`approved_at` still record the decision honestly. Nothing here
+        invents an id (`approval_ledger_id_of`)."""
+        item.approved_by = self.identity or ""
+        item.approved_at = now_iso()
+        item.approval_ledger_id = approval_ledger_id_of(ledger_id)
+
+    @staticmethod
+    def _pending_approval_seq(led: Any) -> Any:
+        """The seq the gate's upcoming `approved` ledger entry will land at, or None with no ledger.
+
+        `len+1` is exact, and MS.S3/B2 is why: the WriteGate holds the ledger's cross-process append
+        lock across the commit closure this is called from AND the `approved` record that follows it
+        (`govern/gate.py:_ledger_hold`), so no other writer can append in between. B2's own fix —
+        `WriteOutcome.approval_seq`, the REAL seq — is not available here and cannot be: it exists
+        only after the entry is written, and the item has to be serialised before that. So the
+        prediction is used where the real value cannot yet exist, and the tests pin the two to be
+        equal rather than trusting the reasoning.
+
+        ONE definition, used by both the team and the local branch below. It used to be inline on
+        the team branch only, which meant a local-mode item had no approval id available to stamp
+        at all — the gap M-1/R9 closes.
+
+        Degrades on any ledger that cannot be measured (a test stub without `__len__`): None, so a
+        write still lands and simply carries no joinable id."""
+        if led is None:
+            return None
+        try:
+            return len(led) + 1
+        except TypeError:
+            return None
 
     @staticmethod
     def _item_scope_cat(item: MemoryItem) -> "Tuple[str, Optional[str], Optional[str]]":
@@ -495,17 +665,68 @@ class MemoryStore:
         journal-first + CAS-guarded (`op` + `base_revision`), NEVER direct-to-backend; in LOCAL mode
         it is exactly today's `backend_call` (byte-identical). The captured `ledger_id` (the human
         approval's ledger seq — the gate's `approved` entry is the next seq with no intervening
-        write) rides the entry so the deferred flush inherits the original consent (C5/P2)."""
+        write) rides the entry so the deferred flush inherits the original consent (C5/P2).
+
+        M-1/R9 — the approval id is resolved for BOTH modes here and stamped onto the item before
+        either branch runs. Two consequences worth stating, because both were previously untrue:
+
+          * a LOCAL-mode item now carries its consent chain too. The id was computed on the `team`
+            branch only, so the local path had nothing to stamp — approval provenance would have
+            existed for teams and silently not for everyone else.
+          * every item ONE approval touches carries the SAME id. Several `_durable_write` calls in
+            one commit closure (a supersede writes old + new; a rollback writes item + prior; a
+            consolidation writes the whole group) all resolve the same `len+1`, because no ledger
+            append happens between them. That matches the journal's own notion of an approval group
+            (`team_journal._approval_key`) rather than inventing a per-item one.
+
+        The stamp is applied HERE, on the single fork, rather than at the ~20 call sites — a new
+        gated write path inherits it by construction instead of by remembering to."""
+        led = ledger if ledger is not None else self._ledger
+        ledger_id = self._pending_approval_seq(led)
+        self._stamp_approval(item, ledger_id)
+        self._record_code_anchors(item, op)
         if team:
-            led = ledger if ledger is not None else self._ledger
-            # `len+1` is the seq the gate's upcoming `approved` entry will land at. MS.S3/B2: the
-            # WriteGate holds the ledger append-lock across THIS commit and that approved record, so
-            # no other window can append between here and there — the prediction is provably exact,
-            # never misattributed to a racing write's approval.
-            ledger_id = (len(led) + 1) if led is not None else None
             self._journal_team_write(item, ledger_id, op=op, base_revision=base_revision)
         else:
             backend_call()
+
+    def _record_code_anchors(self, item: MemoryItem, op: str) -> None:
+        """H-6 — mint the anchor→fingerprint baseline for this item's `about_code` anchors.
+
+        **WHY IT IS HERE, beside `_stamp_approval`, and nowhere else.** M-1/R9 put the approval
+        stamp on this single fork for a stated reason — "a new gated write path inherits it by
+        construction instead of by remembering to" — and the baseline is the same class of act:
+        something that must be true of every gated write and of no ungated one. Bolted onto
+        `remember` alone it would leave `promote` · `propose` · the review transitions · `rollback`
+        · `heal` · `consolidate` silently baseline-less, and an anchor with no baseline is an
+        anchor H-6 has no opinion about (decision #6) — i.e. the feature would be quietly off for
+        every path but one.
+
+        **WHAT THE RECORD MEANS: the code as it stood when the human approved the decision.** This
+        closure runs if and only if a human's approval licensed this content, which is exactly the
+        moment that sentence describes. Minting at the PROPOSE step would record code nobody
+        approved anything about; minting on a read path would record code nobody looked at.
+
+        **`refresh` is NOT passed, and that is P7 at the write path.** The record is keyed per
+        ANCHOR, so a second decision naming a file someone else already anchored must not advance
+        that file's baseline — doing so would silently erase a pending staleness proposal the first
+        decision's owner needed to see, the "quietly relabelled as current" failure STALE-REF
+        exists to stop. The cost is that a later decision is judged against an earlier decision's
+        baseline, so it may propose staleness the moment it lands. That over-proposes rather than
+        under-proposes — a proposal changes nothing and is reviewable — and it is filed as
+        H-6-ANCHOR-KEYED-PER-FILE (doc 84) with per-(item, anchor) keying as the fix.
+
+        A DELETE is skipped: retiring a fact is not a fresh observation of the code it named.
+        Never raises (`record_anchors` swallows) — a bookkeeping failure must not undo a gated
+        write a human already approved.
+        """
+        if op == _OP_DELETE or not getattr(item, "about_code", None):
+            return
+        root = getattr(self._surface, "root", "") if self._surface is not None else ""
+        if not root:
+            return                      # direct/local construction: no repo to fingerprint against
+        from ..knowledge.anchor_fingerprints import record_anchors
+        record_anchors(root, list(item.about_code), layer=self.knowledge_layer)
 
     def _resolve_team_writer(self) -> Any:
         """The injected TEAM-writer strategy, or a lazily-constructed default `TeamWriter` (PRE-SIMP,
@@ -570,16 +791,19 @@ class MemoryStore:
             if self.embedder is not None and "_embedding" not in item.provenance:
                 item.provenance["_embedding"] = list(
                     self.embedder(f"{item.subject} {item.value}"))
-            if team:
-                # TM.S5b — journal-first, capturing the gate's approval ledger id AT this point.
-                # The WriteGate records its "approved" entry immediately AFTER this commit with no
-                # intervening ledger write, so the next seq (len+1) IS that approval's id (C5/P2).
-                # MS.S3/B2: the gate holds the ledger append-lock across this commit + that approved
-                # record, so `len+1` is provably the approval's seq — exact under concurrency.
-                ledger_id = (len(self._ledger) + 1) if self._ledger is not None else None
-                self._journal_team_write(item, ledger_id)
-            else:
-                self.backend.put(item)     # local: byte-for-byte the pre-TM.S5b path
+            # M-1/R9 — `remember` was the ONE gated writer that hand-rolled the TM.S5b fork inline
+            # instead of calling `_durable_write`, which every other path (promote · promote_scope ·
+            # propose · the review transitions · rollback · heal · consolidate) already used. The
+            # resolved write is byte-identical — team took `_journal_team_write(item, len+1)` with
+            # the default `op=_OP_PUT` / `base_revision=None`, which is exactly what the fork passes,
+            # and local took `backend.put(item)`, which is the `backend_call` below.
+            #
+            # It is routed through the seam now because a duplicate fork is how the seam stops being
+            # one: the approval stamp lives in `_durable_write`, so a copy here would have been a
+            # durable write that silently carried no consent chain — on the most-used write path in
+            # the store.
+            self._durable_write(item, op=_OP_PUT, backend_call=lambda: self.backend.put(item),
+                                team=team, base_revision=None)
             self._bump_write()
 
         # M2 (Stage 39): every memory write routes through the ONE universal WriteGate —
@@ -609,10 +833,16 @@ class MemoryStore:
     def render_promotion(self, item: MemoryItem, old: str, new: str, direction: str) -> str:
         """The gate surface for an enforcement change — honest about what it does (and doesn't):
         it moves the BINDING only, the rule text is untouched."""
+        from .intelligence import provenance_block
         verb = {"promote": "PROMOTE", "demote": "DEMOTE"}.get(direction, "CHANGE")
         return (f"mokata · {verb} rule enforcement [{item.governance_kind}] {item.subject}: "
                 f"{old} → {new}\nThis changes ONLY the enforcement binding — the rule's condition "
-                f"({item.value!r}) is NOT rewritten.\nNothing changes unless you approve.")
+                f"({item.value!r}) is NOT rewritten."
+                # R9 — whose rule this is, and on whose approval it currently stands. Making a
+                # rule HARD is the highest-leverage change in the store; the reader should know
+                # whether they are hardening their own decision or somebody else's.
+                + provenance_block(item, label="this rule") +
+                "\nNothing changes unless you approve.")
 
     def _record_enforcement_change(self, item: MemoryItem, old: str, new: str,
                                    direction: str, actor: str, approval_seq: Any) -> None:
@@ -690,8 +920,13 @@ class MemoryStore:
     def render_scope_promotion(self, item: MemoryItem, old: str, new: str) -> str:
         """The gate surface for a SCOPE promotion — honest that it widens the AUDIENCE (who can
         see the item), not its content."""
+        from .intelligence import provenance_block
         return (f"mokata · PROMOTE scope [{item.subject}]: {old} → {new}\nThis WIDENS who can see "
-                f"this item (its content is NOT changed).\nNothing changes unless you approve.")
+                f"this item (its content is NOT changed)."
+                # R9 — widening the audience of content you did not write is the M-2 half of the
+                # same risk: the reader is vouching for someone else's item to a bigger room.
+                + provenance_block(item, label="this item") +
+                "\nNothing changes unless you approve.")
 
     def _record_scope_promotion(self, item: MemoryItem, old: str, new: str, actor: str,
                                 approval_seq: Any) -> None:
@@ -1052,23 +1287,42 @@ class MemoryStore:
                             message=f"rolled back {item.subject}: restored {prior.id}")
 
     # --- reads (honor toggles, count) ---------------------------------------
-    def peek_active(self, mtype: Optional[str] = None) -> List[MemoryItem]:
+    def peek_active(self, mtype: Optional[str] = None, *,
+                    scope_context: Any = None) -> List[MemoryItem]:
         """Active items WITHOUT counting a read — for read-only surfaces (the governance
         dashboard, always-on rule injection) that must mutate NO durable state. Same data as
-        `all_active`; only the instrumentation differs."""
-        items = self.backend.all(mtype=mtype, statuses=(ACTIVE,))
+        `all_active`; only the instrumentation differs.
+
+        DB.S2b — `scope_context`, when given AND the backend can push it, sends the broad→narrow
+        UNION down as a WHERE so the other scopes' rows are never materialized. It is passed only
+        to a backend advertising `supports_scope_pushdown`, which is the backfill-before-filter
+        guard: a store whose scope columns aren't yet a faithful projection of its docs never has a
+        predicate built on them. Omitting it is always SAFE — the caller's `union_read` filters
+        from the doc regardless, so this can only ever change performance, never the result."""
+        extra = {}
+        if scope_context is not None and getattr(self.backend, "supports_scope_pushdown", False):
+            from .scope import scope_path
+            # Passed as **kwargs, not as an explicit `scope_path=None`, so a backend that predates
+            # the seam (or any third-party one implementing the older three-argument `all`) is
+            # called with EXACTLY the signature it has always had. The keyword only ever appears
+            # for a backend that advertised it can take it.
+            extra["scope_path"] = scope_path(scope_context)
+        items = self.backend.all(mtype=mtype, statuses=(ACTIVE,), **extra)
         return [i for i in items if i.mtype in self.enabled_types]
 
-    def all_active(self, mtype: Optional[str] = None) -> List[MemoryItem]:
+    def all_active(self, mtype: Optional[str] = None, *,
+                   scope_context: Any = None) -> List[MemoryItem]:
         self._bump_read()
-        return self.peek_active(mtype=mtype)
+        return self.peek_active(mtype=mtype, scope_context=scope_context)
 
     def recall(self, subject: str, mtype: Optional[str] = None) -> List[MemoryItem]:
         # TM.S6 — recall reads the UNION across the scope path (byte-identical when no context).
         return [i for i in self.scoped_active(mtype=mtype) if i.subject == subject]
 
     def recall_relevant(self, query: str, top_k: int = DEFAULT_TOP_K, semantic: bool = True,
-                        graph_scorer: Any = None) -> List[Any]:
+                        graph_scorer: Any = None, *, stamp: bool = True,
+                        kinds: Optional[Sequence[str]] = None,
+                        degrade_out: Optional[Callable[[str], None]] = None) -> List[Any]:
         """Stage 35e — tiered, by-relevance retrieval (lexical floor + optional graph +
         semantic when an embedder is wired), fused + ranked, top-k only (frugal). Returns
         a list of RetrievalHit. Degrades to lexical when the semantic/graph tiers are off.
@@ -1076,7 +1330,59 @@ class MemoryStore:
         Stage 35f: the graph tier is now LIVE BY DEFAULT — when no explicit graph_scorer is
         passed and a knowledge layer is wired, build one from the code graph. It silently
         contributes nothing on the grep floor (no real graph ⇒ scorer is None), so
-        lexical+semantic always hold."""
+        lexical+semantic always hold.
+
+        DB.S5: the fusion gained a recency + usage term (both 0 for an item with no telemetry, so
+        a store without the v4 columns ranks identically), and the hits this call RETURNS are
+        stamped as recalled. The stamp happens LAST, after the answer exists, and cannot fail it
+        (`record_usage` raises nothing).
+
+        DB.S7b (K1): the fusion gained a bounded ≤2-hop EXPANSION term over the typed edges, wired
+        by the same route the graph tier already uses. It contributes exactly 0.0 for every item
+        when no edge reached it — which is every item on a store with no edge table, on an
+        un-migrated v4 team, and whenever `memory.edge_expansion` is off — so those three cases
+        rank byte-identically to pre-DB.S7b.
+
+        JIT-STAMP-SEAM (2026-08-01) — `stamp` and `kinds`, both defaulting to today's behaviour.
+
+        `stamp=False` is THE seam this method exists to offer, and it is made here at the STORE
+        rather than at the caller on purpose: suppressing the write by monkeypatching, or by a flag
+        on `brain`, would leave this method's own contract saying one thing and doing another. It
+        governs BOTH instrumentation writes on this path, because they are one category — "record
+        that a recall happened":
+
+          * `record_usage` (DB.S5 recency/usage telemetry), and
+          * `_bump_read` inside `hydrate_candidates` / `scoped_active`, which feeds the read/write
+            ratio `/mokata:govern` surfaces.
+
+        Stamping only one of them would be worse than stamping neither: the per-turn injection
+        fires on EVERY prompt, so a counted read per turn turns `memory_stats.reads` into a count
+        of TURNS (JIT-RECALL-COUNTS-A-READ, one layer down) even with the usage write suppressed.
+
+        WHAT `stamp=False` MEANS FOR DB.S5's TELEMETRY, decided and recorded rather than left for a
+        reader to infer: **`hit_count` counts times an item was surfaced to a HUMAN who asked, and
+        that is now a narrower and more useful claim than "times it was returned by the ranker".**
+        Automatic injection is not a recall the user asked for — it is mokata OFFERING context —
+        and letting it stamp would make the two most-injected kinds (`context`, `reference`) the
+        most-recalled items on the store by construction, on every turn, regardless of whether
+        anyone read them. That would then feed BACK into the ranking through DB.S5's usage term:
+        an item injected because it ranked highly would rank more highly because it was injected.
+        Suppressing the stamp keeps the signal exogenous. The cost is that the telemetry is blind
+        to the injection channel, which is real and is why this is a documented decision rather
+        than an implementation detail; when a per-channel counter is wanted it is a NEW column
+        (`injected_count`), never this one silently widened.
+
+        `kinds` restricts the result to those `effective_kind`s — what `jit_recall` has always
+        needed and could not ask for. Enforced in `tiered_recall` over the resolved set; the SQL
+        predicate that rides along is an optimization over the same rule, never a second one.
+
+        `degrade_out` redirects the tiers' degrade notices, which previously had no way through
+        this method and therefore always reached stderr. The per-turn injection needs it: a tier
+        notice is written for someone who ran a recall and got a worse answer than they asked for,
+        and on a hook that fires every prompt the SAME notice would print on every turn — the one
+        case `bootstrap.build_injection` already documents as "announcing it buys nothing and
+        trains the user to ignore the channel". Default `None` is unchanged (stderr, once per
+        subsystem), so every existing caller keeps its notices."""
         from .tiered import tiered_recall
         if graph_scorer is None and self.knowledge_layer is not None:
             try:
@@ -1084,11 +1390,124 @@ class MemoryStore:
                 graph_scorer = make_graph_scorer(self.knowledge_layer, query)
             except Exception:
                 graph_scorer = None
-        return tiered_recall(self, query, embedder=self.embedder,
-                             graph_scorer=graph_scorer, top_k=top_k, semantic=semantic)
+        hits = tiered_recall(self, query, embedder=self.embedder,
+                             graph_scorer=graph_scorer, top_k=top_k, semantic=semantic,
+                             expander=self._edge_expander(), kinds=kinds, count_read=stamp,
+                             degrade_out=degrade_out)
+        # Only the TOP-K that were actually returned are stamped — the signal being recorded is
+        # "this item was surfaced to someone", not "this item was considered by the ranker", and
+        # every active item is considered on every recall. Counting candidates would make
+        # `hit_count` a measure of how often recall RAN, which carries no information at all.
+        if stamp:
+            self.record_usage([h.item.id for h in hits])
+        return hits
+
+    # --- DB.S7b (K1) edge expansion -----------------------------------------
+    def edge_expansion_enabled(self) -> bool:
+        """Is the ≤2-hop expansion live? **ON BY DEFAULT** (doc 84 K1, doc 55:78 — "behind a config
+        flag ON by default"), read from `settings.memory.edge_expansion`.
+
+        The key lives in the SAME `memory` settings dict that already carries non-type keys
+        (`memory.embedder` at `:260`, `memory.category` in `selection.py:239`) rather than a new
+        section — and that is safe by construction, because `enabled_memory_types` above reads only
+        keys named after a MEMORY TYPE (`settings.get(t, True)` for `t in MEMORY_TYPES`), so a
+        non-type key added here can never be mistaken for a type toggle.
+
+        Absent surface / absent manifest ⇒ ON, matching the default and matching every other
+        zero-config path here: a store built without a surface (a test double, an embedded caller)
+        gets mokata's default behaviour, not a silently different one.
+        """
+        surface = getattr(self, "surface", None)
+        manifest = getattr(surface, "manifest", None)
+        if manifest is None:
+            return True
+        return bool((manifest.setting(MEMORY_SETTINGS_KEY, {}) or {}).get("edge_expansion", True))
+
+    def _edge_expander(self) -> Optional[Any]:
+        """The backend's `expand_from` seam, or `None` when the tier must not run.
+
+        `None` in THREE cases, and all three must produce a byte-identical pre-DB.S7b ranking:
+        the config is off; the backend has no `expand_from` at all (Obsidian's files, the native
+        client, any third-party adapter); or — for the shared store — the team is still on v4 and
+        `expand_from` itself answers `[]`. Capability-PROBED with `getattr`, never assumed, exactly
+        as `lexical_search` / `record_usage` / `usage_stats` are probed above.
+        """
+        if not self.edge_expansion_enabled():
+            return None
+        return getattr(self.backend, "expand_from", None)
 
     def get(self, item_id: str) -> Optional[MemoryItem]:
         return self.backend.get(item_id)
+
+    # --- DB.S5 usage telemetry (transient run-state, D5) ---------------------
+    def usage_signals(self, item_ids: Any) -> Dict[str, "lifecycle.UsageSignal"]:
+        """The `{id: UsageSignal}` telemetry for `item_ids` — READ-ONLY, and it writes nothing.
+
+        Degrade-clean in the same direction as everything else on a read path: a backend with no
+        usage columns (Obsidian, native, any third-party adapter), a v3 shared store that has not
+        been migrated, or a driver error all return `{}` — and an absent signal is the ZERO signal,
+        which the fusion treats as "no recency, no usage" and therefore ranks exactly as it did
+        before this stage. There is no arrangement of failures in which missing telemetry can
+        change a result rather than merely fail to improve it.
+        """
+        ids = [str(i) for i in item_ids if i]
+        reader = getattr(self.backend, "usage_stats", None)
+        if reader is None or not ids:
+            return {}
+        try:
+            raw = reader(ids)
+        except Exception:
+            # LEGITIMATE SUPPRESS, and the reasoning is the same one `lexical_tier` carries: this
+            # spans a psycopg driver error (an OPTIONAL extra, not nameable at module scope), a
+            # sqlite3 error on a store mid-migration, and a third-party adapter's own classes.
+            # There is nothing to degrade TO and nothing for a user to act on — the signal is a
+            # RANKING BOOST, not a result. Losing it costs the pre-DB.S5 ranking, which is a
+            # correct ranking. Announcing it would be a notice about a feature getting no better.
+            return {}
+        return {k: lifecycle.UsageSignal(hits=int(v[0] or 0), last_recalled_at=v[1])
+                for k, v in (raw or {}).items()}
+
+    def record_usage(self, item_ids: Any, now: Optional[str] = None) -> bool:
+        """Record that `item_ids` were just recalled: bump `hit_count`, set `last_recalled_at`.
+
+        THE ONE DEGRADE-CLEAN SEAM for usage telemetry, and the reason it is a seam at all: this
+        is a WRITE riding a READ, so the failure mode it must never have is turning a recall into
+        something that can fail. It returns True/False and raises NOTHING — the caller in
+        `recall_relevant` cannot be broken by it, whatever the backend does.
+
+        Why it is ungated, stated plainly rather than assumed (P2 is not being bent here): this is
+        transient RUN-STATE, not a governed durable write. It touches no content a human approved —
+        not the `doc`, not the value, not the provenance, not the validity window — only two
+        counter columns that exist solely to rank. There is nothing to review, nothing to secret-
+        scan (the write contains no user content, just an integer and a clock reading), and nothing
+        an approval could meaningfully say yes or no to. It is registered as such in the SI.6
+        zero-bypass audit rather than being left for someone to discover.
+
+        In TEAM mode it deliberately does NOT journal. The team journal exists to CAS-guard
+        contended writes to approved content; a monotonic counter has no conflict to resolve (two
+        seats each recalling an item should produce two hits, which is exactly what two increments
+        produce) and routing telemetry through the approval-carrying journal would put un-approved
+        rows in an approval ledger.
+        """
+        ids = [str(i) for i in item_ids if i]
+        if not ids or not hasattr(self.backend, "record_usage"):
+            return False
+        try:
+            # Called as `self.backend.record_usage(...)` rather than through a local alias
+            # DELIBERATELY: the SI.6 zero-bypass audit finds writers by scanning for exactly this
+            # shape, and a writer routed through `writer = getattr(...)` would be INVISIBLE to it.
+            # A new durable-ish write that the audit cannot see is the precise failure mode that
+            # audit exists to prevent, so this one is written to be found and is registered in
+            # UNGATED_BY_DESIGN with the D5 reasoning above.
+            self.backend.record_usage(ids, now or now_iso())
+            return True
+        except Exception:
+            # The whole point of this method. A failed telemetry write is SWALLOWED — the recall it
+            # rode has already produced its answer, and that answer is not made wrong by a counter
+            # that did not move. Broad by necessity (driver / sqlite3 / third-party adapter, as
+            # above) and silent by design: this fires on a read-only store, a v3 team schema, or a
+            # locked file, none of which the user needs to be told about mid-recall.
+            return False
 
     # --- formula recall by applicability (TM.S9, doc 62 §2/§8) ---------------
     def recall_formulas(self, query: str) -> List[MemoryItem]:
@@ -1105,7 +1524,177 @@ class MemoryStore:
     def detect_issues(self, now: Optional[str] = None) -> List[HealingProposal]:
         active = [i for i in self.backend.all(statuses=(ACTIVE,))
                   if i.mtype in self.enabled_types]
-        return detect_issues(active, now=now)
+        return detect_issues(active, now=now, conflicts=self._cross_writer_conflicts(),
+                             anchor_staleness=self._moved_code_anchors(active))
+
+    def _moved_code_anchors(self, active: List[MemoryItem]) -> List[Any]:
+        """H-6 S3 — the MOVED `about_code` anchors as plain `AnchorStaleness` records.
+
+        Computed HERE, at the store's own boundary, for the reason `_cross_writer_conflicts` is:
+        `healing.py` is an L2 domain module and must not acquire a filesystem read or a code-graph
+        client on a detection path. It gets verdicts; it does not gather them.
+
+        Empty without a surface (no root to resolve anchors against) — so a directly-constructed
+        store, and every pre-H-6 caller, is byte-identical. The knowledge layer is passed THROUGH
+        rather than built: with no adopted graph, symbol anchors decline, which is the anchor-shape
+        split's own rule and not a degradation of it.
+
+        Read-only (P1): it hashes files and reads a JSON record, and bumps no read counter — the
+        same posture `peek_active` + `detect_issues` already hold on this path.
+        """
+        if self._surface is None:
+            return []
+        try:
+            root = getattr(self._surface, "root", "")
+            if not root:
+                return []
+            from ..knowledge.anchor_fingerprints import (ANCHOR_SCAN_CAP, evaluate_anchors,
+                                                         read_record)
+            from .healing import AnchorStaleness
+            record = read_record(root)
+            if not record:
+                return []                      # no baselines ⇒ no opinion, and no file hashing
+            out: List[Any] = []
+            budget = ANCHOR_SCAN_CAP
+            for item in active:
+                anchors = [a for a in (item.about_code or []) if a][:budget]
+                if not anchors:
+                    continue
+                budget -= len(anchors)
+                for v in evaluate_anchors(anchors, root=root, layer=self.knowledge_layer,
+                                          record=record):
+                    if v.moved:
+                        out.append(AnchorStaleness(item=item, anchor=v.anchor, shape=v.shape,
+                                                   path=v.path))
+                if budget <= 0:
+                    break
+            return out
+        except Exception as exc:  # noqa: BLE001
+            # D5 — LOUD. This arm is the ONLY thing that would tell a human the code under a
+            # decision moved; if it silently answers "nothing moved" they read a clean governance
+            # view and conclude their anchors are current. The detection still proceeds without it
+            # (the other arms are unaffected), so this degrades rather than raises.
+            note_degraded("memory-code-anchors", FAILURE_LOCAL_IO,
+                          detail=str(exc),
+                          fallback="moved `about_code` anchors are not surfaced this run",
+                          fix="run `mokata doctor`; the anchor record lives under "
+                              ".mokata/temp_local/anchor_fingerprints/ and is rebuilt if removed")
+            return []
+
+    def cross_writer_proposals(self) -> List[HealingProposal]:
+        """Just the CROSS_WRITER proposals — the same objects `detect_issues` embeds, without the
+        backend scan the item-level arms need.
+
+        This is the public seam `mokata sync` resolves through (R4): it asks the human, looks the
+        conflict up here by `conflict_id`, and hands it to `apply_proposal`. Read-only."""
+        from .healing import detect_cross_writer
+        return detect_cross_writer(self._cross_writer_conflicts())
+
+    def _cross_writer_conflicts(self) -> List[Any]:
+        """DB.S6/I2a — the surfaced CAS conflicts as plain `ConflictRecord`s, so a teammate's
+        concurrent change reaches every surface that already renders `detect_issues` (the
+        governance view, `mokata memory`, the health nudge, the MCP proposal tool) WITHOUT anyone
+        running `mokata sync`. Empty in local/zero-config mode, which is why the local path stays
+        byte-identical and consults no journal at all.
+
+        Read-only: it writes nothing (I6), and it never raises — a broken journal degrades to "no
+        conflicts" LOUDLY, because silence here is the exact failure this arm exists to remove."""
+        if self._surface is None or not self._team_mode():
+            return []
+        try:
+            # DB.S7c1 — the edge context is attached HERE, after the collab projection and before
+            # the detector sees it, so both `detect_issues` and `cross_writer_proposals` get it
+            # from one place and cannot drift into showing different evidence for one conflict.
+            return self._attach_subgraph(
+                list(self._resolve_team_writer().conflicts(self._surface)))
+        except OSError as exc:
+            # The ONLY raisable class: the projection opens the journal file (a torn JSON line is
+            # already skipped by the replay, and an unreadable DOC degrades to `remote=None`
+            # inside the projection). A locked/permission-broken `.mokata/temp_local/` is the real
+            # case — and it would otherwise read as "no conflicts", i.e. an approved write that
+            # never landed, silently. Say so.
+            note_degraded("memory-conflicts", FAILURE_LOCAL_IO,
+                          fallback="cross-writer conflicts are NOT being surfaced",
+                          fix="check permissions on `.mokata/temp_local/`, then run `mokata sync`",
+                          detail=f"{type(exc).__name__}: {exc}")
+            return []
+
+    # --- DB.S7c1 (K2) edge-aware healing -------------------------------------
+    def _attach_subgraph(self, records: List[Any]) -> List[Any]:
+        """K2 — give each conflict the OPEN relations a resolution would re-project.
+
+        THIS is the boundary the edge read belongs on, and the placement is the whole reason the
+        DB.S6 arm stayed additive: `memory/healing.py` owns what a conflict MEANS and opens no
+        connection; `team_writer` owns the collab projection and knows no backend; the store owns
+        the backend, so the store is the only object that can answer "what edges does the shared
+        graph hold for this id". Each layer answers the question it is the only one able to answer.
+
+        **`open_edges` finally has its production consumer**, which DB.S7a provisioned and DB.S7b
+        explicitly declined to become (`02:231`). It is the right read here for a reason DB.S7b's
+        traversal is not: `project_edges` maintains the projection keyed on `src_id`, so the point
+        read over one src returns EXACTLY the set a resolution rewrites. The ≤2-hop walk would
+        return that set plus a hop of context that resolving this conflict does not touch.
+
+        **NOT gated on `settings.memory.edge_expansion`**, deliberately, and this is a judgement
+        worth naming rather than leaving as an omission. That flag governs whether hops may
+        influence RANKING — a relevance question. This is evidence attached to a human decision at
+        a gate, and a user who turned off retrieval expansion has not asked to be shown less of
+        what they are about to overwrite. Coupling the two would make a perf/relevance preference
+        silently withhold information at the one surface where withholding it changes an outcome.
+
+        Capability-PROBED, never assumed (`getattr`), exactly as `expand_from` / `lexical_search` /
+        `usage_stats` are: a backend with no edge table — Obsidian's files, the native client, any
+        third-party adapter, an un-migrated v4 team — yields records with no subgraph, and those
+        render as the pre-K2 proposal rather than as an error.
+        """
+        read = getattr(self.backend, "open_edges", None)
+        if read is None or not records:
+            return records
+        from .expansion import MAX_WALKED_EDGES
+        from .healing import prune_subgraph
+        visible = self._subgraph_visible()
+        for rec in records:
+            try:
+                rec.subgraph = prune_subgraph(read(rec.local.id), visible, MAX_WALKED_EDGES)
+            except Exception as exc:  # noqa: BLE001
+                # D5 — the subgraph is CONTEXT on a conflict, and the conflict itself is the thing
+                # the user must not lose. A failed edge read therefore degrades to "no subgraph"
+                # and the conflict still surfaces, because dropping a CAS conflict to protect a
+                # decoration would invert the priority this whole arm exists to set. LOUD, though:
+                # silently showing no relations is indistinguishable from an item that genuinely
+                # has none, and the second is the common case — so a human would read a broken
+                # read as reassurance. BROAD for the same reason the sibling handlers here are: it
+                # spans a psycopg driver error (an OPTIONAL, lazily imported extra not nameable at
+                # module scope), a sqlite3 error on a store mid-migration, and any third-party
+                # adapter's own classes.
+                note_degraded("memory-subgraph", failure_class_of(exc) or FAILURE_LOCAL_IO,
+                              fallback="conflict shown WITHOUT the relations it re-projects",
+                              fix="run `mokata doctor` to check the memory store",
+                              detail=f"{type(exc).__name__}: {exc}")
+                rec.subgraph = None
+        return records
+
+    def _subgraph_visible(self) -> Optional[set]:
+        """The ids this identity may read, or None for "no scope context".
+
+        `peek_active` + the SHARED `_visible_filter` — not `scoped_active`, and the difference is
+        a P1 contract rather than a micro-optimization: `scoped_active` COUNTS a read, so using it
+        here would make merely LOOKING at a conflict bump `memory_stats.reads` and write the
+        counter to disk. Detection would then no longer be pure, and P1 ("a detect run writes
+        NOTHING") would be false — which is exactly how the propose-only test caught it.
+
+        Visibility itself is still defined in ONE place; only the instrumentation differs — which
+        is now `peek_visible_active`, the named non-counting twin this call used to open-code."""
+        try:
+            return {i.id for i in self.peek_visible_active()}
+        except Exception:  # noqa: BLE001
+            # D5 — SUPPRESS-adjacent but deliberately fail-CLOSED-ish: an unreadable scope set must
+            # not become "no scope context", because None prunes NOTHING and would show every dst
+            # id to an identity whose visibility we just failed to establish. Returning an empty
+            # set prunes every item-target edge instead — the subgraph degrades to code anchors
+            # only, which discloses nothing. The conflict itself is unaffected and the sibling
+            # handler above already announces a broken store read.
+            return set()
 
     def render_proposal(self, p: HealingProposal) -> str:
         return render_proposal(p)
@@ -1123,9 +1712,20 @@ class MemoryStore:
                        confirm: Optional[Callable[[str], bool]] = None,
                        assume_yes: bool = False, policy: Any = None) -> HealingResult:
         """Resolve a surfaced proposal. Default (reject/defer) changes nothing; approve
-        and edit are human-gated. NEVER auto-rewrites."""
-        if decision not in ("approve", "edit", "reject", "defer"):
+        and edit are human-gated. NEVER auto-rewrites.
+
+        DB.S6/R4 — this is also the ONE resolver for a cross-writer conflict. `mokata sync` no
+        longer settles conflicts itself: it asks, then calls this method, so there is exactly one
+        implementation of "what happens when two writers disagree" and both entry points provably
+        converge on the same end state."""
+        if decision not in ("approve", "edit", "reject", "defer", "discard"):
             raise MemoryError(f"unknown decision '{decision}'")
+        if p.kind == CROSS_WRITER:
+            return self._resolve_cross_writer(p, decision, confirm=confirm,
+                                              assume_yes=assume_yes, policy=policy)
+        if decision == "discard":
+            raise MemoryError("'discard' resolves a cross-writer conflict only "
+                              f"(this proposal is '{p.kind}')")
         if decision in ("reject", "defer"):
             self._record_healing(p, decision, changed=False)
             return HealingResult(changed=False, message=f"{decision}: no change")
@@ -1203,17 +1803,241 @@ class MemoryStore:
         return HealingResult(changed=False, aborted=True,
                              message="declined at the human gate")
 
+    def _resolve_cross_writer(self, p: HealingProposal, decision: str, *,
+                              confirm: Optional[Callable[[str], bool]] = None,
+                              assume_yes: bool = False,
+                              policy: Any = None) -> HealingResult:
+        """R4 — the ONE place a cross-writer conflict is settled.
+
+        THREE outcomes, and the mapping is deliberate:
+
+          * `approve` — keep YOURS. The local write is re-queued at the CURRENT remote revision, so
+            the next flush's CAS lands it over the teammate's row. An explicit overwrite, chosen.
+          * `discard` — keep THEIRS. The local write is dropped. This needed its own word rather
+            than riding `reject`, because `reject` is what every safe default in this codebase
+            falls back to (an EOF, a non-interactive prompt, a dismissed MCP consent) — and a
+            default that DISCARDS an approved write is precisely the silent loss this stage exists
+            to make unreachable.
+          * `reject` / `defer` — leave it conflicted. Nothing is lost, nothing is decided, and the
+            proposal is surfaced again by the next `detect_issues` (I2a).
+
+        `edit` is refused rather than half-implemented: a merged value is a NEW write with its own
+        provenance, not a resolution of this one, and pretending otherwise would let a merge slip
+        in without the CAS the merged row still needs. DB.S7/K2 can add it as its own kind.
+
+        Not counted by `_bump_write`: the write was already counted when the human approved it.
+        Where it finally lands is not a second write, and double-counting would skew the C8 ratio
+        that the unused-memory nudge reads."""
+        if decision == "edit":
+            self._record_healing(p, decision, changed=False)
+            return HealingResult(
+                changed=False, aborted=True,
+                message=("a cross-writer conflict cannot be resolved by editing in place — "
+                         "approve (keep yours) / discard (keep theirs) / defer, then remember the "
+                         "merged value as its own gated write"))
+        if decision in ("reject", "defer"):
+            self._record_healing(p, decision, changed=False)
+            return HealingResult(changed=False,
+                                 message=f"{decision}: the conflict is still open (nothing lost)")
+        if not p.conflict_id:
+            return HealingResult(changed=False, aborted=True,
+                                 message="this proposal carries no conflict handle to resolve")
+
+        from .team_writer import KEEP_LOCAL, KEEP_REMOTE
+        keep = KEEP_LOCAL if decision == "approve" else KEEP_REMOTE
+        # What the gate secret-scans. Keeping YOURS re-publishes your value to the shared row, so
+        # the value is the untrusted content; keeping THEIRS publishes nothing new, so — exactly as
+        # in the STALE branch above — the subject alone is the content.
+        content = (f"{p.old.subject}\n{p.old.value}" if keep == KEEP_LOCAL else p.old.subject)
+        writer, surface = self._resolve_team_writer(), self._surface
+
+        # DB.S6/I1b — the group guard, BEFORE the gate for the same reason `_downgrade_refusal` is:
+        # a resolution mokata will not commit must not cost the human an approval prompt, and
+        # nothing may be written on the way to refusing. I1 made the FLUSH atomic; this closes the
+        # other half — a rolled-back approval surfaces as N separate conflicts, and settling them
+        # one at a time can still retire a fact whose replacement is being discarded or deferred.
+        refusal = writer.group_refusal(surface, p.conflict_id, keep)
+        if refusal is not None:
+            self._record_healing(p, decision, changed=False)
+            return HealingResult(changed=False, aborted=True, refused=True, message=refusal)
+
+        def _commit() -> None:
+            writer.resolve_conflict(surface, p.conflict_id, keep,
+                                    remote_revision=p.remote_revision)
+
+        outcome = self._gated_commit(p.subject, content, _commit, self.render_proposal(p),
+                                     confirm=confirm, assume_yes=assume_yes, policy=policy)
+        self._record_healing(p, decision, changed=outcome.committed)
+        if outcome.committed:
+            if keep == KEEP_LOCAL:
+                # Re-queued at the remote revision — flush it now so "kept mine" actually means the
+                # shared row says mine. Offline it stays journaled (work-locally, nothing lost).
+                self._best_effort_flush()
+            return HealingResult(
+                changed=True, item=(p.old if keep == KEEP_LOCAL else p.new),
+                message=("kept yours — re-queued over the remote row" if keep == KEEP_LOCAL
+                         else "kept theirs — your local write was discarded"))
+        if outcome.findings:
+            return HealingResult(changed=False, aborted=True, blocked=True,
+                                 message="blocked: secret detected — the conflict is still open")
+        return HealingResult(changed=False, aborted=True,
+                             message="declined at the human gate — the conflict is still open")
+
+    # --- DB.S7d: the one-prompt group decision -------------------------------
+    def cross_writer_group(self, p: HealingProposal) -> List[HealingProposal]:
+        """The still-conflicted CROSS_WRITER proposals sharing `p`'s approval, in journal order.
+
+        Read-only, and it returns `[p]` for a conflict with no approval group — a solo conflict is
+        a group of one, so every caller can treat the group as the unit without first asking
+        whether there is one."""
+        if p.kind != CROSS_WRITER or not p.conflict_id:
+            return [p]
+        by_conflict = {q.conflict_id: q for q in self.cross_writer_proposals()}
+        writer = self._resolve_team_writer()
+        members = [by_conflict[cid]
+                   for cid in writer.group_members(self._surface, p.conflict_id)
+                   if cid in by_conflict]
+        return members or [p]
+
+    def apply_group_decision(self, p: HealingProposal, decision: str,
+                             confirm: Optional[Callable[[str], bool]] = None,
+                             assume_yes: bool = False, policy: Any = None) -> HealingResult:
+        """DB.S7d — settle a WHOLE approval in ONE prompt (`02:231`, deferred here from DB.S6/I1b).
+
+        WHAT THIS FIXES. A rolled-back approval surfaces as N separate conflicts, and until now the
+        only way to settle them was one prompt at a time. That is not merely tedious: it is the
+        source of both half-decided end states the two guards refuse — retire-without-replace
+        (a fact lost) and duplicate-both-active (a fact doubled). Deciding the approval as a unit
+        makes both unreachable through this path by construction: every member gets the SAME
+        verdict, so no member can strand or duplicate another.
+
+        "BY CONSTRUCTION" IS NOT ENOUGH, AND THAT IS THE LOAD-BEARING PART. The uniform-verdict
+        argument holds only for members still CONFLICTED. A member settled in an earlier
+        one-at-a-time pass is outside this group's reach entirely — discard the replacement
+        yesterday, and today's "keep local for the whole approval" has exactly one member left to
+        decide, lands the retirement, and the fact is gone in a single prompt the human trusted
+        BECAUSE it claimed to cover everything. So this does not reason about safety itself: it
+        hands the projected end state to `retire_without_replace_refusal` and
+        `duplicate_both_active_refusal` — the same shipped functions the single-member path runs —
+        and refuses if either does.
+
+        ORDER: refuse BEFORE the gate, exactly as `_resolve_cross_writer` and `_downgrade_refusal`
+        do. A decision mokata will not commit must not cost the human an approval prompt, and
+        nothing may be written on the way to refusing.
+
+        ATOMIC: the members' resolutions reach the journal in ONE append (`resolve_group`), so a
+        crash cannot leave the approval half-settled on disk. Combined with the pre-gate refusal,
+        the group is all-or-nothing at both ends — nothing is written when it refuses, and what it
+        does write lands together."""
+        if p.kind != CROSS_WRITER:
+            raise MemoryError("apply_group_decision resolves a cross-writer conflict only "
+                              f"(this proposal is '{p.kind}')")
+        if decision not in ("approve", "discard", "reject", "defer"):
+            raise MemoryError(f"unknown group decision '{decision}'")
+        if decision in ("reject", "defer"):
+            self._record_healing(p, decision, changed=False)
+            return HealingResult(changed=False,
+                                 message=f"{decision}: the approval is still open (nothing lost)")
+        if not p.conflict_id:
+            return HealingResult(changed=False, aborted=True,
+                                 message="this proposal carries no conflict handle to resolve")
+
+        from .team_writer import KEEP_LOCAL, KEEP_REMOTE
+        keep = KEEP_LOCAL if decision == "approve" else KEEP_REMOTE
+        members = self.cross_writer_group(p)
+        writer, surface = self._resolve_team_writer(), self._surface
+        decisions = [(m.conflict_id, keep, m.remote_revision) for m in members]
+
+        refusal = writer.group_decision_refusal(surface, decisions)
+        if refusal is not None:
+            self._record_healing(p, decision, changed=False)
+            return HealingResult(changed=False, aborted=True, refused=True, message=refusal)
+
+        # Same content rule as the single-member path: keeping YOURS re-publishes every member's
+        # value to the shared rows, so all of them are the untrusted content; keeping THEIRS
+        # publishes nothing new, so the subjects alone are. The secret-scan covers the whole group
+        # for the same reason the gate does — one decision, one scan of everything it would push.
+        content = "\n".join(f"{m.old.subject}\n{m.old.value}" if keep == KEEP_LOCAL
+                            else m.old.subject for m in members)
+
+        def _commit() -> None:
+            writer.resolve_group(surface, decisions)
+
+        outcome = self._gated_commit(p.subject, content, _commit,
+                                     self.render_group_decision(members, decision),
+                                     confirm=confirm, assume_yes=assume_yes, policy=policy)
+        self._record_healing(p, decision, changed=outcome.committed)
+        if outcome.committed:
+            if keep == KEEP_LOCAL:
+                self._best_effort_flush()
+            return HealingResult(
+                changed=True, item=p.old,
+                message=(f"kept yours for all {len(members)} writes in this approval — re-queued "
+                         f"over the remote rows" if keep == KEEP_LOCAL else
+                         f"kept theirs for all {len(members)} writes in this approval — your local "
+                         f"writes were discarded"))
+        if outcome.findings:
+            return HealingResult(changed=False, aborted=True, blocked=True,
+                                 message="blocked: secret detected — the approval is still open")
+        return HealingResult(changed=False, aborted=True,
+                             message="declined at the human gate — the approval is still open")
+
+    @staticmethod
+    def render_group_decision(members: List[HealingProposal], decision: str) -> str:
+        """The ONE prompt. It NAMES every member it would decide — a single prompt that hides its
+        own blast radius is worse than the N honest prompts it replaces, because the human is
+        approving N durable writes and has to see N durable writes."""
+        side = "YOUR version" if decision == "approve" else "THEIR version"
+        lines = [f"mokata · resolve this whole approval — {len(members)} conflicted write(s) — "
+                 f"by keeping {side}:"]
+        for m in members:
+            theirs = "unreadable" if m.new is None else repr(m.new.value)
+            lines.append(f"  · {m.old.id} ({m.old.subject}): yours {m.old.value!r} vs {theirs}")
+        lines.append("They are decided together, or not at all. Nothing is written unless you "
+                     "approve.")
+        return "\n".join(lines)
+
     # --- consolidation (C7, PROPOSAL-ONLY + gated apply) --------------------
-    def propose_consolidations(self, ledger: Any = None
+    def propose_consolidations(self, ledger: Any = None,
+                               drafter: Optional[SummaryDrafter] = None
                                ) -> List[ConsolidationProposal]:
         """Surface consolidation proposals (merge/summarize/prune). Reads only — never
-        writes. Each proposal is logged to the ledger."""
+        writes. Each proposal is logged to the ledger.
+
+        M-4/R5 — `drafter` is the injected summary writer (the harness agent, via the propose
+        flow). It is threaded straight through to `propose_consolidations` and used for nothing
+        else; it can only affect a SUMMARIZE proposal's drafted VALUE, and that value then rides
+        the identical secret-scan → human gate → ledger → commit path in `apply_consolidation` that
+        the placeholder rode. Omitted (the default, and every existing caller) the behaviour is
+        byte-identical to the pre-M-4 build."""
         led = ledger if ledger is not None else self._ledger
         active = [i for i in self.backend.all(statuses=(ACTIVE,))
                   if i.mtype in self.enabled_types]
         stale = [i for i in self.backend.all(statuses=(STATUS_STALE,))
                  if i.mtype in self.enabled_types]
-        proposals = propose_consolidations(active, stale)
+        proposals = propose_consolidations(active, stale, drafter=drafter)
+        if led is not None:
+            for p in proposals:
+                led.record("consolidation_proposal", op=p.kind, subject=p.subject,
+                           mtype=p.mtype, count=len(p.olds))
+        return proposals
+
+    def propose_archival(self, ledger: Any = None, now: Optional[str] = None
+                         ) -> List[ConsolidationProposal]:
+        """DB.S5 — surface the size-budget sweep's archival proposals. Reads only; writes nothing
+        and evicts nothing. Each proposal is logged, and applying one is human-gated exactly like
+        every other consolidation (`apply_consolidation`).
+
+        Counts only the ACTIVE items whose validity window is still OPEN — an already-archived,
+        superseded or stale item has left the working set and must not be counted against the
+        budget that governs it, or a store would stay permanently "over budget" on the strength of
+        items it already retired.
+        """
+        led = ledger if ledger is not None else self._ledger
+        active = [i for i in self.backend.all(statuses=(ACTIVE,))
+                  if i.mtype in self.enabled_types and lifecycle.is_open(i)]
+        usage = self.usage_signals([i.id for i in active])
+        proposals = propose_archival(active, usage, now)
         if led is not None:
             for p in proposals:
                 led.record("consolidation_proposal", op=p.kind, subject=p.subject,
@@ -1296,6 +2120,19 @@ class MemoryStore:
                                         team=team, ledger=led)
                 self._bump_write(len(p.olds))
             elif p.kind == SUMMARIZE:
+                # THE `derives_from` PRODUCER (2026-08-01). A SUMMARIZE lands a NEW item distilled
+                # out of `p.olds`, and this is the only place in the codebase that knows which
+                # items those were — so it is the only place the lineage can be recorded without
+                # inventing it. Written on `keep` (which is `edited or p.new`, so a human who
+                # rewrote the summary still gets the lineage of what it summarized) BEFORE the
+                # durable write, because the edge row is a projection OF the persisted field: set
+                # it afterwards and the field would be right while the edge table stayed empty.
+                #
+                # Idempotent and additive, in that order: re-applying the same proposal must not
+                # duplicate ids, and a caller that pre-populated the list keeps what it set.
+                for o in p.olds:
+                    if o.id != keep.id and o.id not in keep.derives_from:
+                        keep.derives_from.append(o.id)
                 self._durable_write(keep, op=_OP_PUT, base_revision=None,
                                     backend_call=lambda: self.backend.put(keep),
                                     team=team, ledger=led)
@@ -1304,6 +2141,20 @@ class MemoryStore:
                 for o in p.olds:
                     self._durable_write(o, op=_OP_DELETE, base_revision=self._base_revision(o),
                                         backend_call=lambda o=o: self.backend.delete(o.id),
+                                        team=team, ledger=led)
+                self._bump_write(max(1, len(p.olds)))
+            elif p.kind == ARCHIVE:
+                # DB.S5 — THE NEVER-DELETE PATH, and the contrast with the PRUNE branch directly
+                # above is the point. PRUNE issues `_OP_DELETE`; ARCHIVE issues `_OP_UPDATE` on
+                # every item and touches nothing but the status and the validity window. The row,
+                # the value, the provenance and every approved field survive, so an archival is
+                # reversible in a way a prune is not — which is what makes it safe to let a size
+                # heuristic propose it at all.
+                for o in p.olds:
+                    lifecycle.close_window(o, now_iso())
+                    o.status = ARCHIVED
+                    self._durable_write(o, op=_OP_UPDATE, base_revision=self._base_revision(o),
+                                        backend_call=lambda o=o: self.backend.update(o),
                                         team=team, ledger=led)
                 self._bump_write(max(1, len(p.olds)))
 

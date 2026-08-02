@@ -16,6 +16,17 @@ from ._common import (
 
 def cmd_doctor(args: argparse.Namespace) -> int:
     from ..legibility import _color_enabled
+    # DOC-ONBOARD — `--wiring`: the WIRING-ONLY check, answered BEFORE a Surface is loaded.
+    # This is what `mokata upgrade` runs the instant the new package lands and what a user runs
+    # when the wiring is the broken thing; demanding an initialized `.mokata/` first would make
+    # the diagnostic unavailable in exactly the cases it exists for. Read-only.
+    if getattr(args, "wiring", False):
+        from ..govern.doctor import wiring_check_lines
+        ok, lines = wiring_check_lines(root=args.path, home=getattr(args, "home", None),
+                                       ascii_only=not _color_enabled())
+        for line in lines:
+            print(line)
+        return 0 if ok else 1
     surface = _load_surface(args.path)
     report = diagnose(surface)
     # DB.S1 — the DSN DEEP-CHECK. For a TEAM-connected repo, classify the shared-DB connection into
@@ -172,6 +183,10 @@ def register(sub, common):
         "doctor", parents=[common],
         help="diagnose the manifest/config (missing deps, conflicts, bad trust)",
     )
+    p_doc.add_argument("--wiring", action="store_true",
+                       help="check ONLY the harness hook wiring — are mokata's gates wired, "
+                            "launchable, and current? (works on an uninitialized repo; exit 1 "
+                            "if a gate would not fire OR the wiring is out of date)")
     p_doc.add_argument("--matrix", action="store_true",
                        help="also print the full capability coverage matrix "
                             "(pass/degraded/fail); read-only, does not change the exit code")

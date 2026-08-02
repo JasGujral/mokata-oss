@@ -34,9 +34,9 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
-from ..degrade import FAILURE_LOCAL_IO, note_degraded
+from ..degrade import FAILURE_CONFLICTED_WRITE, FAILURE_LOCAL_IO, note_degraded
 from .backends import MemoryBackend
 from .item import MemoryItem
 
@@ -66,6 +66,7 @@ class JournalOverlay(MemoryBackend):
         overrides: Dict[str, MemoryItem] = {}
         deletes: Set[str] = set()
         try:
+            self._announce_conflicts()
             pend = self._journal.pending()
         except OSError as exc:
             # The ONLY raisable: the replay opens the journal file. A torn JSON line is already
@@ -88,6 +89,33 @@ class JournalOverlay(MemoryBackend):
                 deletes.discard(e.key)
         return overrides, deletes
 
+    def _announce_conflicts(self) -> None:
+        """DB.S6/I2b — say, LOUDLY and once per process, that N approved writes are NOT in the
+        memory this read is returning.
+
+        The overlay merges only PENDING entries, and a write that loses its CAS is marked
+        CONFLICT — so it silently falls out of every read. The reader then sees the teammate's
+        value with no hint that their own approved fact never landed. That silence is the whole
+        problem: an approved write that is neither in memory nor mentioned is indistinguishable
+        from one that was never made.
+
+        Announcing rather than OVERLAYING is the deliberate choice. Overlaying the conflicted item
+        would put a value into recall that is NOT in the shared store, and — because the overlay
+        overrides by id — would hide the teammate's actual value behind it. A read that lies about
+        shared state to avoid an omission is a worse trade than one that names the omission.
+
+        Costs one dict lookup: `conflicts()` and `pending()` come from the SAME cached replay, so
+        this adds no parse and no file read to the hot path."""
+        conflicts = self._journal.conflicts()
+        if not conflicts:
+            return
+        n = len(conflicts)
+        note_degraded("memory-conflicted-writes", FAILURE_CONFLICTED_WRITE,
+                      fallback=(f"{n} approved write(s) are NOT in active memory — they "
+                                f"conflicted with another writer's change"),
+                      fix="run `mokata sync` (or `mokata govern`) and decide which version wins",
+                      detail=", ".join(sorted(c.key for c in conflicts)[:5]))
+
     @staticmethod
     def _matches(item: MemoryItem, mtype: Optional[str],
                  statuses: Optional[Tuple[str, ...]]) -> bool:
@@ -104,14 +132,28 @@ class JournalOverlay(MemoryBackend):
             return overrides[item_id]
         return self._backend.get(item_id)
 
+    @property
+    def supports_scope_pushdown(self) -> bool:
+        """DB.S2b — the overlay can push scope IFF the store underneath it can. Forwarded rather
+        than hard-coded: in team mode this wrapper IS the read path, so leaving it False would mean
+        the Postgres pushdown never actually runs where the scoped corpus is largest."""
+        return bool(getattr(self._backend, "supports_scope_pushdown", False))
+
     def all(self, mtype: Optional[str] = None,
             statuses: Optional[Tuple[str, ...]] = None,
-            limit: Optional[int] = None) -> List[MemoryItem]:
+            limit: Optional[int] = None,
+            scope_path: Optional[Sequence[Any]] = None) -> List[MemoryItem]:
         # DB.S2a — mtype/statuses ARE pushed to the backend (it filters in SQL now). `limit` is
         # deliberately NOT: this layer removes rows a pending delete hid and appends rows a pending
         # write revealed, so a backend-side LIMIT would take its N before the merge and hand back
         # the wrong N. Apply it to the MERGED result, which is the set the caller asked to cap.
-        base = self._backend.all(mtype=mtype, statuses=statuses)
+        #
+        # DB.S2b — `scope_path` IS pushed, and the pending overrides are then held to the SAME
+        # predicate below. Pushing it to the backend without also applying it here would let an
+        # unflushed write at another scope appear in a scoped read — the journal overlay is a read
+        # path like any other, and a filter that only covers the flushed half is not a filter.
+        extra = {} if scope_path is None else {"scope_path": scope_path}
+        base = self._backend.all(mtype=mtype, statuses=statuses, **extra)
         overrides, deletes = self._pending()
         if not overrides and not deletes:
             return base[:limit] if limit is not None else base   # fully-flushed → backend-identical
@@ -120,9 +162,19 @@ class JournalOverlay(MemoryBackend):
         touched = set(overrides) | deletes
         result = [it for it in base if it.id not in touched]
         for it in overrides.values():
-            if self._matches(it, mtype, statuses):
+            if self._matches(it, mtype, statuses) and self._in_scope(it, scope_path):
                 result.append(it)
         return result[:limit] if limit is not None else result
+
+    @staticmethod
+    def _in_scope(item: MemoryItem, scope_path: Optional[Sequence[Any]]) -> bool:
+        """DB.S2b — is a PENDING item on the requested scope path? Delegates to `scope.on_path`, the
+        same predicate the SQL mirrors, so a pending row and a flushed row are judged identically.
+        No path requested → everything is in scope (the unscoped/local read)."""
+        if scope_path is None:
+            return True
+        from .scope import on_path
+        return on_path(item, scope_path)
 
     # --- writes (delegate — team writes journal first, never reach here) -----
     def put(self, item: MemoryItem) -> None:

@@ -27,21 +27,33 @@ provable) — there is no "assumed and continued" path.
 
 ## Typed query API (B2)
 
-Five query kinds, each returning a `QueryResult` (`kind`, `target`, `references[]`,
+Seven query kinds, each returning a `QueryResult` (`kind`, `target`, `references[]`,
 `backend`, `degraded`, `note`) where each `Reference` is `(path, line, snippet, symbol)`:
 
 | Kind | Question |
 |---|---|
+| `defs` | where is this symbol defined? |
+| `refs` | everywhere this symbol is referenced |
 | `callers` | who calls this symbol? |
 | `callees` | what does this symbol call? |
 | `implementers` | which classes subclass/implement this? |
 | `imports` | where is this module/symbol imported? |
 | `blast_radius` | transitive callers up to `--depth` hops (impact surface) |
 
+The first six are **navigation** — "where does this symbol live, who touches it". They are the
+instrument to reach for *before* reading or grepping: the graph answers precisely, and a lexical
+answer says so. `blast_radius` is the **impact** question.
+
 ```bash
+mokata query defs compute            # where is it defined?
+mokata query refs compute            # everywhere it's referenced
 mokata query callers compute
 mokata query blast_radius helper --depth 3
 ```
+
+Not every backend answers every kind. `code-review-graph` exposes no definition-site pattern, so
+`defs` is answered by the AST floor (exact on Python) and the answer says which backend produced
+it — a mapping gap is reported honestly, never as a graph failure.
 
 ## Backend selection (B1/B3) — one detection path
 
@@ -55,8 +67,9 @@ ripgrep → grep`) and uses the first present provider:
   (`degraded=False`, `is_graph=False`) — a floor above grep with real name-resolution, never the
   adopted structural graph.
 - Otherwise (a zero-Python repo / non-Python files) the **grep floor** (B3) — a dependency-free
-  lexical implementation of the same five queries. Results are marked `degraded=True`
-  (approximate but always available).
+  lexical implementation of the same queries. Results are marked `degraded=True` (approximate but
+  always available), and a navigation answer adds `grep floor — install code-review-graph for
+  full navigation` so the one step that buys the full chain is never a mystery.
 
 If the graph backend errors mid-query, the layer degrades to the AST floor (then grep) rather
 than failing — a graph rebuild failure answers from the AST floor on current files, never from

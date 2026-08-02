@@ -90,13 +90,6 @@ from .formula import (
     render_injection,
     template_params,
 )
-from .growth import (
-    GROWABLE_KINDS,
-    FormulaProposal,
-    RetainOnSuccess,
-    apply_formula_proposal,
-    assert_growable,
-)
 from .access import (
     APPROVER,
     EDITOR,
@@ -127,18 +120,35 @@ from .vector import (
     build_pgvector_backend,
 )
 from .consolidation import (
+    ARCHIVE,
     MERGE,
     PRUNE,
     SUMMARIZE,
     ConsolidationProposal,
+    propose_archival,
     propose_consolidations,
     render_consolidation,
+)
+from .lifecycle import (
+    UsageSignal,
+    budget_for,
+    close_window,
+    is_open,
+    open_window,
+    recency_score,
+    usage_score,
 )
 from .episodic import EpisodicMemory, lexical_score
 from .healing import (
     CONTRADICTION,
+    CROSS_WRITER,
+    NEAR_DUP,
     STALE,
+    ConflictRecord,
+    ConflictSubgraph,
     HealingProposal,
+    canonical_subject,
+    detect_cross_writer,
     detect_issues,
     render_proposal,
 )
@@ -154,6 +164,7 @@ from .item import (
     MEMORY_DOC_VERSION,
     UNREADABLE_DOC_VERSION,
     MemoryDocTooNew,
+    approval_ledger_id_of,
     can_write_doc,
     doc_version,
     downgrade_refusal,
@@ -188,12 +199,15 @@ from .brain import (
     group_by_kind,
     jit_recall,
     normalize_kind,
+    render_item_line,
 )
 from .intelligence import (
     MemoryHealth,
     RecallExplanation,
     assess_health,
     explain_recall,
+    provenance_block,
+    provenance_lines,
     memory_health,
     why_surfaced,
 )
@@ -234,6 +248,8 @@ __all__ = [
     "doc_version",
     "can_write_doc",
     "downgrade_refusal",
+    # M-1/R9 — the consent chain's id coercion (never invents an id)
+    "approval_ledger_id_of",
     # Stage 36 — typed-memory parts (the project brain)
     "RULE",
     "GUARDRAIL",
@@ -248,6 +264,7 @@ __all__ = [
     "always_on_lines",
     "jit_recall",
     "normalize_kind",
+    "render_item_line",
     "MemoryBackend",
     "SQLiteBackend",
     "ObsidianBackend",
@@ -270,6 +287,14 @@ __all__ = [
     "detect_issues",
     "render_proposal",
     "CONTRADICTION",
+    # DB.S6 — cross-writer healing + the near-dup arm
+    "CROSS_WRITER",
+    "NEAR_DUP",
+    "ConflictRecord",
+    "canonical_subject",
+    "detect_cross_writer",
+    # DB.S7c1 — K2 edge-aware healing (the subgraph a resolution re-projects)
+    "ConflictSubgraph",
     # C3 — episodic
     "EpisodicMemory",
     "lexical_score",
@@ -280,6 +305,19 @@ __all__ = [
     "MERGE",
     "SUMMARIZE",
     "PRUNE",
+    # DB.S5 — decay & lifecycle. `ARCHIVE`/`propose_archival` are the size-budget sweep, riding the
+    # C7 proposal path above rather than a second one; the rest is the scoring + validity surface
+    # (`UsageSignal`, the two curves, and the window helpers — `close_window` is the ONLY retirement
+    # operation, and it closes, never deletes).
+    "ARCHIVE",
+    "propose_archival",
+    "UsageSignal",
+    "recency_score",
+    "usage_score",
+    "is_open",
+    "open_window",
+    "close_window",
+    "budget_for",
     # Stage 35b — memory backup surface (export=backup / import=restore)
     "SHARE_KIND",
     "SHARE_SCHEMA_VERSION",
@@ -312,6 +350,9 @@ __all__ = [
     # Stage 59 — memory intelligence (explainable retrieval + health nudge)
     "why_surfaced",
     "explain_recall",
+    # R9 — the gate-side provenance highlight (the twin of why_surfaced)
+    "provenance_lines",
+    "provenance_block",
     "RecallExplanation",
     "MemoryHealth",
     "memory_health",
@@ -369,12 +410,12 @@ __all__ = [
     "applies_to",
     "recall_applicable",
     "render_injection",
-    # TM.S9 — retain-on-success growth (propose-only, doc 62 §5)
-    "RetainOnSuccess",
-    "FormulaProposal",
-    "apply_formula_proposal",
-    "assert_growable",
-    "GROWABLE_KINDS",
+    # TM.S9's retain-on-success growth module was DELETED at DB.S5 (GROWTH-DEAD, doc 84 §3 D3):
+    # `RetainOnSuccess`/`FormulaProposal`/`apply_formula_proposal`/`assert_growable`/
+    # `GROWABLE_KINDS` were public exports with zero production callers for three releases, and
+    # `RetainOnSuccess` held its counts in a per-process dict with no persistence — so wiring it
+    # into DB.S5's lifecycle signals would have been a rebuild, not a connection. The RETRIEVAL
+    # half (`formula.py`) is live and untouched.
     # TM.S10 — identity + scoped-consent access control (doc 52 M-1/M-2, doc 62 §6)
     "AccessPolicy",
     "ROLES",

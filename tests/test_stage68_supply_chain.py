@@ -383,7 +383,7 @@ class TestSyncPublicBoundaryHardened(unittest.TestCase):
     # The seven long-standing internal paths + the three regenerable/backup artifacts added in
     # Stage 3c.2. Each must appear in BOTH the rsync --exclude list and the INTERNAL_PATHS guard.
     REQUIRED = (
-        "docs/build", "docs/launch", "docs/marketing", "CLAUDE.md",
+        "docs/build", "docs/launch", "docs/marketing", "docs/talks", "CLAUDE.md",
         "scripts/sync-public.sh", "scripts/release.sh",
         "build", "dist", "release-backup-*",
     )

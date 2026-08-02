@@ -31,11 +31,14 @@ from .validation import validate_comma_list, validate_enum
 QUERY_TOOL_KINDS = tuple(QUERY_KINDS) + ("semantic",)
 
 __all__ = [
-    "query", "recall", "doctor", "coverage", "budget", "audit", "status", "preview",
+    "query", "recall", "consolidate_proposals", "doctor", "coverage", "budget", "audit",
+    "status", "preview",
     "progress", "lanes", "watch", "govern", "rules", "skills", "suggest", "lat_check",
     "index_status", "tour", "ci_check", "baseline", "sessions", "session_list",
-    "session_windows", "session_save",
-    "config_get", "export_preview", "decompose", "vault_list", "vault_search",
+    "session_windows", "worktree_list", "session_save",
+    "config_get", "export_preview", "decompose", "spec_show",
+    "review_status", "review_record",       # REVIEW-FIX.R3 — the 6r loop, in-harness
+    "vault_list", "vault_search",
     "vault_pull", "stacks_list", "stacks_search", "stacks_show", "plan_list", "plan_show",
 ]
 
@@ -43,9 +46,13 @@ __all__ = [
 @_tool("query", "read")
 def query(path: str = ".", kind: str = "callers", target: str = "",
           depth: int = 2) -> Dict[str, Any]:
-    """Run a structural code query (graph backend if present, else the grep floor). `kind`
-    is one of callers/callees/implementers/imports/blast_radius, or `semantic` when an adopted
-    graph exposes a semantic index (GR.S2; degrades honestly on the floor). Read-only."""
+    """Run a structural code query (graph backend if present, else the grep floor). This is the
+    NAVIGATION instrument: prefer it over Read/grep to find a symbol's definition, its callers,
+    or everywhere it is referenced. `kind` is one of defs (where a symbol is defined) / refs
+    (everywhere it is referenced) / callers / callees / implementers / imports / blast_radius, or
+    `semantic` when an adopted graph exposes a semantic index (GR.S2). Degrades down the chain
+    (code-review-graph -> serena -> AST floor -> grep) and every answer names the backend that
+    produced it, so a lexical answer is never mistaken for a structural one. Read-only."""
     from ..knowledge.layer import run_query
     # D1d — validate BEFORE the layer is built: an unknown kind used to travel all the way to the
     # backend and raise `ValueError` (reclaimed as a server `error`), after paying for the surface
@@ -192,6 +199,24 @@ def status(path: str = ".") -> Dict[str, Any]:
         # read path and carries its own DegradeNotice — so nothing is hidden here; the only thing
         # this guard can lose is the pending COUNT, and the degrade itself is reported elsewhere.
         # Broad because it spans routing + journal + team-health, three subsystems' classes.
+        pass
+    # DOC-ONBOARD — the channel that survives dead hooks. When the wiring is a dead bare name,
+    # mokata's hooks never launch, so the SessionStart briefing cannot say a word — but the MCP
+    # server is registered separately and still answers, which makes THIS the only in-session
+    # surface left. Same verdict (`hook_wiring.wiring_drift`) and same wording
+    # (`wiring_drift_line`) the doctor finding and the briefing use — one source, three surfaces.
+    # ABSENT when the wiring is current: a key that is always there is a key nobody reads.
+    try:
+        from ..hook_wiring import wiring_drift, wiring_drift_line
+        drift = wiring_drift(path)
+        if drift.drifted:
+            resp["wiring"] = {"stale": True, "codes": drift.codes, "reasons": drift.reasons,
+                              "where": drift.where, "fix": "mokata setup claude",
+                              "note": wiring_drift_line(drift)}
+    except Exception:  # pragma: no cover - surfacing is best-effort
+        # (iv) SUPPRESS-OK: an ADDITIVE, optional key, and `wiring_drift` is itself never-raise
+        # (it returns `checked=False` rather than throwing). What could still reach here is a
+        # half-installed package; losing an advisory key must not break a status readout.
         pass
     return resp
 
@@ -487,6 +512,7 @@ def session_windows(path: str = ".", limit: int = DEFAULT_PAGE_LIMIT,
           "started": r.started_at, "last_seen": r.last_seen,
           "alive": r.alive, "phase": r.phase,
           "worktree": worktree_label(r.repo_root) if r.repo_root else "main",
+          "branch": r.branch,                # WT.S4 — the run↔worktree binding, same as the CLI
           "scope": r.scope} for r in rows],
         key="windows", limit=limit, offset=offset)
     # WT.S1 — a ONE-TIME human-gated worktree offer when a live sibling is on this repo (data, not
@@ -503,6 +529,22 @@ def session_windows(path: str = ".", limit: int = DEFAULT_PAGE_LIMIT,
         # + a once-only marker file, and a suggestion must never break a listing.
         pass
     return result
+
+
+@_tool("worktree_list", "read")
+def worktree_list(path: str = ".") -> Dict[str, Any]:
+    """WT-LIST (FR-WT-1) — list this repo's git worktrees, each JOINED to the mokata session that
+    owns its branch, with a STALENESS VERDICT: `main` (the main checkout, never judged) ·
+    `active` (a live session is bound here) · `merged` (the branch is already merged into the
+    default branch) · `idle` (a session was bound but its window exited) · `no-session` (on disk,
+    nothing bound) · `unknown` (the session registry could not be read — never reported as
+    "no-session"). Read-only END TO END: it creates nothing, removes nothing, does NOT `git
+    worktree prune`, and registers no session (unlike `session_windows`, it does not
+    self-register). `empty: true` is the definitive "this repo has only its main checkout" answer;
+    `message` is the same rendered text `mokata worktree list` prints. Distinct from
+    `session_windows` (live WINDOWS) and `sessions` (pipeline RUNS)."""
+    from ..worktree_list import build_worktree_report
+    return build_worktree_report(_surface(path)).to_dict()
 
 
 @_tool("session_save", "read")
@@ -662,8 +704,12 @@ def decompose(path: str = ".", response_format: str = "concise") -> Dict[str, An
     returns the structured split only (P22)."""
     from ..engine import load_emitted_spec
     from ..execmode.decompose import decompose as _decompose
+    from .consent import _evidence_store
     surface = _surface(path)
-    spec = load_emitted_spec(surface.state)
+    # STATE-SCOPE — the RUN's spec, not the process's. The split is derived from the approved ACs,
+    # so reading it through this session's own scope handed a re-entered window "no emitted spec"
+    # for a run that plainly has one. Same resolved run `spec_show` and `spec_emit` answer about.
+    spec = load_emitted_spec(_evidence_store(surface, path)[0])
     if spec is None or not spec.criteria:
         return {"available": False, "subtasks": [],
                 "note": "no emitted spec with acceptance criteria — run /mokata:spec first; "
@@ -673,6 +719,243 @@ def decompose(path: str = ".", response_format: str = "concise") -> Dict[str, An
     out["available"] = True
     out["block"] = LazyRender(plan.render)
     return apply_response_format(response_format, out)
+
+
+@_tool("spec_show", "read")
+def spec_show(path: str = ".", run: str = "",
+              response_format: str = "concise") -> Dict[str, Any]:
+    """The RUN'S OWN persisted, gate-passed spec — title, approach, domains, every acceptance
+    criterion, and the declared scope when one is set. This is how a phase FETCHES the approved
+    spec (the reviewer's brief, develop's/test's precondition): read it here, verbatim, instead of
+    re-deriving it from conversation memory or re-searching the repo for it. ONE keyed read of the
+    run's state — NOT a corpus scan, and NOT `spec_check` (that is the regression guard over the
+    SHARED spec corpus, a different question). `run` names the run explicitly; omitted, it resolves
+    the same run the gates enforce and REFUSES rather than guess when two runs are undecidable.
+    Read-only. Degrades clean: no tracked run / no spec / a spec that is present but unreadable each
+    come back as an `available:false` answer naming the recovery — never an exception, and never a
+    byte of spec content. `response_format` {concise (default), detailed}: detailed adds the
+    rendered `block`."""
+    from ..cli_commands.spec import (NO_SPEC_RECOVERY, NO_TRACKED_RUN_RECOVERY,
+                                     _run_scoped_store)
+    from ..engine.spec_gate import SPEC_MALFORMED_MESSAGE, read_emitted_spec
+
+    surface = _surface(path)
+    # Resolve the run the way `mokata spec show` does — the SAME `_run_scoped_store`, not a second
+    # resolution path. A tool that answered "the spec" from a run other than the one the gates
+    # enforce would hand the reviewer a foreign spec, which is the very failure G1 exists to close.
+    store, run_id, err = _run_scoped_store(surface, (run or "").strip() or None)
+    if err:
+        return {"available": False, "reason": "ambiguous-run", "run": None,
+                "criteria": [], "note": err}
+    if run_id is None:
+        return {"available": False, "reason": "no-run", "run": None,
+                "criteria": [], "note": NO_TRACKED_RUN_RECOVERY}
+    # D5's distinction, carried onto this surface: "no spec" and "a spec that cannot be read" are
+    # different facts with different remedies. Collapsing them would send a caller to rewrite a spec
+    # they already have while the real fault (a torn write, a hand-edit) goes uninvestigated.
+    spec, malformed = read_emitted_spec(store)
+    if malformed:
+        return {"available": False, "reason": "malformed", "run": run_id,
+                "criteria": [], "note": SPEC_MALFORMED_MESSAGE}
+    if spec is None:
+        return {"available": False, "reason": "no-spec", "run": run_id,
+                "criteria": [], "note": NO_SPEC_RECOVERY}
+    out: Dict[str, Any] = {
+        "available": True, "run": run_id, "title": spec.title,
+        "approach": spec.approach, "domains": list(spec.domains),
+        "criteria": [{"id": c.id, "text": c.text} for c in spec.criteria],
+    }
+    if spec.scope is not None:
+        out["scope"] = spec.scope.to_dict()
+    out["block"] = LazyRender(lambda: _render_spec_show(spec))
+    return apply_response_format(response_format, out)
+
+
+def _render_spec_show(spec: Any) -> str:
+    """The human view — the SAME lines `cmd_spec_show` prints, in the same order (title, approach,
+    domains, then each AC). Built lazily, so `concise` never pays for the string it drops."""
+    lines = [f"spec: {spec.title}"]
+    if spec.approach:
+        lines.append(f"approach: {spec.approach}")
+    if spec.domains:
+        lines.append(f"domains: {', '.join(spec.domains)}")
+    for c in spec.criteria:
+        lines.append(f"  {c.id}: {c.text}")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------------------
+# The 6r REVIEW LOOP, in-harness (REVIEW-FIX.R3) — the read AND the record halves.
+#
+# The loop's persisted truth is ONE record: the `review_verdict` progress event, written by
+# `progress_events.record_review_verdict` and read by `latest_review_verdict` /
+# `ship_review_gate` (run-keyed since R1, freshness-bounded since R2). Until this stage the ONLY
+# way to reach either half was `mokata progress record-review` / `review-status` — so the harness
+# had to shell out for the one piece of evidence that decides whether a change may ship. These
+# two tools are that same seam, exposed in-harness: SAME resolution, SAME event on disk, SAME
+# gate verdicts. Neither adds a store, and neither adds a second answer.
+#
+# TRUST POSTURE (grounded, deliberately UNCHANGED from the CLI): recording a verdict is
+# OBSERVABILITY tier — append-only + UNGATED, the same tier as `mokata progress mark` and the
+# audit ledger — so `review_record` is a registered READ-kind tool with NO `approve`/`proposal_id`
+# and no WriteGate, exactly as `mokata progress record-review` has no TTY confirm. That is the
+# `session_save` (SS.S0) precedent, and it is the honest one: the CLI half writes this event
+# ungated today, and giving the harness half a stricter gate would make the SAME truth source
+# reachable under two different postures — the very inconsistency R3 exists to kill. It stays
+# safe because the record is not what a gate TRUSTS: `ship_review_gate` re-derives everything
+# that matters (whose run, how old, passed or not), and a verdict it cannot key to a run
+# satisfies nothing at all.
+# --------------------------------------------------------------------------------------
+@_tool("review_status", "read")
+def review_status(path: str = ".", run: str = "",
+                  response_format: str = "concise") -> Dict[str, Any]:
+    """SHIP'S REVIEW GATE, read from the persisted verdict — the in-harness twin of `mokata
+    progress review-status`. This is how ship VERIFIES that the closing review actually ran:
+    evidence on disk, not conversation context (a `/clear`ed session remembers nothing, and a
+    model's recollection that "review passed" is not a record).
+
+    Returns the resolved `run`, whether a verdict is `present`, whether it was `readable`, whether
+    it `passed`, whether it was `independent` (a fresh-context subagent vs the inline two-pass),
+    `recorded_at`, and `blocks` — True when ship must STOP — with the gate's own `message` +
+    `unblock` line. The four blocking answers are the CLI's, verbatim, because they come from the
+    same `ship_review_gate`: no run could be resolved (mokata refuses to read another run's
+    verdict), the verdict is STALE (older than `settings.review.verdict_max_age_hours`, default
+    24), the verdict could not be READ (`readable: false` — an unreadable or damaged progress-event
+    log, whose remedy is the LOG, not re-running review), or no verdict was recorded at all
+    (`readable: true, present: false` — the remedy IS /mokata:review). An inline PASS does not
+    block, but says so.
+
+    `run` names the run explicitly; omitted, it resolves the SAME session-aware way the record
+    does, so the read-key is the record-key. Read-only. Degrades clean: an unreadable gate reports
+    a block rather than raising. It NEVER returns the verdict's `findings` text — findings can
+    quote project content, and a status read has no need of it (`response_format` {concise
+    (default), detailed}: detailed adds the rendered `block`, the same one line the CLI prints)."""
+    from ..progress_events import (FAULT_UNKNOWN, _resolve_verdict_run,
+                                   latest_review_verdict_event, review_log_path,
+                                   review_read_error_message, review_read_error_unblock,
+                                   ship_review_gate)
+    surface = _surface(path)
+    try:
+        # Resolution through the CLI's own seam — `_resolve_verdict_run` IS what
+        # `ship_review_gate(run_id=None)` calls for itself, so this is not a second resolution
+        # path, it is the same one made visible: the gate returns a verdict, not the key it used,
+        # and this answer must be able to NAME the run it judged. (When nothing resolves, the gate
+        # asks again and gets the same None — a deterministic, local repeat on the block path
+        # only, which is cheaper than teaching the gate a second return shape.)
+        run_id = (run or "").strip() or _resolve_verdict_run(surface)
+        gate = ship_review_gate(surface, run_id=run_id)
+        # The stamp, read only when there IS a verdict — a second bounded backward scan on the
+        # present path only, never on the degrade paths (P11).
+        event = latest_review_verdict_event(surface, run_id=run_id) if gate.present else None
+    except Exception:                        # noqa: BLE001
+        # Degrade-clean, and FAIL-CLOSED in the same direction the CLI degrades. REVIEW-FIX.R4 —
+        # this no longer claims "review hasn't run": the read RAISED, which is a different fact
+        # with a different remedy, and it now says so (`readable: false`) in the same sentence the
+        # CLI's twin handler prints, from the same builder. The two surfaces moved together, which
+        # is what R3 left this blurred FOR. `{exc}` stays out of the message — R3's secret-safety
+        # bar, now the CLI's too.
+        err_path = review_log_path(surface)
+        degraded: Dict[str, Any] = {
+            "run": None, "present": False, "readable": False, "passed": False,
+            "independent": False, "blocks": True, "recorded_at": None,
+            "message": review_read_error_message(FAULT_UNKNOWN, err_path),
+            "unblock": review_read_error_unblock(err_path),
+        }
+        degraded["block"] = LazyRender(
+            lambda: _render_review_line(degraded["message"], degraded["unblock"]))
+        return apply_response_format(response_format, degraded)
+    ts = event.get("ts") if isinstance(event, dict) else None
+    out: Dict[str, Any] = {
+        "run": run_id, "present": gate.present, "readable": gate.readable,
+        "passed": gate.passed, "independent": gate.independent, "blocks": gate.blocks,
+        "recorded_at": ts if isinstance(ts, str) and ts else None,
+        "message": gate.message, "unblock": gate.unblock,
+    }
+    out["block"] = LazyRender(lambda: _render_review_status(gate))
+    return apply_response_format(response_format, out)
+
+
+def _render_review_status(gate: Any) -> str:
+    """The human view — the SAME single line `mokata progress review-status` prints (the gate
+    message, plus its unblock remedy when it blocks). Built lazily, so concise never pays for it."""
+    return _render_review_line(gate.message, gate.unblock)
+
+
+def _render_review_line(message: str, unblock: str) -> str:
+    """The CLI's one-line composition, from message + remedy. Split out at REVIEW-FIX.R4 so the
+    DEGRADE answer — which has no `ReviewGate` to render, because building one is what failed —
+    renders identically to every other answer instead of losing its `detailed` view."""
+    return message + (f"  → to unblock: {unblock}" if unblock else "")
+
+
+@_tool("review_record", "read")
+def review_record(path: str = ".", passed: bool = False, failed: bool = False,
+                  independent: bool = False, findings: str = "",
+                  run: str = "") -> Dict[str, Any]:
+    """RECORD the closing review's verdict — the in-harness twin of `mokata progress
+    record-review`, and the ONLY thing `review_status` / `/mokata:ship` will accept as evidence
+    that review ran. Call it once, at the end of /mokata:review, with the outcome you actually
+    reached.
+
+    Exactly one of `passed` / `failed` must be true (the CLI's mutually-exclusive, required
+    outcome). `independent` records that the review ran as a fresh-context subagent — omit it when
+    it degraded to the inline two-pass; ship does not block on inline, it surfaces the weaker
+    signal, so recording it honestly costs nothing and hiding it corrupts the record. `findings`
+    is an optional count/summary stored with the verdict. `run` names the run this verdict belongs
+    to; omitted, it resolves the SAME session-aware way `review_status` reads, so the record-key
+    and the read-key are the same run by construction (REVIEW-FIX.R1).
+
+    UNGATED, exactly like its CLI twin: this is observability-tier, append-only evidence (the tier
+    of `mokata progress mark` and the audit ledger), not a durable code/memory/config write — so
+    there is no `approve`, no proposal, and nothing to confirm. Recording is not the same as being
+    believed: `ship_review_gate` still decides, and it refuses a verdict it cannot key to a run or
+    one older than the freshness bound.
+
+    A verdict that lands run-less SATISFIES NOTHING — the result says so plainly (`run: null`)
+    rather than letting ship discover it later. A verdict that could not be recorded AT ALL is
+    LOUDER still (REVIEW-FIX.R4): `recorded: false`, `satisfies_gate: false`, and a `message`
+    stating that ship will now block as if review never ran — the same sentence the CLI prints as
+    it exits non-zero. Degrade-clean: a failure to record is reported, never raised."""
+    from ..cli_commands.runviews import (review_record_failed_line, review_recorded_line,
+                                         review_runless_line)
+    from ..progress_events import _CURRENT_RUN, record_review_verdict
+    if passed == failed:
+        # The CLI's `add_mutually_exclusive_group(required=True)`, as a result rather than an
+        # argparse exit: neither named (nothing to record) or both named (no verdict to believe).
+        return {"recorded": False, "status": "error", "run": None,
+                "reason": "name the outcome: exactly one of passed / failed",
+                "hint": ("call `review_record` with passed=true or failed=true — mokata records "
+                         "what the review CONCLUDED and will not guess it.")}
+    surface = _surface(path)
+    try:
+        event = record_review_verdict(surface, passed=passed, independent=independent,
+                                      findings=findings or None,
+                                      run_id=(run or "").strip() or _CURRENT_RUN)
+    except Exception as exc:                 # noqa: BLE001
+        # Same posture as the CLI's record path: a recording failure is REPORTED, not raised — the
+        # review skill must never break on the act of writing down its own verdict. REVIEW-FIX.R4
+        # made that report LOUD on BOTH surfaces: the CLI now exits non-zero, and this answer now
+        # carries the same sentence (one builder) plus the CONSEQUENCE the caller must act on —
+        # `satisfies_gate: false`, the same key a run-less record uses to say "this proves nothing".
+        return {"recorded": False, "status": "error", "run": None, "satisfies_gate": False,
+                "reason": f"could not record the verdict ({exc})",
+                "message": review_record_failed_line(exc),
+                "hint": "retry, or record it from the terminal with `mokata progress "
+                        "record-review --passed|--failed --run <run id>`."}
+    verdict = "passed" if passed else "failed"
+    kind = "independent" if independent else "inline"
+    rid = event.get("run_id")
+    out: Dict[str, Any] = {
+        "recorded": True, "status": "recorded", "run": rid or None,
+        "passed": bool(passed), "independent": bool(independent),
+        "recorded_at": event.get("ts"),
+        # The SAME sentence the CLI prints, from the same builder — one truth source, one wording.
+        "message": (review_recorded_line(verdict, kind, rid) if rid
+                    else review_runless_line(verdict, kind)),
+    }
+    if not rid:
+        out["satisfies_gate"] = False
+    return out
 
 
 # --------------------------------------------------------------------------------------
@@ -775,3 +1058,32 @@ def stacks_show(path: str = ".", name: str = "", source: str = "") -> Dict[str, 
     if entry is None:
         return {"status": "not_found", "message": f"no stack named '{name}' in the catalog"}
     return {"status": "ok", "hosted": False, "stack": entry}
+
+
+# M-4/R5 (0.0.16) — registered LAST, not beside `recall` where it reads more naturally. The
+# registry snapshot pins tool ORDER, and its own rule is that a new tool is APPENDED so every
+# pre-existing entry keeps its position; slotting this next to `recall` would have shifted ~35
+# entries and broken exactly what that guard protects.
+@_tool("consolidate_proposals", "read")
+def consolidate_proposals(path: str = ".") -> Dict[str, Any]:
+    """M-4/R5 PHASE 1 — the DRAFTING REQUEST: episodic clusters that want a summary, WITH the turns
+    to draft from. Read-only; it writes nothing and applies nothing.
+
+    mokata never drafts a summary itself — it calls no model. YOU write each summary from the turns
+    returned here, then submit it with the `consolidate` write tool, which is human-gated: your
+    draft is reviewed by the human before it is ever stored."""
+    from ..memory.consolidation import DRAFTING_INSTRUCTION, drafting_request
+    surface = _surface(path)
+    store = MemoryStore.from_surface(surface)
+    if not store.enabled_types:
+        return {"enabled": False, "drafting_requests": []}
+    # LEDGER PARITY — the agent's drafting request is recorded exactly like the human's (I3). The
+    # ledger is passed EXPLICITLY rather than left to `MemoryStore.from_surface`'s attached one:
+    # both resolve to the same `AuditLedger.from_mokata_dir`, so this changes no behaviour today,
+    # but it states the requirement at the call site instead of inheriting it — the provenance of
+    # a drafting request should not quietly depend on how the store happened to be constructed.
+    ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+    return _with_degrade(store, {
+        "enabled": True,
+        "instruction": DRAFTING_INSTRUCTION,
+        "drafting_requests": drafting_request(store.propose_consolidations(ledger=ledger))})

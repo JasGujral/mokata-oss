@@ -38,6 +38,86 @@ MCP_APPROVE_TOOL = f"mcp__{MCP_SERVER_NAME}__approve"
 MCP_APPROVE_TOOL_ASK = MCP_APPROVE_TOOL
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# The HOST harness's own per-user state layout
+# ══════════════════════════════════════════════════════════════════════════════════════════
+# Claude Code keeps its own state under `<home>/.claude`, OUTSIDE every project workspace.
+# `selfprotect`'s containment rule therefore refuses a write to any of it — correctly, but
+# with a message that reads like it caught a rogue write rather than like a host capability
+# being switched off (`84:69`).
+#
+# The layout lives HERE, next to the `.claude/settings.json` path `harness_setup` already
+# owns, because two spellings of one vendor layout is exactly how they drift. `selfprotect`
+# holds no `.claude` literal of its own; a test asserts that.
+#
+# SHAPE-BASED, not existence-based. `harness_path_kind` answers from the path's COMPONENTS,
+# never from the filesystem: the directory a write is about to create does not exist yet, so
+# an `isdir` check would answer None for precisely the write being judged.
+CLAUDE_DIR_NAME = ".claude"
+CLAUDE_PROJECTS_DIR = "projects"
+CLAUDE_MEMORY_DIR = "memory"
+
+# The capability labels `harness_path_kind` returns. Stable ids a caller can branch on — the
+# refusal message keys on them, and `selfprotect`'s memory carve-out keys on MEMORY alone.
+HARNESS_MEMORY = "memory"
+HARNESS_TRANSCRIPTS = "transcripts"
+HARNESS_SETTINGS = "settings"
+HARNESS_PLUGINS = "plugins"
+HARNESS_HOOKS = "hooks"
+HARNESS_STATE = "state"
+
+# One human phrase per label, for a refusal that names what actually stopped working.
+HARNESS_CAPABILITY_LABELS = {
+    HARNESS_MEMORY: "the harness's persistent MEMORY for this project",
+    HARNESS_TRANSCRIPTS: "the harness's session TRANSCRIPT store for this project",
+    HARNESS_SETTINGS: "the harness's own SETTINGS file",
+    HARNESS_PLUGINS: "the harness's PLUGIN storage",
+    HARNESS_HOOKS: "the harness's HOOK storage",
+    HARNESS_STATE: "the harness's own state directory",
+}
+
+_SETTINGS_FILES = ("settings.json", "settings.local.json")
+
+
+def harness_state_root(home: Optional[str] = None) -> Path:
+    """``<home>/.claude`` — where the host harness keeps its per-user state."""
+    return (Path(home) if home else Path.home()) / CLAUDE_DIR_NAME
+
+
+def harness_path_kind(path: str, home: Optional[str] = None) -> Optional[str]:
+    """Which host-harness capability's storage does ``path`` sit in — or None.
+
+    ``path`` must already be absolute and resolved (``selfprotect`` passes a realpath); the
+    comparison is on path COMPONENTS, so it is decided by shape and answers for a file that
+    does not exist yet. Total: never raises, never touches the filesystem beyond resolving
+    the home directory."""
+    try:
+        root = harness_state_root(home).resolve()
+        rel = Path(path).resolve().relative_to(root)
+    except (OSError, ValueError):
+        return None                          # not under the harness root (or unresolvable)
+    parts = rel.parts
+    if not parts:
+        return HARNESS_STATE
+    if parts[0] == CLAUDE_PROJECTS_DIR:
+        # `<slug>/memory/**` is the memory store; anything else under a slug is transcripts.
+        if len(parts) >= 3 and parts[2] == CLAUDE_MEMORY_DIR:
+            return HARNESS_MEMORY
+        return HARNESS_TRANSCRIPTS
+    if parts[0] in _SETTINGS_FILES:
+        return HARNESS_SETTINGS
+    if parts[0] == "plugins":
+        return HARNESS_PLUGINS
+    if parts[0] == "hooks":
+        return HARNESS_HOOKS
+    return HARNESS_STATE
+
+
+def harness_capability_label(kind: Optional[str]) -> Optional[str]:
+    """The human phrase for a `harness_path_kind` result, or None."""
+    return HARNESS_CAPABILITY_LABELS.get(kind or "")
+
+
 def scope_base(scope: str, root: str, home: Optional[str] = None) -> Path:
     """The base directory a (scope) choice resolves under: the project ``root`` for the
     ``project`` scope, else the user home (``home`` if given, else ``Path.home()``)."""

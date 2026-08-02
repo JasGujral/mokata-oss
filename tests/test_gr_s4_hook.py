@@ -74,10 +74,16 @@ class TestPostToolUseWiring(unittest.TestCase):
         plan = H.plan_setup("claude", root=self.root_dir(), scope="project", with_hooks=True)
         events = plan.hook_commands
         self.assertIn("PostToolUse", events, "PostToolUse not wired")
-        cmds = " ".join(e.get("command", "") for e in events["PostToolUse"])
+        # HOOK-SHELL-AGNOSTIC: the setup route is EXEC form, so the subcommand lives in `args`
+        # rather than appended to the command string. What is wired is unchanged; only how it
+        # is spawned is (no shell — see harness_setup._hook_exec).
+        def _flat(entries):
+            return " ".join(e.get("command", "") + " " + " ".join(e.get("args", []) or [])
+                            for e in entries)
+        cmds = _flat(events["PostToolUse"])
         self.assertIn("dirty-track", cmds)
         # sync security lane untouched: still exactly the two PreToolUse blockers.
-        pre = " ".join(e.get("command", "") for e in events.get("PreToolUse", []))
+        pre = _flat(events.get("PreToolUse", []))
         self.assertIn("secret-guard", pre)
         self.assertIn("gate-guard", pre)
 

@@ -42,6 +42,20 @@ APPROVE = "approve"
 #                     subprocess never spawns.
 #   - graph/PG/catalog WRITES + `status`/`govern`/`decompose`/`ci_check`/`remember` ADDED — each
 #     verified to reach a sink on a read-or-compute path (citations below).
+#   - `spec_show` (HANDOFF.G1) DELIBERATELY EXCLUDED — grounded, not overlooked. Its whole body is
+#     `_run_scoped_store` -> `gate_hook.resolve_run` (local `state/` filenames + the local session
+#     registry) then `read_emitted_spec` (one local JSON read). It builds NO `KnowledgeLayer`, so —
+#     unlike its neighbour `decompose`, which shares the spec load but then graph-verifies subtask
+#     independence — the lazy CRG subprocess never spawns; it touches no MemoryStore, so no team
+#     Postgres; it resolves no catalog. openWorldHint:false.
+#   - `review_status` / `review_record` (REVIEW-FIX.R3) DELIBERATELY EXCLUDED — grounded per tool.
+#     Both bodies are `Surface.load` + `progress_events._resolve_verdict_run` (which reaches
+#     `badge_run.resolve_verdict_run` -> the local session-binding file + `gate_hook.resolve_run`
+#     over local `state/` filenames) + one local append/backward-scan of `state/
+#     progress-events.jsonl`. No `KnowledgeLayer` is built, so the lazy CRG subprocess never
+#     spawns; no `MemoryStore`, so no team Postgres; no catalog is resolved. openWorldHint:false.
+#     NOTE the read/write label is NOT what decides this: `review_record` APPENDS an event and is
+#     still openWorld:false, exactly as the rule above says.
 # A tool added later that reaches out but is NOT listed here fails the D1a drift-guard test.
 OPEN_WORLD_TOOLS = frozenset({
     # --- CRG code-graph subprocess — a graph QUERY on the read/compute path -------------------

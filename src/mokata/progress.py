@@ -83,26 +83,64 @@ def list_runs(store: Any) -> List[str]:
     return out
 
 
-def _shipped_run_ids(store: Any) -> set:
+def list_runs_by_recency(store: Any) -> List[str]:
+    """`list_runs` re-ordered OLDEST → NEWEST by the checkpoint file's mtime (ties broken by id, so
+    the order stays deterministic). Empty when none / unreadable.
+
+    REVIEW-FIX.R1 fold-in — `list_runs` sorts by NAME and run ids are `uuid4().hex`
+    (`session.current_run_id`), so a lexicographic order carries NO time information: every "most
+    recent run" read off it was an ARBITRARY run. The checkpoint file's mtime is the recency signal
+    that actually exists on disk (it is rewritten on every `mark_passed`/`mark_completed`, so it
+    tracks last activity). `list_runs` itself is UNCHANGED — its by-name order is what
+    `list_sessions` and the state scans rely on; only the callers that CLAIM recency use this."""
+    runs = list_runs(store)
+    if not runs:
+        return []
+    root = getattr(store, "root", None) or ""
+
+    def _mtime(rid: str) -> float:
+        try:
+            return os.path.getmtime(os.path.join(root, CHECKPOINT_PREFIX + rid + ".json"))
+        except OSError:
+            return 0.0            # unreadable stamp sorts oldest; never raises into a read path
+
+    return sorted(runs, key=lambda rid: (_mtime(rid), rid))
+
+
+def _shipped_run_ids(store: Any, run_id: Optional[str] = None) -> set:
     """Run ids whose most-recent logged user-stage is `ship` — the terminal END-OF-RUN signal in the
     progress-event log. B-LIFE grounds "finished" here (not on the pipeline checkpoint): `STAGE_PASS`
     is defined but never written and there is no ship-completion event, so entering `ship` (its
     `stage_enter`) is the strongest end-of-run evidence the log records. Uses the LAST stage_enter
     per run (matching the badge's forward-only view), so a run that re-entered develop after ship
     reads as active again. One bounded log read. Degrade-clean: no/broken log -> empty set (nothing
-    is retired), so an unreadable log can never wrongly hide a run."""
+    is retired), so an unreadable log can never wrongly hide a run.
+
+    REVIEW-FIX.R2 — the scan runs BACKWARD under a byte cap (`read_events_backward`) instead of over
+    the trailing `DEFAULT_TAIL`=200 events, and walking backward the FIRST `stage_enter` seen for a
+    run IS its most recent one, so the per-run answer is identical wherever the old window happened
+    to contain the evidence. Where it did not, the old read was wrong in the worst direction:
+    RETIREMENT itself got truncated away, so a shipped run read as unshipped and `find_active_run`
+    resurrected it as "the current run". Passing `run_id` asks the single-run question
+    (`badge_run._run_is_shipped`) and stops the scan at that run's first match."""
     try:
         from .progress_events import ProgressLog, STAGE_ENTER
-        events = ProgressLog.from_state_dir(store.root).read_events()
+        furthest: dict = {}
+        for e in ProgressLog.from_state_dir(store.root).read_events_backward():
+            if e.get("type") != STAGE_ENTER:
+                continue
+            stage = e.get("stage")
+            if stage not in STAGE_BADGE_STAGES:
+                continue
+            rid = e.get("run_id")
+            if run_id is not None and rid != run_id:
+                continue
+            if rid not in furthest:
+                furthest[rid] = stage      # backward scan: the first seen IS the last logged
+            if run_id is not None:
+                break                      # the one run asked about is settled — read no further
     except Exception:
         return set()
-    furthest: dict = {}
-    for e in events:
-        if e.get("type") != STAGE_ENTER:
-            continue
-        stage = e.get("stage")
-        if stage in STAGE_BADGE_STAGES:
-            furthest[e.get("run_id")] = stage
     return {rid for rid, s in furthest.items() if s == "ship"}
 
 
@@ -116,13 +154,18 @@ def find_active_run(store: Any, phases=PIPELINE_PHASES) -> Optional[str]:
     a run that reached the terminal `ship` stage is retired: it finished, and reporting it as the
     current run is the live bug. The incomplete-checkpoint ordering is unchanged; the completed-but-
     unshipped fallback is byte-identical to the old "most recent" pick. Shipped runs are never
-    deleted — still readable by explicit run_id, surfaced as finished-then by `build_progress`."""
+    deleted — still readable by explicit run_id, surfaced as finished-then by `build_progress`.
+
+    REVIEW-FIX.R1 fold-in — the fallback now walks `list_runs_by_recency` (checkpoint mtime), so
+    "most recent" is REAL. It used to walk `reversed(list_runs(...))`, i.e. the highest run id in
+    lexicographic order over `uuid4().hex` ids: an arbitrary pick that contradicted this docstring.
+    The incomplete-checkpoint loop above is unchanged (it claims "the first", not "the newest")."""
     runs = list_runs(store)
     for rid in runs:
         if not PipelineCheckpoint(store, rid).is_complete(phases):
             return rid
     shipped = _shipped_run_ids(store)
-    for rid in reversed(runs):
+    for rid in reversed(list_runs_by_recency(store)):
         if rid not in shipped:
             return rid                                   # most-recent completed-but-unshipped run
     return None
@@ -134,8 +177,12 @@ def _no_active_run_message(store: Any, phases=PIPELINE_PHASES) -> str:
     — "last run '<id>' completed <when> — no active run" — followed by the SAME PH-GATE.S0 recovery
     guidance (`NO_RUN_MESSAGE`) so the user still learns how to start / resume a tracked run. No
     timestamp on record (a legacy shipped run stamped before this stage) ⇒ "completed" without the
-    when, never a crash. No runs at all ⇒ the plain `NO_RUN_MESSAGE`, byte-identical to before."""
-    runs = list_runs(store)
+    when, never a crash. No runs at all ⇒ the plain `NO_RUN_MESSAGE`, byte-identical to before.
+
+    REVIEW-FIX.R1 fold-in — "the most recent one" is read off `list_runs_by_recency` (checkpoint
+    mtime), not off the by-NAME order's last element, which over `uuid4().hex` ids named an
+    arbitrary run in the sentence that says "last run"."""
+    runs = list_runs_by_recency(store)
     if not runs:
         return NO_RUN_MESSAGE
     rid = runs[-1]                                        # the most recent (all runs shipped here)
@@ -248,11 +295,35 @@ def render_progress(progress: RunProgress, ascii_only: bool = False,
         lines.append(f"next: {nxt}     ·     pending: {progress.pending}/"
                      f"{progress.total}")
     lines.extend(_user_stage_arc_lines(surface, ascii_only))   # 6d — MAX detail, degrade-clean
+    lines.extend(_worktree_lines(surface, progress, ascii_only))   # WT.S4 — binding | run-start offer
     if surface is not None:                                     # SK.S1 — same active-skill line
         skill_line = active_skill_surface(surface)             # as the statusline / in-chat use
         if skill_line:
             lines.append(skill_line)
     return "\n".join(lines)
+
+
+def _worktree_lines(surface: Any, progress: "RunProgress",
+                    ascii_only: bool = False) -> List[str]:
+    """WT.S4 — the run's worktree standing, on the surface the run is already shown on.
+
+    Exactly ONE of two things, never both: the run is BOUND (surface which worktree/branch it owns,
+    every time — a binding you have to remember isn't surfaced), or it is UNBOUND (offer it a
+    worktree ONCE per run — the run-start offer; a second print would be a nag). The offer creates
+    nothing. Returns `[]` with no surface or on ANY problem, so an unbound run in a non-git repo
+    sees a block byte-identical to before."""
+    if surface is None:
+        return []
+    try:
+        from .session_worktree import binding_line, emit_run_start_offer_once
+        bound = binding_line(surface, run_id=progress.run_id, ascii_only=ascii_only)
+        if bound:
+            return ["", bound]
+        out: List[str] = []
+        emit_run_start_offer_once(surface, out=out.append, ascii_only=ascii_only)
+        return ["", *out] if out else []
+    except Exception:
+        return []
 
 
 def _user_stage_arc_lines(surface: Any, ascii_only: bool = False) -> List[str]:

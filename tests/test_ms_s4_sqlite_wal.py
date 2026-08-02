@@ -398,8 +398,15 @@ class TestNoBehaviourChange(unittest.TestCase):
                 cols = [r[1] for r in conn.execute("PRAGMA table_info(memory)").fetchall()]
             finally:
                 conn.close()
+            # DB.S5 appends the four v4 lifecycle columns. This test's subject is MS.S4 (the WAL +
+            # busy_timeout pragmas), and its claim is that CHANGING THE JOURNAL MODE does not touch
+            # the schema — so it pins the column list as a whole and is updated, in place, by any
+            # stage that legitimately adds one. The MS.S4 property is the ORDER and PRESENCE of the
+            # original ten being unchanged; the four new names are DB.S5's, provisioned by its own
+            # migration and pinned by its own suite.
             self.assertEqual(cols, ["seq", "id", "mtype", "subject", "status", "doc",
-                                    "scope_level", "scope_id", "pin", "priority"])
+                                    "scope_level", "scope_id", "pin", "priority",
+                                    "valid_from", "valid_to", "hit_count", "last_recalled_at"])
 
     def test_single_window_behaviour_identical(self):
         with tempfile.TemporaryDirectory() as d:

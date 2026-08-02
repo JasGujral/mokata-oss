@@ -46,8 +46,13 @@ Deterministic, which buys three properties for free:
   * **content-bound** — change one argument and the hash changes, so the id changes. "Get X approved,
     then commit Y" is not discouraged, it is *arithmetically impossible*: Y's call cannot produce
     X's id, and X's record cannot match Y's hash.
-  * **session-scoped** — `run_id` is in the pre-image, and the record carries it, so an approval
-    minted in window A is refused in window B (`run_id == session_id`; see `session.py`).
+  * **run-scoped** — `run_id` is in the pre-image, and the record carries it, so an approval minted
+    for one run is refused against another. WHICH run is the CALLER's to decide, and the two callers
+    differ on purpose: the MCP write path passes the PIPELINE's run (`mcp.consent._approval_run` ->
+    `badge_run.resolve_run_for_evidence`), so a human's approval survives an MCP restart or a
+    brainstorm re-entry; anything passing `session.current_run_id()` gets the older, narrower
+    process scope (`run_id == session_id`; see `session.py`). RE-ENTRY changed the caller, not this
+    module — see `_approval_run` for why a stable id is not a weakening of the consent.
 
 Storage — MS.S1 primitives, transient by nature
 -----------------------------------------------
@@ -86,7 +91,7 @@ from .tdd_state import state_dir
 # The state key prefix. A sibling of SI.1's `gate_override__<run_id>` and SI.2's `tdd_phase__<run_id>`
 # — but keyed by PROPOSAL id, not run id, because the `mokata approve` process looks a proposal up by
 # the id the model showed the human. The run is carried INSIDE the record and checked at redemption,
-# which is what makes the approval session-scoped.
+# which is what makes the approval run-scoped (see the module docstring on WHICH run that is).
 PROPOSAL_PREFIX = "write_proposal__"
 
 # How long a proposal (and the approval minted on it) stays redeemable. 15 minutes: long enough for a
@@ -127,7 +132,8 @@ _REFUSAL_TEXT = {
                               "the human saw them (the approval is bound to its content hash)"),
     REFUSED_EXPIRED: "the approval has expired",
     REFUSED_USED: "that approval was already used — an approval licenses exactly one write",
-    REFUSED_OTHER_SESSION: "that approval was minted in a different session",
+    REFUSED_OTHER_SESSION: ("that approval was minted for a different run — it does not license a "
+                            "write against this one"),
     REFUSED_NOT_APPROVED: "no human has approved this proposal yet",
 }
 
@@ -210,6 +216,27 @@ def content_hash(tool: str, args: Dict[str, Any]) -> str:
     the pre-image, so referencing an approval cannot change the hash it is being checked against."""
     blob = json.dumps({"tool": tool, "args": args}, sort_keys=True, separators=(",", ":"),
                       default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def group_content_hash(members: "List[Dict[str, Any]]") -> str:
+    """UX-CONFIRM (D7c) — the hash binding ONE approval to a whole GROUP of writes.
+
+    "SI.3 content-binding extends to the group hash" (doc 84): the human approves a set, so the
+    thing bound has to be the set. Built over each member's OWN `content_hash`, in order, so:
+
+      * adding, removing, reordering or editing any member changes the group hash, and the
+        approval the human gave for the old set no longer licenses the new one;
+      * the members remain individually hashed, so a per-item ledger entry can still name exactly
+        which write it was.
+
+    ORDER IS PART OF THE IDENTITY, deliberately — a caller must present members in a stable order
+    (the order they were rendered in), because "the same items in a different order" is a different
+    thing to have read. Sorting here would let a re-ordered render redeem an approval for a list
+    the human saw differently.
+    """
+    inner = [content_hash(str(m.get("tool", "")), dict(m.get("args", {}))) for m in members]
+    blob = json.dumps({"group": inner}, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
@@ -325,6 +352,79 @@ def propose(root: str, *, tool: str, args: Dict[str, Any], run_id: str, target: 
     )
     _store(root).write(state_key(pid), proposal.to_state())
     return proposal
+
+
+def propose_group(root: str, *, tool: str, members: "List[Dict[str, Any]]", run_id: str,
+                  target: str = "", summary: str = "", ttl: int = DEFAULT_TTL_SECONDS,
+                  now: Optional[float] = None) -> Proposal:
+    """UX-CONFIRM (D7c) — ONE proposal for several writes of the same kind in the same moment.
+
+    The problem it removes (doc 84, from live use): one transition often produces a handful of
+    gated writes of the same kind — a consolidation touching every member, a heal writing both
+    sides — and each one asked separately. That is one DECISION presented as N questions, and N
+    questions is how a human stops reading them.
+
+    What it is NOT: a way to approve less. Every member is rendered IN FULL (`render_group` does
+    not truncate — see there), the group hash binds the exact set (`group_content_hash`), and
+    redemption still produces a per-item ledger entry (`record_group_redemption`). One ask, one
+    decision, N records — never one record standing in for N writes.
+
+    Each member is `{"tool": …, "args": {…}, "preview": …}`. Rides the same storage, TTL, pruning
+    and idempotency as `propose`, so a group is a proposal like any other everywhere else.
+    """
+    now = time.time() if now is None else now
+    chash = group_content_hash(members)
+    pid = proposal_id_for(run_id, chash)
+
+    existing = load(root, pid)
+    if (existing is not None and existing.status in (STATUS_PROPOSED, STATUS_APPROVED)
+            and not existing.expired(now)):
+        return existing
+
+    prune(root, now, keep=MAX_PROPOSALS - 1)
+    proposal = Proposal(
+        proposal_id=pid, run_id=run_id, tool=tool, target=target,
+        summary=summary or f"{len(members)} {tool} writes",
+        preview=_group_preview(members), content_hash=chash, status=STATUS_PROPOSED,
+        created_at=now, expires_at=now + ttl,
+    )
+    _store(root).write(state_key(pid), proposal.to_state())
+    return proposal
+
+
+def _group_preview(members: "List[Dict[str, Any]]") -> str:
+    """Every member, numbered, in full. Numbered because the human is being asked one question
+    about N things and needs to be able to say which one they object to."""
+    out: List[str] = []
+    for i, m in enumerate(members, 1):
+        body = str(m.get("preview", "") or "")
+        out.append(f"[{i}/{len(members)}] {m.get('target') or m.get('tool', '')}")
+        out.extend(f"  {ln}" for ln in body.splitlines())
+    return "\n".join(out)
+
+
+def record_group_redemption(ledger: Any, p: Optional[Proposal],
+                            members: "List[Dict[str, Any]]",
+                            *, write_seqs: Optional["List[Any]"] = None,
+                            committed: bool = True) -> None:
+    """Close the chain for a GROUP: ONE approval, one ledger entry PER member.
+
+    Deliberately not a single entry naming a count. The audit question is "what licensed THIS
+    durable write", asked of one row at a time, and an entry saying "5 writes were approved" cannot
+    answer it. Each entry carries its own member hash plus the group hash they were approved under,
+    so the trail runs write → member → the one decision the human made.
+    """
+    if ledger is None or p is None:
+        return
+    seqs = list(write_seqs or [])
+    for i, m in enumerate(members):
+        ledger.record(LEDGER_KIND, decision="redeemed", proposal=p.proposal_id,
+                      tool=str(m.get("tool", p.tool)), target=str(m.get("target", "")),
+                      content_hash=content_hash(str(m.get("tool", "")), dict(m.get("args", {}))),
+                      group_hash=p.content_hash, group_size=len(members), group_index=i + 1,
+                      approved_by=p.approved_by, approved_at=p.approved_at, run=p.run_id,
+                      committed=committed,
+                      write_seq=(seqs[i] if i < len(seqs) else None))
 
 
 # ======================================================================================
@@ -493,6 +593,30 @@ def render(p: Proposal, now: Optional[float] = None) -> str:
     return "\n".join(lines)
 
 
+def render_group(p: Proposal, now: Optional[float] = None) -> str:
+    """UX-CONFIRM (D7c) — a GROUP proposal, with every member in full.
+
+    Not `render`. That one truncates the preview at 20 lines, which is the right trade for a single
+    write (a preview is a courtesy; the hash is the binding). For a group it would be the wrong
+    trade and a dangerous one: the whole justification for asking once instead of N times is that
+    the human sees all N, so a truncated group render would turn "one decision with full content"
+    into "one decision with some of the content" — which is the rubber-stamp this release is
+    otherwise closing (R9), reintroduced through the confirmation-economics door.
+
+    So: no cap, and the member count is stated up front so the reader knows what they are agreeing
+    to before they scroll.
+    """
+    lines = [
+        f"  proposal : {p.proposal_id}",
+        f"  tool     : {p.tool}",
+        f"  summary  : {p.summary or '(none)'}",
+        f"  expires  : in {p.expires_in(now) // 60}m {p.expires_in(now) % 60}s",
+        "  would write ALL of the following — one approval covers exactly this set:",
+    ]
+    lines.extend(f"    {ln}" for ln in p.preview.splitlines())
+    return "\n".join(lines)
+
+
 __all__ = [
     "PROPOSAL_PREFIX", "DEFAULT_TTL_SECONDS", "MAX_PROPOSALS", "LEDGER_KIND",
     "STATUS_PROPOSED", "STATUS_APPROVED", "STATUS_USED",
@@ -502,4 +626,6 @@ __all__ = [
     "Proposal", "ApprovalResult", "Consent",
     "approve", "consent", "content_hash", "from_state", "load", "pending", "propose",
     "proposal_id_for", "prune", "record_redemption", "redeem", "render", "state_key",
+    # UX-CONFIRM (D7c) — grouped same-kind proposals: one ask, full content, per-item records
+    "group_content_hash", "propose_group", "record_group_redemption", "render_group",
 ]

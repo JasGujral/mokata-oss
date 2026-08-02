@@ -148,6 +148,12 @@ axis. See [Getting started](docs/getting-started.md).
 > A `pip` CLI install is **terminal-only** — it runs the deterministic engine with no LLM
 > attached. It does **not** put mokata inside Claude Code; for that, install the plugin or run
 > `mokata setup claude`. ([Why two ways](https://mokata.ai/concepts/execution-model/).)
+>
+> `mokata init` = **your repo** (`.mokata/`). `mokata setup claude` = **your agent** (`.claude/`,
+> and it runs `init` for you). Upgrading? `mokata upgrade` does the pip install *and* refreshes
+> the harness wiring, both human-gated — a bare `pip install -U` leaves the old wiring in place.
+> Decision table + upgrade runbook:
+> [Which setup command do I need?](https://mokata.ai/how-to/which-setup-command/)
 
 Full walkthrough: [`docs/quickstart.md`](docs/quickstart.md) · full hands-on guide → [the Complete Guide](https://mokata.ai/tutorials/mokata-complete-guide/) (with a downloadable PDF) · published docs: <https://mokata.ai/>
 

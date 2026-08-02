@@ -113,13 +113,17 @@ class TestReviewVerdictPersistence(unittest.TestCase):
                               "a run-less verdict must not match an active run")
             gate = ship_review_gate(surface, run_id="run-a")
             self.assertTrue(gate.blocks, "ship must still block for run-a")
-            # with NO active run (run_id=None) the run-less verdict still counts (unchanged)
-            self.assertIsNotNone(latest_review_verdict(surface, run_id=None))
+            # REVIEW-FIX.R1 — a run-less READ now REFUSES too (it used to filter nothing and let
+            # the last verdict in the whole stream win, which is how a foreign run's PASS reached
+            # the ship gate). So a run-less verdict satisfies NOTHING, in either direction.
+            self.assertIsNone(latest_review_verdict(surface, run_id=None))
 
     def test_degrade_clean_on_broken_surface(self):
         class Broken:
             state = None
-        self.assertIsNone(latest_review_verdict(Broken()))
+        # a run_id is required to reach the log read at all (R1's run-less refusal comes first),
+        # so this still exercises the degrade-clean path on a surface with no readable state.
+        self.assertIsNone(latest_review_verdict(Broken(), run_id="run-a"))
 
 
 # ============================================================ ungated observability
@@ -211,6 +215,11 @@ class TestReviewIndependentConfig(unittest.TestCase):
 
 # ============================================================ the CLI writer + reader
 class TestReviewCLI(unittest.TestCase):
+    """REVIEW-FIX.R1 — these fixtures now register a RUN (`_complete_run`), because the verdict is
+    keyed to the run it belongs to: a repo with no run at all resolves to nothing and
+    `review-status` fails CLOSED ("no run to attribute it to"), which is asserted in
+    `test_review_fix_r1.py`. The record/read behaviour under test here is otherwise unchanged."""
+
     def _run(self, argv, cwd):
         from mokata.cli import main
         out = io.StringIO()
@@ -241,14 +250,14 @@ class TestReviewCLI(unittest.TestCase):
 
     def test_review_status_blocks_without_verdict(self):
         with tempfile.TemporaryDirectory() as d:
-            _repo(d)
+            _complete_run(_repo(d))
             rc, out = self._run(["progress", "review-status"], d)
             self.assertEqual(rc, 2)                     # non-zero -> ship must BLOCK
             self.assertIn("review hasn't run", out)
 
     def test_review_status_passes_independent(self):
         with tempfile.TemporaryDirectory() as d:
-            _repo(d)
+            _complete_run(_repo(d))
             self._run(["progress", "record-review", "--passed", "--independent"], d)
             rc, out = self._run(["progress", "review-status"], d)
             self.assertEqual(rc, 0)
@@ -256,7 +265,7 @@ class TestReviewCLI(unittest.TestCase):
 
     def test_review_status_passes_inline(self):
         with tempfile.TemporaryDirectory() as d:
-            _repo(d)
+            _complete_run(_repo(d))
             self._run(["progress", "record-review", "--passed"], d)   # no --independent
             rc, out = self._run(["progress", "review-status"], d)
             self.assertEqual(rc, 0)                     # inline still ships (never hard-blocks)
@@ -264,7 +273,7 @@ class TestReviewCLI(unittest.TestCase):
 
     def test_review_status_blocks_on_failed(self):
         with tempfile.TemporaryDirectory() as d:
-            _repo(d)
+            _complete_run(_repo(d))
             self._run(["progress", "record-review", "--failed", "--independent"], d)
             rc, out = self._run(["progress", "review-status"], d)
             self.assertEqual(rc, 2)
@@ -296,10 +305,16 @@ class TestTemplates(unittest.TestCase):
         self.assertIn("settings.review.independent=off", text)
 
     def test_review_records_its_verdict(self):
+        """6r's contract: the verdict is PERSISTED, an instrument is named, and independence is
+        recorded honestly. WT.S4 folded REVIEW-FIX.R3 in — `review_record` is now a REGISTERED MCP
+        tool, so the prose leads with the tool and keeps the CLI as the named fallback. The pin
+        moves with it: what must hold is that an instrument is named and independence is on it,
+        NOT that the instrument is spelled as a CLI flag string."""
         text = self._text("review")
         self.assertIn("## Record verdict", text)
-        self.assertIn("mokata progress record-review --passed", text)
-        self.assertIn("--independent", text)
+        self.assertIn("`review_record` MCP tool", text)          # the instrument, leading
+        self.assertIn("mokata progress record-review", text)     # the CLI, still named as fallback
+        self.assertIn("independent", text)
 
     def test_develop_names_review_as_explicit_required_next_step(self):
         text = self._text("develop")

@@ -207,6 +207,11 @@ def run_playbook(surface: Any, exec_choice: Optional[ExecutionChoice] = None,
     checks["red_before_green"] = blocked_impl and guard.allow_implementation(tests[0].name)
 
     # 6) Implement + review through the chosen execution mode (E8); two-stage review (E3).
+    # `checks["review_passed"]` below is a SELF-TEST result — this playbook's own smoke assertion
+    # that the E3 review ran on the tasks it just simulated. It is NOT ship-gating evidence, it is
+    # never persisted as a verdict, and no gate reads it. The single ship-gating review truth is
+    # the persisted `review_verdict` progress event (REVIEW-FIX.R3) — written by
+    # `progress_events.record_review_verdict`, read by `ship_review_gate`.
     tasks = [Task(t.name, f"implement {t.name}", context=STORY["title"]) for t in tests]
     run = run_tasks(tasks, exec_choice, runner=runner, ledger=led, budget=200_000,
                     density=density, router=router, worktrees=worktrees)

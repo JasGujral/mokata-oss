@@ -8,7 +8,9 @@ schema validator, router, adapter contract, and rules.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any, List
 
 from .. import schema
@@ -227,6 +229,210 @@ def ledger_integrity_findings(surface: Any) -> List[DoctorFinding]:
         f"the tamper-evident trust record is compromised (`mokata doctor` verified the chain)")]
 
 
+def secret_ignore_findings(surface: Any) -> List[DoctorFinding]:
+    """SECRET-IGNORE (f) — name the ACTIVE ignore count, so suppressions cannot accumulate
+    invisibly. Suppressed is not the same as forgotten: an entropy-layer false positive that was
+    recorded once and never looked at again is how a suppression list rots into a hole.
+
+    INFO, not an error: a recorded false positive is the feature WORKING, and it is already
+    reviewable in the PR diff. Two things are louder than that:
+      * a TAMPERED/unreadable store is an ERROR — no ignore in it is being honoured, so the user
+        believes they have a road out and does not;
+      * STALE entries (their target file is gone) are named in the same finding, because they are
+        the no-TTL hygiene answer: entries expire on CONTENT, not on a clock, and this is where
+        that expiry becomes visible.
+
+    Read-only and guarded — never creates the file, never raises."""
+    try:
+        import os
+
+        from .secret_ignore import IGNORES_FILENAME, IgnoreStore, TamperedIgnoreFile
+        path = os.path.join(surface.mokata_dir, IGNORES_FILENAME)
+        if not os.path.exists(path):
+            return []                       # no ignores recorded — nothing to say (P8)
+        root = os.path.dirname(surface.mokata_dir)
+        try:
+            store = IgnoreStore.load(root)
+        except TamperedIgnoreFile as exc:
+            return [DoctorFinding("error", "secret-ignores-tampered", str(exc))]
+    except (OSError, ImportError, AttributeError) as exc:
+        return [DoctorFinding(
+            "error", "secret-ignores-unverifiable",
+            f"the secret-scan ignore list could NOT be read ({type(exc).__name__}) — whether "
+            f"any secret finding is being suppressed in this repo is UNKNOWN. That is not a "
+            f"clean bill of health. Check `.mokata/{IGNORES_FILENAME}`")]
+    entries = store.entries()
+    if not entries:
+        return []
+    inert = store.inert()
+    detail = (f"{len(entries)} secret-scan ignore(s) active — entropy-layer guesses suppressed "
+              f"for one exact string in one exact file each (`mokata secret ignores` lists them "
+              f"with their reasons). A recognised credential shape is never ignorable")
+    if inert:
+        detail += (f". {len(inert)} is/are INERT — that string is no longer flagged in that "
+                   f"file, so they suppress nothing; remove them with "
+                   f"`mokata secret ignore --remove`")
+    return [DoctorFinding("info", "secret-ignores", detail)]
+
+
+def hook_resolution_findings(surface: Any, home: Any = None, *,
+                             windows: Any = None, git_bash: Any = None) -> List[DoctorFinding]:
+    """HOOK-RESOLVE — the HARD check that mokata's enforcement plane can actually LAUNCH.
+
+    The failure this exists for: Claude Code silently DROPS a hook whose command does not
+    resolve. On a GUI-launched app (minimal PATH, no shell profile) a wired-but-unresolvable
+    `mokata-hook` therefore means secret-guard and gate-guard never run — and until this check,
+    doctor said nothing at all. A passing doctor and zero enforcement read identically, which
+    is the one thing a guardrail must never allow (P14: a gate that silently doesn't run is
+    worse than no gate).
+
+    So a dead wired hook is an ERROR, named, carrying the exact command it tried and the one
+    remedy that fixes it. Findings are grouped per (surface, program) — four dead hooks on one
+    unresolvable command are ONE finding naming four events, not four ways of saying it once.
+
+    Composition only: `hook_wiring.hook_wiring_report` reads the surfaces (settings.json
+    project+user, the plugin manifest) with the SAME local resolvability probe
+    `mcp_admin.unreachable_registration` uses. NO subprocess is spawned and nothing is written.
+    A repo with nothing wired yields NO findings — silence there means "no mokata hooks are
+    wired here", which is what it has always meant.
+
+    HOOK-SHELL-AGNOSTIC adds the SECOND question. "Does the command resolve" and "can the shell
+    that will run it actually launch it" are different questions, and the old check only asked
+    the first — so a hook wired to a perfectly resolvable absolute path was reported healthy
+    even where the local shell would parse it as a string and never run it. `windows` /
+    `git_bash` default to this machine and are injectable so the Windows verdict is testable
+    from a POSIX box."""
+    from ..hook_wiring import (SETUP_REMEDY, _git_bash_present, hook_wiring_report,
+                               shell_findings)
+    if windows is None:
+        windows = os.name == "nt"
+    if git_bash is None:
+        git_bash = _git_bash_present() if windows else True
+    try:
+        report = hook_wiring_report(getattr(surface, "root", "."), home)
+    except (ImportError, OSError, ValueError) as exc:
+        report = None
+        reason = f"{type(exc).__name__}: {exc}"
+    else:
+        reason = report.unverifiable
+    if reason:
+        # D5 — "I could not check" is a finding, never a pass: silence here would read as
+        # "the gates are wired and firing", which is precisely what is unknown.
+        return [DoctorFinding(
+            "error", "hooks-unverifiable",
+            f"mokata's hook wiring could NOT be checked ({reason}) — whether the secret-guard / "
+            f"gate-guard gates would actually fire is UNVERIFIED. Run `{SETUP_REMEDY}` to rewire "
+            f"them to absolute paths")]
+
+    out: List[DoctorFinding] = []
+    grouped: dict = {}
+    for h in report.dead_hooks:
+        # Grouped by the PROGRAM, not the full command: one unresolvable launcher wired to four
+        # subcommands is ONE broken thing with one fix, and reporting it four times buries it.
+        events, commands = grouped.setdefault((h.surface, h.where, h.program), ([], []))
+        events.append(h.event)
+        commands.append(h.command)
+    for (surface_name, where, program), (events, commands) in grouped.items():
+        out.append(DoctorFinding(
+            "error", "hooks-not-firing",
+            f"{surface_name}: the wired {'/'.join(sorted(set(events)))} hook command does NOT "
+            f"resolve — mokata's gates are NOT firing (secret-guard + gate-guard never run, and "
+            f"Claude Code drops such a hook silently). Tried: {program!r} "
+            f"({len(commands)} hook(s), e.g. {commands[0]!r}, wired in {where}). "
+            f"Fix: run `{SETUP_REMEDY}`"))
+
+    # HOOK-SHELL-AGNOSTIC — the per-SHELL question, asked of the hooks that DID resolve (a
+    # dead command is already reported above; saying it twice would bury both). HARD, and
+    # naming the same single remedy, so a user reads one story across the two stages.
+    for level, code, detail in shell_findings(
+            [h for h in report.hooks if h.resolves], windows=windows, git_bash=git_bash):
+        out.append(DoctorFinding(level, code, detail))
+
+    for s in report.dead_servers:
+        # A static plugin `mcpServers` entry is spawned DIRECTLY (no shell, one command string,
+        # no per-OS branching), so it cannot invoke the self-resolving shim the hooks use —
+        # naming it here is the whole remedy this surface can carry. A warning, not an error:
+        # every other MCP-reachability report in doctor is informational and does not decide
+        # doctor's exit (`mcp_admin.full_status`), and this is the same axis.
+        out.append(DoctorFinding(
+            "warning", "plugin-mcp-unresolvable",
+            f"plugin manifest: the MCP server '{s.name}' is registered as {s.command!r}, which "
+            f"does NOT resolve on this PATH — the mokata MCP tools will not start from the "
+            f"plugin route ({s.where}). Fix: run `{SETUP_REMEDY}` (it registers the server at an "
+            f"absolute path), then restart Claude Code"))
+    return out
+
+
+def wiring_drift_findings(surface: Any, home: Any = None) -> List[DoctorFinding]:
+    """DOC-ONBOARD — the NAMED diagnostic anchor for stale harness wiring.
+
+    `hook_resolution_findings` above answers "would this wiring launch?". This answers the
+    question that outlives an upgrade: "is this wiring the wiring THIS mokata writes?" A user
+    who ran `pip install -U mokata` gets the new code and keeps the old settings.json, so a
+    hook added — or a matcher widened — since their last `mokata setup claude` is simply absent,
+    silently, forever. Nothing errors; the gate just never sees the call it was meant to stop.
+
+    A WARNING, not an error, and the distinction is load-bearing: the wiring that IS here still
+    fires. `hooks-not-firing` / `hooks-shell-unrunnable` stay the errors, reserved for gates
+    that do not run at all — and the DEAD case is deliberately dropped here rather than reported
+    twice in two voices, since `hooks-not-firing` already carries it with the exact command and
+    the same one remedy.
+
+    This is the single anchor the other two surfaces derive from: `bootstrap` and the MCP
+    `status` tool render `hook_wiring.wiring_drift` through the SAME `wiring_drift_line`, so
+    "is the wiring stale" has exactly one answer no matter where you read it."""
+    from ..hook_wiring import DRIFT_DEAD, SETUP_REMEDY, wiring_drift
+    drift = wiring_drift(getattr(surface, "root", "."), home)
+    if not drift.drifted:
+        return []
+    reasons = [reason for code, reason in drift.items if code != DRIFT_DEAD]
+    if not reasons:
+        return []
+    return [DoctorFinding(
+        "warning", "hooks-wiring-stale",
+        f"{drift.surface}: mokata's harness wiring is OLDER than the installed mokata — "
+        f"{'; '.join(reasons)}. The hooks that are wired still fire; the ones missing or "
+        f"mis-matched never see the tool calls they exist to stop. Wired in {drift.where}. "
+        f"Fix: run `{SETUP_REMEDY}` (previews the change and asks before writing), then "
+        f"restart Claude Code")]
+
+
+def wiring_check_lines(root: str = ".", home: Any = None, *,
+                       ascii_only: bool = False) -> tuple:
+    """`mokata doctor --wiring` — the WIRING-ONLY check, as `(ok, lines)`.
+
+    Deliberately free of a `Surface`: this is what `mokata upgrade` runs immediately after a pip
+    upgrade, and what a user runs when the wiring is the thing that is broken. Requiring an
+    initialized `.mokata/` there would make the diagnostic unavailable in exactly the situations
+    it exists for. Composes the two existing checks — nothing here re-derives a verdict.
+
+    `ok` answers exactly the question asked — "is my wiring launchable AND current" — which
+    makes it both stricter and narrower than the full `mokata doctor`:
+
+      * STRICTER: stale wiring is a warning there (what is wired still fires, so it must not
+        flip a general health check's exit) but decides the verdict HERE, because "yes, apart
+        from the part that is out of date" is not an answer to the question.
+      * NARROWER: `plugin-mcp-unresolvable` is reported and does NOT decide it. That warning is
+        about the MCP *server* on the plugin route — a different axis, informational everywhere
+        else in doctor — and letting it fail this check would have `mokata upgrade` announce a
+        problem immediately after a re-wire that worked perfectly."""
+    shim = SimpleNamespace(root=str(root))
+    findings = (hook_resolution_findings(shim, home) + wiring_drift_findings(shim, home))
+    glyph_ok = "[ok]" if ascii_only else "✓"
+    glyph_bad = "[!]" if ascii_only else "⚠"
+    if not findings:
+        from ..hook_wiring import wiring_drift
+        if not wiring_drift(str(root), home).checked:
+            return True, [f"{glyph_ok} hooks: nothing wired in this repo's settings.json — "
+                          f"run `mokata setup claude` to wire mokata's gates."]
+        return True, [f"{glyph_ok} hooks: wired, launchable, and current."]
+    deciding = [f for f in findings
+                if f.severity == "error" or f.code == "hooks-wiring-stale"]
+    lines = [f"{glyph_bad} hooks: {len(findings)} problem(s) found."]
+    lines.extend(f"  [{f.severity}] {f.code}: {f.detail}" for f in findings)
+    return not deciding, lines
+
+
 def render_degrade_report(*, ascii_only: bool = False) -> str:
     """D5 — WHAT SILENTLY DEGRADED THIS SESSION. The one place that question has an answer.
 
@@ -328,6 +534,21 @@ def diagnose(surface: Any) -> DoctorReport:
 
     # 6b-ii) MS.S3 — audit ledger hash-chain integrity (a broken/tampered/truncated trust record).
     findings.extend(ledger_integrity_findings(surface))
+
+    # 6b-iii) HOOK-RESOLVE — are the WIRED gate hooks actually launchable? A hook whose command
+    # does not resolve is dropped SILENTLY by Claude Code, so "wired" has never implied "firing".
+    # This is the only place that difference is visible.
+    findings.extend(hook_resolution_findings(surface))
+
+    # 6b-iii-b) DOC-ONBOARD — is that wiring the wiring THIS mokata writes? A pip upgrade leaves
+    # settings.json exactly as the previous version wrote it, so a hook added (or a matcher
+    # widened) since the user's last `mokata setup claude` is silently absent. Warning-level:
+    # what IS wired still fires. Same verdict the briefing and the MCP status surface render.
+    findings.extend(wiring_drift_findings(surface))
+
+    # 6b-iv) SECRET-IGNORE — the active suppression count (and a tampered store as an error), so
+    # entropy-layer ignores stay VISIBLE rather than accumulating unseen.
+    findings.extend(secret_ignore_findings(surface))
 
     # 6c) TM.S1 — run mode. Flag a hand-edited invalid `settings.mode` (read_mode stays safe/
     # local, but doctor must SEE it); the local default is never an error.

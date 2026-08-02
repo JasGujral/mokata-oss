@@ -214,8 +214,14 @@ def register(sub, common):
         "query", parents=[common],
         help="run a structural query (graph if present, else grep floor)",
     )
-    p_query.add_argument("kind", choices=list(QUERY_KINDS) + ["semantic"],
-                         help="the structural question ('semantic' needs an adopted graph)")
+    p_query.add_argument(
+        "kind", choices=list(QUERY_KINDS) + ["semantic"],
+        # CRG-NAV: `defs`/`refs` are the navigation intents — where a symbol is DEFINED and
+        # everywhere it is REFERENCED. The choices come from QUERY_KINDS, so a kind added to the
+        # graph layer is accepted here for free.
+        help="the structural question — navigation: defs (where it's defined) · refs "
+             "(everywhere it's referenced) · callers · callees · implementers · imports; "
+             "impact: blast_radius ('semantic' needs an adopted graph)")
     p_query.add_argument("target", help="symbol or module to ask about")
     p_query.add_argument(
         "--depth", type=int, default=2,

@@ -785,13 +785,21 @@ Each query returns a `QueryResult` (`kind`, `target`, `references[]`, `backend`,
 
 | Kind | Question |
 |---|---|
+| `defs` | where is this symbol defined? |
+| `refs` | everywhere this symbol is referenced |
 | `callers` | who calls this symbol? |
 | `callees` | what does this symbol call? |
 | `implementers` | which classes subclass/implement this? |
 | `imports` | where is this module/symbol imported? |
 | `blast_radius` | transitive callers up to `--depth` hops (the impact surface) |
 
+The first six are **navigation**; `blast_radius` is **impact**. Navigation is what you reach for
+*instead of* opening a file or grepping for a name — mokata's own skills are instructed to query
+the graph first and to mark a lexical answer as degraded when they fall back.
+
 ```bash
+mokata query defs compute                    # where is it defined?
+mokata query refs compute                    # everywhere it's referenced
 mokata query callers compute
 mokata query callees myFunction
 mokata query implementers BaseHandler
@@ -1454,7 +1462,7 @@ sessions (`mokata session`, `sessions`, `resume`), and the graph/docs tooling (`
 | `mokata index` | build/refresh the freshness index | — |
 | `mokata lat-check` | scan `@lat` anchors, flag drift (exit 1 on drift) | — |
 
-`<kind>` ∈ `callers`, `callees`, `implementers`, `imports`, `blast_radius`.
+`<kind>` ∈ `defs`, `refs`, `callers`, `callees`, `implementers`, `imports`, `blast_radius`.
 
 ### Memory (C), token (F), governance (G), audit (I)
 

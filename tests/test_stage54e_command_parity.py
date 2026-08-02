@@ -33,11 +33,13 @@ COMMANDS_DIR = os.path.join(ROOT, "src", "mokata", "templates", "commands")
 # gained an in-harness surface (the /mokata:setup guided wizard) at Stage 56, so it's no longer
 # exempt — the rest remain shell/hook-only plumbing. `release-check` (Stage 61b) is release
 # plumbing run from the shell/CI during a release cut — the version mirror of `validate`.
-# `worktree` (WT.S1) is git session-hygiene plumbing: `git worktree add` is a durable git /
-# filesystem action gated via the CLI's fail-closed read_yes_no path — its in-harness DETECT+OFFER
-# is surfaced by `session_windows` + the SessionStart briefing, which point the user at it.
+# `worktree` WAS here at WT.S1 (`git worktree add` is a durable git/filesystem action gated via
+# the CLI's fail-closed read_yes_no path), but WT-LIST (FR-WT-1, 0.0.16) gave the command a
+# read-only in-harness surface — the `worktree_list` MCP tool — so it is no longer exempt, the
+# same way `setup` stopped being exempt at Stage 56. The CREATE half's rationale is unchanged and
+# now lives on the matrix entry's `note`: it is disclosed, not silent.
 EXEMPT = {"unsetup", "harness", "route", "detect", "validate", "bootstrap",
-          "release-check", "branch-protection-check", "bench", "worktree", "graph",
+          "release-check", "branch-protection-check", "bench", "graph",
           # SIMP.S2 — `migrate` is one-time deprecation→canonical migration run from the shell; the
           # in-harness deprecation WARN detects+points at it (the `worktree` detect-and-offer
           # pattern), so it is disclosed, not a silent gap. Removed with the channels at 0.0.17.
@@ -54,7 +56,15 @@ EXEMPT = {"unsetup", "harness", "route", "detect", "validate", "bootstrap",
           # consent flag the model typed itself — and closing it is the whole point of SI.3. The
           # approval must be minted by a human at a terminal; the model may only REFERENCE it by id
           # (the write tools' propose path is its in-harness surface). See parity.py's rationale.
-          "approve"}
+          "approve",
+          # SECRET-IGNORE — `secret` (record an entropy-layer false positive) is exempt for the
+          # SAME security reason as `gate` and `approve`: a model-invocable ignore would let the
+          # MODEL suppress the very secret finding that constrains it. It is also where a
+          # RECOGNISED credential shape is refused by name, so the CLI being the only entry is
+          # what a laundering attempt would have to route around. Not a silent gap: the block
+          # message on BOTH surfaces prints the exact command, and doctor names the active count
+          # (the `worktree` detect-and-offer pattern). See parity.py's rationale.
+          "secret"}
 # The new in-harness surfaces this stage adds.
 NEW_READ_TOOLS = ("rules", "skills", "suggest", "lat_check", "index_status",
                   "baseline", "sessions", "config_get", "export_preview")

@@ -49,6 +49,22 @@ class RemoveResult:
     changed: bool
 
 
+@dataclass
+class GitWorktree:
+    """One row of `git worktree list --porcelain` (WT-LIST / FR-WT-1). Pure git facts — the SESSION
+    join and the staleness verdict are built on top of this, in `worktree_list.py`, so this stays a
+    faithful parse of what git said and nothing more."""
+
+    path: str
+    head: str = ""
+    branch: str = ""            # short name ("main"), "" when detached or bare
+    bare: bool = False
+    detached: bool = False
+    locked: bool = False
+    prunable: bool = False
+    is_main: bool = False       # git lists the MAIN worktree first
+
+
 def session_worktree_label(run_id: str) -> str:
     """A stable label for a paused/WIP session's worktree (Stage 50 tie-in)."""
     return f"session-{run_id}"
@@ -63,6 +79,114 @@ def _default_git(args: List[str], cwd: Optional[str] = None) -> GitResult:
         return GitResult(p.returncode, p.stdout, p.stderr)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:  # git missing / bad call
         return GitResult(127, "", str(exc))
+
+
+# ------------------------------------------------------------------ WT-LIST — READ-ONLY queries
+# FR-WT-1 needs three git FACTS that nothing here asked for before: which worktrees exist, what the
+# repo's default branch is, and which branches are already merged into it. They live beside the
+# manager because this is the module that owns talking to git about worktrees — they go through the
+# SAME `_default_git` runner (injectable for tests), so there is still exactly one way mokata
+# spawns git. Every one of them is READ-ONLY: no add, no remove, and deliberately NO `prune` (a
+# read must never be the thing that mutates what it read — that is FR-WT-2/3, 0.0.17).
+
+def list_worktrees(root: str,
+                   git: Optional[Callable[..., GitResult]] = None) -> Optional[List[GitWorktree]]:
+    """Every git worktree of `root`'s repo, parsed from `git worktree list --porcelain`, main
+    checkout FIRST (git's own order). Returns None when git could not answer at all — not a repo,
+    git absent, a broken repo — so the caller can say WHY rather than showing an empty list that
+    looks like "no worktrees". Never raises."""
+    runner = git or _default_git
+    try:
+        r = runner(["worktree", "list", "--porcelain"], cwd=root)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        # D5 — the default runner converts these itself; an INJECTED runner (tests, a host-supplied
+        # git) can raise them straight through. "Can't ask git" is reported as None, never as [] —
+        # conflating the two is exactly the ambiguous empty state FR-WT-1 exists to remove.
+        return None
+    if not getattr(r, "ok", False):
+        return None
+    return _parse_worktree_porcelain(getattr(r, "stdout", "") or "")
+
+
+def _parse_worktree_porcelain(text: str) -> List[GitWorktree]:
+    """The `--porcelain` grammar: stanzas separated by a blank line, each opening with `worktree
+    <path>` and carrying `HEAD <sha>` / `branch <ref>` / the bare `bare`, `detached`, `locked`,
+    `prunable` flags (`locked`/`prunable` may carry a trailing reason). Unknown keys are IGNORED,
+    not an error — git adds them over time and a lister must not break on a newer git."""
+    out: List[GitWorktree] = []
+    cur: Optional[GitWorktree] = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            cur = None                                  # stanza break
+            continue
+        key, _, rest = line.partition(" ")
+        rest = rest.strip()
+        if key == "worktree":
+            cur = GitWorktree(path=rest, is_main=not out)
+            out.append(cur)
+            continue
+        if cur is None:
+            continue                                    # a stray line before any `worktree`
+        if key == "HEAD":
+            cur.head = rest
+        elif key == "branch":
+            cur.branch = rest[len("refs/heads/"):] if rest.startswith("refs/heads/") else rest
+        elif key == "bare":
+            cur.bare = True
+        elif key == "detached":
+            cur.detached = True
+        elif key == "locked":
+            cur.locked = True
+        elif key == "prunable":
+            cur.prunable = True
+    return out
+
+
+def default_branch(root: str,
+                   git: Optional[Callable[..., GitResult]] = None) -> Optional[str]:
+    """The repo's default branch, or None when it genuinely cannot be determined. Grounded, in
+    confidence order: the remote's own HEAD (`refs/remotes/origin/HEAD`, which git records and is
+    authoritative for a repo with a remote), then a LOCAL `main`, then a local `master` — each
+    VERIFIED to exist, never assumed. A remoteless repo on a non-conventional branch therefore
+    returns None, and the caller must not claim "merged" off a guess (P16)."""
+    runner = git or _default_git
+
+    def _ask(args: List[str]) -> Optional[str]:
+        try:
+            r = runner(args, cwd=root)
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return None
+        if not getattr(r, "ok", False):
+            return None
+        val = (getattr(r, "stdout", "") or "").strip()
+        return val or None
+
+    head = _ask(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])
+    if head:
+        return head.split("/", 1)[1] if head.startswith("origin/") else head
+    for name in ("main", "master"):
+        if _ask(["rev-parse", "--verify", "--quiet", f"refs/heads/{name}"]):
+            return name
+    return None
+
+
+def merged_branches(root: str, base: str,
+                    git: Optional[Callable[..., GitResult]] = None) -> Optional[set]:
+    """The branches already merged into `base`, or None when git could not answer (so the caller
+    reports "merged-check skipped" instead of asserting a branch is NOT merged). `--format` is used
+    deliberately: plain `git branch --merged` prefixes a branch checked out in another worktree
+    with `+`, which is EVERY branch this feature cares about."""
+    if not base:
+        return None
+    runner = git or _default_git
+    try:
+        r = runner(["branch", "--merged", base, "--format=%(refname:short)"], cwd=root)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if not getattr(r, "ok", False):
+        return None
+    return {ln.strip() for ln in (getattr(r, "stdout", "") or "").splitlines() if ln.strip()}
 
 
 class WorktreeManager:

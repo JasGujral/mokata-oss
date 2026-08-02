@@ -6,7 +6,7 @@ when_to_use: Engage when a failure, error, crash, or unexpected behaviour needs 
 
 # mokata · /debug
 
-Reproduce the failure before changing anything, then find the smallest change that fixes it. Root-cause from the REAL code — read the failing path and trace it with the structural queries (callers/callees); don't theorise about code you haven't read. Form hypotheses and rule them out against the actual source; after N strikes without a root cause, escalate to a stronger model. Root-cause before fix.
+Reproduce the failure before changing anything, then find the smallest change that fixes it. Root-cause from the REAL code — read the failing path and trace it GRAPH-FIRST (see Grounding discipline): `mokata query defs|refs|callers|callees <symbol>` to find the symbol and walk the path, then Read the lines it points at; grep is the fallback and its answer is degraded. Don't theorise about code you haven't read. Form hypotheses and rule them out against the actual source; after N strikes without a root cause, escalate to a stronger model. Root-cause before fix.
 
 ## Gate (check)
 No fix before the bug is reproduced and the root cause is identified.

@@ -24,6 +24,13 @@ _spec = importlib.util.spec_from_file_location(
 _parent = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_parent)
 
+# (c) DB.S8 — make the unit suite's `_scale_fixture` importable BY NAME from an integration test.
+# Appended (not inserted at 0) so this package's own modules always win the lookup; the fixture's
+# `import _support` then resolves to THIS shim, which is already in `sys.modules` and does the same
+# job (src/ on the path). One fixture, both suites — the scale legs and the contract legs must be
+# measuring the same corpus or their numbers cannot be compared.
+sys.path.append(os.path.join(_HERE, ".."))
+
 write_sample_repo = _parent.write_sample_repo
 sample_manifest_data = _parent.sample_manifest_data
 mcp_commit = _parent.mcp_commit          # SI.3 — the human-approval round-trip for an MCP write

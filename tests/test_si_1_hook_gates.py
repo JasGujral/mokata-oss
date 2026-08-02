@@ -636,7 +636,11 @@ class TestRegistration(unittest.TestCase):
         return [e for e in settings["hooks"]["PreToolUse"] if _is_mokata_hook(e)]
 
     def _commands(self, entries):
-        return sorted(h["command"] for e in entries for h in e["hooks"])
+        # HOOK-SHELL-AGNOSTIC: the setup route wires EXEC form, so the subcommand lives in
+        # `args`, not appended to the command string. Both are flattened here so these pins
+        # keep asserting WHAT is wired; only how it is spawned changed (no shell at all).
+        return sorted(" ".join([h["command"]] + list(h.get("args") or []))
+                      for e in entries for h in e["hooks"])
 
     def test_setup_wires_both_pretooluse_hooks(self):
         from mokata.harness_setup import setup_harness
@@ -648,11 +652,16 @@ class TestRegistration(unittest.TestCase):
             cmds = self._commands(entries)
             self.assertTrue(any("gate-guard" in c for c in cmds), cmds)
             self.assertTrue(any("secret-guard" in c for c in cmds), cmds)
-            # each carries its OWN matcher; the gate hook does NOT match Bash (it decides on a path)
+            # each carries its OWN matcher. The gate hook now ALSO matches Bash — SELF-PROTECT
+            # (0.0.16) parses a shell command for write destinations, because an absolute block on
+            # installed code that `sed -i` walks around is theatre. The RUN-STATE gates are
+            # unchanged: they still decide from a target path, and a Bash call carries none, so it
+            # exits before them (see hook_cli.gate_guard_main's two numbered lanes).
             gate_entry = [e for e in entries
-                          if any("gate-guard" in h["command"] for h in e["hooks"])][0]
+                          if any("gate-guard" in " ".join(list(h.get("args") or []))
+                                 for h in e["hooks"])][0]
             self.assertIn("Write", gate_entry["matcher"])
-            self.assertNotIn("Bash", gate_entry["matcher"])
+            self.assertIn("Bash", gate_entry["matcher"])
 
     def test_re_setup_refreshes_and_never_duplicates(self):
         from mokata.harness_setup import setup_harness

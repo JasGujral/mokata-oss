@@ -74,7 +74,14 @@ class SharedPg:
             f"CREATE TABLE IF NOT EXISTS {teamdb.MEMORY_TABLE} ("
             "  id TEXT PRIMARY KEY, mtype TEXT, subject TEXT, status TEXT, doc TEXT,"
             f"  project TEXT, {teamdb.MEMORY_REVISION_COLUMN} INT NOT NULL DEFAULT 1,"
-            f"  {teamdb.MEMORY_UPDATED_AT_COLUMN} TEXT)")
+            f"  {teamdb.MEMORY_UPDATED_AT_COLUMN} TEXT,"
+            # DB.S2b — the v3 scope/precedence columns. The flush's INSERT/UPDATE populate them
+            # now (the journal is a memory write path like any other), so a stand-in for the
+            # shared table has to carry them or it is modelling a schema this build won't talk to.
+            f"  {teamdb.MEMORY_SCOPE_LEVEL_COLUMN} TEXT NOT NULL DEFAULT 'personal',"
+            f"  {teamdb.MEMORY_SCOPE_ID_COLUMN} TEXT,"
+            f"  {teamdb.MEMORY_PIN_COLUMN} INT NOT NULL DEFAULT 0,"
+            f"  {teamdb.MEMORY_PRIORITY_COLUMN} INT NOT NULL DEFAULT 0)")
 
     def execute(self, sql, params=()):
         stmt = sql.replace("%s", "?").replace("now()", "CURRENT_TIMESTAMP")

@@ -63,8 +63,63 @@ def cmd_progress_mark(args: argparse.Namespace) -> int:
         return 0
     except Exception as exc:
         # never fail the caller — the log is best-effort observability.
+        #
+        # REVIEW-FIX.R4 deliberately LEFT this posture alone while making the sibling
+        # `record-review` failure exit non-zero, and the asymmetry is the point, not an oversight:
+        # a `stage_enter` is OBSERVABILITY (it moves a badge), while a `review_verdict` is GATE
+        # EVIDENCE (`ship_review_gate` refuses to ship without it). Losing the first costs a
+        # cosmetic; losing the second means a review that happened cannot be proven, which is the
+        # one failure the 6r loop exists to make impossible to miss. Do not "fix" this by symmetry.
         print(f"mokata progress: could not record '{args.stage}' ({exc}); continuing.")
         return 0
+
+
+def review_recorded_line(verdict: str, kind: str, run_id: str) -> str:
+    """The one line a recorded verdict reports — lifted VERBATIM out of
+    `cmd_progress_record_review` (no text change) so the MCP `review_record` tool says the SAME
+    thing (REVIEW-FIX.R3). One truth source deserves one wording; a second copy is a drift class.
+    `test_review_fix_r3` reconstructs the pre-R3 f-string and pins byte-identity."""
+    return f"mokata review: recorded verdict {verdict} ({kind}) for run {run_id}."
+
+
+def review_runless_line(verdict: str, kind: str) -> str:
+    """The same, for a verdict that landed with NO run — which satisfies NO gate (R1). Shared by
+    the CLI and the MCP `review_record` tool so both name the same remedy (REVIEW-FIX.R3)."""
+    return (f"mokata review: recorded verdict {verdict} ({kind}) WITHOUT a run — no run could "
+            f"be resolved here, and ship will NOT accept a run-less verdict. Re-record it "
+            f"naming the run: `mokata progress record-review --{verdict}"
+            f" --run <run id>` (`mokata sessions` lists them).")
+
+
+def review_record_failed_line(exc: BaseException) -> str:
+    """The one line a FAILED recording reports (REVIEW-FIX.R4) — shared by the CLI and the MCP
+    `review_record` tool, the R3 way, so the failure reads the same on both surfaces.
+
+    It states the CONSEQUENCE before the remedy, because the consequence is what the caller gets
+    wrong: nothing was written, so ship's gate will block as though review never ran. The remedy is
+    the MCP tool's pre-R4 hint, promoted to shared text.
+
+    `{exc}` IS echoed here, unlike the read path's sentences. The asymmetry is grounded, not
+    inconsistent: this is a WRITE fault (resolving the run, then appending to the log), so the
+    exception carries filesystem/permission detail and never log CONTENT — whereas a read fault can
+    quote the offending line, and a `review_verdict` line carries findings text."""
+    return (f"mokata review: FAILED to record the verdict ({exc}) — nothing was written, so ship's "
+            f"review gate will BLOCK as if review never ran. Retry, or record it from the terminal: "
+            f"`mokata progress record-review --passed|--failed --run <run id>` "
+            f"(`mokata sessions` lists them).")
+
+
+# REVIEW-FIX.R4 — the exit code a FAILED recording returns, chosen and not inherited.
+#
+# 1, not 2. In this cluster 2 means the review gate BLOCKS — a verdict about the CODE, which
+# `review-status` returns and which routes the human to /mokata:review. A record failure is not a
+# verdict about anything; it is this command failing to do its job, and giving it 2 would tell a
+# caller that reads the code (a script, a skill) to send someone to re-review when the actual fault
+# is a log that could not be written. That mis-routing is exactly the defect R4 fixes on the READ
+# side, and minting it on the write side would be perverse. 1 is already the repo's "the operation
+# failed" code (`vault pull`/`push` on a VaultError, `worktree create` when nothing was created),
+# and argparse owns 2 for usage errors besides.
+RECORD_REVIEW_FAILED_EXIT = 1
 
 
 def cmd_progress_record_review(args: argparse.Namespace) -> int:
@@ -73,19 +128,36 @@ def cmd_progress_record_review(args: argparse.Namespace) -> int:
     # tier: append-only + UNGATED (like `mark`). `--independent` records that the review ran as
     # a fresh-context subagent; omit it when it degraded to the inline two-pass. Degrade-clean:
     # any failure is reported and non-fatal (the review skill must never break on recording).
-    from ..progress_events import record_review_verdict
+    # REVIEW-FIX.R1 — `--run` names the run the verdict belongs to (the record-key ship reads back
+    # with); omitted, it resolves session-awarely. A verdict that lands run-less satisfies NO gate,
+    # so say that here rather than let ship discover it later.
+    from ..progress_events import _CURRENT_RUN, record_review_verdict
     passed = args.passed and not args.failed        # --failed wins if somehow both slip through
     try:
         surface = _load_surface(args.path)
-        record_review_verdict(surface, passed=passed, independent=args.independent,
-                              findings=args.findings)
+        event = record_review_verdict(surface, passed=passed, independent=args.independent,
+                                      findings=args.findings,
+                                      run_id=args.run if args.run else _CURRENT_RUN)
         kind = "independent" if args.independent else "inline"
         verdict = "passed" if passed else "failed"
-        print(f"mokata review: recorded verdict {verdict} ({kind}).")
+        rid = event.get("run_id")
+        if rid:
+            print(review_recorded_line(verdict, kind, rid))
+            return 0
+        print(review_runless_line(verdict, kind))
         return 0
     except Exception as exc:
-        print(f"mokata review: could not record the verdict ({exc}); continuing.")
-        return 0
+        # REVIEW-FIX.R4 — this used to print "…; continuing." and return 0: a review whose verdict
+        # could NOT be written exited GREEN, so nothing checking the exit code could tell a recorded
+        # verdict from a lost one. That is the single failure this whole cluster exists to prevent
+        # (evidence over claims) and it was the one made invisible.
+        #
+        # The review skill's "degrade-clean: never break on recording" contract SURVIVES, relocated:
+        # nothing raises, no traceback reaches the user, and the review's own findings are still
+        # theirs to act on. What moves is the honesty of the signal — the failure is LOUD in the
+        # message and TRUE in the exit code, instead of silent in both.
+        print(review_record_failed_line(exc))
+        return RECORD_REVIEW_FAILED_EXIT
 
 
 def cmd_progress_review_status(args: argparse.Namespace) -> int:
@@ -93,13 +165,27 @@ def cmd_progress_review_status(args: argparse.Namespace) -> int:
     # RECORD, not conversation vibes. Prints the one-line gate verdict and returns non-zero when
     # ship must BLOCK (no verdict recorded, or the review failed) — fail-closed, evidence over
     # claims. An inline (non-independent) PASS returns 0 (ships) but says so honestly.
-    from ..progress_events import ship_review_gate
+    # REVIEW-FIX.R1 — `--run` reads THAT run's verdict; omitted, the run is resolved session-awarely
+    # and an unresolvable run BLOCKS with the remedy (never a global scan of every run's verdicts).
+    # REVIEW-FIX.R4 — a read ERROR and an ABSENT verdict are now DIFFERENT answers. Both still
+    # BLOCK (fail-closed is unchanged and is the whole reason this gate is trustworthy); what
+    # changes is that the remedy names the real fault. The gate itself distinguishes them (so the
+    # MCP twin gets the same two answers from the same place); this handler covers only the case
+    # where the read raised before any gate could be built.
+    from ..progress_events import (FAULT_UNKNOWN, review_log_path, review_read_error_message,
+                                   review_read_error_unblock, ship_review_gate)
+    surface = None
     try:
         surface = _load_surface(args.path)
-        gate = ship_review_gate(surface)
-    except Exception as exc:
-        # degrade-clean: treat an unreadable gate as "no verdict" -> block, never a traceback.
-        print(f"review hasn't run — run /mokata:review first ({exc})")
+        gate = ship_review_gate(surface, run_id=args.run or None)
+    except Exception:
+        # SECRET-SAFETY (R3's bar, binding on the CLI since R4): `{exc}` is NOT echoed. This line
+        # used to print it, and a parse fault can quote the offending log line — a `review_verdict`
+        # line carries FINDINGS text, which may quote project content. The fault is named by KIND
+        # and located by PATH instead; neither is derived from the log's bytes.
+        path = review_log_path(surface)
+        print(review_read_error_message(FAULT_UNKNOWN, path)
+              + f"  → to unblock: {review_read_error_unblock(path)}")
         return 2
     if gate.blocks:
         line = gate.message + (f"  → to unblock: {gate.unblock}" if gate.unblock else "")
@@ -155,8 +241,10 @@ def cmd_windows(args: argparse.Namespace) -> int:
         started = f"started {r.started_at}" if r.started_at else "started —"
         dead = " (dead pid)" if not r.alive else ""
         wt = worktree_label(r.repo_root) if r.repo_root else "main"    # WT.S1: main | rel worktree
+        branch = f"  branch: {r.branch}" if r.branch else ""           # WT.S4: the run's binding
         scope = f"  scope: {r.scope}" if r.scope else ""
-        print(f"  {short_id(r.session_id):10} {status}  {started}  {phase}  wt: {wt}{scope}{dead}")
+        print(f"  {short_id(r.session_id):10} {status}  {started}  {phase}  wt: {wt}"
+              f"{branch}{scope}{dead}")
     # WT.S1 — a ONE-TIME human-gated worktree offer when a live sibling is on this repo (never
     # creates anything). Reuses the rows just listed; degrade-clean.
     try:
@@ -176,6 +264,21 @@ def cmd_worktree_create(args: argparse.Namespace) -> int:
     surface = _load_surface(args.path)
     res = SW.create_worktree(surface, topic=args.topic, assume_yes=args.yes, out=print)
     return 0 if res.created else 1
+
+
+def cmd_worktree_list(args: argparse.Namespace) -> int:
+    # WT-LIST (FR-WT-1) — READ-ONLY: every git worktree of this repo joined to its owning session,
+    # with a staleness verdict. It creates nothing, removes nothing, and deliberately does NOT
+    # `git worktree prune` (that is FR-WT-2/3, 0.0.17) — a lister must not mutate what it lists.
+    # It also does not `SR.touch()`: unlike `windows`, this surface registers no session.
+    # Renders the SAME report the `worktree_list` MCP tool returns, so the two cannot disagree.
+    # Degrade-clean: not a git repo / git absent / an unreadable registry ⇒ one honest line and a
+    # CLEAN exit (0) — the answer is a legitimate read-only answer, not a command failure.
+    from ..worktree_list import build_worktree_report
+    surface = _load_surface(args.path)
+    report = build_worktree_report(surface)
+    print(report.render(ascii_only=getattr(args, "ascii", False)))
+    return 0
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
@@ -317,6 +420,11 @@ def register(sub, common):
                             "two-pass)")
     p_rec.add_argument("--findings", default=None,
                        help="optional finding count / summary to record with the verdict")
+    # REVIEW-FIX.R1 — the record-key, mirrored on `review-status` (the read-key). Same spelling as
+    # `progress --run` / `watch --run`.
+    p_rec.add_argument("--run", default=None,
+                       help="the run this verdict belongs to (default: the run resolved for this "
+                            "session; ship reads back the SAME run)")
     p_rec.set_defaults(func=cmd_progress_record_review)
 
     p_rs = prog_sub.add_parser(
@@ -324,6 +432,9 @@ def register(sub, common):
         help="print ship's review gate from the persisted verdict; exits non-zero when ship "
              "must BLOCK (no verdict, or review failed)",
     )
+    p_rs.add_argument("--run", default=None,
+                      help="read THIS run's verdict (default: the run resolved for this session; "
+                           "an unresolvable run BLOCKS rather than reading another run's verdict)")
     p_rs.set_defaults(func=cmd_progress_review_status)
 
     p_sessions = sub.add_parser(
@@ -353,6 +464,14 @@ def register(sub, common):
     p_wt_create.add_argument("--yes", action="store_true",
                              help="approve non-interactively (the durable git worktree add)")
     p_wt_create.set_defaults(func=cmd_worktree_create)
+    p_wt_list = wt_sub.add_parser(
+        "list", parents=[common],
+        help="list this repo's git worktrees joined to their sessions, with a staleness "
+             "verdict (read-only; creates, prunes and removes nothing)",
+    )
+    p_wt_list.add_argument("--ascii", action="store_true",
+                           help="ASCII-only output (no box-drawing/arrow glyphs)")
+    p_wt_list.set_defaults(func=cmd_worktree_list)
 
     p_resume = sub.add_parser(
         "resume", parents=[common],
@@ -390,6 +509,10 @@ def register(sub, common):
 
 
 __all__ = [
+    "RECORD_REVIEW_FAILED_EXIT",
+    "review_recorded_line",
+    "review_runless_line",
+    "review_record_failed_line",
     "cmd_progress",
     "cmd_progress_mark",
     "cmd_progress_record_review",
@@ -397,6 +520,7 @@ __all__ = [
     "cmd_sessions",
     "cmd_windows",
     "cmd_worktree_create",
+    "cmd_worktree_list",
     "cmd_resume",
     "cmd_watch",
     "cmd_govern",

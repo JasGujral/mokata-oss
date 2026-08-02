@@ -194,7 +194,8 @@ CONTRACTS: Dict[str, Contract] = {
             "turn the problem into concrete, testable acceptance criteria",
             "run the completeness gate and map each AC to a test",
             "emit the spec — `spec_emit` / `mokata spec emit` (human-gated): persists "
-            "emitted_spec.json AND the shared spec corpus in one commit",
+            "the run's spec AND the shared spec corpus in one commit (read it back with "
+            "`spec_show`)",
         ),
         must_not=(
             _c("emit a spec that fails completeness", "completeness"),
@@ -217,8 +218,8 @@ CONTRACTS: Dict[str, Contract] = {
             _c("invent ACs or cover behaviour the approved spec doesn't state"),
         ),
         depends_on=(
-            _c("emitted_spec.json — stop and route to spec if absent", "spec-persisted",
-               hard=True),
+            _c("the run's persisted spec (`spec_show`) — stop and route to spec if absent",
+               "spec-persisted", hard=True),
         )),
     "develop": Contract(
         skill="develop", headline_gate="no-code-without-failing-test",
@@ -236,7 +237,7 @@ CONTRACTS: Dict[str, Contract] = {
                "green baseline"),
         ),
         depends_on=(
-            _c("emitted_spec.json", "spec-persisted", hard=True),
+            _c("the run's persisted spec (`spec_show`)", "spec-persisted", hard=True),
             _c("a failing test", "no-code-without-failing-test", hard=True),
         )),
     "review": Contract(
@@ -253,8 +254,8 @@ CONTRACTS: Dict[str, Contract] = {
                "(review gates ship)"),
         ),
         depends_on=(
-            _c("a diff to review; a saved spec is optional (quality-only without one, "
-               "and it says so)"),
+            _c("a diff to review; the approved spec fetched with `spec_show` — optional "
+               "(quality-only without one, and it says so)"),
         )),
     "refine": Contract(
         skill="refine", headline_gate="refinement-approval",
