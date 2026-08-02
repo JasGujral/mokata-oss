@@ -171,7 +171,13 @@ jobs:
           fi
 
       - name: DB.S5 live leg — v4 lifecycle schema + usage telemetry on real types
-        working-directory: tests
+        # `tests/integration`, not `tests` — this step read `tests` and `test_db_s5_live_db.py`
+        # has always lived in `tests/integration/`, so the leg died on `ModuleNotFoundError`
+        # BEFORE touching Postgres and had never once run. Found 2026-08-02 the first time this
+        # workflow was dispatched on the OSS mirror (the private repo's Actions are billing-
+        # blocked, so nothing here had executed since it was written). Every OTHER step in this
+        # file was audited for the same mismatch at the same time; this was the only one.
+        working-directory: tests/integration
         # Shim boundary being closed: the SQLite shim stores `last_recalled_at` as TEXT and hands
         # back exactly what went in, and it has no `= ANY(%s)` array binding at all — so only a
         # real engine proves the TIMESTAMPTZ round trip reads back as something the recency curve
