@@ -1,0 +1,81 @@
+name: quality-at-scale (opt-in)
+
+# DB.S8g — THE QUALITY ARMS AT 100,000, which is the N doc 86's 0.0.16 exit criterion names.
+#
+# THE RECONCILIATION THIS CLOSES. The criterion reads "recall/briefing measurably better on the
+# 100k fixture (before/after)". `test_db_s8d_quality` measures at a DECLARED 5,000 for a costed
+# reason. The doc said 100k, the test said 5k, and nothing reconciled them — so the release's
+# central retrieval claim was being checked at a twentieth of the scale it was stated at.
+#
+# It was reconciled by RUNNING the arms at 100k rather than by editing the criterion down, and
+# running them mattered: three DB.S8f conclusions measured at 5,000 do NOT hold at 100,000
+# (FTS-NORMALIZE-FLATTENS costs RECALL at scale, not only ordering; arm D no longer lands on the
+# isolation arm; the vector tier is net-negative on recall). The headline survives — A->D recall
+# is +26.4pp against a locked 15pp threshold. All four are pinned in the module.
+#
+# WHY OPT-IN: 554s of arm time (A 176.6s, C 185.2s, D 190.0s — those three wire an embedder
+# against a backend with no vector index, so `_can_nominate` refuses candidate selection and each
+# becomes a Python cosine over every visible candidate; B and B+expansion take R-1's bounded path
+# and cost ~1s each). Not a per-push cost. `test_db_s8d_quality` stays the per-push regression
+# gate at its declared 5,000; this is the scale leg.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Wednesdays 04:31 UTC — off the hour, and a day clear of live-db-legs (Mon) and
+    # embeddings-leg (Tue) so the three opt-in legs never contend for a runner.
+    - cron: "31 4 * * 3"
+
+permissions:
+  contents: read
+
+jobs:
+  quality-at-scale:
+    name: retrieval quality at the declared N=100,000 (opt-in)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      MOKATA_QUALITY_SCALE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install mokata
+        run: pip install -e .
+
+      - name: "Preflight — THE SCALE GATE MUST BE ON (a skipped leg reads GREEN)"
+        working-directory: tests
+        # LIVE-LEG-ORPHANS. The whole module is wrapped in `@unittest.skipUnless(_SCALE_LIVE, …)`,
+        # so a dropped `env:` above would produce `OK (skipped=8)` — a nine-minute job replaced by
+        # a green tick that proved nothing. Asserted by IMPORTING the very predicate the tests skip
+        # on, never by re-deriving an equivalent check here.
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sys
+          import _support  # noqa: F401  (puts src/ on the path)
+          from test_db_s8g_quality_at_scale import _SCALE_LIVE, _SCALE_REASON
+          if not _SCALE_LIVE:
+              print(f"::error::the quality-at-scale gate is OFF ({_SCALE_REASON}). Every test in "
+                    "this job would SKIP, and a skipped leg reads GREEN — so the job fails here "
+                    "instead of reporting success for tests that never ran.")
+              sys.exit(1)
+          print("quality-at-scale gate ON — the arms below will RUN, not skip.")
+          PY
+
+      - name: The quality arms at N=100,000
+        working-directory: tests
+        # Named explicitly, not discovered — the point of this job is this module.
+        run: |
+          set -euo pipefail
+          if ! python -m unittest -v test_db_s8g_quality_at_scale; then
+            echo "::error::the 100k quality leg is RED. Either the stored 100k baseline moved (a change in retrieval quality AT SCALE — deliberate edits only, never a re-record to go green), or doc 86's exit criterion no longer holds at the N it names (A->D recall gain under the locked 15pp), or one of the three recorded 5k-vs-100k divergences changed direction — in which case the corresponding doc 84 row is fixed and the pin should be INVERTED rather than relaxed."
+            exit 1
+          fi

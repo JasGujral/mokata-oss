@@ -1,0 +1,138 @@
+name: embeddings-leg (opt-in)
+
+# THE REAL-EMBEDDER LEG. `mokata[embeddings]` is the one blessed extra (model2vec static
+# embeddings) and until this job existed NOTHING in CI had ever installed it — every embedder test
+# in the unit suite either patches `_load_model2vec` with a fake or uses `HashingEmbedder`.
+#
+# Two boundaries this closes, and the second is the reason it was built:
+#
+#   * DB.S4's DETECTION seam — `make_embedder("auto")` resolving to the extra, the dim probed from
+#     a real encode, an explicit `hashing` ask NOT being silently upgraded. All previously proven
+#     against a stand-in that always loads.
+#
+#   * K2's PROBED noise-floor branch — and this one had never met a real embedder at all.
+#     `noise_floor_of` is DECLARED -> PROBED -> UNCHARACTERIZED. `HashingEmbedder` DECLARES its
+#     floor (0.65), so every K2 test in the unit suite takes the declared path.
+#     `Model2VecEmbedder` declares nothing, so the real extra is the ONLY thing that runs the
+#     probe — and the probe is what sets the semantic tier's live weight. DB.S8f shipped that
+#     bound having measured only the NOISY half of it.
+#
+# Measured when the leg was built (2026-08-01): hashing floor 0.65 DECLARED -> weight 0.077;
+# model2vec potion-base-8M floor 0.3067 PROBED -> weight 0.163. The real extra is about twice as
+# quiet and earns about twice the weight, and is still capped near a sixth of the declared
+# ceiling. The tests assert a BAND, not the literal, so a model point release cannot red the leg.
+#
+# WHY OPT-IN rather than a job in ci.yml: this fetches a ~30MB model from the HuggingFace Hub.
+# Putting a third-party network fetch on the blocking path of every push would make CI's green
+# depend on the Hub's uptime — the extra is OPTIONAL by design (P2: installed only on explicit
+# consent), and a required job for an optional dependency inverts that. Dispatch + a weekly cron
+# matches `live-db-legs.yml`, which is opt-in for the same class of reason.
+#
+# NO REPO SECRETS ARE CONSUMED. The Hub is read anonymously; no token is set or needed.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Tuesdays 04:23 UTC — off the hour, and a day off live-db-legs so the two do not contend.
+    - cron: "23 4 * * 2"
+
+permissions:
+  contents: read
+
+jobs:
+  embeddings-leg:
+    name: real model2vec — DB.S4 seam + K2's probed noise floor (opt-in)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install mokata + the embeddings extra
+        # THE point of the job: model2vec is REAL here, not a `mock.patch` on `_load_model2vec`.
+        run: pip install -e ".[embeddings]"
+
+      - name: "Preflight — THE EMBEDDINGS GATE MUST BE ON (a skipped leg reads GREEN)"
+        working-directory: tests
+        # LIVE-LEG-ORPHANS, applied before the orphan exists. Every class in the leg is wrapped in
+        # `@unittest.skipUnless(_M2V_LIVE, …)`, so an extra that failed to install, a Hub outage or
+        # a cold cache on a blocked network would each produce `OK (skipped=12)` — a job that
+        # proved nothing, reporting success, indefinitely.
+        #
+        # It asserts the gate by IMPORTING THE VERY PREDICATE the tests skip on. Re-deriving an
+        # equivalent check here is how a preflight ends up green while the tests it guards skip
+        # anyway; there is one definition and it lives with the tests.
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sys
+          import _support  # noqa: F401  (puts src/ on the path)
+          from test_embeddings_live_model2vec import _M2V_LIVE, _M2V_REASON
+          if not _M2V_LIVE:
+              print(f"::error::the embeddings gate is OFF ({_M2V_REASON}). Every test in this job "
+                    "would SKIP, and a skipped leg reads GREEN — so the job fails here instead of "
+                    "reporting success for tests that never ran.")
+              sys.exit(1)
+          print("embeddings gate ON — the leg below will RUN, not skip.")
+          PY
+
+      - name: Report what was actually measured
+        working-directory: tests
+        # Printed into the job log so the numbers behind the K2 bound are re-readable without
+        # re-running anything locally — the same "report the number, not the verdict" posture
+        # DB.S8's legs take.
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import _support  # noqa: F401
+          from mokata.memory.embed import HashingEmbedder, Model2VecEmbedder, noise_floor_of
+          from mokata.memory.tiered import SEMANTIC_WEIGHT, semantic_weight_for
+          for name, e in (("hashing", HashingEmbedder()), ("model2vec", Model2VecEmbedder())):
+              declared = getattr(e, "noise_floor", None)
+              how = "DECLARED" if declared is not None else "PROBED"
+              print(f"{name:>10}  id={e.embedder_id:<34} floor={noise_floor_of(e):.4f} ({how})"
+                    f"  weight={semantic_weight_for(e):.4f}  ceiling={SEMANTIC_WEIGHT}")
+          PY
+
+      - name: The real-embedder leg — DB.S4 seam + K2's probed branch + end-to-end ranking
+        working-directory: tests
+        # Named EXPLICITLY, not discovered: the point of this job is this module, and a broad
+        # discover would drown a red one in ~5,500 unrelated passes.
+        run: |
+          set -euo pipefail
+          if ! python -m unittest -v test_embeddings_live_model2vec; then
+            echo "::error::the REAL model2vec leg is RED. Either DB.S4's detection seam does not resolve the installed extra, or K2's PROBED noise-floor branch (the ONLY branch a real embedder takes — model2vec declares no floor) disagrees with the bound DB.S8f shipped, or the semantic tier no longer ranks a lexically-disjoint but semantically-near item first. The unit suite cannot see any of these: it mocks _load_model2vec and every K2 test uses HashingEmbedder's DECLARED floor."
+            exit 1
+          fi
+
+      - name: DB.S4 tier legs, re-run with the extra genuinely INSTALLED
+        working-directory: tests
+        # These modules pass with model2vec ABSENT (that is how CI has always run them). Running
+        # them again with it PRESENT exercises the other side of every auto-detection branch —
+        # `detect_embedder` succeeding rather than raising ModelUnavailable, the stamp carrying a
+        # real `model2vec:` id and a real dim rather than the hashing pair.
+        run: |
+          set -euo pipefail
+          if ! python -m unittest -v test_db_s4_pgvector test_stage35e_vector_memory; then
+            echo "::error::the DB.S4 / stage-35e tier legs are RED with mokata[embeddings] INSTALLED, while passing without it. A branch that is only taken when the extra is present has regressed — most likely detect_embedder's success path or the embedder-stamp (id, dim) round trip, which carries a real model2vec pair here and the hashing pair in normal CI."
+            exit 1
+          fi
+
+      - name: The full unit suite, with the extra installed
+        # The extra changes what `detect_embedder` returns PROCESS-WIDE, so any test that resolves
+        # an embedder without pinning one behaves differently here. Normal CI only ever runs the
+        # absent arm; this is the present arm, and it is what would catch a test that silently
+        # depends on hashing being the fallback.
+        run: |
+          set -euo pipefail
+          if ! python -m unittest discover -s tests -t tests; then
+            echo "::error::the unit suite is RED with mokata[embeddings] installed but GREEN without it. Something depends on detect_embedder falling back to hashing — normal CI never installs the extra, so this job is the only place that shows up."
+            exit 1
+          fi
