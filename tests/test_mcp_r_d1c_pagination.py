@@ -292,7 +292,44 @@ class TestSessionsPaginate(unittest.TestCase):
                              (1, False, None))
 
 
+# PAGE-SELFTOUCH — `session_windows` is a READ that performs registry UPKEEP: it calls `SR.touch`
+# to self-register the CALLING window (`mcp/tools_read.py:491-508`, deliberate and documented).
+# So this test's own process is a SIXTH row on top of the five seeded below, and `touch` restamps
+# that row's `last_seen` to NOW on every call (`session_registry.py:112`; `started_at` is
+# explicitly PRESERVED at `:109`, and `pid`/`repo_root`/`phase`/`scope` are stable — `last_seen` is
+# the ONLY field a read mutates).
+#
+# Comparing a page read at T against the full listing read at T+δ therefore compares that one row's
+# `last_seen` ACROSS A CLOCK TICK, and any second boundary between the two reads makes them differ.
+# That is what reddened `ubuntu · jsonschema=present` on an otherwise-green proof run.
+#
+# The fix is not to loosen the claim — it is to assert the claim the tool actually makes. Pagination
+# is SLICING: no gaps, no dupes, same order, same rows. It promises nothing about a field the read
+# itself rewrites. So the comparison is made over everything EXCEPT that field.
+_MUTATED_BY_READ = ("last_seen",)
+
+
+def _sliceable(window):
+    """A window projected to what SLICING is a claim about — every field except the ones the read
+    itself mutates. Deliberately a REMOVE-list, not a keep-list: a new field is compared by default,
+    so this can never quietly stop asserting something."""
+    return {k: v for k, v in window.items() if k not in _MUTATED_BY_READ}
+
+
 class TestSessionWindowsPaginate(unittest.TestCase):
+
+    def test_the_projection_drops_only_the_field_the_read_mutates(self):
+        # The guard on the guard: `_sliceable` exists to remove ONE volatile field, and a projection
+        # that removed more (or everything) would turn the slice assertions below into a test that
+        # passes on any listing at all. Pinned so the fix cannot decay into asserting nothing.
+        window = {"session_id": "w0", "short_id": "w0", "started": "2026-07-20T00:00:00+00:00",
+                  "last_seen": "2026-07-20T00:00:00+00:00", "alive": True, "phase": "spec",
+                  "worktree": "main", "scope": "s0"}
+        self.assertEqual(set(window) - set(_sliceable(window)), {"last_seen"})
+        self.assertNotIn("last_seen", _sliceable(window))
+        # identity + order + payload all survive the projection — it drops one field, not the row.
+        self.assertEqual(_sliceable(window)["session_id"], "w0")
+        self.assertGreaterEqual(len(_sliceable(window)), len(window) - 1)
 
     def test_mcp_r_d1c_session_windows_paginates(self):
         from mokata import session_registry as SR
@@ -313,10 +350,22 @@ class TestSessionWindowsPaginate(unittest.TestCase):
             last = M.session_windows(path=d, limit=2, offset=total - 2)
             self.assertEqual((last["count"], last["has_more"], last["next_offset"]),
                              (2, False, None))
-            # the page is a real slice of the full listing — no gaps, no dupes
+            # the page is a real slice of the full listing — no gaps, no dupes. Compared on
+            # `_sliceable` (see PAGE-SELFTOUCH above): this listing contains the READING process's
+            # own window, whose `last_seen` this very call restamps, so byte-equality across two
+            # reads is a clock race and not a pagination claim.
             everything = M.session_windows(path=d, limit=PG.ALL)["windows"]
-            self.assertEqual(everything[:2], first["windows"])
-            self.assertEqual(everything[total - 2:], last["windows"])
+            self.assertEqual([_sliceable(w) for w in everything[:2]],
+                             [_sliceable(w) for w in first["windows"]])
+            self.assertEqual([_sliceable(w) for w in everything[total - 2:]],
+                             [_sliceable(w) for w in last["windows"]])
+            # …and the ordered identity sequence is asserted in its own right, so a slice that
+            # returned the right COUNT of the wrong rows cannot hide inside the projection.
+            self.assertEqual([w["session_id"] for w in everything[:2]],
+                             [w["session_id"] for w in first["windows"]])
+            self.assertEqual([w["session_id"] for w in everything[total - 2:]],
+                             [w["session_id"] for w in last["windows"]])
+            self.assertEqual(len({w["session_id"] for w in everything}), total)   # no dupes
 
 
 class TestSessionListPaginates(unittest.TestCase):

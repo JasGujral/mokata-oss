@@ -54,6 +54,11 @@ from .degrade import FAILURE_ENGINE, note_degraded
 # Security-block exit code (PreToolUse): a non-zero exit blocks the tool call.
 BLOCK_EXIT = 2
 
+# The two events mokata injects context on, and the names Claude Code keys the payload by. A
+# payload stamped with the wrong `hookEventName` is dropped silently, so these are named once.
+SESSION_START_EVENT = "SessionStart"
+USER_PROMPT_SUBMIT_EVENT = "UserPromptSubmit"
+
 # Keys inside tool_input that name the target path (for path-based detection, e.g. .env).
 _PATH_KEYS = ("file_path", "path", "notebook_path", "target_file")
 
@@ -190,11 +195,26 @@ def secret_guard_main(argv: Optional[List[str]] = None) -> int:
         else:
             text, path = raw, args.path     # raw-text fallback (non-envelope callers)
 
-    findings = scan(text=text or "", path=path, for_send=args.send)
+    # SECRET-IGNORE — the repo's RECORDED false positives (entropy layer only). Resolved from the
+    # target path, then the envelope cwd, then this process's cwd: a hook is launched by the
+    # harness, so its own cwd is the least reliable of the three. Every failure mode lands on
+    # `store=None`, which suppresses NOTHING — fail-closed, exactly as before the feature existed.
+    from .gate_hook import find_mokata_root
+    from .govern.secret_ignore import load_for_scan, render_block
+    store = None
+    ignore_notice = ""
+    root = find_mokata_root(os.path.dirname(os.path.abspath(path)) if path else os.getcwd())
+    if root is not None:
+        store, ignore_notice = load_for_scan(root)
+
+    findings = scan(text=text or "", path=path, for_send=args.send, ignores=store)
+    if ignore_notice:
+        # A suppression list that cannot be trusted is not a quiet condition: the user believes
+        # their recorded false positives are honoured, and they are not.
+        sys.stderr.write(ignore_notice + "\n")
     if findings:
-        for f in findings:
-            sys.stderr.write(f"BLOCKED [{f.layer}/{f.kind}] {f.detail}\n")
-        sys.stderr.write("mokata: secret detected — write/commit/send blocked.\n")
+        # ONE shared builder for the wording (R3/R4) — the MCP WriteGate renders the SAME text.
+        sys.stderr.write(render_block(findings, path=path, root=root) + "\n")
         return BLOCK_EXIT
     return 0
 
@@ -215,26 +235,40 @@ def secret_guard_main(argv: Optional[List[str]] = None) -> int:
 
 
 def gate_guard_main(argv: Optional[List[str]] = None) -> int:
-    """Block a native file-mutation tool call that violates a persisted run-state gate.
+    """Block a native file-mutation tool call that violates a persisted run-state gate — and, ahead
+    of that, ANY write to installed or out-of-workspace code (SELF-PROTECT, 0.0.16 stage 3).
 
     Reads the PreToolUse envelope on stdin (`tool_input` for the target path, `cwd` for the repo,
     `session_id` for the once-per-window notice). Exit 2 + a one-line actionable reason on a
-    violation; exit 0 otherwise. Never raises: the outermost `except` is the fail-open floor."""
+    violation; exit 0 otherwise. Never raises: the outermost `except` is the fail-open floor.
+
+    TWO independent decisions live here, in this order and for a reason:
+      1. SELF-PROTECT — keys on the TARGET PATH alone (`selfprotect.check_target`), so it runs
+         BEFORE `find_mokata_root` and before every run-state gate. Those gates are positively
+         triggered and this hook exits 0 on a non-mokata cwd, which is precisely why a
+         `site-packages` edit was never examined: it is never inside a mokata repo, and never
+         inside a run. Security class, never overridable.
+      2. the SI.1 run-state gates — unchanged, in their existing order, on their existing signals."""
     parser = argparse.ArgumentParser(description="mokata run-state gate (sync gate hook)")
     parser.add_argument("--path", default=None, help="target path (bypasses stdin; for testing)")
     parser.add_argument("--cwd", default=None, help="repo dir (bypasses stdin; for testing)")
+    parser.add_argument("--command", default=None,
+                        help="Bash command (bypasses stdin; for testing the self-protect lane)")
     args, _unknown = parser.parse_known_args(argv)
 
     try:
         # Imported lazily (like secret-guard's engine import) so a half-installed environment
         # degrades to a clean no-op instead of crashing a hook. The module's own import surface is
         # SI.2-cheap: stdlib + state + tdd_state — no engine, no govern, no config.
-        from .gate_hook import (check_write, find_mokata_root, notice_once, target_content,
-                                target_path)
+        from .gate_hook import (bash_command, check_write, find_mokata_root, notice_once,
+                                target_content, target_path)
+        from .selfprotect import (bash_write_targets, check_target, render_refusal,
+                                  workspace_root_for)
 
         cwd, session_id, path = args.cwd or os.getcwd(), "", args.path
+        command = args.command
         content = ""
-        if args.path is None:
+        if args.path is None and args.command is None:
             raw = _read_stdin_bounded(_STDIN_READ_TIMEOUT_SECS)
             payload = {}
             if raw and raw.strip():
@@ -253,10 +287,26 @@ def gate_guard_main(argv: Optional[List[str]] = None) -> int:
             # otherwise-authorized file (the incident's actual shape). Matched against literal
             # markers only; never interpreted, never sent anywhere.
             content = target_content(tool_input)
+            command = bash_command(tool_input)
+
+        # ---- 1 · SELF-PROTECT. Target path only, BEFORE find_mokata_root and every run-state
+        # gate. `_SOURCE_EXTS` is deliberately NOT consulted: that filter is what keeps a README
+        # edit from tripping a methodology gate, and inheriting it here would leave
+        # `settings.json` / `hooks.json` / `manifest.json` — the files that switch mokata's own
+        # enforcement OFF — outside the block entirely.
+        protect_root = workspace_root_for(cwd)
+        for target in ([path] if path else []) + bash_write_targets(command or ""):
+            # `base_dir=cwd`: a RELATIVE target is relative to the cwd the TOOL acts in (the
+            # envelope's), never to this hook process's own cwd — see `resolve_target`.
+            verdict = check_target(target, workspace_root=protect_root, base_dir=cwd)
+            if verdict.blocked:
+                sys.stderr.write(render_refusal(verdict) + "\n")
+                return BLOCK_EXIT
 
         if not path:
             return 0                              # no file target (or no envelope) -> nothing to do
 
+        # ---- 2 · the SI.1 run-state gates. Untouched, including this fail-open floor.
         root = find_mokata_root(cwd)
         if root is None:
             return 0                              # not a mokata project -> zero cost, instant allow
@@ -402,10 +452,20 @@ def _payload_from_stdin() -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
-def _emit(context: str) -> None:
+def _emit(context: str, event: str = SESSION_START_EVENT) -> None:
+    """Emit ONE `additionalContext` payload for `event`.
+
+    The event name was hard-coded to `SessionStart` while there was exactly one context-injecting
+    hook. H-1a adds the second (`UserPromptSubmit`), and Claude Code keys the payload on
+    `hookEventName` — an emit stamped with the wrong event is silently ignored, so the parameter is
+    load-bearing, not cosmetic. It stays a DEFAULT rather than a required argument so every
+    existing SessionStart call site is byte-identical.
+
+    ONE channel, deliberately (doc 84's "no second competing channel"): both injection surfaces go
+    through this function, so the budget accounting has a single place to live."""
     print(json.dumps({
         "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
+            "hookEventName": event,
             "additionalContext": context,
         }
     }))
@@ -530,6 +590,105 @@ def session_start_main(argv: Optional[List[str]] = None) -> int:
     except Exception:
         pass
     return 0
+
+
+# ======================================================================================
+# user-prompt-submit (UserPromptSubmit, async CONTEXT-INJECTION hook — H-1a)
+# ======================================================================================
+# H-1a: memory stops being a once-per-session briefing and becomes per-turn inbuilt RAG. This
+# hook fires on every prompt the human submits, and returns a small `additionalContext` pack of
+# the rules + the recalled items relevant to THIS turn.
+#
+# Its class is the SessionStart class, not the PreToolUse one, and every line of it follows from
+# that. It is ASYNC/OBSERVABILITY: it only ADDS context, so it must ALWAYS exit 0.
+#
+#   * FAIL-OPEN, absolutely. Exit 2 on a UserPromptSubmit hook does not block a tool call — it
+#     EATS THE HUMAN'S TURN. There is no failure here worth that, so every arm (stdin parse,
+#     Surface load, store construction, recall, budget cap) returns 0 with an empty stdout and an
+#     unchanged prompt. `BLOCK_EXIT` is unreachable from this subcommand by construction and is
+#     pinned as such.
+#   * NON-COUNTING + SCOPED reads only (H-1a C1). It calls `jit_recall` + `always_on_lines`,
+#     never `recall_relevant` — which STAMPS the hits it returns (`record_usage`) and would make
+#     a per-turn injection a durable write on every turn. `recall_relevant(stamp=False)` is the
+#     deliberate future route to the wider tiered retrieval (semantic + graph + edge expansion);
+#     v1 is the lexical floor alone, so the injection stays zero-dependency and deterministic.
+#   * ANCHOR-FREE (items only). Wiring code anchors into the injection is H-6's job; inheriting
+#     that coupling here would create it by accident rather than by decision.
+
+
+def user_prompt_submit_main(argv: Optional[List[str]] = None) -> int:
+    """Inject the per-turn recall pack (H-1a). ALWAYS exits 0; prints nothing when there is
+    nothing to say (an uninitialized repo, an empty prompt, no relevant memory).
+
+    NOTHING is the normal quiet outcome: an empty prompt, a repo mokata isn't set up in, or a
+    turn with no relevant memory all emit NO `hookSpecificOutput` at all — not an empty
+    `additionalContext`, which is still a channel and still says "mokata spoke and had nothing"."""
+    parser = argparse.ArgumentParser(description="mokata per-turn recall injection hook")
+    parser.add_argument("--prompt", default=None,
+                        help="the submitted prompt (bypasses stdin; for testing)")
+    parser.add_argument("--cwd", default=None, help="repo dir (bypasses stdin; for testing)")
+    args, _unknown = parser.parse_known_args(argv)
+
+    try:
+        prompt, cwd, session_id = _prompt_envelope(args)
+        if not prompt:
+            return 0                       # nothing to key a recall on — say nothing
+
+        # Imported lazily (secret-guard's precedent) so a half-installed environment degrades to
+        # a clean no-op. `config` alone here — deliberately NOT the memory stack, which is the
+        # expensive import and must not be paid by the overwhelmingly common case of a repo
+        # mokata is not set up in. `build_injection` is what pulls it, and only past the
+        # `is_initialized` gate below.
+        from .config import Surface, find_project_root
+
+        root = find_project_root(cwd)
+        if not Surface.is_initialized(root):
+            return 0                       # not a mokata project — zero cost, total silence
+        surface = Surface.load(root)
+
+        # S4 — what this session has already been handed. Excluded from the ranking, so the
+        # budget goes to what is NEW rather than re-handing the model turn 3's answer on turn 20.
+        from .bootstrap import build_injection
+        from .injection_ledger import already_injected, record_injected
+        pack = build_injection(surface, prompt,
+                               exclude_ids=already_injected(root, session_id=session_id))
+        if not pack.text:
+            return 0                       # nothing relevant this turn — emit NO channel at all
+        _emit(pack.text, event=USER_PROMPT_SUBMIT_EVENT)
+        # AFTER the emit, and only the ids that actually SURVIVED the budget (`pack.item_ids` is
+        # what was rendered, not what was retrieved). Recording a dropped item would suppress it
+        # for the rest of the session without the model ever having seen it — losing memory in
+        # the name of not repeating it.
+        record_injected(root, pack.item_ids, session_id=session_id)
+        return 0
+    except Exception:  # noqa: BLE001
+        # THE FAIL-OPEN FLOOR, and it is deliberately broad. On this event an exit 2 eats the
+        # human's turn and even a traceback on stderr is noise in their transcript, so the floor
+        # swallows and returns 0. Unlike gate-guard's floor there is no `note_degraded` here: a
+        # gate failing open enforces nothing and MUST say so (P16), whereas an injection failing
+        # open costs the turn some context it never promised — announcing it every turn would be
+        # the louder harm.
+        return 0
+
+
+def _prompt_envelope(args) -> "tuple":
+    """(prompt, cwd, session_id) from the UserPromptSubmit envelope on stdin, or from the
+    `--prompt`/`--cwd` argv escape. Never raises; every unreadable field degrades to empty."""
+    if args.prompt is not None:
+        return args.prompt, args.cwd or os.getcwd(), ""
+    raw = _read_stdin_bounded(_STDIN_READ_TIMEOUT_SECS)
+    payload = {}
+    if raw and raw.strip():
+        try:
+            loaded = json.loads(raw)
+            payload = loaded if isinstance(loaded, dict) else {}
+        except (ValueError, TypeError):
+            payload = {}
+    prompt = payload.get("prompt")
+    sid = payload.get("session_id")
+    return (prompt if isinstance(prompt, str) else "",
+            args.cwd or payload.get("cwd") or os.getcwd(),
+            sid if isinstance(sid, str) else "")
 
 
 # ======================================================================================
@@ -677,8 +836,14 @@ _SUBCOMMANDS = {
     "secret-guard": secret_guard_main,
     "gate-guard": gate_guard_main,
     "dirty-track": dirty_track_main,
+    "user-prompt-submit": user_prompt_submit_main,
     "statusline": statusline_main,
 }
+
+# The one place the subcommand list is written for HUMANS (both error strings below). Derived
+# from `_SUBCOMMANDS` so a new hook cannot be added without appearing in the misconfiguration
+# message that tells a user what they mistyped.
+_SUBCOMMAND_LIST = " | ".join(_SUBCOMMANDS)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -691,15 +856,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
         sys.stderr.write(
-            "mokata-hook: missing subcommand "
-            "(session-start | secret-guard | gate-guard | dirty-track | statusline)\n")
+            f"mokata-hook: missing subcommand ({_SUBCOMMAND_LIST})\n")
         return 1  # misconfiguration → visible exit 1 (NOT 0=silent, NOT 2=security-block)
     sub, rest = argv[0], argv[1:]
     handler = _SUBCOMMANDS.get(sub)
     if handler is None:
         sys.stderr.write(
-            f"mokata-hook: unknown subcommand {sub!r} "
-            f"(expected session-start | secret-guard | gate-guard | dirty-track | statusline)\n")
+            f"mokata-hook: unknown subcommand {sub!r} (expected {_SUBCOMMAND_LIST})\n")
         return 1  # misconfiguration → visible exit 1 (NOT 0=silent, NOT 2=security-block)
     return handler(rest)
 

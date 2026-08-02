@@ -51,6 +51,18 @@ def cmd_release_check(args: argparse.Namespace) -> int:
     return 0 if res.consistent else 1
 
 
+def cmd_release_notes_check(args: argparse.Namespace) -> int:
+    """DG-7 — PURE/OFFLINE: assert RELEASE_NOTES.md announces the intended tag AND discloses
+    every `### Known limitations` fact the CHANGELOG records for it. Exit 1 (fail-closed)
+    naming each undisclosed fact, so `release.sh` REFUSES to tag notes that quietly dropped a
+    limitation the project decided to ship."""
+    from ..packaging import check_release_notes
+    target = args.version or __version__
+    res = check_release_notes(target, root=args.root)
+    print(res.render())
+    return 0 if res.ok else 1
+
+
 def cmd_branch_protection_check(args: argparse.Namespace) -> int:
     """TM.S12a — FAIL-CLOSED: verify the public mirror's default branch is protected (no
     force-push, no deletion, required status checks). Exit 1 on any inability to prove it so
@@ -115,9 +127,16 @@ def cmd_version(args: argparse.Namespace) -> int:
 
 def cmd_upgrade(args: argparse.Namespace) -> int:
     # 45b — easy, HUMAN-GATED upgrade. `--check` just reports; never auto-runs an install.
+    #
+    # DOC-ONBOARD — and it FINISHES THE JOB. Installing the package was never the whole upgrade:
+    # `.claude/settings.json` still carries the wiring the previous version wrote, so a gate
+    # added since the user's last `mokata setup claude` is silently missing. After the gated pip
+    # run, the tail re-wires (through `setup`'s own preview-diff gate — nothing silent) and then
+    # verifies. Human-gated end to end: the pip run has its gate, the settings write has setup's.
     from ..version import (
         check_for_update,
         detect_install_method,
+        finish_upgrade,
         run_pip_upgrade,
         upgrade_steps,
     )
@@ -134,6 +153,8 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
         return 0
     steps = upgrade_steps(method)
     if method == "source":
+        # A source checkout can't be upgraded FOR you (it's your working tree), so the tail
+        # rides the printed recipe instead of the runner — the same two steps, same order.
         print("Source checkout — upgrade with:")
         for step in steps:
             print(f"  {step}")
@@ -146,6 +167,14 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
             return 0
     run_pip_upgrade()
     print(f"ran: {steps[0]}")
+    if getattr(args, "no_refresh", False):
+        # Opting out of the tail must still leave the user holding the step they now owe —
+        # an upgrade that stops here is exactly the half-done state this deliverable exists for.
+        print("wiring refresh skipped (--no-refresh). Your harness wiring is still the "
+              "previous version's — run `mokata setup claude`, then `mokata doctor --wiring`.")
+        return 0
+    finish_upgrade(root=args.path, scope=getattr(args, "scope", "project"),
+                   assume_yes=args.yes)
     return 0
 
 
@@ -178,6 +207,21 @@ def register(sub, common):
         help="the checkout to verify (e.g. the public mirror before tagging); default: cwd",
     )
     p_relchk.set_defaults(func=cmd_release_check)
+
+    p_notes = sub.add_parser(
+        "release-notes-check",
+        help="verify RELEASE_NOTES.md announces the tag and discloses the CHANGELOG's known "
+             "limitations (pure/offline; exit 1 on any gap)",
+    )
+    p_notes.add_argument(
+        "version", nargs="?", default=None,
+        help="the intended tag/version (e.g. 0.0.16 or v0.0.16); default: this package's version",
+    )
+    p_notes.add_argument(
+        "--root", default=".",
+        help="the checkout to verify (e.g. the public mirror before tagging); default: cwd",
+    )
+    p_notes.set_defaults(func=cmd_release_notes_check)
 
     p_bpc = sub.add_parser(
         "branch-protection-check",
@@ -230,6 +274,11 @@ def register(sub, common):
     p_up.add_argument("--yes", action="store_true",
                       help="approve the pip upgrade non-interactively (never auto-runs "
                            "without this or a confirm)")
+    p_up.add_argument("--scope", choices=("project", "user"), default="project",
+                      help="scope for the post-upgrade harness re-wiring (default: project)")
+    p_up.add_argument("--no-refresh", action="store_true",
+                      help="don't refresh the harness wiring after upgrading (you must then "
+                           "run `mokata setup claude` yourself, or the new gates stay unwired)")
     p_up.set_defaults(func=cmd_upgrade)
 
 

@@ -95,6 +95,34 @@ jobs:
               sys.exit(1)
           PY
 
+      - name: "Preflight — THE LIVE GATE MUST BE ON (a skipped live leg reads GREEN)"
+        working-directory: tests/integration
+        # DB.S8e. THE failure mode this whole workflow is exposed to, and it is silent: every live
+        # module below is wrapped in `@unittest.skipUnless(_PG_LIVE, ...)`. If the DSN is unset, the
+        # driver is missing, or the server is unreachable, unittest reports `OK (skipped=N)` and the
+        # step goes GREEN — a job that proved nothing, reporting success, indefinitely.
+        #
+        # This asserts the gate by IMPORTING THE VERY PREDICATE the tests skip on, rather than
+        # re-deriving an equivalent check here. Two implementations of "is the DB live" is how a
+        # preflight ends up passing while the tests it guards skip anyway; there is one, and it
+        # lives with the tests.
+        env:
+          MOKATA_LIVE_DB: "1"
+          MOKATA_PG_DSN: "postgresql://mokata@localhost:5432/mokata_legs"
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sys
+          import _support  # noqa: F401  (puts src/ on the path)
+          from test_db_s6_live_db import _PG_LIVE, _PG_REASON
+          if not _PG_LIVE:
+              print(f"::error::the live-DB gate is OFF ({_PG_REASON}). Every leg in this job would "
+                    "SKIP, and a skipped live leg reads GREEN — so the job fails here instead of "
+                    "reporting success for tests that never ran.")
+              sys.exit(1)
+          print("live-DB gate ON — the legs below will RUN, not skip.")
+          PY
+
       # The three legs below name their test modules EXPLICITLY — no broad discover. The point of
       # this job is these legs; a discover would drown a red one in 4,000 unrelated passes.
       # `working-directory: tests` matches the repo's `-t tests` top-level (each file does
@@ -111,6 +139,25 @@ jobs:
             exit 1
           fi
 
+      - name: DB.S2b live leg — real BOOLEAN/jsonb backfill + the scope predicate
+        working-directory: tests/integration
+        # Shim boundary being closed, and it is the SAFETY-CRITICAL one. Two things in DB.S2b are
+        # Postgres SQL no SQLite shim can stand in for: the provisioning BACKFILL (`doc::jsonb->>`
+        # with `::boolean`/`::int` casts and `IS DISTINCT FROM`) and the scope predicate binding
+        # against real column types. This leg already caught one genuine bug the shim passed —
+        # `pin` written as an int, which SQLite accepts and Postgres rejects outright.
+        # Red here means a scoped read on a real shared store does not return what
+        # `scope.union_read` returns, i.e. rows missing or another tenant's rows visible.
+        env:
+          MOKATA_LIVE_DB: "1"
+          MOKATA_PG_DSN: "postgresql://mokata@localhost:5432/mokata_legs"
+        run: |
+          set -euo pipefail
+          if ! python -m unittest -v test_db_s2b_live_db; then
+            echo "::error::DB.S2b LIVE leg RED on real Postgres — the scope pushdown, the jsonb backfill, or the BOOLEAN/int column typing diverged from scope.union_read. This is the cross-tenant visibility path: red here means a scoped recall on a shared store returns the wrong rows."
+            exit 1
+          fi
+
       - name: DB.S3 live leg — PG's real tsvector/ts_rank ranking
         working-directory: tests
         # Shim boundary being closed: the shim emulated to_tsvector/to_tsquery/@@/ts_rank narrowly
@@ -120,6 +167,83 @@ jobs:
           set -euo pipefail
           if ! python -m unittest -v test_db_s3_fts.LivePostgresTest; then
             echo "::error::DB.S3 LIVE leg RED on real Postgres — to_tsvector/ts_rank did not rank the relevant document first. The shim proved the WHERE filters and the values bind; only this leg proves PG's ranking QUALITY, which is the retrieval claim DB.S3 shipped on."
+            exit 1
+          fi
+
+      - name: DB.S5 live leg — v4 lifecycle schema + usage telemetry on real types
+        # `tests/integration`, not `tests` — this step read `tests` and `test_db_s5_live_db.py`
+        # has always lived in `tests/integration/`, so the leg died on `ModuleNotFoundError`
+        # BEFORE touching Postgres and had never once run. Found 2026-08-02 the first time this
+        # workflow was dispatched on the OSS mirror (the private repo's Actions are billing-
+        # blocked, so nothing here had executed since it was written). Every OTHER step in this
+        # file was audited for the same mismatch at the same time; this was the only one.
+        working-directory: tests/integration
+        # Shim boundary being closed: the SQLite shim stores `last_recalled_at` as TEXT and hands
+        # back exactly what went in, and it has no `= ANY(%s)` array binding at all — so only a
+        # real engine proves the TIMESTAMPTZ round trip reads back as something the recency curve
+        # can parse, and that the id-array binding matches the right rows. It also runs the
+        # `valid_from` backfill (jsonb `->'provenance'->>'created_at'` + `IS DISTINCT FROM`
+        # idempotence) against a table that already has rows.
+        # Red here means one of: usage telemetry silently records nothing on a shared store (the
+        # ranking signal quietly reverts to the pre-DB.S5 floor), one project can read or stamp
+        # another's usage, or — the serious one — the v4 migration CLOSED a validity window, which
+        # would retire live memory on upgrade and is the exact opposite of the never-delete
+        # invariant this schema exists to serve.
+        env:
+          MOKATA_LIVE_DB: "1"
+          MOKATA_PG_DSN: "postgresql://mokata@localhost:5432/mokata_legs"
+        run: |
+          set -euo pipefail
+          if ! python -m unittest -v test_db_s5_live_db; then
+            echo "::error::DB.S5 LIVE leg RED on real Postgres — the v4 migration, the validity-window projection, or the usage telemetry diverged on real types. If the backfill closed a window, upgrading retires live memory: that is the never-delete invariant breaking."
+            exit 1
+          fi
+
+      - name: "DB.S6 live leg — TWO real writers: CAS no-clobber + group-atomic apply + group resolution"
+        working-directory: tests/integration
+        # Shim boundary being closed, and there are three of them. (1) `_FakeMemPg` IS the CAS — it
+        # decides in Python whether a revision matched — so only two independent installs against
+        # one shared table show that Postgres's own `UPDATE … WHERE revision = %s` serializes them.
+        # (2) The group-atomic apply depends on psycopg3 giving a real BEGIN/ROLLBACK around one
+        # approval on an AUTOCOMMIT connection, and on that rollback undoing a statement that had
+        # already succeeded; the unit proof uses a fake that snapshots a dict.
+        # (3) I1b — a rolled-back approval is then RESOLVED one conflict at a time, so the end state
+        # (2) prevents is still reachable by hand: approve the retirement, discard the replacement.
+        # Only a real engine can show that the row genuinely lands `superseded` when the guard is
+        # absent, which is what makes the refusal worth having.
+        # Red here means one of: a stale writer overwrote a teammate's row (the no-clobber claim,
+        # gone), or — the serious one — a heal's two writes landed only half, which leaves a
+        # subject with its old fact RETIRED and its replacement ABSENT and nothing saying so.
+        env:
+          MOKATA_LIVE_DB: "1"
+          MOKATA_PG_DSN: "postgresql://mokata@localhost:5432/mokata_legs"
+        run: |
+          set -euo pipefail
+          if ! python -m unittest -v test_db_s6_live_db; then
+            echo "::error::DB.S6 LIVE leg RED on real Postgres — one of: the revision CAS did not hold between two real writers (a stale write clobbered the winner); one approval's writes were not applied atomically; or (I1b) a rolled-back approval was resolved one member at a time and published a retirement whose replacement was discarded. The last two both end the same way — a subject with its fact RETIRED, nothing in its place, and nothing anywhere saying so. The _FakeMemPg is the CAS in Python and proved none of them."
+            exit 1
+          fi
+
+      - name: "DB.S7d live leg — TWO real writers: duplicate-both-active + the one-prompt group decision"
+        working-directory: tests/integration
+        # Shim boundary being closed, and both halves are claims about the SHARED TABLE rather than
+        # about local state. (1) "two active facts on one subject" is a statement about what OTHER
+        # writers read back out of Postgres — a Python dict standing in for the table can show a
+        # resolution being refused, but not that the refusal is what keeps the shared row singular.
+        # (2) A whole-approval verdict re-queues N writes at their current remote revisions and the
+        # next flush CASes all of them inside one transaction; whether they land TOGETHER depends on
+        # psycopg3's real BEGIN/COMMIT and on Postgres's own `UPDATE … WHERE revision = %s`.
+        # Red here means one of: the shared table ended up carrying both halves of a heal nobody
+        # decided as a whole (a duplicated fact), or — the serious one — a one-prompt group verdict
+        # published a retirement whose replacement had already been discarded, which loses the fact
+        # in a single prompt the human trusted BECAUSE it claimed to cover the whole approval.
+        env:
+          MOKATA_LIVE_DB: "1"
+          MOKATA_PG_DSN: "postgresql://mokata@localhost:5432/mokata_legs"
+        run: |
+          set -euo pipefail
+          if ! python -m unittest -v test_db_s7d_live_db; then
+            echo "::error::DB.S7d LIVE leg RED on real Postgres — either the shared table was left with TWO active facts from one approval that was only half-decided, or a one-prompt group verdict landed a retirement whose replacement was already discarded (the fact is gone, in the single prompt that claimed to cover everything), or the whole-approval verdict did not survive the real CAS flush. _FakeMemPg is the CAS in Python and proved none of them."
             exit 1
           fi
 
@@ -135,7 +259,68 @@ jobs:
             exit 1
           fi
 
+      # ---------------------------------------------------------------- DB.S8e: THE EIGHT ORPHANS
+      # Every module below shipped a live leg with its stage and then ran in NEITHER workflow:
+      # `ci.yml`'s live-db job runs ONLY `test_live_db.py` (`-p "test_live_db.py"`), and the steps
+      # above name their modules explicitly. So DB.S7a/b/c1/c2, H-1a, H-6, M-1/R9 and TM.S5b were
+      # each written, verified on-device, recorded as evidence in doc 02 — and then never run again
+      # by anything. That is the reachability pattern doc 84 files, in CI form: code that exists,
+      # is believed covered, and has no runner.
+      #
+      # They run in ONE step because they share a gate and a database, and because eight
+      # near-identical steps is how the ninth gets forgotten. The modules are still NAMED (never a
+      # broad discover) so a red one is identifiable, and `-v` keeps per-test output.
+      - name: "DB.S8e — the eight legs that ran in NEITHER workflow"
+        working-directory: tests/integration
+        env:
+          MOKATA_LIVE_DB: "1"
+          MOKATA_PG_DSN: "postgresql://mokata@localhost:5432/mokata_legs"
+        run: |
+          set -euo pipefail
+          if ! python -m unittest -v \
+              test_db_s7a_live_db test_db_s7b_live_db test_db_s7c1_live_db test_db_s7c2_live_db \
+              test_h1a_live_db test_h6_live_db test_m1_r9_live_db test_tm_s5b_live_db; then
+            echo "::error::one of the eight previously-unwired live legs is RED on real Postgres. These cover the DB.S7 edge substrate + traversal + edge-aware healing + stale refs, H-1a per-turn injection, H-6 code-anchor staleness, M-1/R9's consent chain on real types, and TM.S5b's journal-first store. Each was verified on-device at its own stage and then run by nothing until DB.S8e; a red here is a regression that had no runner to catch it."
+            exit 1
+          fi
+
+      - name: "DB.S8c — S-1 + S-4 at N=100,000 on the real engine"
+        working-directory: tests/integration
+        # The scale leg. Shim boundary being closed: S-1 is "query plans + row counts" and a PLAN is
+        # something only a planner produces — the _PgShim would EXPLAIN SQLite and report green
+        # about Postgres. S-4's winner is decided by Postgres's own `UPDATE … WHERE revision = %s`,
+        # and every unit-suite double IS that CAS in Python.
+        env:
+          MOKATA_LIVE_DB: "1"
+          MOKATA_PG_DSN: "postgresql://mokata@localhost:5432/mokata_legs"
+        run: |
+          set -euo pipefail
+          out=$(python -m unittest -v test_db_s8c_live_db 2>&1) || { echo "$out"; exit 1; }
+          echo "$out"
+          # THE SKIP GUARD, and it is separate from the preflight ON PURPOSE. The preflight proves
+          # the gate was on before anything ran; this proves THIS module actually ran, which is a
+          # different claim — a module can skip for its own reasons (a missing import, a
+          # `setUpClass` guard) long after the gate has been shown healthy. Doc 52 calls the 100k
+          # contracts the release's validation bar, so "it skipped" must never reach the summary
+          # as "it passed".
+          if grep -qE "skipped=[1-9]" <<<"$out"; then
+            echo "::error::the DB.S8c SCALE leg SKIPPED tests rather than running them. A skipped live leg reads GREEN, and this is the leg doc 52 names as the 100k validation bar — so the job fails rather than reporting a bar that was never measured."
+            exit 1
+          fi
+          if ! grep -qE "^Ran [1-9][0-9]* test" <<<"$out"; then
+            echo "::error::the DB.S8c scale leg ran ZERO tests — the module was collected but empty, which reads as success and proves nothing."
+            exit 1
+          fi
+
       - name: Summary
         run: |
-          echo "ok — DB.S2a (psycopg) · DB.S3 (ts_rank) · DB.S4 (pgvector/HNSW) all green on the"
-          echo "real engines. The three recorded shim boundaries are measured, not assumed."
+          echo "ok — DB.S2a (psycopg) · DB.S2b (scope pushdown + jsonb backfill) · DB.S3 (ts_rank)"
+          echo "· DB.S5 (v4 lifecycle + usage telemetry on real types) · DB.S6 (two-writer CAS +"
+          echo "group-atomic apply) · DB.S7d (duplicate-both-active + group decision) · DB.S4"
+          echo "(pgvector/HNSW) all green on the real engines."
+          echo "DB.S8e — plus the eight legs that previously ran in NEITHER workflow: DB.S7a/b/c1/c2,"
+          echo "H-1a, H-6, M-1/R9, TM.S5b."
+          echo "DB.S8c — S-1 (index-bound plans + row counts) and S-4 (two real writers) at"
+          echo "N=100,000, with a preflight and a skip guard so a leg that did not run cannot"
+          echo "report as one that passed."
+          echo "The recorded shim boundaries are measured, not assumed."

@@ -39,8 +39,8 @@ from __future__ import annotations
 from .registry import _tool
 from .tools_config import (config_set, export_stack, import_stack, init,
                            reconfigure, reset, stacks_install)
-from .tools_memory import (apply_proposal, memory_export, memory_import,
-                           remember)
+from .tools_memory import (apply_proposal, consolidate, memory_export,
+                           memory_import, remember)
 from .tools_session import session_name, session_pull, session_push
 from .tools_share import vault_push
 from .tools_spec import spec_amend, spec_check, spec_emit
@@ -51,6 +51,7 @@ __all__ = [
     "memory_import", "vault_push", "session_push", "session_pull", "session_name",
     "audit_share", "spec_check", "init", "reconfigure", "config_set", "export_stack",
     "stacks_install",
+    "consolidate",          # M-4/R5 — appended, matching the registration discipline below
 ]
 
 # ---- registration: registry-driven, in the EXACT historical order (parity with the pre-split
@@ -77,3 +78,6 @@ _tool("reconfigure", "write")(reconfigure)
 _tool("config_set", "write")(config_set)
 _tool("export_stack", "write")(export_stack)
 _tool("stacks_install", "write")(stacks_install)
+# M-4/R5 (0.0.16) — APPENDED, not slotted beside `apply_proposal` where it belongs by domain: the
+# registry snapshot pins tool order and its rule is that a new tool keeps every existing position.
+_tool("consolidate", "write")(consolidate)      # submit an agent-DRAFTED summary (human-gated)

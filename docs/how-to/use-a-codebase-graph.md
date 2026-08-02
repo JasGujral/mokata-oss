@@ -188,12 +188,23 @@ present and the grep floor when not** — same commands either way.
 ## The structural queries it unlocks
 
 ```bash
+mokata query defs <symbol>           # where it's defined
+mokata query refs <symbol>           # everywhere it's referenced
 mokata query callers <symbol>        # who calls it
 mokata query callees <symbol>        # what it calls
 mokata query implementers <name>     # who implements/subclasses it
 mokata query imports <module>        # who imports it
 mokata query blast_radius <symbol>   # transitive impact of a change
 ```
+
+The first six are **navigation** — they replace opening a file or grepping for a name. mokata's
+skills are instructed to ask the graph first and to fall back to Read/grep only afterwards,
+marking the answer degraded when they do; a lexical navigation answer carries
+`grep floor — install code-review-graph for full navigation`.
+
+One honest gap: `code-review-graph` exposes no definition-site query, so `defs` is answered by
+the embedded AST floor (exact on Python) even when the graph is adopted. The answer names the
+backend that produced it, so you always know which one you got.
 
 ## Which languages work
 

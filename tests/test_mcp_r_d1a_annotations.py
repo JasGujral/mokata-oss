@@ -100,13 +100,18 @@ class TestProjectionTable(unittest.TestCase):
 
 
 # ======================================================================================
-# Coverage — EVERY registered tool is annotated with the right shape (all 55; none unannotated)
+# Coverage — EVERY registered tool is annotated with the right shape (all 56; none unannotated)
 # ======================================================================================
 
 class TestCoverage(unittest.TestCase):
 
     def test_mcp_r_d1a_every_tool_annotated(self):
-        self.assertEqual(len(TOOLS), 55)                 # the D0 ground-truth count
+        # the D0 ground-truth count, 55 -> 56 at HANDOFF.G1 (0.0.16): the `spec_show` read tool;
+        # 56 -> 58 at REVIEW-FIX.R3 (0.0.16): `review_status` + `review_record`;
+        # 58 -> 59 at WT-LIST (0.0.16): `worktree_list`, the read-only worktree×session join;
+        # 59 -> 61 at M-4/R5 (0.0.16): `consolidate_proposals` (read — the drafting request) +
+        # `consolidate` (gated write — the agent submits the summary it drafted).
+        self.assertEqual(len(TOOLS), 61)
         for spec in TOOLS:
             ann = A.annotations_for(spec.kind, spec.name)
             self.assertIn("readOnlyHint", ann)           # present + bool for EVERY tool
@@ -142,7 +147,10 @@ class TestSdkAttach(unittest.TestCase):
 
         server = MS.build_server()
         tools = {t.name: t for t in asyncio.run(server.list_tools())}
-        self.assertEqual(len(tools), 55)
+        # 55 -> 56 at HANDOFF.G1 (`spec_show`); 56 -> 58 at REVIEW-FIX.R3 (the 6r review loop);
+        # 58 -> 59 at WT-LIST (`worktree_list`); 59 -> 61 at M-4/R5 (`consolidate_proposals` +
+        # `consolidate`, the two-phase drafted-summary flow)
+        self.assertEqual(len(tools), 61)
 
         by_name = {s.name: s for s in TOOLS}
         for name, tool in tools.items():
@@ -207,6 +215,12 @@ class TestResultsUnchanged(unittest.TestCase):
             _repo(d)
             direct = TR.doctor(path=d)                    # the tool called directly
             served = MS._serve(TR.doctor, name="doctor", kind="read")(path=d)   # via D0 wrapper
+            # `_serve` fires a self-registration daemon thread it deliberately never joins (R5).
+            # That thread holds an open fd on `…/state/.session_registry.json.lock`; POSIX unlinks
+            # an open file happily, Windows raises WinError 32 and the TemporaryDirectory teardown
+            # below dies (WIN-LOCKHANDLE). Drain it INSIDE the block — `_await_registrations` is
+            # the seam that exists for exactly this race.
+            MS._await_registrations(5.0)
         # a read tool's output carries NONE of the annotation keys...
         self.assertFalse(annotation_keys & set(direct))
         # ...and the served result is byte-identical to the direct call (annotations are metadata)

@@ -75,16 +75,27 @@ class TestSetupUsesConsoleEntryPoint(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestHooksJsonUsesConsoleEntryPoint(unittest.TestCase):
-    def test_hooks_json_uses_mokata_hook_no_python3_no_launcher(self):
+    def test_hooks_json_invokes_the_self_resolving_shim(self):
+        # HOOK-RESOLVE amended this pin. A plugin hooks.json is STATIC — it cannot carry the
+        # absolute console-script path `mokata setup` writes — so a BARE `mokata-hook` was
+        # silently unresolvable on a GUI-minimal PATH and the gates never ran. It now invokes
+        # the self-resolving shim under ${CLAUDE_PLUGIN_ROOT}, which runs the same ladder at
+        # hook time. The pin is the NEW shape: shim-invoking, never a bare name.
         flat = json.dumps(json.loads(HOOKS_JSON.read_text(encoding="utf-8")))
-        self.assertIn("mokata-hook session-start", flat)
-        self.assertIn("mokata-hook secret-guard", flat)
+        for sub in ("session-start", "secret-guard", "gate-guard", "dirty-track"):
+            self.assertIn(f"mokata-hook-launch\\\" {sub}", flat,
+                          f"hooks.json must invoke the shim for {sub}")
+            self.assertNotIn(f"mokata-hook {sub}", flat,
+                             f"{sub} must NOT be wired by bare name (silently unresolvable)")
+        self.assertIn("${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch", flat)
         # no fragile resolution remains: no bare python3, no `sh launch.sh`
         self.assertNotRegex(flat, r'(^|\s)python3(\s|\\|$)')
         self.assertNotIn("launch.sh", flat)
 
     def test_launcher_still_ships_as_fallback(self):
-        # launch.sh remains for the pure-plugin-without-pip last resort.
+        # launch.sh remains for the pure-plugin-without-pip last resort (it launches the
+        # standalone hooks/*.py shims by script path — a different interface from the
+        # HOOK-RESOLVE shim, which takes a mokata-hook SUBCOMMAND).
         self.assertTrue(LAUNCH.exists(), "hooks/launch.sh must still ship")
         # and the standalone shim scripts it would launch still exist.
         self.assertTrue((ROOT / "src" / "mokata" / "hooks" / "session_start.py").exists())

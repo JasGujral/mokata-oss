@@ -54,11 +54,36 @@ class Skill:
 # must exist before code/tests. Fired ahead of the skill's own gate.
 SPEC_PERSISTED_PRECONDITION = (
     "Precondition (spec-persisted): a saved spec with at least one acceptance criterion must "
-    "exist (`emitted_spec.json`, written by the human-gated `emit` after the completeness "
-    "gate passes). If it's absent, STOP and produce + emit the spec first (`/mokata:spec`) — "
-    "do not write code or tests against an unsaved spec."
+    "exist — the run's persisted spec, written by the human-gated `emit` after the completeness "
+    "gate passes. FETCH it with the `spec_show` tool (or `mokata spec show`); it is keyed to "
+    "this run, not a file you can open by name. If it's absent, STOP and produce + emit the "
+    "spec first (`/mokata:spec`) — do not write code or tests against an unsaved spec."
 )
 
+
+# CRG-NAV — the NAVIGATION rule, stated ONCE. Navigation is graph-first: the code graph is the
+# instrument for "where does this symbol live / who touches it", and Read/grep is the FALLBACK,
+# marked degraded when it answers. It is composed INTO `GROUNDING_DISCIPLINE` below rather than
+# pasted per skill, so develop / refine / debug / optimize (and every other grounded skill) get
+# ONE wording that cannot drift into per-skill copies — the same single-source discipline the
+# grounding block itself uses.
+#
+# It binds to THE CHAIN, not to one product: the order named here is the backend chain
+# (`knowledge.layer.select_backends`), so if that chain is re-ordered later the rule stays true
+# — what an agent must do is "ask the graph first", not "install a particular tool".
+NAVIGATION_GRAPH_FIRST = (
+    "Navigate GRAPH-FIRST: to find a symbol, its DEFINITION, its CALLERS or CALLEES, who IMPORTS "
+    "or IMPLEMENTS it, or everywhere it is REFERENCED, ask the code graph FIRST — `mokata query "
+    "defs|refs|callers|callees|implementers|imports <symbol>` (or the `query` MCP tool). Read and "
+    "grep are the FALLBACK, not the opening move: reach for them to READ the lines the graph "
+    "pointed you at, or when the graph has no op for the question — never as the first way to "
+    "find something. When you DO fall back, SAY SO: name what answered and treat it as DEGRADED, "
+    "so a lexical guess is never recorded as a structural fact. The chain degrades in order — "
+    "code-review-graph, then serena, then the embedded AST floor, then grep — and every answer "
+    "names the backend that produced it; an answer carrying `grep floor — install "
+    "code-review-graph for full navigation` means you are on the lexical floor, so the result is "
+    "approximate and the fix is one install away. "
+)
 
 # Stage 33 — the shared anti-assumption / ground-in-code clause, appended UNIFORMLY to every
 # critical skill (single source so it can't drift). Covers both the up-front "verify or ask"
@@ -73,7 +98,10 @@ GROUNDING_DISCIPLINE = (
     "captured rules and guardrails, and pull in only the context, references, and best-practices "
     "RELEVANT to the symbols/topic in play (just-in-time — never the whole corpus). The graph + "
     "memory are the source of "
-    "truth; where they're absent, read or grep the code and state what you read. If a fact "
+    "truth; where they're absent, read or grep the code and state what you read. "
+    # CRG-NAV — the navigation ORDER, single-sourced above so no skill carries its own copy.
+    + NAVIGATION_GRAPH_FIRST +
+    "If a fact "
     "CANNOT be determined from the code, state the assumption explicitly and ASK — never "
     "silently assume. Cite what you verified. And continuously: if at any point you find a "
     "decision rested on an assumption, or the code contradicts something you assumed, STOP — "
@@ -245,7 +273,14 @@ INDEPENDENT_REVIEW_CLAUSE = (
     "\n\nRun this review INDEPENDENTLY by default (this is the closing gate, not a self-check). "
     "Spawn a FRESH-CONTEXT subagent and hand it a SELF-CONTAINED brief — the emitted spec + its "
     "acceptance criteria, the approved approach/refinement set, the DIFF under review, and how "
-    "to run the tests — and explicitly NO builder conclusions or claims. The subagent re-derives "
+    "to run the tests — and explicitly NO builder conclusions or claims. FETCH the spec for that "
+    "brief with the `spec_show` tool (or `mokata spec show`) and pass what it returns VERBATIM: "
+    "the reviewer must be handed the persisted, gate-passed spec this run actually approved, not "
+    "a version you re-derived from conversation memory or re-searched the repo for. `spec_show` is "
+    "the ONE instrument for this — it is a keyed read of the run's own spec; `spec_check` is NOT a "
+    "spec fetch (it is the regression guard that scans the SHARED spec corpus for conflicts, a "
+    "different question). If `spec_show` reports no spec, say so in the brief and review on "
+    "quality alone — never substitute a remembered spec. The subagent re-derives "
     "its verdict from the code and its OWN test runs (the doc-00 release-gate pattern applied "
     "per-feature); it must reach the two-pass verdict above on its own, not ratify yours. "
     "Degrade-clean: where the harness has NO subagents (or `settings.review.independent=off`), "
@@ -256,18 +291,43 @@ INDEPENDENT_REVIEW_CLAUSE = (
 )
 
 
+# REVIEW-FIX.R3 (fold-in, WT.S4) — the 6r loop's two instruments are now REGISTERED MCP read tools
+# (`review_record` / `review_status` in `mcp/tools_read.py`), so the prose must name the TOOL as the
+# in-harness instrument and keep the CLI as the fallback the tool shells to. Both phrases live HERE,
+# in one place each, and are interpolated into review's and ship's prose — the two files name the
+# same instrument by construction, so they cannot drift the way a hand-copied command string does.
+REVIEW_RECORD_INSTRUMENT = (
+    "call the `review_record` MCP tool (its CLI fallback, which it shells to, is "
+    "`mokata progress record-review`)"
+)
+
+REVIEW_STATUS_INSTRUMENT = (
+    "call the `review_status` MCP tool (its CLI fallback, which it shells to, is "
+    "`mokata progress review-status`)"
+)
+
+
 # Stage 6r — persist the verdict so ship verifies the RECORD, not conversation vibes. One
 # persistence layer: the SAME Stage-6b progress log, as a `review_verdict` event. UNGATED
 # observability, like the stage_enter mark.
 RECORD_VERDICT_INSTRUCTION = (
     "When the review reaches its verdict, PERSIST it so `/mokata:ship` can verify the record "
-    "(evidence over vibes): run "
-    "`mokata progress record-review --passed` (or `--failed`), adding `--independent` when it "
+    "(evidence over vibes): "
+    + REVIEW_RECORD_INSTRUMENT +
+    " with `passed=true` (or `failed=true`), setting `independent=true` when it "
     "ran as a fresh-context subagent and OMITTING it when it degraded to the inline two-pass. "
     "This appends a single `review_verdict` event to the append-only progress-event log — "
     "OBSERVABILITY, like the stage-entry mark: UNGATED (no durable code/memory/config write, so "
-    "no approval prompt) and best-effort (if it fails, keep going). Ship reads this record and "
-    "BLOCKS when it is absent, so recording the verdict is what closes the pipeline."
+    "no approval prompt). Ship reads this record and BLOCKS when it is absent, so recording the "
+    "verdict is what closes the pipeline. "
+    "If recording FAILS it says so LOUDLY — the tool answers `recorded: false` with "
+    "`satisfies_gate: false`, and the CLI fallback exits NON-ZERO (`mokata review: FAILED to "
+    "record the verdict …`) — do not read that as recorded and do not carry on as if the verdict "
+    "landed: nothing was written, so ship will block as if review never ran. Retry, or record it "
+    "naming the run (the tool's `run` argument, or `--run <run id>` from the terminal; "
+    "`mokata sessions` lists them). It still never "
+    "raises at you — report the review's findings either way — but the record is not closed until "
+    "it succeeds."
 )
 
 
@@ -366,6 +426,50 @@ REVIEW_DOMAIN_AXES = (
 )
 
 
+# WT.S4 — the pipeline-in-worktree flow, in prose. Two clauses, one source each, LAYERED on top of
+# the CRG-NAV navigation clause already in develop.md / ship.md (additive — neither replaces it).
+#
+# The offer is the whole point of the run-start half: a worktree is a real cost (a second checkout,
+# a second window) and a real benefit (isolation + a branch to merge), so the HUMAN weighs it. The
+# consent discipline is the same one develop's parallel-run offer and the bootstrap setup offer
+# already use: ask once, act only on an explicit yes, and treat silence as no. There is deliberately
+# no "sensible default" here — a default would be an automatic worktree, which is exactly the thing
+# the locked posture forbids.
+WORKTREE_RUN_START_OFFER = (
+    "\n\n## Run-start worktree — OFFER it, never assume it\n"
+    "At the START of the run — with the same one-time consent discipline as the parallel-run "
+    "question above — OFFER this run its own git worktree + branch, then let the human decide. "
+    "mokata surfaces the offer for you on the run-progress block (once per run, never per phase); "
+    "your job is to put the trade-off in front of the human and WAIT. State BOTH sides: the "
+    "BENEFIT is that the run's working tree is isolated (a parallel run, or your own main checkout, "
+    "cannot collide with it) and the run ends on a branch that is ready to review and merge; the "
+    "COST is a second checkout on disk and a second window to work in. "
+    "It is HUMAN-GATED and never automatic. Nothing is created — no worktree, no branch — without "
+    "an explicit yes: silence is a NO, and a bare \"start\", \"go\", or \"continue\" is a NO. Do not "
+    "read consent into enthusiasm for the work itself. On an explicit yes, the ONE action is the "
+    "gated `mokata worktree create \"<what this run is working on>\"`, which confirms again before "
+    "it touches git; on anything else, carry on in place and do not ask a second time. "
+    "If the repo is not a git repo, or the run is already bound to a worktree, there is nothing to "
+    "offer — say nothing and proceed."
+)
+
+# The handoff's whole job is that the human ends holding a BRANCH, not a directory they have to
+# reason about. It is derived text over the binding, so an unbound run produces nothing at all —
+# which is what keeps ship byte-identical for every run that never took the offer.
+WORKTREE_MERGE_READY_HANDOFF = (
+    "\n\n## Merge-ready branch handoff (worktree-bound runs)\n"
+    "If this run is BOUND to a worktree (the run-progress block names the worktree + branch it "
+    "owns), close it out by handing the human a MERGE-READY BRANCH rather than a worktree they have "
+    "to reason about. As part of the landing options in step 3: NAME the branch, name the worktree "
+    "path the work sits in, and name the EXACT next action to land it — commit anything outstanding "
+    "on that branch, then from the MAIN checkout run `git merge <branch>`. mokata never merges, so "
+    "that command is the human's to run and only after they choose it; PR creation is out of scope "
+    "here. The worktree stays until the human removes it — do not clean it up unasked. "
+    "If there is NO binding, this section does not apply: print no handoff prose, raise no error, "
+    "and land the run exactly as you otherwise would."
+)
+
+
 # Stage 6r — develop's finish names the next step EXPLICITLY. The generic PROGRESS_INSTRUCTION
 # ends with a `/mokata:<next>` placeholder; for the develop→review transition that is exactly
 # the advisory hand-off that let 0.0.8 skip review. Name it, mark it required, offer to run it.
@@ -455,6 +559,16 @@ _SKILLS: List[Skill] = [
             "every criterion to a test before you emit, and never work around a refusal. This "
             "emit is what unblocks implementation (the `spec-persisted` gate reads exactly the "
             "spec it persists) and what puts the spec into the corpus the regression guard reads. "
+            "If this run ALREADY has a spec, emitting again REPLACES it as a new version rather "
+            "than overwriting it: the previous spec is archived and superseded, and the approval "
+            "preview heads the diff with `REPLACES v<N> -> v<N+1>` so the human sees exactly what "
+            "changes before approving. Re-emit while the spec is still being settled; once "
+            "implementation is under way and you need to WIDEN scope, route through `spec_amend` "
+            "instead — that forces the phase regression back to SPEC, re-earns the gates, and "
+            "makes the new criteria owe a failing test. Emitting with no approved approach or "
+            "refinement set behind it is a SUPPORTED path, not an error — the gate says so and "
+            "names the road to an approved direction; never treat that note as a failure or work "
+            "around it. "
             "Declare the spec's SCOPE when you emit it — this is what makes the spec BIND rather "
             "than merely describe: `scope.authorized` is the paths this work may touch (globs), and "
             "`scope.deferred` names each thing you agreed NOT to build, with the paths it would "
@@ -485,8 +599,9 @@ _SKILLS: List[Skill] = [
         name="test",
         summary="mokata · Write failing tests first (RED); no implementation.",
         prompt=(
-            "Do NOT write tests until the spec is emitted and SAVED: if there is no "
-            "`emitted_spec.json` (the persisted, completeness-gate-passed spec), STOP and "
+            "Do NOT write tests until the spec is emitted and SAVED: FETCH this run's "
+            "persisted, completeness-gate-passed spec with the `spec_show` tool (or `mokata "
+            "spec show`) and work from what it returns; if there is none, STOP and "
             "produce + emit the spec first (`/mokata:spec`). Then write tests that express "
             "the desired behaviour and watch them FAIL first (RED). Do NOT write "
             "implementation here. One behaviour per test, clear names, real code over "
@@ -520,15 +635,19 @@ _SKILLS: List[Skill] = [
             "estimate when offering parallel, honor the saved `settings.execution.default` "
             "preference, and NEVER fan out without an explicit choice; if the harness has "
             "no subagents, say so and run sequentially. Do NOT write code until the spec "
-            "is emitted and SAVED: if there is no `emitted_spec.json` (the persisted, "
-            "completeness-gate-passed spec), STOP and produce + emit the spec first "
+            "is emitted and SAVED: FETCH this run's persisted, completeness-gate-passed "
+            "spec with the `spec_show` tool (or `mokata spec show`) and implement against "
+            "what it returns; if there is none, STOP and produce + emit the spec first "
             "(`/mokata:spec`). Confirm a GREEN test baseline before you start "
             "(`mokata baseline`), so any new failure is attributable to your change. Then "
             "implement the minimum needed "
             "to turn a failing test GREEN. Implement against the REAL contracts found in the "
             "code, not assumed ones: before changing a shared symbol, check its call sites "
             "(`mokata query callers <symbol>` / `blast_radius`) so you don't break a caller "
-            "you didn't read. Work in SMALL, ordered, grounded tasks — each naming the "
+            "you didn't read. Navigate GRAPH-FIRST throughout (see Grounding discipline): "
+            "locating a symbol, its definition, or its references is a `mokata query` — Read "
+            "and grep come after, to read what the graph found, and a lexical answer is called "
+            "out as degraded. Work in SMALL, ordered, grounded tasks — each naming the "
             "files/symbols it touches and a check. No new behaviour without a failing test "
             "that demands it; keep the change surgical and stop when the test passes. "
             "Implement STRICTLY against the approved plan — the approved spec and its "
@@ -547,6 +666,7 @@ _SKILLS: List[Skill] = [
             + DEVELOP_SCOPE_BINDING
             + DEVELOP_AMEND_LOOP
             + DEVELOP_DOMAIN_ENGAGE
+            + WORKTREE_RUN_START_OFFER      # WT.S4 — layered ON TOP, disturbs no prior clause
         ),
         gate=Gate("no-code-without-failing-test",
                   "Implementation is allowed only against an existing failing test; the "
@@ -589,7 +709,10 @@ _SKILLS: List[Skill] = [
         prompt=(
             "Reproduce the failure before changing anything, then find the smallest "
             "change that fixes it. Root-cause from the REAL code — read the failing path "
-            "and trace it with the structural queries (callers/callees); don't theorise "
+            "and trace it GRAPH-FIRST (see Grounding discipline): `mokata query "
+            "defs|refs|callers|callees <symbol>` to find the symbol and walk the path, then "
+            "Read the lines it points at; grep is the fallback and its answer is degraded. "
+            "Don't theorise "
             "about code you haven't read. Form hypotheses and rule them out against the "
             "actual source; after N strikes without a root cause, escalate to a stronger "
             "model. Root-cause before fix."
@@ -610,7 +733,11 @@ _SKILLS: List[Skill] = [
         summary="mokata · Measure first; keep only proven, behaviour-preserving wins.",
         prompt=(
             "Measure before you change anything — measure the REAL code, don't assume the "
-            "hot path; confirm where the time actually goes first. Apply a change only "
+            "hot path; confirm where the time actually goes first. Locate the code the "
+            "measurement points at GRAPH-FIRST (see Grounding discipline) — `mokata query "
+            "defs|refs|callers <symbol>` to find the hot symbol and everything that reaches "
+            "it, Read/grep after and marked degraded — so you optimise the path that is "
+            "actually called, not the one that merely matches a text search. Apply a change only "
             "after a baseline is recorded, and keep it only when a before/after measurement "
             "shows it is faster with behaviour unchanged; otherwise revert."
         ),
@@ -656,11 +783,24 @@ _SKILLS: List[Skill] = [
             "1. VERIFY (evidence over claims — do not take 'done' on faith): the full test "
             "suite is GREEN (re-run it; compare against the green baseline you confirmed "
             "before starting, so any new failure is attributable to this change), every "
-            "acceptance criterion in the emitted spec is met (completeness), and `review` "
-            "passed — checked from the PERSISTED RECORD, not conversation memory: run "
-            "`mokata progress review-status`. If it reports `review hasn't run — run "
+            "acceptance criterion in the emitted spec is met (completeness — read the ACs "
+            "back from the persisted spec with the `spec_show` tool or `mokata spec show`, "
+            "so you check against what was approved, not what you remember), and `review` "
+            "passed — checked from the PERSISTED RECORD, not conversation memory: "
+            + REVIEW_STATUS_INSTRUMENT +
+            ". If it reports `review hasn't run — run "
             "/mokata:review first` (no verdict recorded) or that review FAILED, STOP and route "
-            "the human to review — do NOT present landing options. On a pass, SURFACE which kind "
+            "the human to review — do NOT present landing options. If it reports that the review "
+            "evidence has NO RUN to attribute it to, STOP: mokata refuses to satisfy the ship gate "
+            "with another run's review, so re-read it naming the run — the tool's `run` argument "
+            "(or `--run <run id>` from the CLI fallback); `mokata sessions` lists them, and the "
+            "verdict must have been recorded under that same run. The verdict is keyed to "
+            "THIS run, so the stage-entry mark this phase records on entry never changes which "
+            "verdict is read. If it reports that the review evidence could not be READ (`review "
+            "evidence could not be READ — the progress-event log … this is NOT 'review hasn't "
+            "run'`), STOP — but do NOT route the human to review: the fault is the LOG, and "
+            "re-running review will not fix a log mokata cannot read. Surface the log path and the "
+            "repair steps that line names. On a pass, SURFACE which kind "
             "it was: `review passed (independent ✓)` when it ran as a fresh-context subagent, or "
             "`review passed (inline — not independent)` when it degraded to the inline two-pass. "
             "Do NOT hard-block on inline — a capability-degraded harness must still ship — but "
@@ -680,6 +820,7 @@ _SKILLS: List[Skill] = [
             "\"what I changed and WHY\" recap — mokata's bounded, read-only `audit --why` over "
             "this run (what changed + each gate decision + why) — so finishing the run shows "
             "what landed and why. The recap is derived; it never implies mokata merged anything."
+            + WORKTREE_MERGE_READY_HANDOFF   # WT.S4 — layered ON TOP, disturbs no prior clause
         ),
         gate=Gate("finish-is-human-landed",
                   "Shipping verifies done (green tests + met ACs + passed review) and the "

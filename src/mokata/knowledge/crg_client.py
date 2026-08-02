@@ -51,6 +51,22 @@ _KIND_TO_PATTERN: Dict[str, str] = {
     "implementers": "inheritors_of",
 }
 
+# CRG-NAV (b) — `refs` ("everywhere this is referenced") is the UNION of the INBOUND patterns the
+# grounded interface exposes: who calls it, who imports it, who inherits it. It is composed from
+# patterns already on record above/here, not a new tool and not a guess: each is a documented
+# `query_graph_tool` pattern (see the module docstring). A reference that is none of those three
+# — a bare name passed as a value — is not a graph edge CRG holds; that is the lexical floor's
+# question, and a floor answer says so.
+_REFS_PATTERNS: Tuple[str, ...] = ("callers_of", "importers_of", "inheritors_of")
+
+# CRG-NAV (b) — the navigation intent code-review-graph CANNOT back. Its `query_graph_tool`
+# patterns (callers_of / callees_of / imports_of / importers_of / children_of / tests_for /
+# inheritors_of / file_summary) contain no definition-site lookup, and `semantic_search_nodes_tool`
+# ranks by similarity rather than resolving a name — mapping "where is X defined" onto it would be
+# a fuzzy answer wearing a structural label. So the client REFUSES the kind here and the layer
+# routes it to the AST floor, which answers it exactly on a Python repo.
+UNMAPPED_KINDS: Tuple[str, ...] = ("defs",)
+
 # Version-compat handshake bounds (semver, inclusive lower / exclusive upper-major). CRG exposes
 # no schema version, so the handshake is on the CLI `--version` string. The adopted-tool contract
 # mokata maps was grounded against the 2.x line.
@@ -117,7 +133,18 @@ class CodeReviewGraphClient:
         self._run_cli = run_cli or self._default_run_cli
 
     # --- typed queries (GraphQueryClient protocol) --------------------------------------
+    def supports_kind(self, kind: str) -> bool:
+        """CRG-NAV (b) — whether the REAL code-review-graph interface has an op for `kind`.
+        False for `defs` (no definition-site pattern exists); the layer reads this and answers
+        that one kind from the floor with an honest note, so a MAPPING gap is never reported as
+        a graph FAILURE and never costs a wasted recovery attempt."""
+        if kind in UNMAPPED_KINDS:
+            return False
+        return kind in _KIND_TO_PATTERN or kind in ("blast_radius", "refs")
+
     def query(self, kind: str, target: str, root: str, depth: int = 1) -> List[Dict[str, Any]]:
+        if kind == "refs":
+            return self._refs(target, root)
         if kind == "blast_radius":
             payload = self._call_tool("traverse_graph_tool", {
                 "query": target, "depth": max(1, int(depth)), "mode": "bfs",
@@ -129,6 +156,25 @@ class CodeReviewGraphClient:
             payload = self._call_tool("query_graph_tool", {
                 "pattern": pattern, "target": target, "repo_root": root})
         return self._normalize(payload)
+
+    def _refs(self, target: str, root: str) -> List[Dict[str, Any]]:
+        """CRG-NAV (b) — `refs` over the union of the inbound patterns, de-duplicated on
+        (path, line, symbol) so a symbol that is both called and imported in one place is ONE
+        reference. A pattern that finds nothing contributes nothing; a pattern that FAILS raises
+        (CrgUnavailable) and the whole answer degrades to the floor, exactly as a single-pattern
+        kind would — the composition adds no new failure mode."""
+        rows: List[Dict[str, Any]] = []
+        seen = set()
+        for pattern in _REFS_PATTERNS:
+            payload = self._call_tool("query_graph_tool", {
+                "pattern": pattern, "target": target, "repo_root": root})
+            for row in self._normalize(payload):
+                key = (row.get("path"), row.get("line"), row.get("symbol"))
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append(row)
+        return rows
 
     def resolves(self, symbol: str, root: str) -> bool:
         """Authoritative existence check for docsync's symbol-drift audit. CRG's `query_graph_tool`

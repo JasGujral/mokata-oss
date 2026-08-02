@@ -81,6 +81,25 @@ jobs:
               print("\n".join(errs)); sys.exit(1)
           print(f"OK — version {tag} consistent across all manifests; plugin + marketplace valid")
           PY
+      # DG-7 (0.0.16) — the release-notes disclosure gate, at TAG TIME and on the exact content
+      # being published. `release.sh` already runs this fail-closed twice (dev checkout before the
+      # first push, mirror after the merge), but release.sh is dev-only and a tag can be pushed
+      # without it; this is the backstop that cannot be bypassed by not running the script. It
+      # fails the release when RELEASE_NOTES.md announces a different version than the tag, or
+      # drops a fact CHANGELOG.md declares under `### Known limitations` for it. The 0.0.16 audit
+      # found nothing anywhere in tests/, scripts/ or .github/ binding those two files.
+      #
+      # BE PRECISE ABOUT WHAT THIS BLOCKS (DB.S10 re-verification, doc 98 RV2). This workflow
+      # triggers ON `push: tags: ["v*"]`, so the tag ALREADY EXISTS when the gate runs — it does
+      # not and cannot prevent a tag being pushed. What it blocks, completely, is PUBLICATION:
+      # `build` needs [test, validate], and `github-release` + `pypi` both need `build`. A failed
+      # validate skips build, which skips both publish jobs => no GitHub Release, no sdist/wheel,
+      # no PyPI artifact, no Sigstore attestation. A bare dangling tag would remain and can be
+      # deleted. That is the control that matters, because RELEASE_NOTES.md is exactly the text
+      # the GitHub Release and the mirror PR body are built from.
+      - name: Release-notes disclosure (notes == tag, and every known limitation disclosed)
+        run: |
+          PYTHONPATH=src python -m mokata release-notes-check "${GITHUB_REF_NAME}" --root .
 
   # Supply-chain trust (Stage 68): build a REPRODUCIBLE sdist+wheel, emit a CycloneDX SBOM,
   # and produce a Sigstore-backed BUILD-PROVENANCE attestation. All of this runs at TAG TIME

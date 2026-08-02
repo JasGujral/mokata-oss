@@ -69,6 +69,20 @@ class CodeReviewGraphBackend(GraphBackend):
         return bool(getattr(self.client, "supports_semantic", False)) and hasattr(
             self.client, "semantic")
 
+    def supports_kind(self, kind: str) -> bool:
+        """CRG-NAV (b/d) — delegate to the adopted client's own declaration of what its real
+        interface maps. A client that does not declare (an injected double, an alternative
+        adopted tool) is assumed to answer everything, so behaviour is unchanged for it."""
+        if kind not in QUERY_KINDS:
+            return False
+        fn = getattr(self.client, "supports_kind", None)
+        if not callable(fn):
+            return True
+        try:
+            return bool(fn(kind))
+        except Exception:                      # a client that misbehaves is not a refusal
+            return True
+
     def query(self, kind: str, target: str, depth: int = 1) -> QueryResult:
         if kind not in QUERY_KINDS:
             raise ValueError(f"unknown query kind '{kind}'; one of {QUERY_KINDS}")

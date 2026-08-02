@@ -29,7 +29,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 # The loud head. One string, one place — a surface that greps for "AWAITING APPROVAL" finds every
 # wait, and a reworded copy in some tool's prose can't exist because no tool writes its own.
@@ -52,7 +52,8 @@ AMEND_REGRESSED_NOTE = ("the run has REGRESSED to the SPEC phase — development
 
 
 def awaiting_block(proposal_id: str, tool: str, *, blocked_note: str = "",
-                   approved: bool = False) -> Dict[str, Any]:
+                   approved: bool = False,
+                   also_pending: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     """The uniform head of every propose-path result: what state this is, and the exact commands
     out of it. Returned as an ordered dict the caller splices in FIRST, so a model (or a human
     reading raw JSON) hits the answer before any payload detail.
@@ -62,8 +63,18 @@ def awaiting_block(proposal_id: str, tool: str, *, blocked_note: str = "",
     consequence where there isn't one is its own kind of lie.
 
     `approved` flips the head to the redeem instruction: a human has already said yes out-of-band,
-    so the next move is the re-call, not another trip to the terminal."""
+    so the next move is the re-call, not another trip to the terminal.
+
+    RE-ENTRY — `also_pending` names the OTHER live proposals this same tool already has waiting on
+    the human. D2 fixed a wait that read as a HANG because its data arrived buried; this fixes the
+    next turn of the same screw, RE-PROPOSING BLIND. An amendment has REGRESSED the run, so the
+    model re-calls — and a reworded `reason` is different content, so it correctly gets a different
+    id, and the answer then talks only about the NEW proposal while the OLD one is the thing
+    actually holding the run down. The user is told to approve an id that resolves nothing. Naming
+    the others turns "here is another wait" into "here is every road out", and it is built HERE so
+    all nineteen propose sites inherit it and no tool can word it its own way."""
     approve_cmd = APPROVE_CMD.format(proposal_id=proposal_id)
+    others = [p for p in (also_pending or []) if p and p != proposal_id]
     if approved:
         head = (f"{AWAITING}: ALREADY APPROVED — a human has approved this write. Nothing has "
                 f"been written yet. Re-call {tool} with proposal_id=\"{proposal_id}\" to commit "
@@ -72,6 +83,11 @@ def awaiting_block(proposal_id: str, tool: str, *, blocked_note: str = "",
         head = (f"{AWAITING}: mokata is WAITING ON A HUMAN — this is not an error and the server "
                 f"is not stuck. NOTHING was written. Ask the human to run:  {approve_cmd}  — "
                 f"then re-call {tool} with proposal_id=\"{proposal_id}\".")
+    if others:
+        head += (f"  NOTE: {len(others)} earlier {tool} write(s) are ALREADY awaiting this human "
+                 f"({', '.join(others)}) — approving one of THOSE may be what you actually want; "
+                 f"re-calling with changed arguments stages a new write, it does not replace an "
+                 f"old one.")
     block: Dict[str, Any] = {
         "awaiting": head,
         "awaiting_proposal_id": proposal_id,
@@ -82,6 +98,10 @@ def awaiting_block(proposal_id: str, tool: str, *, blocked_note: str = "",
         block["awaiting_abort_command"] = AMEND_ABORT_CMD
     if blocked_note:
         block["awaiting_blocks"] = blocked_note
+    if others:
+        block["awaiting_also_pending"] = others
+        block["awaiting_also_pending_approve_commands"] = [
+            APPROVE_CMD.format(proposal_id=p) for p in others]
     return block
 
 

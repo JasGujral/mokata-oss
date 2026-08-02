@@ -212,11 +212,23 @@ lands on PATH exactly like the `mokata` CLI and the `mokata-mcp` server — so i
 resolves for you (it must, for its tools to work), the hooks resolve identically. No bare
 `python3`, no `sh`, no PATH guessing. `mokata setup` additionally pins it to its absolute path.
 
-**Last-resort fallback (pure plugin, no `pip install`).** If you ran the plugin *without*
-installing the package, `mokata-hook` isn't on PATH. The plugin then materializes
-`hooks/launch.sh` at init with an absolute interpreter, and as a final safety net that launcher
-resolves a Python 3 at run time (`python3` → `python` → `py -3`, then common install
-locations); set `MOKATA_PYTHON` to your interpreter's absolute path if it still can't find one.
-Either way a missing interpreter prints one clear line and **exits 0 — it never blocks your
-session.** On **Windows**, install [Git for Windows](https://git-scm.com/downloads/win) — Claude
-Code already recommends it, and the fallback launcher runs under its bundled Git Bash.
+**The plugin route (no `pip install`, or a GUI-launched app).** A plugin's `hooks.json` is
+static — it can't carry the absolute path `mokata setup` writes — so it invokes a
+**self-resolving shim**, `hooks/mokata-hook-launch`, under `${CLAUDE_PLUGIN_ROOT}`. The shim
+runs the same ladder at hook time: `$MOKATA_HOOK` → `mokata-hook` on PATH → the `mokata-hook`
+sitting beside a resolved Python 3 → that interpreter running the packaged module directly
+(mokata's core is dependency-free, so this works with no install at all). Set `MOKATA_PYTHON`
+to your interpreter's absolute path if it still can't find one.
+
+If **nothing** resolves, the shim prints one line naming the fix and **exits 1** — a
+misconfiguration, never a silent success, because a security gate that quietly doesn't run is
+worse than no gate. Exit 1 does not block your tool call (only exit 2 does, and that stays
+reserved for a real secret). The fix it names is `mokata setup claude`, which rewires the hooks
+to absolute paths. `mokata doctor` reports the same thing before you hit it: a wired hook whose
+command doesn't resolve is an error finding — *"gates are NOT firing"* — naming the exact
+command it tried.
+
+On **Windows** the shim ships twice: the extension-less POSIX file above and
+`mokata-hook-launch.cmd` beside it. `hooks.json` names the path *without* an extension, so
+cmd.exe completes it to the `.cmd` through `PATHEXT` while any POSIX shell (including the Git
+Bash from [Git for Windows](https://git-scm.com/downloads/win)) runs the `sh` one.

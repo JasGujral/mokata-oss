@@ -64,8 +64,11 @@ class _FakeMemPg:
                               "revision": 1}
             return _Cursor(rowcount=1)
         if low.startswith("update mokata_memory"):
-            # params: (mtype, subject, status, doc, project, id, base_revision)
-            rid, base = params[5], params[6]
+            # params: (mtype, subject, status, doc, project, <DB.S2b scope cols…>, id, base_rev).
+            # The CAS pair is read from the TAIL, not by fixed index: DB.S2b inserted four scope
+            # columns into the SET list, and an index-based read would silently take `pin` as the
+            # id and never match a row again.
+            rid, base = params[-2], params[-1]
             row = self.rows.get(rid)
             if row is None or row["revision"] != base:
                 return _Cursor(rowcount=0)      # lost update

@@ -127,6 +127,31 @@ def sqlite_disk_ok():
     return _SQLITE_DISK_OK
 
 
+# --- H-1a: the BEHAVIOURAL read-only pin ------------------------------------------------
+# "This code path writes nothing durable" cannot be pinned by a name-based sweep (asserting no
+# call to `record_usage`/`all_active` catches only the mutations someone thought to name, and
+# passes for every one they didn't). The honest pin is a WHOLE-TREE byte snapshot around the
+# call: hash every file under the repo root before and after, and require them equal. It catches
+# a stats bump, a usage stamp, a cache file, a journal line — anything that touched the disk,
+# named or not.
+def tree_snapshot(root):
+    """`{relpath: (size, sha256)}` for every file under `root`. Unreadable files are skipped
+    (they are equally unreadable in both snapshots, so they cannot mask a change)."""
+    import hashlib
+    snap = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        for name in sorted(filenames):
+            ab = os.path.join(dirpath, name)
+            try:
+                with open(ab, "rb") as fh:
+                    data = fh.read()
+            except OSError:
+                continue
+            snap[os.path.relpath(ab, root)] = (len(data), hashlib.sha256(data).hexdigest())
+    return snap
+
+
 # A tiny, deterministic Python repo for exercising the knowledge-layer queries.
 # Relationships (used by the structural-query tests):
 #   helper  <- called by compute

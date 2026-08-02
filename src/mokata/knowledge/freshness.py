@@ -10,7 +10,13 @@ answers, and rebuilds a KNOWN-stale index rather than serving it:
   2. one cheap `.git/HEAD` change probe (zero-subprocess SHA read) — HEAD moved ⇒ ONE batched
      `git diff --name-only <last-indexed-SHA>` (catches branch switch / commit / pull, and
      editor/out-of-band changes);
-  3. a cold-start index walk — ONCE per session — to seed the mtime/hash baseline.
+  3. a cold-start index walk — ONCE per session — to seed the mtime/hash baseline;
+  4. (H-6, 0.0.16) the CODE-ANCHOR tripwire — `about_code` anchors whose DURABLE recorded
+     fingerprint has moved (`anchor_fingerprints`). The first three signals all die with the
+     session; this one is the same knowledge arriving from a baseline that outlived it, which
+     is why an out-of-band edit to an anchored file is a BEFORE-answer signal rather than
+     something the post-answer recheck catches afterwards. Bounded by `ANCHOR_SCAN_CAP` with an
+     honest costed note, and forced ONCE per state per session (see `FreshnessState`).
 
 FRESHNESS-BEFORE-ANSWER INVARIANT (re-groom #5): a graph KNOWN stale never answers. A stale
 index rebuilds first (AST incremental re-parse; CRG refresh via GR.S2(k)). Debounce only
@@ -214,14 +220,27 @@ def git_changed_since(root: str, sha: str,
 class FreshnessState:
     head_sha: Optional[str] = None
     cold_done: bool = False
+    # H-6 S2 — path → the anchor fingerprint this session has ALREADY forced a rebuild for.
+    #
+    # The other three signals self-clear: the dirty-set is DRAINED, HEAD ADVANCES into `head_sha`,
+    # the cold walk sets `cold_done`. The anchor signal cannot, and deliberately so: the durable
+    # record is not re-stamped by a rebuild (H-6 P7 — a re-stamp is a HUMAN's decision, and S3's
+    # proposal and S4's refusal both read the un-restamped record as their evidence). Without this
+    # ledger a single moved anchor would rebuild the graph on EVERY query for the rest of the
+    # session, which is a loop rather than a signal. SESSION-scoped for the same reason the cold
+    # walk is: a new session has not established what its graph reflects.
+    forced_anchors: dict = field(default_factory=dict)
 
     def to_dict(self):
-        return {"head_sha": self.head_sha, "cold_done": self.cold_done}
+        return {"head_sha": self.head_sha, "cold_done": self.cold_done,
+                "forced_anchors": dict(self.forced_anchors)}
 
     @classmethod
     def from_dict(cls, d):
         d = d or {}
-        return cls(head_sha=d.get("head_sha"), cold_done=bool(d.get("cold_done", False)))
+        forced = d.get("forced_anchors")
+        return cls(head_sha=d.get("head_sha"), cold_done=bool(d.get("cold_done", False)),
+                   forced_anchors=dict(forced) if isinstance(forced, dict) else {})
 
 
 # ==========================================================================================
@@ -461,6 +480,25 @@ class FreshnessController:
                 capped = True
                 notes.append("freshness: index size cap — cold walk bounded")
 
+        # 4 — H-6: the CODE-ANCHOR tripwire. `about_code` anchors whose recorded fingerprint has
+        #     moved are the same knowledge the three signals above carry — this graph is KNOWN
+        #     stale for these files — arriving by a fourth route: a baseline that OUTLIVED the
+        #     session. Section 9's pre-named `fingerprint_forces_refresh` is the comparison, owned
+        #     once in `anchor_fingerprints` and consumed here rather than re-derived.
+        forced = dict(st.forced_anchors)
+        anchors = self._anchor_signal()
+        for rel in anchors.paths:
+            fp = self._anchor_fingerprint(rel)
+            if fp and forced.get(rel) == fp:
+                continue          # already forced a rebuild for THIS state (see FreshnessState)
+            changed.add(rel)
+            forced[rel] = fp
+        if anchors.skipped:
+            capped = True
+            notes.append(
+                f"freshness: anchor-scan cap — {anchors.skipped} recorded code anchor(s) not "
+                "checked this pass (bounded — costed, not blocked)")
+
         # freshness change cap — costed note, NEVER a block.
         if len(changed) > FRESHNESS_CHANGE_CAP:
             capped = True
@@ -472,10 +510,31 @@ class FreshnessController:
         if changed:
             self._rebuild(layer, out, notes)
 
-        # persist the advanced baseline (last-indexed SHA + cold-done)
-        self._save_state(FreshnessState(head_sha=head, cold_done=True))
+        # persist the advanced baseline (last-indexed SHA + cold-done + H-6's forced-anchor ledger)
+        self._save_state(FreshnessState(head_sha=head, cold_done=True, forced_anchors=forced))
         out.note = " | ".join(n for n in notes if n)
         return out
+
+    # --- H-6 S2: the code-anchor tripwire's inputs ---------------------------
+    def _anchor_signal(self):
+        """The moved `about_code` anchors, bounded. Imported LAZILY and on purpose:
+        `anchor_fingerprints` imports this module for the tripwire, so a module-level import here
+        would be a cycle. Never raises — a broken record must not cost a query its answer."""
+        try:
+            from .anchor_fingerprints import anchor_signal
+            return anchor_signal(self.root)
+        except Exception:  # noqa: BLE001
+            from .anchor_fingerprints import AnchorSignal
+            return AnchorSignal(paths=[])
+
+    def _anchor_fingerprint(self, rel: str) -> str:
+        """The CURRENT content hash of an anchored file — the ledger key for "already forced".
+        Empty on any failure, which makes the entry non-matching and simply re-forces once."""
+        try:
+            from .index import file_fingerprint
+            return file_fingerprint(os.path.join(self.root, rel))[0]
+        except (OSError, ValueError):
+            return ""
 
     def _rebuild(self, layer: Any, out: FreshnessOutcome, notes: List[str]) -> None:
         """Debounce COALESCES all pending signals into ONE rebuild (it never permits a stale
@@ -526,17 +585,26 @@ class FreshnessController:
 
 
 # ==========================================================================================
-# 9 — H-6 fingerprint tripwire: NAMED HOOK, dormant until 0.0.16
+# 9 — H-6 fingerprint tripwire: AWAKE since 0.0.16 (H-6 S2, 2026-08-01)
 # ==========================================================================================
 def fingerprint_forces_refresh(recorded: Optional[str], current: Optional[str]) -> bool:
-    """H-6 NAMED HOOK (dormant until 0.0.16). A fingerprint MISMATCH is the SAME forced-refresh
-    tripwire as a dirty-set/HEAD change — a KNOWN-stale graph must rebuild before it answers.
+    """The H-6 tripwire. A fingerprint MISMATCH is the SAME forced-refresh signal as a
+    dirty-set/HEAD change — a KNOWN-stale graph must rebuild before it answers.
 
-    It stays dormant now: 0.0.16 (H-6) supplies the recorded vs current environment/index
-    fingerprints and wires this into `_reconcile` (one line: `if fingerprint_forces_refresh(...)
-    : changed |= {...}`). With nothing supplied it is a no-op (returns False), exactly the AP-SD
-    / GR.S2(m) dormant-hook precedent. The SHAPE is asserted now so the wake is a flip, not a
-    redesign."""
+    **WOKEN AT H-6 S2 (0.0.16).** It was declared here at GR.S4 and left dormant with a note that
+    0.0.16 would supply the recorded-vs-current fingerprints. It does: `anchor_fingerprints`
+    (H-6 S1) holds a DURABLE anchor→fingerprint record — the piece GR.S4 could not supply, since
+    its own baseline dies with the session — and `_reconcile` signal 4 consumes the verdict.
+
+    The wake is NOT the literal `if fingerprint_forces_refresh(...)` line this docstring once
+    predicted, and the difference is deliberate: the comparison is owned in ONE place
+    (`anchor_fingerprints.evaluate_anchor`, this function's only other caller) and `_reconcile`
+    reads its result. Inlining it here as well would put two fingerprint comparisons in the
+    codebase, which is precisely what pre-naming ONE hook was for. A guard test enumerates the
+    caller list (`test_db_s7c2_stale_ref.py`).
+
+    Still a no-op when either side is absent (returns False) — no baseline is no opinion, the
+    direction `memory.staleness.is_stale` takes for the memory-handle half."""
     if not recorded or not current:
         return False
     return recorded != current

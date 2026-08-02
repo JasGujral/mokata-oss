@@ -172,6 +172,14 @@ class AstBackend(GraphBackend):
     def query(self, kind: str, target: str, depth: int = 1) -> QueryResult:
         if kind not in QUERY_KINDS:
             raise ValueError(f"unknown query kind '{kind}'; one of {QUERY_KINDS}")
+        if kind == "refs":
+            # CRG-NAV (b): the AST edge index holds DEF / CALL / IMPORT edges — it carries no
+            # general name-reference index, so "everywhere this is referenced" is a question it
+            # cannot answer completely. Answering it from calls+imports alone would hand back a
+            # PARTIAL set dressed as structural (degraded=False), which is the exact overclaim
+            # this floor's honesty contract forbids. The lexical superset answers it instead,
+            # marked degraded, and carries the floor note.
+            return self.grep.query(kind, target, depth=depth)
         self._ensure_index()
         if kind == "callers":
             refs = self._callers(target)
@@ -181,6 +189,8 @@ class AstBackend(GraphBackend):
             refs = self._implementers(target)
         elif kind == "imports":
             refs = self._imports(target)
+        elif kind == "defs":
+            refs = self._defs(target)
         else:
             refs = self._blast_radius(target, depth)
         if not refs:
@@ -316,6 +326,19 @@ class AstBackend(GraphBackend):
             for cname, line, bases in fe.classes:
                 if target in bases:
                     out.append(Reference(rel, line, "", cname))
+        return out
+
+    def _defs(self, target: str) -> List[Reference]:
+        """CRG-NAV (b) — the DEFINITION site(s) of `target`, from the def edges the walk already
+        extracts (function / method / class). This is the one navigation intent the adopted graph
+        has no op for, so the AST floor is the most precise answer available on a Python repo:
+        exact, not lexical, and it carries the def's kind in `metadata`."""
+        out: List[Reference] = []
+        for rel, fe in self._edges.items():
+            for name, line, dkind in fe.defs:
+                if name == target:
+                    out.append(Reference(rel, line, "", name,
+                                         metadata={"kind": dkind}))
         return out
 
     def _imports(self, target: str) -> List[Reference]:

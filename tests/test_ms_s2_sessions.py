@@ -314,11 +314,13 @@ class TestSessionRegistry(unittest.TestCase):
                 self.assertNotIn("postgres" + "://", blob)
                 self.assertNotIn(secret_pw, blob)
                 # entries carry only the small identity/liveness fields — nothing else. (WT.S1 adds
-                # `scope` — the session's stated topic, recorded by `worktree create`; still no
-                # secret / memory content.)
+                # `scope` — the session's stated topic, recorded by `worktree create`; WT.S4 adds
+                # `branch` — the branch that same gated create cut, which is what makes the entry a
+                # run↔worktree BINDING. Both are runtime-transient labels: still no secret / memory
+                # content, and still nothing added SILENTLY — this pin is the thing that says so.)
                 entry = base.read(SR.SESSION_REGISTRY_KEY)["sessions"][S.current_session_id()]
-                self.assertEqual(set(entry), {"session_id", "started_at", "pid",
-                                              "repo_root", "last_seen", "phase", "scope"})
+                self.assertEqual(set(entry), {"session_id", "started_at", "pid", "repo_root",
+                                              "last_seen", "phase", "scope", "branch"})
             finally:
                 os.environ.pop("MOKATA_TEST_DSN", None)
 

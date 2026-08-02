@@ -6,7 +6,7 @@ when_to_use: Engage when the user wants code made faster or lighter and the chan
 
 # mokata · /optimize
 
-Measure before you change anything — measure the REAL code, don't assume the hot path; confirm where the time actually goes first. Apply a change only after a baseline is recorded, and keep it only when a before/after measurement shows it is faster with behaviour unchanged; otherwise revert.
+Measure before you change anything — measure the REAL code, don't assume the hot path; confirm where the time actually goes first. Locate the code the measurement points at GRAPH-FIRST (see Grounding discipline) — `mokata query defs|refs|callers <symbol>` to find the hot symbol and everything that reaches it, Read/grep after and marked degraded — so you optimise the path that is actually called, not the one that merely matches a text search. Apply a change only after a baseline is recorded, and keep it only when a before/after measurement shows it is faster with behaviour unchanged; otherwise revert.
 
 ## Gate (check)
 No optimisation without a before/after measurement proving the win and preserved behaviour.

@@ -157,8 +157,25 @@ def _surfaces() -> List[CommandSurface]:
                             "only)"),
         CommandSurface("preview", mcp_read=("preview",),
                        note="pipeline dry-run → read tool"),
-        CommandSurface("progress", slash=("progress",), mcp_read=("progress", "lanes"),
-                       note="run tracker + parallel lanes → read tools + slash (Stage 54d)"),
+        CommandSurface("progress", slash=("progress",),
+                       mcp_read=("progress", "lanes", "review_status", "review_record"),
+                       note="run tracker + parallel lanes → read tools + slash (Stage 54d). "
+                            "REVIEW-FIX.R3 adds the 6r REVIEW LOOP: `record-review` and "
+                            "`review-status` are NESTED sub-actions of `progress` (runviews.py, "
+                            "deliberately — so the top-level command set stays one `progress`), "
+                            "which made this matrix structurally BLIND to them: it checks that a "
+                            "COMMAND has some surface, and `progress` already had two read tools "
+                            "and a slash, so the entire ship-gating review loop being CLI-only "
+                            "raised nothing. They are declared explicitly here, on the surface "
+                            "that owns them — a separate `review` CommandSurface would be a "
+                            "matrix entry for a command that does not exist, which "
+                            "`verify_parity` reports as STALE. `review_record` sits in mcp_read, "
+                            "NOT mcp_write, and that is the honest label: recording a verdict is "
+                            "observability-tier — append-only + UNGATED, like `progress mark` "
+                            "and the audit ledger — so it has no `approve`, no proposal and no "
+                            "WriteGate, exactly like its CLI twin (the `session_save` precedent). "
+                            "`mcp_write` here would claim a consent flow that does not exist and "
+                            "would give the ONE truth source two different trust postures"),
         CommandSurface("rules", mcp_read=("rules",),
                        note="4-tier rules + budgets + gated proposals → read tool"),
         CommandSurface("skills", mcp_read=("skills",),
@@ -184,12 +201,19 @@ def _surfaces() -> List[CommandSurface]:
                             "(self-registers + prunes dead pids; transient registry upkeep, "
                             "ungated). Distinct from `sessions` (pipeline runs) and `session` "
                             "(shareable bundles)."),
-        CommandSurface("worktree", exempt=(
-            "WT.S1 — `git worktree add` to isolate a session's working tree is a durable git / "
-            "filesystem action, gated through the CLI's fail-closed read_yes_no path (P2/P14). Its "
-            "in-harness DETECT + OFFER is surfaced by `session_windows` (read tool) and the "
-            "SessionStart briefing, which point the user at this command; the create itself is not "
-            "an MCP write tool — a shell worktree action lives outside the WriteGate's data model.")),
+        CommandSurface("worktree", mcp_read=("worktree_list",),
+                       note="WT-LIST (FR-WT-1) — `worktree list` is a READ: every git worktree of "
+                            "this repo joined to its owning session with a staleness verdict → "
+                            "read tool (creates/prunes/removes nothing, writes no registry row). "
+                            "The `worktree create` half is deliberately NOT an MCP write tool and "
+                            "keeps WT.S1's rationale: `git worktree add` is a durable git / "
+                            "filesystem action gated through the CLI's fail-closed read_yes_no "
+                            "path (P2/P14) — a shell worktree action lives outside the WriteGate's "
+                            "data model. So the command is no longer EXEMPT (its read half is "
+                            "in-harness); the create half's gap stays disclosed here and by the "
+                            "DETECT+OFFER that `session_windows` + the SessionStart briefing "
+                            "surface. FR-WT-2/3 (`clean`/`remove`, 0.0.17) bring the gated "
+                            "destructive half in-harness."),
         CommandSurface("decompose", slash=("decompose",), mcp_read=("decompose",),
                        note="propose an independent-subtask split of the spec ACs (read-only) "
                             "→ read tool + slash; the confirm + fan-out stay the human-gated "
@@ -210,10 +234,11 @@ def _surfaces() -> List[CommandSurface]:
                        note="config get → read tool; config set → gated write (secret "
                             "hard-block in the manifest is absolute); config wizard → the same "
                             "gated write path, walked interactively (RT.S3 A3)"),
-        CommandSurface("memory", mcp_read=("recall",),
+        CommandSurface("memory", mcp_read=("recall", "consolidate_proposals"),
                        mcp_write=("remember", "memory_export", "memory_import",
-                                  "apply_proposal"),
-                       note="recall → read; remember/share/heal → gated writes"),
+                                  "apply_proposal", "consolidate"),
+                       note="recall/consolidate_proposals → read; remember/share/heal and the "
+                            "M-4/R5 drafted-summary submit → gated writes"),
         CommandSurface("vault", slash=("vault",),
                        mcp_read=("vault_list", "vault_search", "vault_pull"),
                        mcp_write=("vault_push",),
@@ -247,13 +272,20 @@ def _surfaces() -> List[CommandSurface]:
                             "Postgres via an env-var DSN → slash drives the human-gated, "
                             "secret-scanned adopt/connect (mokata hosts nothing; the DSN secret "
                             "is never stored). status is read-only"),
-        CommandSurface("spec", slash=("spec",), mcp_write=("spec_emit", "spec_amend"),
+        CommandSurface("spec", slash=("spec",), mcp_read=("spec_show",),
+                       mcp_write=("spec_emit", "spec_amend"),
                        note="SI-DEV.0 — EMIT the spec: the completeness gate, then a human-gated "
                             "write of `emitted_spec` + `spec_corpus`. The slash command drives the "
                             "gated path (propose → `mokata approve <id>` → commit); the CLI twin "
                             "(`mokata spec emit --file`) is the use-anywhere surface. This is the "
                             "ONLY writer of the spec the `spec-persisted` gate and `spec-check` "
-                            "read — before it, both were unsatisfiable."),
+                            "read — before it, both were unsatisfiable. HANDOFF.G1 adds the READ "
+                            "half: `mokata spec show` had NO in-harness twin, so a phase that "
+                            "needed the approved spec (review's brief, develop's precondition) had "
+                            "to re-derive it — the matrix was blind to the gap because it only "
+                            "checks the COMMAND has some surface, and `spec` already had two write "
+                            "tools. `spec_show` is that read surface, resolving the run through the "
+                            "same `_run_scoped_store` the CLI uses."),
         CommandSurface("spec-check", mcp_write=("spec_check",),
                        note="regression guard → gated (deviation gate on a conflict)"),
         CommandSurface("reset", mcp_write=("reset",),
@@ -283,6 +315,17 @@ def _surfaces() -> List[CommandSurface]:
             "gate structural; a model-invocable override would make it advisory again). The "
             "override must be a HUMAN act at a terminal — explicit, re-confirmed, session-scoped, "
             "ledgered. The hook itself needs no surface: it is wired by `setup`.")),
+        CommandSurface("secret", exempt=(
+            "SECRET-IGNORE — records that an ENTROPY-layer secret finding is a false positive. "
+            "The `gate` reasoning directly above, applied to the security layer: an in-harness "
+            "surface would let the MODEL suppress the very secret finding that constrains it, "
+            "which is the bypass secret-guard exists to close. The CLI is the only entry for a "
+            "second reason too — it is where a RECOGNISED credential shape (signature layer / "
+            "known-shape floor) is refused BY NAME, so routing around it is what a laundering "
+            "attempt would have to do. The gap is not silent: the block message on BOTH surfaces "
+            "(the `secret-guard` hook and the MCP WriteGate, from one shared builder) prints the "
+            "exact command, and `mokata doctor` names the active ignore count — the "
+            "`worktree`/`migrate` detect-and-OFFER pattern.")),
         CommandSurface("unsetup", exempt=(
             "install plumbing — reverses `setup`; a harness-config + filesystem teardown "
             "run from the shell, the mirror of `setup`.")),
@@ -331,6 +374,11 @@ def _surfaces() -> List[CommandSurface]:
             "release plumbing — a pure/offline preflight asserting every version field == "
             "the intended tag; run from the shell by `release.sh` (and CI) during a release "
             "cut, the version mirror of `validate`. Not a user workflow.")),
+        CommandSurface("release-notes-check", exempt=(
+            "release plumbing — a pure/offline preflight (DG-7) asserting RELEASE_NOTES.md "
+            "announces the intended tag and carries every fact from the CHANGELOG's `### Known "
+            "limitations` entries; run from the shell by `release.sh` during a cut, the "
+            "disclosure mirror of `release-check`. Not a user workflow.")),
         CommandSurface("branch-protection-check", exempt=(
             "release plumbing — a FAIL-CLOSED preflight (TM.S12a) asserting the public mirror's "
             "default branch is protected (no force-push/deletion, required status checks) before a "

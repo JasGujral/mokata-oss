@@ -306,6 +306,20 @@ def target_content(tool_input: object) -> str:
     return "\n".join(parts)[:MAX_SCAN_BYTES]
 
 
+def bash_command(tool_input: object) -> str:
+    """The shell command a `Bash` tool call is about to run — "" when there is none.
+
+    SELF-PROTECT (0.0.16 stage 3) parses this for write destinations (`sed -i`, `tee`, redirects,
+    `cp` destinations). The RUN-STATE gates deliberately do NOT read it and are unchanged: they
+    decide from a target path, and a shell command's real target is a heuristic, not a fact — which
+    is fine for an absolute path block and not fine for a methodology gate. Bounded by
+    `MAX_SCAN_BYTES` for the same reason `target_content` is; never raises."""
+    if not isinstance(tool_input, dict):
+        return ""
+    value = tool_input.get("command")
+    return value[:MAX_SCAN_BYTES] if isinstance(value, str) else ""
+
+
 # ======================================================================================
 # run resolution (the window-identity obligation)
 # ======================================================================================
@@ -698,6 +712,6 @@ __all__ = [
     "BLOCK_EXIT", "GATES", "GATE_PHASE", "GATE_SCOPE", "GATE_SPEC", "GATE_TDD", "GateOutcome",
     "RunResolution", "APPROACH_PREFIX", "SPEC_PREFIX", "CHECKPOINT_PREFIX", "OVERRIDE_PREFIX",
     "MAX_SCAN_BYTES",
-    "check_write", "find_mokata_root", "is_implementation_path", "is_test_path",
+    "bash_command", "check_write", "find_mokata_root", "is_implementation_path", "is_test_path",
     "notice_once", "override_key", "read_override", "resolve_run", "target_content", "target_path",
 ]

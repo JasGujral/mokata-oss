@@ -65,6 +65,11 @@ TRUE_POSITIVES = {
 }
 
 # Real literals — these MUST pass (no finding). Pure-hex digests, identifiers, paths, URLs.
+#
+# SECRET-FP (0.0.16): the rows below were ALL lowercase-only, which made this corpus blind to
+# the live 0.0.14 bug — the entropy backstop blocked every mixed-case/SCREAMING_SNAKE
+# identifier, and the suite stayed green. Cased rows are now first-class here; the measured
+# incident identifiers and the adversarial false-negative bar live in `test_secret_fp.py`.
 FALSE_POSITIVES = [
     "docs/build/02-mokata-build-status.md",
     "/Users/x/Documents/Development/claude/cowork/mokata/src/mokata/govern/secrets.py",
@@ -80,6 +85,15 @@ FALSE_POSITIVES = [
     "1.2.3-beta.4",                                              # semver
     "data:image/png;base64,iVBORw0KGgo=",                       # trivial data URI
     "the quick brown fox jumps over the lazy dog",
+    # SECRET-FP — CASED identifiers (each ≥20 chars WITH a digit, so it actually reaches the
+    # entropy backstop; a shorter or digit-free row is exempted by the char-class gate and
+    # proves nothing about the predicate).
+    "getUserAuthToken2FromRequest",                              # camelCase (measured FP)
+    "MOKATA_SESSION_ID_OVERRIDE_2",                              # SCREAMING_SNAKE (measured FP)
+    "kubernetesClusterRoleBinding2Spec",                         # camelCase (measured FP)
+    "PascalCaseIdentifier2Here",                                 # PascalCase
+    "parseHTTPResponseHeader2Value",                             # embedded acronym
+    "mixed_Case_With_Separators_2",                              # mixed convention
 ]
 
 
@@ -108,12 +122,47 @@ class TestFalsePositives(unittest.TestCase):
 class TestEntropyFuzzInvariant(unittest.TestCase):
     """Seeded + deterministic (no real randomness leaks into CI). The invariant:
     path/URL/identifier/hex shapes never entropy-block; contiguous rich-alphabet
-    high-entropy runs (no path separators) always do."""
+    high-entropy runs (no path separators) always do.
 
-    def _word(self, rng, lo=1, hi=12):
-        n = rng.randint(lo, hi)
-        return "".join(rng.choice(string.ascii_lowercase + string.digits)
-                       for _ in range(n))
+    SECRET-FP (0.0.16) — this fuzzer used to be BLIND to casing in both directions: `_word`
+    drew from `ascii_lowercase + digits` only, and the positive case FORCED an uppercase
+    char into every generated secret. Casing was therefore a perfect classifier, and a
+    heuristic of "block anything with a capital letter" would have passed. Now:
+      - benign identifiers are generated in the real CASING CONVENTIONS (camel, Pascal,
+        snake, kebab, SCREAMING) so most of them carry uppercase;
+      - the positive case no longer forces an uppercase char, so the two streams are
+        separable only by STRUCTURE (word-shaped segments vs. random runs), not by casing.
+    Benign words are built from consonant-vowel syllables — random letter soup joined by
+    underscores is not a benign identifier, it is the shape the backstop must keep blocking."""
+
+    _CONSONANTS = "bcdfghjklmnprstvwz"
+    _VOWELS = "aeiou"
+    _STYLES = ("camel", "pascal", "snake", "kebab", "screaming")
+
+    def _word(self, rng, lo=2, hi=4):
+        """A WORD-SHAPED segment (CV syllables). Casing is applied by the convention in
+        `_styled` — intra-word random capitals would be soup, not a convention."""
+        return "".join(rng.choice(self._CONSONANTS) + rng.choice(self._VOWELS)
+                       for _ in range(rng.randint(lo, hi)))
+
+    def _styled(self, words, style):
+        if style == "camel":
+            return words[0] + "".join(w.capitalize() for w in words[1:])
+        if style == "pascal":
+            return "".join(w.capitalize() for w in words)
+        if style == "snake":
+            return "_".join(words)
+        if style == "kebab":
+            return "-".join(words)
+        return "_".join(w.upper() for w in words)           # screaming
+
+    def _benign_identifier(self, rng):
+        """An ordinary source identifier: 3-8 words in one casing convention, always
+        carrying a digit segment (without one the char-class gate exempts it up front and
+        the sample proves nothing about the predicate)."""
+        words = [self._word(rng) for _ in range(rng.randint(3, 8))]
+        words.insert(rng.randrange(1, len(words) + 1), str(rng.randint(1, 99)))
+        return self._styled(words, rng.choice(self._STYLES))
 
     def _entropy(self, s):
         return any(f.layer == "entropy" for f in scan(text=s))
@@ -121,16 +170,21 @@ class TestEntropyFuzzInvariant(unittest.TestCase):
     def test_benign_shapes_never_entropy_block(self):
         rng = random.Random(0xC0FFEE)
         for _ in range(400):
-            kind = rng.randrange(4)
+            kind = rng.randrange(5)
             if kind == 0:                                   # path (with digits)
-                s = "/".join(self._word(rng) for _ in range(rng.randint(2, 6))) \
+                s = "/".join(self._word(rng) + str(rng.randint(0, 99))
+                             for _ in range(rng.randint(2, 6))) \
                     + "." + rng.choice(("py", "md", "txt", "json"))
             elif kind == 1:                                 # url
                 s = "https://" + self._word(rng) + ".com/" + \
-                    "/".join(self._word(rng) for _ in range(rng.randint(1, 4)))
+                    "/".join(self._word(rng) + str(rng.randint(0, 99))
+                             for _ in range(rng.randint(1, 4)))
             elif kind == 2:                                 # snake/kebab identifier
                 sep = rng.choice(("_", "-"))
-                s = sep.join(self._word(rng) for _ in range(rng.randint(3, 8)))
+                s = sep.join([self._word(rng) for _ in range(rng.randint(3, 8))]
+                             + [str(rng.randint(1, 99))])
+            elif kind == 3:                                 # CASED identifier (the blind spot)
+                s = self._benign_identifier(rng)
             else:                                           # hex digest (git sha / hash)
                 s = "".join(rng.choice("0123456789abcdef")
                             for _ in range(rng.choice((7, 40, 64))))
@@ -142,10 +196,11 @@ class TestEntropyFuzzInvariant(unittest.TestCase):
         alpha = string.ascii_letters + string.digits        # no path separators
         for _ in range(400):
             n = rng.randint(28, 44)
-            # Guarantee rich + non-pure-hex: a non-hex letter, a digit, an uppercase.
-            chars = [rng.choice(nonhex), rng.choice(string.digits),
-                     rng.choice(string.ascii_uppercase)]
-            chars += [rng.choice(alpha) for _ in range(n - 3)]
+            # Guarantee rich + non-pure-hex: a non-hex letter and a digit. An uppercase char
+            # is NO LONGER forced — casing must not be what separates these from the benign
+            # stream, or the fuzzer is blind to a casing-based heuristic (SECRET-FP).
+            chars = [rng.choice(nonhex), rng.choice(string.digits)]
+            chars += [rng.choice(alpha) for _ in range(n - 2)]
             rng.shuffle(chars)
             s = "".join(chars)
             self.assertTrue(self._entropy(s), f"missed secret-shaped {s!r}")

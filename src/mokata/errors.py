@@ -44,7 +44,30 @@ from __future__ import annotations
 
 from .degrade import FAILURE_UNREACHABLE
 
-__all__ = ["MokataError", "DegradedCapability", "failure_class_of"]
+__all__ = ["ControlSignal", "MokataError", "DegradedCapability", "failure_class_of"]
+
+
+class ControlSignal(Exception):
+    """A private CONTROL-FLOW signal — deliberately NOT a `MokataError`, and the sibling base that
+    makes "every exception mokata defines is a MokataError" survive contact with a codebase that
+    also needs non-local exits.
+
+    The distinction is not taxonomic tidiness. A `MokataError` is a FAILURE mokata is reporting:
+    something went wrong, and `except MokataError` exists so a caller can catch exactly that and
+    nothing else. A control signal reports no failure at all — it is a `raise` used to leave a
+    block, caught within a handful of lines by the frame that armed it. Filing one under the error
+    base makes a legitimate `except MokataError` swallow it, which converts a designed non-local
+    exit into a silently skipped one — and the whole point of D5 was to stop broad handlers
+    swallowing things they were never meant to see.
+
+    So the rule is: a signal that means "unwind to there" gets this base; anything that means "this
+    failed" gets `MokataError`. Both are swept by the D5 taxonomy test, so a new class still cannot
+    appear without someone saying which it is — the escape hatch is NAMED, not open.
+
+    It subclasses `Exception` (not `BaseException`): a signal must still be caught by the
+    last-resort `except Exception` handlers that guard mokata's never-raise boundaries, because a
+    signal that escapes its frame is a bug and must degrade like one rather than kill the process.
+    """
 
 
 class MokataError(Exception):

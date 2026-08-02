@@ -37,6 +37,21 @@ tests/plans/
 # Release script backups (scripts/release-*.sh) — local safety copies, not source.
 release-backup-*/
 
+# Build-session scratch. `_to_delete/` accumulated 1.2GB of snapshot tarballs, git lock
+# fixtures and pre-edit source backups across the 0.0.16 stages. NOTE THE LIMIT OF THIS
+# ENTRY: gitignoring a path does NOT stop it reaching the public mirror — sync-public.sh
+# mirrors the WORKING TREE with rsync, which ignores .gitignore entirely. The real control
+# is the --exclude list + INTERNAL_PATHS guard in scripts/sync-public.sh, and `_to_delete/`
+# is registered in BOTH. This entry only keeps it out of `git add -A`.
+_to_delete/
+# Scratch snapshots and git-lock fixtures left by build/verification sessions.
+*.tgz
+_stale_HEAD.lock*
+_stale_index.lock*
+# Local Postgres data dirs from live-DB test legs (DB.S2b/DB.S5 integration).
+pgdata/
+*-pgdata/
+
 # Marketing / brand assets — kept local, not shipped with the OSS code or a hotfix.
 # (Publish deliberately as a separate step if/when desired.)
 docs/marketing/
@@ -50,3 +65,13 @@ docs/launch/assets/
 editors/vscode/node_modules/
 editors/vscode/out/
 .mokata_probe_test/
+
+# Client technical-review deck — GENERATED render output only; the source beside it
+# (slides.py, theme.css, the two gen_*.py, README, SCRIPT.md, 00-design.md) IS tracked.
+# `build/` holds deck.html + the PDF + slide PNGs; `diagrams/*.svg` are emitted by
+# gen_arch.py / gen_more.py. Both are regenerable, and left untracked they would trip
+# release.sh's `git status --porcelain` cleanliness gate at the next cut.
+# FULLY ANCHORED on purpose — see the /build/ note above: a bare `build/` would also
+# match docs/build/, the internal build-docs dir that MUST stay tracked.
+docs/talks/client-technical-review/deck/build/
+docs/talks/client-technical-review/deck/diagrams/*.svg

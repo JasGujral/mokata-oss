@@ -81,14 +81,14 @@ This site follows the [Diátaxis](https://diataxis.fr/) model:
 | E | TDD & execution | RED-before-GREEN, model routing, bug/debug/optimize engines, execution-mode selector |
 | F | Token governance | tracker, JIT retrieval, handback caps, output density, budget, cache-stable prefixes |
 | G | Rules & governance | 4-tier rules, taxonomy, sync/async hooks, Karpathy gates, rule-learning, skill authoring |
-| I | Safety & audit | secret protection, human-minted single-use approvals, **9 backed gates (4 enforced on your agent's native writes by a hook)**, audit ledger, lethal-trifecta gate, revert, resume |
+| I | Safety & audit | secret protection, human-minted single-use approvals, **10 backed gates (5 enforced on your agent's native writes by a hook)**, audit ledger, lethal-trifecta gate, revert, resume |
 | J | Distribution | cross-harness boundary, shareable stack manifests, portable sessions (transport derived from the repo's mode) |
 | K | Config | per-layer/tool toggles, profiles, local-first, committed config, trust dial, doctor (incl. the DSN deep-check and retrieval-stack line), reset |
 | L | Composability | standalone commands, mid-pipeline entry, direct skills, catalog, chaining, suggestions |
-| M | MCP surface | 55 tools (35 read · 19 write · 1 opt-in approve), every call bounded with a `timed_out` status that names the operation, typed annotations, structured `response_format`, cursor pagination, and a loud `AWAITING APPROVAL` head so waiting-on-a-human never reads as a hang |
+| M | MCP surface | 61 tools (40 read · 20 write · 1 opt-in approve), every call bounded with a `timed_out` status that names the operation, typed annotations, structured `response_format`, cursor pagination, and a loud `AWAITING APPROVAL` head so waiting-on-a-human never reads as a hang |
 
 Counts in the box today: **26 Agent Skills** (16 curated + 10 domain) · **37 slash commands** ·
-**67 CLI subcommands** · **55 MCP tools** · **9 backed gates** · **1 runtime dependency**.
+**69 CLI subcommands** · **61 MCP tools** · **10 backed gates** · **1 runtime dependency**.
 
 Published docs: <https://mokata.ai/> · Source & issues:
 <https://github.com/JasGujral/mokata-oss>.

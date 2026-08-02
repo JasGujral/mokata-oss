@@ -25,7 +25,7 @@ truth). A CI parity test derives the command set from the live CLI parser and **
 command lacks a Claude Code surface *or* an explicit exemption — so this can never silently
 regress.
 
-**The MCP surface today: 55 tools — 35 read, 19 write, and 1 approve** (the default-off in-chat
+**The MCP surface today: 61 tools — 40 read, 20 write, and 1 approve** (the default-off in-chat
 approval described below). The registry in `mokata.mcp.registry` is the single source of that
 count.
 

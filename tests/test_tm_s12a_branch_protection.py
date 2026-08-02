@@ -155,15 +155,28 @@ class CliExitCode(unittest.TestCase):
         self.assertIn("FAIL", out)
 
 
+# DEV-ONLY SOURCES. These two scripts are excluded from the public mirror, so the classes that
+# read them cannot run there. The skip is a CLASS DECORATOR rather than a `raise SkipTest` in
+# `setUpClass` **and the difference is not cosmetic** (found 2026-08-02 while explaining the
+# DB.S10 audit's unattributed 6-test gap): a SkipTest raised in `setUpClass` never lets the
+# class's tests START, so unittest reports the whole class as ONE skip and `Ran N` drops by the
+# class size. A decorator skips each test individually, so all six still appear — as skips. That
+# is why the mirror's CI said `Ran 5623` where a dev checkout said `Ran 5629`: same files, same
+# collection (both discover 5,629), six tests that simply stopped being counted. An unexplained
+# count is exactly the "a skipped leg reads green" hazard this project keeps closing, so the two
+# numbers are now the same number everywhere.
+_RELEASE_SH = os.path.join(ROOT, "scripts", "release.sh")
+_SYNC_SH = os.path.join(ROOT, "scripts", "sync-public.sh")
+
+
+@unittest.skipUnless(os.path.exists(_RELEASE_SH),
+                     "scripts/release.sh is dev-only — not shipped to the public mirror")
 class ReleaseScriptWiring(unittest.TestCase):
     """release.sh (dev-only) must actually RUN the fail-closed branch-protection check in preflight."""
 
     @classmethod
     def setUpClass(cls):
-        path = os.path.join(ROOT, "scripts", "release.sh")
-        if not os.path.exists(path):
-            raise unittest.SkipTest("scripts/release.sh is dev-only — not shipped to the public mirror")
-        with open(path, encoding="utf-8") as fh:
+        with open(_RELEASE_SH, encoding="utf-8") as fh:
             cls.sh = fh.read()
 
     def test_invokes_the_branch_protection_check(self):
@@ -193,16 +206,15 @@ class ReleaseScriptWiring(unittest.TestCase):
                         "the public-subset preflight must run BEFORE any tag is created")
 
 
+@unittest.skipUnless(os.path.exists(_SYNC_SH),
+                     "scripts/sync-public.sh is dev-only — not shipped to the public mirror")
 class SyncBoundaryEnvHardening(unittest.TestCase):
     """scripts/sync-public.sh: a real `.env` is EXCLUDED (would carry live creds) but `.env.example`
     still SHIPS, and .env is in the guard's INTERNAL_PATHS. (String-level: the DRY-RUN is the proof.)"""
 
     @classmethod
     def setUpClass(cls):
-        path = os.path.join(ROOT, "scripts", "sync-public.sh")
-        if not os.path.exists(path):
-            raise unittest.SkipTest("scripts/sync-public.sh is dev-only — not shipped to the public mirror")
-        with open(path, encoding="utf-8") as fh:
+        with open(_SYNC_SH, encoding="utf-8") as fh:
             cls.sh = fh.read()
 
     def test_env_example_is_included_before_env_exclude(self):

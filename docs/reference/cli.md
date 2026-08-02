@@ -146,6 +146,18 @@ package's version; `--root` checks another checkout before you tag it).
 Exits non-zero **naming each offender** — the release preflight that refuses to tag a commit
 whose versions lag the tag (the 0.0.4 lesson).
 
+### `mokata release-notes-check [version] [--root <checkout>]`
+Release plumbing (pure/offline). The disclosure half of `release-check`: assert that
+`RELEASE_NOTES.md` announces the intended tag **and** carries every fact `CHANGELOG.md`
+records under `### Known limitations` for that version — the measurements, the code
+identifiers and the versions it names. The wording is deliberately **not** matched, so the
+notes can be written in their own voice; what may not happen is a number quietly going
+missing. Exits non-zero **naming each undisclosed fact**. Run it before you tag:
+
+```bash
+mokata release-notes-check 0.0.16
+```
+
 ### `mokata branch-protection-check [--repo <owner/repo>] [--branch <name>]`
 Release plumbing (**fail-closed**). Verify the public mirror's default branch is protected —
 no force-push, no deletion, required status checks — by reading protection via the `gh` CLI
@@ -184,6 +196,24 @@ record is always a spec `spec-check` can see.
 This is what unblocks implementation: the `spec-persisted` run-state gate reads exactly the key this
 writes. `show` prints the run's persisted spec (read-only).
 (MCP: `spec_emit` — human-gated: propose → `mokata approve <id>` → commit.)
+
+**A spec with no approved approach behind it is SUPPORTED, and says so.** Emitting without a prior
+brainstorm approval or refinement set is a legitimate path, not an error — so the completeness gate
+reports it rather than failing or staying silent: *"STANDALONE: no approved brainstorm approach or
+refinement set is on record for this spec — it stands alone. That is a SUPPORTED path, not an error
+and not a failure."* It then names the road to an approved direction (`/mokata:brainstorm` or
+`/mokata:refine`, approve an approach, then emit). The note is informational only and never blocks
+the emit.
+
+**Emitting twice on one run REPLACES, and the old spec is superseded — never overwritten.** A second
+`emit` on a run that already has a spec is a versioned replace: the previous spec is archived as
+`v<N>` and the new one lands as `v<N+1>`, with the archive kept on the record. The approval preview
+says so before you approve it — it heads the diff with `REPLACES v<N> -> v<N+1>` and shows what
+changes (title, criteria counts, and the per-criterion delta), in the same vocabulary an
+`amend` preview uses, so a replace can never look like a first emit. If the existing spec is present
+but unreadable, the preview says *that* instead of pretending to diff it. Use `spec amend` rather
+than a re-emit when you are widening scope on work already under way: amend forces the phase
+regression and re-earns the gates, whereas a re-emit is the spec being rewritten before that point.
 
 **Scope (what the `spec-scope` gate reads).** A spec can carry a machine-checkable **scope**: the
 **authorized surface** (where this change is allowed to land) and the **deferred items** — the things
@@ -307,9 +337,10 @@ boolean): `--fresh`, `--spec`, `--failing-test`, `--implementation`, `--diff`, `
 ## Knowledge (Part B)
 
 ### `mokata query <kind> <target> [--depth N]`
-Run a structural query: `kind` is `callers`/`callees`/`implementers`/`imports`/
-`blast_radius`; `--depth` (default 2) applies to `blast_radius`. Uses the graph if present,
-else the grep floor.
+Run a structural query. Navigation kinds — `defs` (where a symbol is defined) / `refs`
+(everywhere it is referenced) / `callers` / `callees` / `implementers` / `imports`; impact kind —
+`blast_radius`, to which `--depth` (default 2) applies. Uses the graph if present, else the AST
+floor, else the grep floor; the answer always names the backend that produced it.
 
 ### `mokata index`
 Build/refresh the per-file freshness index (incremental); report added/changed/removed and
@@ -791,10 +822,26 @@ the diff, and writes ONLY on approval** through the universal write gate (`--yes
 non-interactively); a decline writes nothing — there is no silent-write path, and it reconciles the
 **doc** to match the code, never the reverse. Backs `/mokata:docsync`.
 
-### `mokata doctor [--matrix]`
+### `mokata doctor [--wiring] [--matrix]`
 Diagnose the manifest/config: missing providers, broken adapters, role conflicts, bad
 trust levels, oversized rule tiers, and a broken audit-ledger hash-chain. Exit non-zero if any
 error. Read-only.
+
+**`--wiring`** narrows it to one question — *are mokata's gates wired, launchable, and current?*
+— and answers only that:
+
+```text
+✓ hooks: wired, launchable, and current.
+```
+
+It checks that every wired hook command **resolves** (a hook Claude Code cannot launch is
+dropped silently, so wired has never implied firing) and that the wiring is the wiring **this
+version of mokata writes** (a `pip install -U` leaves `settings.json` as the previous version
+wrote it, so a hook added or a matcher widened since your last `mokata setup claude` is simply
+absent). Exits non-zero if either answer is no. Unlike the full `doctor` it needs **no
+initialized repo**, so it is runnable the moment a `pip install` finishes — which is exactly
+when `mokata upgrade` runs it. See
+[`mokata-hook: command not found`](../how-to/fix-mokata-hook-command-not-found.md).
 
 It is also where **a degrade stops being invisible**. Seven honesty surfaces ride it:
 
@@ -885,6 +932,30 @@ never a second write authority. **Fail-closed**: on a non-TTY / unreadable stdin
 change and says so (it never hangs or silently writes). Reject leaves the manifest byte-unchanged;
 each committed change is recorded in the audit ledger.
 
+### `mokata secret ignore --token <string> --file <path> --reason <why>` · `mokata secret ignores`
+Record that a secret-scan finding is a **false positive**, for one exact string in one exact
+file. `--reason` is **required**.
+
+Only the **entropy backstop** — the layer that *guesses* a string looks generated — is
+negotiable. A finding from the **signature layer** or the **known-shape floor**
+(AWS / GitHub / GitLab / Slack / GCP / Stripe / PEM / JWT / connection strings) is refused **by
+name** and can never be ignored; those are documented credential formats, not a guess.
+
+The ignore list is `.mokata/secret-ignores.json` — **version-controlled on purpose**, so a
+suppressed secret finding shows up in your PR diff with the reason you gave. It stores a
+**sha256 of the flagged string, never the string itself**. It carries an integrity checksum: a
+hand-edit is refused with *"re-add it via the CLI"* — a speed bump and an audit trail, **not** a
+security boundary. Entries **do not expire on a clock**; they expire on **content** — rename the
+identifier or delete the line and the entry stops matching anything and is reported **inert**.
+
+`mokata secret ignores` lists what is recorded (hash, file, reason, age, and whether it is inert).
+`mokata secret ignore --remove --token <string>|--hash <h> --file <path>` revokes one. Both add
+and remove are written through the human-gated write path and recorded in the audit ledger, and
+`mokata doctor` names the active count so ignores cannot accumulate unseen.
+
+When the entropy backstop blocks a write, the block message prints the exact command for that
+finding — the same wording on the CLI hook and the MCP write gate.
+
 ### `mokata reset [--keep-config] [--backup DIR] [--yes]`
 Remove mokata state (`.mokata/`). `--keep-config` keeps `manifest.json` + `constitution.md`
 and removes only `memory/`, `state/`, `audit/`. `--backup DIR` moves state there instead of
@@ -914,15 +985,33 @@ source), and the Python version. **Offline by default** — local-first, zero ne
 published release; it is accounted in the audit ledger and **degrades clean** offline (a
 blocked/failed check just says it couldn't check — it never errors the command).
 
-### `mokata upgrade [--check] [--method auto|pip|plugin] [--yes]`
-Upgrade mokata. The **pip** path is the only one that *executes* anything: it proposes
-`pip install -U mokata` and runs it only after you confirm (**human-gated**; `--yes` approves
-non-interactively — it never auto-runs without one or the other). The **plugin** path only
-**prints** the Claude Code steps (`/plugin marketplace update mostack` + reinstall), because the CLI
-cannot upgrade the plugin itself; a **source** checkout likewise only prints its steps (`git pull` +
-reinstall). `--check` is the one **outbound** call — it just reports whether a newer release exists
-(the same opt-in check as `version --check`) and upgrades nothing. `--method` overrides
-install-method detection. Inside Claude Code, the `/mokata:version` command surfaces the same.
+### `mokata upgrade [--check] [--method auto|pip|plugin] [--yes] [--scope project|user] [--no-refresh]`
+Upgrade mokata — **and finish the job.** Installing the package was never the whole upgrade:
+`pip install -U mokata` replaces the code and leaves `.claude/settings.json` carrying the wiring
+the *previous* version wrote, so a gate added since your last `mokata setup claude` is silently
+missing. So the **pip** path runs three steps, each ending where you decide:
+
+1. it proposes `pip install -U mokata` and runs it only after you confirm;
+2. it re-runs `mokata setup claude`, which **previews the settings change and asks again** —
+   the same gate `setup` always uses; nothing is ever written silently;
+3. it runs `mokata doctor --wiring` and reports.
+
+**Human-gated end to end** — decline either gate and nothing is written. `--yes` approves both
+non-interactively (the plan is still printed); `--no-refresh` skips steps 2–3 and prints the
+commands you now owe; `--scope` picks the scope for the re-wiring (default `project`).
+
+The re-wiring runs as a **subprocess of the freshly-installed mokata**, not in this process:
+after `pip install -U`, the running process still holds the *old* modules in memory, so
+re-wiring in-place would faithfully write the wiring of the version you just upgraded away from.
+
+The **plugin** path only **prints** the Claude Code steps (`/plugin marketplace update mostack` +
+reinstall), because the CLI cannot upgrade the plugin itself; a **source** checkout likewise only
+prints its steps (`git pull` + reinstall). Both printed recipes end with the same verification
+step the pip path runs. `--check` is the one **outbound** call — it just reports whether a newer
+release exists (the same opt-in check as `version --check`) and upgrades nothing. `--method`
+overrides install-method detection. Inside Claude Code, the `/mokata:version` command surfaces
+the same. Full runbook:
+[Which setup command do I need?](../how-to/which-setup-command.md#upgrading-mokata)
 
 ### `mokata govern [--open] [--live] [--once]`
 Write a **self-contained, clickable local HTML view of the governed state** — the same

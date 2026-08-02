@@ -51,6 +51,7 @@ from .doctor import (
     DoctorReport,
     coverage_matrix,
     diagnose,
+    hook_resolution_findings,
 )
 from .lifecycle import ResetPlan, ResetResult, plan_reset, reset_state
 from .trust import (
@@ -172,6 +173,8 @@ __all__ = [
     "TRUST_LEVELS", "DEFAULT_TRUST",
     # K5 — doctor
     "diagnose", "DoctorReport", "DoctorFinding",
+    # HOOK-RESOLVE — the wired-hook resolvability check (gates wired vs gates FIRING)
+    "hook_resolution_findings",
     # R13 — doctor coverage matrix
     "coverage_matrix", "CoverageMatrix", "CoverageRow",
     # K6 — lifecycle

@@ -19,6 +19,7 @@ Everything mokata creates as its own data lives under `.mokata/`, with a clear
 | `vault/` | the design-artifact vault (`mokata vault push`) + `vault/sessions/` for vault-transport session bundles | **committed** |
 | `session-bundles/` | `mokata session push --to local` bundles | **committed** (your choice) |
 | `skills/` | skills you authored with `mokata skill author` | **committed** |
+| `secret-ignores.json` | secret-scan ignores recorded by `mokata secret ignore` (hash + file + reason) | **committed** (on purpose — a teammate inherits the same exemptions) |
 | `temp_local/` | all transient/runtime data (below) | **gitignored** |
 
 Everything above `temp_local/` sits at the `.mokata/` root **on purpose**: a backup, a shared
@@ -33,7 +34,7 @@ travel with the repo, so they are deliberately outside the gitignored transient 
 | `temp_local/audit/ledger.jsonl` | the append-only audit ledger |
 | `temp_local/memory/memory.db` | SQLite memory backend (and `memory/vault/` for Obsidian) |
 
-State files include `approved_approach.json` (brainstorm handoff), `emitted_spec.json`,
+State files include `approved_approach__<run_id>.json` (brainstorm handoff), `emitted_spec__<run_id>.json`,
 `memory_stats.json`, `knowledge_index.json`, `story_analysis__<id>.json`, `undo_log.json`,
 and `pipeline_run__<id>.json` (resume checkpoints). They're runtime artifacts, not config —
 hence `temp_local/`. (A user-set `tools.<id>.config.path`/`config.vault` can point a backend
@@ -139,6 +140,7 @@ elsewhere; that's the user's explicit choice, overriding the default location.)
 | `ux.statusline` | bool | `true` | the always-on pipeline-stage badge (Stage 54b) — opt-out |
 | `ux.badge_verbosity` | `"full"`/`"minimal"` | `full` | badge detail: `full` (everything on) or `minimal` (just the current stage) — opt-DOWN; any other value reads as `full` |
 | `review.independent` | `"on"`/`"off"` | `on` | run the closing `/review` as a fresh-context subagent (`on`) or the inline two-pass (`off`); any other value reads as `on` |
+| `review.verdict_max_age_hours` | hours, or `0`/`"off"` | `24` | how old a recorded review PASS may be and still satisfy the ship gate. Past the bound it blocks as stale and names when it was recorded. `0`/`"off"` disables the bound; an unreadable or nonsense value falls back to the default, so a broken setting can never silently switch the freshness check off |
 | `brainstorm.auto` | `"on"`/`"off"`/`"ask"` | `on` | auto-engage brainstorm when exploring: `on` (dive in), `ask` (offer first), `off` (never) |
 | `governance.output_density` | bool | `false` | output-density compression (F4) |
 | `graph.required` | bool | `true` | REFUSE a degraded (grep-floor) blast radius as decision input in brainstorm Lens-1 / spec-check / domain classification (GR.S3) — opt-out; the escape is a ledgered `--allow-degraded` |

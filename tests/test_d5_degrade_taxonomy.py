@@ -42,7 +42,7 @@ from mokata.degrade import (FAILURE_CORRUPT, FAILURE_DOC_SCHEMA, FAILURE_ENGINE,
                             FAILURE_SCHEMA, FAILURE_UNREACHABLE, FAILURE_UNSET, FAILURE_WAL,
                             CapabilityDegradeNotice, emitted_notices, note_degraded,
                             reset_degrade_notices)
-from mokata.errors import DegradedCapability, MokataError, failure_class_of
+from mokata.errors import ControlSignal, DegradedCapability, MokataError, failure_class_of
 
 SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src", "mokata")
 
@@ -76,7 +76,14 @@ DEGRADE_FAMILY = {
 # so that adding a class forces a decision about which side of the line it is on.
 HARD_ERRORS = {
     "MokataError", "AuthoringError", "BrainstormError", "BrainstormGateError", "BugError",
-    "ConfigCommandError", "ConfigError", "DebugError", "GraphDegradedError", "LockTimeout",
+    "ConfigCommandError", "ConfigError", "DebugError",
+    # DB.S7a — an edge kind outside the CLOSED typed set. HARD, and deliberately not a degrade:
+    # there is no floor to fall to. Coercing an unknown kind to a default would store a relation no
+    # traversal knows how to interpret, and dropping it silently would lose an assertion the caller
+    # believed it had made. The whole point of a closed set is that admitting a kind is a reviewed
+    # schema change — so an unrecognised one propagates and the write does not happen.
+    "EdgeKindError",
+    "GraphDegradedError", "LockTimeout",
     "ManifestError",
     "ManifestShareError", "MeasureFirstError", "MemoryDisabledError", "MemoryDocTooNew",
     "MemoryError", "MemoryShareError", "MigrateError", "NetworkEgressBlocked", "OptimizeError",
@@ -94,6 +101,17 @@ HARD_ERRORS = {
     # propagates to `_serve`, which converts it to a `status:"refused"` result.
     "ValidationError",
     "VaultError",
+    # SECRET-IGNORE — all three REFUSE, none degrades, and that is the whole point of the
+    # feature's safety. `NotIgnorable` (the token IS a recognised credential shape) and
+    # `IgnoreError` (bad path / blank reason / nothing to ignore) propagate to the CLI as a
+    # non-zero exit. `TamperedIgnoreFile` is the one that would be TEMPTING to model as a
+    # degrade — "the ignore list is unreadable, carry on without it" — and it deliberately is
+    # not: there is no floor to fall to, because the two candidate floors are "honour a store
+    # nobody can vouch for" and "silently suppress nothing while the user believes they are
+    # suppressed". `load_for_scan` converts it to `(None, <loud notice>)` at the ONE call site
+    # that must never raise (the scanner), which is a named refusal with a printed reason — not
+    # a silent fallback.
+    "IgnoreError", "NotIgnorable", "TamperedIgnoreFile",
 }
 
 # Hard errors that fail CLOSED (nothing degrades to a floor) but are still ABOUT a schema, so
@@ -105,6 +123,22 @@ HARD_ERRORS = {
 #                     read", and that floor IS the bug. So it refuses instead of degrading.
 CLASSED_HARD_ERRORS = {"ProvisionError": FAILURE_SCHEMA,
                        "MemoryDocTooNew": FAILURE_DOC_SCHEMA}
+
+# The THIRD side of the line, and the only one that is not an error at all: a private CONTROL-FLOW
+# signal — a `raise` used to leave a block, caught within a few lines by the frame that armed it.
+#
+# These are deliberately NOT `MokataError`s. `except MokataError` means "catch a failure mokata
+# DEFINED"; a signal reports no failure, so letting a domain-error handler intercept one converts a
+# designed non-local exit into a silently skipped one — the exact bug-swallowing D5 exists to end.
+# They are still SWEPT (the AST sweep below recognises the `ControlSignal` base), so the escape
+# hatch is a NAMED classification, not a hole: a new signal that forgets it fails CI like any other
+# unclassified class.
+#
+#   _GroupRollback  DB.S6/I1 — rolls one approval's transaction back when a member loses its CAS.
+#                   Nothing degraded and nothing failed: the compare-and-set did precisely its job,
+#                   the group is left untouched in the shared store, and the human is asked. Caught
+#                   one frame up, unconditionally; it never escapes `team_journal`.
+CONTROL_SIGNALS = {"_GroupRollback"}
 
 
 def _exception_classes():
@@ -130,8 +164,14 @@ def _exception_classes():
                     # after D5 a re-parented class's base is MokataError/DegradedCapability, which
                     # the suffix rules above would miss (`DsnUnset` names neither) — the sweep must
                     # still SEE it, or a re-parented class reads as "stale" and gets deleted.
-                    or "DegradedCapability" in bases or "MokataError" in bases)
-                if looks_like_error and node.name not in ("DegradedCapability", "MokataError"):
+                    or "DegradedCapability" in bases or "MokataError" in bases
+                    # DB.S6 — a control-flow signal names neither error base and its own name
+                    # matches no suffix rule, so without this the sweep would go BLIND to the one
+                    # family that is allowed out of the error taxonomy — and "allowed out" would
+                    # quietly become "unnoticed".
+                    or "ControlSignal" in bases)
+                if looks_like_error and node.name not in ("DegradedCapability", "MokataError",
+                                                          "ControlSignal"):
                     found[node.name] = (rel, bases)
     return found
 
@@ -141,31 +181,54 @@ class TestTheTaxonomyIsComplete(unittest.TestCase):
 
     def test_every_exception_class_is_classified(self):
         classes = _exception_classes()
-        known = set(DEGRADE_FAMILY) | HARD_ERRORS
+        known = set(DEGRADE_FAMILY) | HARD_ERRORS | CONTROL_SIGNALS
         unclassified = sorted(set(classes) - known)
         detail = "\n".join(f"    {n}  ({classes[n][0]})" for n in unclassified)
         self.assertEqual(
             unclassified, [],
             "UNCLASSIFIED EXCEPTION CLASS(ES) — a new exception appeared in src/ and nobody said "
             "whether it is a DEGRADE (a capability fell back to a floor → subclass "
-            "DegradedCapability + name its failure_class) or a HARD error (it propagates → "
-            "subclass MokataError, failure_class stays \"\").\n\n" + detail)
+            "DegradedCapability + name its failure_class), a HARD error (it propagates → subclass "
+            "MokataError, failure_class stays \"\"), or a CONTROL SIGNAL (it is not a failure at "
+            "all → subclass ControlSignal + list it in CONTROL_SIGNALS).\n\n" + detail)
 
     def test_the_register_carries_no_stale_entries(self):
         """A classification for a class that no longer exists is a lie that makes the next reader
         trust the whole list less (the SI.6 rule)."""
         classes = _exception_classes()
-        stale = sorted((set(DEGRADE_FAMILY) | HARD_ERRORS) - set(classes) - {"MokataError"})
+        stale = sorted((set(DEGRADE_FAMILY) | HARD_ERRORS | CONTROL_SIGNALS)
+                       - set(classes) - {"MokataError"})
         self.assertEqual(stale, [], f"these classes no longer exist — remove them: {stale}")
 
     def test_every_mokata_exception_subclasses_MokataError(self):
         """The point of a base: `except MokataError` catches a failure mokata DEFINED, and does not
         catch an AttributeError from a typo. 210 `except Exception` handlers could not tell those
-        apart — which is why every one of them was silently a bug-swallower too."""
+        apart — which is why every one of them was silently a bug-swallower too.
+
+        The control-signal family is exempt BY NAME, not by accident — see the test below, which
+        pins the opposite property for exactly the classes named in `CONTROL_SIGNALS`."""
+        exempt = CONTROL_SIGNALS | {"ControlSignal"}
         for name, cls in sorted(_live_classes().items()):
+            if name in exempt:
+                continue
             with self.subTest(cls=name):
                 self.assertTrue(issubclass(cls, MokataError),
                                 f"{name} must subclass MokataError (errors.py)")
+
+    def test_a_control_signal_is_NOT_catchable_as_a_mokata_error(self):
+        """The exemption, stated as the property it buys. A signal means "unwind to there", not
+        "this failed" — so a caller catching mokata's failures must not intercept one and skip the
+        unwind the raiser depends on."""
+        live = _live_classes()
+        for name in sorted(CONTROL_SIGNALS):
+            with self.subTest(cls=name):
+                cls = live[name]
+                self.assertTrue(issubclass(cls, ControlSignal),
+                                f"{name} is registered as a control signal — it must carry the "
+                                f"ControlSignal base so the sweep above can still see it")
+                self.assertFalse(issubclass(cls, MokataError),
+                                 f"{name} is control flow, not a failure — `except MokataError` "
+                                 f"must not be able to swallow it")
 
     def test_the_degrade_family_subclasses_DegradedCapability_with_its_class(self):
         live = _live_classes()
@@ -413,10 +476,11 @@ def _live_classes():
     from mokata import config, config_cmd, brainstorm, dsn, manifest, pipeline, plans, refine
     from mokata import agent_skills, harness_setup, session_bundle, session_transport, share
     from mokata.execmode import tasks
-    from mokata.govern import authoring, graph_required, revert, tdd
+    from mokata.govern import authoring, graph_required, revert, secret_ignore, tdd
     from mokata.knowledge import crg_client, neo4j_backend, query
     # DB.S4 adds `embed` (ModelUnavailable) and `reembed` (ReembedError) to the sweep's reach.
-    from mokata.memory import (backends, embed, item, migrate, reembed,
+    # DB.S7a adds `edges` (EdgeKindError — the closed typed-edge set's hard refusal).
+    from mokata.memory import (backends, edges, embed, item, migrate, reembed,
                                share as mshare, store, vector)
     from mokata.modes import bug, debug, optimize
     # MCP-R.D1d — the MCP surface's input-validation fault (SDK-free to import).
@@ -425,7 +489,8 @@ def _live_classes():
     mods = (netguard, oslock, skills, stacks, teamdb, team_audit, team_journal, vault, config,
             config_cmd, brainstorm, dsn, manifest, pipeline, plans, refine, agent_skills,
             harness_setup, session_bundle, session_transport, share, tasks, authoring,
-            graph_required, revert, tdd, crg_client, neo4j_backend, query, backends, embed, item,
+            graph_required, revert, secret_ignore, tdd,
+            crg_client, neo4j_backend, query, backends, edges, embed, item,
             migrate, reembed, mshare, store, vector, bug, debug, optimize, mcp_validation)
     live = {"MokataError": MokataError}
     for mod in mods:

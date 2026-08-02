@@ -103,9 +103,15 @@ class TestEntryPointDeclared(unittest.TestCase):
 # --- the plugin hooks.json uses the console entry point (no python3 / sh) -------------
 class TestPluginHooksJson(unittest.TestCase):
     def test_hooks_json_uses_mokata_hook_no_python3_no_sh(self):
+        # HOOK-RESOLVE amended this pin: the Stage-53b win (one `mokata-hook` entry point, no
+        # python3/sh chain) is unchanged, but the plugin route no longer names it BARE — a bare
+        # name is silently unresolvable on a GUI-minimal PATH, so the gates never fired. It now
+        # goes through the self-resolving shim, which execs `mokata-hook` the moment it resolves.
         flat = json.dumps(json.loads(HOOKS_JSON.read_text(encoding="utf-8")))
-        self.assertIn("mokata-hook session-start", flat)
-        self.assertIn("mokata-hook secret-guard", flat)
+        self.assertIn("mokata-hook-launch\\\" session-start", flat)
+        self.assertIn("mokata-hook-launch\\\" secret-guard", flat)
+        self.assertNotIn("mokata-hook session-start", flat)
+        self.assertNotIn("mokata-hook secret-guard", flat)
         self.assertIn("SessionStart", flat)
         self.assertIn("PreToolUse", flat)
         # the whole point of the stage: no fragile resolution remains

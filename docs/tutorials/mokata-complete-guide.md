@@ -785,13 +785,21 @@ Each query returns a `QueryResult` (`kind`, `target`, `references[]`, `backend`,
 
 | Kind | Question |
 |---|---|
+| `defs` | where is this symbol defined? |
+| `refs` | everywhere this symbol is referenced |
 | `callers` | who calls this symbol? |
 | `callees` | what does this symbol call? |
 | `implementers` | which classes subclass/implement this? |
 | `imports` | where is this module/symbol imported? |
 | `blast_radius` | transitive callers up to `--depth` hops (the impact surface) |
 
+The first six are **navigation**; `blast_radius` is **impact**. Navigation is what you reach for
+*instead of* opening a file or grepping for a name — mokata's own skills are instructed to query
+the graph first and to mark a lexical answer as degraded when they fall back.
+
 ```bash
+mokata query defs compute                    # where is it defined?
+mokata query refs compute                    # everywhere it's referenced
 mokata query callers compute
 mokata query callees myFunction
 mokata query implementers BaseHandler
@@ -1223,9 +1231,9 @@ mokata mcp    # discover MCP servers from .mokata/mcp.json and map them to roles
 
 Drop a `.mokata/mcp.json` listing the servers you use (`{name, provides, command}`), and `mokata mcp` enumerates them and maps them to stack roles/capabilities — then mokata orchestrates them through its own gates and audit trail. Discovery is pluggable and **degrades cleanly**: with no config present, the registry is empty and nothing errors.
 
-> mokata both **ships its own MCP server and consumes external ones.** The bundled **`mokata-mcp`** server (registered by `mokata setup claude`) exposes mokata's operations to Claude Code as native tools: **35 read tools** (`query`, `recall`, `doctor`, `coverage`, `budget`, `audit`, `status`, `preview`, `progress`, `rules`, `govern`, `skills`, `session_save`, … — read-only, ungated) and **19 write tools** (`remember`, `apply_proposal`, `init`, `reset`, `config_set`, `import_stack`, `export_stack`, `memory_export`, `memory_import`, `vault_push`, `spec_check`, `spec_emit`, `spec_amend`, `session_push`, `session_pull`, `audit_share`, …), plus the single opt-in `approve` tool — **55 tools in all**. Separately, `mokata mcp` **discovers and routes to** the external MCP servers you list in `.mokata/mcp.json`.
+> mokata both **ships its own MCP server and consumes external ones.** The bundled **`mokata-mcp`** server (registered by `mokata setup claude`) exposes mokata's operations to Claude Code as native tools: **40 read tools** (`query`, `recall`, `doctor`, `coverage`, `budget`, `audit`, `status`, `preview`, `progress`, `rules`, `govern`, `skills`, `session_save`, … — read-only, ungated) and **20 write tools** (`remember`, `apply_proposal`, `init`, `reset`, `config_set`, `import_stack`, `export_stack`, `memory_export`, `memory_import`, `vault_push`, `spec_check`, `spec_emit`, `spec_amend`, `session_push`, `session_pull`, `audit_share`, …), plus the single opt-in `approve` tool — **61 tools in all**. Separately, `mokata mcp` **discovers and routes to** the external MCP servers you list in `.mokata/mcp.json`.
 >
-> **Every one of the 19 write tools is propose-only.** It hands back a `proposal_id` and writes nothing until *you* mint the approval out-of-band with `mokata approve <id>` — single-use, content-hashed, session-scoped, expiring, ledgered; the model can only ever *reference* it, never create it (§13.2). `approve=true` / `confirm=true` are still accepted but **commit nothing**. Secrets are a hard block even once approved. An in-chat `approve` tool (`mcp__mokata__approve`) exists but is **opt-in, default-OFF**, single-use and content-hash-bound; even opted-in it forces a per-call human prompt via a `permissions.ask` entry — so it never lets the model approve its own write.
+> **Every one of the 20 write tools is propose-only.** It hands back a `proposal_id` and writes nothing until *you* mint the approval out-of-band with `mokata approve <id>` — single-use, content-hashed, session-scoped, expiring, ledgered; the model can only ever *reference* it, never create it (§13.2). `approve=true` / `confirm=true` are still accepted but **commit nothing**. Secrets are a hard block even once approved. An in-chat `approve` tool (`mcp__mokata__approve`) exists but is **opt-in, default-OFF**, single-use and content-hash-bound; even opted-in it forces a per-call human prompt via a `permissions.ask` entry — so it never lets the model approve its own write.
 
 ### 15.3 Capability coverage (H/A6)
 
@@ -1268,7 +1276,7 @@ mokata preview
 #   strawman         (simplicity)        check   —
 #   pre_mortem       —                   —       —
 #   probes           —                   —       —
-#   completeness_gate completeness+verify check  state/emitted_spec.json
+#   completeness_gate completeness+verify check  state/emitted_spec__<run_id>.json
 #   emit             emit-approval+scope human   <your source files>
 ```
 
@@ -1454,7 +1462,7 @@ sessions (`mokata session`, `sessions`, `resume`), and the graph/docs tooling (`
 | `mokata index` | build/refresh the freshness index | — |
 | `mokata lat-check` | scan `@lat` anchors, flag drift (exit 1 on drift) | — |
 
-`<kind>` ∈ `callers`, `callees`, `implementers`, `imports`, `blast_radius`.
+`<kind>` ∈ `defs`, `refs`, `callers`, `callees`, `implementers`, `imports`, `blast_radius`.
 
 ### Memory (C), token (F), governance (G), audit (I)
 

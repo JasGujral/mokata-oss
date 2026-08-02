@@ -44,6 +44,13 @@ _SECRET_DSN = f"postgres://{_SECRET_USER}:{_SECRET_PW}@{_SECRET_HOST}:5432/postg
 # A pooled Supabase transaction-mode string (the DB.S0 trap shape).
 _POOLED_DSN = f"postgres://{_SECRET_USER}:{_SECRET_PW}@aws-0-eu.pooler.supabase.com:6543/postgres"
 _SECRETS = (_SECRET_PW, _SECRET_HOST, _SECRET_USER, _SECRET_DSN)
+# The bounded/hanging-connect test gets its OWN DSN. `teamdb.probe` abandons its worker on the
+# budget but the thread lives on, so ~2s later it installs a connection into the process-global
+# `_pg._MANAGER` under whatever DSN it probed — AFTER `_mock_psycopg.__exit__` already ran
+# `reset_manager()`. Sharing `_SECRET_DSN` therefore poisoned every later test on that key
+# (WIN-DOCTOR-SCHEMA). A distinct key means the orphan cannot collide with anything.
+# Precedent: the sibling bounded probe test uses its own `postgres://h/db`.
+_BOUNDED_DSN = "postgres://bounded-h/db"
 
 
 # --------------------------------------------------------------- ProbeResult / inspection doubles
@@ -198,7 +205,15 @@ class _FakeConn:
         for key, rows in self._rows_for.items():
             if key in sql:
                 return _FakeCursor(rows)
-        return _FakeCursor([(1,)])
+        if sql.strip().upper() == "SELECT 1":
+            return _FakeCursor([(1,)])     # the reachability round-trip — the ONE untaught answer
+        # A double that answers questions it was never taught is a LIAR: the old silent
+        # `_FakeCursor([(1,)])` fallback is exactly what turned a wrong CONNECTION into a
+        # plausible wrong ANSWER ("the shared schema is v1") in WIN-DOCTOR-SCHEMA. Anything
+        # this fake was not taught is now a loud failure, not a fabricated `1`.
+        raise AssertionError(
+            f"_FakeConn was asked SQL it was never taught: {sql!r}. Teach it via "
+            f"rows_for=/error_for= — do NOT restore a silent default.")
 
     def close(self):
         self.closed = 1
@@ -318,6 +333,23 @@ def _doctor(d, home, env):
     old_env = dict(os.environ)
     os.environ.clear()
     os.environ.update(env)
+    if os.name == "nt":
+        # WINDOWS: `Path.home()` has NO pwd-style fallback. `diagnose()` does not thread doctor's
+        # `--home` down to the hook-wiring check, so it legitimately calls `Path.home()` — and with
+        # the environment cleared wholesale that raises RuntimeError("Could not determine home
+        # directory."), which doctor then reports (CORRECTLY) as a loud `hooks-unverifiable` ERROR
+        # and exits 1. POSIX never noticed: there `Path.home()` falls back to the pwd database by
+        # uid, so it answers with no environment at all.
+        #
+        # That environment cannot exist on a real Windows box — USERPROFILE is always set — so
+        # clearing it FABRICATES a failure rather than testing one. Point home at the test's OWN
+        # isolated `home` tempdir: more realistic than the real user's home AND still fully
+        # isolated. POSIX is untouched, so its behaviour stays byte-identical.
+        os.environ.setdefault("SYSTEMROOT", old_env.get("SYSTEMROOT", r"C:\Windows"))
+        os.environ.setdefault("PATH", old_env.get("PATH", ""))
+        os.environ["USERPROFILE"] = str(home)
+        drive, tail = os.path.splitdrive(str(home))
+        os.environ["HOMEDRIVE"], os.environ["HOMEPATH"] = drive, tail
     try:
         with contextlib.redirect_stdout(buf):
             rc = cmd_doctor(args)
@@ -339,7 +371,7 @@ class TestDoctorWiring(unittest.TestCase):
                     pass
             self.assertIn("database (team DSN):", out)
             self.assertIn("team DB OK", out)
-            self.assertEqual(rc, 0)                       # healthy → doctor OK
+            self.assertEqual(rc, 0, out)                  # healthy → doctor OK
             for secret in _SECRETS:                        # secret-safety on real stdout
                 self.assertNotIn(secret, out)
 
@@ -387,7 +419,7 @@ class TestDoctorWiring(unittest.TestCase):
                 with _doctor(d, home, {_ENV: _POOLED_DSN, "NO_COLOR": "1"}) as (rc, out):
                     pass
             self.assertIn(db_doctor.AXIS_POOLER, out)      # the pooler warning shows…
-            self.assertEqual(rc, 0)                        # …but a reachable+healthy DB stays OK
+            self.assertEqual(rc, 0, out)                   # …but a reachable+healthy DB stays OK
 
     def test_db_s1_doctor_solo_silent(self):
         # A solo / no-DSN repo must render NO db section and never reach the DB.S1 probe (P8).
@@ -406,7 +438,7 @@ class TestDoctorWiring(unittest.TestCase):
                     pass
             self.assertNotIn("database (team DSN):", out)  # zero section noise (P8)
             self.assertEqual(probed, [])                   # zero network probe (no DSN to probe)
-            self.assertEqual(rc, 0)
+            self.assertEqual(rc, 0, out)
 
 
 # ================================================================= 4) bounded (never hangs doctor)
@@ -418,7 +450,7 @@ class TestBounded(unittest.TestCase):
             surface = _repo(d, mode="team")
             with _mock_psycopg(_FakePsycopg(connect_sleep=2.0)):
                 start = time.monotonic()
-                check = db_doctor.deep_check(surface, environ={_ENV: _SECRET_DSN}, budget_ms=150)
+                check = db_doctor.deep_check(surface, environ={_ENV: _BOUNDED_DSN}, budget_ms=150)
                 elapsed = (time.monotonic() - start) * 1000
         self.assertIsNotNone(check)
         self.assertEqual(check.primary.axis, db_doctor.AXIS_NETWORK)

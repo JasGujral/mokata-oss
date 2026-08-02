@@ -32,14 +32,24 @@ EXPECTED_READ = {"query", "recall", "doctor", "coverage", "budget", "audit",
                  "rules", "skills", "suggest", "lat_check", "index_status",
                  "baseline", "sessions", "config_get", "export_preview",
                  "decompose",                          # Stage 54f — task decomposition (read)
+                 "spec_show",                          # HANDOFF.G1 — the run's own spec (read)
+                 # REVIEW-FIX.R3 — the 6r review loop in-harness. `review_record` APPENDS the
+                 # verdict event and is still a READ-kind tool: observability-tier, append-only +
+                 # UNGATED, mirroring `mokata progress record-review` (the `session_save` shape).
+                 "review_status", "review_record",
                  "session_list",                       # Stage 55a — portable sessions (read)
                  "session_windows",                    # MS.S2 — live-window registry (read)
+                 "worktree_list",                      # WT-LIST — worktree×session join (read)
                  "session_save",                       # SS.S0 — ungated in-flight save (read)
                  "tour",                                # Stage 56 — read-only first-run demo
                  "ci_check",                            # Stage 58 — mokata-as-a-PR-check (read)
                  "stacks_list", "stacks_search",        # Stage 70 — community stacks (read)
                  "stacks_show",
-                 "plan_list", "plan_show"}               # Stage 6p — brainstorm plan file (read)
+                 "plan_list", "plan_show",               # Stage 6p — brainstorm plan file (read)
+                 # M-4/R5 — PHASE 1 of the drafted-summary flow: which episodic clusters want a
+                 # summary, and the turns to draft one from. Read-kind because asking what to
+                 # draft proposes nothing and writes nothing; the SUBMIT is the gated write below.
+                 "consolidate_proposals"}
 EXPECTED_WRITE = {"remember", "import_stack", "reset", "apply_proposal", "init",
                   "memory_export", "memory_import", "vault_push", "spec_check",
                   "config_set", "export_stack",       # Stage 54e — command-parity write tools
@@ -49,7 +59,11 @@ EXPECTED_WRITE = {"remember", "import_stack", "reset", "apply_proposal", "init",
                   "stacks_install",                   # Stage 70 — community stacks (gated install)
                   "audit_share",                      # Stage 71 — team audit shared publish (gated)
                   "spec_emit",                        # SI-DEV.0 — THE spec-emit surface (gated)
-                  "spec_amend"}                       # SI-DEV — the forced scope regression (gated)
+                  "spec_amend",                       # SI-DEV — the forced scope regression (gated)
+                  # M-4/R5 — PHASE 2: the agent submits the summary it DRAFTED. Propose-only and
+                  # human-gated like every write here; the model may reference consent, never mint
+                  # it, so it cannot approve the text it just wrote.
+                  "consolidate"}
 # AP-MCP (doc 85 §5 D26 amendment): the in-chat approve tool is its OWN kind — neither a read nor
 # a propose-only write — so it is excluded from both name lists (and from the SI.3 write-tool
 # sweeps). Default-OFF opt-in; see test_ap_mcp_in_chat_approval.py for its behaviour.

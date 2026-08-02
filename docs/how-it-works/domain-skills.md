@@ -31,7 +31,7 @@ derives the domains from the **graph surface an approach touches**, in three ste
    components/views → `frontend-a11y`; a migration or removal → `deprecation`; a hot path or a
    perf acceptance-criterion → `performance`; …). Because the classifier is fed the graph surface
    and not the topic text, it *cannot* be fooled by wording. The resulting domain set is carried
-   into the hand-off and **persisted into `emitted_spec.json` as a first-class constraint**, right
+   into the hand-off and **persisted into `emitted_spec__<run_id>.json` as a first-class constraint**, right
    beside the acceptance criteria and the approved approach — human-approved and legible. (This is
    a JSON field only; there is **no store schema change**.)
 

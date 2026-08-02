@@ -347,6 +347,15 @@ def team_init(root: str, surface: Any, *, backend: str = "managed",
         emit(f"provisioned the shared schema (idempotent): {', '.join(prov.tables)} + "
              f"schema-version v{prov.version} (serving clients from "
              f"v{teamdb.TEAM_SCHEMA_MIN_SUPPORTED}).")
+        # DB.S7a (E7) — SURFACE the edge migration's skips. A dangling ref is skipped rather than
+        # orphaned or fatal, and this line is what stops "skipped" from meaning "silently dropped":
+        # the operator sees the number here, on the pass that did it, with the reason. Emitted only
+        # when there ARE skips — a clean store should not be told about a problem it does not have.
+        if prov.skipped_dangling_edges:
+            emit(f"memory edges (v5): {prov.skipped_dangling_edges} reference(s) SKIPPED — they "
+                 f"name an item that is not in this store (pruned or partially imported). No edge "
+                 f"was orphaned and nothing was deleted; re-run `mokata team init` after the "
+                 f"missing items land and they will be migrated then.")
 
     # 4) pin project.id into the shared manifest — human-gated + secret-scanned (the DSN value is
     #    never written; only the derived id, a machine-path-free hash). No-op when already pinned.

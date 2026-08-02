@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 
-from .episodic import lexical_score
+from .episodic import lexical_score, shares_content_term
 from .item import ALWAYS_ON_KINDS, DEFAULT_TOP_K, JIT_KINDS, MEMORY_KINDS, MemoryItem
 
 # Accept a few natural spellings for a kind so capture (LLM/user) is forgiving; canonical out.
@@ -59,17 +59,46 @@ def group_by_kind(items: List[MemoryItem]) -> "OrderedDict[str, List[MemoryItem]
     return ordered
 
 
-def _line(item: MemoryItem) -> str:
+def render_item_line(item: MemoryItem) -> str:
+    """THE one-line rendering of a memory item for an injected surface — `- [kind] subject: value`.
+
+    Public because H-1a's per-turn pack renders its JIT half itself (`always_on_lines` renders the
+    always-on half) and the two halves land in the SAME emitted block. Two renderers would have
+    made one block speak in two voices for no reason anyone could see from either side."""
     return f"- [{item.effective_kind}] {item.subject}: {item.value}"
+
+
+def _injectable_active(store: Any) -> List[MemoryItem]:
+    """THE read both auto-injection halves use: the active items this identity may SEE, read
+    WITHOUT counting a read. Two properties, one call, and both were filed as H-1a blockers
+    (doc 84 §4) because this module sits on the warm path of every turn once H-1a wires it:
+
+      * NON-COUNTING (JIT-RECALL-COUNTS-A-READ). Auto-injection is not a user recall. `all_active`
+        bumps `memory_stats.reads` and persists it to DISK, so a per-turn injection would write on
+        every turn and turn the read/write ratio `/mokata:govern` surfaces into a count of TURNS.
+        The always-on half already avoided this; `jit_recall` did not.
+
+      * VISIBLE (JIT-RECALL-UNSCOPED). `all_active`/`peek_active` are the RAW reads — they apply
+        neither the TM.S6 scope union, nor the M-A2 precedence winner, nor the TM.S10 readability
+        filter. `peek_visible_active` is the store's one visibility rule on a non-counting read.
+        Byte-identical in local/zero-config mode (no scope context, no enforcing policy), so this
+        only ever changes what a TEAM seat sees — where it is DB.S8's S-2 "zero cross-seat leaks".
+
+    Split the INSTRUMENTATION, never the rule (DB.S7c1). Duck-typed and degrading, so a minimal
+    store or a test double that predates the seam still works: `peek_visible_active` →
+    `peek_active` → `all_active`."""
+    read = (getattr(store, "peek_visible_active", None)
+            or getattr(store, "peek_active", None)
+            or store.all_active)
+    return list(read())
 
 
 def always_on_items(store: Any) -> List[MemoryItem]:
     """Active rule/guardrail items (the always-on set), regardless of relevance. Surfacing
     the always-on rules (briefing, rules view, governance dashboard) is automatic injection,
-    not a user recall — read via the NON-counting path so it never moves the read counter or
-    mutates durable stats. (peek_active falls back to all_active for any non-store double.)"""
-    peek = getattr(store, "peek_active", None) or store.all_active
-    return [i for i in peek() if i.effective_kind in ALWAYS_ON_KINDS]
+    not a user recall — so it reads through `_injectable_active`: non-counting AND scope/
+    readability filtered."""
+    return [i for i in _injectable_active(store) if i.effective_kind in ALWAYS_ON_KINDS]
 
 
 def always_on_lines(store: Any, max_lines: int,
@@ -90,27 +119,66 @@ def always_on_lines(store: Any, max_lines: int,
                                   i.subject))
 
     if len(items) <= max_lines:
-        return [_line(i) for i in items], 0
+        return [render_item_line(i) for i in items], 0
 
     # Too many to fit: keep (max_lines - 1) and spend the last line on an honest notice.
     keep = max(max_lines - 1, 0)
-    shown = [_line(i) for i in items[:keep]]
+    shown = [render_item_line(i) for i in items[:keep]]
     overflow = len(items) - keep
     shown.append(f"- (+{overflow} more project rule(s)/guardrail(s) not shown — over the "
                  f"always-on budget; run `mokata memory --kind rule` / prioritise)")
     return shown, overflow
 
 
+def injection_admits(query: str, item: MemoryItem) -> bool:
+    """THE admission test for AUTOMATIC injection — is there evidence this item is about the turn?
+
+    One definition site, called by both injection routes: `jit_recall` (the lexical floor) and
+    `bootstrap._ranked_injection_items` (the tiered stack). It answers the C2 claim "function words
+    are not match EVIDENCE" (doc 84 JIT-LEXICAL-FUNCTION-WORD-FLOOR) and it is a filter on
+    ADMISSION, never on ranking — `lexical_score` is untouched by it, which a mutation pins.
+
+    It stays applied on the tiered route rather than being retired into BM25's IDF, because the
+    tiered route degrades: on a store with no FTS the ranker is the Jaccard floor again, and there
+    is no IDF anywhere to subsume the rule. A ranked list has no admission threshold of its own —
+    `recall_relevant` returns the top-k of whatever it ranked — so without this the per-turn pack
+    would spend its budget on the least-irrelevant items on a turn that matched nothing at all.
+    """
+    return shares_content_term(query, _text(item))
+
+
 def jit_recall(store: Any, query: str, top_k: int = DEFAULT_TOP_K,
-               kinds: Tuple[str, ...] = JIT_KINDS) -> List[MemoryItem]:
+               kinds: Tuple[str, ...] = JIT_KINDS,
+               exclude_ids: Optional[Any] = None) -> List[MemoryItem]:
     """Just-in-time retrieval of the context/reference/best-practice items RELEVANT to `query`
     — top-k by relevance, never a corpus dump (P11). Returns at most `top_k` items, only those
-    with a non-zero relevance signal; an empty query retrieves nothing. Lexical floor (zero-dep,
-    deterministic); the wider tiered retrieval keys the same relevance when wired."""
+    sharing a CONTENT term with the query; an empty query retrieves nothing. Lexical floor
+    (zero-dep, deterministic); the wider tiered retrieval keys the same relevance when wired.
+
+    ADMISSION vs RANKING are two different questions here, and only the first changed. Admission
+    asks "is there evidence this item is about the turn?" and answers it with `shares_content_term`
+    — function words are excluded, so a query and an item sharing only `the` are NOT a match (doc
+    84 JIT-LEXICAL-FUNCTION-WORD-FLOOR). Ranking is still raw `lexical_score`, because it is the
+    shared v1 ranker DB.S3's FTS parity compares against; H-4's BM25 is where ranking gets fixed,
+    and its IDF subsumes this list rather than deleting it. Note the admission test SUBSUMES the
+    old `score > 0` filter: a shared content token implies a non-zero Jaccard, never the reverse.
+
+    Reads through `_injectable_active` — non-counting and visibility-filtered. This is automatic
+    injection, not a recall the user asked for, and on a team seat the candidate set must never
+    include an item the reader may not see.
+
+    `exclude_ids` (H-1a S4) is dropped from the CANDIDATE set, before scoring and before the top-k
+    cut — never from the result. Filtering afterwards looks equivalent and is not: with the
+    excluded items still occupying the top k, a caller that has already seen them gets back an
+    EMPTY list while genuinely relevant items sit at rank k+1, unreached. The dedup would then
+    silence the caller instead of promoting what it has not seen yet, which is the opposite of
+    what it is for. Default None ⇒ byte-identical for every existing caller."""
     if not query or top_k <= 0:
         return []
-    candidates = [i for i in store.all_active() if i.effective_kind in kinds]
+    exclude = set(exclude_ids or ())
+    candidates = [i for i in _injectable_active(store)
+                  if i.effective_kind in kinds and i.id not in exclude
+                  and injection_admits(query, i)]
     scored = [(lexical_score(query, _text(i)), i) for i in candidates]
-    scored = [(s, i) for s, i in scored if s > 0.0]
     scored.sort(key=lambda si: (-si[0], si[1].created_at, si[1].subject))
     return [i for _s, i in scored[:top_k]]
