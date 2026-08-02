@@ -74,20 +74,28 @@ PROMOTED_FROM = "promoted_from"    # this item was promoted out of that lower-sc
 EDGE_KINDS: Tuple[str, ...] = (SUPERSEDES, DEPENDS_ON, DERIVES_FROM, CONTRADICTS,
                                ABOUT_CODE, DECIDED_IN, USED_BY, PROMOTED_FROM)
 
-# The three kinds with a LIVE PRODUCER — all three are persisted doc-JSON fields on `MemoryItem`
-# (`item.py:286-287,320`), which is precisely what makes them MIGRATABLE rather than inventable.
-# The other five are declared and inert:
+# The kinds with a LIVE PRODUCER — each is a persisted doc-JSON field on `MemoryItem`, which is
+# precisely what makes them MIGRATABLE rather than inventable. The remaining four are declared and
+# inert, and the reasons differ — which is why `derives_from` could be wired and they cannot:
 #   * `contradicts` — contradiction is detected at READ time by `healing.detect_issues` and is
 #     never persisted as a relation, so there is no producer to migrate. Wiring it would mean
 #     inventing edges.
 #   * `used_by` — K5 prompt linkage is not built; the string appears nowhere in `src/`.
-#   * `derives_from` / `decided_in` / `promoted_from` — likewise no persisted producer today.
+#   * `decided_in` / `promoted_from` — no producer at all today.
+#
+# `derives_from` JOINED THE WIRED SET on 2026-08-01. It was the one declared-but-unwired kind whose
+# producer ALREADY EXISTED in the codebase with no design question attached: an approved SUMMARIZE
+# consolidation lands a new summary item and knows exactly which turns it was distilled out of
+# (`ConsolidationProposal.olds`). Everything it needed was a place to persist that, so it gained an
+# inline list on the SAME terms as the three above — authoritative field, derived edge row.
+#
 # `_ITEM_FIELD` below is the whole wiring: the map IS the list of wired kinds, so the two cannot
 # drift apart (`WIRED_KINDS` is derived from it, never written out a second time).
 _ITEM_FIELD: Dict[str, str] = {
     SUPERSEDES: "supersedes",
     DEPENDS_ON: "depends_on",
     ABOUT_CODE: "about_code",
+    DERIVES_FROM: "derives_from",
 }
 WIRED_KINDS: Tuple[str, ...] = tuple(k for k in EDGE_KINDS if k in _ITEM_FIELD)
 

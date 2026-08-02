@@ -209,6 +209,17 @@ _register("memory/tiered.py", {
         "driver error (an OPTIONAL, lazily imported extra, not nameable at module scope), a "
         "sqlite3 error, and the decode of each stored doc; narrowing to what we CAN name would "
         "turn a swallow into a crash on every recall."),
+    "_nominate": (DEGRADES_LOUD,
+        "R-1 (DB.S8) — CANDIDATE SELECTION. The ranked `lexical_search` that nominates the "
+        "candidate set is the same call `lexical_tier` wraps, so it is broad for the identical "
+        "honest reason: it spans a psycopg driver error (an OPTIONAL, lazily imported extra — not "
+        "nameable at module scope), a sqlite3 error on a store mid-migration, and the decode of "
+        "each stored doc. What is DIFFERENT here, and why it is (ii) rather than (iv), is that "
+        "there is a genuinely correct fallback to name: returning None drops recall back to the "
+        "pre-R-1 full-set read, which is slower and produces a correct ranking. Silence would be "
+        "the bug — a failed nomination and a query that matched nothing both yield a short result, "
+        "and without the notice they are indistinguishable, which is the exact ambiguity D5 "
+        "exists to end. It announces `note_degraded('memory-candidates', ...)` once."),
     "_expansion_tier": (DEGRADES_LOUD,
         "DB.S7b (K1) — the ≤2-hop edge expansion. A failed traversal must not take a recall down "
         "with it: the direct matches are already ranked correctly and that IS the pre-DB.S7b "
@@ -244,6 +255,17 @@ _register("memory/embed.py", {
         "Fails CLOSED: dim `0`, which `verify_stamp` reads as a mismatch — an embedder mokata "
         "cannot identify is refused onto an index rather than waved through. No notice, because "
         "the refusal itself is the loud part and it carries the named finding."),
+    "measure_noise_floor": (DEGRADES_LOUD,
+        "DB.S8f — probing an unknown callable's UNRELATED-PAIR COSINE, the number the semantic "
+        "tier's weight is derived from (K2). Broad for `embedder_identity`'s reason and no other: "
+        "the seam accepts ANY `text -> list[float]`, so this calls CALLER code whose raisables span "
+        "a hosted provider's transport errors, an optional extra's own tree, and plain TypeError "
+        "from a callable that does not take a string. Fails CLOSED at "
+        "`UNCHARACTERIZED_NOISE_FLOOR` (1.0) — the ranking principle is not waived for a signal we "
+        "failed to measure — which collapses the tier's weight to its budget share. That is a real "
+        "degrade and it used to be silent, so it now carries "
+        "`note_degraded('memory-embedder-noise')`: a tier ranking on almost nothing must not look "
+        "like a tier that is simply quiet."),
 })
 
 _register("memory/vector.py", {
@@ -863,8 +885,24 @@ _register("memory/_pg.py", {
         "it does not swallow; and the class it converts FROM lives in the optional extra."),
     "_is_live": (NARROW_IS_HONEST,
         "A third-party connection's `.closed` property. False → reconnect, the safe direction."),
-    "reset_manager": (NARROW_IS_HONEST,
-        "Best-effort `close()` on cached psycopg connections during teardown."),
+    "close_quietly": (NARROW_IS_HONEST,
+        "Best-effort `close()` on a psycopg connection during teardown — THE one place that "
+        "swallow is spelled, now that three call sites need it (`reset_manager`, `adopt`, and the "
+        "abandoned probe worker under PROBE-ORPHAN). It carries the reasoning `reset_manager` used "
+        "to hold verbatim, and it is registered here rather than there because the entry must "
+        "follow the code: `reset_manager`'s own handler is GONE, it delegates. Broad with no "
+        "narrow class to name — `conn` is a THIRD-PARTY (psycopg) or injected object whose "
+        "`close()` raises classes mokata cannot import without a hard dependency on the optional "
+        "extra. Nothing to degrade and nothing to report: the connection is being dropped either "
+        "way, and a failed close on a socket nobody will use again is not a fact anyone can act "
+        "on."),
+    "open_unmanaged": (NARROW_IS_HONEST,
+        "PROBE-ORPHAN's private-connection seam, and the EXACT twin of `get_connection` above — "
+        "it catches any psycopg connect failure and RE-RAISES it as the caller's typed "
+        "`unavailable` ('database unavailable: <exc>'). It converts, it does not swallow. The two "
+        "differ ONLY in whether the result is published into `_MANAGER`, never in how they fail, "
+        "which is the property that lets a caller swap one for the other without changing its "
+        "error handling — pinned at `test_open_unmanaged_fails_exactly_as_get_connection_does`."),
 })
 
 _register("memory/backends.py", {
@@ -1750,6 +1788,24 @@ _register("injection_ledger.py", {
 })
 
 _register("bootstrap.py", {
+    "_ranked_injection_items": (SUPPRESS_OK,
+        "JIT-RECALL-STAMP-SEAM (2026-08-01). This handler is a DOWNGRADE BETWEEN TWO WORKING "
+        "ROUTES, which is why it is not a degrade to announce: the tiered stack "
+        "(`recall_relevant(stamp=False, kinds=…)`) is an upgrade over the Jaccard floor "
+        "(`jit_recall`), and when it raises, the floor still runs and still returns the pack H-1a "
+        "shipped. Nothing the user relies on is lost — the budget is still enforced, the always-on "
+        "slice is untouched, and the ranked half is still populated by the same code that "
+        "populated it before this seam existed. It is deliberately broad for the reason the tiers "
+        "below it are: the raisables span a psycopg driver error (an OPTIONAL extra, not nameable "
+        "at module scope), a sqlite3 error on a store mid-migration, a duck-typed store whose "
+        "`recall_relevant` has a different signature, and the decode of each stored doc — "
+        "narrowing to the nameable subset would let a driver error crash the hook on every prompt, "
+        "which turns a silent downgrade into a broken turn. The genuinely-broken cases still "
+        "announce: a store that cannot be read at all is caught by `build_injection`'s own handler "
+        "(see below) and by `_always_on_rule_lines`' loud `memory-rules` notice at SessionStart. "
+        "NOT a place a real failure hides — the ONLY failure it can hide is 'the better ranker was "
+        "unavailable for one turn', and announcing that once per prompt is the exact tune-out "
+        "failure the `build_injection` entry below describes."),
     "build_injection": (SUPPRESS_OK,
         "H-1a's per-turn recall pack, and it shares its reasoning with — and is the OTHER HALF of "
         "— `hook_cli.user_prompt_submit_main` (see that entry). One thing worth stating separately: "

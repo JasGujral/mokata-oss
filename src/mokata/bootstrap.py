@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from .config import Surface
 from .router import Resolution
@@ -526,6 +526,60 @@ def _fit_to_budget(header: str, reserved: List[str], ranked: List[str], budget: 
     return "", 0, 0, total
 
 
+def _ranked_injection_items(store: Any, query: str, exclude: "set",
+                            kinds: tuple, jit_recall: Any) -> list:
+    """The ranked half of the per-turn pack: the FULL tiered stack, degrading to the lexical floor.
+
+    JIT-STAMP-SEAM. `recall_relevant(stamp=False, kinds=…)` is what makes this legal on a hook that
+    fires every prompt — it suppresses both instrumentation writes (the DB.S5 usage stamp and the
+    read counter) at the STORE, so the contract and the behaviour agree. Three properties are
+    preserved exactly as H-1a shipped them, and each is preserved by construction rather than by
+    hoping the new path happens to keep it:
+
+      * **DEDUP BEFORE THE CUT (S4).** `recall_relevant` has no `exclude_ids`, so the exclusion is
+        paid for by OVER-FETCHING exactly `len(exclude)` extra slots and dropping the seen items
+        from the result. That is equivalent to excluding from the candidate set for the property
+        that matters: if every excluded item lands in the top `k + len(exclude)`, removing them
+        still leaves `k` unseen items, so the freed budget promotes what the session has not seen
+        instead of silencing the channel. Filtering a plain top-`k` is what would silence it.
+
+      * **ADMISSION (C2).** A ranked list has no admission threshold — `recall_relevant` returns
+        the top-k of whatever it ranked, matching or not. `injection_admits` is re-applied here so
+        a turn that matches nothing injects nothing. KNOWN RESIDUAL, recorded not hidden: the
+        floor's order is admit → rank → cut, and this is rank → cut → admit, so a turn CAN inject
+        fewer than `k` items where the floor would have found `k`. It is bounded and points the
+        right way (what it drops are items the ranker put below `k` genuinely-relevant ones), and
+        on the FTS path it is nearly unreachable because only matches are candidates at all.
+
+      * **DEGRADE.** Any failure falls back to `jit_recall` — the exact pre-seam behaviour, not an
+        empty pack. A store with no tiered path (a duck-typed double, a backend without
+        `recall_relevant`) is a normal outcome here, not an error.
+    """
+    from .memory.brain import injection_admits
+    recall = getattr(store, "recall_relevant", None)
+    if recall is not None:
+        try:
+            # The tiers' degrade notices go to a SINK, not to stderr, and that is a deliberate
+            # exception rather than an oversight — it is the same one `build_injection`'s own
+            # handler already carries in prose. A tier notice ("edge expansion was bounded",
+            # "semantic recall is OFF") is written for someone who RAN a recall and got a worse
+            # answer than they asked for. Here nobody asked: the hook fires on every prompt, so
+            # the identical notice would print every turn and what it would report is that one
+            # turn got less context than it could have — never that a guarantee was broken. The
+            # same degrade still announces loudly on every path a human actually invoked.
+            hits = recall(query, top_k=INJECTION_JIT_TOP_K + len(exclude),
+                          stamp=False, kinds=kinds, degrade_out=lambda _msg: None)
+            items = [h.item for h in hits if h.item.id not in exclude
+                     and injection_admits(query, h.item)]
+            return items[:INJECTION_JIT_TOP_K]
+        except Exception:  # noqa: BLE001
+            # The tiered stack is an UPGRADE over a floor that still works. Falling back to it is
+            # the designed outcome, and announcing it every turn would train the user to ignore
+            # the channel (the same reasoning `build_injection`'s own handler carries).
+            pass
+    return jit_recall(store, query, top_k=INJECTION_JIT_TOP_K, exclude_ids=exclude)
+
+
 def build_injection(surface: Surface, query: str,
                     budget: int = INJECTION_TOKEN_BUDGET,
                     exclude_ids: "Optional[set]" = None) -> InjectionResult:
@@ -543,7 +597,7 @@ def build_injection(surface: Surface, query: str,
 
     exclude = exclude_ids or set()
     try:
-        from .memory import MemoryStore, always_on_lines, jit_recall, render_item_line
+        from .memory import JIT_KINDS, MemoryStore, always_on_lines, jit_recall, render_item_line
         store = MemoryStore.from_surface(surface)
         # Both reads are NON-COUNTING and scope/readability filtered (H-1a C1) — a per-turn
         # injection must move no durable state and must never surface a teammate's private item.
@@ -553,7 +607,17 @@ def build_injection(surface: Surface, query: str,
         # items sat at rank k+1. The whole point of the ledger is to promote what is new.
         # The always-on slice is deliberately NOT deduped — a guardrail is not "already known"
         # because it scrolled out of the window.
-        hits = jit_recall(store, query, top_k=INJECTION_JIT_TOP_K, exclude_ids=exclude)
+        #
+        # JIT-STAMP-SEAM (2026-08-01) — the ranked half now runs the FULL tiered stack
+        # (lexical + semantic + graph + K1 ≤2-hop expansion, R-1 bounded candidate selection)
+        # instead of the Jaccard floor, via the `stamp=False` seam that makes it legal on a hook
+        # firing every prompt. Two defects closed at once, and they were the same defect:
+        #   QUALITY — the pack was delivering arm A while arm D measures +33.3pp recall (DB.S8f).
+        #   SCALE   — `jit_recall` reads the WHOLE visible active set, which is the pre-R-1 read
+        #             R-1 removed from `recall_relevant` and left here (975 ms/turn at 100k).
+        # `stamp=False` suppresses BOTH instrumentation writes (`record_usage` AND the read
+        # counter), so the read-only guarantee H-1a pins by byte snapshot is unchanged.
+        hits = _ranked_injection_items(store, query, exclude, JIT_KINDS, jit_recall)
     except Exception:  # noqa: BLE001
         # (iv) SUPPRESS-OK, and the one place the usual "announce the degrade" answer is wrong:
         # see the D5 register entry for `hook_cli.user_prompt_submit_main`. This runs on EVERY

@@ -27,7 +27,10 @@ BASE = "https://mokata.ai/"
 
 # Immediate subdirs of docs/ that are INTERNAL planning or mkdocs presentation, never product
 # topics. Everything else under docs/ is a public product section the pointer must cover.
-_NON_PRODUCT_DIRS = {"build", "launch", "marketing", "assets", "stylesheets"}
+# `talks/` joins build/launch/marketing as internal-only: it is excluded from the published site
+# (mkdocs `exclude_docs`) AND from the public mirror (sync-public.sh --exclude + INTERNAL_PATHS),
+# so it can never HAVE a mokata.ai URL for a topic to point at.
+_NON_PRODUCT_DIRS = {"build", "launch", "marketing", "talks", "assets", "stylesheets"}
 
 
 def _product_sections():

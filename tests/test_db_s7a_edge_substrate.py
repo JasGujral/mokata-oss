@@ -69,18 +69,27 @@ class TestE5TheClosedTypedSet(unittest.TestCase):
              "about_code", "decided_in", "used_by", "promoted_from"), E.EDGE_KINDS)
         self.assertEqual(8, len(set(E.EDGE_KINDS)), "the closed set must have no duplicates")
 
-    def test_exactly_three_are_wired_and_they_are_the_ones_with_a_producer(self):
-        """The three WIRED kinds are exactly the three persisted doc-JSON fields on `MemoryItem` —
-        which is what makes them MIGRATABLE rather than inventable. MUTATION: wire `contradicts`
-        (add it to `_ITEM_FIELD`) and this goes RED, as it should: contradiction is detected at READ
-        time and never persisted, so there is no producer to migrate and wiring it would mean
-        INVENTING edges."""
-        self.assertEqual(("supersedes", "depends_on", "about_code"), E.WIRED_KINDS)
+    def test_exactly_the_kinds_with_a_producer_are_wired(self):
+        """The WIRED kinds are exactly the persisted doc-JSON fields on `MemoryItem` — which is what
+        makes them MIGRATABLE rather than inventable. MUTATION: wire `contradicts` (add it to
+        `_ITEM_FIELD`) and this goes RED, as it should: contradiction is detected at READ time and
+        never persisted, so there is no producer to migrate and wiring it would mean INVENTING
+        edges.
+
+        WAS "exactly three" until 2026-08-01. `derives_from` joined the wired set when its producer
+        was built — an approved SUMMARIZE lands a new item and is the only place that knows which
+        items it was distilled out of. The count moved because the CODE moved; the RULE ("wired iff
+        a persisted producer field exists") is what this pin actually guards and it is unchanged,
+        which is why the assertion below is the rule and not the number."""
+        self.assertEqual(("supersedes", "depends_on", "derives_from", "about_code"),
+                         E.WIRED_KINDS)
         for kind in E.WIRED_KINDS:
             self.assertTrue(hasattr(MemoryItem("s", "v"), E._ITEM_FIELD[kind]),
                             f"'{kind}' claims a producer field the item model does not have")
-        self.assertEqual(5, len(set(E.EDGE_KINDS) - set(E.WIRED_KINDS)),
-                         "five kinds are DECLARED-ONLY at DB.S7a — see the plan of record")
+        self.assertEqual(4, len(set(E.EDGE_KINDS) - set(E.WIRED_KINDS)),
+                         "four kinds are DECLARED-ONLY: contradicts (detected at read time, never "
+                         "persisted), used_by (K5 not built), decided_in and promoted_from (no "
+                         "producer at all)")
 
     def test_an_out_of_set_kind_is_REFUSED_not_stored(self):
         """MUTATION: make `validate_kind` return `kind` unconditionally and this goes RED. A hard

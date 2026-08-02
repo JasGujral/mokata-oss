@@ -403,6 +403,24 @@ def _read_schema_version(conn: Any) -> "tuple[bool, Optional[int], Optional[int]
     return True, version, min_supported
 
 
+def _abandon_probe(box: dict, handover: "threading.Lock") -> Any:
+    """Give up on a probe worker. Returns the connection the CALLER must now close, or `None`.
+
+    Extracted so it can be pinned DIRECTLY, because the interleaving it guards cannot be forced
+    through the thread: the worker's `finally` may complete between `join` returning and this lock
+    being taken, and `Thread.is_alive()` is still True during teardown. In that window the
+    connection is already in the box and its owner has walked away — `abandoned` only instructs a
+    worker that has NOT yet reached its finally, so without the `pop` the socket leaks.
+
+    Both halves happen under ONE lock acquisition on purpose: setting the flag and taking the
+    connection must be atomic with respect to the worker's `finally`, or the two can both decide
+    they are not responsible for it.
+    """
+    with handover:
+        box["abandoned"] = True
+        return box.pop("conn", None)
+
+
 def probe(dsn: str, *, budget_ms: int = PROBE_BUDGET_MS) -> ProbeResult:
     """Probe `dsn` for team activation: reachability + schema compatibility, wall-clock bounded
     to `budget_ms`. Fail-closed — any error / timeout yields a NOT-reachable-or-not-compatible
@@ -422,10 +440,23 @@ def probe(dsn: str, *, budget_ms: int = PROBE_BUDGET_MS) -> ProbeResult:
         pass
 
     box: dict = {}
+    # PROBE-ORPHAN (doc 84, fixed 2026-08-01). The worker below may OUTLIVE this call — that is
+    # what "bounded even when connect hangs" means, and it is the design, not a bug. The bug was
+    # that the worker connected through `_pg.get_connection`, which PUBLISHES into the process-
+    # global `_MANAGER`; so a probe that had already returned "unreachable" could still install a
+    # live connection with nobody waiting for it, and the next caller would silently reuse a
+    # connection whose own probe said the database was down.
+    #
+    # Fixed STRUCTURALLY rather than with a flag the worker consults on its way past: it now opens
+    # an UNMANAGED connection it holds privately, and only a caller that is STILL WAITING adopts
+    # it. A worker that cannot publish cannot orphan. This lock is what makes the handover
+    # race-free in both directions — exactly one of {adopt, close} happens to any connection.
+    handover = threading.Lock()
 
     def _work() -> None:
+        conn = None
         try:
-            conn = _pg.get_connection(dsn, _ProbeUnavailable)
+            conn = _pg.open_unmanaged(dsn, _ProbeUnavailable)
             conn.execute("SELECT 1").fetchone()          # reachability round-trip
             box["reachable"] = True
             present, version, min_supported = _read_schema_version(conn)
@@ -435,6 +466,15 @@ def probe(dsn: str, *, budget_ms: int = PROBE_BUDGET_MS) -> ProbeResult:
         except Exception as exc:                          # connect / query failure
             box["error"] = str(exc)
             box["conn_reason"] = _conn_reason_from_exc(exc)
+        finally:
+            with handover:
+                if box.get("abandoned"):
+                    # Nobody is waiting for this any more. CLOSE it — never cache it, and never
+                    # leave the socket open either. This is the branch that used to leak.
+                    if conn is not None:
+                        _pg.close_quietly(conn)
+                else:
+                    box["conn"] = conn
 
     start = time.monotonic()
     t = threading.Thread(target=_work, daemon=True)
@@ -443,9 +483,23 @@ def probe(dsn: str, *, budget_ms: int = PROBE_BUDGET_MS) -> ProbeResult:
     elapsed_ms = (time.monotonic() - start) * 1000.0
 
     if t.is_alive():
+        stranded = _abandon_probe(box, handover)
+        if stranded is not None:
+            _pg.close_quietly(stranded)
         return ProbeResult(reachable=False, compatible=False, elapsed_ms=elapsed_ms,
                            detail=f"unreachable — no response within {budget_ms}ms",
                            error="timeout", conn_reason=CONN_TIMEOUT)
+
+    # Still waiting, so this caller owns the result — publish the connection it opened, which is
+    # what preserves the manager's one-connection-per-DSN benefit for the success path.
+    with handover:
+        opened = box.get("conn")
+    if opened is not None and box.get("reachable"):
+        _pg.adopt(dsn, opened)
+    elif opened is not None:
+        # Connected but not usable (the round-trip or the schema read failed). It is nobody's
+        # connection; closing beats caching one the probe just declared unreachable.
+        _pg.close_quietly(opened)
 
     if not box.get("reachable"):
         return ProbeResult(reachable=False, compatible=False, elapsed_ms=elapsed_ms,

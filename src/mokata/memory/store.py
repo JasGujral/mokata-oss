@@ -13,7 +13,7 @@ detection path; SQLite is the guaranteed floor.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .backends import MemoryBackend
 # PRE-SIMP (0.0.15) — backend build/select/scope/identity resolution moved to `selection.py` (the
@@ -292,6 +292,53 @@ class MemoryStore:
         (like `all_active`), so instrumentation is unchanged."""
         return self._visible_filter(self.all_active(mtype=mtype,
                                                     scope_context=self.scope_context))
+
+    # --- R-1 (DB.S8) the BOUNDED candidate read -----------------------------
+    def candidate_scope_path(self) -> Optional[List[Any]]:
+        """The scope path to send DOWN with a candidate query, or `None`.
+
+        `None` in exactly the two cases `peek_active` already omits it: no scope context (local /
+        zero-config), or a backend whose backfill has not run. Omitting it is always SAFE — the
+        hydrated set still goes through `_visible_filter`, so this can only ever change how many
+        rows the database returns, never which ones survive.
+        """
+        if self.scope_context is None:
+            return None
+        if not getattr(self.backend, "supports_scope_pushdown", False):
+            return None
+        from .scope import scope_path
+        return scope_path(self.scope_context)
+
+    def hydrate_candidates(self, ids: Any, *, subjects: Any = (),
+                           mtype: Optional[str] = None,
+                           count_read: bool = True) -> List[MemoryItem]:
+        """R-1 — `scoped_active`'s BOUNDED twin: the same visibility rule over the rows the tiers
+        NOMINATED instead of over every active row.
+
+        The visibility half is deliberately unchanged and shares `_visible_filter` with
+        `scoped_active`, so scope union, precedence and readability keep exactly ONE implementation.
+        What changes is only how many rows reach it: ~150 nominated ids and their precedence groups
+        rather than the whole active set (51,606 rows at DB.S8's 100k fixture).
+
+        It COUNTS a read by default, like `scoped_active`, so `memory_stats.reads` — which
+        `/mokata:govern` surfaces as the read/write ratio — keeps meaning the same thing across
+        this change.
+
+        JIT-STAMP-SEAM — `count_read=False` is the NON-COUNTING twin, and it is the same split
+        `peek_visible_active` already makes against `scoped_active`: split the INSTRUMENTATION,
+        never the rule (DB.S7c1). The per-turn injection reads through here on EVERY prompt, and a
+        counted read per turn is exactly the JIT-RECALL-COUNTS-A-READ defect one layer up —
+        `memory_stats.reads` would become a count of turns. Visibility, precedence and readability
+        are untouched by the flag: there is still ONE `_visible_filter` and one rule, and the only
+        thing that moves is whether the counter does.
+        """
+        if count_read:
+            self._bump_read()
+        items = self.backend.hydrate(list(ids), subjects=list(subjects), statuses=(ACTIVE,),
+                                     scope_path=self.candidate_scope_path())
+        if mtype is not None:
+            items = [i for i in items if i.mtype == mtype]
+        return self._visible_filter([i for i in items if i.mtype in self.enabled_types])
 
     def peek_visible_active(self, mtype: Optional[str] = None) -> List[MemoryItem]:
         """`scoped_active`'s NON-COUNTING twin — the SAME visible set, read without moving the
@@ -1273,7 +1320,9 @@ class MemoryStore:
         return [i for i in self.scoped_active(mtype=mtype) if i.subject == subject]
 
     def recall_relevant(self, query: str, top_k: int = DEFAULT_TOP_K, semantic: bool = True,
-                        graph_scorer: Any = None) -> List[Any]:
+                        graph_scorer: Any = None, *, stamp: bool = True,
+                        kinds: Optional[Sequence[str]] = None,
+                        degrade_out: Optional[Callable[[str], None]] = None) -> List[Any]:
         """Stage 35e — tiered, by-relevance retrieval (lexical floor + optional graph +
         semantic when an embedder is wired), fused + ranked, top-k only (frugal). Returns
         a list of RetrievalHit. Degrades to lexical when the semantic/graph tiers are off.
@@ -1292,7 +1341,48 @@ class MemoryStore:
         by the same route the graph tier already uses. It contributes exactly 0.0 for every item
         when no edge reached it — which is every item on a store with no edge table, on an
         un-migrated v4 team, and whenever `memory.edge_expansion` is off — so those three cases
-        rank byte-identically to pre-DB.S7b."""
+        rank byte-identically to pre-DB.S7b.
+
+        JIT-STAMP-SEAM (2026-08-01) — `stamp` and `kinds`, both defaulting to today's behaviour.
+
+        `stamp=False` is THE seam this method exists to offer, and it is made here at the STORE
+        rather than at the caller on purpose: suppressing the write by monkeypatching, or by a flag
+        on `brain`, would leave this method's own contract saying one thing and doing another. It
+        governs BOTH instrumentation writes on this path, because they are one category — "record
+        that a recall happened":
+
+          * `record_usage` (DB.S5 recency/usage telemetry), and
+          * `_bump_read` inside `hydrate_candidates` / `scoped_active`, which feeds the read/write
+            ratio `/mokata:govern` surfaces.
+
+        Stamping only one of them would be worse than stamping neither: the per-turn injection
+        fires on EVERY prompt, so a counted read per turn turns `memory_stats.reads` into a count
+        of TURNS (JIT-RECALL-COUNTS-A-READ, one layer down) even with the usage write suppressed.
+
+        WHAT `stamp=False` MEANS FOR DB.S5's TELEMETRY, decided and recorded rather than left for a
+        reader to infer: **`hit_count` counts times an item was surfaced to a HUMAN who asked, and
+        that is now a narrower and more useful claim than "times it was returned by the ranker".**
+        Automatic injection is not a recall the user asked for — it is mokata OFFERING context —
+        and letting it stamp would make the two most-injected kinds (`context`, `reference`) the
+        most-recalled items on the store by construction, on every turn, regardless of whether
+        anyone read them. That would then feed BACK into the ranking through DB.S5's usage term:
+        an item injected because it ranked highly would rank more highly because it was injected.
+        Suppressing the stamp keeps the signal exogenous. The cost is that the telemetry is blind
+        to the injection channel, which is real and is why this is a documented decision rather
+        than an implementation detail; when a per-channel counter is wanted it is a NEW column
+        (`injected_count`), never this one silently widened.
+
+        `kinds` restricts the result to those `effective_kind`s — what `jit_recall` has always
+        needed and could not ask for. Enforced in `tiered_recall` over the resolved set; the SQL
+        predicate that rides along is an optimization over the same rule, never a second one.
+
+        `degrade_out` redirects the tiers' degrade notices, which previously had no way through
+        this method and therefore always reached stderr. The per-turn injection needs it: a tier
+        notice is written for someone who ran a recall and got a worse answer than they asked for,
+        and on a hook that fires every prompt the SAME notice would print on every turn — the one
+        case `bootstrap.build_injection` already documents as "announcing it buys nothing and
+        trains the user to ignore the channel". Default `None` is unchanged (stderr, once per
+        subsystem), so every existing caller keeps its notices."""
         from .tiered import tiered_recall
         if graph_scorer is None and self.knowledge_layer is not None:
             try:
@@ -1302,12 +1392,14 @@ class MemoryStore:
                 graph_scorer = None
         hits = tiered_recall(self, query, embedder=self.embedder,
                              graph_scorer=graph_scorer, top_k=top_k, semantic=semantic,
-                             expander=self._edge_expander())
+                             expander=self._edge_expander(), kinds=kinds, count_read=stamp,
+                             degrade_out=degrade_out)
         # Only the TOP-K that were actually returned are stamped — the signal being recorded is
         # "this item was surfaced to someone", not "this item was considered by the ranker", and
         # every active item is considered on every recall. Counting candidates would make
         # `hit_count` a measure of how often recall RAN, which carries no information at all.
-        self.record_usage([h.item.id for h in hits])
+        if stamp:
+            self.record_usage([h.item.id for h in hits])
         return hits
 
     # --- DB.S7b (K1) edge expansion -----------------------------------------
@@ -2028,6 +2120,19 @@ class MemoryStore:
                                         team=team, ledger=led)
                 self._bump_write(len(p.olds))
             elif p.kind == SUMMARIZE:
+                # THE `derives_from` PRODUCER (2026-08-01). A SUMMARIZE lands a NEW item distilled
+                # out of `p.olds`, and this is the only place in the codebase that knows which
+                # items those were — so it is the only place the lineage can be recorded without
+                # inventing it. Written on `keep` (which is `edited or p.new`, so a human who
+                # rewrote the summary still gets the lineage of what it summarized) BEFORE the
+                # durable write, because the edge row is a projection OF the persisted field: set
+                # it afterwards and the field would be right while the edge table stayed empty.
+                #
+                # Idempotent and additive, in that order: re-applying the same proposal must not
+                # duplicate ids, and a caller that pre-populated the list keeps what it set.
+                for o in p.olds:
+                    if o.id != keep.id and o.id not in keep.derives_from:
+                        keep.derives_from.append(o.id)
                 self._durable_write(keep, op=_OP_PUT, base_revision=None,
                                     backend_call=lambda: self.backend.put(keep),
                                     team=team, ledger=led)

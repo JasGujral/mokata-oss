@@ -271,17 +271,53 @@ class TestP2AFullInjectionTurnWritesNothing(unittest.TestCase):
                          "`stats.reads` — the read/write ratio `/mokata:govern` surfaces — "
                          "became a count of TURNS")
 
-    def test_the_injection_path_does_not_route_through_recall_relevant(self):
-        """A supporting check, NOT the pin: `recall_relevant` stamps what it returns
-        (`record_usage`), which is why v1 is lexical-floor-only. The route to the wider tiered
-        retrieval is a `recall_relevant(stamp=False)` seam, filed rather than improvised."""
+    def test_the_injection_path_routes_through_recall_relevant_without_stamping(self):
+        """INVERTED IN PLACE 2026-08-01 (JIT-RECALL-STAMP-SEAM), the same act the function-word
+        pin went through at C2. This test previously asserted that the injection path does NOT
+        reach `recall_relevant`, on purpose, so that changing it would have to be deliberate.
+        This is that deliberate change: the seam it named now exists, so the pin becomes its
+        regression guard rather than being deleted.
+
+        What flipped: the path DOES call `recall_relevant`. What did NOT flip, and is the whole
+        reason the seam was required: `record_usage` is still never called. A hook firing on every
+        prompt must move no durable state."""
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d, rules=_MANY_RULES, items=_MANY_ITEMS)
-            with mock.patch.object(MemoryStore, "recall_relevant") as recall, \
+            with mock.patch.object(MemoryStore, "recall_relevant",
+                                   autospec=True, return_value=[]) as recall, \
                     mock.patch.object(MemoryStore, "record_usage") as usage:
                 build_injection(surface, QUERY)
-            recall.assert_not_called()
+            recall.assert_called()
             usage.assert_not_called()
+        # The stamp is suppressed at the STORE, by the argument — not by the caller happening to
+        # avoid a code path. A `stamp=True` here would be a durable write per turn.
+        self.assertIs(False, recall.call_args.kwargs.get("stamp"),
+                      "the injection called `recall_relevant` WITHOUT `stamp=False` — the per-turn "
+                      "hook is stamping DB.S5 usage telemetry on every prompt")
+
+    def test_the_injection_asks_only_for_the_jit_kinds(self):
+        """The kinds filter reaches the store as an ARGUMENT. Without it the ranked half competes
+        for its five slots against rules and guardrails — which the reserved slice already carries,
+        so the pack would spend the same budget twice."""
+        from mokata.memory import JIT_KINDS
+        with tempfile.TemporaryDirectory() as d:
+            surface = _repo(d, rules=_MANY_RULES, items=_MANY_ITEMS)
+            with mock.patch.object(MemoryStore, "recall_relevant",
+                                   autospec=True, return_value=[]) as recall:
+                build_injection(surface, QUERY)
+        self.assertEqual(JIT_KINDS, recall.call_args.kwargs.get("kinds"))
+
+    def test_a_failing_tiered_recall_degrades_to_the_lexical_floor_not_to_silence(self):
+        """The tiered stack is an upgrade over a floor that still works. If it raises, the turn
+        gets the pre-seam pack — never an empty channel."""
+        with tempfile.TemporaryDirectory() as d:
+            surface = _repo(d, rules=_MANY_RULES, items=_MANY_ITEMS)
+            with mock.patch.object(MemoryStore, "recall_relevant", autospec=True,
+                                   side_effect=RuntimeError("tiered stack is down")):
+                degraded = build_injection(surface, QUERY)
+            healthy = build_injection(surface, QUERY)
+        self.assertTrue(degraded.text, "a failing tier silenced the channel instead of degrading")
+        self.assertEqual(healthy.rules_shown, degraded.rules_shown)
 
 
 # ================================================================================= P3 · DEGRADE
@@ -454,9 +490,15 @@ class TestP5FailOpenAtEveryArm(unittest.TestCase):
 
     @unittest.skipUnless(sqlite_disk_ok(), "sandbox cannot back an on-disk SQLite DB")
     def test_arm_4_recall(self):
+        """The recall arm has had TWO routes since JIT-RECALL-STAMP-SEAM — the tiered stack and
+        the lexical floor it degrades to — so breaking one no longer breaks the arm. Both are
+        broken here, which is what "the recall step is down" now means; breaking only `jit_recall`
+        would pass through the tiered path and prove nothing about fail-open."""
         with tempfile.TemporaryDirectory() as d:
             _repo(d, items=_MANY_ITEMS)
-            with mock.patch("mokata.memory.jit_recall", side_effect=RuntimeError("boom")):
+            with mock.patch("mokata.memory.jit_recall", side_effect=RuntimeError("boom")), \
+                    mock.patch("mokata.memory.store.MemoryStore.recall_relevant",
+                               side_effect=RuntimeError("boom")):
                 code, out, err = _run_hook(QUERY, d)
         self._assert_silent_success(code, out, err)
 

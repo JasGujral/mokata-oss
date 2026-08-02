@@ -31,7 +31,7 @@ from datetime import datetime, timedelta, timezone
 
 import _support  # noqa: F401 - puts src/ on the path
 
-from mokata.memory import lifecycle
+from mokata.memory import lifecycle, tiered
 from mokata.memory.backends import (
     _LIFECYCLE_BACKFILL_STAMP,
     _SCOPE_BACKFILL_STAMP,
@@ -306,10 +306,26 @@ class TestFusionBackCompat(unittest.TestCase):
 
     def test_the_quality_terms_never_outweigh_the_content_tiers(self):
         """A maxed-out recency+usage boost must stay below the lexical floor's weight, or a
-        popular-but-irrelevant item could outrank a precise match."""
-        self.assertLess(RECENCY_WEIGHT + USAGE_WEIGHT, LEXICAL_WEIGHT + GRAPH_WEIGHT)
-        self.assertLess(RECENCY_WEIGHT, LEXICAL_WEIGHT)
-        self.assertLess(USAGE_WEIGHT, LEXICAL_WEIGHT)
+        popular-but-irrelevant item could outrank a precise match.
+
+        DB.S8f — STRENGTHENED, because this test as originally written was green throughout the
+        entire period the defect it names was LIVE. It asserted each term below `LEXICAL_WEIGHT`
+        (0.15 < 0.25, 0.10 < 0.25) and the pair below `LEXICAL_WEIGHT + GRAPH_WEIGHT` (0.25 < 0.75)
+        — both true, and neither is the claim in the docstring. The claim is about a maxed-out
+        boost versus a LEXICAL match, and the number that decides it is the SUM against
+        `LEXICAL_WEIGHT` alone: 0.15 + 0.10 = 0.25, a tie, which the `created_at` tiebreak then
+        resolved in the popular item's favour. Filed as QUALITY-TERM-SUM, closed at DB.S8f.
+
+        The bound is derived in `test_db_s8f_ranking_bounds.py` (K3) and demonstrated on a real
+        store in `test_db_s8_r1_candidates.QualityTermSumTest`. This is the unit-level pin.
+        """
+        both_maxed = RECENCY_WEIGHT + USAGE_WEIGHT
+        self.assertLess(both_maxed, LEXICAL_WEIGHT,
+                        f"a non-matching item with maxed telemetry collects {both_maxed}, at or "
+                        f"above a full lexical match ({LEXICAL_WEIGHT})")
+        # …and inside the share the ranking principle allocates them, which is the tighter of the
+        # two and the one that leaves room for the other non-matching signals to coexist.
+        self.assertLessEqual(both_maxed, tiered.QUALITY_BUDGET + 1e-12)
 
     def test_the_deterministic_tiebreak_is_unchanged(self):
         """Equal scores still order created_at ASC then id ASC — the new terms enter the SCORE,

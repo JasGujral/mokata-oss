@@ -35,17 +35,15 @@ _MANAGER: Dict[str, Any] = {}
 
 
 def reset_manager() -> None:
-    """Drop every cached connection (best-effort close). For tests + a clean re-probe."""
+    """Drop every cached connection (best-effort close). For tests + a clean re-probe.
+
+    AUTHORITATIVE since PROBE-ORPHAN was fixed. It previously was not: a probe worker that had
+    outlived its caller could publish into `_MANAGER` AFTER a teardown ran, so "reset" meant "reset
+    unless a probe is in flight". Probe workers no longer publish (`open_unmanaged` + `adopt`), so
+    when this returns the cache is empty and stays empty until someone still-waiting adopts.
+    """
     for conn in list(_MANAGER.values()):
-        try:
-            conn.close()
-        except Exception:  # pragma: no cover - close is best-effort
-            # D5 — deliberately left BROAD, with no narrow class to name: `conn` is a THIRD-PARTY
-            # (psycopg) or injected object whose `close()` raises classes mokata cannot import
-            # without taking a hard dependency on the optional extra. Closing is a teardown that
-            # cannot fail in a way anyone can act on — there is nothing to degrade and nothing to
-            # report; the connection is being dropped either way.
-            pass
+        close_quietly(conn)
     _MANAGER.clear()
 
 
@@ -72,6 +70,63 @@ def _raw_connect(dsn: str, *, connect_timeout: int, statement_timeout_ms: int) -
         connect_timeout=connect_timeout,
         options=f"-c statement_timeout={statement_timeout_ms}",
     )
+
+
+def open_unmanaged(dsn: str, unavailable: Type[Exception], *,
+                   connect_timeout: int = CONNECT_TIMEOUT_S,
+                   statement_timeout_ms: int = STATEMENT_TIMEOUT_MS) -> Any:
+    """A timeout-bounded connection that is deliberately NOT in `_MANAGER` — the caller owns it.
+
+    PROBE-ORPHAN (doc 84). `teamdb.probe` runs its work in a daemon thread joined for a budget and
+    WALKS AWAY on timeout; the thread lives on. While that worker connected through
+    `get_connection`, a probe that had already reported UNREACHABLE could still install a live
+    connection into the process-global `_MANAGER` with nobody waiting for it — so the next caller
+    silently reused a connection whose probe said the database was down, and `reset_manager()` was
+    not authoritative while a probe was in flight (a teardown that ran BEFORE the orphan landed
+    was simply overwritten).
+
+    The fix is structural rather than a flag: a worker that may be abandoned MUST NOT be able to
+    publish. It connects through here, holds the connection privately, and only a caller that is
+    STILL WAITING adopts it via `adopt`. Nothing that outlives its waiter can reach the cache.
+
+    Raises `unavailable(...)` on any connect failure, exactly as `get_connection` does — the two
+    differ ONLY in whether the result is published, never in how they fail.
+    """
+    try:
+        return _raw_connect(dsn, connect_timeout=connect_timeout,
+                            statement_timeout_ms=statement_timeout_ms)
+    except ImportError as exc:  # pragma: no cover - exercised when the extra is absent
+        raise unavailable("psycopg is not installed (optional extra 'postgres')") from exc
+    except Exception as exc:
+        raise unavailable(f"database unavailable: {exc}") from exc
+
+
+def adopt(dsn: str, conn: Any) -> None:
+    """Publish an `open_unmanaged` connection into the shared cache — the ONE way a privately
+    opened connection becomes the process-wide one for `dsn`.
+
+    Called only by a caller that is still waiting on the work that opened it (PROBE-ORPHAN). Any
+    connection already cached for `dsn` is closed first, so adopting cannot silently strand a live
+    socket that another consumer still believes it owns.
+    """
+    previous = _MANAGER.get(dsn)
+    if previous is not None and previous is not conn:
+        close_quietly(previous)
+    _MANAGER[dsn] = conn
+
+
+def close_quietly(conn: Any) -> None:
+    """Best-effort close. THE one place that swallow is spelled, so the three call sites that need
+    it (`reset_manager`, `adopt`, the abandoned probe worker) cannot drift apart on it."""
+    try:
+        conn.close()
+    except Exception:
+        # D5 — deliberately BROAD with no narrow class to name, and this is the reason
+        # `reset_manager` already carried verbatim: `conn` is a THIRD-PARTY (psycopg) or injected
+        # object whose `close()` raises classes mokata cannot import without a hard dependency on
+        # the optional extra. Closing is a teardown that cannot fail in a way anyone can act on —
+        # nothing to degrade, nothing to report; the connection is being dropped either way.
+        pass
 
 
 def get_connection(dsn: str, unavailable: Type[Exception], *,

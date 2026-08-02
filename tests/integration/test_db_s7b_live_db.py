@@ -24,9 +24,19 @@ Two further claims ride the same live connection because they are equally engine
 Gate is the same explicit contract as the other live-DB legs: MOKATA_LIVE_DB=1 + MOKATA_PG_DSN +
 psycopg + a reachable DB, else these skip cleanly.
 
-**CI DOES NOT RUN THIS.** The live-DB lane is billing-blocked, so every claim in this file is
-on-device evidence only — and a skipped live leg reads GREEN, which is precisely why that is
-written here rather than assumed.
+**CI RUNS THIS** — `live-db-legs.yml`, the DB.S7b step (wired at DB.S8e, 2026-08-01).
+
+The sentence that stood here said "CI DOES NOT RUN THIS. The live-DB lane is billing-blocked", and
+it had been false since before it was written: `live-db-legs.yml` has existed and run since
+GR.S2-FU, on a throwaway service container that consumes no repo secret and costs no billing. What
+was true is narrower and duller — this MODULE was never added to its step list, along with seven
+others. DB.S8e added all eight.
+
+Worth keeping the correction visible rather than just deleting the line, because the failure mode
+it created is the one the file's own last clause names: a skipped live leg reads GREEN. A stale
+"CI can't run this" comment is how a leg stays unwired for a whole release while everyone who
+reads the file believes there is a reason. The workflow now carries a PREFLIGHT that fails the job
+outright if the gate is off, so "it skipped" can no longer be mistaken for "it passed".
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """

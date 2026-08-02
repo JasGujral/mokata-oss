@@ -117,7 +117,8 @@ def validity_columns_from_doc(doc: Dict[str, Any]) -> tuple:
     return (valid_from, doc.get("valid_to") or None)
 
 
-def scope_clause_for(path: Sequence[Any], *, placeholder: str = "?") -> Tuple[str, tuple]:
+def scope_clause_for(path: Sequence[Any], *, placeholder: str = "?",
+                     qualifier: str = "") -> Tuple[str, tuple]:
     """DB.S2b — the scope-path predicate: `scope.on_path()` expressed as SQL, condition for
     condition.
 
@@ -145,6 +146,11 @@ def scope_clause_for(path: Sequence[Any], *, placeholder: str = "?") -> Tuple[st
     if not path:
         return "1=0", ()
     from .scope import GLOBAL, PERSONAL
+    # R-1 (DB.S8) — `qualifier` prefixes each column when this predicate is composed into a
+    # JOIN, where a bare `scope_level` would be ambiguous. Built from mokata constants only;
+    # the caller never supplies a column name.
+    level_expr = _SCOPE_LEVEL_EXPR.replace("scope_level", qualifier + "scope_level")
+    id_expr = _SCOPE_ID_EXPR.replace("scope_id", qualifier + "scope_id")
 
     ors: List[str] = []
     params: List[Any] = []
@@ -152,23 +158,38 @@ def scope_clause_for(path: Sequence[Any], *, placeholder: str = "?") -> Tuple[st
         level = getattr(ref, "level", None)
         ref_id = getattr(ref, "id", None)
         if level == GLOBAL or ref_id is None:
-            ors.append(f"{_SCOPE_LEVEL_EXPR}={placeholder}")
+            ors.append(f"{level_expr}={placeholder}")
             params.append(level)
             continue
         if level == PERSONAL:
-            ors.append(f"({_SCOPE_LEVEL_EXPR}={placeholder} AND "
-                       f"({_SCOPE_ID_EXPR}={placeholder} OR {_SCOPE_ID_EXPR}=''))")
+            ors.append(f"({level_expr}={placeholder} AND "
+                       f"({id_expr}={placeholder} OR {id_expr}=''))")
             params.extend([level, ref_id])
             continue
-        ors.append(f"({_SCOPE_LEVEL_EXPR}={placeholder} AND {_SCOPE_ID_EXPR}={placeholder})")
+        ors.append(f"({level_expr}={placeholder} AND {id_expr}={placeholder})")
         params.extend([level, ref_id])
     return "(" + " OR ".join(ors) + ")", tuple(params)
+
+
+def _in_clause(column: str, values: Sequence[Any], placeholder: str) -> Tuple[str, tuple]:
+    """`column IN (…)` with every value BOUND. An EMPTY `values` yields `1=0`, never the empty
+    string — for the same reason `filter_clause_for` maps an empty `statuses` to `1=0`: the Python
+    membership test it stands in for matched nothing, and degrading to "no condition" would widen
+    the read to the whole table."""
+    if not values:
+        return "1=0", ()
+    return (f"{column} IN (%s)" % ", ".join([placeholder] * len(values))), tuple(values)
 
 
 def filter_clause_for(mtype: Optional[str] = None,
                       statuses: Optional[Tuple[str, ...]] = None,
                       *, scope_path: Optional[Sequence[Any]] = None,
-                      placeholder: str = "?", prefix: str = "WHERE") -> Tuple[str, tuple]:
+                      ids: Optional[Sequence[str]] = None,
+                      subjects: Optional[Sequence[str]] = None,
+                      kinds: Optional[Sequence[str]] = None,
+                      kind_expr: Optional[str] = None,
+                      placeholder: str = "?", prefix: str = "WHERE",
+                      qualifier: str = "") -> Tuple[str, tuple]:
     """DB.S2a/DB.S2b — the ONE source of the `all()` filter semantics, shared by BOTH SQL backends.
 
     Returns `(clause, params)` for the requested filters (the same shape `_scope()` returns), so
@@ -203,7 +224,7 @@ def filter_clause_for(mtype: Optional[str] = None,
     conds: List[str] = []
     params: List[Any] = []
     if mtype is not None:
-        conds.append(f"mtype={placeholder}")
+        conds.append(f"{qualifier}mtype={placeholder}")
         params.append(mtype)
     if statuses is not None:
         if len(statuses) == 0:
@@ -212,12 +233,48 @@ def filter_clause_for(mtype: Optional[str] = None,
             # empty-tuple result set identical rather than raising.
             conds.append("1=0")
         else:
-            conds.append("status IN (%s)" % ", ".join([placeholder] * len(statuses)))
+            conds.append(f"{qualifier}status IN (%s)"
+                         % ", ".join([placeholder] * len(statuses)))
             params.extend(statuses)
     if scope_path is not None:
-        scope_cond, scope_params = scope_clause_for(scope_path, placeholder=placeholder)
+        scope_cond, scope_params = scope_clause_for(scope_path, placeholder=placeholder,
+                                                   qualifier=qualifier)
         conds.append(scope_cond)
         params.extend(scope_params)
+    # JIT-STAMP-SEAM — the KIND predicate, emitted only when the caller both asks for kinds AND
+    # hands over its engine's `effective_kind` expression. No expression ⇒ no clause: a backend
+    # that has not been taught to spell it silently returns every kind, and the caller's own
+    # Python filter (`tiered_recall`) is what actually enforces the rule. That is the same
+    # optimization-not-definition posture the scope predicate carries — the difference here is
+    # that the expression reads the `doc` directly, so it needs no population and no backfill.
+    if kinds is not None and kind_expr:
+        if len(kinds) == 0:
+            conds.append("1=0")               # `IN ()` is a syntax error; `kind in ()` matched nothing
+        else:
+            expr = kind_expr.format(p=qualifier)
+            conds.append(f"{expr} IN (%s)" % ", ".join([placeholder] * len(kinds)))
+            params.extend(kinds)
+    # R-1 (DB.S8) — the CANDIDATE predicate. `ids` and `subjects` are OR-ed with each other and
+    # AND-ed with everything above, because they answer two halves of one question: "the rows the
+    # tiers nominated" plus "the rows that COMPETE with them for precedence".
+    #
+    # The second half is not an optimisation, it is a correctness requirement, and it is the
+    # subtlest thing in this function. `precedence.resolve_items` collapses a scope union to one
+    # winner per `item.subject`. Hydrating only the nominated ids would hand it a partial group —
+    # so a narrow-scope item that LOSES to a broader pinned one would be returned as a winner
+    # purely because its winner was not nominated. Reading the whole group keeps the resolution
+    # exactly what it was when the full set was materialized.
+    if ids is not None or subjects is not None:
+        halves: List[str] = []
+        if ids is not None:
+            cond, ps = _in_clause(qualifier + "id", ids, placeholder)
+            halves.append(cond)
+            params.extend(ps)
+        if subjects is not None:
+            cond, ps = _in_clause(qualifier + "subject", subjects, placeholder)
+            halves.append(cond)
+            params.extend(ps)
+        conds.append("(" + " OR ".join(halves) + ")")
     if not conds:
         return "", ()
     return f" {prefix} " + " AND ".join(conds), tuple(params)
@@ -237,6 +294,16 @@ FTS_TABLE = "memory_fts"
 # the doc: `json_extract` on SQLite, `->>` on Postgres. One definition of "the searchable text".
 _SQLITE_TEXT_EXPR = "{p}subject || ' ' || coalesce(json_extract({p}doc, '$.value'), '')"
 _PG_TEXT_EXPR = "coalesce(subject, '') || ' ' || coalesce((doc::jsonb->>'value'), '')"
+# JIT-STAMP-SEAM — `effective_kind` in SQL, i.e. `item.py:485`'s `self.kind or self.mtype`, spelled
+# once per engine. `kind` is NOT a column on either table (it lives in the `doc` JSON) and this
+# deliberately does NOT add one: a projected column would need population + a backfill + a
+# capability gate before it could be filtered on (the whole DB.S2b hazard `filter_clause_for`
+# documents above), whereas reading the doc IS the doc, so the predicate cannot disagree with
+# `MemoryItem.from_dict(doc).effective_kind` by construction. `nullif(…, '')` is what makes it
+# `or` rather than `coalesce` — an item whose `kind` is the empty string falls back to `mtype` in
+# Python, and would not in SQL without it.
+_SQLITE_KIND_EXPR = "coalesce(nullif(json_extract({p}doc, '$.kind'), ''), {p}mtype)"
+_PG_KIND_EXPR = "coalesce(nullif(doc::jsonb->>'kind', ''), mtype)"
 # The text-search configuration. English stemming is Postgres's default and matches FTS5's
 # unicode61 tokenizer closely enough that the two tiers agree on what a "term" is.
 TS_CONFIG = "english"
@@ -388,6 +455,12 @@ class SQLiteBackend(MemoryBackend):
                        last_recalled_at TEXT
                    )"""
             )
+            # R-1 (DB.S8) — the precedence-group read (`hydrate(subjects=…)`) filters on `subject`,
+            # which carried no index: a bounded candidate read that then scanned the table to find
+            # each nominee's precedence group would have moved the scan rather than removed it.
+            # `id` already has one (it is UNIQUE in the CREATE above), so this is the only one
+            # Option A adds. IF NOT EXISTS, so an existing store gains it on its next open.
+            conn.execute("CREATE INDEX IF NOT EXISTS memory_subject ON memory(subject)")
             self._ensure_scope_columns(conn)
             # DB.S2b — the columns exist; now make them TRUE of every row. Ordered deliberately:
             # add-then-backfill, both before the constructor returns, so nothing can query this
@@ -497,15 +570,36 @@ class SQLiteBackend(MemoryBackend):
             # Jaccard floor, which is exactly what the floor is FOR.
             return False
 
-    def lexical_search(self, query: str, top_k: int = DEFAULT_TOP_K
+    def lexical_search(self, query: str, top_k: int = DEFAULT_TOP_K,
+                       *, scope_path: Optional[Sequence[Any]] = None,
+                       statuses: Optional[Tuple[str, ...]] = None,
+                       kinds: Optional[Sequence[str]] = None
                        ) -> List[Tuple[MemoryItem, float]]:
         """DB.S3 — the lexical tier as ONE ranked SQL query: FTS5 `MATCH` + `bm25()`, top-k in the
         database. This is what replaces `tiered_recall`'s Python `lexical_score` scan over every
         active item — only MATCHING rows are ever materialized, and they arrive already ranked.
 
+        JIT-STAMP-SEAM — `kinds` travels with the ranked query for the SAME reason `scope_path`
+        does: the LIMIT must be taken over rows the caller can actually use. The per-turn injection
+        wants the top-k of `JIT_KINDS`, and on a store whose best lexical matches are rules and
+        decisions, a top-k taken across ALL kinds and filtered afterwards returns fewer items than
+        exist — the filter would silence the channel rather than bound it.
+
         Returns `[(item, score)]` with `score` normalized into [0,1] (bm25 is a distance — see
         `normalize_lexical_scores`). An empty list when FTS is unavailable or the query has no
         terms; the caller treats an empty lexical map as "no lexical signal", never as an error.
+
+        R-1 (DB.S8) — `scope_path` and `statuses` now travel WITH the ranked query, and that is the
+        load-bearing change rather than a tidy-up. Before it, this returned the store's global
+        top-N and the caller intersected the result with a separately-materialized visible set —
+        which is correct, but it means the LIMIT is taken before visibility is known. On a shared
+        100k store whose reader may see a fraction of it, the top 50 rows by rank can be entirely
+        another tenant's, and the intersection then yields NOTHING while the reader's own matching
+        rows sit unread below the cut. Pushing the predicate INTO the ranked query makes the
+        top-N a top-N of the rows this identity may actually read.
+
+        Same posture as everywhere else in this file: the predicate is emitted only when a caller
+        passes a path, and a caller passes one only for a store reporting `supports_scope_pushdown`.
         """
         if not self._fts:
             return []
@@ -515,15 +609,20 @@ class SQLiteBackend(MemoryBackend):
         # OR (not AND): the tier RANKS, it does not gate — a partial match should surface below a
         # full one, not vanish. Each token is quoted so it is a bare string term, never an operator.
         match = " OR ".join(f'"{t}"' for t in tokens)
+        # Built by the SHARED builder, prefixed `AND` because the FTS MATCH already opened the
+        # WHERE. Every column it names is on `m`, the memory table the join already carries.
+        clause, params = filter_clause_for(None, statuses, scope_path=scope_path,
+                                           kinds=kinds, kind_expr=_SQLITE_KIND_EXPR,
+                                           placeholder="?", prefix="AND", qualifier="m.")
         with self._connect() as conn:
             rows = conn.execute(
                 f"""SELECT m.doc, bm25({FTS_TABLE}) AS lex_rank
                       FROM {FTS_TABLE}
                       JOIN memory m ON m.seq = {FTS_TABLE}.rowid
-                     WHERE {FTS_TABLE} MATCH ?
+                     WHERE {FTS_TABLE} MATCH ?{clause}
                      ORDER BY lex_rank ASC, m.seq ASC
                      LIMIT ?""",                                   # nosec B608 (fixed identifiers)
-                (match, int(top_k)),
+                (match, *params, int(top_k)),
             ).fetchall()
         items = [MemoryItem.from_dict(json.loads(r[0])) for r in rows]
         scores = normalize_lexical_scores([r[1] for r in rows], higher_is_better=False)
@@ -851,42 +950,61 @@ class SQLiteBackend(MemoryBackend):
                 yield conn
 
     def put(self, item: MemoryItem) -> None:
+        with self._connect() as conn:
+            self._put_on(conn, item)
+            conn.commit()
+
+    def _put_on(self, conn: Any, item: MemoryItem) -> None:
+        """THE local write, with its CONNECTION and its COMMIT hoisted out to the caller.
+
+        `put` above is this plus "open a connection, commit it" — and that is the ONLY production
+        caller. It is split out for exactly one reason: a caller with N items to land pays N
+        connection opens and N commits through `put`, which is 71.7s for the 100k-row store DB.S8
+        contracts against and 1.4s for the same rows through one transaction. The alternative — a
+        loader that writes its own INSERT — is the SHIM-FALSE-GREEN shape doc 84 already carries as
+        a 🔴 row: a fixture whose rows are built by a second, hand-mirrored statement proves the
+        second statement, not the one users run. There is exactly one INSERT for the local store and
+        it is below.
+        """
         payload = item.to_doc()           # D6 — the durable serializer: refuses a newer-than-us doc
         doc = json.dumps(payload)
-        with self._connect() as conn:
-            # DB.S2b — the scope/precedence columns are written by THIS statement, the one that
-            # writes `doc`. Single-sourced on purpose: one writer means column and doc cannot
-            # drift, which is the property that makes `filter_clause_for` allowed to push a scope
-            # predicate at them. The upsert branch moves them too — a re-put at a new scope that
-            # left a stale column behind would be the same cross-tenant bug as never writing one.
-            # DB.S5 — the validity columns ride the SAME statement, on the same single-source
-            # argument as the scope half. The usage columns are conspicuously NOT in this list:
-            # an upsert must never reset a live row's `hit_count`, so the write path does not name
-            # them and `record_usage` owns them alone.
-            conn.execute(
-                """INSERT INTO memory (id, mtype, subject, status, doc,
-                                       scope_level, scope_id, pin, priority,
-                                       valid_from, valid_to)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(id) DO UPDATE SET
-                       mtype=excluded.mtype, subject=excluded.subject,
-                       status=excluded.status, doc=excluded.doc,
-                       scope_level=excluded.scope_level, scope_id=excluded.scope_id,
-                       pin=excluded.pin, priority=excluded.priority,
-                       valid_from=excluded.valid_from, valid_to=excluded.valid_to""",
-                (item.id, item.mtype, item.subject, item.status, doc,
-                 *scope_columns_from_doc(payload), *validity_columns_from_doc(payload)),
-            )
-            # DB.S7a — the EDGE PROJECTION rides the SAME connection and lands in the SAME
-            # `commit()` below, which is what makes E6 structural instead of asserted. `put` is
-            # reached only from `store._commit`, the closure the WriteGate runs on approval, so:
-            # an approved write commits the item row and its edges together or neither, and a
-            # DECLINED write never calls this at all — there is no path that writes an edge row
-            # without a human having approved the item it projects. The projection derives from
-            # `payload`, the very dict serialized into `doc` one statement above, on the same
-            # single-source argument the scope and validity columns are written by.
-            _edges.project_edges(conn, _edges.LOCAL_EDGES_TABLE, payload, now=now_iso())
-            conn.commit()
+        # DB.S2b — the scope/precedence columns are written by THIS statement, the one that
+        # writes `doc`. Single-sourced on purpose: one writer means column and doc cannot
+        # drift, which is the property that makes `filter_clause_for` allowed to push a scope
+        # predicate at them. The upsert branch moves them too — a re-put at a new scope that
+        # left a stale column behind would be the same cross-tenant bug as never writing one.
+        # DB.S5 — the validity columns ride the SAME statement, on the same single-source
+        # argument as the scope half. The usage columns are conspicuously NOT in this list:
+        # an upsert must never reset a live row's `hit_count`, so the write path does not name
+        # them and `record_usage` owns them alone.
+        conn.execute(
+            """INSERT INTO memory (id, mtype, subject, status, doc,
+                                   scope_level, scope_id, pin, priority,
+                                   valid_from, valid_to)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                   mtype=excluded.mtype, subject=excluded.subject,
+                   status=excluded.status, doc=excluded.doc,
+                   scope_level=excluded.scope_level, scope_id=excluded.scope_id,
+                   pin=excluded.pin, priority=excluded.priority,
+                   valid_from=excluded.valid_from, valid_to=excluded.valid_to""",
+            (item.id, item.mtype, item.subject, item.status, doc,
+             *scope_columns_from_doc(payload), *validity_columns_from_doc(payload)),
+        )
+        # DB.S7a — the EDGE PROJECTION rides the SAME connection and lands in the SAME
+        # `commit()` the caller runs, which is what makes E6 structural instead of asserted.
+        # `put` is reached only from `store._commit`, the closure the WriteGate runs on approval,
+        # so: an approved write commits the item row and its edges together or neither, and a
+        # DECLINED write never calls this at all — there is no path that writes an edge row
+        # without a human having approved the item it projects. The projection derives from
+        # `payload`, the very dict serialized into `doc` one statement above, on the same
+        # single-source argument the scope and validity columns are written by.
+        #
+        # The commit moved OUT to `put` (DB.S8) and the together-or-neither property is unchanged
+        # by that: it was never this line's commit that provided it, it was the fact that both
+        # writes ride ONE connection and ONE transaction. A bulk caller that commits after N items
+        # holds the same property over a wider unit — items and their edges still land together.
+        _edges.project_edges(conn, _edges.LOCAL_EDGES_TABLE, payload, now=now_iso())
 
     def get(self, item_id: str) -> Optional[MemoryItem]:
         with self._connect() as conn:
@@ -929,6 +1047,47 @@ class SQLiteBackend(MemoryBackend):
                 (*params, *tail_params),
             ).fetchall()
         return [MemoryItem.from_dict(json.loads(r[0])) for r in rows]
+
+    #: R-1 (DB.S8) — the local store CAN nominate candidates in SQL (it has FTS5 and an id index),
+    #: so recall need not materialize the active set to rank it. Probed by the caller with
+    #: `getattr`, never assumed — the same posture as `lexical_search` / `expand_from`.
+    supports_candidate_selection = True
+
+    def hydrate(self, ids: Sequence[str] = (), *, subjects: Sequence[str] = (),
+                statuses: Optional[Tuple[str, ...]] = None,
+                scope_path: Optional[Sequence[Any]] = None) -> List[MemoryItem]:
+        """R-1 (DB.S8) — the BOUNDED read: the rows the tiers nominated, plus the rows that compete
+        with them for precedence. Never a scan.
+
+        This is the half of Option A that replaces `all(statuses=(ACTIVE,))` on the recall path.
+        `ids` are the nominated candidates; `subjects` pulls in each nominee's full precedence
+        group (see `filter_clause_for` — a partial group would let a loser be returned as a winner).
+        Both are OR-ed, then AND-ed with the same status and scope predicates every other read uses,
+        so a candidate outside the reader's scope is dropped by the DATABASE rather than after it.
+
+        Chunked at `_ID_CHUNK` for the reason `record_usage` is: a single statement binds one `?`
+        per id and `SQLITE_MAX_VARIABLE_NUMBER` is 999 on older builds. The chunk loop keeps this
+        read correct on any sqlite3 mokata can be built against rather than raising on the large
+        stores it exists to serve. Result order is `seq`, matching `all()`.
+        """
+        ids, subjects = list(ids), list(subjects)
+        if not ids and not subjects:
+            return []
+        seen: dict = {}
+        # The two halves are chunked INDEPENDENTLY: a 150-id candidate set and a 150-subject
+        # group set would otherwise bind 300 parameters in one statement.
+        for kind, values in (("ids", ids), ("subjects", subjects)):
+            for chunk in self._chunks(values):
+                clause, params = filter_clause_for(
+                    None, statuses, scope_path=scope_path, placeholder="?",
+                    **{kind: chunk})
+                with self._connect() as conn:
+                    rows = conn.execute(
+                        f"SELECT seq, doc FROM memory{clause} ORDER BY seq",  # nosec B608
+                        params).fetchall()
+                for seq, doc in rows:
+                    seen.setdefault(seq, doc)
+        return [MemoryItem.from_dict(json.loads(doc)) for _seq, doc in sorted(seen.items())]
 
     def delete(self, item_id: str) -> bool:
         with self._connect() as conn:
@@ -1139,6 +1298,17 @@ class PostgresBackend(MemoryBackend):
     # fragment) — never user input. All VALUES go through the driver's parameterized `%s`
     # placeholders, so there is no injection surface. Suppression markers only, no behaviour change.
     def put(self, item: MemoryItem) -> None:
+        self._put_on(self._conn, item)
+
+    def _put_on(self, conn: Any, item: MemoryItem) -> None:
+        """THE shared write, with its CONNECTION passed in — the twin of `SQLiteBackend._put_on`,
+        split out for the identical reason and with the identical contract.
+
+        `_pg` connections are AUTOCOMMIT, so through `put` each item is its own transaction and its
+        own server round trip: at DB.S8's 100k rows that is 100k commits. A bulk caller wraps N of
+        these in ONE explicit transaction and pays one. `put` — the only production caller — passes
+        `self._conn` and is therefore byte-identical to what it always did.
+        """
         # DB.S2b — the scope/precedence columns ride the SAME statement as `doc` (the SQLite twin
         # does the identical thing with the identical `_scope_columns` values). One writer per row
         # means the column and the doc cannot drift, which is precisely what lets `all()` push a
@@ -1148,7 +1318,7 @@ class PostgresBackend(MemoryBackend):
         # thing). The usage columns stay out of it, as they do locally: an upsert that named
         # `hit_count` would reset a live row's counter from a stale in-memory doc.
         payload = item.to_doc()           # D6 — the durable serializer: refuses a newer-than-us doc
-        self._conn.execute(
+        conn.execute(
             f"INSERT INTO {self.TABLE} (id, mtype, subject, status, doc, project,"  # nosec B608
             " scope_level, scope_id, pin, priority, valid_from, valid_to)"
             " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
@@ -1173,7 +1343,7 @@ class PostgresBackend(MemoryBackend):
         # atomicity IS load-bearing is the team flush, and there the projection runs inside the
         # approval group's explicit transaction (see `team_journal._project_edges_for`).
         if self.supports_edges:
-            _edges.project_edges(self._conn, _edges.SHARED_EDGES_TABLE, payload,
+            _edges.project_edges(conn, _edges.SHARED_EDGES_TABLE, payload,
                                  now=now_iso(), placeholder="%s")
 
     @property
@@ -1345,10 +1515,50 @@ class PostgresBackend(MemoryBackend):
     # the ADR-54 vanilla-Postgres golden path.
     lexical_mode = LEXICAL_MODE_TSVECTOR
 
-    def lexical_search(self, query: str, top_k: int = DEFAULT_TOP_K
+    #: R-1 (DB.S8) — the shared store nominates candidates in SQL too. Guarded at the READ, not
+    #: here: `hydrate` composes a scope predicate only when `supports_scope_pushdown` says the
+    #: backfill has run, so a v3/un-backfilled store still nominates and still filters from the doc.
+    supports_candidate_selection = True
+
+    def hydrate(self, ids: Sequence[str] = (), *, subjects: Sequence[str] = (),
+                statuses: Optional[Tuple[str, ...]] = None,
+                scope_path: Optional[Sequence[Any]] = None) -> List[MemoryItem]:
+        """R-1 (DB.S8) — the bounded read on the shared store; the twin of the SQLite one, built
+        from the SAME `filter_clause_for`, so "the two engines filter identically" is a property of
+        one builder rather than a coincidence between two hand-written queries.
+
+        No chunk loop: psycopg binds a list as one parameter and Postgres has no
+        `SQLITE_MAX_VARIABLE_NUMBER` analogue to trip over. It carries the project clause every
+        other read on this backend carries.
+        """
+        ids, subjects = list(ids), list(subjects)
+        if not ids and not subjects:
+            return []
+        pclause, pparams = self._scope("WHERE")
+        prefix = "AND" if pclause else "WHERE"
+        clause, params = filter_clause_for(None, statuses, scope_path=scope_path,
+                                           ids=ids or None, subjects=subjects or None,
+                                           placeholder="%s", prefix=prefix)
+        rows = self._conn.execute(
+            f"SELECT doc, revision FROM {self.TABLE}{pclause}{clause} "   # nosec B608
+            "ORDER BY id", (*pparams, *params)).fetchall()
+        return [_with_revision(r[0], r[1]) for r in rows]
+
+    def lexical_search(self, query: str, top_k: int = DEFAULT_TOP_K,
+                       *, scope_path: Optional[Sequence[Any]] = None,
+                       statuses: Optional[Tuple[str, ...]] = None,
+                       kinds: Optional[Sequence[str]] = None
                        ) -> List[Tuple[MemoryItem, float]]:
         """DB.S3 — the lexical tier as ONE ranked SQL query: `@@` for the match, `ts_rank` for the
         order, top-k in the database. Replaces the Python Jaccard scan (see the SQLite twin).
+
+        JIT-STAMP-SEAM — `kinds` travels with the ranked query, for the reason spelled out on the
+        SQLite twin: a top-k taken across all kinds and filtered afterwards under-fills.
+
+        R-1 (DB.S8) — `scope_path`/`statuses` travel WITH the ranked query, for the reason spelled
+        out on the SQLite twin: the LIMIT must be taken over rows this identity may READ. On a
+        shared store the project predicate was already here; the SCOPE predicate was not, so the
+        top-N could be filled entirely with rows the reader's scope path excludes.
 
         NO RUNTIME DDL (D1/C4): the tsvector is computed from the row's own columns, so this runs
         correctly on a DML-only role against a table that has never been touched by `team init`.
@@ -1370,12 +1580,15 @@ class PostgresBackend(MemoryBackend):
         vec = f"to_tsvector('{TS_CONFIG}', {_PG_TEXT_EXPR})"
         tsq = f"to_tsquery('{TS_CONFIG}', %s)"
         scope, scope_params = self._scope(prefix="AND")
+        clause, params = filter_clause_for(None, statuses, scope_path=scope_path,
+                                           kinds=kinds, kind_expr=_PG_KIND_EXPR,
+                                           placeholder="%s", prefix="AND")
         rows = self._conn.execute(
             f"SELECT doc, revision, ts_rank({vec}, {tsq}) AS lex_rank"      # nosec B608
             f"  FROM {self.TABLE}"
-            f" WHERE {vec} @@ {tsq}{scope}"
+            f" WHERE {vec} @@ {tsq}{scope}{clause}"
             f" ORDER BY lex_rank DESC, seq ASC LIMIT %s",
-            (tsquery, tsquery, *scope_params, int(top_k)),
+            (tsquery, tsquery, *scope_params, *params, int(top_k)),
         ).fetchall()
         items = [_with_revision(r[0], r[1]) for r in rows]
         scores = normalize_lexical_scores([r[2] for r in rows], higher_is_better=True)

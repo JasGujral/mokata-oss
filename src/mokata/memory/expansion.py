@@ -83,7 +83,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .edges import (DST_COLUMN, EDGE_KINDS, KIND_COLUMN, SRC_COLUMN, VALID_TO_COLUMN,
-                    ABOUT_CODE, DEPENDS_ON, SUPERSEDES)
+                    ABOUT_CODE, DEPENDS_ON, DERIVES_FROM, SUPERSEDES)
 
 # ---------------------------------------------------------------- the bound (K1's whole point)
 # ≤2 hops, doc 84 K1 / doc 55 §3. TWO, not "a few": the value is the contract, and it is spelled
@@ -152,8 +152,20 @@ KIND_WEIGHT: Dict[str, float] = {
     # admitted and never bridges to anything on a forward walk. It becomes useful the day the
     # reverse leg exists (see the module header); until then a non-zero weight would be decoration.
     ABOUT_CODE: 0.0,
+    # WIRED 2026-08-01 (the SUMMARIZE producer). Listed explicitly now that it has a producer, and
+    # deliberately AT `UNWIRED_DEFAULT_WEIGHT`'s value — so wiring the kind is byte-identical in
+    # ranking and the only thing that changed is that edges now exist to walk. Moving the number
+    # would be a ranking change made on intuition, and this module's own header says every one of
+    # these is tuned against the at-scale fixture, not chosen. It is the one kind now OWED a
+    # measured weight: unlike the still-unwired four, a sweep can finally observe it.
+    #
+    # For whoever tunes it: a SUMMARIZE does NOT retire its olds (`apply_consolidation`'s SUMMARIZE
+    # branch writes only the new item), so the raw turns stay ACTIVE and a forward hop across this
+    # edge CAN admit them. The question a sweep has to answer is whether surfacing the material a
+    # summary already condenses is worth a slot — which is a real question, not an obvious one.
+    DERIVES_FROM: 0.5,
 }
-# The five with no producer, defaulted EXPLICITLY (never by a dict `.get` fallback buried in the
+# The four with no producer, defaulted EXPLICITLY (never by a dict `.get` fallback buried in the
 # scorer) so the table below is the complete, readable answer to "what is each kind worth".
 for _kind in EDGE_KINDS:
     KIND_WEIGHT.setdefault(_kind, UNWIRED_DEFAULT_WEIGHT)
@@ -267,6 +279,15 @@ class ExpansionResult:
     seeds_dropped: int = 0
     rows_truncated: int = 0
     cycles_pruned: int = 0                   # candidate extensions dropped for revisiting a node
+    # R-1 (DB.S8) — the ITEMS an admitted path reached, when the caller had to fetch them.
+    #
+    # Empty on the full-set read, and that is not an oversight: there, every reachable item was
+    # already materialized and the tier only ever RE-RANKED what the caller held. Under candidate
+    # selection an item reached by a hop is by definition one the direct tiers did NOT nominate —
+    # doc 55:80's "an answer only reachable via one hop" — so it has to be handed back or the walk
+    # finds it and nobody ever sees it. This module still opens no connection: the caller hydrates
+    # and attaches (`tiered._bounded_walk`).
+    admitted: Tuple[Any, ...] = ()
 
     def score(self, item_id: str) -> float:
         path = self.paths.get(item_id)

@@ -485,7 +485,14 @@ class NoBehaviourChange(unittest.TestCase):
             "enforcement", "applicability", "review", "about_code",
         }
         added_since_d6 = ({"valid_from", "valid_to"}                                # DB.S5
-                          | {"approved_by", "approved_at", "approval_ledger_id"})   # M-1/R9
+                          | {"approved_by", "approved_at", "approval_ledger_id"}    # M-1/R9
+                          # The `derives_from` PRODUCER (2026-08-01): the SUMMARIZE lineage, a
+                          # fourth inline edge list on the same terms as `supersedes` /
+                          # `depends_on` / `about_code`. Additive under doc v1 for the identical
+                          # reason as the two groups above — it defaults to `[]`, so every legacy
+                          # doc round-trips byte-identically and an older reader carries it in
+                          # `extra`. `MEMORY_DOC_VERSION` does not move.
+                          | {"derives_from"})
         self.assertEqual({DOC_VERSION_KEY},
                          set(item.to_dict()) - before_d6 - added_since_d6)
 

@@ -181,7 +181,7 @@ DOC_VERSION_KEY = "schema_version"
 DOC_KEYS = frozenset({
     "id", "subject", "value", "mtype", "status", "kind", "provenance", "expires_at",
     "supersedes", "depends_on", "scope_level", "scope_id", "pin", "priority", "enforcement",
-    "applicability", "review", "about_code", "valid_from", "valid_to",
+    "applicability", "review", "about_code", "derives_from", "valid_from", "valid_to",
     # M-1/R9 — the consent chain (see `MemoryItem.approved_by`).
     "approved_by", "approved_at", "approval_ledger_id",
     DOC_VERSION_KEY,
@@ -355,6 +355,22 @@ class MemoryItem:
     # untouched by DB.S7a: the doc is the same bytes it was, and an export, a share and a teammate's
     # read all still carry the relations in these fields.
     about_code: List[str] = field(default_factory=list)
+    # DERIVES-FROM PRODUCER (2026-08-01) — the items this one was DISTILLED OUT OF. Populated by
+    # exactly one path: an approved SUMMARIZE consolidation, which lands a new summary item and
+    # knows precisely which turns it summarized (`ConsolidationProposal.olds`).
+    #
+    # It is a FOURTH inline list on the same terms as the three above, and deliberately so rather
+    # than as a new mechanism: `edges._ITEM_FIELD` wires an edge kind by naming a persisted
+    # doc-JSON field, so a kind with no field has no producer and cannot be anything but inert.
+    # `derives_from` was the one declared-but-unwired kind with a real producer already in the
+    # codebase and NO open design question — `contradicts` is detected at read time and never
+    # persisted (wiring it would mean inventing edges), `used_by` needs K5 prompt linkage that is
+    # not built, and `decided_in`/`promoted_from` have no producer at all.
+    #
+    # Same contract as the three above, for the same reason: this list is AUTHORITATIVE and the
+    # edge row is a DERIVED PROJECTION rebuilt from it by the gated write that persists it.
+    # Additive and empty by default, so every legacy item round-trips byte-identically.
+    derives_from: List[str] = field(default_factory=list)
     # DB.S5 — the BI-TEMPORAL VALIDITY WINDOW (doc 62 lifecycle; Graphiti's model). `valid_from` is
     # when this fact STARTED being true, `valid_to` when it STOPPED; an OPEN window (`valid_to`
     # empty) is the live state. This is a different axis from `provenance.created_at` (when we
@@ -445,6 +461,7 @@ class MemoryItem:
         applicability: Optional[Dict[str, Any]] = None,
         review: Optional[Dict[str, Any]] = None,
         about_code: Optional[List[str]] = None,
+        derives_from: Optional[List[str]] = None,
     ) -> "MemoryItem":
         created = created_at or now_iso()
         if expires_at is None and valid_for is not None:
@@ -472,6 +489,8 @@ class MemoryItem:
             review=dict(review or {}),
             # TM.S11a — about_code link; empty for every item that names no code symbols.
             about_code=[str(s) for s in (about_code or [])],
+            # The SUMMARIZE lineage; empty for every item that was not distilled out of others.
+            derives_from=[str(s) for s in (derives_from or [])],
         )
 
     @property
@@ -518,6 +537,7 @@ class MemoryItem:
             "applicability": dict(self.applicability),
             "review": dict(self.review),
             "about_code": list(self.about_code),
+            "derives_from": list(self.derives_from),
             # DB.S5 — the bi-temporal window. Emitted always (like every other modelled field), and
             # empty strings for an item that has never had one, so a legacy item's window is
             # "unset" rather than a forged claim about when it started being true.
@@ -586,6 +606,7 @@ class MemoryItem:
             # TM.S11a — a pre-S11a doc has no `about_code` key → [] (names no code); a linked item
             # round-trips its symbol list verbatim.
             about_code=[str(s) for s in (d.get("about_code", []) or [])],
+            derives_from=[str(s) for s in (d.get("derives_from", []) or [])],
             # DB.S5 — a pre-S5 doc has no validity keys → "" / "" → `lifecycle.is_open` reads it as
             # OPEN and `lifecycle.open_window` reads its `created_at` as the window's start. The
             # whole pre-DB.S5 corpus is therefore valid on upgrade with no migration write; a v4

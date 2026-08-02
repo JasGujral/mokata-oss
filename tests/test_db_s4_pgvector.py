@@ -165,11 +165,21 @@ class TestPgVectorReachable(unittest.TestCase):
         # inline). Only the DRIVER CONNECT is stubbed (the shim stands in for a live server), so
         # everything above it — the selection branch, the embedder resolution, the DSN resolver,
         # the backend construction, the stamp verify — is the real shipped path.
+        #
+        # The config NAMES its embedder (VECTOR-TIER-NOISE, 2026-08-02). It used to omit it and
+        # lean on the branch's `auto` default, which resolved to hashing whenever the `embeddings`
+        # extra was absent — so what this test actually asserted depended on what was installed on
+        # the machine running it. That default is gone: an UNSET embedder now leaves the semantic
+        # tier OFF rather than filling a real vector index with token-hash vectors. Saying
+        # `hashing` out loud is what "opted in" means here, and it makes the wiring assertion below
+        # independent of the environment in the bargain. The unset path has its own pins in
+        # `test_embedder_ask_legibility.TheAskSiteIsREACHED`.
         shim = _PgVectorShim()
         with mock.patch.dict(os.environ, {"MOKATA_DSN": "postgres://host/db"}), \
              mock.patch("mokata.memory._pg.connect_psycopg", return_value=shim):
             backend = selection._select_raw_backend(
-                "pgvector", tempfile.mkdtemp(), {}, {"dsn_env": "MOKATA_DSN"}, None, None)
+                "pgvector", tempfile.mkdtemp(), {},
+                {"dsn_env": "MOKATA_DSN", "embedder": "hashing"}, None, None)
         self.assertIsInstance(backend, PgVectorBackend,
                               "an opted-in pgvector config selects the vector backend — the "
                               "D5-rider(3) 'no shipped store selects it' state is over")

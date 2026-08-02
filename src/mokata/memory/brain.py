@@ -130,6 +130,23 @@ def always_on_lines(store: Any, max_lines: int,
     return shown, overflow
 
 
+def injection_admits(query: str, item: MemoryItem) -> bool:
+    """THE admission test for AUTOMATIC injection — is there evidence this item is about the turn?
+
+    One definition site, called by both injection routes: `jit_recall` (the lexical floor) and
+    `bootstrap._ranked_injection_items` (the tiered stack). It answers the C2 claim "function words
+    are not match EVIDENCE" (doc 84 JIT-LEXICAL-FUNCTION-WORD-FLOOR) and it is a filter on
+    ADMISSION, never on ranking — `lexical_score` is untouched by it, which a mutation pins.
+
+    It stays applied on the tiered route rather than being retired into BM25's IDF, because the
+    tiered route degrades: on a store with no FTS the ranker is the Jaccard floor again, and there
+    is no IDF anywhere to subsume the rule. A ranked list has no admission threshold of its own —
+    `recall_relevant` returns the top-k of whatever it ranked — so without this the per-turn pack
+    would spend its budget on the least-irrelevant items on a turn that matched nothing at all.
+    """
+    return shares_content_term(query, _text(item))
+
+
 def jit_recall(store: Any, query: str, top_k: int = DEFAULT_TOP_K,
                kinds: Tuple[str, ...] = JIT_KINDS,
                exclude_ids: Optional[Any] = None) -> List[MemoryItem]:
@@ -161,7 +178,7 @@ def jit_recall(store: Any, query: str, top_k: int = DEFAULT_TOP_K,
     exclude = set(exclude_ids or ())
     candidates = [i for i in _injectable_active(store)
                   if i.effective_kind in kinds and i.id not in exclude
-                  and shares_content_term(query, _text(i))]
+                  and injection_admits(query, i)]
     scored = [(lexical_score(query, _text(i)), i) for i in candidates]
     scored.sort(key=lambda si: (-si[0], si[1].created_at, si[1].subject))
     return [i for _s, i in scored[:top_k]]

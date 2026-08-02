@@ -136,11 +136,33 @@ def _select_raw_backend(tool: str, root: str, clients: Dict[str, Any], config: D
             return floor()
         from .embed import make_embedder
         from .vector import build_pgvector_backend
-        # The embedder is per-tool config, defaulting to AUTO detection: opting into a semantic
-        # STORE is opting into semantics, so requiring a second `settings.memory.embedder` to make
-        # it work would be a trap. Auto is itself honest — it lands on hashing when the extra
-        # isn't installed, and doctor says which.
-        embedder = make_embedder(config.get("embedder") or "auto")
+        # THE EMBEDDER FOR AN OPT-IN SEMANTIC STORE, and the two asks are NOT the same ask.
+        #
+        # This branch used to read `config.get("embedder") or "auto"`. `auto` means "use whatever
+        # is best", and its documented floor is `HashingEmbedder` — correct for a zero-dep default,
+        # WRONG here, because this is the ONE path (DB.S8f) that reaches a live embedder without
+        # `memory.embedder` being set anywhere. Defaulting it to `auto` therefore let an unset
+        # config fill a REAL pgvector index with token-hash vectors that nobody asked for.
+        #
+        # VECTOR-TIER-NOISE (doc 84) is why that is not a cosmetic default. Hashing returns cosine
+        # ~0.75 between UNRELATED items; DB.S8f's K2 bound weights it down to 0.077 so it cannot
+        # dominate the fusion, but DB.S8g measured at the declared N=100,000 that bounding is not
+        # eliminating — the tier is still NET-NEGATIVE on recall (arm C 0.4306 < arm B 0.4444).
+        # A tier that measurably subtracts recall must not be switched on by the ABSENCE of
+        # configuration. Off is the honest default; hashing-by-omission is not.
+        #
+        # So the ask is split, and each half keeps its own guarantee:
+        #   * NAMED  — `make_embedder` resolves it exactly as before, and EXPLICIT-EMBEDDER-ASK
+        #              still announces when a named ask lands on hashing. A user who wrote
+        #              `embedder: hashing` gets hashing; this refusal is about silence, not choice.
+        #   * UNSET  — a real embedder or NOTHING. `None` makes `build_pgvector_backend` return
+        #              None, the tier stays OFF, and the store falls to the local floor with a
+        #              notice that names the cause and the one command that fixes it.
+        asked = (config or {}).get("embedder")
+        if asked:
+            embedder = make_embedder(asked, semantic_store=True)
+        else:
+            embedder = _unasked_semantic_embedder()
         failures: List[Exception] = []
         backend = build_pgvector_backend(config, embedder, project=project,
                                          on_unavailable=failures.append)
@@ -156,6 +178,46 @@ def _select_raw_backend(tool: str, root: str, clients: Dict[str, Any], config: D
         return floor()
     # "ripgrep"/unknown, or unavailable -> SQLite floor
     return floor()
+
+
+def _unasked_semantic_embedder() -> Optional[Any]:
+    """The embedder for a pgvector store that named NONE: a real one, or `None` so the tier is OFF.
+
+    VECTOR-TIER-NOISE (doc 84). The question here is deliberately narrower than `detect_embedder`'s
+    — that function answers "semantic on, quality honest", and its whole design is to FALL BACK to
+    hashing so a recall never breaks. That is the right answer for a lexical/semantic read tier and
+    the wrong one for a vector STORE, where the fallback is not a weaker ranking but a persisted
+    index full of token hashes and a measured recall LOSS at scale. Asking the narrow question
+    directly is also what keeps the reporting honest: routing `detect_embedder` through here would
+    emit its "semantic recall is TOKEN-HASH" notice, which would now be FALSE — the tier is off,
+    not hashing — and `note_degraded` records for `doctor` even when its output is redirected, so
+    the wrong sentence would outlive the call.
+
+    Both causes end in the same verdict and differ only in the FIX, exactly as `detect_embedder`
+    splits them: the extra is not installed (install it), or it is installed and the model would
+    not load (network/`doctor`). Naming the wrong one sends the user to the wrong place.
+    """
+    from ..degrade import FAILURE_ENGINE, note_degraded
+    from .embed import Model2VecEmbedder, ModelUnavailable, _extra_is_installed
+    try:
+        return Model2VecEmbedder()
+    except ModelUnavailable as exc:
+        if _extra_is_installed():
+            fix = ("run `mokata doctor`; the model is fetched once — connect to the network once "
+                   "and re-run, or `pip install -U mokata[embeddings]`")
+            cause = "the `embeddings` extra is installed but the model could not be loaded"
+        else:
+            fix = ("pip install 'mokata[embeddings]'  (~30MB, numpy-only) — or set "
+                   "`memory.embedder: hashing` to say token-hash vectors are deliberate")
+            cause = "the `embeddings` extra is not installed"
+        note_degraded(
+            "memory-semantic", FAILURE_ENGINE,
+            fallback=f"semantic recall is OFF — a pgvector store was selected but no embedder was "
+                     f"configured, and {cause}. mokata will NOT fill a vector index with "
+                     f"token-hash vectors you did not ask for (they measure net-negative on "
+                     f"recall); memory is local",
+            fix=fix, detail=str(exc))
+        return None
 
 
 def _note_vector_degrade(failures: List[Exception]) -> None:

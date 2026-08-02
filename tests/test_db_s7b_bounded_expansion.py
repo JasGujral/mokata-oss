@@ -56,6 +56,22 @@ def _chain(tmp):
     ])
 
 
+def _reached(hits, item_id):
+    """Did the expansion REACH `item_id`? R-1 (DB.S8) gave this claim two equally-correct shapes
+    and the pins below are written against the claim, not against either shape.
+
+    Under the full-set read every active item is ranked, so an unreached item comes back with
+    `edge == 0.0` and `path is None`. Under candidate selection an item the query did not match and
+    no hop reached is not a candidate at all, so it comes back not at all — which is the SAME
+    contract held more strongly, not a weaker one. What must never be true either way is a non-zero
+    edge score on an item the bound (or the open-window filter) should have excluded, and that is
+    what this returns. Every mutation these tests name still makes it True: a widened `MAX_HOPS`
+    ADMITS the 3-hop node under candidate selection rather than merely scoring it.
+    """
+    hit = hits.get(item_id)
+    return hit is not None and (hit.edge > 0.0 or hit.path is not None)
+
+
 def _snapshot(hits):
     """A hit list as comparable BYTES: id, order, and every score at FULL float precision.
 
@@ -87,8 +103,8 @@ class TwoHopBoundTest(unittest.TestCase):
             self.assertGreater(hits["b"].edge, 0.0)
             self.assertGreater(hits["c"].edge, 0.0)
             # THE PIN. `d` is three hops out and must be untouched by the expansion.
-            self.assertEqual(0.0, hits["d"].edge, "a THIRD hop was walked — the bound is broken")
-            self.assertIsNone(hits["d"].path)
+            self.assertFalse(_reached(hits, "d"),
+                             "a THIRD hop was walked — the bound is broken")
 
     def test_the_sql_carries_the_bound(self):
         """The bound is BOUND, not baked — so the constant is the single source of it."""
@@ -115,7 +131,7 @@ class TwoHopBoundTest(unittest.TestCase):
             store, _ = _chain(tmp)
             for run in range(4):
                 hits = {h.item.id: h for h in store.recall_relevant("rotation")}
-                self.assertEqual(0.0, hits["d"].edge,
+                self.assertFalse(_reached(hits, "d"),
                                  f"the 3-hop node surfaced on recall #{run + 1} — the bound crept")
             # …and the expansion is STABLE, not merely bounded: the same query gives the same
             # reachable set on a cold store and a warm one.
@@ -127,7 +143,10 @@ class TwoHopBoundTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store, _ = _chain(tmp)
             hits = store.recall_relevant("rotation")
-            self.assertEqual(["a", "b", "c", "d"], [h.item.id for h in hits])
+            # `a` matched directly; `b` and `c` are 1 and 2 hops off it. `d` is three hops out, so
+            # under R-1's candidate selection it is not a candidate and does not appear — the
+            # bound holding, not a hit going missing (`_reached` above).
+            self.assertEqual(["a", "b", "c"], [h.item.id for h in hits])
             self.assertGreater(hits[0].score, hits[1].score,
                                "a 1-hop neighbour outranked a full direct match")
 
@@ -208,8 +227,8 @@ class OpenWindowFilterTest(unittest.TestCase):
             store, backend = self._graph(tmp)
             self._close(backend, "a", "b")               # the ANCHOR's row
             hits = {h.item.id: h for h in store.recall_relevant("rotation")}
-            self.assertEqual(0.0, hits["b"].edge, "a CLOSED edge was walked from the anchor")
-            self.assertEqual(0.0, hits["c"].edge, "…and it bridged to a second hop")
+            self.assertFalse(_reached(hits, "b"), "a CLOSED edge was walked from the anchor")
+            self.assertFalse(_reached(hits, "c"), "…and it bridged to a second hop")
 
     def test_a_closed_second_hop_is_not_walked(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -217,7 +236,8 @@ class OpenWindowFilterTest(unittest.TestCase):
             self._close(backend, "b", "c")               # the RECURSIVE TERM's row
             hits = {h.item.id: h for h in store.recall_relevant("rotation")}
             self.assertGreater(hits["b"].edge, 0.0, "the OPEN first hop must still walk")
-            self.assertEqual(0.0, hits["c"].edge, "a CLOSED edge was walked in the recursive term")
+            self.assertFalse(_reached(hits, "c"),
+                             "a CLOSED edge was walked in the recursive term")
 
     def test_a_closed_window_is_history_not_staleness(self):
         """The third axis. A closed edge is a COMPLETE, CORRECT record of a relation that was once
@@ -341,7 +361,10 @@ class DegradeIsByteIdenticalTest(unittest.TestCase):
             direct = {h.item.id: h.score
                       for h in tiered.tiered_recall(store, "rotation", expander=None)}
             for hit in store.recall_relevant("rotation"):
-                expected = direct[hit.item.id] + tiered.EDGE_WEIGHT * hit.edge
+                # `.get(..., 0.0)` for the R-1 case: an item ADMITTED by a hop has no entry in the
+                # direct ranking precisely because no direct tier scored it, and 0.0 is its exact
+                # direct score rather than a stand-in for one. The claim stays exact.
+                expected = direct.get(hit.item.id, 0.0) + tiered.EDGE_WEIGHT * hit.edge
                 self.assertEqual(repr(expected), repr(hit.score),
                                  f"{hit.item.id}: the expansion term is not exactly "
                                  f"EDGE_WEIGHT × weight")
@@ -618,11 +641,26 @@ class KindWeightTest(unittest.TestCase):
         for kind in E.EDGE_KINDS:
             self.assertIn(kind, X.KIND_WEIGHT, f"{kind} is in the closed set but has no weight")
 
-    def test_the_unwired_five_default_explicitly(self):
+    def test_the_unwired_kinds_default_explicitly(self):
+        """WAS "the unwired five" until 2026-08-01, when `derives_from` gained a producer. Four
+        remain. The rule is unchanged: an unwired kind carries the explicit shared default, never a
+        `.get` fallback buried in the scorer, so the table is the complete answer to "what is each
+        kind worth"."""
         unwired = [k for k in E.EDGE_KINDS if k not in E.WIRED_KINDS]
-        self.assertEqual(5, len(unwired))
+        self.assertEqual(4, len(unwired))
         for kind in unwired:
             self.assertEqual(X.UNWIRED_DEFAULT_WEIGHT, X.KIND_WEIGHT[kind])
+
+    def test_wiring_derives_from_did_not_move_its_weight(self):
+        """`derives_from` is listed EXPLICITLY now that it has a producer, and deliberately at the
+        unwired default's value — so wiring the kind is byte-identical in RANKING and the only
+        thing that changed is that edges now exist to walk.
+
+        Moving the number would be a ranking change made on intuition; this module's header says
+        every weight is tuned against the at-scale fixture, not chosen. This pin is what makes a
+        future retune DELIBERATE: it goes red, and whoever reds it has to say what they measured."""
+        self.assertEqual(X.UNWIRED_DEFAULT_WEIGHT, X.KIND_WEIGHT[E.DERIVES_FROM])
+        self.assertIn(E.DERIVES_FROM, E.WIRED_KINDS)
 
     def test_an_unwired_kind_is_still_traversed(self):
         """The set is walked GENERICALLY — a kind is controlled by its WEIGHT, never by being

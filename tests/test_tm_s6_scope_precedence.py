@@ -331,8 +331,17 @@ class TestStoreScopedRecall(unittest.TestCase):
         store = self._store()
         self._seed(store)
         store.scope_context = S.ScopeContext(project="P", user="U")
-        subjects = {h.item.subject for h in store.recall_relevant("v", top_k=10)}
-        self.assertNotIn("q", subjects)
+        # The query names every seeded value, INCLUDING the off-path project's. That is the point:
+        # `q` is a genuine lexical match here, so its absence is scope filtering doing its job
+        # rather than the query simply missing it.
+        #
+        # It used to query `"v"`, which matched NOTHING (the values tokenize as `gv`/`pv`/`qv`/`mv`)
+        # and passed only because the pre-R-1 full-set read ranked and returned every active item
+        # whether or not the query touched it. R-1's candidate selection returns what the query
+        # matched, so that phrasing asserted scope filtering over an empty result. This one asserts
+        # it over a result where the excluded item was a real competitor.
+        subjects = {h.item.subject for h in store.recall_relevant("gv pv qv mv", top_k=10)}
+        self.assertNotIn("q", subjects, "an off-path project's LEXICAL MATCH leaked into recall")
         self.assertTrue({"g", "p", "me"} <= subjects)
 
 
