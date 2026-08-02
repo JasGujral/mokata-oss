@@ -304,13 +304,80 @@ class ProbeOrphanTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 _pg.get_connection(DSN, ValueError)
 
-    def test_adopt_closes_a_connection_it_displaces(self):
-        """Adopting must not strand a live socket another consumer believes it owns."""
+    def test_adopt_never_leaves_both_connections_open(self):
+        """The no-leak invariant, stated over the PAIR rather than over one of them.
+
+        This replaces `test_adopt_closes_a_connection_it_displaces`, which pinned the same
+        invariant by naming WHICH connection closes — and named the wrong one (ADOPT-LIVE-HANDLE).
+        The leak this guards is "two live sockets, one cache slot"; which of the two is disposed of
+        is a separate decision, and the two tests below make it."""
         first, second = FakeConn("first"), FakeConn("second")
         _pg.adopt(DSN, first)
         _pg.adopt(DSN, second)
-        self.assertIs(second, _pg._MANAGER[DSN])
-        self.assertEqual(1, first.closed, "the displaced connection was left open")
+        self.assertEqual(1, first.closed + second.closed,
+                         "exactly one of the two must be closed — both open leaks a socket, both "
+                         "closed leaves the cache holding a dead connection")
+        self.assertIn(DSN, _pg._MANAGER)
+        self.assertEqual(0, _pg._MANAGER[DSN].closed,
+                         "the connection left IN the cache is closed — every later consumer gets "
+                         "a dead handle")
+
+    def test_adopt_keeps_the_LIVE_cached_connection_and_closes_the_incoming_one(self):
+        """ADOPT-LIVE-HANDLE. `adopt` displaced-and-closed the CACHED connection, and that is
+        backwards: the cached connection is the one with OTHER REFERENTS.
+
+        `PostgresBackend`, `PgVectorStore`, `PostgresTransport` and the shared audit ledger each
+        take the managed connection ONCE in `__init__` and hold it as `self._conn` for their whole
+        lifetime (20+ `self._conn.execute` sites in the backend alone). The incoming connection has
+        exactly one referent — the probe worker that just opened it. So closing the cached one
+        INVALIDATES live handles across the process, while closing the incoming one disposes of a
+        redundancy nobody else can name. Same no-leak guarantee, opposite blast radius."""
+        held = FakeConn("held-by-consumers")
+        _pg.adopt(DSN, held)
+        incoming = FakeConn("probe-opened")
+        _pg.adopt(DSN, incoming)
+        self.assertIs(held, _pg._MANAGER[DSN],
+                      "a live cached connection was displaced — every consumer still holding it "
+                      "as self._conn now has a closed handle")
+        self.assertEqual(0, held.closed)
+        self.assertEqual(1, incoming.closed, "the redundant incoming connection leaked")
+
+    def test_adopt_DOES_replace_a_dead_cached_connection(self):
+        """The converse, and it is load-bearing: "never displace" would also be satisfied by an
+        adopt that could never refresh a broken cache, stranding the process on a dead socket.
+        A cached connection that reports closed has nothing worth keeping."""
+        dead = FakeConn("dead")
+        _pg.adopt(DSN, dead)
+        dead.close()
+        incoming = FakeConn("fresh")
+        _pg.adopt(DSN, incoming)
+        self.assertIs(incoming, _pg._MANAGER[DSN],
+                      "a DEAD cached connection was kept over a live incoming one — the cache "
+                      "can no longer heal itself")
+        self.assertEqual(0, incoming.closed)
+
+    def test_a_probe_does_not_close_the_connection_its_consumers_are_holding(self):
+        """The end-to-end shape, through the REAL `probe`, because this is how it reached users.
+
+        A consumer takes the managed connection and holds it (what every Postgres consumer does).
+        An ordinary probe then runs — `mokata doctor`, `team status`, or the 30s `team_health` TTL
+        refresh that `MemoryStore.from_surface` triggers via `resolve_read_routing`. Before this
+        fix the probe's `adopt` closed the consumer's handle, and its next statement raised
+        `psycopg.OperationalError: the connection is closed`. Reproduced on live Postgres 16.14
+        against a real `PostgresBackend`, and as the 2 of 77 DB.S8e errors in CI."""
+        held = FakeConn("held")
+        with mock.patch.object(_pg, "_raw_connect", lambda dsn, **kw: held):
+            self.assertIs(held, _pg.get_connection(DSN, ValueError))
+        probe_conn = FakeConn("probe")
+        with mock.patch.object(_pg, "_raw_connect", lambda dsn, **kw: probe_conn), \
+                mock.patch.object(teamdb, "_read_schema_version", return_value=(True, 5, 3)):
+            result = teamdb.probe(DSN, budget_ms=5_000)
+        self.assertTrue(result.reachable, "the probe must still succeed — this is not a fix that "
+                                          "works by making the probe fail")
+        self.assertEqual(0, held.closed,
+                         "an ordinary probe closed the connection its consumers are still holding "
+                         "— every live PostgresBackend in the process is now broken")
+        self.assertIs(held, _pg._MANAGER[DSN])
 
     # --------------------------------------------------- the un-forceable interleaving
     def test_abandoning_takes_a_connection_the_worker_already_handed_over(self):

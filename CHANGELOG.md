@@ -96,8 +96,86 @@ All notable changes to mokata are documented here. The format is based on
   an anchor, or a symbol anchor and no adopted code graph, mokata has no evidence the code moved
   and says nothing rather than blocking you on a guess.
 
+### Changed — memory ranking
+
+- **Memory ranking changed: a signal that matches nothing can no longer outrank one that does.**
+  This alters the ORDER `recall` returns results in — deliberately, and only where an embedder is
+  wired or an item carries recall history. Retrieval now holds one rule end to end: *no
+  non-matching signal, alone or in combination, may outrank a real match.* Two places broke it.
+  The **semantic tier** was weighted four times the lexical floor with no bound at all, and
+  embedding cosine between two *unrelated* items is a positive number — so on the built-in
+  token-hash embedder an item matching nothing collected more than a perfect keyword match, and
+  buried the answers under filler. The tier's weight is now derived from the embedder's own
+  measured noise rather than being one fixed number for every embedder: a quiet embedder keeps its
+  full weight, a noisy one is held to what it can be trusted with, and an embedder that cannot be
+  characterized fails closed and says so. Separately, the two **recall-history terms** (recency and
+  usage) were each individually below the lexical floor but *summed to exactly it*, so an item you
+  had recalled often enough tied a perfect match and won the tiebreak — they are now bounded as a
+  sum, keeping their relative weighting. Measured on the 5,000-item benchmark: retrieval with the
+  graph-expansion tier on went from **+0.0pp to +33.3pp recall** against the keyword floor, and the
+  semantic tier stopped costing recall and ranking quality. **If you have not opted into an
+  embedder (the default) and your store has no recall history yet, your ranking is unchanged** —
+  arithmetically, term for term.
+- **A semantic (pgvector) store no longer switches on token-hash embeddings you did not ask for.**
+  Selecting the opt-in `pgvector` memory store used to resolve its embedder to `auto`, whose
+  documented floor is the built-in token-hash embedder — so a team that opted into a semantic
+  store *without* naming an embedder, and without the `embeddings` extra installed, silently
+  filled a real vector index with token-hash vectors. Measured at 100,000 items, that tier is
+  **net-negative on recall** (see the known limitation below), so it must not be switched on by
+  the *absence* of configuration. Now: name an embedder and you get it (including
+  `memory.embedder: hashing`, if that is what you want, and an explicit ask that falls back still
+  says so); name none and the semantic tier stays **off**, with a notice saying why and how to
+  turn it on. Nothing changes for a store that already names its embedder.
+
+### Known limitations
+
+- **The SQLite FTS5/BM25 lexical tier ranks *worse* than the keyword floor it replaced, and at
+  scale it costs recall — measured, not suspected.** `normalize_lexical_scores` scales each
+  engine's scores against the best score *in its own result set*, which flattens exactly the gap
+  that would have ranked a mid-pack answer. On the 100,000-item benchmark, against the Jaccard
+  keyword floor on the same probes and the same code — only the corpus size differs — the FTS
+  tier measures **−5.6pp recall (0.5000 → 0.4444)** and **−10.8pp MRR@10 (0.8334 → 0.7258)**.
+  At 5,000 items the same comparison loses no recall at all and only −3.3pp MRR, so the small
+  corpus hides more than half of it: normalizing against the result set's own max only begins
+  dropping real answers once there are enough genuine competitors. **This is shipping as-is and
+  the fix is scheduled for 0.0.17** alongside the BM25/H-4 ranking work, because the correct
+  repair is rank-preserving normalization rather than a constant to tune, and it wants measuring
+  in one pass with the rest of the ranking. It is recorded here rather than left to be discovered:
+  if you run a large store and your lexical results look mis-ordered, this is why.
+
+### Performance
+
+- **Recall no longer reads your whole memory store to answer one question.** Retrieval used to
+  begin by materializing *every* active visible item and decoding each one, on every recall —
+  then ranking what it had already paid for. On a 100,000-item store that was **51,606 rows and
+  4,533 ms**. Each tier now nominates its own ranked shortlist in the database, the capped union
+  is hydrated, and — the part with teeth — **your scope predicate travels with that query** instead
+  of being applied afterwards. Same store, after: **26 rows and 20.1 ms** (225× on latency, ~2,000×
+  on rows), and the read no longer grows with the store. This also fixes a real correctness bug on
+  the way: the ranked query's limit used to be taken over the *whole* store and only then
+  intersected with what you were allowed to see, so a reader whose matching items all ranked below
+  the cut got **nothing back while their own rows sat unread underneath**.
+- **Per-turn memory injection cost three-quarters of a second per prompt.** The per-turn recall
+  that rides `UserPromptSubmit` was still doing the whole-store read described above — one layer
+  up, where the retrieval fix had not reached it. Measured on a 100,000-item store over 20
+  consecutive turns: **787.0 ms → 36.8 ms per turn (21×)**. If you use mokata on a large store,
+  this was a latency you paid on *every single prompt*.
+
 ### Fixed
 
+- **Windows is now actually first-class, as the docs already claimed.** `platform-support.md` has
+  described mokata as "a first-class citizen on Windows, macOS, and Linux" — and for the
+  self-protect gate that was **not true**: it enforced *neither way* on Windows. The tokenizer
+  treated `\` as a shell escape (it is POSIX's escape character, but Windows' path **separator**),
+  which collapsed `C:\…\site-packages\pkg\mod.py` into a string with no path components left — so
+  a write into an installed mokata **was never judged at all** (exit 0 where a block is required),
+  while ordinary in-repo writes were **over-blocked** because their paths collapsed to relative
+  ones that resolved outside the workspace. Both directions came from one root cause and are fixed
+  at the root; POSIX tokenization is byte-identical. Alongside it: a POSIX-only `os.geteuid` call
+  evaluated at *import* time took an entire test module down during discovery on Windows, and hook
+  output capture and worktree path comparison are now encoding- and separator-agnostic. **This
+  release makes the platform claim true rather than editing it down** — the Windows CI matrix now
+  *executes* these paths instead of asserting about them as strings.
 - **Re-entering a pipeline no longer wedges the approval loop.** Returning to brainstorm on an
   existing pipeline and re-generating the spec used to pop an approval prompt on every request;
   approvals are now keyed to the pipeline, and the shared awaiting-head names the other pending

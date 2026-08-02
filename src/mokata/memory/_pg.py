@@ -105,12 +105,31 @@ def adopt(dsn: str, conn: Any) -> None:
     """Publish an `open_unmanaged` connection into the shared cache — the ONE way a privately
     opened connection becomes the process-wide one for `dsn`.
 
-    Called only by a caller that is still waiting on the work that opened it (PROBE-ORPHAN). Any
-    connection already cached for `dsn` is closed first, so adopting cannot silently strand a live
-    socket that another consumer still believes it owns.
+    Called only by a caller that is still waiting on the work that opened it (PROBE-ORPHAN).
+    EXACTLY ONE of the two connections is closed, always: leaving both open leaks a socket, and
+    the cache holds one connection per DSN by construction.
+
+    ADOPT-LIVE-HANDLE (doc 84, fixed 2026-08-02) — WHICH of the two closes is the whole content of
+    this function, and the first version chose backwards. It closed the CACHED connection to avoid
+    "stranding a live socket", but the cached connection is precisely the one with OTHER REFERENTS:
+    `PostgresBackend`, `PgVectorStore`, `PostgresTransport` and the shared audit ledger each take
+    the managed connection ONCE in `__init__` and hold it as `self._conn` for their whole lifetime.
+    The incoming connection has exactly one referent — the worker that just opened it. So closing
+    the cached one does not strand a socket, it INVALIDATES live handles process-wide; every
+    consumer built before the probe then raises `the connection is closed` on its next statement.
+
+    A LIVE cached connection therefore WINS and the incoming one is closed as the redundancy it is.
+    A cached connection that reports closed has nothing worth keeping and IS replaced, so the cache
+    still heals itself — "never displace" would strand the process on a dead socket, which is the
+    same class of bug pointing the other way.
     """
     previous = _MANAGER.get(dsn)
-    if previous is not None and previous is not conn:
+    if previous is conn:
+        return
+    if previous is not None and _is_live(previous):
+        close_quietly(conn)                  # the cache already has a live, REFERENCED connection
+        return
+    if previous is not None:                 # a dead cached connection — nothing to preserve
         close_quietly(previous)
     _MANAGER[dsn] = conn
 

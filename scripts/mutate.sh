@@ -73,6 +73,33 @@
 # What is deliberately NOT claimed: this does not make a GREEN mean "the pin is weak". A GREEN can
 # still be an honest survivor because the mutated line is UNREACHABLE on the path the tests drive.
 # That is a real finding and wants a hand-built input that reaches it, not a deleted guard.
+#
+# ---------------------------------------------------------------------------------------------
+# ★ STANDING RULE: NEVER MUTATE A SOURCE FILE BY HAND. THIS SCRIPT OR NOTHING.
+#
+# Holes 1 and 2 are properties of CPython's bytecode cache, NOT of this script. They apply to ANY
+# mutate -> restore done by hand, and by hand NEITHER protection is in force: nothing deletes the
+# stale pyc going in, and nothing stops the mutant pyc being written on the way out.
+#
+# THIS IS NOT THEORETICAL — IT RECURRED, LIVE, DURING THE 2026-08-02 PRE-AUDIT SWEEP, in the very
+# session that was auditing this hazard. A by-hand edit of `src/mokata/teamdb.py`
+# (`_pg.open_unmanaged` -> `_pg.get_connection`, 14 characters -> 14 characters, exactly
+# size-preserving) was applied and restored outside this script. The restore landed in the same
+# integer second, so the mutant `.pyc` stayed valid. THE WORKING TREE THEN EXECUTED CODE THAT WAS
+# NOT IN THE WORKING COPY FOR ROUGHLY FORTY MINUTES, with `git status` clean and `git diff` empty.
+# It reddened three PROBE-ORPHAN pins and sent the investigation after a phantom cross-test
+# interaction that did not exist.
+#
+# It was caught only by a `_MANAGER.__setitem__` trace whose stack read `teamdb.py:459
+# open_unmanaged` calling `_pg.py:151 get_connection`. THAT IS THE SIGNATURE, and it is worth
+# memorising because nothing else gives the game away: THE SOURCE LINE AND THE EXECUTING FRAME
+# DISAGREE. Neither the diff, the status, nor the test output can show you this — by construction,
+# since the whole failure is that the file on disk is not the code being run.
+#
+# So: if you are about to hand-edit a source file to see whether a test catches it, STOP and run
+# this script instead. If you have already done it, `find . -name '__pycache__' -exec rm -rf {} +`
+# before you believe ANY result from that shell. A one-line edit is exactly the size-preserving
+# case, and "I'll put it back in a second" is exactly the mtime collision.
 # ---------------------------------------------------------------------------------------------
 set -euo pipefail
 
