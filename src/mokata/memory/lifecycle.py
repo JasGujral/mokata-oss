@@ -97,6 +97,49 @@ USAGE_SATURATION_HITS = 5.0
 _SECONDS_PER_DAY = 86400.0
 
 
+# ------------------------------------------------------------------ the ONE ISO lexer
+# THE dialect gap, and why this is a lexer rather than a try/except: `datetime.fromisoformat` only
+# learned the Zulu designator ('…Z') in Python 3.11. mokata's declared floor is 3.10, where every
+# `…Z` stamp — the dialect Postgres, a teammate's client and half the ISO-8601 world emit — raises
+# ValueError. At the ranking inputs below that fault is SILENT: `parse_iso` absorbs it to None, the
+# term degrades to 0.0, and a recency signal that exists simply stops counting. Nothing logs, no
+# test fails, and the ordering is quietly wrong on the interpreter the package claims to support.
+#
+# It is normalized UNCONDITIONALLY — no `sys.version_info` branch anywhere in this path. A
+# version-gated fix ships two lexers and guarantees that whichever one CI does not run is the one
+# that rots; an unconditional rewrite means 3.10 and 3.12 lex the same bytes the same way, so a
+# test that passes on either is evidence about both. On 3.11+ the rewrite is a no-op in meaning:
+# '+00:00' is what that interpreter already parses '…Z' into.
+_ZULU = ("Z", "z")
+_UTC_OFFSET = "+00:00"
+
+
+def _normalize_iso(value: Any) -> Any:
+    """`value` with a trailing Zulu designator rewritten to the explicit `+00:00` offset.
+
+    Byte-identical passthrough for EVERYTHING else — an already-explicit `+00:00`, any other
+    offset, a naive stamp, a non-string, the empty string. It corrects one dialect; it does not
+    validate, repair or canonicalize, so a malformed stamp stays malformed and still raises
+    downstream where the caller's contract decides what that means.
+    """
+    if not isinstance(value, str):
+        return value
+    if len(value) > 1 and value[-1] in _ZULU:
+        return value[:-1] + _UTC_OFFSET
+    return value
+
+
+def parse_iso_strict(value: Any) -> datetime:
+    """An ISO-8601 timestamp as an aware datetime. RAISES on genuinely malformed input.
+
+    The raising half of the pair, for callers whose contract is "this stamp is well-formed and a
+    bad one is a bug" rather than "degrade to no signal". A naive timestamp is read as UTC, matching
+    `item.now_iso`, so mixed-offset stores compare correctly.
+    """
+    dt = datetime.fromisoformat(_normalize_iso(str(value)))
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
 def parse_iso(value: Any) -> Optional[datetime]:
     """An ISO-8601 timestamp as an aware datetime, or None for anything unparseable.
 
@@ -104,14 +147,22 @@ def parse_iso(value: Any) -> Optional[datetime]:
     hand-editable doc and a teammate's client, so a malformed one must degrade to "no signal"
     (score 0.0 — the back-compat floor) instead of failing a recall. A naive timestamp is read as
     UTC, matching `item.now_iso`, so mixed-offset stores compare correctly.
+
+    WHY THE ABSORBER IS SAFE NOW, which it was not before: an absorber at a ranking input cannot
+    tell "this stamp is garbage" from "this interpreter cannot read this dialect", and it answers
+    both with the same silent 0.0. That is fine for the first and a correctness bug for the second.
+    `_normalize_iso` closes the Zulu case AHEAD of the absorber, so the one dialect gap that used to
+    reach it — and the only one mokata's own writers and Postgres actually emit — no longer can.
+    The absorber is back to meaning what it says: this input was malformed. It is NOT a general
+    dialect shim, and the remaining 3.10 gaps (week dates, comma fractional seconds) still land in
+    it silently — tracked as PARSE-ISO-ABSORBS in doc 84, and NOT closed by this fix.
     """
     if not value:
         return None
     try:
-        dt = datetime.fromisoformat(str(value))
+        return parse_iso_strict(value)
     except (TypeError, ValueError):
         return None
-    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
 
 
 def recency_score(signal: UsageSignal, created_at: str = "",

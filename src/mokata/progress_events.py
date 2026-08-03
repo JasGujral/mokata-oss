@@ -481,12 +481,16 @@ def _event_age_hours(event: Dict[str, Any]) -> Optional[float]:
     ts = event.get("ts") if isinstance(event, dict) else None
     if not isinstance(ts, str) or not ts:
         return None
-    try:
-        when = datetime.fromisoformat(ts)
-    except ValueError:
+    # THE one ISO lexer (`memory.lifecycle.parse_iso`): same never-raise contract this function
+    # already had, same naive-is-UTC reading, and it lexes a `…Z` stamp on the declared 3.10 floor
+    # where a bare `fromisoformat` does not. Imported inside the function deliberately — this module
+    # loads today WITHOUT pulling `mokata.memory`, and a top-level import would drag that whole
+    # package (backends, embeddings, vector store) into every importer of this light module.
+    from .memory.lifecycle import parse_iso
+
+    when = parse_iso(ts)
+    if when is None:
         return None
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)        # a naive stamp is UTC, as `_now_iso` writes
     return (datetime.now(timezone.utc) - when).total_seconds() / 3600.0
 
 
