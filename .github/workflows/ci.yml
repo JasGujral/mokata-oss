@@ -31,6 +31,23 @@ jobs:
         os: ["ubuntu-latest", "windows-latest"]
         python: ["3.12"]
         jsonschema: ["absent", "present"]
+        # THE DECLARED FLOOR, exercised on the PR gate. `requires-python = ">=3.10"` in
+        # pyproject.toml is a promise to users, and until 0.0.16 the ONLY job that ever ran 3.10
+        # was release.yml — so the floor was first exercised at TAG time, after the code was
+        # already declared done. That is how the ISO-dialect split shipped green: `fromisoformat`
+        # learned '…Z' in 3.11, the fault only exists BELOW the CI floor, and a 3.12-only gate is
+        # structurally blind to every such gap.
+        #
+        # Deliberately ONE leg via `include`, not a Python axis: adding "3.10" to `python:` above
+        # would cross-product to 8 legs and roughly double a gate that is already ~45 min.
+        # ubuntu (cheapest runner) × jsonschema=present (the fuller dependency surface — the
+        # `absent` axis is about optional-dep degradation, which is orthogonal to interpreter
+        # version). One leg is not full floor coverage and is not claimed to be; broader matrix
+        # work is tracked as CI-MATRIX-FLOOR-GAP in doc 84.
+        include:
+          - os: "ubuntu-latest"
+            python: "3.10"
+            jsonschema: "present"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
