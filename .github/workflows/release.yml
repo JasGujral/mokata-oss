@@ -274,6 +274,6 @@ jobs:
       - name: Publish to PyPI (Trusted Publishing) — the reproducible, attested artifact
         # No `python -m build` here BY DESIGN: a rebuild would yield a DIFFERENT, unsigned wheel
         # than the one attached to the GitHub Release. We upload the downloaded dist verbatim.
-        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: dist
