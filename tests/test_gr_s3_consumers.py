@@ -24,6 +24,7 @@ import _support  # noqa: F401  (puts src/ on the path)
 from mokata.brainstorm import Approach, BrainstormGateError, BrainstormSession
 from mokata.brainstorm_impact import DesignFitVerdict, compute_impact
 from mokata.knowledge.query import QueryResult, Reference
+from mokata.knowledge.query import BASIS_LEXICAL, BASIS_STRUCTURAL
 
 
 # ---------------------------------------------------------------- deterministic fake layers
@@ -40,7 +41,8 @@ class _Layer:
     def blast_radius(self, symbol, depth=2):
         return QueryResult("blast_radius", symbol,
                            references=list(self.table.get(symbol, [])),
-                           backend=self.backend_name, degraded=self._degraded)
+                           backend=self.backend_name,
+                           basis=(BASIS_LEXICAL if self._degraded else BASIS_STRUCTURAL))
 
 
 def _ref(path, line, sym):

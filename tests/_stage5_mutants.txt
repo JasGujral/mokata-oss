@@ -1,0 +1,56 @@
+GATE-UNREACHABLE-BRAINSTORM (D1) + the two registry rulings — 0.0.17 stage 5's mutant list
+==========================================================================================
+
+Scope: the logic ADDED or CHANGED at stage 5 — `_gatereach.keyword_origination` (the new
+derivation), the `skill_contracts.GATES` registry moves (`self-protect` added, `ship-readiness`
+demoted), and the `record_finish_decision` back-compat deletion. Stage 4's `build_gate_reachability`
+is NOT re-graded here; it was graded in its own stage and no resolution rule was touched.
+
+Run with `scripts/mutate.sh` and NOTHING ELSE (doc 85 §7b): only it purges the stale `.pyc`, sets
+PYTHONDONTWRITEBYTECODE=1, takes an exclusive lock, restores by CONTENT IDENTITY, and traps
+EXIT/INT/TERM so an interrupted run cannot leave the tree mutated. `_stage5_mutants.sh` beside this
+file drives the list and consumes mutate.sh's exit contract (0.0.17 stage 18b).
+
+RED = the mutation was caught. GREEN = it SURVIVED. BROKEN = no verdict (never read as either).
+
+SCORE: 10 / 10 RED.
+
+  M01  keyword match inverted (`==` -> `!=`)                          RED  (11 failures)
+  M02  entry_reachable `and` -> `or`                                  RED  (3 failures)
+  M03  entry-reachability check dropped (pinned True)                 RED  (4 failures)
+  M04  owner lookup nulled                                            RED  (3 failures)
+  M05  source-order sort deleted                                      RED  (1 failure)
+  M06  ship-readiness re-promoted to backed                           RED  (11 failures)
+  M07  self-protect enforcement point repointed                       RED  (2 failures)
+  M08  `approved = bool(approve)` pinned True                         RED  (1 failure)
+  M09  ★ SIMULATED 0.0.19 WIRING — a LIVE `graph_gate=` planted in a
+       reached CLI handler (`cli_commands/approve.py`)                RED  (2 failures)
+  M10  ★ PLANTED UNREACHABLE GATE — the certified zero
+       (`engine/ship.py`) re-promoted to a BACKED registry entry      RED  (2 failures)
+
+M09 and M10 are the §7i grades, and they are planted in the LIVE tree rather than in a synthetic
+corpus. That matters here more than usual: this stage's subject is an ABSENCE (no production path
+originates a `graph_gate`; no surface reaches `engine/ship.py`), and a sweep that walks a healthy
+tree and finds nothing proves nothing. M09 makes the D1 pin's failure case real by wiring the gate
+the way 0.0.19 will, and M10 makes a backed gate genuinely unreachable. Both must RED, and the
+former is the one that will legitimately go RED for good when D14's deferral lifts.
+
+TWO SURVIVORS WERE FOUND AND BOTH ARE RECORDED RATHER THAN QUIETLY RE-RUN:
+
+  · M05 SURVIVED the first batch and was a REAL GAP, not a weak mutant. `ast.walk` is
+    BREADTH-FIRST, so a method inside a `class` is yielded AFTER a module-level function defined
+    below it (measured: lines [7, 4]) — the sort is load-bearing and the pin indexes `passes[0]`.
+    Every planted corpus in the module had at most ONE pass, so ordering could not matter anywhere
+    it was checked. Fixed by adding `test_the_population_is_returned_in_source_order` with a
+    two-pass corpus; M05 then RED.
+
+  · M08 SURVIVED against `test_stage34_ship_and_baseline.py` and was an ARTEFACT OF THE TEST GLOB,
+    not a gap. The not-approved path is pinned by
+    `test_stage60_trust_visibility.test_ship_stays_human_gated_never_auto_merges` (the P2
+    human-gate invariant). Re-graded against `test_*.py`: RED. Recorded because a survivor that
+    turns out to be a mis-scoped run is exactly the shape that gets silently re-run and forgotten.
+
+ONE MUTANT WAS BROKEN AND REPLACED: the first M04 attempt (`if not isinstance(node, ast.Call):`)
+matched 4 occurrences in the file and mutate.sh refused it with exit 3 — no verdict, per the exit
+contract. Replaced with the owner-lookup mutant above, which is unique. Recorded so the list's
+count cannot be read as "10 attempted, 10 graded" when it was 11 attempted.

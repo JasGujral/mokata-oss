@@ -48,6 +48,9 @@ _to_delete/
 *.tgz
 _stale_HEAD.lock*
 _stale_index.lock*
+# scripts/mutate.sh's exclusive-run lock. Lives only for the length of a mutation run; a file
+# left here after one means a run was SIGKILLed, and the next run reclaims it (dead pid = corpse).
+.mutate.lock
 # Local Postgres data dirs from live-DB test legs (DB.S2b/DB.S5 integration).
 pgdata/
 *-pgdata/

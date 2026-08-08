@@ -21,7 +21,7 @@ approving the SAME content, produces a DIFFERENT id every time:
 
 This is the residual REVIEW-FIX.R1 filed. R1 fixed exactly this class for the review verdict by
 making the record-key and the read-key one session-aware resolution
-(`badge_run.resolve_verdict_run`); this stage extends that seam to the approval chain.
+(`run_resolver.resolve_verdict_run`); this stage extends that seam to the approval chain.
 
 What these tests pin:
   (a) the two repro legs, red before the fix;
@@ -45,7 +45,7 @@ from mokata import approval as A
 from mokata import session as S
 from mokata.awaiting import (AMEND_ABORT_CMD, AMEND_REGRESSED_NOTE, APPROVE_CMD, AWAITING,
                              awaiting_block)
-from mokata.badge_run import resolve_run_for_evidence
+from mokata.run_resolver import resolve_run_id
 from mokata.config import Surface
 from mokata.govern.ledger import AuditLedger
 from mokata.govern.resume import PipelineCheckpoint
@@ -203,7 +203,7 @@ class TestTheKeyIsThePipelineNotTheProcess(_Base):
     def test_re_entry_resolves_the_run_that_holds_the_evidence(self):
         d = _pipeline_repo()
         _re_enter(d, "runB")
-        self.assertEqual(resolve_run_for_evidence(d), "runA",
+        self.assertEqual(resolve_run_id(d), "runA",
                          "a re-entered session registers a BARE checkpoint; the pipeline is the "
                          "run holding the approved approach and the emitted spec")
 
@@ -211,13 +211,13 @@ class TestTheKeyIsThePipelineNotTheProcess(_Base):
         d = _pipeline_repo()
         _re_enter(d, "runB")
         with mock.patch.dict(os.environ, {"MOKATA_SESSION_ID": "pinned"}):
-            self.assertEqual(resolve_run_for_evidence(d), "pinned")
+            self.assertEqual(resolve_run_id(d), "pinned")
 
     def test_a_repo_with_no_pipeline_resolves_to_nothing(self):
         d = tempfile.mkdtemp()
         init_repo(root=d, profile="standard", assume_yes=True, out=lambda *_a: None)
         _enter_session("solo")
-        self.assertIsNone(resolve_run_for_evidence(d),
+        self.assertIsNone(resolve_run_id(d),
                           "no pipeline evidence and no run state — there is nothing to resolve, "
                           "and the caller must not be handed a guess")
 
@@ -227,7 +227,7 @@ class TestTheKeyIsThePipelineNotTheProcess(_Base):
         surface = Surface.load(d)
         PipelineCheckpoint(surface.state, "runB").ensure_registered()
         surface.state.write("emitted_spec", {"title": "other", "criteria": [], "version": 1})
-        self.assertIsNone(resolve_run_for_evidence(d),
+        self.assertIsNone(resolve_run_id(d),
                           "two runs hold evidence and neither is pinned — mokata refuses rather "
                           "than picks a window (the R1 discipline)")
 
@@ -392,7 +392,7 @@ class TestTheFiledResidual(_Base):
         surface = Surface.load(d)
         PipelineCheckpoint(surface.state, "runB").ensure_registered()
         surface.state.write("emitted_spec", {"title": "other", "criteria": [], "version": 1})
-        self.assertIsNone(resolve_run_for_evidence(d))
+        self.assertIsNone(resolve_run_id(d))
 
         out = TS.spec_emit(path=d, title="s2", criteria=C2, tests=T2, approach="A1")
         self.assertEqual(out["status"], "proposed")

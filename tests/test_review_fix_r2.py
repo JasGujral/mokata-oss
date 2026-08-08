@@ -48,13 +48,13 @@ from unittest import mock
 import _support  # noqa: F401  (puts src/ on the path)
 
 from mokata import config_cmd, progress
-from mokata.badge_run import bind_session_run
+from mokata.run_resolver import bind_session_run
 from mokata.config import Surface
 from mokata.govern.resume import CHECKPOINT_PREFIX, PipelineCheckpoint
 from mokata.progress import (
+    build_progress,
     STAGE_BADGE_STAGES,
     _shipped_run_ids,
-    find_active_run,
     list_runs,
     list_runs_by_recency,
 )
@@ -257,7 +257,10 @@ class TestReviewFixR2Regression(_NoPinnedSession):
 
             # NEW — still retired; no run is reported as active, and the badge is clean.
             self.assertEqual(_shipped_run_ids(surface.state), {"shipped"})
-            self.assertIsNone(find_active_run(surface.state))
+            # RUN-ID-DRIFT — the retirement now narrows inside the ONE resolver (rung viii) and is
+            # applied again as display policy by `build_progress`; either way the shipped run is
+            # not reported as current.
+            self.assertIsNone(build_progress(surface.state, root=d).run_id)
             bind_session_run(d, "sessA", "shipped")
             self.assertEqual(progress.build_stage_badge(Surface.load(d), session_id="sessA"),
                              "mokata")
@@ -357,7 +360,7 @@ class TestRetirementCannotBeTruncated(_NoPinnedSession):
             self.assertEqual(_shipped_run_ids(surface.state, "shipped"), {"shipped"})
 
     def test_the_badge_still_retires_a_flooded_out_shipped_run(self):
-        """`badge_run._run_is_shipped` asks the run-filtered question now; the answer must not
+        """`run_resolver._run_is_shipped` asks the run-filtered question now; the answer must not
         depend on how much noise landed after the ship event."""
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
@@ -378,7 +381,7 @@ class TestRetirementCannotBeTruncated(_NoPinnedSession):
             ProgressLog.from_surface(surface).append_event(STAGE_ENTER, "develop", run_id="runA")
             _flood(surface, run_id="other")
             self.assertEqual(_shipped_run_ids(surface.state), set())
-            self.assertEqual(find_active_run(surface.state), "runA")
+            self.assertEqual(build_progress(surface.state, root=d).run_id, "runA")
 
     def test_run_filtered_scan_ignores_other_runs_ship_events(self):
         with tempfile.TemporaryDirectory() as d:

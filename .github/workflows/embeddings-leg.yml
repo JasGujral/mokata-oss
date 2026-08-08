@@ -59,6 +59,17 @@ jobs:
         # THE point of the job: model2vec is REAL here, not a `mock.patch` on `_load_model2vec`.
         run: pip install -e ".[embeddings]"
 
+      - name: Install workflow-lint test tooling (PyYAML — a test-only dep, not a mokata dep)
+        # ADDED 0.0.17 stage 10, and it is a FIX, not plumbing. This job runs the FULL unit suite
+        # below, and it was the only such job without PyYAML — so the 17 parser-dependent tests
+        # skipped here every run, and the job reported OK while checking none of them. Exactly
+        # the "skipped leg reads GREEN" failure the preflight step below exists to prevent,
+        # one step further down the same job.
+        # Now load-bearing: the action-pin sweep (tests/test_s10_workflow_pins.py) RAISES rather
+        # than skips without a parser (§7g), so this install is what lets the suite answer at all.
+        # Hash-pinned like the sibling jobs (SC.S1 / Scorecard Pinned-Dependencies).
+        run: pip install --require-hashes -r requirements/ci.txt
+
       - name: "Preflight — THE EMBEDDINGS GATE MUST BE ON (a skipped leg reads GREEN)"
         working-directory: tests
         # LIVE-LEG-ORPHANS, applied before the orphan exists. Every class in the leg is wrapped in

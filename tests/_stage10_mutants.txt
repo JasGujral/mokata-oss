@@ -1,0 +1,102 @@
+STAGE 10 — PIN-SUBSTRING-COMMENT-HOLE (breadth) — mutation record
+=================================================================
+
+Driver : tests/_stage10_mutants.sh   (via scripts/mutate.sh — doc 85 §7b, no hand-mutation)
+Graded : tests/test_s10_workflow_pins.py   (21 tests) over tests/_workflow_pins.py
+Result : 16 mutants, 16 RED, 0 survivors — first batch, no rewrites needed.
+
+§7i — WHY THIS STAGE IS THE DANGEROUS ONE
+-----------------------------------------
+Every action reference in all nine workflows was ALREADY correctly SHA-pinned before this stage
+and still is. So the sweep's real-tree assertion runs over a corpus with ZERO offenders, and on
+its own it grades exactly nothing — the shape the 7i audit convicted, built deliberately by a
+breadth stage. Two things stop it being a comment:
+
+  * the sweep takes a CORPUS DIRECTORY as a parameter rather than finding the repo itself, so the
+    tests can hand it broken corpora (TestSyntheticOffenders, 9 cases, one defect each);
+  * this batch plants a real tag pin in EACH OF THE NINE WORKFLOWS in turn.
+
+LAYER 1 — a tag pin planted in each real workflow (T01-T09)
+-----------------------------------------------------------
+T01  RED  ci.yml                (no generic coverage before this stage)
+T02  RED  codeql.yml            (   "   )
+T03  RED  docs.yml              (   "   )
+T04  RED  scorecard.yml         (   "   — its action was pinned only by the bespoke identity pin)
+T05  RED  quality-at-scale.yml  (   "   )
+T07  RED  embeddings-leg.yml    (   "   )
+T08  RED  live-db-legs.yml      (   "   )
+T09  RED  real-crg.yml          (   "   )
+T06  RED  release.yml `pypi` job — ★ THE SUBSUMPTION PROOF.
+
+     T06 is the only one of the nine that the deleted bespoke pin covered. It drops that job's
+     `pypa/gh-action-pypi-publish` step to `@v1.14.1` and requires the NEW sweep to go red on it,
+     with the sweep's test file run in isolation so the verdict is attributable to the sweep and
+     not to the pin being replaced. Only after T06 came back RED was
+     `test_stage68_supply_chain.py::test_pypi_actions_are_sha_pinned` deleted. Had it come back
+     GREEN the bespoke pin would have been kept.
+
+LAYER 2 — the sweep's own logic (S01-S07)
+------------------------------------------
+A sweep that catches a planted tag for the wrong reason is still broken, so these attack the
+mechanism rather than the corpus.
+
+S01  RED  SHA shape widened to accept UPPERCASE hex — a 40-char string git will not resolve.
+S02  RED  SHA shape widened to `{7,40}` — abbreviated SHAs are collidable and resolved at run
+          time, so they are not immutable references.
+S03  RED  job-level `uses:` no longer walked. A tag-pinned REUSABLE WORKFLOW call is exactly as
+          mutable as a tag-pinned action and is invisible to any sweep that only walks `steps` —
+          which is what the deleted bespoke pin did.
+S04  RED  a mutable docker tag counts as pinned.
+S05  RED  the corpus walk stops after the first file (3 failures — including the real-tree
+          "every workflow contributes references" anti-vacuity pin).
+S06  RED  ★ §7g. Missing PyYAML degrades QUIETLY (`return None`) instead of raising, which is
+          what the suite's other 17 PyYAML call sites do. Under this mutant the sweep reports a
+          CLEAN TREE on a runner with no parser — an absent answer wearing a pass. 2 failures.
+S07  RED  everything treated as a local action, so nothing needs a pin (11 failures).
+
+BESPOKE PINS — DISPOSITION
+--------------------------
+DELETED   test_stage68_supply_chain.py::test_pypi_actions_are_sha_pinned
+          Subsumed and PROVEN so by T06. The sweep covers its one job plus 8 more workflows,
+          walks job-level `uses:` too, and raises instead of skipping without PyYAML.
+
+KEPT      test_tm_s12a_branch_protection.py::test_sha_pin_intact
+          NOT subsumed. It asserts the IDENTITY of scorecard-action's ref (the exact reviewed
+          commit `4eaacf05...`); the sweep asserts only its SHAPE. A silent repoint to a
+          different well-formed 40-hex SHA is green under the sweep and red under this. Reason
+          recorded in the test's own docstring so it is not deleted later as "duplicate".
+
+KEPT      tests/test_pin_drift.py + packaging.ACTION_PIN_PATHS
+          Different property entirely, despite the name. These guard the `mokata-check@vX.Y.Z`
+          references to mokata's OWN action inside published docs, i.e. version-consistency at a
+          release. Nothing to do with third-party SHA pinning.
+
+WHAT FAILING LOUD IMMEDIATELY FOUND
+-----------------------------------
+Making the sweep raise instead of skip turned up a live §7g defect that no mutant planted.
+
+`embeddings-leg.yml` runs the FULL unit suite (`unittest discover -s tests -t tests`, :135) and
+installed only `pip install -e ".[embeddings]"` — no PyYAML. It was the only full-suite job in
+CI without the parser. So all 17 parser-dependent tests SKIPPED there on every run and the job
+reported OK while checking none of them, which is the very failure its own preflight step guards
+against ("a skipped leg reads GREEN") occurring one step further down the same job.
+
+Under the new sweep that job would have gone RED, because the sweep refuses to answer without a
+parser. FIXED by adding the hash-pinned `requirements/ci.txt` install the sibling jobs already
+carry. Two consequences worth naming: that job now genuinely runs the 17 tests it was skipping,
+and the fail-loud requirement paid for itself before the stage even landed.
+
+Audited for the same defect across all nine: `ci.yml` and `release.yml` already install ci.txt;
+`real-crg.yml` runs only pattern-scoped discovery (`-p "test_db_s4_pgvector.py"`,
+`-p "test_gr_s2_*.py"`) which never reaches this file; the other five run no suite at all.
+
+WHAT THIS BATCH DOES NOT COVER
+------------------------------
+* `.github/actions/mokata-check/example-pr-check.yml` carries a deliberately TAG-pinned
+  `mokata-check@v0.0.x` reference. It is outside the swept corpus (`.github/workflows/`) by
+  design — it is a published example telling users how to reference the action, and its version
+  is guarded by test_pin_drift instead. If the sweep's corpus is ever widened to the whole
+  `.github/` tree, that file will need an explicit exemption.
+* Nothing here validates that a pinned SHA actually EXISTS upstream, or that it is the commit the
+  adjacent `# vX.Y.Z` comment claims. A pin to a well-formed but wrong/rewritten SHA is green.
+  Catching that needs a network call, which no test in this suite makes.

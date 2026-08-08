@@ -57,6 +57,13 @@ from mokata.brainstorm import Approach, BrainstormGateError, BrainstormSession
 from mokata.brainstorm_impact import DesignFitVerdict
 from mokata.govern.stale_ref_gate import (GATE_ID, StaleRefOutcome, brainstorm_stale_ref_gate,
                                           check_stale_refs)
+from _translating import (
+    Declaration,
+    Interception,
+    TranslatingConnection,
+    placeholder_rewrite,
+)
+
 from mokata.memory.backends import PostgresBackend, SQLiteBackend
 from mokata.memory.item import ACTIVE, PERSISTENT, SUPERSEDED, MemoryItem
 from mokata.memory.staleness import INDEX_EPOCH_OFF, is_stale, read_index_epoch
@@ -64,14 +71,52 @@ from mokata.prior_art import RelatedDecision, run_prior_art
 
 
 # ---------------------------------------------------------------- shared-store shim
-class _PgShim:
+def _to_regclass(conn, _sql, params):
+    """Answer the backend's catalogue probe the way Postgres does: the table's name when it
+    exists, NULL when it does not.
+
+    This is an INTERCEPTION, not a rewrite — the engine never sees the statement. Letting it RAISE
+    would make the backend's edge probe report a DEGRADED capability, i.e. a loud and correct
+    warning about the SHIM rather than about the code under test."""
+    name = (params or (None,))[0]
+    present = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()
+    return conn.execute("SELECT ?", (present[0] if present else None,))
+
+
+_DECLARATION = Declaration(
+    suite="DB.S7c2 stale-ref index epoch",
+    reason="an epoch claimed to CHANGE on a write must be proven against an actual SQL engine, "
+           "not a hand-parsed fake that can only confirm the strings it was taught.",
+    rewrites=(placeholder_rewrite(),),
+    interceptions=(
+        Interception(
+            "to_regclass",
+            matches=lambda sql: "to_regclass" in sql,
+            respond=_to_regclass,
+            why="SQLite has no catalogue function; the probe is answered from `sqlite_master`."),
+    ),
+    not_proven=(
+        "anything about Postgres's catalogue itself — `to_regclass` is INTERCEPTED, so this suite "
+        "never executes the probe the production code actually sends",
+        "Postgres's own visibility rules for a concurrently-provisioned table: the interception "
+        "answers from SQLite's schema, which has neither Postgres's transactional DDL nor its "
+        "catalogue snapshot semantics",
+    ),
+)
+
+
+class _PgShim(TranslatingConnection):
     """Runs the Postgres backend's SQL for real, on SQLite (`%s` -> `?`), against a table shaped
-    like the provisioned `mokata_memory`. Same posture as `test_db_s2a_pushdown._PgShim`: an epoch
-    claimed to CHANGE on a write must be proven against an actual SQL engine, not a hand-parsed
-    fake that can only confirm the strings it was taught."""
+    like the provisioned `mokata_memory`.
+
+    NOT the same posture as `test_db_s2a_pushdown._PgShim`, which this docstring claimed until
+    0.0.17 stage 2 measured it: that shim translates placeholders and emulates NOTHING, whereas
+    this one also INTERCEPTS the `to_regclass` capability probe and answers it itself. The stronger
+    concession is now declared below rather than described as the weaker one."""
 
     def __init__(self):
-        self._c = sqlite3.connect(":memory:")
+        super().__init__(_DECLARATION)
         self._c.execute(
             """CREATE TABLE mokata_memory (
                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,23 +128,6 @@ class _PgShim:
                    hit_count INTEGER NOT NULL DEFAULT 0, last_recalled_at TEXT
                )"""
         )
-        self.sql_log = []
-
-    def execute(self, sql, params=()):
-        self.sql_log.append(sql)
-        if "to_regclass" in sql:
-            # SQLite has no `to_regclass`, and letting it RAISE would make the backend's edge probe
-            # report a DEGRADED capability — a loud, correct warning about the shim rather than
-            # about the code under test. Answer the probe the way Postgres does: the table's name
-            # when it exists, NULL when it does not.
-            name = (tuple(params or ()) or (None,))[0]
-            present = self._c.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()
-            return self._c.execute("SELECT ?", (present[0] if present else None,))
-        return self._c.execute(sql.replace("%s", "?"), tuple(params or ()))
-
-    def close(self):
-        self._c.close()
 
 
 def _item(subject, value, item_id, status=ACTIVE):

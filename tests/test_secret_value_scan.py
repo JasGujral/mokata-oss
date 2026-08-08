@@ -70,6 +70,20 @@ import test_secret_fp as fp
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _is_debris(name):
+    """A directory under `src/` or `tests/` that the REPO does not carry — build output, import
+    caches, and `.mokata/` state that only exists once the suite has been run in this tree.
+
+    ★ Stage 29 rider. The FP bar below is measured against "a REAL corpus", and the corpus was a
+    filesystem walk, so it also swept whatever a given machine happened to have lying around —
+    here 327 `.mokata/temp_local/state/*.json` files full of hex run-ids, plus `mokata.egg-info`.
+    A bar whose corpus depends on whether the suite has been run before is not one bar. Pruning
+    can only REMOVE findings, so it cannot mask a new false positive; and the size floor below
+    counts `.py` only, of which this repo has no untracked file.
+    """
+    return name == "__pycache__" or name == ".mokata" or name.endswith(".egg-info")
+
+
 def j(*parts):
     """Join fragments — the runtime string; the source only holds the (benign) fragments."""
     return "".join(parts)
@@ -495,7 +509,7 @@ def _entropy_findings_in_repo():
     out = []
     for target in ("src", "tests"):
         for dirpath, dirnames, filenames in os.walk(os.path.join(REPO, target)):
-            dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+            dirnames[:] = [d for d in dirnames if not _is_debris(d)]
             for name in sorted(filenames):
                 if not name.endswith(exts):
                     continue
@@ -596,7 +610,7 @@ class TestOwnCorpusFalsePositiveRate(unittest.TestCase):
         n_files = n_lines = 0
         for target in ("src", "tests"):
             for dirpath, dirnames, filenames in os.walk(os.path.join(REPO, target)):
-                dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+                dirnames[:] = [d for d in dirnames if not _is_debris(d)]
                 for name in filenames:
                     if name.endswith(".py"):
                         n_files += 1

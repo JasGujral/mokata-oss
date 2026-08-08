@@ -30,6 +30,7 @@ from mokata.govern import PipelineCheckpoint
 from mokata.memory import MemoryStore
 from mokata.progress import list_sessions
 from mokata.state import StateStore
+from mokata.tdd_state import state_dir
 
 
 def run_cli(argv):
@@ -110,7 +111,9 @@ class TestSessions(unittest.TestCase):
 
     def test_list_sessions_reports_progress_and_resume_point(self):
         with tempfile.TemporaryDirectory() as d:
-            store = StateStore(os.path.join(d, "state"))
+            # RUN-ID-DRIFT — the REAL state-dir layout: `active` is now THE resolver's answer, and
+            # resolution is rooted at the repo, which a synthetic `<d>/state` store is not inside.
+            store = StateStore(state_dir(d))
             PipelineCheckpoint(store, "run-a").mark_passed("brainstorm")
             sessions = list_sessions(store)
             self.assertEqual(len(sessions), 1)

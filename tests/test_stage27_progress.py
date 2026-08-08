@@ -23,11 +23,11 @@ from mokata.progress import (
     NO_RUN_MESSAGE,
     active_banner,
     build_progress,
-    find_active_run,
     render_progress,
 )
 from mokata.skills import get_skill
 from mokata.state import StateStore
+from mokata.tdd_state import state_dir
 
 
 def _silent(_):
@@ -35,7 +35,9 @@ def _silent(_):
 
 
 def _store(d):
-    return StateStore(os.path.join(d, "state"))
+    # RUN-ID-DRIFT — the REAL state-dir layout, so `build_progress(store, root=d)` resolves against
+    # the same directory these checkpoints are written to.
+    return StateStore(state_dir(d))
 
 
 def _checkpoint(store, run_id, passed_phases):
@@ -108,12 +110,24 @@ class TestProgressModel(unittest.TestCase):
             self.assertFalse(p.active)
             self.assertIn("no run", p.message.lower())
 
-    def test_find_active_prefers_incomplete(self):
+    def test_two_unattributable_runs_resolve_to_nothing(self):
+        """RUN-ID-DRIFT — this test used to pin `find_active_run`'s "prefers the incomplete run".
+
+        That preference was the DEFECT (OSS #44): "incomplete" is not a fact about the caller, and
+        over `uuid4` ids the tie-break was lexicographic, so a `progress` read and a stage mark
+        could name different runs. Neither of these two runs is attributable to this process, is
+        bound, holds evidence, is live, or is the only unshipped one — so mokata refuses and names
+        both, rather than preferring one."""
         with tempfile.TemporaryDirectory() as d:
             store = _store(d)
             _checkpoint(store, "done-run", list(PIPELINE_PHASES))
             _checkpoint(store, "live-run", list(PIPELINE_PHASES[:1]))
-            self.assertEqual(find_active_run(store), "live-run")
+            p = build_progress(store, root=d)
+            self.assertFalse(p.active)
+            self.assertIsNone(p.run_id)
+            self.assertIn("will not guess", p.message)
+            self.assertIn("done-run", p.message)
+            self.assertIn("live-run", p.message)
 
 
 # ------------------------------------------------------------------- renderer

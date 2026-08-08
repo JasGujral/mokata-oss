@@ -13,6 +13,8 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..repo_walk import prune_source_dirs
+
 DEFAULT_EXTENSIONS = (".py",)
 
 
@@ -42,14 +44,30 @@ class IndexEntry:
 class KnowledgeIndex:
     def __init__(self, entries: Optional[Dict[str, IndexEntry]] = None) -> None:
         self.entries: Dict[str, IndexEntry] = entries or {}
+        # The nested checkouts the LAST walk skipped, repo-relative. Transient by design: it
+        # describes a walk, not the index, so it is neither persisted by `to_dict` nor carried
+        # across walks — a caller reading it after a build is reading THAT build.
+        self.skipped_checkouts: List[str] = []
 
-    @staticmethod
-    def _iter_files(root: str, extensions):
+    def _iter_files(self, root: str, extensions):
+        """Every source file under `root`, nested checkouts EXCLUDED and RECORDED.
+
+        Excluded because a vendored dependency or a worktree inside the repo duplicates every
+        symbol it holds, and this index feeds impact analysis and blast radius — the two
+        answers a duplicate corrupts silently. Recorded because a user who vendored that
+        dependency deliberately would otherwise find it mysteriously unsearchable with nothing
+        to read; `cmd_index` says how many were skipped and where."""
+        skipped: List[str] = []
+        # Cleared up front, so a caller that abandons the walk part-way (the freshness
+        # cold-walk stops at its file cap) is left with an empty record rather than the
+        # previous walk's — a stale "1 checkout skipped" is the false evidence, not the fix.
+        self.skipped_checkouts = []
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [x for x in dirnames if not x.startswith(".")]
+            prune_source_dirs(dirpath, dirnames, skipped=skipped)
             for fn in filenames:
                 if fn.endswith(tuple(extensions)):
                     yield os.path.join(dirpath, fn)
+        self.skipped_checkouts = sorted(os.path.relpath(p, root) for p in skipped)
 
     def _current(self, root: str, extensions) -> Dict[str, str]:
         out: Dict[str, str] = {}
@@ -114,6 +132,30 @@ class KnowledgeIndex:
     def from_dict(cls, d: Dict[str, Any]) -> "KnowledgeIndex":
         return cls(entries={rel: IndexEntry.from_dict(e)
                             for rel, e in d.get("entries", {}).items()})
+
+
+# How many skipped checkouts are NAMED before the line starts summarising. A vendored tree can
+# hold dozens; the point is that the user can see the ones that matter and is told exactly how
+# many they are not being shown — a silent truncation would read as "that's all of them".
+SKIPPED_CHECKOUT_NAME_CAP = 5
+
+
+def skipped_checkout_lines(skipped: List[str]) -> List[str]:
+    """The declaration for a walk that skipped nested checkouts: how many, and where.
+
+    Empty when nothing was skipped — the overwhelmingly common case, and a repo with no
+    vendored tree must not gain a line saying so. Paths are rendered POSIX-style so the same
+    repo reads identically on Windows."""
+    if not skipped:
+        return []
+    shown = [p.replace(os.sep, "/") for p in skipped[:SKIPPED_CHECKOUT_NAME_CAP]]
+    where = ", ".join(shown)
+    remainder = len(skipped) - len(shown)
+    if remainder:
+        where += f", +{remainder} more"
+    noun = "nested checkout" if len(skipped) == 1 else "nested checkouts"
+    return [f"index: skipped {len(skipped)} {noun} — a different repo's source, "
+            f"not indexed: {where}"]
 
 
 def surface_staleness(result: Any, index: KnowledgeIndex, root: str) -> Any:

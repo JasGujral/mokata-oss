@@ -39,6 +39,7 @@ from mokata.init import init_repo                                  # noqa: E402
 from mokata.knowledge.query import QueryResult, Reference          # noqa: E402
 from mokata.mcp import tools_write as TW                           # noqa: E402
 from mokata.state import StateStore                                # noqa: E402
+from mokata.knowledge.query import BASIS_STRUCTURAL
 
 
 # ---------------------------------------------------------------- fixtures
@@ -67,12 +68,12 @@ class _Layer:
         self.depths.append(depth)
         refs = [Reference(**r) for r in self._radius.get(sym, [])]
         return QueryResult(kind="blast_radius", target=sym, references=refs,
-                           backend="code-review-graph")
+                           backend="code-review-graph", basis=BASIS_STRUCTURAL)
 
     def callers(self, sym):
         refs = [Reference(**r) for r in self._callers.get(sym, [])]
         return QueryResult(kind="callers", target=sym, references=refs,
-                           backend="code-review-graph")
+                           backend="code-review-graph", basis=BASIS_STRUCTURAL)
 
 
 def _session_with_decisions(decisions=None, *, approach="a"):

@@ -355,10 +355,14 @@ class TestNoNewGate(unittest.TestCase):
         # PH-GATE.S0 (0.0.14) backs `approach-approval` — the SI.1 gate hook now enforces the
         # brainstorm boundary (doc 76 FU-1), so it joins the SK.S1 eight. DK.S0 itself still adds
         # no gate; this set is the post-PH-GATE.S0 backed enforcement set.
+        # 0.0.17 stage 5 moved the SET without changing its SIZE: `self-protect` was added (it
+        # enforces at `WriteGate.submit` layer 0 and was missing from the table doc 85 §4 has
+        # listed it in since 2026-07-26) and `ship-readiness` was demoted to advisory (nothing
+        # executes it). Still no gate from THIS stage.
         self.assertEqual(
             sorted(g for g, r in GATES.items() if r.backed),
             ["approach-approval", "completeness", "deviation", "hard-rule",
-             "no-code-without-failing-test", "secret-guard", "ship-readiness", "spec-persisted",
+             "no-code-without-failing-test", "secret-guard", "self-protect", "spec-persisted",
              "write-gate"])
 
 

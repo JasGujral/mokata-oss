@@ -42,6 +42,13 @@ import unittest
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _translating import (
+    Declaration,
+    EmulatedFunction,
+    Rewrite,
+    TranslatingConnection,
+    placeholder_rewrite,
+)
 
 from mokata import extras_install, teamdb
 from mokata.memory import embed, reembed, selection, tier_report, tiered
@@ -83,16 +90,41 @@ def _cos_distance(a_lit, b_lit):
 _VEC_OP = re.compile(r"embedding\s*<=>\s*\?")
 
 
-class _PgVectorShim:
+_DECLARATION = Declaration(
+    suite="DB.S4 pgvector semantic tier",
+    reason="the emitted vector SQL has to be proven valid, bound and ORDER-BY-ranked; a "
+           "string-matching fake could not show that the ranking composes with the scope filter.",
+    rewrites=(
+        placeholder_rewrite(),
+        Rewrite("cosine-distance-operator", lambda s: _VEC_OP.sub("vec_cos_dist(embedding, ?)", s),
+                "pgvector's `<=>` operator has no SQLite equivalent, so the ORDER BY term becomes "
+                "a Python cosine-distance function over the text-serialized vectors."),
+    ),
+    functions=(
+        EmulatedFunction("vec_cos_dist", 2, _cos_distance,
+                         "exact cosine distance in Python over parsed literals — no index, no "
+                         "approximation, and no quantization."),
+    ),
+    not_proven=(
+        "pgvector's HNSW/IVFFlat RECALL behaviour — this computes an EXACT distance over every "
+        "row, so it is the one thing an approximate index could get wrong and this cannot see",
+        "pgvector's `vector` type at all: embeddings are stored as TEXT here, so dimension "
+        "enforcement, and any coercion or precision loss the real type imposes, are absent",
+        "index selection or planner behaviour — there is no vector index in this engine",
+    ),
+)
+
+
+class _PgVectorShim(TranslatingConnection):
     """Runs `PgVectorBackend`'s REAL SQL on SQLite, with `<=>` emulated as cosine distance.
 
     What this proves: the emitted SQL is valid, the project scope composes with the ranking, the
     ORDER BY actually orders by distance, the LIMIT bounds the result, and every value travels as
-    a BOUND parameter. What it does NOT prove: pgvector's HNSW recall behaviour — that is the
-    live-DB leg (`MOKATA_TEST_DSN`), the same honest boundary DB.S2a and DB.S3 recorded."""
+    a BOUND parameter. What it does NOT prove is enumerated in `_DECLARATION.not_proven`, and the
+    translation itself is declared and ENFORCED by `_translating.TranslatingConnection`."""
 
     def __init__(self, stamp=None):
-        self._c = sqlite3.connect(":memory:")
+        super().__init__(_DECLARATION)
         self._c.execute(
             """CREATE TABLE mokata_memory_vectors (
                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,23 +135,13 @@ class _PgVectorShim:
         if stamp is not None:
             self._c.execute("INSERT INTO mokata_vector_stamp (id, embedder, dim) VALUES (1,?,?)",
                             (stamp[0], stamp[1]))
-        self._c.create_function("vec_cos_dist", 2, _cos_distance)
-        self.sql_log = []
         self.param_log = []
 
     def execute(self, sql, params=()):
-        self.sql_log.append(sql)
+        # The param log is this suite's own bookkeeping — the TRANSLATION happens in the base and
+        # nowhere else, which is what the repo-wide sweep enforces.
         self.param_log.append(tuple(params or ()))
-        run = _VEC_OP.sub("vec_cos_dist(embedding, ?)", sql.replace("%s", "?"))
-        # SQLite has no ON CONFLICT (id) DO UPDATE SET col=EXCLUDED.col ordering quirk here; the
-        # statement is already valid SQLite, so it runs verbatim.
-        return self._c.execute(run, tuple(params or ()))
-
-    def close(self):
-        self._c.close()
-
-    def last_select(self):
-        return [s for s in self.sql_log if s.lstrip().upper().startswith("SELECT")][-1]
+        return super().execute(sql, params)
 
     def stamp_row(self):
         return self._c.execute("SELECT embedder, dim FROM mokata_vector_stamp WHERE id=1").fetchone()

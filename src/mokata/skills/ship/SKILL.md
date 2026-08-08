@@ -65,11 +65,11 @@ Evidence, not "seems right" — check every box or say which is unmet and why:
 - record the finish and show the audit --why recap
 
 **MUST NOT**
-- present landing options while anything is red or unmet (gate: ship-readiness)
+- present landing options while anything is red or unmet (advisory)
 - merge, PR, push, delete, or discard without the human's explicit choice (gate: write-gate)
 
 **DEPENDS ON**
-- completed develop+review artifacts **(hard)** (gate: ship-readiness)
+- completed develop+review artifacts **(hard)** (advisory)
 - git (soft — report if absent) (advisory)
 
 > Grounding: `(gate: …)` boundaries are enforced by that gate in code; `(advisory)` ones are protocol discipline this skill follows, not a hard block.

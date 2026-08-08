@@ -120,6 +120,28 @@ def state_dir(root: str) -> str:
     return os.path.join(root, MOKATA_DIR, TEMP_LOCAL_DIRNAME, STATE_DIRNAME)
 
 
+def root_of_state_dir(directory: str) -> Optional[str]:
+    """The INVERSE of `state_dir` — the repo root a state directory belongs to, or None when
+    `directory` is not one (`state_dir(root_of_state_dir(d)) == d` for every real state dir).
+
+    RUN-ID-DRIFT needs it because run resolution is rooted at the REPO (the session registry, the
+    session binding and the candidate scan all live under one root) while the read surfaces
+    — `build_progress`, `build_run_lanes`, the badge — are handed a `StateStore`. Every one of them
+    has the repo in hand indirectly; this makes that explicit and single-sourced instead of each
+    caller doing its own `dirname(dirname(dirname(...)))`, which is the kind of duplicated path math
+    that goes wrong silently when the layout moves.
+
+    Declared HERE, next to `state_dir`, so the pair moves together: a change to the layout that
+    forgets this function fails `test_run_id_drift`'s round-trip pin rather than degrading a surface
+    to "no run found". Returns None (never guesses) when the tail does not match the layout — a
+    synthetic store in a test, or any directory that is simply not a mokata state dir."""
+    parts = os.path.normpath(directory).split(os.sep)
+    tail = (MOKATA_DIR, TEMP_LOCAL_DIRNAME, STATE_DIRNAME)
+    if len(parts) <= len(tail) or tuple(parts[-len(tail):]) != tail:
+        return None
+    return os.sep.join(parts[:-len(tail)]) or os.sep
+
+
 def phase_of(red: Iterable[str], green: Iterable[str]) -> str:
     """The phase implied by the recorded sets (see the module docstring's table)."""
     red_set, green_set = set(red), set(green)

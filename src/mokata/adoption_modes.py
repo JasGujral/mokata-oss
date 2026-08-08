@@ -20,9 +20,14 @@ symbol, only the profile changed:
     --profile standard  ->  blast_radius(beta) via ast  [graph]
 
 `minimal` disables the `knowledge` layer, so `code_graph` is dropped at resolution (K1) and the
-radius falls to the lexical floor with `degraded=True` — which `govern.graph_required` then
-refuses at `BrainstormSession.approve(graph_gate=...)`. A `seatbelt` mode on `minimal` would
-therefore ship a mode whose headline command dead-ends on default settings. The gates consume
+radius falls to the lexical floor with `degraded=True` (a genuine absence — no floor can
+account for the symbol at all) — which `govern.graph_required` then refuses at `spec emit`
+(`mcp/tools_spec.py`, phase 7). ⚠ NOT at `BrainstormSession.approve(graph_gate=...)`, as this
+note said until 0.0.17: that parameter has no production caller and the approve-path refusal is
+inert (`GATE-UNREACHABLE-BRAINSTORM`, doc 84; wiring deferred to 0.0.19 by D14). The CONCLUSION
+below is unchanged — the refusal still lands, just later in the pipeline — so a `seatbelt` mode
+on `minimal` would still ship a mode whose headline command dead-ends on default settings, and
+the dead-end is WORSE for arriving at phase 7 than it would be at phase 1. The gates consume
 the AST floor, so seatbelt wires it. `seatbelt` and `memory` land the same profile and differ
 in FLAVOUR: memory offers the semantic tier, seatbelt structurally never does.
 

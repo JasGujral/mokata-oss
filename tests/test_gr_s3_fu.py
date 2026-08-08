@@ -27,6 +27,7 @@ from mokata.engine.spec_awareness import ChangeSet, check_change, guard_change
 from mokata.init import init_repo
 from mokata.knowledge.layer import KnowledgeLayer
 from mokata.knowledge.query import QueryResult, Reference
+from mokata.knowledge.query import BASIS_LEXICAL, BASIS_STRUCTURAL
 
 
 # --------------------------------------------------------------- real AST-repo fixtures
@@ -136,9 +137,37 @@ class TestFloorStillRefuses(unittest.TestCase):
         self.assertFalse(out.proceeded)
         self.assertIn("REFUSED", out.render())
 
-    def test_empty_ast_evidence_is_refused(self):
-        # a Python repo where `charge` has NO caller ⇒ the AST floor finds no structural evidence
-        # and falls through to grep (degraded=True) ⇒ the refusal is retained.
+    def test_symbol_the_floor_cannot_see_is_refused(self):
+        # ★ D2 (BLAST-RADIUS-LEAF-DEGRADE) REVERSED THIS TEST'S PREMISE, and the reversal is the
+        # point of the stage. It used to define `charge` in a `.py` file with no caller and assert
+        # a REFUSAL, calling that "the GR.S1 hand-off honesty". The premise was false: the AST floor
+        # had not failed to find evidence — it held `charge`'s definition and found zero callers,
+        # which is an ANSWER. Refusing it meant naming one entry point among an approach's targets
+        # refused `spec_emit` on mokata's own primary language.
+        #
+        # What this class is actually FOR still holds and is what is asserted now: a symbol the
+        # floor CANNOT SEE (no definition in the index — it lives only in non-`.py` code, or in a
+        # file `ast.parse` rejects) is a genuine absence and is still refused. The LEAF case moved
+        # to `test_d2_blast_radius_leaf.TestConsumersInherit.test_guard_change_admits_a_leaf`.
+        with tempfile.TemporaryDirectory() as root:
+            surface = _init(root)
+            app = os.path.join(root, "app")
+            os.makedirs(app, exist_ok=True)
+            with open(os.path.join(app, "pay.py"), "w", encoding="utf-8") as fh:
+                fh.write("def charge(amount):\n    return amount\n")
+            layer = KnowledgeLayer.from_surface(surface)
+            # `settleRefund` is defined nowhere in this repo's Python — no definition, so no
+            # structural answer, so the refusal stands.
+            change = ChangeSet(symbols=["settleRefund"])
+            outcome = guard_change(change, specs=[Spec(title="c", source="s", criteria=[])],
+                                   decisions=[], layer=layer,
+                                   graph_required=True, graph_overridden=False)
+            self.assertFalse(outcome.proceeded)
+            self.assertIn("REFUSED", outcome.render())
+
+    def test_a_leaf_is_no_longer_refused(self):
+        # The other half of the reversal, asserted HERE too so this class cannot silently drift
+        # back to refusing leaves without a test going red.
         with tempfile.TemporaryDirectory() as root:
             surface = _init(root)
             app = os.path.join(root, "app")
@@ -146,12 +175,12 @@ class TestFloorStillRefuses(unittest.TestCase):
             with open(os.path.join(app, "pay.py"), "w", encoding="utf-8") as fh:
                 fh.write("def charge(amount):\n    return amount\n")   # nobody calls charge
             layer = KnowledgeLayer.from_surface(surface)
-            change = ChangeSet(symbols=["charge"])
-            outcome = guard_change(change, specs=[Spec(title="c", source="s", criteria=[])],
+            outcome = guard_change(ChangeSet(symbols=["charge"]),
+                                   specs=[Spec(title="c", source="s", criteria=[])],
                                    decisions=[], layer=layer,
                                    graph_required=True, graph_overridden=False)
-            self.assertFalse(outcome.proceeded)
-            self.assertIn("REFUSED", outcome.render())
+            self.assertTrue(outcome.proceeded)
+            self.assertIsNone(outcome.graph_refusal)
 
 
 # ================================================================ graph.required=false byte-identity
@@ -180,7 +209,8 @@ class _FloorLayer:
     def _res(self, kind, target):
         refs = [Reference("app/pay.py", 5, "", "process")]
         return QueryResult(kind, target, references=refs, backend=self.backend_name,
-                           degraded=self._degraded, note="" if self._degraded else "ast note")
+                           basis=(BASIS_LEXICAL if self._degraded else BASIS_STRUCTURAL),
+                           note="" if self._degraded else "ast note")
 
     def callers(self, s): return self._res("callers", s)
     def callees(self, s): return self._res("callees", s)

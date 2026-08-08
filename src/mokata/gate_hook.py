@@ -95,6 +95,12 @@ from dataclasses import dataclass
 from typing import Optional, Sequence, Set, Tuple
 
 from . import MOKATA_DIR, TEMP_LOCAL_DIRNAME
+# AMEND-STEP-2-IS-UNADVERTISED — the regressed-run refusal below was the ONE place step 2 was
+# stated, as a pair of literals. It now reads the same constants doctor and the tool result read,
+# so the three cannot drift about what finishing an amendment is called.
+from .awaiting import AMEND_ABORT_CMD, AMEND_FINISH_CMD
+from .run_resolver import (APPROACH_PREFIX, CHECKPOINT_PREFIX, RunResolution,
+                           SPEC_PREFIX)
 from .spec_scope import SCOPE_KEY, amend_from_state, amend_key, classify, scope_from_dict
 from .state import StateStore
 from .tdd_state import PHASE_UNSET, TDD_STATE_PREFIX, from_state, state_dir
@@ -127,19 +133,12 @@ GATE_SCOPE = "spec-scope"
 GATE_PHASE = "approach-approval"
 GATES: Tuple[str, ...] = (GATE_SPEC, GATE_TDD, GATE_SCOPE, GATE_PHASE)
 
-# The run-scoped state keys this hook reads. Literals for the same reason (owners:
-# `brainstorm.APPROACH_STATE_KEY`, `engine.spec_gate.SPEC_STATE_KEY`, `tdd_state.TDD_STATE_PREFIX`).
-# The `__<run_id>` suffix is `session_state.SessionScopedStore._phys`'s physical naming.
-APPROACH_PREFIX = "approved_approach__"
-SPEC_PREFIX = "emitted_spec__"
-
-# The pipeline-run checkpoint (owner: `govern.resume.CHECKPOINT_PREFIX`). A literal here for the
-# same cheap-import reason as the gate-id literals — pinned to its owner by test_ph_gate_s0. Its
-# mere EXISTENCE is what PH-GATE.S0 binds on: a checkpoint means a mokata pipeline run is REGISTERED
-# and under way (RUN-REG made that structural — protocol-start writes it), which the run resolver
-# and the phase gate both now read. Keyed by run_id (== session_id), so it is read as a plain
-# pass-through key, exactly like the three above.
-CHECKPOINT_PREFIX = "pipeline_run__"
+# The run-scoped state keys this hook reads live on `run_resolver` (imported at the top of the
+# module), which is where RUN-ID-DRIFT put "what counts as a run" — the hook re-exports rather than
+# re-declares, so the candidate set the gate reasons about and the one the resolver scans cannot
+# drift apart. The `__<run_id>` suffix is `session_state.SessionScopedStore._phys`'s physical
+# naming; the checkpoint's mere EXISTENCE is what PH-GATE.S0 binds on (RUN-REG writes it at
+# protocol start, so a registered run is structural).
 
 # The P14 session-scoped override (written by `mokata gate override`, read here). Keyed by run_id,
 # so it EXPIRES with the run: a new session mints a new run_id, which has no override file, and
@@ -204,15 +203,6 @@ class GateOutcome:
         return 0 if self.allowed else BLOCK_EXIT
 
 
-@dataclass(frozen=True)
-class RunResolution:
-    """Which run this hook is deciding for — or that it honestly cannot tell."""
-
-    run_id: Optional[str]
-    ambiguous: bool = False
-    candidates: Tuple[str, ...] = ()
-
-
 ALLOW_NO_ROOT = GateOutcome(True, "not a mokata project")
 
 
@@ -226,18 +216,23 @@ def find_mokata_root(start: str = ".") -> Optional[str]:
     The cheap twin of `config.find_project_root` (which would drag in detect/manifest/router). It
     answers only the question the hook asks — "is this an initialized mokata repo, and where is its
     root" — so a NON-mokata repo costs one `os.path.exists` per ancestor and an instant exit 0.
-    Pinned to `config.find_project_root` for initialized repos by test_si_1_*."""
-    try:
-        cur = os.path.abspath(start)
-    except OSError:
-        return None
-    while True:
-        if os.path.exists(os.path.join(cur, MOKATA_DIR, "manifest.json")):
-            return cur
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            return None
-        cur = parent
+    Pinned to `config.find_project_root` for initialized repos by test_si_1_*.
+
+    WT-ROOT — the walk itself moved to `repo_identity.resolve_mokata_root`, the ONE resolver that
+    knows a git worktree is not a different repository, so this and `find_project_root` cannot
+    disagree about a worktree. The cheap path is unchanged: a main checkout still resolves on the
+    first probe, and a non-mokata repo still walks to None and exits 0 in silence.
+
+    This function stays SILENT and side-effect-free, and that is a deliberate choice rather than the
+    old oversight. The unresolved-worktree case DOES now speak — but not from here. This hook is a
+    FRESH PROCESS on every native tool call, so `note_degraded`'s once-per-subsystem memory (which
+    is per-process) would mean once per Write, per Edit, per MultiEdit, forever. A notice that fires
+    on every keystroke-sized action is not a warning, it is noise that trains the reader to ignore
+    it. The voice belongs on the surfaces where "once" is real and a human is actually reading —
+    `Surface.load` (the error the user is shown) and the SessionStart briefing — and that is where
+    `RootResolution.unresolved_worktree` is consumed."""
+    from .repo_identity import resolve_mokata_root
+    return resolve_mokata_root(start).root
 
 
 def is_test_path(path: str) -> bool:
@@ -323,105 +318,27 @@ def bash_command(tool_input: object) -> str:
 # ======================================================================================
 # run resolution (the window-identity obligation)
 # ======================================================================================
-
-def _run_ids(directory: str) -> Set[str]:
-    """Every run id with run-scoped pipeline state in `directory` (one `scandir`, no file read)."""
-    found: Set[str] = set()
-    try:
-        with os.scandir(directory) as entries:
-            for entry in entries:
-                name = entry.name
-                if not name.endswith(".json"):
-                    continue
-                for prefix in (TDD_STATE_PREFIX, APPROACH_PREFIX, SPEC_PREFIX, CHECKPOINT_PREFIX):
-                    if name.startswith(prefix):
-                        found.add(name[len(prefix):-len(".json")])
-                        break
-    except OSError:
-        return set()
-    found.discard("")
-    return found
+#
+# RUN-ID-DRIFT — the hook no longer HAS a resolver. It reads THE resolver (`run_resolver`), which
+# owns the candidate scan, the live-registry narrowing and the ladder. The hook's own copies of
+# `_run_ids`/`_live_runs`/`_same_repo`/`resolve_run`/`RunResolution` are deleted rather than kept
+# beside it: a second resolver answering the same question differently is OSS #44, and the gate is
+# the surface where disagreeing with the rest of mokata means enforcing one run's RED against
+# another run's editor.
+#
+# The hook deliberately does NOT pass a `session_id`. It has Claude Code's session id on stdin, but
+# the BOUND rung would then let a hook-written binding widen ENFORCEMENT beyond what the pin and the
+# registry can prove — a scope change this stage did not set out to make. Ambiguity still fails OPEN
+# with a once-per-session notice; that guarantee is untouched.
 
 
-def _live_runs(root: str, candidates: Set[str]) -> list:
-    """The candidate run ids whose MCP process is registered ALIVE and rooted at this repo (R-MCP).
+def resolve_run(root: str, run_id: Optional[str] = None) -> "RunResolution":
+    """Which run's gates apply to a write in `root` — THE resolver, called with no session binding.
 
-    ONE registry read, taken only on the ambiguous path (`resolve_run`, 2+ candidates). A candidate
-    survives iff the MS.S2 live-session registry (`session_registry.SESSION_REGISTRY_KEY`, the
-    shared pass-through key in this repo's `state_dir`) holds an entry for it whose `pid` is alive
-    and whose `repo_root` resolves to this repo. This is only sound because the MCP server now
-    self-registers every run on its first tool call (`mcp/server._with_registration`) — the whole
-    point of this stage.
-
-    A read, never a write: it uses `StateStore.read`, NOT `list_sessions` (which prunes), so the
-    hook keeps its never-writes contract even against a stale registry. Degrade-clean: an
-    absent/unreadable/torn registry, or a wrong-shape entry, narrows NOTHING (returns []), so the
-    caller falls open exactly as before — the registry can only ever REMOVE ambiguity, never add a
-    wrong-window block."""
-    from .session_registry import SESSION_REGISTRY_KEY, pid_alive
-    try:
-        data = StateStore(state_dir(root)).read(SESSION_REGISTRY_KEY)
-    except OSError:
-        return []
-    if not isinstance(data, dict):
-        return []
-    sessions = data.get("sessions")
-    if not isinstance(sessions, dict):
-        return []
-    try:
-        here = os.path.realpath(root)
-    except OSError:
-        here = ""
-    survivors = []
-    for run_id in candidates:
-        entry = sessions.get(run_id)
-        if not isinstance(entry, dict) or not pid_alive(entry.get("pid")):
-            continue
-        entry_root = entry.get("repo_root")
-        if not isinstance(entry_root, str) or not entry_root:
-            continue
-        if _same_repo(entry_root, here):
-            survivors.append(run_id)
-    return survivors
-
-
-def _same_repo(entry_root: str, here: str) -> bool:
-    """True when a registry entry's `repo_root` names THIS repo — realpath-compared so a
-    symlinked/`/tmp` vs `/private/tmp` root still matches. Degrade-clean: unresolvable -> not-same
-    (so a broken path narrows nothing rather than mis-enforcing)."""
-    if not here:
-        return False
-    try:
-        return os.path.realpath(entry_root) == here
-    except OSError:
-        return False
-
-
-def resolve_run(root: str, run_id: Optional[str] = None) -> RunResolution:
-    """Which run's gates apply to a write in `root` — see the module docstring's resolution order.
-
-    Never guesses: two or more candidate runs that the live-session registry cannot narrow to
-    exactly one is `ambiguous`, which the caller MUST fail open on. That is the whole guarantee
-    against wrong-window blocking."""
-    if run_id:
-        return RunResolution(run_id)
-    pinned = os.environ.get("MOKATA_SESSION_ID", "").strip()
-    if pinned:
-        return RunResolution(pinned)
-    candidates = _run_ids(state_dir(root))
-    if not candidates:
-        return RunResolution(None)                       # no run has state — nothing to enforce
-    if len(candidates) == 1:
-        return RunResolution(next(iter(candidates)))
-    # AMBIGUOUS on disk. R-MCP: the MS.S2 registry now records every MCP process's run structurally
-    # (its first tool call self-registers), so it can soundly narrow — a candidate whose process is
-    # ALIVE and rooted here is the real driver. Exactly one such run -> enforce against it; zero or
-    # 2+ survivors -> still ambiguous, fail open unchanged (two live windows on one repo stay
-    # un-decidable, which is what keeps wrong-window blocking structurally impossible).
-    survivors = _live_runs(root, candidates)
-    if len(survivors) == 1:
-        return RunResolution(survivors[0])
-    return RunResolution(None, ambiguous=True, candidates=tuple(sorted(candidates)))
+    Never guesses: two or more candidate runs that no rung can narrow to exactly one is `ambiguous`,
+    which the caller MUST fail open on. That is the whole guarantee against wrong-window blocking."""
+    from .run_resolver import resolve_run as _resolve
+    return _resolve(root, run_id=run_id)
 
 
 # ======================================================================================
@@ -607,8 +524,8 @@ def check_write(root: str, path: str, run_id: Optional[str] = None,
             f"v{amend.to_version}"
             f"{': ' + amend.item if amend.item else ''}) — this run has regressed to the SPEC "
             f"phase and development writes are blocked until the amendment is approved. Finish it "
-            f"(mokata approve <id>, then re-run `mokata spec amend`), abandon it "
-            f"(mokata spec amend --abort), or override: mokata gate override {GATE_SCOPE} "
+            f"(mokata approve <id>, then re-run `{AMEND_FINISH_CMD}`), abandon it "
+            f"({AMEND_ABORT_CMD}), or override: mokata gate override {GATE_SCOPE} "
             f"--reason \"<why>\"",
             gate=GATE_SCOPE,
         )
@@ -668,7 +585,7 @@ def check_write(root: str, path: str, run_id: Optional[str] = None,
             False,
             f"{GATE_SCOPE}: scope change — this write is outside spec v{_version_of(spec_data)}"
             f"{deferred}. {verdict.reason}. A user's instruction is authorization to ASK, not to "
-            f"build: run `mokata spec amend` (gated — the new scope is re-approved and re-tested), "
+            f"build: run `{AMEND_FINISH_CMD}` (gated — the new scope is re-approved and re-tested), "
             f"or override: mokata gate override {GATE_SCOPE} --reason \"<why>\"",
             gate=GATE_SCOPE,
         )

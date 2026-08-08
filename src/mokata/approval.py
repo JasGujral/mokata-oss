@@ -49,7 +49,7 @@ Deterministic, which buys three properties for free:
   * **run-scoped** — `run_id` is in the pre-image, and the record carries it, so an approval minted
     for one run is refused against another. WHICH run is the CALLER's to decide, and the two callers
     differ on purpose: the MCP write path passes the PIPELINE's run (`mcp.consent._approval_run` ->
-    `badge_run.resolve_run_for_evidence`), so a human's approval survives an MCP restart or a
+    `run_resolver.resolve_run`), so a human's approval survives an MCP restart or a
     brainstorm re-entry; anything passing `session.current_run_id()` gets the older, narrower
     process scope (`run_id == session_id`; see `session.py`). RE-ENTRY changed the caller, not this
     module — see `_approval_run` for why a stable id is not a weakening of the consent.

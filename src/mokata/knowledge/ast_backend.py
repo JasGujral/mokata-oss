@@ -10,9 +10,20 @@ the permitted zero-dependency floor ABOVE grep.
 Honesty (P22). An AST-answered result is `degraded=False`: mokata answers "who calls this /
 what breaks if I change it" from a real AST-derived edge graph, out of the box, zero external
 deps. The note names the one limit — name-resolution, not type inference — so dynamic dispatch
-it cannot see is documented, never overclaimed. Grep stays the EMERGENCY floor: a query with
-no AST evidence (a target that lives only in non-`.py` code or in a file `ast.parse` rejects)
+it cannot see is documented, never overclaimed. Grep stays the EMERGENCY floor: a query about a
+target this floor CANNOT SEE (it lives only in non-`.py` code, or in a file `ast.parse` rejects)
 falls through to grep with `degraded=True`, exactly as before.
+
+D2 — "cannot see" is the test, and it is NOT "found no edges" (`SYMBOL_EDGE_KINDS` /
+`_holds_definition` below). Those were the same branch until BLAST-RADIUS-LEAF-DEGRADE, and
+conflating them made every LEAF — a symbol this floor holds the definition of, that nothing calls —
+report as an absence of evidence. One leaf among an approach's targets then marked the whole blast
+radius degraded and `spec_emit` refused it, on mokata's own primary language, for naming an entry
+point. A zero this floor can account for is now an ANSWER (`BASIS_VERIFIED_EMPTY`) and only a
+symbol it cannot account for is an absence. That is CRG-NAV's `refs` reasoning applied
+consistently rather than a new rule: `refs` is refused because calls+imports is a PARTIAL set
+dressed as structural; a leaf's zero is a COMPLETE set, and dressing THAT as absent is the same
+overclaim pointed the other way.
 
 The floor is INCREMENTAL. Per-file edges are cached under `.mokata/temp_local/` keyed by
 (mtime, size); an unchanged file is never re-parsed. The cache is transient/internal (24D) —
@@ -30,12 +41,42 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..repo_walk import prune_source_dirs
 from .grep_backend import GrepBackend
-from .query import QUERY_KINDS, GraphBackend, QueryResult, Reference
+from .query import (BASIS_STRUCTURAL, BASIS_VERIFIED_EMPTY, QUERY_KINDS,
+                    GraphBackend, QueryResult, Reference)
 
 # The one honest sentence an AST answer carries (P22): what it IS, and its one documented limit.
 AST_NOTE = ("answered by the embedded AST floor (name-resolution, not type inference); "
             "dynamic dispatch is not resolved")
+
+# D2 — the sentence a VERIFIED ZERO carries. It states the fact that licenses the zero (the index
+# holds the definition, and no edge reaches it) and then repeats AST_NOTE's limit verbatim, because
+# a verified zero is bounded by exactly the same limit as a verified non-zero: a dynamically
+# dispatched caller is invisible to a 0-result answer and to a 3-result answer alike.
+AST_EMPTY_NOTE = ("no references — the embedded AST floor holds this symbol's definition and found "
+                  "no edge reaching it, so ZERO is the structural answer, under the same one limit "
+                  "as any answer here: name-resolution, not type inference; dynamic dispatch is "
+                  "not resolved")
+
+# D2 — the kinds whose question is "what edges touch THIS DEFINITION". Only these can be answered
+# by a definition-site predicate, and each excluded kind is excluded for its own reason:
+#   * `imports` — the target is a MODULE TOKEN, not a definition, so a def-site predicate says
+#                 nothing about it. This exclusion IS load-bearing: `cart_summary` has a definition
+#                 and zero imports-of, so admitting `imports` here would certify a zero the index
+#                 never checked. Mutation-pinned (stage 6 M07).
+#   * `refs`    — CRG-NAV's standing ruling (see `query`): calls+imports is a PARTIAL set and must
+#                 not be dressed as structural, empty or not. Never reaches this code — `query`
+#                 routes it to the lexical superset before the index is consulted at all.
+#   * `defs`    — "does the index hold a definition" IS the question. Listing it would be
+#                 STRUCTURALLY UNREACHABLE rather than wrong, and that was measured, not assumed
+#                 (stage 6 M07 survived as a GREEN and the equivalence was then proved): for
+#                 `defs`, `refs` IS `_defs(target)`, so the empty branch below is reached exactly
+#                 when `_defs` is empty — precisely when `_holds_definition` is False anyway. It
+#                 is left out because that is what the code MEANS, not because the tuple is what
+#                 stops it; `test_d2_blast_radius_leaf` pins the equivalence so a future change
+#                 that makes it reachable cannot land silently.
+SYMBOL_EDGE_KINDS = ("callers", "callees", "implementers", "blast_radius")
 
 CACHE_DIRNAME = "knowledge_ast"
 CACHE_FILENAME = "edges.json"
@@ -194,13 +235,35 @@ class AstBackend(GraphBackend):
         else:
             refs = self._blast_radius(target, depth)
         if not refs:
-            # No AST evidence. The target may live only in non-.py code or a file ast.parse
-            # rejected, OR it may be genuinely uncalled — and the AST cannot see dynamic
-            # dispatch. Either way, claiming an authoritative "zero" would overclaim, so we
-            # fall through to the grep EMERGENCY floor (degraded=True), exactly as before.
+            # D2 (BLAST-RADIUS-LEAF-DEGRADE) — THE defect site. This branch used to collapse two
+            # different worlds into one grep fallthrough:
+            #
+            #   (a) the index has never heard of `target` — it lives only in non-.py code, or in a
+            #       file `ast.parse` rejected. There is no structural evidence either way, and
+            #       claiming a zero WOULD overclaim. Still falls through, exactly as before.
+            #   (b) the index HOLDS `target`'s definition and no edge reaches it. That is a LEAF,
+            #       and zero is the structural answer — arrived at the same way, and bounded by
+            #       the same documented limit, as any non-zero answer this floor gives.
+            #
+            # Collapsing them meant one leaf among an approach's targets marked the whole blast
+            # radius degraded and refused `spec_emit`. The definition-site predicate is what tells
+            # the two apart, and it is the SAME index the answer itself came from — no second
+            # source of truth to drift.
+            if self._holds_definition(kind, target):
+                return QueryResult(kind=kind, target=target, references=[], backend=self.name,
+                                   basis=BASIS_VERIFIED_EMPTY, note=AST_EMPTY_NOTE)
             return self.grep.query(kind, target, depth=depth)
         return QueryResult(kind=kind, target=target, references=refs, backend=self.name,
-                           degraded=False, note=AST_NOTE)
+                           basis=BASIS_STRUCTURAL, note=AST_NOTE)
+
+    def _holds_definition(self, kind: str, target: str) -> bool:
+        """D2 — whether this floor may certify a ZERO for `kind(target)`.
+
+        It may exactly when the question is about edges touching a definition (`SYMBOL_EDGE_KINDS`)
+        AND the index holds that definition. Read off the same `defs` edges `_defs` answers from,
+        so "what the floor knows" has one definition and the certification can never claim more
+        than the index actually saw."""
+        return bool(kind in SYMBOL_EDGE_KINDS and self._defs(target))
 
     # --- structure summary (GR.S4 briefing slice) ----------------------------
     def structure(self, top_n: int = 5):
@@ -257,7 +320,10 @@ class AstBackend(GraphBackend):
 
     def _py_files(self):
         for dirpath, dirnames, filenames in os.walk(self.root):
-            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            # Hidden dirs and nested checkouts alike: parsing a vendored dependency's `.py`
+            # into THIS repo's edge graph makes every blast-radius answer name a file the user
+            # does not maintain, twice.
+            prune_source_dirs(dirpath, dirnames)
             for fn in filenames:
                 if fn.endswith(".py"):
                     yield os.path.join(dirpath, fn)

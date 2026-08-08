@@ -694,6 +694,15 @@ class NoShimInTraversalTests(unittest.TestCase):
     shape: a green that reads as coverage it does not have.
 
     MUTATION (confirmed RED): add a `_PgShim` to this file's traversal tests — this guard fires.
+
+    ⚠ THIS GUARD IS NO LONGER THE ONLY DEFENCE, and it was never sufficient on its own — doc 84
+    said so when it asked for (b) a repo-wide sweep and (c) a self-labelling shim. Both landed at
+    0.0.17 stage 2: `tests/test_shim_declaration.py` detects translating doubles STRUCTURALLY
+    across the whole tree (this guard matches a NAME, which works by coincidence until an author
+    picks a different one — and seven doubles existed where the name found three), and
+    `_translating.TranslatingConnection` now REFUSES `WITH RECURSIVE` outright, so the hazard
+    below is stopped by the tool rather than by a per-suite reminder. This file is kept because it
+    holds the MEASUREMENT the whole row rests on.
     """
 
     # Every DB.S7b test file, swept as a SET rather than just this one — a guard that only watches

@@ -21,6 +21,7 @@ from mokata.brainstorm import (Approach, BrainstormGateError, BrainstormSession,
                                save_brainstorm_progress, restore_brainstorm_progress)
 from mokata.brainstorm_impact import DesignFitVerdict
 from mokata.knowledge.query import QueryResult, Reference
+from mokata.knowledge.query import BASIS_LEXICAL, BASIS_STRUCTURAL
 
 
 # ---------------------------------------------------------------- deterministic fake layer
@@ -42,18 +43,21 @@ class _Layer:
     def implementers(self, name):
         self.calls.append(("implementers", name))
         return QueryResult("implementers", name, references=list(self.table.get(name, [])),
-                           backend=self.backend_name, degraded=self._degraded)
+                           backend=self.backend_name,
+                           basis=(BASIS_LEXICAL if self._degraded else BASIS_STRUCTURAL))
 
     def callers(self, name):
         self.calls.append(("callers", name))
         return QueryResult("callers", name, references=list(self.table.get(name, [])),
-                           backend=self.backend_name, degraded=self._degraded)
+                           backend=self.backend_name,
+                           basis=(BASIS_LEXICAL if self._degraded else BASIS_STRUCTURAL))
 
     def semantic(self, query, kind=None, limit=20):
         self.calls.append(("semantic", query))
         refs = [r for refs in self.table.values() for r in refs][:limit]
         return QueryResult("semantic", query, references=refs,
-                           backend=self.backend_name, degraded=self._degraded)
+                           backend=self.backend_name,
+                           basis=(BASIS_LEXICAL if self._degraded else BASIS_STRUCTURAL))
 
 
 def _ref(path, line, sym):

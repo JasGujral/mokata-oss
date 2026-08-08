@@ -9,7 +9,7 @@ runs on disk — `/ship`'s `review-status` check could pass the gate on a FOREIG
 a run-less/stale verdict. Ship-on-stale-review.
 
 The fix under test:
-  1. record + read resolve the run through ONE session-aware resolver (`badge_run.resolve_verdict_run`
+  1. record + read resolve the run through ONE session-aware resolver (`run_resolver.resolve_verdict_run`
      — bound run -> the run the gate hook would enforce -> None), so record-key == read-key;
   2. `--run` on BOTH `mokata progress record-review` and `review-status` (the explicit key);
   3. FAIL CLOSED: no resolvable run ⇒ `ship_review_gate` BLOCKS with the remedy, and
@@ -34,10 +34,10 @@ from unittest import mock
 import _support  # noqa: F401  (puts src/ on the path)
 
 from mokata import progress, session_registry as SR
-from mokata.badge_run import bind_session_run, resolve_badge_run, resolve_verdict_run
+from mokata.run_resolver import bind_session_run, resolve_badge_run, resolve_run_id
 from mokata.config import Surface
 from mokata.govern.resume import CHECKPOINT_PREFIX, PipelineCheckpoint
-from mokata.progress import find_active_run, list_runs, list_runs_by_recency
+from mokata.progress import list_runs, list_runs_by_recency
 from mokata.progress_events import (
     ENVELOPE_KEYS,
     REVIEW_VERDICT,
@@ -97,16 +97,33 @@ def _set_mtime(root, run_id, when):
     os.utime(p, (when, when))
 
 
+def _old_find_active_run(store, phases=PHASES):
+    """`progress.find_active_run`, VERBATIM as it stood before RUN-ID-DRIFT deleted it.
+
+    Reconstructed locally for the same reason `test_review_fix_r2._old_shipped_run_ids` is: the
+    leak this suite pins must stay pinned by the SUITE, not by a memory of a build that no longer
+    exists. This IS the scan OSS #44 was reported on — "the first incomplete-checkpoint run, else
+    the most-recent unshipped", with no notion of whose run it is."""
+    for rid in list_runs(store):
+        if not PipelineCheckpoint(store, rid).is_complete(phases):
+            return rid
+    shipped = progress._shipped_run_ids(store)
+    for rid in reversed(list_runs_by_recency(store)):
+        if rid not in shipped:
+            return rid
+    return None
+
+
 def _old_gate_would_pass(surface):
     """Whether the PRE-R1 gate would have PASSED — a verbatim reconstruction of the two lines the
     stage replaced, so the leak is pinned by this suite instead of by a memory of the old build:
 
-        run_id = find_active_run(surface.state)        # progress_events.py:265-266 (session-blind)
+        run_id = _old_find_active_run(surface.state)        # progress_events.py:265-266 (session-blind)
         for e in events:                              # progress_events.py:208-215
             if run_id is not None and e.get("run_id") != run_id: continue   # None => NO filtering
 
     True means the old code let ship proceed on whatever verdict that scan happened to end on."""
-    run_id = find_active_run(surface.state)
+    run_id = _old_find_active_run(surface.state)
     found = None
     for e in ProgressLog.from_surface(surface).read_events():
         if e.get("type") != REVIEW_VERDICT:
@@ -161,7 +178,7 @@ class TestReviewFixR1Regression(_NoPinnedSession):
             record_review_verdict(surface, passed=False, independent=True, run_id="runM")
 
             # PIN THE LEAK — old resolution lands on the FOREIGN run and its PASS satisfies ship.
-            self.assertEqual(find_active_run(surface.state), "runF")
+            self.assertEqual(_old_find_active_run(surface.state), "runF")
             self.assertTrue(_old_gate_would_pass(surface),
                             "pre-R1 code shipped on the foreign run's review")
 
@@ -183,7 +200,7 @@ class TestReviewFixR1Regression(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             record_review_verdict(surface, passed=True, independent=True, run_id=None)
-            self.assertIsNone(find_active_run(surface.state))
+            self.assertIsNone(_old_find_active_run(surface.state))
             self.assertTrue(_old_gate_would_pass(surface), "pre-R1 code shipped on it")
 
             self.assertTrue(ship_review_gate(surface).blocks)
@@ -206,8 +223,8 @@ class TestSpecdCases(_NoPinnedSession):
             # SessionStart bound the cleared window to its OWN run: the gate keys on runB, which
             # has no verdict — "review hasn't run", never runA's stale pass.
             bind_session_run(d, "sessB", "runB")
-            self.assertEqual(resolve_verdict_run(d, "sessB"), "runB")
-            gate = ship_review_gate(surface, run_id=resolve_verdict_run(d, "sessB"))
+            self.assertEqual(resolve_run_id(d, session_id="sessB"), "runB")
+            gate = ship_review_gate(surface, run_id=resolve_run_id(d, session_id="sessB"))
             self.assertTrue(gate.blocks)
             self.assertIn("review hasn't run", gate.message)
 
@@ -263,7 +280,7 @@ class TestRecordKeyEqualsReadKey(_NoPinnedSession):
             _persist_run(d, "only-run", passed=PHASES)
             event = record_review_verdict(surface, passed=True, independent=True)
             self.assertEqual(event["run_id"], "only-run")
-            self.assertEqual(event["run_id"], resolve_verdict_run(d))
+            self.assertEqual(event["run_id"], resolve_run_id(d))
             self.assertFalse(ship_review_gate(surface).blocks)
 
     def test_resolution_is_not_session_blind(self):
@@ -272,8 +289,8 @@ class TestRecordKeyEqualsReadKey(_NoPinnedSession):
             _repo(d)
             _persist_run(d, "runA", passed=PHASES[:1])
             _persist_run(d, "runB", passed=PHASES[:1])
-            self.assertIsNotNone(find_active_run(Surface.load(d).state))   # blind: answers anyway
-            self.assertIsNone(resolve_verdict_run(d))                      # aware: refuses
+            self.assertIsNotNone(_old_find_active_run(Surface.load(d).state))   # blind: answers anyway
+            self.assertIsNone(resolve_run_id(d))                      # aware: refuses
 
     def test_bound_session_beats_the_other_run(self):
         with tempfile.TemporaryDirectory() as d:
@@ -281,8 +298,8 @@ class TestRecordKeyEqualsReadKey(_NoPinnedSession):
             _persist_run(d, "runA", passed=PHASES)
             _persist_run(d, "runB", passed=PHASES)
             bind_session_run(d, "sessA", "runA")
-            self.assertEqual(resolve_verdict_run(d, "sessA"), "runA")
-            self.assertEqual(resolve_verdict_run(d, "sessB"), None)  # unbound, still ambiguous
+            self.assertEqual(resolve_run_id(d, session_id="sessA"), "runA")
+            self.assertEqual(resolve_run_id(d, session_id="sessB"), None)  # unbound, still ambiguous
 
     def test_live_window_narrows_two_runs_on_disk(self):
         """R-MCP narrowing: one dead run + one LIVE run ⇒ the live one is this session's."""
@@ -377,7 +394,7 @@ class TestOrderingIrrelevant(_NoPinnedSession):
             _register_live_run(d, "solo", passed=PHASES)
             _mark_ship(surface, "solo")
             self.assertIsNone(resolve_badge_run(d, "sessX"))          # badge: retired
-            self.assertEqual(resolve_verdict_run(d, "sessX"), "solo")  # verdict: still keyed
+            self.assertEqual(resolve_run_id(d, session_id="sessX"), "solo")  # verdict: still keyed
 
 
 # ======================================================= 5 · fold-in: real recency
@@ -402,7 +419,7 @@ class TestRecencyFoldIn(_NoPinnedSession):
             _persist_run(d, "zzz", passed=PHASES)
             _set_mtime(d, "zzz", 1_600_000_000)
             _set_mtime(d, "aaa", 1_700_000_000)
-            self.assertEqual(find_active_run(Surface.load(d).state), "aaa")
+            self.assertEqual(_old_find_active_run(Surface.load(d).state), "aaa")
 
     def test_last_run_message_names_the_newest_shipped_run(self):
         with tempfile.TemporaryDirectory() as d:
@@ -413,7 +430,7 @@ class TestRecencyFoldIn(_NoPinnedSession):
             _mark_ship(surface, "zzz")
             _set_mtime(d, "zzz", 1_600_000_000)
             _set_mtime(d, "aaa", 1_700_000_000)
-            msg = progress.build_progress(Surface.load(d).state).message
+            msg = progress.build_progress(Surface.load(d).state, root=d).message
             self.assertIn("last run 'aaa'", msg)
 
 
@@ -425,7 +442,7 @@ class TestNoBehaviourChange(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _persist_run(d, "solo", passed=PHASES)
-            blind = find_active_run(surface.state)
+            blind = _old_find_active_run(surface.state)
             event = record_review_verdict(surface, passed=True, independent=True)
             self.assertEqual(event["run_id"], blind)
             self.assertEqual(event["data"], {"passed": True, "independent": True})
@@ -459,7 +476,7 @@ class TestNoBehaviourChange(_NoPinnedSession):
 
     def test_badge_path_unchanged(self):
         """The badge still resolves session-awarely AND still retires a shipped run; a payload with
-        no session_id still renders the find_active_run badge."""
+        no session_id still resolves through the one resolver."""
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _persist_run(d, "runA", passed=["brainstorm"])

@@ -27,6 +27,8 @@ import os
 import shutil
 from typing import Dict, Optional
 
+from .repo_walk import prune_source_dirs
+
 
 def _obsidian_config_dirs() -> "list[str]":
     """The real per-OS locations Obsidian keeps its config under. The bare `~/.obsidian`
@@ -118,13 +120,18 @@ class Detector:
         return False
 
     def _python_files_present(self) -> bool:
-        """True when `self.root` (default cwd) holds at least one `.py` file, hidden dirs
-        skipped — the same walk the grep/index backends use. Gates the `ast` provider so a
-        zero-Python repo behaves exactly as before (routes past `ast` to the lexical floor)."""
+        """True when `self.root` (default cwd) holds at least one `.py` file — the same walk
+        the grep/index backends use (`repo_walk.prune_source_dirs`: hidden dirs and nested
+        checkouts alike). Gates the `ast` provider so a zero-Python repo behaves exactly as
+        before (routes past `ast` to the lexical floor).
+
+        Sharing the walk is the POINT, not tidiness: a repo whose only Python lives in a
+        vendored checkout would otherwise route to an AST floor with nothing to parse — this
+        function promising the provider files no backend will index."""
         root = self.root or os.getcwd()
         try:
             for dirpath, dirnames, filenames in os.walk(root):
-                dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+                prune_source_dirs(dirpath, dirnames)
                 if any(fn.endswith(".py") for fn in filenames):
                     return True
         except OSError:

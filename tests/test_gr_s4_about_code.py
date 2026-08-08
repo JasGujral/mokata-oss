@@ -15,6 +15,7 @@ from unittest import mock
 
 from mokata.knowledge.about_code import AboutCodeCheck, check_about_code_anchors
 from mokata.knowledge.query import GraphBackend, QueryResult
+from mokata.knowledge.query import BASIS_STRUCTURAL
 
 
 class _ResolvingBackend(GraphBackend):
@@ -30,7 +31,8 @@ class _ResolvingBackend(GraphBackend):
         self._raise_on = raise_on
 
     def query(self, kind, target, depth=1):
-        return QueryResult(kind=kind, target=target, backend=self.name)
+        return QueryResult(kind=kind, target=target, backend=self.name,
+                           basis=BASIS_STRUCTURAL)
 
     def resolves(self, symbol):
         if self._raise_on and symbol == self._raise_on:
@@ -69,7 +71,7 @@ class TestCheckAboutCodeAnchors(unittest.TestCase):
             name = "ast"
 
             def query(self, kind, target, depth=1):
-                return QueryResult(kind=kind, target=target)
+                return QueryResult(kind=kind, target=target, basis=BASIS_STRUCTURAL)
 
         out = check_about_code_anchors(["anything"], _Layer(_NoResolve()))
         self.assertEqual(out.unresolved, [])

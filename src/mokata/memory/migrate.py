@@ -177,6 +177,79 @@ def _default_drop_confirm(text: str) -> bool:
     return read_yes_no(text, "DROP the source after migrating?")
 
 
+def _drop_source(source: Any, migrated_items: List[Any], *, src_tool: str, same_store: bool,
+                 pending: int, conflicts: int, assume_yes: bool,
+                 drop_confirm: Optional[Callable[[str], bool]], ledger: Any,
+                 emit: Callable[[str], None]) -> int:
+    """`--drop-source`: DESTROY the migrated items from the source store. Returns how many were
+    actually deleted (0 on any refusal or a decline).
+
+    IT IS ITS OWN FUNCTION, AND THAT IS THE POINT (stage 16 / MIGRATE-DROP-SOURCE-UNLEDGERED +
+    REGISTER-KEY-COLLISION, doc 84). The SI.6 sweep keys a durable write by (file, QUALIFIED
+    enclosing name), so while this delete lived inside `migrate_memory` ONE key had to describe TWO
+    regimes: the gate-run `dest.put` inside the WriteGate's commit closure, and this ungoverned
+    delete outside it. One entry cannot be true of both — which is precisely what the GATED entry
+    for `migrate_memory` had been getting wrong since SI.6, and what its own register entry now
+    records. Split out, the drop earns its own key and its own reason: LEDGERED.
+
+    LEDGERED, not GATED, and the distinction is deliberate. The consent here is REAL — a bespoke
+    batch confirm (`_default_drop_confirm` -> `read_yes_no`, fail-closed off a TTY; `assume_yes` is
+    the explicit non-interactive approval, the same posture `run_reembed` takes). A batch drop is
+    not a per-item write, so it is not redesigned into the per-item WriteGate. What was missing —
+    and what stage 16 adds — is the AUDIT RECORD: bespoke consent with no record is the KNOWN_BYPASS
+    shape, and KNOWN_BYPASS is asserted empty.
+
+    THE REFUSALS LIVE HERE, WITH THE DELETE THEY PROTECT, rather than in the caller. A destructive
+    helper whose safety guards sit one frame up is one refactor away from being unsafe; keeping them
+    inside means no caller can reach the delete without them. Their behaviour is unchanged.
+    """
+    if same_store:
+        emit("migrate: refusing --drop-source on a self-migration (would delete the "
+             "just-written data).")
+        return 0
+    if pending or conflicts:
+        # SI.6 — journal-first makes "migrated" mean "journaled (+ applied when the flush was
+        # healthy)". Dropping the source while writes are still pending, or while a CAS conflict
+        # is awaiting a human, would be exactly the "partially migrated then lost" case this
+        # command promises never to cause. Refuse; `mokata sync` first, then drop.
+        emit(f"migrate: refusing --drop-source — {pending} write(s) are still journaled and "
+             f"{conflicts} conflict(s) unresolved. Run `mokata sync`, then drop.")
+        return 0
+
+    approved = assume_yes
+    if not approved:
+        dgate = drop_confirm or _default_drop_confirm
+        approved = dgate(f"Migration done. DROP all {len(migrated_items)} item(s) from "
+                         f"the source '{src_tool}'? This is destructive.")
+    if not approved:
+        return 0
+
+    # drop only what actually migrated — a blocked item stays in the source.
+    dropped = 0
+    try:
+        for it in migrated_items:
+            source.delete(it.id)
+            dropped += 1
+    finally:
+        # THE STAGE 16 RECORD. Counted as it happens and written in a `finally`, so a drop that dies
+        # halfway still leaves an honest record of what it destroyed — recording only on the happy
+        # path would leave the one case that most needs an audit trail with none. `complete` says
+        # which it was, so a partial can never be READ as a completed one.
+        #
+        # SECRET-SAFE, `run_reembed`'s rule verbatim: counts and the source TOOL NAME, never an
+        # item's subject or value. This path DELETES memory items; a record that echoed what it
+        # deleted would be a secret leak wearing an audit badge.
+        #
+        # A refusal or a decline records NOTHING (each returns above): a record is a claim that
+        # something was destroyed, and the batch gate above takes the same posture — a declined
+        # migration returns before `migrate_batch` is written.
+        if ledger is not None and dropped:
+            ledger.record("migrate_drop_source", op="drop_source", subject=src_tool,
+                          items=dropped, attempted=len(migrated_items),
+                          complete=(dropped == len(migrated_items)))
+    return dropped
+
+
 def migrate_memory(surface: Any, to_backend: str, from_backend: Optional[str] = None,
                    *, confirm: Optional[Callable[[str], bool]] = None,
                    assume_yes: bool = False, drop_source: bool = False,
@@ -353,27 +426,12 @@ def migrate_memory(surface: Any, to_backend: str, from_backend: Optional[str] = 
 
     dropped = 0
     if drop_source:
-        if same_store:
-            emit("migrate: refusing --drop-source on a self-migration (would delete the "
-                 "just-written data).")
-        elif pending or conflicts:
-            # SI.6 — journal-first makes "migrated" mean "journaled (+ applied when the flush was
-            # healthy)". Dropping the source while writes are still pending, or while a CAS conflict
-            # is awaiting a human, would be exactly the "partially migrated then lost" case this
-            # command promises never to cause. Refuse; `mokata sync` first, then drop.
-            emit(f"migrate: refusing --drop-source — {pending} write(s) are still journaled and "
-                 f"{conflicts} conflict(s) unresolved. Run `mokata sync`, then drop.")
-        else:
-            approved = assume_yes
-            if not approved:
-                dgate = drop_confirm or _default_drop_confirm
-                approved = dgate(f"Migration done. DROP all {len(migrated_items)} item(s) from "
-                                 f"the source '{src_tool}'? This is destructive.")
-            if approved:
-                # drop only what actually migrated — a blocked item stays in the source.
-                for it in migrated_items:
-                    source.delete(it.id)
-                dropped = len(migrated_items)
+        # The destructive half, in its OWN function so the register can describe it in its own
+        # right (LEDGERED) instead of sharing this one's key with the gated destination write —
+        # see `_drop_source`, which carries the refusals and the audit record.
+        dropped = _drop_source(source, migrated_items, src_tool=src_tool, same_store=same_store,
+                               pending=pending, conflicts=conflicts, assume_yes=assume_yes,
+                               drop_confirm=drop_confirm, ledger=ledger, emit=emit)
 
     dest.close()
     source.close()

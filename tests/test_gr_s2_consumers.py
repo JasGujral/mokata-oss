@@ -23,6 +23,7 @@ from mokata.knowledge import (
 )
 from mokata.knowledge.layer import run_query
 from mokata.profiles import build_manifest_data
+from mokata.knowledge.query import BASIS_STRUCTURAL
 
 
 class FakeSemBackend:
@@ -33,13 +34,14 @@ class FakeSemBackend:
     def query(self, kind, target, depth=1):
         from mokata.knowledge import QueryResult
         return QueryResult(kind=kind, target=target,
-                           references=[Reference("a.py", 1, symbol="a.b")], backend=self.name)
+                           references=[Reference("a.py", 1, symbol="a.b")], backend=self.name,
+                           basis=BASIS_STRUCTURAL)
 
     def semantic(self, query, kind=None, limit=20):
         from mokata.knowledge import QueryResult
         return QueryResult(kind="semantic", target=query,
                            references=[Reference("svc.py", 9, symbol="svc.handle")],
-                           backend=self.name)
+                           backend=self.name, basis=BASIS_STRUCTURAL)
 
 
 class TestQueryRouterSurfacesSemantic(unittest.TestCase):

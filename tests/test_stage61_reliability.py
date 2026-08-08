@@ -30,13 +30,13 @@ import unittest
 from _support import sample_manifest_data  # noqa: F401  (path-fix side-effect)
 
 from mokata.state import StateStore
+from mokata.tdd_state import state_dir
 from mokata.govern.resume import CHECKPOINT_PREFIX, PipelineCheckpoint
 from mokata.govern.secrets import has_secrets, scan
 from mokata.progress import (
     build_progress,
     build_run_lanes,
     build_stage_badge,
-    find_active_run,
     render_lanes,
     render_progress,
 )
@@ -98,11 +98,20 @@ class TestCorruptCheckpointDegradesClean(unittest.TestCase):
                 cp = PipelineCheckpoint(store, "r")     # must not raise
                 self.assertEqual(cp.passed, [])         # bad state -> empty (fresh)
 
-    def test_find_active_run_never_crashes(self):
+    def test_run_resolution_never_crashes(self):
+        # RUN-ID-DRIFT — the never-raises pin follows the resolution, which moved from
+        # `progress.find_active_run` (deleted) to `run_resolver.resolve_run`. A corrupt checkpoint
+        # must resolve to an UNRESOLVED result, never an exception: this feeds the statusline and
+        # the gate hook, neither of which may fail on a bad byte.
+        from mokata.run_resolver import resolve_run
         for label, raw in _BAD_CHECKPOINTS.items():
             with self.subTest(case=label):
-                store = self._store_with(raw)
-                find_active_run(store)                  # must not raise
+                d = tempfile.mkdtemp()
+                os.makedirs(state_dir(d), exist_ok=True)
+                with open(os.path.join(state_dir(d), CHECKPOINT_PREFIX + "r.json"), "w",
+                          encoding="utf-8", errors="surrogateescape") as fh:
+                    fh.write(raw)
+                resolve_run(d)                          # must not raise
 
     def test_build_progress_degrades_to_inactive(self):
         for label, raw in _BAD_CHECKPOINTS.items():

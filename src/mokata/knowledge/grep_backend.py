@@ -19,8 +19,9 @@ import re
 from typing import List, Optional, Tuple
 
 from .. import languages
-from .query import (GREP_FLOOR_NAV_NOTE, NAVIGATION_KINDS, QUERY_KINDS, GraphBackend,
-                    QueryResult, Reference)
+from ..repo_walk import prune_source_dirs
+from .query import (BASIS_LEXICAL, GREP_FLOOR_NAV_NOTE, NAVIGATION_KINDS, QUERY_KINDS,
+                    GraphBackend, QueryResult, Reference)
 
 LEXICAL_NOTE = "lexical fallback (no structural graph; results are approximate)"
 
@@ -67,14 +68,16 @@ class GrepBackend(GraphBackend):
             note = f"{note} | {GREP_FLOOR_NAV_NOTE}"
         return QueryResult(
             kind=kind, target=target, references=refs, backend=self.name,
-            degraded=True, note=note,
+            basis=BASIS_LEXICAL, note=note,
         )
 
     # --- file helpers --------------------------------------------------------
     def _files(self):
         for dirpath, dirnames, filenames in os.walk(self.root):
-            # skip hidden dirs (e.g. .mokata, .git) so config/state isn't scanned
-            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            # Skip hidden dirs (e.g. .mokata, .git) so config/state isn't scanned, AND nested
+            # checkouts — a vendored dependency or a worktree is somebody else's source, and
+            # answering `defs`/`callers` from it duplicates every symbol it holds.
+            prune_source_dirs(dirpath, dirnames)
             for fn in filenames:
                 if fn.endswith(self.extensions):
                     yield os.path.join(dirpath, fn)

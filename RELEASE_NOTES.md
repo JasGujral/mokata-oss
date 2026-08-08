@@ -1,135 +1,94 @@
-mokata **0.0.16 — "Memory intelligence at scale."** Upgrade with `mokata upgrade` (or
+mokata **0.0.17 — "Trustworthy evidence."** Upgrade with `mokata upgrade` (or
 `pip install -U mokata`, then `mokata upgrade`). Additive; **no breaking changes**; local stays the
 zero-config default; **no schema change**. Requires **Python ≥ 3.10**.
 
-Memory stops being a feature that works on a demo store and becomes one that works on yours. The
-whole retrieval path was re-measured at **100,000 items** rather than at a size that flatters it —
-and the numbers moved by orders of magnitude, not percentages. Around that, memory learns to age,
-teammates stop losing each other's facts, upgrades finish the job they used to leave half-done, and
-one measured regression is disclosed here rather than left for you to find.
+A green check is supposed to mean something. Most of this release went into the instruments that
+decide whether mokata's own claims are true — and four of the things those instruments found were
+being felt by users every day. Those four are the reason to upgrade. The instruments are why the
+four are fixed rather than merely reported.
 
-**Retrieval, measured at 100,000 items.**
+**The four you have been feeling.**
 
-- **Recall no longer reads your whole store to answer one question.** Retrieval used to
-  materialize *every* active visible item and decode each one, on every recall, then rank what it
-  had already paid for. On a 100,000-item store that was **51,606 rows and 4,533 ms**. Each tier
-  now nominates its own ranked shortlist *in the database*, the capped union is hydrated, and —
-  the part with teeth — **your scope predicate travels with that query** instead of being applied
-  afterwards. Same store, after: **26 rows and 20.1 ms** — 225× on latency, ~2,000× on rows — and
-  the read no longer grows with the store.
-- **It also fixes a real correctness bug.** The ranked query's limit used to be taken over the
-  *whole* store and only then intersected with what you were allowed to see, so a reader whose
-  matching items all ranked below the cut got **nothing back while their own rows sat unread
-  underneath**.
-- **Per-turn memory injection cost three-quarters of a second per prompt.** The recall that rides
-  `UserPromptSubmit` was still doing the whole-store read, one layer up where the fix had not
-  reached. Measured on a 100,000-item store over 20 consecutive turns: **787.0 ms → 36.8 ms per
-  turn (21×)**. On a large store this was a latency you paid on *every single prompt*.
-- **A signal that matches nothing can no longer outrank one that does.** The semantic tier's
-  weight is now derived from the embedder's own measured noise instead of one fixed number for
-  every embedder — a quiet embedder keeps its full weight, a noisy one is held to what it can be
-  trusted with, and an embedder that cannot be characterized fails closed and says so. The two
-  recall-history terms are bounded as a *sum* rather than individually, so frequent recall can no
-  longer tie a perfect match and win the tiebreak. **If you have not opted into an embedder (the
-  default) and your store has no recall history yet, your ranking is unchanged** — arithmetically,
-  term for term.
+- **`UserPromptSubmit hook timed out after 30s` is gone.** The hook that injects relevant memory
+  into your prompt had **no clock on its own work** — reading its input was bounded, everything
+  after that was not — so a slow store or a pathological turn hung it until the harness killed it,
+  and you saw a timeout on a prompt you had already sent. Its work now runs under its own budget
+  and, over budget, emits **nothing** rather than half an injection. **The budget is measured, not
+  chosen:** end-to-end in a cold subprocess the whole hook is ~90–100 ms, of which ~85 ms is
+  interpreter start and imports, and ranked recall itself runs 0.5 / 0.5 / 1.1 ms at 0 / 50 / 500
+  items. The guess going in was that recall was spending the 30 seconds. It was not — and measuring
+  before fixing is what moved the answer. (OSS #43.)
+- **Run ids stop drifting, and an unresolvable run says so instead of picking one.** With several
+  runs tracked in one repo, surfaces disagreed about which run you were in: `progress` read one
+  while stage marks landed on another, unstarted one. One live session produced **three distinct
+  ids across five tracked runs**. There is now one resolver, and it gives three outcomes three
+  distinct representations — **resolved** (naming which rule answered), **ambiguous** (candidates
+  listed, and mokata refuses, because a stage mark in the wrong run is a false green a later reader
+  trusts), and **none**. Where it refuses, **`--run <id>`** and **`mokata resume --id <id>`** let you
+  say which; the old refusal named a flag that did not exist. (OSS #44.)
+- **A worktree no longer forks your memory and your audit ledger.** A second session in a
+  `git worktree` of the same repo silently got **its own** memory store and **its own** ledger —
+  measured before the fix, not theorised. Root-finding tested for a `.git` *directory*, and a linked
+  worktree's `.git` is a *file*, so mokata walked past the worktree and then offered *"run
+  `mokata init`"* inside it — and accepting that offer is what created the fork. Repo-scoped state
+  now resolves to the **main checkout** from every tree, per-tree state stays local, and a worktree
+  mokata cannot resolve is finally distinguishable from "not a mokata repo".
+- **An approval you already gave stops being asked for again.** After you ran `mokata approve`, the
+  statusline still said `⏳ awaiting approval` and `doctor` still counted it into *"N write(s)
+  awaiting YOUR approval"*, handing you the approve command for a decision you had already made — on
+  the exact surface you run when you think you are stuck. And **`spec amend`'s second step is finally
+  advertised**: amending raises a proposal, you approve it, **and the amend must be re-run to redeem
+  that approval**. That third step was stated in exactly one place you would only see by doing
+  something else, so the menu offered one way forward that does not land the change and one way back
+  that throws it away.
+
+**Also fixed.**
+
+- **Code navigation stops answering with a vendored copy of someone else's source.** A nested
+  checkout inside your repo — a vendored dependency, a submodule, a worktree at an ordinary path —
+  was indexed as *your* source, so *"where is this defined"* could answer **first** with a file you
+  do not maintain. Nested checkouts are now detected structurally rather than by name, across every
+  walker, and the skip is **declared**: `mokata index` names how many it pruned and where.
+- **A leaf symbol no longer poisons a whole blast-radius verdict.** A symbol with no dependents has
+  a legitimately empty impact set; that was read as "the graph could not answer" and degraded the
+  verdict for the entire approach.
+- **Destructive and data-moving paths leave an audit record, unconditionally.** `--drop-source` on a
+  memory migration records a partial drop as the partial it was, and the session vault re-home now
+  runs inside the same gate as every other durable write — each bundle secret-scanned, a refused
+  bundle named and skipped, and a migration that cannot reach a ledger **refusing loudly instead of
+  writing unrecorded**.
+- **Three Windows documentation pages stop asserting a premise that had already been falsified**,
+  and **one publisher now owns a GitHub Release** — two paths used to race for a single tag, which is
+  why some earlier releases carry no attached artifacts at all.
+
+**The ship-readiness gate is now advisory rather than enforcing**, and says so, along with what
+promoting it would require. It was counted among the enforced gates while no production path
+reaching it could be demonstrated. Claiming enforcement mokata does not perform is precisely the
+failure this release is named for, so it is stated here rather than quietly recounted.
 
 ### Known limitations
 
-- **The SQLite FTS5/BM25 lexical tier ranks *worse* than the keyword floor it replaced, and at
-  scale it costs recall — measured, not suspected.** `normalize_lexical_scores` scales each
-  engine's scores against the best score *in its own result set*, which flattens exactly the gap
-  that would have ranked a mid-pack answer. On the 100,000-item benchmark, against the Jaccard
-  keyword floor on the same probes and the same code — only the corpus size differs — the FTS tier
-  measures **−5.6pp recall (0.5000 → 0.4444)** and **−10.8pp MRR@10 (0.8334 → 0.7258)**. At 5,000
-  items the same comparison loses no recall at all and only −3.3pp MRR, so a small corpus hides
-  more than half of it: normalizing against the result set's own max only begins dropping real
-  answers once there are enough genuine competitors. **This ships as-is and the fix is scheduled
-  for 0.0.17** alongside the BM25/H-4 ranking work, because the correct repair is rank-preserving
-  normalization rather than a constant to tune, and it wants measuring in one pass with the rest
-  of the ranking. It is recorded here rather than left to be discovered: if you run a large store
-  and your lexical results look mis-ordered, this is why.
+- **The SQLite FTS5/BM25 lexical tier still ranks *worse* than the keyword floor it replaced, and the
+  fix promised for this release did not land.** 0.0.16 disclosed this and said the repair was
+  scheduled for **0.0.17**; **0.0.17 shipped no ranking work at all**, so both the measurement and the
+  defect stand unchanged. `normalize_lexical_scores` scales each engine's scores against the best
+  score *in its own result set*, flattening exactly the gap that would have ranked a mid-pack answer.
+  On the 100,000-item benchmark, against the Jaccard keyword floor on the same probes and the same
+  code — only the corpus size differs — the FTS tier measures **−5.6pp recall (0.5000 → 0.4444)** and
+  **−10.8pp MRR@10 (0.8334 → 0.7258)**. At 5,000 items the same comparison loses no recall at all and
+  only −3.3pp MRR, so a small corpus hides more than half of it. It is **now scheduled for 0.0.19**,
+  with the rest of the ranking work, because the correct repair is rank-preserving normalization
+  rather than a constant to tune. If you run a large store and your lexical results look mis-ordered,
+  this is why — and this is the second release running that it has been true, which is the more
+  useful thing to know than the first disclosure was.
 
-**Memory that ages, and teammates who stop overwriting each other.**
-
-- **Memory ages.** Items carry usage signals (`hit_count`, `last_recalled_at`) and bi-temporal
-  validity windows, and ranking gains recency and usage terms that break ties between things that
-  already match. Over-budget scopes get **proposed** archival sweeps — one reviewable decision per
-  bucket. Archiving closes a validity window and never deletes a row: your memory is re-openable
-  and provenance survives. An item with no hits scores exactly as it did before.
-- **Two teammates writing the same memory produce a proposal, not a lost fact.** A flush-time
-  conflict becomes a healing proposal resolved through the gate you already use. Entries sharing
-  an approval apply in a single transaction, so a conflict rolls the whole group back — a partial
-  heal can no longer retire a fact and lose its replacement. Retiring a fact whose replacement is
-  still undecided, discarded or blocked is refused outright.
-- **Memory summaries are written, not templated.** Consolidating a turn cluster now produces a
-  real drafted summary, drafted by the harness agent you are already talking to through a seam —
-  no model is embedded in mokata and no API key is involved. The draft is a **proposal** on the
-  same secret-scan → human-gate → ledger path. With no drafter present the output is
-  byte-identical to before, and a drafter that fails falls back to the placeholder *loudly*,
-  because a placeholder shown at an approval prompt looks exactly like a real summary.
-- **A semantic store no longer switches on token-hash embeddings you did not ask for.** Selecting
-  `pgvector` used to resolve the embedder to `auto`, whose floor is the built-in token-hash
-  embedder — so a team that opted into a semantic store without naming one silently filled a real
-  vector index with token-hash vectors. Name an embedder and you get it; name none and the
-  semantic tier stays **off**, with a notice saying why and how to turn it on.
-
-**Upgrades that finish, and wiring you can see.**
-
-- **`mokata upgrade` finishes the job.** `pip install -U mokata` replaces the code and leaves
-  `.claude/settings.json` carrying the wiring the *previous* version wrote — so a hook added since
-  your last `mokata setup claude` was silently absent, with no error and no warning, just a gate
-  that never fires. `mokata upgrade` refreshes the harness wiring through setup's own preview-diff
-  gate and then runs the wiring check. Human-gated end to end: decline either gate and nothing is
-  written.
-- **Stale wiring is visible where you already are** — a SessionStart briefing line (when the hooks
-  still run), the `status` MCP tool (when they do not), and a named `hooks-wiring-stale` doctor
-  finding. A current install sees nothing on any of them.
-- **`mokata doctor --wiring`** — the wiring-only check, non-zero if your gates are not wired,
-  launchable and current. It works on an uninitialized repo, so it is runnable the moment a
-  `pip install` finishes.
-
-**Worktrees, navigation and spec.**
-
-- **Pipelines can run in their own worktree** — always offered, never automatic — with the
-  run↔worktree binding kept visible and a merge-ready branch at ship. **`mokata worktree list`**
-  (and a `worktree_list` MCP tool) joins your worktrees against their sessions with a staleness
-  verdict per row.
-- **Code navigation goes through the graph** rather than ad-hoc search, degrading cleanly when no
-  graph is available. **`spec_show`** fetches the current spec so phase prompts stop re-searching
-  the repo for something mokata already knows, and re-emitting a spec **archives and versions** the
-  prior one instead of clobbering it.
-- **⚠ NEW FAILURE MODE — `spec emit` can now refuse on a stale code anchor** (`code-anchor-ref`).
-  If the decisions your approach was approved against name code that has since changed, emitting
-  is blocked with the anchors named and the road out. **This is a deliberate contract change.**
-  Nothing is written when it fires, and it is conservative: with no recorded baseline, mokata says
-  nothing rather than blocking you on a guess.
-
-**Security and platform.**
-
-- **Windows is now actually first-class, as the docs already claimed.** The self-protect gate
-  enforced *neither way* on Windows: the tokenizer treated `\` as a shell escape rather than a
-  path separator, so a write into an installed mokata was **never judged at all** while ordinary
-  in-repo writes were **over-blocked**. Both directions came from one root cause and are fixed at
-  the root; POSIX tokenization is byte-identical. The Windows CI matrix now *executes* these paths
-  instead of asserting about them as strings.
-- **Hooks resolve without a shell that completes filenames for you.** Plugin hooks leaned on
-  cmd.exe's `PATHEXT` completion — a *shell* behaviour. Under PowerShell the launcher did not
-  resolve and **`secret-guard` and `gate-guard` simply did not run**, with no error to see. Setup
-  now uses the exec form, the plugin route names its shell, and an unresolvable wired hook is a
-  loud failure instead of a quiet one.
-- **Writes to mokata's own installed code are blocked, non-overridably** — site-packages, a
-  mokata install, or outside the workspace root, including the Bash side-door. No override flag,
-  no environment switch.
-- **The secret scanner stops flagging your variable names**, and **`mokata secret ignore`** lets
-  you record an entropy-layer ignore keyed by content hash and version controlled. Signature-detected
-  credentials are refused by name and can never be ignored.
-
-**Fixes.** Re-entering a pipeline no longer wedges the approval loop; a re-entered session can see
-its own pipeline's state across a `/clear`; review verdicts survive a new session and a failed
-review record is loud instead of silent; there is one source of review truth across CLI and MCP;
-and the Homebrew formula vendors **29** resources, not 28 — the 0.0.15 note miscounted against its
-own lockfile.
+**The instruments, in one line, because you do not consume them.** Pins that a production path
+actually reaches each gate rather than only that the gate behaves when called; a register that makes
+delegated writes visible to the write detector; mutation discipline that stops a size-preserving
+mutant inflating a score; an audit of all 23 guards against whether they can grade anything at all;
+a per-check supply-chain differ that fails on any single check dropping even when the aggregate
+rises. **No behaviour of yours changes because of any of it** — it is why the fixes above are claims
+you can check rather than claims you have to take.
 
 Full detail, including everything trimmed from these notes, is in
 [`CHANGELOG.md`](https://github.com/JasGujral/mokata-oss/blob/main/CHANGELOG.md).

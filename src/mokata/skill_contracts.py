@@ -71,10 +71,6 @@ GATES: Dict[str, GateRef] = {
         "hard-rule",
         "in-scope hard governance rules block with no runtime override (fail-closed)",
         "src/mokata/govern/enforce.py"),
-    "ship-readiness": GateRef(
-        "ship-readiness",
-        "landing blocks until tests are green, ACs met, and a review verdict is recorded",
-        "src/mokata/engine/ship.py"),
     # `approach-approval` was advisory until PH-GATE.S0 (doc 76 FU-1): the SI.1 gate hook now
     # ENFORCES the brainstorm boundary — a native implementation write with a run registered but no
     # approach approved exits 2 (`gate_hook.GATE_PHASE`). It is a backed gate now, so the brainstorm
@@ -83,7 +79,39 @@ GATES: Dict[str, GateRef] = {
         "approach-approval",
         "no spec until exactly one approach is explicitly approved",
         "src/mokata/gate_hook.py"),
+    # `self-protect` is LAYER 0 of `WriteGate.submit` (`govern/gate.py`), running ahead of the trust
+    # dial, the secret scan and the human gate, and it is layer 1 of the gate-guard PreToolUse hook
+    # (`hook_cli.gate_guard_main`) where it keys on the TARGET PATH alone — so it runs before
+    # `find_mokata_root` and before every run-state gate. A gate that runs FIRST on every durable
+    # write is backed by any definition; doc 85 §4 has listed it since 2026-07-26 and this table
+    # simply did not have the row. SECURITY-class: non-overridable, no P14 escape, no env switch.
+    # Added 0.0.17 stage 5 — its reachability was measured REACHABLE by `tests/_gatereach.py`.
+    "self-protect": GateRef(
+        "self-protect",
+        "writes to installed package trees, mokata's own install, or outside the workspace root "
+        "are refused — security-class, never overridable",
+        "src/mokata/selfprotect.py"),
     # --- advisory protocol boundaries (backed=False): headline-gate copy only, never cited ---
+    # `ship-readiness` was BACKED until 0.0.17 stage 5, and the demotion is the honest state, not a
+    # loss of function. REVIEW-FIX.R3 deleted `check_ship_readiness` and moved the review truth to
+    # `progress_events.ship_review_gate`, leaving this entry naming the "landing-decision half" of
+    # `engine/ship.py`. Stage 4's reachability derivation then showed that half has NO CONSUMER
+    # EITHER: nothing in the package so much as imports `engine/ship.py` (a certified zero, not a
+    # resolver shadow). There is no `mokata ship` subcommand and no `ship` MCP tool, because `ship`
+    # is an agent-facing SKILL — so "record the finish" is prose an agent follows, not code a
+    # surface runs. `backed=True` means "an executable gate a Contract clause may cite", and
+    # nothing executes this one.
+    #   PROMOTION BACK TO BACKED REQUIRES A SURFACE THAT RUNS IT — a `mokata ship` subcommand or a
+    # `ship` MCP tool reaching `engine/ship.py`. That is self-correcting: build the surface and the
+    # reachability pin promotes this entry with evidence, rather than on a claim.
+    #   `engine/ship.py` is NOT deleted and this is NOT a `BACKCOMPAT-SWEEP` hit: the module is the
+    # landing-decision recorder the ship skill's prose depends on, and it works — it is simply not
+    # reached from a production surface today.
+    "ship-readiness": GateRef(
+        "ship-readiness",
+        "landing is not presented while tests are red, ACs are unmet, or no review verdict is "
+        "recorded — an agent-facing protocol boundary, not a code gate",
+        "", backed=False),
     "refinement-approval": GateRef(
         "refinement-approval",
         "no spec until a scoped set of refinements is explicitly approved",
@@ -324,12 +352,16 @@ CONTRACTS: Dict[str, Contract] = {
             "record the finish and show the audit --why recap",
         ),
         must_not=(
-            _c("present landing options while anything is red or unmet", "ship-readiness"),
+            # These two cited `ship-readiness` as a GATE until 0.0.17 stage 5 demoted it to
+            # advisory (see its entry). The BOUNDARIES are unchanged and still binding; what
+            # changed is that they may no longer be announced as a code enforcement, because no
+            # code enforces them. Re-cite the gate when a surface runs `engine/ship.py`.
+            _c("present landing options while anything is red or unmet"),
             _c("merge, PR, push, delete, or discard without the human's explicit choice",
                "write-gate"),
         ),
         depends_on=(
-            _c("completed develop+review artifacts", "ship-readiness", hard=True),
+            _c("completed develop+review artifacts", hard=True),
             _c("git (soft — report if absent)"),
         )),
     "onboard": Contract(

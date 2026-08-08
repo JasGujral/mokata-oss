@@ -367,6 +367,18 @@ _register("hook_cli.py", {
         "A torn-down/errored stdin IS 'no input' — there is no other answer to give. The docstring "
         "promises `Never raises`, and the caller falls back to its own default (its own contract). "
         "Nothing degrades: the hook still runs, on the default it would have used anyway."),
+    "_bounded._run": (SUPPRESS_OK,
+        "`_read_stdin_bounded._reader`'s sibling, added for OSS issue #43 to bound the hook's own "
+        "WORK the way that one bounds its stdin. Broad for the same reason and with the same "
+        "answer: this thread's whole contract is to produce a result or not, and 'not' is already "
+        "a first-class outcome the caller handles (over budget looks identical to failed, "
+        "deliberately — see `_bounded`'s docstring). It is NOT a place a real failure hides: the "
+        "only work passed to it is `_build_injection_for`, whose own body is `build_injection`, "
+        "which ALREADY has the registered SUPPRESS-OK arm covering exactly these raisables and "
+        "already returns an empty pack rather than raising. So this catch is the belt behind that "
+        "brace — it exists so a thread cannot die with a traceback on stderr during the human's "
+        "turn, and announcing here would double-announce a degrade that arm already decided to "
+        "keep quiet (see the `user_prompt_submit_main` entry for why per-turn silence is right)."),
     # `secret_guard_main` is NOT registered because it is no longer BROAD — THE headline D5 site
     # left this sweep instead of being justified in it. A broken `govern` import meant every
     # Write/Edit/Bash proceeded UNSCANNED FOR SECRETS, forever, with zero output: a security control
@@ -460,6 +472,10 @@ _register("progress.py", {
     "active_skill_surface": (SUPPRESS_OK, "Guards `_badge_state`; no skill surface rendered."),
     "build_todo_items": (SUPPRESS_OK, "An unreadable checkpoint → an empty todo list, not a crashed surface."),
     "_logged_user_stage": (SUPPRESS_OK, "An unreadable progress log → None; the checkpoint still derives the stage."),
+    "_root_of": (SUPPRESS_OK,
+        "The store→repo-root recovery (`tdd_state.root_of_state_dir`) → None, so the surface has no "
+        "repo to resolve against and renders the honest no-run view. It cannot render a WRONG run: "
+        "the only alternative to a root is no resolution at all."),
     "_shipped_run_ids": (SUPPRESS_OK, "An unreadable progress log → empty set (B-LIFE): NO run reads as shipped, so a run is SHOWN, never wrongly retired — the safe floor for the read-only progress/badge surface."),
     "statusline_enabled": (SUPPRESS_OK, "An unreadable setting → the DEFAULT (True). The badge shows; nothing is lost."),
     "badge_verbosity": (SUPPRESS_OK, "An unreadable setting → the DEFAULT (BADGE_FULL)."),
@@ -470,22 +486,30 @@ _register("progress.py", {
 })
 
 
-# badge_run.py (B-BADGE) — session-scoped run resolution: the statusline BADGE, plus REVIEW-FIX.R1's
-# verdict key (`resolve_verdict_run`, registered last with its own reasoning). Every BADGE handler
-# here guards a COSMETIC read or a best-effort convenience write; none guards a decision, a
-# governed write, or enforcement. The silence is right for the SAME two reasons as progress.py:
-# nothing a user relies on for correctness degrades (resolution just falls open to the clean/no-run
-# badge or to live-narrowing), and the harness re-runs the statusline on EVERY state change, so a
-# notice from here would be mokata's noisiest line. The LOUD degrade for the underlying registry /
-# state IO already lives once, at its owner (`session_registry` / `gate_hook._live_runs`); these are
-# downstream cosmetic readers of that same state and must not double-announce it.
-_register("badge_run.py", {
+# run_resolver.py (RUN-ID-DRIFT) — THE run resolver: every surface's answer to "which run is this?",
+# including the statusline badge, the review verdict key and the approval key. The handlers here
+# split into two groups, and BOTH are silent for a reason:
+#
+#   * the COSMETIC readers (badge, binding) — nothing a user relies on for correctness degrades
+#     (resolution falls open to the clean/no-run badge), and the harness re-runs the statusline on
+#     EVERY state change, so a notice from here would be mokata's noisiest line;
+#   * the GATE-FEEDING readers (`resolve_run` and its rungs) — not cosmetic, and that is exactly why
+#     silence is correct: their failure value is UNRESOLVED, the STRICTEST outcome there is. A
+#     caller that cannot resolve a run BLOCKS with a legible remedy naming `--run`; a swallowed
+#     failure can only ever make a gate stricter, never let something through. The remedy line IS
+#     the loud half.
+#
+# The LOUD degrade for the underlying registry / state IO already lives once, at its owner
+# (`session_registry`); these are downstream readers of that same state and must not double-announce
+# it.
+_register("run_resolver.py", {
     "resolve_badge_run": (SUPPRESS_OK,
         "Any resolution error → None (the clean `mokata` badge) — the read-only statusline's safe "
         "floor. The registry IO it reads announces its own failure at its owner."),
-    "_single_live_run": (SUPPRESS_OK,
-        "The R-MCP narrowing read (reuses `gate_hook._live_runs`, which owns the loud degrade) → "
-        "None; the badge falls to the no-run cell rather than guessing a run."),
+    "_is_live": (SUPPRESS_OK,
+        "The badge's per-run liveness read (`live_runs`, whose registry IO owns the loud degrade) → "
+        "NOT live, so an unreadable registry hides a badge rather than showing an unattributed run. "
+        "The safe direction for a display filter that may only ever narrow."),
     "_run_is_shipped": (SUPPRESS_OK,
         "The B-LIFE end-of-run read (delegates to `progress._shipped_run_ids`, which owns the log "
         "read) → NOT shipped; a run that can't be read as finished is SHOWN, never wrongly retired."),
@@ -503,22 +527,24 @@ _register("badge_run.py", {
     # caller BLOCKS with a legible remedy naming `--run` — so nothing a real failure could hide can
     # pass a gate. The remedy line IS the loud half; a second notice would fire on the read-only
     # statusline path that shares these tiers.
-    "resolve_verdict_run": (SUPPRESS_OK,
-        "Any resolution error → None, which makes `ship_review_gate` BLOCK ('no run to attribute "
-        "it to' + the `--run` remedy). A swallowed failure can only ever make ship STRICTER, never "
-        "let an unreviewed change through; the state/registry IO announces itself at its owner."),
+    "resolve_run": (SUPPRESS_OK,
+        "THE resolver's own outer guard: any error at any rung → an UNRESOLVED result, never a "
+        "raise and never a guess. It feeds the statusline (must exit 0), the gate hook (must never "
+        "block a write because a resolver threw) and the ship gate (which then BLOCKS with the "
+        "`--run` remedy). Unresolved is the strictest outcome available, so a swallowed failure can "
+        "only make a caller stricter; the state/registry IO announces itself at its owner."),
+    "_own_run": (SUPPRESS_OK,
+        "The OWN rung's identity read (`session.current_run_id`, a uuid mint) → None, i.e. this "
+        "process claims no run and the ladder falls through to the inference rungs below. Never a "
+        "wrong run, only a less specific one."),
+    "_unshipped": (SUPPRESS_OK,
+        "The retirement NARROWING's log read (`progress._shipped_run_ids`, which owns the log "
+        "read) → narrow NOTHING, so every candidate stays a candidate and resolution goes AMBIGUOUS "
+        "rather than narrowing on evidence it could not read. Refusing beats a half-read pick."),
     "_bound_run": (SUPPRESS_OK,
-        "The tier-(i) binding read (checkpoint existence) → None, i.e. treated as no binding: the "
-        "badge falls to live-narrowing and the verdict key falls to the gate hook's resolver, which "
-        "refuses on ambiguity. Never a wrong run, only a narrower one."),
-    # RE-ENTRY — the approval-key resolver, the third consumer of these tiers. Same reasoning as
-    # `resolve_verdict_run`: its failure value is the STRICTEST one available.
-    "resolve_run_for_evidence": (SUPPRESS_OK,
-        "Any resolution error → None, and None makes `mcp.consent._approval_run` fall back to this "
-        "PROCESS's own session id — the narrowest possible key, i.e. exactly the pre-RE-ENTRY "
-        "behaviour. A swallowed failure can therefore only ever make an approval HARDER to redeem "
-        "(a refusal the human resolves by re-approving), never easier; it cannot widen who may "
-        "redeem and cannot reach a commit. The state/registry IO announces itself at its owner."),
+        "The BOUND rung's binding read (checkpoint existence) → None, i.e. treated as no binding, so "
+        "the ladder falls through to the rungs below it. Never a wrong run, only a less specific "
+        "one — and an unresolvable one refuses rather than guesses."),
 })
 
 

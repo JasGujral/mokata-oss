@@ -1,0 +1,52 @@
+0.0.17 — RUN-ID-DRIFT (OSS #44). The mutant list, committed beside the score.
+
+TARGETS:
+  src/mokata/run_resolver.py           — THE resolver: the ladder, the refusal, the badge filter
+  src/mokata/cli_commands/runviews.py  — the WRITING surface #44 was reported on (`progress mark`)
+  src/mokata/progress.py               — the display surface + B-LIFE retirement (kept out of the ladder)
+  src/mokata/mcp/server.py             — eager window registration
+  src/mokata/session_registry.py       — sticky pid
+  src/mokata/tdd_state.py              — `root_of_state_dir`, the declared inverse of `state_dir`
+
+GRADED BY:
+  tests/test_run_id_drift.py              (this stage — the invariant, Class 1, the rungs, the refusals)
+  tests/test_b_badge_session_scope.py     (the badge's display filter)
+  tests/test_b_life.py                    (ship retirement stays DISPLAY, not ladder)
+  tests/test_review_fix_r1.py             (the verdict key's session-awareness)
+  tests/test_re_entry.py                  (the EVIDENCE rung + the pin)
+  tests/test_r_mcp_self_registration.py   (the hook's narrowing + its no-extra-registry-read budget)
+
+Run: PYTHON=/Users/jas/jsvenv_mk312/bin/python tests/_run_id_drift_mutants.sh
+
+RED   = the tests caught it. The pin is real.
+GREEN = it survived. That is a finding about a pin, and it is reported, never quietly dropped.
+
+SCORE: 22/22 RED (second grading). The FIRST grading was 21 RED / 1 GREEN, and the survivor is the
+reason this batch was worth running — doc 85 §7f exactly:
+
+  M05 (drop the SINGLE rung below LIVE) survived `test_r_mcp_self_registration`'s budget pin, the
+  test whose whole job is to prove the single-candidate path reads nothing new. It survived because
+  the test built its "single candidate" with `_approve`, i.e. with an APPROVED APPROACH — so the
+  resolver answered at the EVIDENCE rung and never walked the line the booby-trap was armed for.
+  The pin had been green since R-MCP while grading nothing. Fixed by giving it a BARE checkpoint
+  (state without evidence), which is the only shape that actually reaches SINGLE; the evidence case
+  is kept as a second assertion rather than replaced.
+
+WHAT THE MUTANTS COVER, and why these and not others. Every mutant below inverts a decision the
+stage actually makes, and each maps to a sentence in `run_resolver`'s module docstring that claims
+something is load-bearing — the point being that a claim in a docstring is worth exactly as much as
+the test that fails when it stops being true:
+
+  M01-M05  the LADDER'S ORDERING. Every ordering the module argues for (EVIDENCE over OWN, OWN
+           suppressed when two pipelines exist, BOUND live, the PIN short-circuiting, SINGLE above
+           LIVE for the hook's read budget) is inverted and must be caught.
+  M06-M09  THE REFUSAL — the defect itself. Ambiguity degrading back into a pick; each narrowing
+           taking "the first" instead of demanding "exactly one".
+  M10-M11  CLASS 1 — the two absences collapsing into one, and the remedy losing its candidates.
+  M12-M14  the BADGE's display filter, which may SUBTRACT but never SUBSTITUTE.
+  M15-M16  the OWN rung claiming a run it does not own, and going inert.
+  M17      the WRITING surface stamping into a guess (the half of #44 that corrupts state).
+  M18      B-LIFE retirement, which stayed OUT of the ladder and IN the display.
+  M19-M21  eager registration; sticky pid in BOTH directions (it must hold against a live sibling
+           AND yield to a dead owner — a one-directional stickiness is its own bug).
+  M22      the state-dir inverse guessing a root for a directory that is not one.

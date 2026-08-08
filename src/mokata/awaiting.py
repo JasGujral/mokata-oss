@@ -45,6 +45,34 @@ LIST_CMD = "mokata approve --list"
 AMEND_ABORT_CMD = "mokata spec amend --abort"
 AMEND_TOOL_NAME = "spec_amend"
 
+# The amend path's FINISH — step 2, and the reason "spec amend gets stuck" (AMEND-STEP-2-IS-
+# UNADVERTISED). Approving an amendment does not land it: the flow has to be re-run to redeem the
+# approval. That fact was stated in exactly one place, `gate_hook`'s regressed-run refusal, which
+# fires only when a user attempts a DEVELOPMENT WRITE against the regressed run — so a user who
+# followed the amend flow itself never saw it. Named here beside its abort, for the same reason the
+# abort is named here: a flow that offers a way to ABANDON and no way to COMPLETE is a menu whose
+# only exit is giving up, and two surfaces wording that step differently is how it went missing.
+#
+# THE PLACEHOLDER IS LOAD-BEARING — this literal read `mokata spec amend`, which ERRORS at a shell
+# with "--file is required". A refusal that names a remedy must name one that WORKS (doc 85 §7g's
+# closing rule), and this is the human-facing spelling of the finish step: the one string a stuck
+# user copies. It is rendered with its required argument so they see what is needed before they run
+# it, not after.
+#
+# And `--file` is genuinely required — CHECKED, not assumed. A `Proposal` stores `content_hash`,
+# never the args (`approval.Proposal`), and `approval.redeem` re-derives `content_hash(tool, args)`
+# from arguments the CALLER supplies and compares. That is what makes consent content-bound —
+# "approve X, then commit Y" stays arithmetically impossible — so the payload must come back with
+# the redemption BY DESIGN. The approved proposal cannot carry the spec home; the string was the
+# thing that was wrong, not the CLI.
+AMEND_FINISH_CMD = "mokata spec amend --file <your-spec.json>"
+
+# What is TRUE and was never said: the human has done everything asked of them and the amendment is
+# still not in. Said in the human's terms, not the model's — "re-call the tool with proposal_id" is
+# the model's instruction and it is why this looked like a server problem rather than a missing step.
+AMEND_FINISH_NOTE = (f"approving does NOT land the amendment — the run stays REGRESSED until the "
+                     f"amend is finished: re-run `{AMEND_FINISH_CMD}`")
+
 # The regressed-state sentence for an in-flight amendment. This is the FACT that makes the wait
 # urgent rather than ignorable: development writes are blocked while it stands.
 AMEND_REGRESSED_NOTE = ("the run has REGRESSED to the SPEC phase — development writes are BLOCKED "
@@ -79,6 +107,11 @@ def awaiting_block(proposal_id: str, tool: str, *, blocked_note: str = "",
         head = (f"{AWAITING}: ALREADY APPROVED — a human has approved this write. Nothing has "
                 f"been written yet. Re-call {tool} with proposal_id=\"{proposal_id}\" to commit "
                 f"it (once).")
+        if tool == AMEND_TOOL_NAME:
+            # The human-facing spelling of that same step. Without it the approved state told the
+            # MODEL what to do and told the HUMAN nothing, which is precisely the moment they
+            # concluded the server was wedged.
+            head += f"  {AMEND_FINISH_NOTE}."
     else:
         head = (f"{AWAITING}: mokata is WAITING ON A HUMAN — this is not an error and the server "
                 f"is not stuck. NOTHING was written. Ask the human to run:  {approve_cmd}  — "
@@ -95,7 +128,10 @@ def awaiting_block(proposal_id: str, tool: str, *, blocked_note: str = "",
         "awaiting_list_command": LIST_CMD,
     }
     if tool == AMEND_TOOL_NAME:
+        # BOTH roads, always. `awaiting_abort_command` shipped alone, which advertised the one
+        # move that throws the work away and left the one that keeps it unnamed.
         block["awaiting_abort_command"] = AMEND_ABORT_CMD
+        block["awaiting_finish_command"] = AMEND_FINISH_CMD
     if blocked_note:
         block["awaiting_blocks"] = blocked_note
     if others:
@@ -122,10 +158,34 @@ def _pending(root: str) -> List[Any]:
     return list(approval.pending(root))
 
 
+def by_decision(proposals: Sequence[Any]) -> "tuple":
+    """Split a live proposal set into (waiting-on-the-HUMAN, already-approved).
+
+    `approval.pending` is a LIVENESS filter — unexpired and unredeemed — and it is right to include
+    an approved-but-unredeemed proposal, because that write has still not happened. But LIVE is not
+    the same question as WHO IS BEING WAITED ON, and the surfaces below answer the second one. The
+    state that separates them already exists (`Proposal.approved`); this is the one place that reads
+    it, so no surface can drift from another about whose move it is.
+
+    Degrade-clean: a record with no `approved` attribute reads as waiting, which over-asks rather
+    than under-asks — the safe direction for a consent surface."""
+    waiting, approved = [], []
+    for p in proposals:
+        (approved if getattr(p, "approved", False) else waiting).append(p)
+    return waiting, approved
+
+
 def pending_lines(root: str = ".", *, quiet_when_ok: bool = True) -> List[str]:
     """The shared "waiting on you" report block, in the same style as `parity_lines` /
     `skills_visibility_lines`. Loud-only by default; `doctor` passes `quiet_when_ok=False` to
     also show the nothing-pending line.
+
+    TWO BLOCKS, not one (APPROVED-STILL-READS-AS-AWAITING). A proposal the human has already
+    approved is live but is NOT waiting on them, and rendering it under "awaiting YOUR approval"
+    with `Fix: mokata approve <pid>` told a human to redo a decision they had already made — on the
+    exact surface they run when they believe they are stuck. So the wait block counts and instructs
+    only the UNDECIDED, and the approved-unredeemed ones get their own block that names them without
+    asking for anything.
 
     INFORMATIONAL: this reports state, it never judges it. A pending proposal is mokata working
     CORRECTLY — the gate is the point (P2) — so it is never a doctor finding and never touches
@@ -136,25 +196,54 @@ def pending_lines(root: str = ".", *, quiet_when_ok: bool = True) -> List[str]:
             return [] if quiet_when_ok else [
                 "mokata pending: nothing is waiting on you ✓"]
 
-        lines = [f"mokata pending: {len(proposals)} write(s) awaiting YOUR approval "
-                 f"— mokata is waiting, not stuck"]
-        for p in proposals:
-            # NAME the tool + id + the road back. Never `p.summary` / `p.preview` — those carry
-            # the proposal's CONTENT (see the module docstring).
-            tool = getattr(p, "tool", "?")
-            pid = getattr(p, "proposal_id", "?")
-            if tool == AMEND_TOOL_NAME:
-                lines.append(f"  amendment pending — approve {pid} or --abort")
-                lines.append(f"    {AMEND_REGRESSED_NOTE}")
-                lines.append(f"    Fix: `{APPROVE_CMD.format(proposal_id=pid)}`  "
-                             f"or  `{AMEND_ABORT_CMD}`")
-            else:
-                lines.append(f"  {tool} pending — approve {pid}")
-                lines.append(f"    Fix: `{APPROVE_CMD.format(proposal_id=pid)}`")
+        waiting, approved = by_decision(proposals)
+        lines: List[str] = []
+        if waiting:
+            lines.append(f"mokata pending: {len(waiting)} write(s) awaiting YOUR approval "
+                         f"— mokata is waiting, not stuck")
+            for p in waiting:
+                # NAME the tool + id + the road back. Never `p.summary` / `p.preview` — those carry
+                # the proposal's CONTENT (see the module docstring).
+                tool = getattr(p, "tool", "?")
+                pid = getattr(p, "proposal_id", "?")
+                if tool == AMEND_TOOL_NAME:
+                    lines.append(f"  amendment pending — approve {pid} or --abort")
+                    lines.append(f"    {AMEND_REGRESSED_NOTE}")
+                    lines.append(f"    Fix: `{APPROVE_CMD.format(proposal_id=pid)}`  "
+                                 f"then  `{AMEND_FINISH_CMD}`  "
+                                 f"— or abandon it: `{AMEND_ABORT_CMD}`")
+                else:
+                    lines.append(f"  {tool} pending — approve {pid}")
+                    lines.append(f"    Fix: `{APPROVE_CMD.format(proposal_id=pid)}`")
+        if approved:
+            # Says what is TRUE of every approved write — that the decision is recorded and is not
+            # being asked for again — and stops there. It deliberately does NOT promise "nothing
+            # more to do": an approved amendment still owes its finish step (AMEND-STEP-2-IS-
+            # UNADVERTISED), and a heading that contradicts the line under it is a new lie for an
+            # old one.
+            lines.append(f"mokata approved: {len(approved)} write(s) you have ALREADY APPROVED "
+                         f"— your decision is recorded and is not being asked for again")
+            for p in approved:
+                lines.extend(_approved_lines(getattr(p, "tool", "?"),
+                                             getattr(p, "proposal_id", "?")))
         lines.append(f"  (list them any time: `{LIST_CMD}`)")
         return lines
     except Exception as exc:                 # informational path — never raise
         return [f"mokata pending: check skipped ({exc})."]
+
+
+def _approved_lines(tool: str, pid: str) -> List[str]:
+    """The per-proposal render for an APPROVED, unredeemed write: the id, and what is now owed —
+    which is never another trip to the terminal.
+
+    The amend flow owes one more thing, and it is the whole of AMEND-STEP-2-IS-UNADVERTISED: an
+    approved amendment is still holding the run REGRESSED, and only re-running the amend releases
+    it. Doctor is exactly where a user lands asking why approving changed nothing."""
+    lines = [f"  {tool} APPROVED {pid} — approved, not yet written"]
+    if tool == AMEND_TOOL_NAME:
+        lines.append(f"    {AMEND_FINISH_NOTE}")
+        lines.append(f"    Fix: `{AMEND_FINISH_CMD}`  — or abandon it: `{AMEND_ABORT_CMD}`")
+    return lines
 
 
 def liveness_lines() -> List[str]:
@@ -187,18 +276,33 @@ def statusline_segment(root: str = ".") -> str:
     """The mokata-OWNED wait signal for a harness that raises none of its own: a statusline
     segment naming the wait and its id. "" when nothing is pending (so a healthy session's
     statusline stays byte-identical). No daemon — the pending set is already on disk, and this
-    renders on the statusline tick the harness was going to run anyway. Never raises."""
+    renders on the statusline tick the harness was going to run anyway.
+
+    An APPROVED-but-unredeemed proposal gets its own segment rather than the wait one: it is still
+    unwritten, so hiding it would be its own lie, but `⏳ awaiting approval <id>` standing on the
+    statusline after the human approved is a permanent false ask (APPROVED-STILL-READS-AS-AWAITING).
+    Both can render at once — the wait first, because that one is the human's move. Never raises."""
     try:
         proposals = _pending(root)
         if not proposals:
             return ""
-        newest = proposals[0]
-        pid = getattr(newest, "proposal_id", "?")
-        if len(proposals) > 1:
-            return f"⏳ awaiting approval {pid} (+{len(proposals) - 1} more)"
-        return f"⏳ awaiting approval {pid}"
+        waiting, approved = by_decision(proposals)
+        parts = []
+        if waiting:
+            parts.append("⏳ awaiting approval " + _seg(waiting))
+        if approved:
+            parts.append("✅ approved, not yet written " + _seg(approved))
+        return "  ".join(parts)
     except Exception:
         return ""
+
+
+def _seg(proposals: Sequence[Any]) -> str:
+    """`<newest-id>`, or `<newest-id> (+N more)` — the id a human retypes, plus how many others
+    share this state. Counts WITHIN one state, never across: a "+1 more" that silently mixed a wait
+    with an already-approved write is the same conflation this stage removes."""
+    pid = getattr(proposals[0], "proposal_id", "?")
+    return f"{pid} (+{len(proposals) - 1} more)" if len(proposals) > 1 else pid
 
 
 # ======================================================================================
@@ -277,6 +381,7 @@ def _statusline_wired(root: str) -> bool:
         return False
 
 
-__all__ = ["AMEND_ABORT_CMD", "AMEND_REGRESSED_NOTE", "AMEND_TOOL_NAME", "APPROVE_CMD",
+__all__ = ["AMEND_ABORT_CMD", "AMEND_FINISH_CMD", "AMEND_FINISH_NOTE",
+           "AMEND_REGRESSED_NOTE", "AMEND_TOOL_NAME", "APPROVE_CMD",
            "AWAITING", "HARNESS_NOTIFICATION", "LIST_CMD", "STATUSLINE", "TOOL_RESULT",
-           "awaiting_block", "pending_lines", "signal_wait", "statusline_segment"]
+           "awaiting_block", "by_decision", "pending_lines", "signal_wait", "statusline_segment"]

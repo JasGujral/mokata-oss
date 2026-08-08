@@ -27,10 +27,19 @@ results WILL differ. The bar proven here is "as good or better, deterministic, d
   7. BACKFILL — an EXISTING populated table gains the index and its existing rows become findable
      (the upgrade path, not just fresh installs).
 
-Backend legs: SQLite runs everything for real. Postgres runs its emitted SQL through the DB.S2a
-`_PgShim` precedent (`%s` -> `?`) extended with a NARROW emulation of the four text-search
-primitives — enough to prove the WHERE filters, the scope composes, and the ORDER BY ranks, but
-NOT PG's own ranking quality (that is the live-DB leg, skipped unless MOKATA_TEST_DSN is set).
+Backend legs: SQLite runs everything for real. Postgres runs its emitted SQL through a DECLARED
+translation (`_translating.TranslatingConnection`) — enough to prove the WHERE filters, the scope
+composes, and the ORDER BY ranks, but NOT PG's own ranking quality (that is the live-DB leg,
+skipped unless MOKATA_TEST_DSN is set). The full, enforced list of what is translated and what
+that costs lives in `_DECLARATION` below; read it there rather than trusting a summary here.
+
+⚠ This paragraph used to read "the DB.S2a `_PgShim` precedent (`%s` -> `?`) extended with a NARROW
+emulation of the four text-search primitives". 0.0.17 stage 2 measured it and it was wrong in both
+halves: THREE string rewrites, not one, and FIVE emulated functions, not four. The two items the
+phrase "text-search" quietly excluded are the `@@` operator rewrite and the `doc::jsonb->>'value'`
+accessor — and the accessor is the one that most needed saying, because it swaps Postgres JSON
+extraction for `json.loads()` on the very value path the index is built over. A word like "NARROW"
+is a self-justification, not a measurement (doc 85 §7h).
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
@@ -44,6 +53,13 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _translating import (
+    Declaration,
+    EmulatedFunction,
+    Rewrite,
+    TranslatingConnection,
+    placeholder_rewrite,
+)
 
 from mokata import degrade
 from mokata.memory import tiered
@@ -112,16 +128,88 @@ def _rewrite_match_operator(sql):
     return sql
 
 
-class _PgShim:
-    """Executes the Postgres backend's SQL for real, on SQLite (the DB.S2a precedent), with a
-    NARROW emulation of Postgres's text-search primitives.
+def _query_tokens(q):
+    return {t.strip() for t in (q or "").split("|") if t.strip()}
+
+
+def _pg_match(vec, q):
+    return 1 if _ts_tokens(vec) & _query_tokens(q) else 0
+
+
+def _ts_rank(vec, q):
+    vt = _ts_tokens(vec)
+    hits = len(vt & _query_tokens(q))
+    return hits / (1.0 + math.log(1 + len(vt))) if hits else 0.0
+
+
+def _pg_doc_value(doc):
+    try:
+        return json.loads(doc).get("value", "")
+    except Exception:
+        return ""
+
+
+# THE FULL, MEASURED TRANSLATION. Three rewrites and five functions — see the class docstring for
+# what this list used to claim.
+_DECLARATION = Declaration(
+    suite="DB.S3 Postgres full-text search",
+    reason="the FTS predicate has to be proven to FILTER and the ORDER BY proven to RANK; a "
+           "string-matching fake could only confirm the query it was taught.",
+    rewrites=(
+        placeholder_rewrite(),
+        Rewrite("match-operator", _rewrite_match_operator,
+                "SQLite has no `@@` operator and cannot define one, so every `LEFT @@ RIGHT` "
+                "becomes `pg_match(LEFT, RIGHT)` by balanced-paren parsing of both operands."),
+        Rewrite.literal(
+            "jsonb-value-accessor", "(doc::jsonb->>'value')", "pg_doc_value(doc)",
+            "Postgres extracts the indexed text with a jsonb cast + `->>`. SQLite gets a Python "
+            "function over `json.loads`. NOT a text-search primitive — it is the value path the "
+            "whole index is built over, which is why hiding it under that heading mattered."),
+    ),
+    functions=(
+        EmulatedFunction("to_tsvector", 2, lambda cfg, t: " ".join(sorted(_ts_tokens(t))),
+                         "whitespace-joined sorted token set; no stemming, no stop words, no "
+                         "language configuration — `cfg` is ignored entirely."),
+        EmulatedFunction("to_tsquery", 2, lambda cfg, q: q or "",
+                         "the query string passes through unparsed; `&`, `!` and phrase operators "
+                         "are NOT implemented, only `|` is honoured by `pg_match`."),
+        EmulatedFunction("pg_match", 2, _pg_match,
+                         "set intersection, so a match is any shared token — Postgres's operator "
+                         "does far more."),
+        EmulatedFunction("ts_rank", 2, _ts_rank,
+                         "hit count damped by log(vector length). This is NOT BM25 and shares no "
+                         "constants with Postgres's ranking."),
+        EmulatedFunction("pg_doc_value", 1, _pg_doc_value,
+                         "the target of the jsonb-value-accessor rewrite above."),
+    ),
+    not_proven=(
+        "Postgres's own BM25-family ranking QUALITY — `ts_rank` here is a log-damped hit count, "
+        "so any assertion about relative ordering holds for this formula and not for Postgres's",
+        "text-search SEMANTICS: no stemming, no stop words, no language configuration, and of "
+        "the query operators only `|` — a `&`/`!`/phrase query would be silently mis-parsed",
+        "that the indexed value is extracted the way Postgres extracts it: the jsonb path is "
+        "replaced by `json.loads`, which differs on nulls, non-objects and non-string values",
+    ),
+)
+
+
+class _PgShim(TranslatingConnection):
+    """Executes the Postgres backend's SQL for real, on SQLite, with a declared emulation of
+    Postgres's text-search primitives AND of its JSON value accessor.
 
     What this proves: the emitted SQL is valid, the MATCH predicate actually FILTERS, the project
-    scope composes with it, the ORDER BY ranks, and every value is bound. What it does NOT prove:
-    Postgres's own BM25-family ranking quality — that is the live-DB leg."""
+    scope composes with it, the ORDER BY ranks, and every value is bound. What it does NOT prove is
+    enumerated in `_DECLARATION.not_proven` — and that enumeration is now ENFORCED, not asserted.
+
+    ⚠ This docstring used to say "a NARROW emulation of the four text-search primitives". Measured
+    at 0.0.17 stage 2, that was three understatements in one phrase: there are THREE string
+    rewrites (not just `%s` -> `?`) and FIVE emulated functions, and the two items the word
+    "text-search" excluded — the `@@` operator rewrite and the `doc::jsonb->>'value'` accessor —
+    are exactly the ones a reader most needed told, because the accessor replaces Postgres JSON
+    extraction with `json.loads()` on the very value path the index is built over."""
 
     def __init__(self):
-        self._c = sqlite3.connect(":memory:")
+        super().__init__(_DECLARATION)
         self._c.execute(
             """CREATE TABLE mokata_memory (
                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,45 +224,6 @@ class _PgShim:
                    hit_count INTEGER NOT NULL DEFAULT 0, last_recalled_at TEXT
                )"""
         )
-        self._c.create_function("to_tsvector", 2, lambda cfg, t: " ".join(sorted(_ts_tokens(t))))
-        self._c.create_function("to_tsquery", 2, lambda cfg, q: q or "")
-        self._c.create_function("pg_match", 2, self._match)
-        self._c.create_function("ts_rank", 2, self._rank)
-        self._c.create_function("pg_doc_value", 1, self._doc_value)
-        self.sql_log = []
-
-    # -- the emulated primitives ------------------------------------------
-    @staticmethod
-    def _query_tokens(q):
-        return {t.strip() for t in (q or "").split("|") if t.strip()}
-
-    def _match(self, vec, q):
-        return 1 if _ts_tokens(vec) & self._query_tokens(q) else 0
-
-    def _rank(self, vec, q):
-        vt = _ts_tokens(vec)
-        hits = len(vt & self._query_tokens(q))
-        return hits / (1.0 + math.log(1 + len(vt))) if hits else 0.0
-
-    @staticmethod
-    def _doc_value(doc):
-        try:
-            return json.loads(doc).get("value", "")
-        except Exception:
-            return ""
-
-    # -- the connection contract ------------------------------------------
-    def execute(self, sql, params=()):
-        self.sql_log.append(sql)
-        run = _rewrite_match_operator(sql.replace("%s", "?"))
-        run = run.replace("(doc::jsonb->>'value')", "pg_doc_value(doc)")
-        return self._c.execute(run, tuple(params or ()))
-
-    def close(self):
-        self._c.close()
-
-    def last_select(self):
-        return [s for s in self.sql_log if s.lstrip().upper().startswith("SELECT")][-1]
 
 
 # ================================================================================ helpers

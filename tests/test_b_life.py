@@ -19,7 +19,7 @@ The fix is DISPLAY-only (P17 — run state is NEVER deleted, pruned, or rewritte
     run STAYS active; only a SHIPPED run is excluded.
   * `build_progress` with no active run but a most-recent shipped run reports
     "last run '<id>' completed <when> — no active run" + the existing PH-GATE.S0 recovery guidance.
-  * `badge_run.resolve_badge_run` retires a bound / live-narrowed SHIPPED run -> clean badge.
+  * `run_resolver.resolve_badge_run` retires a bound / live-narrowed SHIPPED run -> clean badge.
   * Explicit run_id / resume paths still render a shipped run in full (the P17 negative).
 
 Legacy boundary (accepted, no heuristics/backfill): a run that truly finished BEFORE this log existed
@@ -36,7 +36,7 @@ from contextlib import redirect_stdout
 import _support  # noqa: F401  (puts src/ on the path)
 
 from mokata import session_registry as SR
-from mokata.badge_run import bind_session_run, resolve_badge_run
+from mokata.run_resolver import bind_session_run, resolve_badge_run
 from mokata.brainstorm import PIPELINE_PHASES
 from mokata.cli import main
 from mokata.config import Surface
@@ -46,7 +46,6 @@ from mokata.progress import (
     NO_RUN_MESSAGE,
     build_progress,
     build_stage_badge,
-    find_active_run,
     list_runs,
     render_progress,
 )
@@ -60,7 +59,16 @@ def _silent(_):
 
 
 def _store(d):
-    return StateStore(os.path.join(d, "state"))
+    # RUN-ID-DRIFT — the REAL state-dir layout (`<d>/.mokata/temp_local/state`), because resolution
+    # is now rooted at the repo: `build_progress(store, root=d)` must find the same directory the
+    # checkpoints were written to.
+    return StateStore(state_dir(d))
+
+
+def _active(d, store):
+    """The run the progress surface reports as current — THE resolver plus B-LIFE display
+    retirement, which is where `find_active_run`'s retirement half now lives."""
+    return build_progress(store, root=d).run_id
 
 
 def _checkpoint(store, run_id, passed_phases):
@@ -152,21 +160,21 @@ class TestCompletedStamp(unittest.TestCase):
             self.assertTrue(surface.state.read(CHECKPOINT_PREFIX + "run-a").get("completed_at"))
 
 
-# =========================================================== find_active_run: ship-based retirement
+# ====================================================== the resolver + display: ship-based retirement
 class TestFindActiveRetirement(unittest.TestCase):
     def test_shipped_run_is_not_active(self):
         with tempfile.TemporaryDirectory() as d:
             store = _store(d)
             _checkpoint(store, "done", list(PIPELINE_PHASES))
             _ship(store, "done")
-            self.assertIsNone(find_active_run(store))       # shipped -> excluded, no fallback
+            self.assertIsNone(_active(d, store))            # shipped -> retired, no fallback
 
     def test_spec_emitted_unshipped_run_stays_active(self):
         # THE conflation pin: a complete checkpoint with no ship signal is AT develop -> ACTIVE.
         with tempfile.TemporaryDirectory() as d:
             store = _store(d)
             _checkpoint(store, "at-develop", list(PIPELINE_PHASES))
-            self.assertEqual(find_active_run(store), "at-develop")
+            self.assertEqual(_active(d, store), "at-develop")
 
     def test_new_incomplete_after_shipped_wins(self):
         with tempfile.TemporaryDirectory() as d:
@@ -174,13 +182,16 @@ class TestFindActiveRetirement(unittest.TestCase):
             _checkpoint(store, "aaa-done", list(PIPELINE_PHASES))
             _ship(store, "aaa-done")
             _checkpoint(store, "zzz-live", list(PIPELINE_PHASES[:1]))
-            self.assertEqual(find_active_run(store), "zzz-live")
+            # RUN-ID-DRIFT — this is now the UNSHIPPED NARROWING, not a pick: the shipped run is
+            # excluded and exactly one candidate is left, so the answer is forced rather than
+            # chosen. Two UNSHIPPED runs here would resolve to nothing (see test_run_id_drift).
+            self.assertEqual(_active(d, store), "zzz-live")
 
     def test_incomplete_only_is_byte_identical(self):
         with tempfile.TemporaryDirectory() as d:
             store = _store(d)
             _checkpoint(store, "live", list(PIPELINE_PHASES[:2]))
-            self.assertEqual(find_active_run(store), "live")
+            self.assertEqual(_active(d, store), "live")
 
     def test_legacy_finished_without_ship_event_stays_active(self):
         # binding #5 — a truly-finished run with NO ship event in the log is NOT retired (honest
@@ -188,7 +199,7 @@ class TestFindActiveRetirement(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             store = _store(d)
             _checkpoint(store, "legacy", list(PIPELINE_PHASES))   # complete, no ship event
-            self.assertEqual(find_active_run(store), "legacy")
+            self.assertEqual(_active(d, store), "legacy")
 
 
 # =========================================================== build_progress: the completed message
@@ -258,7 +269,7 @@ class TestSpecEmittedStaysActive(unittest.TestCase):
             _repo(d)
             _register_live_run(d, "run-a", passed=list(PIPELINE_PHASES))   # complete, not shipped
             # progress: the run is active (the full pipeline strip, not the completed message)
-            p = build_progress(Surface.load(d).state)
+            p = build_progress(Surface.load(d).state, root=d)
             self.assertTrue(p.active)
             self.assertEqual(p.run_id, "run-a")
             # badge: sits at develop (session-resolved), never retired
@@ -325,7 +336,7 @@ class TestResumeAndPreservation(unittest.TestCase):
             self.assertIsNotNone(store.read(CHECKPOINT_PREFIX + "done"))
             self.assertIn("done", list_runs(store))
             self.assertTrue(os.path.exists(
-                os.path.join(d, "state", CHECKPOINT_PREFIX + "done.json")))
+                os.path.join(state_dir(d), CHECKPOINT_PREFIX + "done.json")))
 
 
 if __name__ == "__main__":

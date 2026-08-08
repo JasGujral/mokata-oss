@@ -1,0 +1,90 @@
+STAGE 11 — BOOKKEEPING-SWEEP-MANUAL — mutation record
+=====================================================
+
+Driver : tests/_stage11_mutants.sh   (via scripts/mutate.sh — doc 85 §7b, no hand-mutation)
+Graded : tests/test_s11_bookkeeping_derived.py   (22 tests) over tests/_mirror_bookkeeping.py
+Result : 11 mutants, 11 RED, 0 survivors — first batch.
+
+WHAT THE BOOKKEEPING DID BEFORE THIS STAGE (grounded, then replaced)
+--------------------------------------------------------------------
+Three separate things existed, and the sentence joining them was the one nobody checked:
+
+  * doc 02's 0.0.16 verification sweep — a markdown table whose last column, "Blocking the
+    0.0.16 cut?", is TYPED BY A HUMAN from the sweep author's notes. It reported TODELETE-LEAK
+    🔴 when `9ec1b05` had already closed it.
+  * `scripts/check-tracker-tables.py` — the only mechanical doc gate. It checks table SHAPE
+    (cell count against the header) and says nothing about whether a cell is TRUE. A row can be
+    perfectly shaped and wholly wrong, which is exactly what happened.
+  * `test_stage68_supply_chain.py` — pins the CONTROLS (both `--exclude` and `INTERNAL_PATHS`
+    cover every REQUIRED path) and says nothing about what any document CLAIMS about them.
+
+So the control was pinned, the table was shaped, and the claim connecting them was trusted. This
+stage derives that claim and then holds the doc to it. It does NOT rewrite doc 02 — it makes the
+doc CHECKABLE, the same move check-tracker-tables.py made for shape, applied to what a cell says.
+
+THREE OUTCOMES, THREE REPRESENTATIONS
+-------------------------------------
+GREEN / RED / UNDECIDABLE, with `basis` the ONE stored signal and `verdict` DERIVED from it
+through `_VERDICT_OF` — `RunResolution`'s discipline and `knowledge/query.py`'s, not a third
+vocabulary. An UNDECIDABLE that cannot say WHY is refused at construction (B08 grades that).
+
+THE MUTANTS
+-----------
+C01  RED  sync-public.sh drops `_to_delete` from `--exclude`.
+C02  RED  sync-public.sh drops `editors/vscode/out` from `INTERNAL_PATHS`.
+     ★ These two are what grade the DOC-AGREEMENT pin, and they are the §7i offenders that
+     matter. Under each, the derived status flips to OPEN while doc 02 still reads
+     "✅ **NO** — closed before any public sync". That divergence — a document asserting a
+     mirror-boundary control is closed while the control is gone — is precisely the stale-green
+     this row was filed to make impossible, and it now reds. Both took 2 failures: the real-tree
+     derivation AND the doc comparison.
+
+B01  RED  comments no longer stripped, so a commented-out entry counts as a control. TD-2's
+          defect, moved into the derivation.
+B02  RED  the guard becomes "everything after INTERNAL_PATHS=(" instead of the array literal, so
+          the enforcement loop and its prose satisfy membership on their own.
+B03  RED  ★ an unreadable script derives GREEN instead of UNDECIDABLE.
+B04  RED  ★ a script with no `--exclude` clauses derives GREEN instead of UNDECIDABLE.
+B05  RED  ★ glob-only coverage is GUESSED as GREEN instead of asking.
+     These three are the row's one prohibition — "undecidable rows render UNKNOWN, never
+     default-green" — attacked directly. Each turns an absent answer into a decided pass.
+B06  RED  losing the hard-guard backstop (`--exclude` only) stops counting as a defect.
+B07  RED  a path covered by NEITHER control derives GREEN.
+B08  RED  an UNDECIDABLE may be constructed with no reason. A shrug with no reason is rounded to
+          green by every reader, so the constructor refuses it.
+B09  RED  the guard-only defect (guard names it, rsync still copies it) stops counting.
+
+A FALSE-RED FOUND AND FIXED DURING THE STAGE
+--------------------------------------------
+The first derivation compared entries EXACTLY. Against the real script that produces a false RED
+for any path one control covers by a literal and the other by a glob — `.env` is in
+`INTERNAL_PATHS` but `--exclude` carries `.env*`; likewise `release-backup-*` and `*.mp4`, which
+`--exclude` anchors (`/release-backup-*`) and the guard does not. Eight of the 32 exclude entries
+and three of the 27 guard entries differ only in that spelling.
+
+Calling those RED invents a leak that is not there, and a status column that cries wolf is
+abandoned exactly as fast as one that lies. Guessing GREEN is the stale-green this stage exists
+to remove. So glob-only coverage became a THIRD answer: UNDECIDABLE, naming the pattern, routing
+a human to look. B05 grades it.
+
+Also corrected: `--exclude="/$rel/"` (sync-public.sh:52) is built inside a loop over discovered
+nested checkouts, so it is not a literal at all. Read as the string `/$rel` it would have put a
+path into the covered set that covers nothing. Entries containing `$` are now dropped.
+
+WHAT THIS STAGE DOES NOT DO
+---------------------------
+* IT DOES NOT REWRITE doc 02's status column into a generated one. Doc 02 carries another lane's
+  uncommitted edits in this worktree and could not be touched; and adding a generated file under
+  docs/build/ would breach CLAUDE.md's "exactly 9 living docs" rule. What lands instead is
+  strictly stronger than a regenerated cell in one respect — a generated column is only as good
+  as the last regeneration, whereas this comparison reds on EVERY run — and weaker in another:
+  a human still types the cell, and still types it wrong until a test run tells them. Pasting
+  `ControlResolution.render()`'s output into the doc remains available and is one edit.
+* IT COVERS TWO DOC ROWS (TODELETE-LEAK, NODE_MODULES-LEAK), not the whole sweep table. Those are
+  the rows that name mirror-boundary controls, which are the only ones `sync-public.sh` can
+  decide. Rows about tracker ticks or CHANGELOG coverage have no control to derive from — they
+  would be UNDECIDABLE for a structural reason, and filling them in would be the same guess this
+  stage removes.
+* IT DERIVES FROM sync-public.sh ONLY. The rsync boundary is one control; `git add -A` in the
+  public checkout is another, and NODE_MODULES-LEAK showed the mirrored `.gitignore` silently
+  acting as a third. Nothing here reasons about those.
