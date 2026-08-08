@@ -143,14 +143,36 @@ def _list(root: str) -> int:
         print("mokata · nothing is waiting on you ✓ — no durable writes are pending.")
         return 0
     now = time.time()
-    print(f"mokata · {len(items)} durable write(s) waiting for your approval:\n")
-    for p in items:
-        mark = "APPROVED (redeemable once)" if p.approved else "awaiting your approval"
-        print(f"  {p.proposal_id}  {p.tool:16} {mark}")
-        print(f"    proposed {_age(now - p.created_at)} — expires in {p.expires_in(now) // 60}m")
-        print(f"    see it in full and approve it with: mokata approve {p.proposal_id}")
-        print()
+    # APPROVED-STILL-READS-AS-AWAITING — the row mark already told these apart, but the HEADING
+    # counted them together and every row closed with "approve it with: mokata approve <id>". So
+    # the one surface that knew the difference still asked an approved write's owner to decide it
+    # again. Count and instruct by decision, from the same `p.approved` the mark reads.
+    waiting, approved = _by_decision(items)
+    if waiting:
+        print(f"mokata · {len(waiting)} durable write(s) waiting for your approval:\n")
+        for p in waiting:
+            print(f"  {p.proposal_id}  {p.tool:16} awaiting your approval")
+            print(f"    proposed {_age(now - p.created_at)} — "
+                  f"expires in {p.expires_in(now) // 60}m")
+            print(f"    see it in full and approve it with: mokata approve {p.proposal_id}")
+            print()
+    if approved:
+        print(f"mokata · {len(approved)} write(s) you have ALREADY APPROVED — nothing more is "
+              f"asked of you:\n")
+        for p in approved:
+            print(f"  {p.proposal_id}  {p.tool:16} APPROVED (redeemable once)")
+            print(f"    proposed {_age(now - p.created_at)} — "
+                  f"expires in {p.expires_in(now) // 60}m")
+            print(f"    approved, not yet written — the model commits it by re-calling {p.tool}")
+            print()
     return 0
+
+
+def _by_decision(items):
+    """(waiting-on-you, already-approved) — the ONE split, imported from `awaiting` so this surface
+    and doctor's cannot disagree about whose move it is."""
+    from ..awaiting import by_decision
+    return by_decision(items)
 
 
 def register(sub, common):

@@ -57,10 +57,10 @@ def _run_scoped_store(surface, run_id: "str | None" = None):
     state in the repo, which makes the hook's run resolution AMBIGUOUS and silently turns every gate
     OFF. Emitting a spec would then unblock nothing and disable everything.
 
-    So the run is resolved by the hook's OWN resolver (`gate_hook.resolve_run`, the discipline
-    `cli_commands/gate.py` already uses for the override): the spec lands on the run being gated.
-    `(store, run_id, error)` — `error` is a message when the run cannot be resolved WITHOUT
-    guessing, and the caller must refuse rather than pick a window.
+    So the run is resolved by THE resolver (`run_resolver.resolve_run` — the same one the gate hook
+    enforces with, and the discipline `cli_commands/gate.py` already uses for the override): the
+    spec lands on the run being gated. `(store, run_id, error)` — `error` is a message when the run
+    cannot be resolved WITHOUT guessing, and the caller must refuse rather than pick a window.
 
     HANDOFF.G1 — `run_id` names the run EXPLICITLY (the MCP `spec_show` tool's optional `run`), and
     is threaded straight into the SAME resolver rather than resolved a second way: `resolve_run`
@@ -68,28 +68,26 @@ def _run_scoped_store(surface, run_id: "str | None" = None):
     code path. `None` (every CLI caller, unchanged) keeps the infer-from-the-repo behaviour byte for
     byte — no CLI surface passes this argument.
 
-    RE-ENTRY — an INFERRED run now resolves through `badge_run.resolve_run_for_evidence` rather than
-    `gate_hook.resolve_run` directly. Same tiers, plus ONE: when several runs have state but exactly
-    one holds pipeline EVIDENCE (an approved approach / an emitted spec), that run is the answer.
-    Without it, going back to `/brainstorm` broke this command outright — re-entry REGISTERS a bare
+    RE-ENTRY — the EVIDENCE rung: when several runs have state but exactly one holds pipeline
+    EVIDENCE (an approved approach / an emitted spec), that run is the answer. Without it, going
+    back to `/brainstorm` broke this command outright — re-entry REGISTERS a bare
     `pipeline_run__<new>` checkpoint (RUN-REG), which counts as a second "run with state", so
     `mokata spec amend --abort` — the escape hatch the regressed-run answer TELLS the user to run —
     died on "2 mokata runs have state in this repo and none is pinned". Naming a road out that
     errors is the exact P16 failure the awaiting head exists to prevent.
 
-    Two things it does NOT change. An EXPLICIT `run_id` still goes straight to `resolve_run`'s
-    short-circuit (naming a run and inferring one still travel one code path, HANDOFF.G1). And
-    genuine ambiguity still REFUSES: two runs that BOTH hold evidence fall through to `resolve_run`
-    and the error below, because a bare checkpoint is the only thing this tier learned to see past —
-    it de-ambiguates the re-entry shape, it never guesses between two pipelines."""
-    from ..badge_run import resolve_run_for_evidence
-    from ..gate_hook import RunResolution, resolve_run
+    RUN-ID-DRIFT — that rung is now inside THE resolver rather than in a spec-specific wrapper
+    around it, so this command reads the single `run_resolver.resolve_run` every other surface
+    reads. One call, one ladder: the EXPLICIT id and the inferred run travel the same code path
+    (HANDOFF.G1's property, now structural rather than arranged), and genuine ambiguity — two runs
+    that BOTH hold evidence — still REFUSES below. The evidence rung de-ambiguates the re-entry
+    shape; it never guesses between two pipelines."""
+    from ..run_resolver import resolve_run
     from ..session_state import scoped_store
     from ..state import StateStore
     from ..tdd_state import state_dir
 
-    inferred = resolve_run_for_evidence(surface.root) if not run_id else None
-    run = RunResolution(inferred) if inferred else resolve_run(surface.root, run_id)
+    run = resolve_run(surface.root, run_id=run_id)
     if run.ambiguous:
         return None, None, (
             f"{len(run.candidates)} mokata runs have state in this repo and none is pinned, so "

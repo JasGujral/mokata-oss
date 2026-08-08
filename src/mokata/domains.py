@@ -226,7 +226,17 @@ def classify_from_impact(impact: Any, roles: Optional[Sequence[str]] = None, *,
     REFUSES (the surface is a degraded lexical estimate, ``graph.required`` on, no override), the
     classification is refused with :class:`~mokata.govern.graph_required.GraphDegradedError`: a
     domain set derived from an unreliable surface is not a decision input. Absent (the
-    ``graph.required=false`` path) it is a no-op — byte-identical."""
+    ``graph.required=false`` path) it is a no-op — byte-identical.
+
+    ⚠ NEITHER BRANCH RUNS IN PRODUCTION. This function has ZERO callers anywhere in ``src/``
+    outside this module, so the refusal above is unreachable twice over: nothing originates a
+    ``graph_gate`` value, AND nothing calls the function that would consume one. It is not an inert
+    gate on a live function — the function is inert too. Filed as ``DK-CLUSTER-INERT`` (doc 84):
+    13 of this module's 16 top-level symbols have no production caller, and every dead one is the
+    BEHAVIOURAL half (classification, engagement, domain memory, handoff) while the three live ones
+    are the skill-REGISTRY half. The domain framework was built and never connected. Stage 5 of
+    0.0.17 corrects this comment and REPORTS; the wire-or-delete ruling belongs with 0.0.18's SIMP
+    deletion work, because "should the domain framework be live?" is a product question."""
     if graph_gate is not None and getattr(graph_gate, "refused", False):
         from .govern.graph_required import GraphDegradedError
         raise GraphDegradedError(graph_gate.render())
@@ -243,7 +253,14 @@ def classify_session_domains(session: Any, roles: Optional[Sequence[str]] = None
     """Classify the domains-in-play for a brainstorm session's CHOSEN approach — from its
     computed blast-radius impact when present, else its declared targets. The ``roles`` are the
     model's structural tags for the touched surface (grounded in the graph). GR.S3 — ``graph_gate``
-    refuses classification from a degraded surface (see :func:`classify_from_impact`)."""
+    refuses classification from a degraded surface (see :func:`classify_from_impact`).
+
+    ⚠ ALSO UNREACHABLE, and it is the other half of the same finding. This function has no
+    production caller either, and the ``graph_gate=`` pass below is the ONLY ``graph_gate``
+    argument pass anywhere in ``src/`` — one dead function handing a value to another dead
+    function. That single pass is what makes the cheap statement of the defect true: no production
+    path ORIGINATES a ``graph_gate`` at all. See :func:`classify_from_impact` for
+    ``DK-CLUSTER-INERT`` and why stage 5 reports rather than wires or deletes."""
     chosen = getattr(session, "chosen", None)
     if chosen is None:
         return []

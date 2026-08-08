@@ -80,6 +80,19 @@ def build_backend(tool: str, root: str,
     return _overlay_for_team(backend, routing, root)
 
 
+def memory_dir_for(mokata_dir: str) -> str:
+    """Where the LOCAL memory store lives for a `.mokata/` dir — `temp_local/memory/`.
+
+    WT-ROOT — and it is REPO-scoped, so it resolves to the MAIN checkout. The ruling (Jas,
+    2026-08-04) is that branches and worktrees are separate but MEMORY IS SHARED: what mokata
+    learned on one branch is not un-learned by checking out another, and a worktree that grew its
+    own empty store would silently un-remember the project. Identity for a main checkout / non-git
+    dir, so the single-tree path is byte-identical. A user-set `config.path`/`config.vault` still
+    overrides this and may point anywhere — this is only the default location."""
+    from ..repo_identity import canonical_mokata_dir
+    return os.path.join(canonical_mokata_dir(mokata_dir), TEMP_LOCAL_DIRNAME, MEMORY_DIRNAME)
+
+
 def _select_raw_backend(tool: str, root: str, clients: Dict[str, Any], config: Dict[str, Any],
                         project: Optional[str], routing: Any) -> MemoryBackend:
     """Resolve the concrete storage backend (NO overlay — `build_backend` applies that). This is
@@ -87,7 +100,7 @@ def _select_raw_backend(tool: str, root: str, clients: Dict[str, Any], config: D
     and any unavailability degrades to the guaranteed SQLite floor."""
     # Default runtime stores are transient: under .mokata/temp_local/memory/ (Stage 24D).
     # A user-set config.path/config.vault overrides this and may point anywhere.
-    mem_dir = os.path.join(root, TEMP_LOCAL_DIRNAME, MEMORY_DIRNAME)
+    mem_dir = memory_dir_for(root)
     floor = lambda: SQLiteBackend(os.path.join(mem_dir, "memory.db"))  # noqa: E731
 
     if tool == "obsidian":

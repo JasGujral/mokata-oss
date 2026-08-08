@@ -30,6 +30,7 @@ from mokata.knowledge.ast_backend import AstBackend
 from mokata.knowledge.grep_backend import GrepBackend
 from mokata.knowledge.layer import KnowledgeLayer
 from mokata.knowledge.query import GraphBackend, QueryResult, Reference
+from mokata.knowledge.query import BASIS_STRUCTURAL
 
 
 HAVE_GIT = shutil.which("git") is not None
@@ -83,7 +84,8 @@ class _FakeGraph(GraphBackend):
         # The STALE graph answer — a reference the test asserts must NEVER surface after a
         # failed rebuild (a failed rebuild must fall to the AST floor, not serve this).
         return QueryResult(kind=kind, target=target, backend=self.name,
-                           references=[Reference(path="STALE_FROM_GRAPH.py", line=1)])
+                           references=[Reference(path="STALE_FROM_GRAPH.py", line=1)],
+                           basis=BASIS_STRUCTURAL)
 
     def refresh_index(self):
         self.refresh_calls += 1

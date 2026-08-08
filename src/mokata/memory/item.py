@@ -291,8 +291,21 @@ def now_iso() -> str:
 
 
 def add_seconds(iso: str, seconds: int) -> str:
-    dt = datetime.fromisoformat(iso)
-    return (dt + timedelta(seconds=seconds)).isoformat()
+    """`iso` advanced by `seconds`, as an ISO-8601 string. Raises on a malformed stamp.
+
+    Lexes through `lifecycle.parse_iso_strict` — THE one ISO lexer — rather than calling
+    `fromisoformat` directly, so a `…Z` stamp is read here exactly as the healing and ranking paths
+    read it. Keeps its raising contract: this builds an `expires_at` from a caller-supplied
+    `created_at`, and a TTL silently computed off a stamp we could not read is worse than a loud
+    failure at the write.
+
+    Imported inside the function, not at module scope: `lifecycle` imports THIS module, so a
+    top-level import is a genuine circular import (`memory/__init__` loads lifecycle first, which
+    would find `item` half-built). One lexer, imported late — not a second copy of it.
+    """
+    from .lifecycle import parse_iso_strict
+
+    return (parse_iso_strict(iso) + timedelta(seconds=seconds)).isoformat()
 
 
 @dataclass

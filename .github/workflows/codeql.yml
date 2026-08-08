@@ -7,8 +7,33 @@ name: CodeQL
 # BOTH branch names are listed on purpose: the PUBLIC mirror (mokata-oss) — the only repo
 # this job runs on (see the `if:` gate below) — has default branch `main`, while the private
 # dev mirror is `master`. Listing only `master` meant CodeQL NEVER fired on the public repo,
-# so Scorecard's SAST check saw the config but "0 commits checked with a SAST tool". Same
+# so Scorecard's SAST check saw the config but scored it as not run on all commits. Same
 # fix already applied to scorecard.yml. Keep `main` first so public pushes always match.
+#
+# ⚠ THE FIX IS FORWARD-ONLY, AND THE SCORE HEALS ON ITS OWN. Corrected 2026-08-07 (stage 23)
+# after a measurement, because the paragraph above reads as though landing it settled the
+# matter, and the next reader who sees SAST still below 10 will otherwise "fix" the trigger
+# again. Scorecard's SAST check does not ask "is CodeQL configured"; it asks, for each merged
+# PR in a TRAILING SAMPLE of recent changesets, "did a SAST tool run on it". A trigger fix
+# cannot retroactively run CodeQL on changesets that already merged, so the score climbs only
+# as pre-fix ones age out of the window.
+#
+# MEASURED on the live API run of 2026-08-04 (commit cea79a9), read 2026-08-07 — 24 changesets
+# sampled, 16 of them merged PRs, and the split is exactly at this fix with ZERO exceptions:
+#
+#   PRs #12 #13 #14 #15 #16 #17 #18 #19  merged 2026-07-08 … 07-13  NO CodeQL check run
+#   PRs #20 #21 #29 #30 #31 #35 #37 #38  merged 2026-07-14 … 08-03  CodeQL ran, succeeded
+#
+# This file still read `branches: [master]` at 8fd6191 (#15, 2026-07-13) and reads
+# `[main, master]` at 451850e (#20, 2026-07-14) — the release-0.0.13 sync that carried
+# fec9864 to the public mirror. 8 of 16 is why the check reads 8 and not 10.
+#
+# SO: DO NOT TUNE THESE TRIGGERS TO MOVE THAT NUMBER. There is no residual trigger gap —
+# every merged PR since the fix has a successful CodeQL run. The remaining points are eight
+# historical changesets, and the only thing that clears them is more commits on public `main`.
+# If SAST is ever below 10 for a PR merged AFTER 2026-07-14, that is a new defect and this
+# comment does not explain it. (`SAST-SCORE-REGRESSION`, doc 84; the per-check differ that
+# would have caught the original drop is `scripts/scorecard_delta.py`.)
 
 on:
   push:

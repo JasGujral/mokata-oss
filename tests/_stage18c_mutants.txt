@@ -1,0 +1,116 @@
+0.0.17 stage 18c — KILLED-RUN-TEST-TIMEOUT-RACE. The mutant list, committed beside the score.
+
+TARGET:   scripts/mutate.sh — the restore path and the signal traps.
+GRADED BY: tests/test_mutation_harness.py (32 tests, 25 -> 32).
+
+Run: PYTHON=/Users/jas/jsvenv_mk312/bin/python tests/_stage18c_mutants.sh
+
+⚠ THIS BATCH MUTATES A COPY, and no other batch does. Grading the mutator means pointing it at
+itself, and bash reads a script lazily from a remembered byte offset — rewriting the file under a
+running instance corrupts the run doing the grading. The driver copies the script to a scratch
+path and the tests are pointed at it with MUTATE_SH_UNDER_TEST.
+
+RED   = the tests caught it. The pin is real.
+GREEN = it survived. That is a finding about a pin, and it is reported, never quietly dropped.
+
+SCORE: 12/12 RED (third grading). The first was 7/10 and the second 11/12. Every one of the four
+survivors along the way was a defect in a PIN, not in the fix — three of them in tests written in
+this same stage. They are all written up below, because a batch that only ever confirms what the
+builder already believed has not earned its runtime.
+
+--------------------------------------------------------------------------------------------------
+THE ROW AS FILED SAID ONE THING. THERE WERE TWO, AND THE FILED ONE WAS THE LESSER.
+
+The tracker described `communicate(timeout=120)` against a `time.sleep(120)` hook and prescribed
+"widen the margin". That collision is real and the margin is now 60. But grounding it turned up
+two defects in `scripts/mutate.sh` itself, and BOTH had shipped:
+
+  1. THE RESTORE REFUSED OVER BYTES THE RUN HAD WRITTEN ITSELF. `expected_sha` was updated after
+     the mutator's command substitution returned, but the mutant reaches disk INSIDE it, and bash
+     defers a pending TERM trap to the end of the enclosing compound command. A run killed there
+     compared the mutant against the PRISTINE hash, concluded a third party had written, refused,
+     and exited 4 — leaving the tree MUTATED (hole 3, the hazard the trap exists to close), a
+     displaced .REFUSED-RESTORE.bak beside it, and a message accusing a collision that never
+     happened. Measured at 36/40 (90%) when the kill lands in the window.
+
+  2. A SIGNALLED RUN DID NOT TERMINATE. `trap restore EXIT INT TERM` restored and RETURNED, back
+     into the wait for the test-run substitution. `kill` on a process group reaches the processes
+     in it AT THAT MOMENT, so under load — where the gap between the mutation landing and the test
+     pipeline being forked is wide — the children are born after the signal and never receive it.
+     A `ps` 20s after a SIGTERM showed all four alive and sleeping. The tree was correct and the
+     run was a zombie, which is why it presented as a TIMEOUT: THE ASSERTION THE SHIPPED TEST
+     FAILED ON WAS NEVER THE RESTORE. Widening the timeout would have hidden this, not fixed it.
+     It had also released the lock on its way through, so a second run could snapshot while this
+     one's tests were still executing — the interleave the interlock exists to prevent.
+
+Defect 2 is what reddens CI, and CI is where it was first seen in the wild (private run
+30902799293, `ubuntu-latest · py3.12`).
+
+--------------------------------------------------------------------------------------------------
+DEFECT 1 — THE AUTHORED SET
+  M01  the pre-stage shape restored: the mutant hash recorded AFTER the apply
+  M02  the restore accepts only the last written state, not the snapshot
+  M03  the restore accepts only the snapshot, not the mutation it applied
+  M04  HOLE 6 WEAKENED — the restore accepts anything, so a third party is overwritten
+  M05  the apply stops checking the source is what the plan hashed
+  M06  the plan WRITES, collapsing the two-step split back into one
+
+DEFECT 2 — A SIGNAL ENDS THE RUN
+  M07  the pre-stage shape restored: restore trapped on INT/TERM directly
+  M08  the handler restores but does not terminate
+  M09  a signalled run reports a status a batch driver reads as a VERDICT
+  M10  the EXIT trap dropped, so a signalled run exits 143 having restored nothing
+
+GUARDS THE FIX MUST NOT BUY ITS GREEN WITH
+  M11  the plan/apply staleness check inverted
+  M12  a refusal stops preserving the pristine copy
+
+--------------------------------------------------------------------------------------------------
+THE FOUR SURVIVORS, AND WHAT EACH ONE WAS
+
+  ⚠ M02 (first grading) — THE MIRROR WINDOW WAS CLOSED IN THE CODE AND PINNED NOWHERE.
+    Narrowing `we_authored` to `expected_sha` alone left the suite green: every kill test landed
+    either where both hashes agree or where the target holds the mutation. The instant AFTER the
+    mutant hash is recorded and BEFORE it is written — target pristine, recorded hash mutant — had
+    no test at all. Closed by `test_a_run_killed_in_the_MIRROR_window_restores_too`, which parks
+    on that side deliberately. This is the reason the restore accepts a SET: a fix that only
+    accepts the last write trades one window for its mirror and passes its own stage's tests.
+
+  ⚠ M05 (first AND second grading) — AND THE SECOND TIME IT WAS THE TEST, NOT THE CODE.
+    `test_the_apply_refuses_bytes_the_plan_never_saw` wrote third-party bytes that did not contain
+    the pattern, so deleting the staleness check entirely still produced BROKEN — on the pattern
+    COUNT (`occurs 0 times`), which was never the thing under test. The test asserted that the
+    word BROKEN appeared, and it appeared, for an unrelated reason. Rewritten so the third party's
+    edit CONTAINS the pattern exactly once: the count check is then satisfied and only the hash
+    comparison can refuse. The assertion that matters is not BROKEN, it is that their bytes are
+    still on disk.
+
+  ⚠ M10 (first grading) — AN EQUIVALENT MUTANT, AND THE CODE WAS DELETED RATHER THAN PINNED.
+    `on_signal` called `restore` before exiting, but `exit` runs the EXIT trap, which IS `restore`.
+    The explicit call could not change any outcome — including the refusal path, where `exit 4`
+    from inside the EXIT trap overrides the status either way. Rather than pin a redundancy, the
+    call was removed and M10 retargeted at dropping the EXIT trap, which is the thing that
+    actually matters. A second path that cannot change an outcome is still a second path.
+
+  ⚠⚠ AND ONE THE BATCH FOUND IN THE STAGE'S OWN TEST HARNESS, which is the finding worth keeping.
+    Chasing M02 exposed that `WINDOW_HOLDER` — the stand-in interpreter that makes these window
+    tests deterministic — had STOPPED PARKING ALTOGETHER. It located the target at `argv[1]`,
+    correct while the mutator took `- <target> <old> <new>`; splitting it into plan/apply made
+    `argv[1]` the MODE, the `open()` raised, the hold was skipped, and every window test went
+    green WITHOUT EVER ENTERING THE WINDOW. Nothing failed. The tests simply stopped testing, in
+    the same commit that introduced the thing they exist to test, and the GREEN they reported was
+    worth nothing. It was caught only because a mutant that should have died survived.
+    The holder now FAILS LOUD (exit 97) on an argv it does not recognise, rather than passing the
+    call through — a holder that no longer parks must be a red, not a quiet green.
+
+--------------------------------------------------------------------------------------------------
+DECLARED, NOT DISCOVERED LATER
+
+  The window tests depend on `$PYTHON` being substitutable, which is how they park inside the
+  mutator without changing `mutate.sh`. That is a real coupling to the script's internals: if the
+  mutator stops being invoked through `$PYTHON`, or its argv changes again, the holder must be
+  re-checked. The exit-97 guard makes the SECOND of those loud; nothing makes the first loud, and
+  it is named here rather than left for the next reader to discover the way this one did.
+
+  Nothing in this batch grades the interlock's flock/pidfile branches, which are stage 18's and
+  already pinned there. The mutants above are confined to what 18c changed.

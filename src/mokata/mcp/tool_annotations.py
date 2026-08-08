@@ -50,7 +50,7 @@ APPROVE = "approve"
 #     Postgres; it resolves no catalog. openWorldHint:false.
 #   - `review_status` / `review_record` (REVIEW-FIX.R3) DELIBERATELY EXCLUDED — grounded per tool.
 #     Both bodies are `Surface.load` + `progress_events._resolve_verdict_run` (which reaches
-#     `badge_run.resolve_verdict_run` -> the local session-binding file + `gate_hook.resolve_run`
+#     `run_resolver.resolve_run` -> the local session-binding file + `gate_hook.resolve_run`
 #     over local `state/` filenames) + one local append/backward-scan of `state/
 #     progress-events.jsonl`. No `KnowledgeLayer` is built, so the lazy CRG subprocess never
 #     spawns; no `MemoryStore`, so no team Postgres; no catalog is resolved. openWorldHint:false.

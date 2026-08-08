@@ -31,11 +31,15 @@ from . import tools_read, tools_write, tools_approve  # noqa: F401
 # ======================================================================================
 #
 # SI.1's gate hook narrows an AMBIGUOUS multi-run repo by consulting the MS.S2 live-session
-# registry (`gate_hook._live_runs`) — but that is only SOUND if every MCP process is actually IN
+# registry (`run_resolver.live_runs`) — but that is only SOUND if every MCP process is actually IN
 # the registry. Before this stage the MCP process self-registered ONLY when the user called the
 # `session_windows` tool, so the hook could not rely on it and had to fail open. This seam closes
-# that: the server self-registers on the FIRST tool call it serves (and refreshes on every
-# subsequent one), making registry liveness a STRUCTURAL fact, not a user-dependent one.
+# that: the server registers EAGERLY at process start (`main`, RUN-ID-DRIFT) and refreshes on every
+# tool call it serves, making registry liveness a STRUCTURAL fact, not a user-dependent one.
+#
+# It said that before RUN-ID-DRIFT too, while registering on the first tool call — which made the
+# claim false for exactly the window that had not yet used mokata. See `main` for the measured
+# consequence.
 
 def _call_path(args: tuple, kwargs: dict) -> str:
     """The repo path a served tool call targets. Every mokata MCP tool takes `path` (default ".")
@@ -309,7 +313,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # PREDATES this flag rejects it with exit 2 — and that failure is itself the staleness signal.
     from .. import __version__
     parser.add_argument("--version", action="version", version=__version__)
-    parser.parse_args(argv)
+    args = parser.parse_args(argv)
 
     # Fail LOUD, not dead (Stage 3b.1). The MCP SDK is an unconditional dependency, so a healthy
     # `pip install mokata` always has it — but a stripped or broken environment can still be
@@ -324,5 +328,22 @@ def main(argv: Optional[List[str]] = None) -> int:
             "mokata CLI works fully without the MCP server.\n")
         return 1
 
+    # RUN-ID-DRIFT — register this window EAGERLY, at process start, BEFORE serving anything.
+    #
+    # The comment above `_register_this_window` has always claimed registry liveness is "a STRUCTURAL
+    # fact, not a user-dependent one". It was not: registration fired from `_serve`, i.e. on the FIRST
+    # TOOL CALL the server happened to serve. A window the user had opened but not yet asked mokata
+    # anything therefore had only the row its SessionStart hook wrote — and that hook process exits
+    # within a second, so a sibling window read the row's pid as dead, PRUNED it, and `live_runs`
+    # returned [] with no live sibling to find. Every narrowing that depends on the registry
+    # (`resolve_run`'s LIVE rung, the gate hook's ambiguity narrowing, the badge's display filter)
+    # silently lost the one signal that could have disambiguated the repo. Registering here makes
+    # the claim true: a window is in the registry from the moment its server exists.
+    #
+    # Same call, same degrade posture (`_register_this_window` is D5-classed and swallows), and it
+    # runs BEFORE `.run()` blocks on stdio, so a slow registry delays startup rather than a user's
+    # tool call — the reverse of R5's tradeoff, and the right way round at startup. `_serve` still
+    # re-registers per call, which is now a REFRESH (`last_seen`/phase) rather than the first write.
+    _register_this_window(getattr(args, "path", ".") or ".")
     _public_module().build_server().run()   # stdio (plugin-launched); each tool takes its `path`
     return 0

@@ -223,18 +223,13 @@ class TestPyPIPublishJob(unittest.TestCase):
         self.assertTrue(all("python -m build" not in r for r in runs),
                         "pypi must NOT rebuild — publish the reproducible, attested artifact")
 
-    def test_pypi_actions_are_sha_pinned(self):
-        # Supply-chain hygiene: third-party actions pinned to a 40-hex commit SHA, like the rest.
-        import re
-        if not _HAVE_YAML:
-            self.skipTest("PyYAML not installed (not a mokata dependency); run in CI")
-        for s in self._job()["steps"]:
-            u = str(s.get("uses", ""))
-            if not u:
-                continue
-            ref = u.split("@", 1)[1] if "@" in u else ""
-            self.assertRegex(ref, r"^[0-9a-f]{40}$",
-                             "action '" + u + "' must be pinned to a 40-char commit SHA")
+    # `test_pypi_actions_are_sha_pinned` lived here and is DELETED (0.0.17 stage 10). It walked
+    # this one job's steps asserting a 40-hex ref — the suite's ONLY generic pinning check, over
+    # 1 job of 1 of the 9 workflows, and it skipTest'd itself away without PyYAML. That coverage
+    # is now `tests/test_s10_workflow_pins.py`, which sweeps all nine, walks job-level `uses:`
+    # as well as steps, and RAISES rather than skips when the parser is absent.
+    # Subsumption was PROVEN before deletion, not assumed: mutant T06 in `_stage10_mutants.sh`
+    # drops this exact pypi step to `@v1.14.1` and the new sweep goes RED on it.
 
 
 class TestReproducibleBuild(unittest.TestCase):
@@ -381,20 +376,40 @@ class TestSyncPublicBoundaryHardened(unittest.TestCase):
     stay in step)."""
 
     # The seven long-standing internal paths + the three regenerable/backup artifacts added in
-    # Stage 3c.2. Each must appear in BOTH the rsync --exclude list and the INTERNAL_PATHS guard.
+    # Stage 3c.2 + `_to_delete/` (TODELETE-LEAK, 0.0.16) + the VS Code extension's build
+    # artifacts (NODE_MODULES-LEAK, 0.0.16). Each must appear in BOTH the rsync --exclude list
+    # and the INTERNAL_PATHS guard.
     REQUIRED = (
         "docs/build", "docs/launch", "docs/marketing", "docs/talks", "CLAUDE.md",
         "scripts/sync-public.sh", "scripts/release.sh",
         "build", "dist", "release-backup-*",
+        "_to_delete",
+        "editors/vscode/node_modules", "editors/vscode/out",
     )
+
+    @staticmethod
+    def _code_only(block):
+        """`block` with every `#` comment line dropped.
+
+        Load-bearing, not tidiness. Both controls are documented IN PLACE, and those comments name
+        the very paths being pinned — the `_to_delete` entry sits under six lines of prose that say
+        "_to_delete" four times. A raw substring check therefore passes on the COMMENT after the
+        array entry it describes has been deleted, which is a pin that reports GREEN precisely when
+        the control it guards is gone. Caught by mutation (TD-2 survived until this stripped)."""
+        return "\n".join(ln for ln in block.splitlines() if not ln.lstrip().startswith("#"))
 
     def setUp(self):
         self.sh = _read(SYNC_SH)
         # Isolate the two controls so we assert against each independently.
         guard_start = self.sh.find("INTERNAL_PATHS=(")
         self.assertNotEqual(guard_start, -1, "sync-public.sh lost its INTERNAL_PATHS guard")
-        self.exclude_block = self.sh[:guard_start]
-        self.guard_block = self.sh[guard_start:]
+        # The guard is the ARRAY LITERAL, not "everything after it" — the array is followed by the
+        # enforcement loop and its commentary, which mention internal paths in prose and would
+        # otherwise satisfy a membership check on their own.
+        guard_end = self.sh.find("\n)", guard_start)
+        self.assertNotEqual(guard_end, -1, "INTERNAL_PATHS array is unterminated")
+        self.exclude_block = self._code_only(self.sh[:guard_start])
+        self.guard_block = self._code_only(self.sh[guard_start:guard_end])
 
     def test_exclude_list_covers_every_internal_path(self):
         for p in self.REQUIRED:
@@ -411,6 +426,53 @@ class TestSyncPublicBoundaryHardened(unittest.TestCase):
         for p in ("build", "dist", "release-backup-*"):
             self.assertIn(p, self.exclude_block, "missing --exclude for '" + p + "'")
             self.assertIn(p, self.guard_block, "missing INTERNAL_PATHS entry for '" + p + "'")
+
+    def test_to_delete_scratch_is_in_BOTH_places(self):
+        """TODELETE-LEAK (0.0.16). `_to_delete/` held 1.2GB of snapshot tarballs, ~90 git lock
+        files and `_secrets_before.py` — mokata's OWN source module, sitting untracked at the repo
+        root. `.gitignore` covered it and that is EXACTLY why it was dangerous: rsync copies the
+        working tree and ignores `.gitignore`, so the gitignore entry made the directory invisible
+        to `git status` while leaving it fully live to the mirror.
+
+        Asserted as its own case, not only as a `REQUIRED` row, because the two controls fail
+        DIFFERENTLY and the failure text has to say which one went missing: losing the `--exclude`
+        leaks the bytes, losing the `INTERNAL_PATHS` entry removes the backstop that would have
+        caught it. Both directions are mutation-proven."""
+        self.assertIn("_to_delete", self.exclude_block,
+                      "sync-public.sh lost its `--exclude='_to_delete/'` — scratch (and the "
+                      "`_secrets_before.py` that lived in it) would rsync to the public mirror")
+        self.assertIn("_to_delete", self.guard_block,
+                      "sync-public.sh lost `_to_delete` from INTERNAL_PATHS — the hard-guard "
+                      "would no longer abort a sync that carried it")
+
+    def test_vscode_build_artifacts_are_in_BOTH_places(self):
+        """NODE_MODULES-LEAK (0.0.16). Found by re-running TODELETE-LEAK's question against the
+        rest of the tree: `editors/vscode/node_modules/` (240 files, 26MB of third-party npm
+        packages) and `editors/vscode/out/` (10 compiled JS artifacts) were in NEITHER control.
+
+        WHAT ACTUALLY HAPPENED, measured rather than assumed — and it is the reason this case
+        exists. All 250 files WERE copied into the public checkout (they are in the 1126-file
+        dry-run manifest), but they never reached the public repo: `.gitignore` is itself mirrored,
+        so its lines 64-66 were sitting in the DEST checkout and `git add -A` skipped them.
+
+        So the only thing standing between 26MB of vendored dependencies and the public repo was
+        an ignore file that exists for an unrelated reason and is one edit from being changed —
+        no sync control named these paths at all. That is an accident, not a control: `git add -f`,
+        a decision to vendor the extension, or any tidy-up of those three lines publishes the lot,
+        and nothing in `sync-public.sh` would have said a word. Both dirs are regenerable
+        (`npm ci && npm run compile`), so the mirror loses nothing by dropping them.
+
+        Asserted as its own case for the same reason `_to_delete` is: the two controls fail
+        DIFFERENTLY and the message must say which one went missing. All four directions
+        mutation-proven independently via `scripts/mutate.sh`."""
+        for p in ("editors/vscode/node_modules", "editors/vscode/out"):
+            self.assertIn(p, self.exclude_block,
+                          "sync-public.sh lost its `--exclude='" + p + "/'` — the VS Code "
+                          "extension's build artifacts would rsync to the public mirror "
+                          "(.gitignore does NOT govern what rsync copies)")
+            self.assertIn(p, self.guard_block,
+                          "sync-public.sh lost `" + p + "` from INTERNAL_PATHS — the hard-guard "
+                          "would no longer catch a sync that carried it")
 
 
 if __name__ == "__main__":

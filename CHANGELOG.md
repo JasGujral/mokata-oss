@@ -10,6 +10,124 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.17] — 2026-08-08
+
+**Trustworthy evidence.** A green check means something. This release is mostly about the
+instruments that decide whether mokata's own claims are true — but four of the things those
+instruments found were being felt by users every day, and those are the reason to upgrade.
+
+### Fixed
+
+- **`UserPromptSubmit hook timed out after 30s` is gone.** The hook that injects relevant memory
+  into your prompt had **no clock on its own work**. Reading its input was bounded; everything
+  after that was not — so a slow store, a slow disk or a pathological turn could hang the hook
+  until the harness killed it, and you saw a timeout warning on a prompt you had already sent.
+  The hook's work now runs under its own budget and, over budget, emits **nothing** rather than a
+  partial injection. **The budget is 5 seconds, and that number is measured, not chosen**:
+  end-to-end in a cold subprocess the whole hook is ~90–100 ms, of which ~85 ms is interpreter
+  start and imports; ranked recall itself runs 0.5 / 0.5 / 1.1 ms at 0 / 50 / 500 items. The
+  guess going in was that recall was spending the 30 seconds. It was not, and measuring first is
+  what moved the fix. (Reported as OSS #43, on Windows 11 during `/brainstorm`.)
+- **Run ids no longer drift across a session, and an unresolvable run says so instead of picking
+  one.** With several runs tracked in one repo, different surfaces answered "which run is this?"
+  differently — `progress` read `[2/7]` on one run while stage marks landed on a different,
+  unstarted one. In one live session **five tracked runs produced three distinct ids across
+  surfaces**. There is now **one** resolver, and it gives three outcomes three different
+  representations: **resolved** (naming which rule answered), **ambiguous** (the candidates
+  listed, and mokata refuses — a stage mark in the wrong run is a false green a later reader
+  trusts), and **none**. Where it refuses, **`--run <id>`** (and `mokata resume --id <id>`) let
+  you say which; the old refusal named a flag that did not exist. (Reported as OSS #44.)
+- **A worktree no longer forks your memory and your audit ledger.** Running a second session in a
+  `git worktree` of the same repo silently gave it **its own** memory store and **its own**
+  ledger — measured before the fix, not theorised. Two causes, and the second produced the advice
+  that triggered the first: root-finding tested for a `.git` **directory**, and a linked
+  worktree's `.git` is a **file**, so mokata walked straight past the worktree and then offered
+  *"run `mokata init`"* inside it — and accepting that offer is what created the fork. Repo-scoped
+  state (manifest, ledger, memory, session registry) now resolves to the **main checkout** from
+  every tree, per-tree state stays local, and a worktree mokata cannot resolve is now
+  **distinguishable from "not a mokata repo"** instead of sharing its message.
+- **An approval you already gave stops being asked for again.** After you ran `mokata approve`,
+  the statusline still rendered `⏳ awaiting approval <id>` and `doctor` still counted the
+  proposal into *"N write(s) awaiting YOUR approval"* — handing you `Fix: mokata approve <pid>`
+  for a decision you had already made, on the exact surface you run when you believe you are
+  stuck. The state was never missing; two call sites simply never consulted it.
+- **`spec amend`'s second step is finally advertised.** Amending is a two-step flow — the amend
+  raises a proposal, you approve it, **and then the amend must be re-run to redeem that
+  approval**. That third step was stated in exactly one place: a refusal that only fires if you
+  attempt a development write against the regressed run. Follow the amend flow itself and you
+  never saw it, so the menu offered one way forward that does not land the change and one way
+  back that throws it away. The finish command is now named where you are.
+- **Code navigation stops answering with a vendored copy of someone else's source.** A nested
+  checkout inside your repo — a vendored dependency, a submodule, a worktree at an ordinary path —
+  **was indexed as your source**, so *"where is this defined"* could answer with a file you do not
+  maintain, **first**. Nested checkouts are now detected structurally (a directory carrying a
+  `.git` entry, in both on-disk shapes) rather than by name, across every walker. The skip is
+  **declared, not silent**: `mokata index` names how many checkouts it pruned and where, so a
+  dependency you vendored on purpose does not just become mysteriously unsearchable.
+- **A blast-radius verdict is no longer poisoned by one leaf symbol.** A symbol with no
+  dependents legitimately has an empty impact set; that empty result was read as *"the graph
+  could not answer"* and degraded the verdict for the **whole** approach. A leaf's zero is an
+  answer, and mokata now distinguishes it from an absent one.
+- **Three user-facing Windows pages stop asserting a premise that had already been falsified.**
+  The guard that exists to stop mokata re-claiming the old `cmd.exe` `PATHEXT` behaviour walked a
+  hardcoded list of four **source** files, so the pages a Windows user actually reads to decide
+  whether the gates work on their machine were the least guarded text in the repo — and went on
+  asserting it for a full release. The guard now walks all shipped documentation, and the pages
+  are corrected.
+- **One publisher owns a GitHub Release.** Two independent paths created the release for a single
+  tag and raced; both won at different times, which is why published releases for `v0.0.9`
+  through `v0.0.16` are inconsistent — three authored by a bot, five by a human, with different
+  titles and, in the losing cases, **no attached artifacts**. The release workflow, which already
+  owns the signed artifacts and the SBOM, is now the only publisher, and it verifies the assets
+  arrived rather than assuming they did.
+
+### Added
+
+- **`--run <id>` on `mokata progress`, `--id <id>` on `mokata resume`** — name the run when
+  several are live and mokata refuses to guess.
+- **`mokata index` reports skipped nested checkouts** — how many, and where.
+
+### Changed
+
+- **Destructive and data-moving paths now leave an audit record, unconditionally.**
+  `--drop-source` on a memory migration writes a batch record with a running count and a
+  completion flag, so a drop that dies halfway is recorded as the partial it was; and the session
+  **vault** re-home now runs inside the same gate as every other durable write, so each bundle's
+  bytes are secret-scanned, a refused bundle is named and skipped, and a migration that cannot
+  reach a ledger **refuses loudly instead of writing unrecorded** — which was reachable from the
+  shipped CLI, not hypothetical.
+- **The ship-readiness gate is now advisory rather than enforcing**, and says so along with what
+  its promotion would require. It was counted among the enforced gates while a production path
+  that reaches it could not be demonstrated; claiming enforcement mokata does not perform is the
+  failure this release is named for.
+
+### Instruments
+
+- **One line, because you do not consume this — it is why the eight fixes above are true.** Most
+  of this release went into the machinery that grades mokata's own evidence: pinning that a
+  production path actually reaches each gate (rather than only that the gate behaves when
+  called), a register that makes delegated writes visible to the write detector, mutation-testing
+  discipline that stops a size-preserving mutant from inflating a score, an audit of all 23
+  guards against whether they can grade anything, a per-check OpenSSF Scorecard differ that fails
+  on any single check dropping even when the aggregate rises, and a sweep that pins every CI
+  workflow instead of one. **No behaviour of yours changes because of any of it.**
+
+### Known limitations
+
+- **The SQLite FTS5/BM25 lexical tier still ranks *worse* than the keyword floor it replaced, and
+  the fix promised for this release did not land.** 0.0.16 disclosed this and said the repair was
+  **scheduled for 0.0.17**; 0.0.17 shipped no ranking work at all, so the measurement stands
+  unchanged and so does the defect. `normalize_lexical_scores` scales each engine's scores against
+  the best score *in its own result set*, flattening exactly the gap that would have ranked a
+  mid-pack answer. On the 100,000-item benchmark, against the Jaccard keyword floor on the same
+  probes and the same code — only the corpus size differs — the FTS tier measures **−5.6pp recall
+  (0.5000 → 0.4444)** and **−10.8pp MRR@10 (0.8334 → 0.7258)**. At 5,000 items the same comparison
+  loses no recall at all and only −3.3pp MRR, so a small corpus hides more than half of it. **Now
+  scheduled for 0.0.19**, with the rest of the ranking work, because the correct repair is
+  rank-preserving normalization rather than a constant to tune. If you run a large store and your
+  lexical results look mis-ordered, this is why — and this is the second release in a row it has
+  been true.
+
 ## [0.0.16] — 2026-08-02
 
 **Memory intelligence at scale.** Memory that ages, summarizes itself, heals across writers and
@@ -934,6 +1052,7 @@ spine.
 - Clean-room throughout: no dependency on, or text copied from, any other framework
   (Apache-2.0, under MoStack).
 
+[0.0.17]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.17
 [0.0.16]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.16
 [0.0.15]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.15
 [0.0.14]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.14

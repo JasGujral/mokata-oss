@@ -45,6 +45,7 @@ from mokata.knowledge.grep_backend import GrepBackend
 from mokata.knowledge.layer import KnowledgeLayer
 from mokata.knowledge.query import QueryResult, Reference
 from mokata.memory.item import MemoryItem
+from mokata.knowledge.query import BASIS_STRUCTURAL
 
 
 # ---------------------------------------------------------------- a deterministic fake layer
@@ -58,7 +59,8 @@ class _FakeLayer:
 
     def blast_radius(self, symbol, depth=2):
         return QueryResult("blast_radius", symbol,
-                           references=list(self.table.get(symbol, [])), backend="fake")
+                           references=list(self.table.get(symbol, [])), backend="fake",
+                           basis=BASIS_STRUCTURAL)
 
 
 def _ref(path, line, sym):

@@ -374,13 +374,20 @@ class ApproveSeam(_Base):
         from mokata import skill_contracts as sc
         self.assertNotIn(G.GATE_ID, sc.GATES)
         backed = sorted(k for k, v in sc.GATES.items() if getattr(v, "backed", False))
-        # The exact set, frozen — a count would let one addition hide one removal. (doc 85 §4
-        # names TEN backed gates: these nine, which a skill Contract may CITE, plus `self-protect`,
-        # which is enforced in code and lives in no contract registry. Two registries, not a
-        # discrepancy.)
+        # The exact set, frozen — a count would let one addition hide one removal, and in 0.0.17
+        # stage 5 exactly that happened: `self-protect` was ADDED and `ship-readiness` REMOVED in
+        # the same stage, so the count stayed 9 while the set changed twice. This assertion is why
+        # that was visible rather than silent.
+        #   ⚠ THIS COMMENT USED TO SAY "two registries, not a discrepancy" — that doc 85 §4's TEN
+        # were these nine plus `self-protect`, which was "enforced in code and lives in no contract
+        # registry". That reasoning was overturned (Jas, 0.0.17 stage 5): §4 was right and the
+        # registry was INCOMPLETE. `self-protect` is layer 0 of `WriteGate.submit`, ahead of the
+        # trust dial, the secret scan and the human gate, and measured REACHABLE — a gate that runs
+        # first on every durable write is backed by any definition, so its absence from the table
+        # claiming to enumerate backed gates was the defect, not a second registry.
         self.assertEqual(
             ["approach-approval", "completeness", "deviation", "hard-rule",
-             "no-code-without-failing-test", "secret-guard", "ship-readiness",
+             "no-code-without-failing-test", "secret-guard", "self-protect",
              "spec-persisted", "write-gate"], backed)
 
     def test_its_id_is_distinct_from_the_memory_handle_half(self):

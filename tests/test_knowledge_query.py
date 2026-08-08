@@ -66,11 +66,16 @@ class TestGrepStructuralQueries(unittest.TestCase):
         self.assertFalse(self.backend.is_graph)
         self.assertTrue(r.degraded)   # grep floor is always a degraded answer
         self.assertEqual(r.count, len(r.references))
-        # the shape is a fixed set of fields
+        # the shape is a fixed set of fields. D2 — `degraded` LEFT this set and became a property
+        # derived from `basis`: while both were stored, a leaf answer and an absent answer could
+        # agree on the bool and disagree about reality, which is the whole of BLAST-RADIUS-LEAF-
+        # DEGRADE. One stored signal, one derived view.
         self.assertEqual(
             {f.name for f in dataclasses.fields(QueryResult)},
-            {"kind", "target", "references", "backend", "degraded", "note"},
+            {"kind", "target", "references", "backend", "basis", "note"},
         )
+        self.assertFalse(any(f.name == "degraded" for f in dataclasses.fields(QueryResult)),
+                         "`degraded` must stay DERIVED — a second stored copy is the defect")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,69 @@
+STAGE 12 — RELEASE-SH-GITHUB-RELEASE-RACE — mutation record
+===========================================================
+
+Driver : tests/_stage12_mutants.sh   (via scripts/mutate.sh — doc 85 §7b, no hand-mutation)
+Graded : tests/test_s12_release_publisher.py   (9 tests)
+Result : 9 mutants, 9 RED, 0 survivors — after ONE survivor was found and the pin it exposed
+         was rewritten. That survivor is the most useful line in this file; see M08.
+
+§7i — WHY SYNTHETIC OFFENDERS WERE REQUIRED
+-------------------------------------------
+This stage's subject is an ABSENCE: after the fix, `gh release create` appears nowhere in
+scripts/release.sh. A pin asserting "nothing is there" over a tree where nothing is there grades
+nothing at all — the shape the 7i audit convicted. M01, M02 and M04 exist to put an offender
+back: M01 restores the executed call, M02 restores the printed instruction, M04 plants a second
+publishing workflow. Without those three this batch would be decorative.
+
+THE MUTANTS
+-----------
+M01  RED  release.sh  the second publisher returns — `wait_for_release "$PUB_REPO" "$TAG"`
+          replaced by `gh release create ...`. This is the EXACT pre-stage-12 defect, restored
+          verbatim. Caught by 2 tests (the no-create pin and the call-site pin).
+
+M02  RED  release.sh  the printed runbook re-advertises the manual create. AMEND-STEP-2-IS-
+          UNADVERTISED inverted: the call is gone but the instruction tells a human to run it,
+          which is the same race with a person in the loop.
+
+M03  RED  release.yml  the publishing step deleted (softprops/action-gh-release -> checkout).
+          Whole-tree count 1 -> 0. Nothing would publish at all.
+
+M04  RED  ci.yml  a SECOND workflow gains a publishing step. Count 1 -> 2. Planted at top level
+          rather than as a valid job step on purpose: what must grade is that a second publisher
+          ANYWHERE is caught, not that this particular plant is legal GitHub Actions.
+
+M05  RED  release.sh  fail-OPEN on the publish timeout — the timeout branch prints REFUSING TO
+          FINISH and then `break`s instead of `exit 1`, so the release proceeds as if it had
+          succeeded. Caught only because the pin checks EVERY refusal branch; an
+          `assertIn("exit 1", fn)` over the whole function would have survived this, since the
+          two asset branches still carry their own aborts.
+
+M06  RED  release.sh  attestation check retargeted (`\.sigstore\.json` -> `\.no-such-asset\.json`).
+M07  RED  release.sh  SBOM check retargeted (`sbom\.cdx\.json` -> `nosuch\.cdx\.json`).
+          BOTH ARE DELIBERATELY SUBTLE. The refusal messages still say "Sigstore attestation" and
+          "SBOM" in prose, so a pin that grepped the function body for those WORDS stays green
+          with the checks dead — PIN-SUBSTRING-COMMENT-HOLE reproduced on purpose. They are caught
+          only because the pin reads the grep EXPRESSIONS.
+
+M08  RED  release.sh  the manual runbook stops naming the publisher (5 lines -> one bland line).
+     ★ SURVIVED THE FIRST BATCH, and the survival was correct. The pin asserted "release.yml"
+          appeared among ALL `echo` lines in the script — and wait_for_release()'s own refusal
+          message says "the github-release job of .github/workflows/release.yml is the ONLY
+          publisher". So gutting the runbook entirely left the pin green on an unrelated error
+          string. Same too-wide-region defect as TD-2 (doc 02), where a six-line comment satisfied
+          a check about an array literal. FIXED by scoping the pin to the runbook block itself
+          (delimited by its "finish the release MANUALLY" header and "Stopping here" footer), and
+          by adding a second pin that the runbook also carries the VERIFY command. M08 now REDs
+          both.
+
+M09  RED  release.sh  wait_for_release DEFINED but never CALLED (`wait_for_release ...` -> `true`).
+          Dead code reading as an enforced gate. Caught because the pin excises the function
+          definition before looking for the name — `assertIn("wait_for_release", body)` alone is
+          satisfied by the definition and would have survived.
+
+WHAT THIS BATCH DOES NOT COVER
+------------------------------
+Nothing here executes release.sh. These are parse-level pins over the script's text, like the
+rest of the release-process battery (test_stage61b). A wait_for_release that is syntactically
+present, fail-closed and correctly targeted could still be wrong at runtime — `bash -n` is run,
+but no mutant proves the poll loop terminates or that `gh release view`'s exit status means what
+this script assumes. Grading that needs a `gh` fake, which this stage did not build.

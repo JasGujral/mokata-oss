@@ -16,10 +16,11 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import unittest
 
-from _support import sample_manifest_data  # noqa: F401  (path-fix side-effect)
+from _support import iter_repo_files  # also applies the `src/` path fix on import
 
 from mokata import __version__
 from mokata.packaging import (
@@ -83,6 +84,38 @@ class _TmpMixin(unittest.TestCase):
         return d
 
 
+def _matches(path, pattern):
+    """True when `path` is readable text matching `pattern`. Unreadable/binary files are not
+    pins, and a sweep that raised on one would be reporting the walk, not the drift."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return bool(pattern.search(fh.read()))
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def _git(*args, cwd):
+    subprocess.run(
+        ["git", *args], cwd=cwd, check=True,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull},
+    )
+
+
+def _make_git_repo_with_pin(tmp):
+    """A real one-commit checkout carrying exactly one action pin, so a worktree of it
+    duplicates that pin and nothing else."""
+    os.makedirs(os.path.join(tmp, os.path.dirname(PIN_DOC)), exist_ok=True)
+    with open(os.path.join(tmp, PIN_DOC), "w", encoding="utf-8") as fh:
+        fh.write(_pin_text("0.0.17"))
+    _git("init", "-q", cwd=tmp)
+    _git("config", "user.email", "t@example.invalid", cwd=tmp)
+    _git("config", "user.name", "t", cwd=tmp)
+    _git("add", "-A", cwd=tmp)
+    _git("commit", "-qm", "seed", cwd=tmp)
+    return tmp
+
+
 class TestPinDriftSelector(_TmpMixin):
     """The new `action-pin` selector kind reads an `@vX.Y.Z` pin out of arbitrary text."""
 
@@ -133,37 +166,43 @@ class TestPinDriftSelector(_TmpMixin):
         self.assertIn(f"{PIN_DOC}:action-pin", [n for n, _ in res.mismatches])
 
 
-class TestPinDriftCoverageSweep(unittest.TestCase):
+class TestPinDriftCoverageSweep(_TmpMixin):
     """R-MAN-register pattern: every pin in the tree must be COVERED by a guarded entry, so
     a future doc adding a third pin unguarded fails CI instead of drifting silently."""
 
-    def _sweep(self):
-        """Every repo-relative file containing a `mokata-check@v` pin. `docs/build/` is
-        excluded by its provenance rule — historical pins there are correct history — and
-        `tests/` because pins there are synthetic fixtures (this module builds them), not
-        published references a release has to keep in step."""
-        skip_dirs = {".git", "docs/build", "tests", ".venv", "venv", "node_modules",
-                     "__pycache__", "site", "dist", "build", ".mypy_cache",
-                     ".pytest_cache", ".ruff_cache"}
-        found = []
-        for dirpath, dirnames, filenames in os.walk(ROOT):
-            rel_dir = os.path.relpath(dirpath, ROOT)
-            rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
-            dirnames[:] = [
-                d for d in dirnames
-                if d not in skip_dirs
-                and f"{rel_dir}/{d}".lstrip("/") not in skip_dirs
-            ]
-            for fn in filenames:
-                rel = os.path.join(rel_dir, fn).replace(os.sep, "/").lstrip("/")
-                try:
-                    with open(os.path.join(dirpath, fn), encoding="utf-8") as fh:
-                        text = fh.read()
-                except (OSError, UnicodeDecodeError):
-                    continue
-                if ACTION_PIN_RE.search(text):
-                    found.append(rel)
-        return sorted(found)
+    # `docs/build/` is excluded by its provenance rule — historical pins there are correct
+    # history — and `tests/` because pins there are synthetic fixtures (this module builds
+    # them), not published references a release has to keep in step.
+    SKIP_DIRS = {"docs/build", "tests", ".venv", "venv", "node_modules",
+                 "__pycache__", "site", "dist", "build", ".mypy_cache",
+                 ".pytest_cache", ".ruff_cache"}
+
+    def _sweep(self, root=ROOT):
+        """Every repo-relative file under `root` containing a `mokata-check@v` pin.
+
+        The walk is `iter_repo_files`, which drops NESTED CHECKOUTS. That is not tidiness: a
+        git worktree under the repo root duplicates every pinned file, and this sweep counted
+        the copies as unguarded pins and failed at a clean HEAD (see
+        `test_nested_checkout_boundary.py` for the reproduction and the pin)."""
+        return sorted(
+            rel for rel, ab in iter_repo_files(root, skip_dirs=self.SKIP_DIRS)
+            if _matches(ab, ACTION_PIN_RE)
+        )
+
+    def test_a_nested_checkout_does_not_add_uncovered_pins(self):
+        """The live incident, reproduced against a synthetic tree so it stays fixed.
+
+        Plant one pinned file and a real worktree of the same tree beneath it: the sweep must
+        report the ONE pin it owns, not the checkout's duplicate."""
+        tmp = _make_git_repo_with_pin(self.tmp())
+        self.assertEqual(self._sweep(tmp), [PIN_DOC])
+        _git("worktree", "add", "-q", "--detach",
+             os.path.join(".claude", "worktrees", "probe"), "HEAD", cwd=tmp)
+        self.assertTrue(
+            os.path.exists(os.path.join(tmp, ".claude", "worktrees", "probe", PIN_DOC)),
+            "precondition: the worktree really does duplicate the pinned file")
+        self.assertEqual(self._sweep(tmp), [PIN_DOC],
+                         "the nested checkout's duplicate pin was counted as an unguarded pin")
 
     def test_pin_drift_all_pins_guarded(self):
         found = self._sweep()

@@ -89,7 +89,16 @@ def cmd_query(args: argparse.Namespace) -> int:
     surface = _load_surface(args.path)
     layer = KnowledgeLayer.from_surface(surface)
     result = run_query(layer, args.kind, args.target, depth=args.depth)
-    mode = "graph" if not result.degraded else "grep fallback"
+    # D2 — THREE modes, because there are three answers. A leaf used to print
+    # `via grep [grep fallback] — 0 result(s)`, which reads as "I could not find out" when the
+    # truth is "I looked, and the answer is none". The gate stopped conflating them at the
+    # backend; the surface a human actually reads must stop conflating them too.
+    if result.verified_empty:
+        mode = "verified empty"
+    elif result.degraded:
+        mode = "grep fallback"
+    else:
+        mode = "graph"
     print(
         f"{result.kind}({result.target}) via {result.backend} [{mode}] — "
         f"{result.count} result(s)"

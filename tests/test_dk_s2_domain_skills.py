@@ -322,8 +322,12 @@ class TestNoNewGate(unittest.TestCase):
         self.assertEqual(
             sorted(g for g, r in GATES.items() if r.backed),
             # PH-GATE.S0 (0.0.14) backed `approach-approval`; this stage still adds no gate.
+            # 0.0.17 stage 5 moved the SET without changing its SIZE: `self-protect` was
+            # added (it enforces at `WriteGate.submit` layer 0 and was missing from the
+            # table doc 85 §4 has listed it in since 2026-07-26) and `ship-readiness` was
+            # demoted to advisory (nothing executes it). Still no gate from THIS stage.
             ["approach-approval", "completeness", "deviation", "hard-rule",
-             "no-code-without-failing-test", "secret-guard", "ship-readiness", "spec-persisted",
+             "no-code-without-failing-test", "secret-guard", "self-protect", "spec-persisted",
              "write-gate"])
 
     def test_the_verify_ui_domains_feed_instruments_not_backed_gates(self):

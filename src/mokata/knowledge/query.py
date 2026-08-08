@@ -41,6 +41,46 @@ PREFERRED_GRAPH_TOOL = "code-review-graph"
 # degrade) without a second mechanism.
 GREP_FLOOR_NAV_NOTE = f"grep floor — install {PREFERRED_GRAPH_TOOL} for full navigation"
 
+# ---------------------------------------------------------------------- the BASIS of an answer
+# D2 (BLAST-RADIUS-LEAF-DEGRADE) — WHICH RUNG ANSWERED, and the reason this is a named vocabulary
+# rather than a bool.
+#
+# `references == []` used to mean two irreconcilable things: "this symbol genuinely has no
+# callers" and "I have no structural evidence about this symbol". `degraded` could not separate
+# them either, because the AST floor's zero-edge fallthrough reached the grep floor and inherited
+# the floor's own verdict. So an approach naming ONE leaf — an entry point, a new function, a
+# top-level component, exactly what a frontend approach names — had its whole blast radius marked
+# degraded and `spec_emit` refused it, on mokata's own primary language.
+#
+# That is doc 85 §7g: an absent answer and a real answer must never share a representation. The
+# worked model in this repo is `run_resolver.RunResolution`, and this mirrors its three moving
+# parts deliberately — distinct OUTCOMES instead of a boolean with a comment, a `basis` naming
+# which rung answered so an answer carries its own provenance, and one stated invariant:
+#
+#     an empty `references` list NEVER distinguishes an answer from an absence — only `basis`.
+#
+# The consistency argument, which is CRG-NAV's own and is why this is not special-casing zero:
+# `refs` is refused from the AST index because calls+imports is "a PARTIAL set dressed as
+# structural". A zero-caller `blast_radius` over a symbol the index HOLDS A DEFINITION FOR is the
+# opposite shape — a COMPLETE set that is empty — and calling it absent is that same overclaim
+# pointed the other way. A verified zero is exactly as trustworthy as a verified three: both are
+# bounded by the floor's one documented limit (name resolution, not type inference), which is why
+# a verified-empty answer carries the same note rather than a bare claim.
+BASIS_STRUCTURAL = "structural"          # a structural backend answered
+BASIS_VERIFIED_EMPTY = "verified_empty"  # ...and CERTIFIES that the answer is zero
+BASIS_LEXICAL = "lexical"                # no structural answer — the lexical floor stands in
+
+# VERIFIED_EMPTY is a STRICTLY STRONGER claim than STRUCTURAL, not merely "structural with an
+# empty list": it says the backend can account for the symbol and vouch for the absence of edges.
+# Only a backend that can actually check that (today: the AST floor, via its definition index)
+# may use it, which is why `__post_init__` polices it and the adopted-graph sites do not reach
+# for it — an adopted graph's empty result stays STRUCTURAL, byte-identical to before.
+
+# The bases that mean "a structural backend answered this question". Membership is asked HERE, in
+# one place, so no consumer can invent its own idea of what counts as structural — the drift that
+# let three GR.S3 consumers each carry their own copy of the rule.
+STRUCTURAL_BASES = (BASIS_STRUCTURAL, BASIS_VERIFIED_EMPTY)
+
 
 class BackendError(DegradedCapability):
     """A backend failed to answer a query (e.g. the graph tool errored). The layer
@@ -79,22 +119,72 @@ class Reference:
 
 @dataclass
 class QueryResult:
+    """One structural answer — and WHICH RUNG produced it (D2; see the basis vocabulary above).
+
+    `basis` is the single stored representation; `degraded` is DERIVED from it. That asymmetry is
+    the whole fix and it is deliberate: while both were fields, a leaf answer and an absent answer
+    could agree on `degraded` while disagreeing about reality, and every consumer that read the
+    bool inherited the confusion. There is now one place the truth lives, so a consumer cannot
+    read a stale half of it.
+
+    `basis` defaults to LEXICAL, which is the FAIL-HONEST direction: a backend that has not been
+    taught this vocabulary makes no structural claim, so an un-migrated caller under-claims (the
+    old, safe behaviour) rather than silently certifying a zero it never verified."""
+
     kind: str                                   # one of QUERY_KINDS
     target: str                                 # the symbol/module asked about
     references: List[Reference] = field(default_factory=list)
     backend: str = ""                           # which provider answered
-    degraded: bool = False                      # True when the grep floor answered
+    basis: str = BASIS_LEXICAL                  # which rung answered (the ONE stored signal)
     note: str = ""
+
+    def __post_init__(self) -> None:
+        # The one incoherent combination: a basis claiming "the answer is zero" while carrying
+        # hits. Refused at construction rather than left for a reader to notice, because this is
+        # exactly the shape whose two halves drifted apart before.
+        if self.basis == BASIS_VERIFIED_EMPTY and self.references:
+            raise ValueError(
+                f"basis={BASIS_VERIFIED_EMPTY!r} claims a structurally verified ZERO but "
+                f"{len(self.references)} reference(s) were supplied")
 
     @property
     def count(self) -> int:
         return len(self.references)
 
+    @property
+    def degraded(self) -> bool:
+        """True when NO structural backend answered — the lexical floor's approximation stands in.
+
+        Read-only ON PURPOSE. It used to be a settable field, and that is how "the AST found zero
+        callers" and "the AST could not see this symbol" ended up sharing a value. Demote through
+        `demote_to_floor` instead, which moves the basis and the note together."""
+        return self.basis not in STRUCTURAL_BASES
+
+    @property
+    def structural(self) -> bool:
+        """True when a structural backend answered — WHETHER OR NOT it found anything."""
+        return self.basis in STRUCTURAL_BASES
+
+    @property
+    def verified_empty(self) -> bool:
+        """True when the structural answer is zero AND that zero is the answer, not an absence."""
+        return self.basis == BASIS_VERIFIED_EMPTY
+
+    def demote_to_floor(self, why: str = "") -> None:
+        """Demote an answer to the lexical floor — the ONE spelling of "this is no longer a
+        structural claim", so a caller cannot move the verdict without moving the reason."""
+        self.basis = BASIS_LEXICAL
+        if why:
+            self.note = f"{self.note}; {why}" if self.note else why
+
     def to_dict(self) -> Dict[str, Any]:
+        # `degraded` is still emitted — it is a derived view, and every existing reader of the
+        # wire shape keeps working — with `basis` beside it carrying what the bool cannot say.
         return {
             "kind": self.kind,
             "target": self.target,
             "backend": self.backend,
+            "basis": self.basis,
             "degraded": self.degraded,
             "note": self.note,
             "references": [r.to_dict() for r in self.references],

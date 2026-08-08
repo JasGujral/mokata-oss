@@ -16,6 +16,13 @@ import os
 import unittest
 from contextlib import redirect_stdout
 
+try:                                        # test-only dep (requirements/ci.txt), not a mokata dep
+    import yaml
+    _HAVE_YAML = True
+except ImportError:                         # absence is FAILED LOUD at the pin, never skipped
+    yaml = None
+    _HAVE_YAML = False
+
 import _support  # noqa: F401  (puts src/ on the path)
 
 from mokata.branch_protection import (
@@ -210,42 +217,121 @@ class ReleaseScriptWiring(unittest.TestCase):
                      "scripts/sync-public.sh is dev-only — not shipped to the public mirror")
 class SyncBoundaryEnvHardening(unittest.TestCase):
     """scripts/sync-public.sh: a real `.env` is EXCLUDED (would carry live creds) but `.env.example`
-    still SHIPS, and .env is in the guard's INTERNAL_PATHS. (String-level: the DRY-RUN is the proof.)"""
+    still SHIPS, and .env is in the guard's INTERNAL_PATHS. (String-level: the DRY-RUN is the proof.)
+
+    PIN-SUBSTRING-COMMENT-HOLE (0.0.16). All three pins below used to grep the WHOLE script — and
+    the script documents both controls IN PLACE, in prose that names the very literals being
+    pinned (`sync-public.sh:104-112` says `.env` six times and quotes `'.env*'`). So each pin was
+    satisfied by the COMMENT after the control it guards had been deleted: green precisely when
+    the control was gone, and for all three this class was the SOLE guard. Mutation-proven, then
+    fixed with the TD-2 remedy — bound the slice to the rsync ARGUMENT literal / the INTERNAL_PATHS
+    ARRAY literal, and strip `#` lines from both before asserting."""
+
+    @staticmethod
+    def _code_only(block):
+        """`block` with every `#` comment line dropped. Load-bearing, not tidiness — see the
+        class docstring: the comments in this script name the exact literals under pin."""
+        return "\n".join(ln for ln in block.splitlines() if not ln.lstrip().startswith("#"))
+
+    @staticmethod
+    def _slice(text, start_marker, end_marker, what):
+        """`text` between the two markers. Raises (never returns a wrong slice) if either marker
+        is gone — an explicit raise, not `assert`, so `python -O` cannot delete the check."""
+        start = text.find(start_marker)
+        if start == -1:
+            raise AssertionError("sync-public.sh lost its " + what + " (no '" + start_marker + "')")
+        end = text.find(end_marker, start + len(start_marker))
+        if end == -1:
+            raise AssertionError("sync-public.sh's " + what + " is unterminated (no '"
+                                 + end_marker.replace("\n", "\\n") + "')")
+        return text[start:end]
 
     @classmethod
     def setUpClass(cls):
         with open(_SYNC_SH, encoding="utf-8") as fh:
             cls.sh = fh.read()
+        # The rsync ARGUMENT literal: `rsync -a --delete \` … `"$SRC"/ "$DEST"/`.
+        cls.rsync_args = cls._code_only(
+            cls._slice(cls.sh, "rsync -a --delete", '"$SRC"/ "$DEST"/', "rsync invocation"))
+        # The INTERNAL_PATHS ARRAY literal: `INTERNAL_PATHS=(` … `\n)`. Bounded on purpose —
+        # "everything after `INTERNAL_PATHS=(`" swallows the enforcement loop and its commentary,
+        # which discuss `.env` at length and satisfy the membership check on their own.
+        cls.guard_block = cls._code_only(
+            cls._slice(cls.sh, "INTERNAL_PATHS=(", "\n)", "INTERNAL_PATHS guard"))
 
     def test_env_example_is_included_before_env_exclude(self):
-        inc = self.sh.find("--include='.env.example'")
-        exc = self.sh.find("--exclude='.env")
+        inc = self.rsync_args.find("--include='.env.example'")
+        exc = self.rsync_args.find("--exclude='.env")
         self.assertNotEqual(inc, -1, ".env.example must be explicitly INCLUDED so it still ships")
         self.assertNotEqual(exc, -1, ".env must be EXCLUDED")
         self.assertLess(inc, exc,
                         "rsync ordering: the .env.example include must precede the .env exclude")
 
     def test_dotenv_wildcard_excluded(self):
-        self.assertIn("--exclude='.env*'", self.sh)
+        self.assertIn("--exclude='.env*'", self.rsync_args,
+                      "sync-public.sh lost its `--exclude='.env*'` rsync argument — a real .env "
+                      "(live DB creds) would be copied to the public mirror")
 
     def test_env_in_guard_internal_paths(self):
-        guard = self.sh[self.sh.find("INTERNAL_PATHS=("):]
-        self.assertIn(".env", guard, ".env must be in the guard's INTERNAL_PATHS")
+        # Token-level, not substring: `.env` must be an ARRAY ENTRY of its own. The array also
+        # holds `.venv` and `'*.egg-info'`, and a looser check invites a future near-miss.
+        self.assertIn(".env", self.guard_block.split(),
+                      ".env must be an entry in the guard's INTERNAL_PATHS — it is the "
+                      "belt-and-suspenders backstop for the live-credential file")
 
 
 class ScorecardPatWiring(unittest.TestCase):
-    """scorecard.yml must pass the SCORECARD_PAT to scorecard-action, keeping the SHA pin + trigger."""
+    """scorecard.yml must pass the SCORECARD_PAT to scorecard-action, keeping the SHA pin + trigger.
+
+    PIN-SUBSTRING-COMMENT-HOLE (0.0.16): `assertIn(<literal>, self.yml)` over the raw file passed
+    on the comment left behind when the real line was commented out — the SHA pin stayed green
+    with the action re-pointed at the MUTABLE `@v2` tag. Both pins now read the PARSED structure,
+    where a comment cannot appear. PyYAML is not a mokata dependency, so its absence is FAILED
+    LOUD rather than skipped: a pin that evaporates when a dep is missing is the same bug in a
+    different costume. CI installs it (requirements/ci.txt) for exactly this reason."""
+
+    _ACTION = "ossf/scorecard-action"
+    _SHA = "4eaacf0543bb3f2c246792bd56e8cdeffafb205a"
 
     @classmethod
     def setUpClass(cls):
         with open(os.path.join(ROOT, ".github", "workflows", "scorecard.yml"), encoding="utf-8") as fh:
             cls.yml = fh.read()
 
+    def _scorecard_step(self):
+        """The PARSED `ossf/scorecard-action` step. Fails loud without PyYAML."""
+        if not _HAVE_YAML:
+            self.fail("PyYAML is required to verify the scorecard-action wiring from the PARSED "
+                      "workflow (a text-level check passes on a comment). Install it: "
+                      "pip install -r requirements/ci.txt")
+        doc = yaml.safe_load(self.yml)
+        for job in (doc.get("jobs") or {}).values():
+            for step in (job or {}).get("steps") or []:
+                if self._ACTION in str((step or {}).get("uses", "")):
+                    return step
+        self.fail("scorecard.yml declares no `" + self._ACTION + "` step at all")
+
     def test_repo_token_wired_to_pat_secret(self):
-        self.assertIn("repo_token: ${{ secrets.SCORECARD_PAT }}", self.yml)
+        with_ = self._scorecard_step().get("with") or {}
+        self.assertEqual(with_.get("repo_token"), "${{ secrets.SCORECARD_PAT }}",
+                         "scorecard-action must receive the fine-grained SCORECARD_PAT; without it "
+                         "the Branch-Protection check scores 0 ('Resource not accessible')")
 
     def test_sha_pin_intact(self):
-        self.assertIn("4eaacf0543bb3f2c246792bd56e8cdeffafb205a", self.yml)
+        """KEPT, deliberately, after 0.0.17 stage 10's sweep replaced the other bespoke pin.
+
+        NOT SUBSUMED, and the difference is the whole point: `test_s10_workflow_pins.py` asserts
+        the SHAPE of every ref in every workflow (some 40-hex commit SHA), which is a supply-chain
+        property. This asserts the IDENTITY of one — that scorecard-action is still pinned to the
+        exact commit that was reviewed. A silent bump to a different, equally well-formed 40-hex
+        SHA is green under the sweep and red here, and 'somebody repointed our Scorecard action at
+        an unreviewed commit' is precisely the event worth catching.
+        """
+        uses = str(self._scorecard_step().get("uses", ""))
+        ref = uses.split("@", 1)[1] if "@" in uses else ""
+        self.assertEqual(ref, self._SHA,
+                         "scorecard-action must stay pinned to its immutable 40-hex commit SHA, "
+                         "not a mutable tag — got '" + uses + "'")
 
     def test_trigger_intact(self):
         self.assertIn("branches: [main, master]", self.yml)

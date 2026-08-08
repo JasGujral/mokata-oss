@@ -18,6 +18,7 @@ from mokata.engine import ChangeSet
 from mokata.execmode.review import two_stage_review
 from mokata.execmode.review_graph import graph_verify
 from mokata.knowledge import GrepBackend, KnowledgeLayer, QueryResult, Reference
+from mokata.knowledge.query import BASIS_STRUCTURAL
 
 
 class FakeGraphLayer:
@@ -32,13 +33,13 @@ class FakeGraphLayer:
     def callers(self, sym):
         refs = [Reference(**r) for r in self._callers.get(sym, [])]
         return QueryResult(kind="callers", target=sym, references=refs,
-                           backend="code-review-graph")
+                           backend="code-review-graph", basis=BASIS_STRUCTURAL)
 
     def blast_radius(self, sym, depth=2):
         self.depths.append(depth)
         refs = [Reference(**r) for r in self._radius.get(sym, [])]
         return QueryResult(kind="blast_radius", target=sym, references=refs,
-                           backend="code-review-graph")
+                           backend="code-review-graph", basis=BASIS_STRUCTURAL)
 
 
 class TestPass2Callers(unittest.TestCase):

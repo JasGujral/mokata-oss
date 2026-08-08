@@ -44,7 +44,8 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-from mokata import gate_hook as G                                  # noqa: E402
+from mokata import gate_hook as G
+from mokata import run_resolver as RR                                  # noqa: E402
 from mokata import tdd_state as T                                  # noqa: E402
 from mokata import session as S                                    # noqa: E402
 from mokata import session_registry as SR                          # noqa: E402
@@ -225,7 +226,7 @@ class TestRMcpRegression(_Base):
             _self_register(d, RUN_A)                                 # A is the live MCP window
 
             # sanity: on disk this is ambiguous (two candidates); the registry breaks the tie.
-            self.assertEqual(set(G._run_ids(G.state_dir(d))), {RUN_A, RUN_B})
+            self.assertEqual(set(RR.run_ids(G.state_dir(d))), {RUN_A, RUN_B})
 
             code, err = _hook(os.path.join(d, "src", "auth.py"), d)  # NO pin -> narrow path
             self.assertEqual(code, 2, f"the ambiguous case failed open instead of enforcing: {err!r}")
@@ -273,7 +274,7 @@ class TestNegatives(_Base):
             _self_register(d, RUN_A)                                 # A alive
             _plant_window(d, RUN_B, pid=DEAD_PID)                    # B a corpse
 
-            self.assertEqual([r for r in G._live_runs(d, {RUN_A, RUN_B})], [RUN_A])
+            self.assertEqual([r for r in RR.live_runs(d, {RUN_A, RUN_B})], [RUN_A])
             code, err = _hook(os.path.join(d, "src", "auth.py"), d)
             self.assertEqual(code, 2, f"enforced a corpse or failed open: {err!r}")
             self.assertIn(G.GATE_TDD, err)
@@ -298,21 +299,33 @@ class TestNegatives(_Base):
 class TestBudget(_Base):
 
     def test_happy_paths_never_touch_the_registry(self):
-        """The pinned-run and single-candidate resolutions must read NOTHING new: `_live_runs` is
-        only consulted when there are 2+ on-disk candidates. Booby-trap it to prove it isn't."""
+        """The pinned-run and single-candidate resolutions must read NOTHING new: `run_resolver.live_runs`
+        is only consulted when there are 2+ on-disk candidates. Booby-trap it to prove it isn't.
+
+        ⚠ RUN-ID-DRIFT — THIS PIN WAS MASKED, and mutation testing is what found it (mutant M05:
+        drop the SINGLE rung below LIVE; the test stayed green). The single-candidate case was set
+        up with `_approve`, which writes an APPROVED APPROACH — so the resolver answered at the
+        EVIDENCE rung and never reached the single-candidate rung this test is named for. The
+        booby-trap was armed for a line the test never walked. The candidate below is now a BARE
+        checkpoint (state, but no evidence), which is the only shape that actually reaches SINGLE;
+        the evidence case is kept as its own assertion rather than deleted, since it must also read
+        nothing new."""
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
-            orig = G._live_runs
-            G._live_runs = lambda *a, **k: (_ for _ in ()).throw(
+            orig = RR.live_runs
+            RR.live_runs = lambda *a, **k: (_ for _ in ()).throw(
                 AssertionError("registry read on the happy path"))
             try:
                 # pinned run
                 self.assertEqual(G.resolve_run(d, run_id=RUN_A).run_id, RUN_A)
-                # single on-disk candidate
+                # a single BARE on-disk candidate — the shape that reaches the SINGLE rung
+                _raw_store(d).write(G.CHECKPOINT_PREFIX + RUN_A, {"run_id": RUN_A, "passed": []})
+                self.assertEqual(G.resolve_run(d).run_id, RUN_A)
+                # and the same candidate once it holds evidence — answered even earlier
                 _approve(d, RUN_A)
                 self.assertEqual(G.resolve_run(d).run_id, RUN_A)
             finally:
-                G._live_runs = orig
+                RR.live_runs = orig
 
 
 # ======================================================================================

@@ -50,26 +50,24 @@ def find_project_root(start: str = ".") -> str:
     failing that, `start` itself. This is what lets `init`/`status`/the MCP tools and the
     SessionStart offer all agree on whether the project is set up — so an already-init
     repo is recognized from a subdirectory and never re-offered init (the "asks every
-    time" bug)."""
+    time" bug).
+
+    WT-ROOT — both tiers were blind to git worktrees, in the two different ways a path-walk can be.
+    The manifest tier is now `repo_identity.resolve_mokata_root` (shared with
+    `gate_hook.find_mokata_root`, so the two cannot disagree). The VCS tier tested
+    `os.path.isdir(".git")`, and a linked worktree's `.git` is a FILE — so it walked straight past
+    the worktree it was standing in and answered `start`, which is how `mokata init` came to be
+    offered INSIDE a worktree. It now resolves through `canonical_repo_root`, the same primitive
+    `repo_identity` already uses for the registry."""
     cur = os.path.abspath(start)
 
-    probe = cur
-    while True:
-        if os.path.exists(os.path.join(probe, MOKATA_DIR, MANIFEST_FILENAME)):
-            return probe
-        parent = os.path.dirname(probe)
-        if parent == probe:
-            break
-        probe = parent
+    from .repo_identity import _common_dir, canonical_repo_root, resolve_mokata_root
+    resolved = resolve_mokata_root(cur).root
+    if resolved is not None:
+        return resolved
 
-    probe = cur
-    while True:
-        if os.path.isdir(os.path.join(probe, ".git")):
-            return probe
-        parent = os.path.dirname(probe)
-        if parent == probe:
-            break
-        probe = parent
+    if _common_dir(cur) is not None:
+        return canonical_repo_root(cur)
 
     return cur
 
@@ -171,9 +169,29 @@ class Surface:
 
     @classmethod
     def load(cls, root: str = ".", detector: Optional[Detector] = None) -> "Surface":
-        mdir = os.path.join(root, MOKATA_DIR)
+        # WT-ROOT — the committed CONFIG (manifest + constitution) is repo-scoped and resolves to
+        # the main checkout, so a session inside a linked worktree loads the repo's real manifest
+        # instead of erroring "not initialized" (and being told to run `mokata init`, which is the
+        # advice that forks the state). `root` itself deliberately stays THIS tree: the working tree
+        # and the branch are per-tree, and so is everything under this tree's `temp_local/`.
+        from .repo_identity import canonical_repo_root, resolve_mokata_root
+        resolution = resolve_mokata_root(root)
+        config_root = resolution.root or root
+        mdir = os.path.join(config_root, MOKATA_DIR)
         manifest_path = os.path.join(mdir, MANIFEST_FILENAME)
         if not os.path.exists(manifest_path):
+            if resolution.unresolved_worktree:
+                # WT-ROOT — the silent None goes, HERE, where a human is reading. The generic
+                # message below would be actively harmful in this case: `mokata init` run inside a
+                # linked worktree is exactly what forks the memory store and the audit ledger, so
+                # the one repo this advice must never be given to is this one.
+                raise ConfigError(
+                    f"'{os.path.abspath(root)}' is a linked git WORKTREE of "
+                    f"{canonical_repo_root(root)}, which has a {MOKATA_DIR}/ but no readable "
+                    f"{MANIFEST_FILENAME} — so mokata cannot resolve this repo's config. This is a "
+                    f"broken mokata repo, NOT an uninitialized one. Fix it in the MAIN checkout; do "
+                    f"NOT run `mokata init` here, which would fork memory and the audit ledger."
+                )
             raise ConfigError(
                 f"mokata is not initialized in '{os.path.abspath(root)}' "
                 f"(no {MOKATA_DIR}/{MANIFEST_FILENAME}). Run `mokata init` first."

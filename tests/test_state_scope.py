@@ -1,6 +1,6 @@
 """STATE-SCOPE — the MCP surface reads and writes the PIPELINE's state, not the process's (0.0.16).
 
-RE-ENTRY made the approval KEY pipeline-scoped (`badge_run.resolve_run_for_evidence`), and closed
+RE-ENTRY made the approval KEY pipeline-scoped (`run_resolver.resolve_run_for_evidence`), and closed
 the loop it was filed for. It also filed its own residual, which this stage closes: `Surface.state`
 is still scoped to `session.current_session_id()`, so the MCP surface — unlike the CLI, which has
 had `cli_commands/spec.py:_run_scoped_store` since HANDOFF.G1 — cannot SEE the run it just resolved.
@@ -43,7 +43,7 @@ import _support  # noqa: F401  (puts src/ on the path)
 
 from mokata import approval as A
 from mokata import session as S
-from mokata.badge_run import resolve_run_for_evidence
+from mokata.run_resolver import resolve_run_id
 from mokata.brainstorm import (Approach, BrainstormSession, load_approved_approach,
                                save_brainstorm_progress)
 from mokata.brainstorm_impact import DesignFitVerdict
@@ -56,6 +56,7 @@ from mokata.mcp import tools_read as TR
 from mokata.mcp import tools_spec as TS
 from mokata.mcp.consent import _evidence_store
 from mokata.session_save import register_run
+from mokata.knowledge.query import BASIS_LEXICAL
 
 C1 = [{"id": "AC1", "text": "the thing works"}]
 T1 = [{"name": "test_thing", "ac_ids": ["AC1"]}]
@@ -134,7 +135,7 @@ class _Layer:
     def blast_radius(self, symbol, depth=2):
         return QueryResult("blast_radius", symbol,
                            references=[Reference("app/pay.py", 5, snippet="", symbol="charge")],
-                           backend=self.backend_name, degraded=True)
+                           backend=self.backend_name, basis=BASIS_LEXICAL)
 
 
 def _degraded_brainstorm():
@@ -281,7 +282,7 @@ class TestReproSingleShotKeying(_Base):
         _re_enter(d, "runB")
         out = _commit(d, title="s2", criteria=C2, tests=T2, approach="a")
         self.assertEqual(out["status"], "committed")
-        self.assertEqual(resolve_run_for_evidence(d), "runA",
+        self.assertEqual(resolve_run_id(d), "runA",
                          "the commit must land under the run it was keyed to — a spec written into "
                          "the WRITING session's scope is a second pipeline mokata then cannot "
                          "choose between")
@@ -313,7 +314,7 @@ class TestReproSingleShotKeying(_Base):
         self.assertEqual(_commit(d, title="s3", criteria=C2, tests=T2,
                                  approach="a")["status"], "committed")
 
-        self.assertEqual(resolve_run_for_evidence(d), "runA")
+        self.assertEqual(resolve_run_id(d), "runA")
         store, run_id = _evidence_store(Surface.load(d), d)
         self.assertEqual(run_id, "runA")
         self.assertEqual(load_emitted_spec(store).title, "s3",
@@ -349,7 +350,7 @@ class TestFailClosed(_Base):
 
     def test_an_ambiguous_repo_resolves_to_nothing(self):
         d = self._two_pipelines()
-        self.assertIsNone(resolve_run_for_evidence(d),
+        self.assertIsNone(resolve_run_id(d),
                           "two runs hold evidence and neither is pinned — mokata refuses rather "
                           "than picks a window")
 

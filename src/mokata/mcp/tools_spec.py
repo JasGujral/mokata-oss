@@ -233,9 +233,15 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
     # "" when a direction IS on record, which is what keeps the attached result byte-identical.
     alone = standalone_note(gr)
 
-    # Gate 1b — GR.S3 `graph.required`. MCP-loop parity for the Lens-1 HARD-GATE: a spec emitted
-    # from a brainstorm whose CHOSEN approach's blast radius fell to the lexical floor is refused as
-    # a decision input, exactly as the CLI approve gate refuses. Read the persisted brainstorm's
+    # Gate 1b — GR.S3 `graph.required`. A spec emitted from a brainstorm whose CHOSEN approach's
+    # blast radius fell to the lexical floor is refused as a decision input. ⚠ This is the ONLY
+    # place that refusal fires today: `BrainstormSession.approve` takes a `graph_gate=` and would
+    # refuse at phase 1, but NO production path anywhere in `src/` originates a `graph_gate` value,
+    # so the approve-path twin is inert (`GATE-UNREACHABLE-BRAINSTORM`, doc 84). Wiring it is
+    # deferred to 0.0.19 by ruling D14 — it may only land once a TypeScript repo can get a
+    # non-degraded graph, or it moves the refusal earlier for users who have no floor that can
+    # answer it. Until then the refusal lands HERE, at emit (phase 7), and nowhere earlier.
+    # Read the persisted brainstorm's
     # chosen-approach radius; degrade-clean — no persisted brainstorm / no chosen impact → skip (we
     # only refuse when we can positively see a degraded radius). The escape is the session-scoped
     # `--allow-degraded` override the same human-consent flow writes.

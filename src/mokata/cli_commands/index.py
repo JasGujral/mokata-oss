@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 
+from ..knowledge.index import skipped_checkout_lines
 from ._common import (
     AdapterContract,
     negotiate,
@@ -30,6 +31,13 @@ def cmd_index(args: argparse.Namespace) -> int:
               f"+{len(d['added'])} added, -{len(d['removed'])} removed")
     store.write("knowledge_index", idx.to_dict())
     print(f"index: tracking {len(idx.entries)} file(s)")
+    # 0.0.17 stage 21 — a nested checkout (a vendored dependency, a submodule, a worktree) is a
+    # DIFFERENT repo's source: indexing it double-counts every symbol it holds, and this index
+    # feeds impact analysis and blast radius. It is skipped — and SAID, here, beside the counts
+    # it changes and the degrade line below, because a user who vendored that dependency on
+    # purpose would otherwise just find it unsearchable with nothing to read.
+    for line in skipped_checkout_lines(idx.skipped_checkouts):
+        print(line)
     # Stage 35f: name the code-graph backend the refresh runs against — the wired adapter
     # (e.g. neo4j) when present, the grep floor when not. Degrade-clean: never a hard error.
     layer = KnowledgeLayer.from_surface(surface)

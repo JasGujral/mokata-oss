@@ -38,7 +38,7 @@ import json
 import os
 import sys
 import threading
-from typing import List, Optional
+from typing import Any, Callable, List, Optional
 
 # Stage 3d.1: with the mcp_admin ↔ harness_setup cycle broken (shared pieces extracted to
 # harness_paths), this import — previously lazy inside `_mcp_reachability_warning` — is top-level.
@@ -68,6 +68,32 @@ _PATH_KEYS = ("file_path", "path", "notebook_path", "target_file")
 # no writer, where a bare read() would block forever and hang the session.
 _STDIN_READ_TIMEOUT_SECS = 2.0
 
+# How long the UserPromptSubmit hook may spend on its OWN WORK — the H-1a recall pack — before it
+# gives up and injects nothing (OSS issue #43: "UserPromptSubmit hook timed out after 30s").
+#
+# WHY IT EXISTS. `_STDIN_READ_TIMEOUT_SECS` above bounds READING the payload; nothing bounded what
+# the hook then did with it. The hook is documented FAIL-OPEN, but that is fail-open on EXIT CODE,
+# not on TIME: it never blocks a tool call, and it still stalls the human for however long its
+# slowest phase takes. Claude Code kills a hook at 30 s, discards its output, and shows the user a
+# warning on an ordinary turn — so an unbounded body converts a slow disk, a cold cache or a
+# filtered network into a scary message about a hook the user never asked about.
+#
+# WHY 5 s. Measured, not guessed. End-to-end in a cold subprocess the whole hook is ~90-100 ms, of
+# which ~85 ms is interpreter start plus imports; the recall itself ran 0.5-1.1 ms at 0 / 50 / 500
+# memory items and `always_on_lines` peaked at 3.3 ms. 5 s is ~1000x the measured body cost and
+# ~50x the entire process, so it cannot trip a healthy turn on a far slower machine — and it is a
+# sixth of the harness's kill, so mokata's own degrade always fires FIRST and the user gets a
+# normal turn instead of a stall plus a warning. It is a runaway catch, not a performance target.
+#
+# WHAT IT CATCHES. `build_injection` opens the store on every prompt, and `MemoryStore.from_surface`
+# resolves the embedder; with `memory.embedder: auto|model2vec` that reaches `_load_model2vec`,
+# whose only bound is `MODEL_FETCH_TIMEOUT_S = 30.0` for the model fetch. A sub-budget equal to the
+# harness's WHOLE budget can never fire in time to help — this one can.
+#
+# THE DEGRADE IS SILENCE, never a partial pack: half a recall pack is context the model will trust,
+# cut wherever the clock stopped. A turn with no pack is a correct turn.
+_HOOK_WORK_BUDGET_SECS = 5.0
+
 
 def _read_stdin_bounded(timeout: float = _STDIN_READ_TIMEOUT_SECS) -> Optional[str]:
     """Read all of stdin, but never block a session longer than ``timeout`` seconds.
@@ -95,6 +121,43 @@ def _read_stdin_bounded(timeout: float = _STDIN_READ_TIMEOUT_SECS) -> Optional[s
     if thread.is_alive():
         return None                  # timed out: an open pipe with no writer — don't block
     return holder.get("raw")
+
+
+def _bounded(work: "Callable[[], Any]", timeout: float) -> Any:
+    """Run `work` on a daemon thread and return its result, or None if it outlives `timeout`.
+    Never raises: an exception inside `work` also comes back as None, which every caller already
+    treats as "nothing to say" — so there is exactly ONE no-result answer and no caller has to
+    tell two flavours of nothing apart.
+
+    The SAME pattern `_read_stdin_bounded` uses, and for the same reason — cross-platform, no
+    SIGALRM, Windows-safe (the platform issue #43 was reported on). Deliberately RESULT-RETURNING
+    rather than side-effecting: the caller acts on a result only after the join, so a LATE worker
+    cannot emit, cannot record, and cannot be observed at all.
+
+    `is_alive()` IS the load-bearing line, not a formality. A worker can populate its result in
+    the instant between the join expiring and this check — a COMPLETE pack that arrived LATE, past
+    the budget. Reading the holder unconditionally would hand that back and emit it, which is
+    precisely what the budget exists to prevent, so a still-running worker is refused on the fact
+    that it is still running rather than on whether it happens to have left something behind.
+
+    The abandoned thread is left running as a daemon and dies with the process. Safe here because
+    the work is READ-ONLY (`build_injection` runs the ranked recall with `stamp=False`, precisely
+    so a per-prompt hook moves no durable state) — the worst a late worker can do is finish a
+    computation nobody reads."""
+    holder: dict = {}
+
+    def _run() -> None:
+        try:
+            holder["value"] = work()
+        except Exception:            # noqa: BLE001 — the caller's own fail-open floor applies
+            holder["value"] = None
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        return None                  # over budget — refuse it for RUNNING, not for being empty
+    return holder.get("value")
 
 
 # ======================================================================================
@@ -535,6 +598,22 @@ def session_start_main(argv: Optional[List[str]] = None) -> int:
     root = find_project_root(cwd)
 
     if not Surface.is_initialized(root):
+        # WT-ROOT — the silent no-op goes, and THIS is where it did the most damage. A linked
+        # worktree of a repo that has a `.mokata/` but no readable manifest lands here, and the
+        # setup offer below is the single worst thing to say to it: `mokata init` run inside a
+        # worktree is precisely what forks the memory store and the audit ledger. A broken mokata
+        # repo must not be greeted in the voice of a directory that was never one.
+        #
+        # SessionStart is also the one surface where "say it once" is honestly once — the gate hook
+        # is a fresh process per tool call and would repeat this forever, so it stays silent.
+        from .repo_identity import resolve_mokata_root
+        resolution = resolve_mokata_root(cwd)
+        if resolution.unresolved_worktree:
+            _emit("mokata: this is a linked git WORKTREE of a repo whose `.mokata/` has no readable "
+                  "manifest.json — a BROKEN mokata repo, not an uninitialized one. Fix it in the "
+                  "main checkout. Do NOT run `mokata init` here: it would fork this repo's memory "
+                  "store and audit ledger into a second, empty copy.")
+            return 0
         # Proactive, one-time offer. Disappears for good once .mokata/ exists.
         _emit(build_setup_offer().text)
         return 0
@@ -581,11 +660,11 @@ def session_start_main(argv: Optional[List[str]] = None) -> int:
     # B-BADGE — bind THIS Claude Code session to its single live run so the statusline badge is
     # session-aware (a cleared session never wears a dead run's strip; a resumed one re-attaches).
     # SessionStart is the writer because the MCP process that REGISTERS the run cannot learn Claude
-    # Code's `session_id` (harness gap #25642) — see `badge_run.maybe_bind_on_session_start`, which
+    # Code's `session_id` (harness gap #25642) — see `run_resolver.maybe_bind_on_session_start`, which
     # binds only on source=startup/resume with exactly one live run (never on `clear`). Run-state
     # class, ungated, degrade-clean: on any failure the badge falls open to live-narrowing.
     try:
-        from .badge_run import maybe_bind_on_session_start
+        from .run_resolver import maybe_bind_on_session_start
         maybe_bind_on_session_start(root, session_id, source)
     except Exception:
         pass
@@ -646,12 +725,22 @@ def user_prompt_submit_main(argv: Optional[List[str]] = None) -> int:
             return 0                       # not a mokata project — zero cost, total silence
         surface = Surface.load(root)
 
-        # S4 — what this session has already been handed. Excluded from the ranking, so the
-        # budget goes to what is NEW rather than re-handing the model turn 3's answer on turn 20.
-        from .bootstrap import build_injection
-        from .injection_ledger import already_injected, record_injected
-        pack = build_injection(surface, prompt,
-                               exclude_ids=already_injected(root, session_id=session_id))
+        # THE WALL-CLOCK BUDGET (OSS issue #43). Everything expensive lives past this point —
+        # opening the store, resolving the embedder, the ranked recall — and until now none of it
+        # was bounded by anything. It runs on a bounded worker; if the worker outlives the budget
+        # the hook injects NOTHING and returns, rather than handing back a pack the harness has
+        # already given up waiting for.
+        #
+        # The emit and the ledger write stay HERE, on the main thread, past the join. That is the
+        # load-bearing half: a worker that finishes late must not be able to emit into a turn that
+        # has moved on, and must not be able to mark items "already injected" that the model never
+        # saw (see `record_injected` below — the S4 ledger suppresses an item for the rest of the
+        # session, so recording a dropped pack loses that memory in the name of not repeating it).
+        from .injection_ledger import record_injected
+        pack = _bounded(lambda: _build_injection_for(surface, prompt, root, session_id),
+                        _HOOK_WORK_BUDGET_SECS)
+        if pack is None:
+            return 0                       # over budget / unreadable — silence, never a partial
         if not pack.text:
             return 0                       # nothing relevant this turn — emit NO channel at all
         _emit(pack.text, event=USER_PROMPT_SUBMIT_EVENT)
@@ -669,6 +758,25 @@ def user_prompt_submit_main(argv: Optional[List[str]] = None) -> int:
         # open costs the turn some context it never promised — announcing it every turn would be
         # the louder harm.
         return 0
+
+
+def _build_injection_for(surface, prompt: str, root: str, session_id: str):
+    """The hook's WORK, in one callable so it can be bounded as a unit.
+
+    Extracted for `_bounded` rather than inlined: the budget is on the hook's work, not on one
+    call inside it, and the two expensive phases (`already_injected`'s read and `build_injection`'s
+    store-open + recall) belong on the same side of the clock. Imported lazily here for the same
+    reason the caller imports `config` lazily — a repo mokata is not set up in must never pay for
+    the memory stack.
+
+    READ-ONLY by construction (`build_injection` runs the ranked recall with `stamp=False`), which
+    is what makes it safe to abandon on a timeout."""
+    from .bootstrap import build_injection
+    from .injection_ledger import already_injected
+    # S4 — what this session has already been handed. Excluded from the ranking, so the budget
+    # goes to what is NEW rather than re-handing the model turn 3's answer on turn 20.
+    return build_injection(surface, prompt,
+                           exclude_ids=already_injected(root, session_id=session_id))
 
 
 def _prompt_envelope(args) -> "tuple":
@@ -766,7 +874,7 @@ def _mokata_segment(cwd: str, session_name: Optional[str],
             return ""
         # TM.S1 — the statusline segment prefixes the run mode (local|team) so a session is
         # never ambiguous about which mode it's in, then the pipeline-stage badge. B-BADGE — the
-        # payload's `session_id` scopes the stage strip to THIS session (see `badge_run`).
+        # payload's `session_id` scopes the stage strip to THIS session (see `run_resolver`).
         badge = statusline_badge(surface, session_name=session_name, session_id=session_id)
         # MCP-R.D2 (UX-NOTIFY) — the mokata-OWNED wait signal, for the waits that raise no harness
         # notification. A gated write returning a proposal does NOT trigger a permission prompt

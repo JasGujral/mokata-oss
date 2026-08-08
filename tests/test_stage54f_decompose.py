@@ -33,6 +33,7 @@ from mokata.execmode.decompose import (DecompositionPlan, Subtask,
                                        extract_refs, run_decomposition)
 from mokata.govern import AuditLedger
 from mokata.knowledge.query import QueryResult, Reference
+from mokata.knowledge.query import BASIS_LEXICAL, BASIS_STRUCTURAL
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COMMANDS_DIR = os.path.join(ROOT, "src", "mokata", "templates", "commands")
@@ -55,7 +56,7 @@ class _FakeGraphLayer:
         refs = [Reference(path="x.py", line=1, symbol=s)
                 for s in self._links.get(sym, [])]
         return QueryResult(kind="blast_radius", target=sym, references=refs,
-                           degraded=self._degraded)
+                           basis=(BASIS_LEXICAL if self._degraded else BASIS_STRUCTURAL))
 
 
 class _GrepLayer:

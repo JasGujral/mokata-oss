@@ -44,6 +44,13 @@ import time
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _translating import (
+    Declaration,
+    ResultAdaptation,
+    Rewrite,
+    TranslatingConnection,
+    placeholder_rewrite,
+)
 
 from mokata import MANIFEST_FILENAME, MOKATA_DIR, TEMP_LOCAL_DIRNAME, teamdb
 from mokata.config import STATE_DIRNAME, Surface
@@ -110,17 +117,52 @@ def plan_ops(seed: int, wid: int, n: int):
 
 
 # --------------------------------------------------------------------------- the shared backend
-class SharedPg:
+_DECLARATION = Declaration(
+    suite="MS.S7 exactly-once under stress",
+    reason="exactly-once is a CROSS-PROCESS property, so the backend has to be genuinely shared "
+           "and has to enforce CAS for real. The same shape MS.S5 uses, so the stress stage and "
+           "the unit stage agree on what \"the shared table\" means.",
+    rewrites=(
+        placeholder_rewrite(),
+        Rewrite.literal(
+            "transaction-clock", "now()", "CURRENT_TIMESTAMP",
+            "Postgres's `now()` is TRANSACTION-stable; SQLite's `CURRENT_TIMESTAMP` is "
+            "STATEMENT-stable and second-granular. Under STRESS this matters more than it does in "
+            "MS.S5, because concurrent writes here land inside the same second routinely."),
+    ),
+    adaptations=(
+        ResultAdaptation(
+            "rowcount-from-total-changes",
+            "the exactly-once verdict is read from this rowcount, so the adaptation is the "
+            "measurement instrument, not a convenience."),
+    ),
+    not_proven=(
+        "Postgres's concurrency model — WAL-mode SQLite serializes writers with a file lock and "
+        "a busy timeout, so 'exactly one writer won' is proven under SQLite's contention and not "
+        "under Postgres's row locks, deadlock detection or serialization failures",
+        "behaviour at Postgres's connection limits, which is a load class this cannot reach",
+        "anything about the timestamps: `now()` is rewritten to a coarser, statement-stable clock",
+    ),
+)
+
+
+class SharedPg(TranslatingConnection):
     """A file-backed stand-in for the shared `mokata_memory` table (there is no live DB in CI).
 
     Deliberately not an in-memory dict: exactly-once is a CROSS-PROCESS property, so the backend has
     to be genuinely shared and has to enforce CAS for real. SQLite in WAL mode does both — the same
     shape MS.S5 uses, so the stress and the unit stage agree on what "the shared table" means.
+
+    Like its MS.S5 twin it TRANSLATES Postgres SQL, undeclared until 0.0.17 stage 2 derived it
+    structurally rather than by name.
     """
 
     def __init__(self, path):
         self.path = path
-        self._db = sqlite3.connect(path, timeout=20.0, isolation_level=None)   # autocommit
+        super().__init__(
+            _DECLARATION,
+            connection=sqlite3.connect(path, timeout=20.0, isolation_level=None))  # autocommit
+        self._db = self._c
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA busy_timeout=20000")
         self._db.execute(
@@ -135,10 +177,14 @@ class SharedPg:
             f"  {teamdb.MEMORY_PRIORITY_COLUMN} INT NOT NULL DEFAULT 0)")
 
     def execute(self, sql, params=()):
-        stmt = sql.replace("%s", "?").replace("now()", "CURRENT_TIMESTAMP")
-        before = self._db.total_changes
-        cur = self._db.execute(stmt, tuple(params))
-        return _Cursor(cur.fetchall(), rowcount=self._db.total_changes - before)
+        """Rowcount bookkeeping only — the translation is the base class's, by declared rules."""
+        self._before_changes = self._db.total_changes
+        return super().execute(sql, params)
+
+    def _adapt(self, cursor):
+        """The declared `rowcount-from-total-changes` adaptation."""
+        return _Cursor(cursor.fetchall(),
+                       rowcount=self._db.total_changes - self._before_changes)
 
     def ids(self):
         cur = self._db.execute(f"SELECT id FROM {teamdb.MEMORY_TABLE}")

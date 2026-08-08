@@ -28,6 +28,7 @@ import sqlite3
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _translating import Declaration, TranslatingConnection, placeholder_rewrite
 
 from mokata import teamdb
 from mokata.memory.backends import (
@@ -99,13 +100,29 @@ def _doc_scope(conn, table, item_id):
 
 
 # ------------------------------------------------------------- a REAL SQL Postgres stand-in
-class _PgShim:
+_DECLARATION = Declaration(
+    suite="DB.S2b scope/precedence pushdown",
+    reason="the scope predicate must be proven to EXCLUDE rows, and a hand-parsing fake can only "
+           "confirm the strings it was taught. The emitted WHERE is exercised, not string-matched.",
+    rewrites=(placeholder_rewrite(),),
+    not_proven=(
+        "Postgres's own planner behaviour, and any claim that the scope predicate is INDEXED — "
+        "only that it is emitted, bound, and filters",
+        "Postgres type coercion on the v3 scope columns: SQLite is dynamically typed, so a "
+        "`scope_level`/`pin`/`priority` value that round-trips here could still be refused there",
+    ),
+)
+
+
+class _PgShim(TranslatingConnection):
     """Runs the Postgres backend's SQL for real on SQLite (`%s` -> `?`), on a table shaped like a
     provisioned v3 `mokata_memory`. Borrowed from the DB.S2a suite so the emitted WHERE is
-    EXERCISED, not string-matched."""
+    EXERCISED, not string-matched.
+
+    The translation is DECLARED and ENFORCED by `_translating.TranslatingConnection`."""
 
     def __init__(self, backfilled=True):
-        self._c = sqlite3.connect(":memory:")
+        super().__init__(_DECLARATION)
         self._c.execute(
             """CREATE TABLE mokata_memory (
                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -130,17 +147,6 @@ class _PgShim:
             (teamdb.TEAM_SCHEMA_VERSION, teamdb.TEAM_SCHEMA_MIN_SUPPORTED,
              1 if backfilled else 0),
         )
-        self.sql_log = []
-
-    def execute(self, sql, params=()):
-        self.sql_log.append(sql)
-        return self._c.execute(sql.replace("%s", "?"), tuple(params or ()))
-
-    def close(self):
-        self._c.close()
-
-    def last_select(self):
-        return [s for s in self.sql_log if s.lstrip().upper().startswith("SELECT")][-1]
 
 
 def _seeded_sqlite(items):

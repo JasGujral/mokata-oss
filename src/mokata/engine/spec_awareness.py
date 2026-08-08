@@ -198,11 +198,16 @@ def expand_touch_set(layer: Any, symbols: List[str],
         (GR.S1): an AST-expanded touch-set is still flagged a floor and carries the AST note.
       * ``graph_degraded`` (QUERY-LEVEL) — the signal the ``graph.required`` gate reads: True only
         when a structural answer was ATTEMPTED and WITHHELD — no layer (with symbols to expand), a
-        query that FAULTED, or a ``blast_radius`` that fell to the grep floor (``qr.degraded``, the
-        grep / empty-AST fallthrough). The AST floor answering WITH evidence keeps
-        ``floor_degraded=True`` but ``graph_degraded=False`` — so it EXPANDS and is NOT refused,
-        while empty-AST evidence still refuses (the GR.S1 hand-off). This mirrors Lens-1 exactly:
+        query that FAULTED, or a ``blast_radius`` that reached the lexical floor (``qr.degraded``).
+        The AST floor answering structurally keeps ``floor_degraded=True`` but
+        ``graph_degraded=False`` — so it EXPANDS and is NOT refused. This mirrors Lens-1 exactly:
         ``blast_radius`` is the canonical query the signal keys on.
+
+        D2 — "answering structurally" INCLUDES a verified ZERO. This read "the grep / empty-AST
+        fallthrough" and "empty-AST evidence still refuses (the GR.S1 hand-off)", which is the
+        defect stated as a contract: a LEAF is not absent evidence. The distinction is made once,
+        at the backend, so this consumer needed no change — which is the point, since three
+        consumers each carrying their own copy of the rule is how they drifted apart before.
 
     D5 — a graph wired but FAULTING forces ``graph_degraded=True`` and speaks once via
     ``note_degraded('code-graph')``: a degraded flag that lies is worse than no flag."""
@@ -219,7 +224,8 @@ def expand_touch_set(layer: Any, symbols: List[str],
     note = ""
     for sym in list(expanded):
         # ``blast_radius`` is the CANONICAL query the query-level signal keys on — exactly the query
-        # Lens-1 uses. A degraded (grep-floor / empty-AST fallthrough) answer withholds the radius.
+        # Lens-1 uses. A degraded (lexical-floor) answer withholds the radius; a structurally verified
+        # ZERO does not — see D2 in the docstring above.
         try:
             res = layer.blast_radius(sym, depth=depth)
         except Exception:               # noqa: BLE001 — see the note below

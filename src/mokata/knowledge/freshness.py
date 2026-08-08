@@ -384,7 +384,7 @@ class FreshnessController:
         try:
             # count-bounded build (option-B: don't let a giant repo blow the cold walk unbounded)
             paths = []
-            for ab in KnowledgeIndex._iter_files(self.root, (".py",)):
+            for ab in idx._iter_files(self.root, (".py",)):
                 paths.append(ab)
                 if len(paths) >= INDEX_SIZE_CAP_FILES:
                     capped = True

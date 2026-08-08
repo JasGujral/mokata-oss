@@ -35,7 +35,7 @@ jobs:
       # Run the completeness gate + spec-awareness over the PR's changed files.
       # `fail-on-block: true` makes a real block fail the check (set false for report-only).
       - id: check
-        uses: JasGujral/mokata-oss/.github/actions/mokata-check@v0.0.16
+        uses: JasGujral/mokata-oss/.github/actions/mokata-check@v0.0.17
         with:
           base: ${{ github.event.pull_request.base.sha }}
           fail-on-block: "true"

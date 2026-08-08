@@ -17,11 +17,11 @@ def cmd_progress(args: argparse.Namespace) -> int:
     if getattr(args, "lanes", False):
         from ..progress import build_run_lanes, render_lanes
         ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
-        rl = build_run_lanes(surface.state, ledger=ledger, run_id=args.run)
+        rl = build_run_lanes(surface.state, ledger=ledger, run_id=args.run, root=surface.root)
         print(render_lanes(rl, ascii_only=args.ascii))
         return 0
     from ..progress import build_progress, render_progress
-    progress = build_progress(surface.state, run_id=args.run)
+    progress = build_progress(surface.state, run_id=args.run, root=surface.root)
     # Stage 6d — pass the surface so /progress renders the MAX-detail view: the 7-phase tracker
     # PLUS the 5 user-stage arc + 6c develop sub-counter + what's pending this session.
     print(render_progress(progress, ascii_only=args.ascii, surface=surface))
@@ -34,11 +34,28 @@ def cmd_progress_mark(args: argparse.Namespace) -> int:
     # + UNGATED (same trust tier as the audit ledger — NOT a P2 durable write, so it never
     # routes through the WriteGate/human-gate). Degrade-clean: any failure is reported and
     # non-fatal (a skills-template call must never break the phase it's recording).
-    from ..progress import find_active_run
     from ..progress_events import ProgressLog, STAGE_ENTER
+    from ..run_resolver import resolve_run, unresolved_reason
     try:
         surface = _load_surface(args.path)
-        run_id = find_active_run(surface.state)     # reuse the existing run identity
+        # RUN-ID-DRIFT — THE resolver, not a scan. This is the surface OSS #44 was reported on: the
+        # scan stamped a stage into whichever run sorted first, so `progress` read `[2/7]` on one run
+        # while the marks landed on a different, unstarted one.
+        #
+        # The TWO unresolved cases are handled differently, and that difference is the whole Class-1
+        # point rather than an inconsistency:
+        #
+        #   AMBIGUOUS — several runs, none identifiably the caller's. REFUSE. A stage mark in the
+        #     wrong run is worse than an absent one: it is a false green a later reader trusts, and
+        #     it is exactly what #44 reported. Say which runs were seen and name `--run`.
+        #   NO RUN AT ALL — nothing exists to mis-attribute to, so recording a RUN-LESS stage_enter
+        #     is honest observability, not a guess (it is what the badge's "no checkpoint but a log
+        #     recorded a stage" path reads, and it is byte-for-byte the pre-#44 behaviour here).
+        res = resolve_run(surface.root, run_id=getattr(args, "run", None))
+        run_id = res.run_id
+        if res.ambiguous:
+            print(f"mokata progress: not recording '{args.stage}' — " + unresolved_reason(res))
+            return 0
         ProgressLog.from_surface(surface).append_event(
             STAGE_ENTER, args.stage, run_id=run_id)
         # B-LIFE — entering `ship` is the run's terminal END-OF-RUN signal: stamp the checkpoint's
@@ -199,7 +216,7 @@ def cmd_sessions(args: argparse.Namespace) -> int:
     # Stage 50 — list past + active runs (read-only; bounded; friendly empty state).
     from ..progress import list_sessions
     surface = _load_surface(args.path)
-    sessions = list_sessions(surface.state)
+    sessions = list_sessions(surface.state, root=surface.root)
     if not sessions:
         print("mokata sessions: no runs on record yet. Start one with /mokata:brainstorm "
               "or /mokata:refine.")
@@ -285,11 +302,15 @@ def cmd_resume(args: argparse.Namespace) -> int:
     # Stage 50 — PREVIEW where a run resumes (read-only): the phase + the gate that still
     # applies. mokata never auto-runs the pipeline; the gates hold on resume.
     from ..pipeline import PHASE_GATES
-    from ..progress import build_progress, find_active_run
+    from ..progress import build_progress
+    from ..run_resolver import resolve_run, unresolved_reason
     surface = _load_surface(args.path)
-    rid = args.id or find_active_run(surface.state)
+    # RUN-ID-DRIFT — resume reads THE resolver. An ambiguous repo is told to name a run rather than
+    # handed an arbitrary one to resume, which is how a resume landed in someone else's pipeline.
+    res = resolve_run(surface.root, run_id=args.id)
+    rid = res.run_id
     if rid is None:
-        print("mokata resume: no run to resume. Start one with /mokata:brainstorm.")
+        print("mokata resume: no run to resume — " + unresolved_reason(res, flag="--id"))
         return 0
     progress = build_progress(surface.state, run_id=rid)
     if not progress.active:
@@ -401,6 +422,12 @@ def register(sub, common):
     )
     p_mark.add_argument("stage", choices=list(STAGE_BADGE_STAGES),
                         help="the user-stage being entered")
+    # RUN-ID-DRIFT — the same `--run` spelling as `record-review` / `review-status` / `progress`.
+    # A mark is a WRITE into a run's history, so when resolution is ambiguous this is the remedy
+    # the refusal names; without it the user would be told to name a run they could not name.
+    p_mark.add_argument("--run", default=None,
+                        help="the run this stage mark belongs to (default: the run resolved for "
+                             "this session)")
     p_mark.set_defaults(func=cmd_progress_mark)
 
     # Stage 6r — `mokata progress record-review` / `review-status`: the closing review's

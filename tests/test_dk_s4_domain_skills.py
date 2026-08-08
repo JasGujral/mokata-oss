@@ -244,9 +244,17 @@ class TestShippingFeedsTheExistingShipReadinessGate(unittest.TestCase):
         self.assertIn("release-gate", dk.DOMAIN_INSTRUMENT_ONELINE)
         self.assertNotIn("release-gate", GATES)                 # not a backed gate at all — no fork
 
-    def test_the_existing_ship_readiness_gate_is_the_backed_release_gate(self):
-        # the BACKED gate shipping feeds is the EXISTING ship-readiness gate (unchanged, not forked).
-        self.assertTrue(GATES["ship-readiness"].backed)
+    def test_the_existing_ship_readiness_boundary_is_what_shipping_feeds(self):
+        # The gate shipping feeds is the EXISTING `ship-readiness` entry — unchanged and not
+        # forked, which is the claim this test has always made and still makes.
+        #   What changed in 0.0.17 stage 5: that entry is ADVISORY now, not backed. It was demoted
+        # because nothing executes it (nothing in the package imports `engine/ship.py`), so the
+        # boundary is agent-facing protocol rather than a code gate. Shipping's position is
+        # unaffected — it feeds the release-gate INSTRUMENT and forks no gate either way — but the
+        # skill's prose may no longer call what it feeds a BACKED gate, and this asserts the
+        # demotion held rather than silently re-greening if someone flips it back.
+        self.assertFalse(GATES["ship-readiness"].backed)
+        self.assertEqual(GATES["ship-readiness"].enforcement_point, "")
         low = _skill_text("shipping").lower()
         self.assertIn("ship-readiness", low)                    # names the EXISTING gate it feeds
         self.assertIn("no new gate", low)                       # forks none
@@ -350,8 +358,12 @@ class TestNoNewGate(unittest.TestCase):
         self.assertEqual(
             sorted(g for g, r in GATES.items() if r.backed),
             # PH-GATE.S0 (0.0.14) backed `approach-approval`; this stage still adds no gate.
+            # 0.0.17 stage 5 moved the SET without changing its SIZE: `self-protect` was
+            # added (it enforces at `WriteGate.submit` layer 0 and was missing from the
+            # table doc 85 §4 has listed it in since 2026-07-26) and `ship-readiness` was
+            # demoted to advisory (nothing executes it). Still no gate from THIS stage.
             ["approach-approval", "completeness", "deviation", "hard-rule",
-             "no-code-without-failing-test", "secret-guard", "ship-readiness", "spec-persisted",
+             "no-code-without-failing-test", "secret-guard", "self-protect", "spec-persisted",
              "write-gate"])
 
     def test_each_domain_feeds_an_existing_gate_or_instrument(self):

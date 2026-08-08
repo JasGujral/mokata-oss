@@ -232,8 +232,11 @@ class TestApproveParam(unittest.TestCase):
         from mokata.engine import record_finish_decision
         dec = record_finish_decision(None, "keep", approve=True)
         self.assertTrue(dec.approved)
-        # back-compat alias
-        self.assertTrue(record_finish_decision(None, "keep", confirmed=True).approved)
+        # H3's point was that the spelling is `approve`, matching the MCP write tools. The
+        # `confirmed=` alias that shipped beside it was deleted in 0.0.17 stage 5 (pre-1.0
+        # no-back-compat, doc 85 §7d) — there is ONE spelling now, which is what H3 wanted.
+        with self.assertRaises(TypeError):
+            record_finish_decision(None, "keep", confirmed=True)
 
 
 # ----------------------------------------------------------------- M1: Neo4j typed degrade

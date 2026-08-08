@@ -35,6 +35,13 @@ import unittest
 from contextlib import contextmanager
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _translating import (
+    Declaration,
+    ResultAdaptation,
+    Rewrite,
+    TranslatingConnection,
+    placeholder_rewrite,
+)
 
 from mokata import MANIFEST_FILENAME, MOKATA_DIR, flush_liveness, team_health, team_journal, teamdb
 from mokata.config import Surface
@@ -57,17 +64,59 @@ class _Cursor:
         return list(self._rows)
 
 
-class SharedPg:
+SHARED_PG_DECLARATION = Declaration(
+    suite="MS.S5 single-flusher (cross-process exactly-once)",
+    reason="the M-5 bug is a CROSS-PROCESS one, so the backend has to be genuinely shared between "
+           "processes and has to enforce CAS for real. An in-memory dict cannot do either; SQLite "
+           "in WAL mode does both, and `total_changes` gives an exact rowcount rather than the "
+           "driver-specific INSERT quirk.",
+    rewrites=(
+        placeholder_rewrite(),
+        Rewrite.literal(
+            "transaction-clock", "now()", "CURRENT_TIMESTAMP",
+            "⚠ THE STRONGEST CONCESSION IN THIS FILE. Postgres's `now()` is TRANSACTION-stable — "
+            "every statement in one transaction reads the same instant. SQLite's "
+            "`CURRENT_TIMESTAMP` is STATEMENT-stable, and it is second-granular. Two writes this "
+            "suite believes are distinguishable by their stamps may be indistinguishable in "
+            "Postgres, and vice versa."),
+    ),
+    adaptations=(
+        ResultAdaptation(
+            "rowcount-from-total-changes",
+            "psycopg reports `cursor.rowcount`; SQLite's is unreliable for the statements here, so "
+            "the rowcount is derived from the connection's `total_changes` delta. CAS correctness "
+            "is read from this number, so the adaptation is load-bearing, not cosmetic."),
+    ),
+    not_proven=(
+        "Postgres's TRANSACTION semantics — WAL-mode SQLite in autocommit has neither Postgres's "
+        "isolation levels nor its lock escalation, so 'the loser's UPDATE affected 0 rows' is "
+        "proven for SQLite's concurrency model and not for Postgres's",
+        "anything about the stamps themselves: `now()` is rewritten to a statement-stable, "
+        "second-granular clock, so ordering or equality of timestamps is not evidence here",
+        "the driver's own INSERT rowcount behaviour, which is the very quirk this stands in for",
+    ),
+)
+
+
+class SharedPg(TranslatingConnection):
     """A file-backed stand-in for the shared `mokata_memory` table, speaking the flush's SQL.
 
     Deliberately NOT an in-memory dict: the M-5 bug is a CROSS-PROCESS one, so the backend has to be
     genuinely shared between processes and has to enforce CAS for real. SQLite in WAL mode does both
     — `ON CONFLICT DO NOTHING` and revision-guarded UPDATE/DELETE mean the same thing they do in
-    Postgres, and `total_changes` gives an exact rowcount (never the driver-specific INSERT quirk)."""
+    Postgres, and `total_changes` gives an exact rowcount (never the driver-specific INSERT quirk).
 
-    def __init__(self, path):
+    It TRANSLATES Postgres SQL, which went undeclared until 0.0.17 stage 2 derived it structurally
+    — the name carries no `Shim` in it, so every name-based sweep had missed it. See
+    `SHARED_PG_DECLARATION`, and note that the `now()` rewrite is a semantic substitution, not a
+    placeholder swap."""
+
+    def __init__(self, path, declaration=None):
         self.path = path
-        self._db = sqlite3.connect(path, timeout=20.0, isolation_level=None)  # autocommit
+        super().__init__(
+            declaration or SHARED_PG_DECLARATION,
+            connection=sqlite3.connect(path, timeout=20.0, isolation_level=None))  # autocommit
+        self._db = self._c
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA busy_timeout=20000")
         self._db.execute(
@@ -84,10 +133,15 @@ class SharedPg:
             f"  {teamdb.MEMORY_PRIORITY_COLUMN} INT NOT NULL DEFAULT 0)")
 
     def execute(self, sql, params=()):
-        stmt = sql.replace("%s", "?").replace("now()", "CURRENT_TIMESTAMP")
-        before = self._db.total_changes
-        cur = self._db.execute(stmt, tuple(params))
-        return _Cursor(cur.fetchall(), rowcount=self._db.total_changes - before)
+        """Only the ROWCOUNT bookkeeping lives here; the translation is the base class's, by the
+        declared rules and nothing else."""
+        self._before_changes = self._db.total_changes
+        return super().execute(sql, params)
+
+    def _adapt(self, cursor):
+        """The declared `rowcount-from-total-changes` adaptation."""
+        return _Cursor(cursor.fetchall(),
+                       rowcount=self._db.total_changes - self._before_changes)
 
     # --- assertions the tests make against the shared table ---------------------------
     def rows(self):

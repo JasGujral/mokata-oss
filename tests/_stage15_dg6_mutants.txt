@@ -1,0 +1,78 @@
+0.0.17 stage 15 — DG-3 + DG-6. The mutant list, committed beside the score.
+
+TARGETS
+  tests/test_hook_shell_agnostic.py      — the guard (DG-6: widen it from 4 source files to docs/)
+  docs/reference/platform-support.md     — DG-3 site 1, the platform-support table
+  docs/how-to/use-without-plugin.md      — DG-3 sites 2+3, the Windows shim + the setup route
+
+GRADED BY: tests/test_hook_shell_agnostic.py (31 tests, 30 -> 31 at the M04 close).
+
+Run: PYTHON=/Users/jas/jsvenv_mk312/bin/python tests/_stage15_dg6_mutants.sh
+
+RED   = the tests caught it. The pin is real.
+GREEN = it survived. That is a finding about a pin, and it is reported, never quietly dropped.
+
+SCORE: 9/9 RED (third grading). The batch was worth running twice over — the FIRST grading was
+7 mutants and found the guard's PREDICATE was wrong (M01 survived), the SECOND found its REACH
+was unpinned (M04 survived). Both are written up below. A guard shipped on the first grading
+would have looked like it covered `docs/` while being unable to see the one page that mattered
+most, which is the DG-6 defect exactly, committed by the code written to fix it.
+
+--------------------------------------------------------------------------------------------------
+DG-3 — THE TWO USER-FACING PAGES
+Each mutant restores, near enough, the text that shipped for a whole release after
+HOOK-SHELL-AGNOSTIC's deliverable 0 falsified it by reading the harness binary.
+
+  M01  platform-support re-asserts the premise      the page a Windows user checks first
+  M02  use-without-plugin re-asserts the premise    the Windows shim paragraph
+
+       ⚠ M01 SURVIVED THE FIRST GRADING, and it is the first of this batch's two findings.
+       The guard's predicate asked whether the whole LINE carried a negation, and the
+       platform-support entry is a single markdown TABLE ROW that already said "No bare
+       `python3`" about the interpreter. One unrelated "no" exempted every other claim on that
+       line, permanently — and a table row can be arbitrarily long, so the more authoritative a
+       page's formatting, the less the guard could see of it. Closed by scoping the negation to
+       the CLAUSE holding the mention (`_CLAUSE`), and pinned in both directions by
+       `test_an_unrelated_negation_elsewhere_on_the_line_does_not_grant_an_exemption`.
+
+--------------------------------------------------------------------------------------------------
+DG-6 — THE GUARD'S REACH
+
+  M03   the docs walk finds nothing                  rglob("*.md") -> rglob("*.NOTHING")
+  M04   the scan is handed an EMPTY corpus           _pathext_scan(docs) -> _pathext_scan([])
+  M04b  the same, on the SOURCE half of the guard
+  M04c  the walk stops excluding docs/build/         the internal planning tree, which RECORDS
+                                                     the false premise and must stay excluded
+
+       ⚠ M04 SURVIVED THE SECOND GRADING — the batch's other finding, and the subtler one.
+       While the scan returned offenders alone, handing it an empty corpus left the suite fully
+       green: no corpus yields no offenders, and `assertEqual([], [])` is true for the same
+       reason whether the guard walked forty pages or none. `assertTrue(docs, …)` did not help,
+       because it asserted the WALK while the mutant attacked the CHECK — two facts nothing tied
+       together. Closed by returning `(files_walked, offenders)` from ONE call, so "it found no
+       offenders" is inseparable from "it looked at something", with a floor of >20 pages rather
+       than >0 (a guard that walks one page is as vacuous as one that walks none).
+
+--------------------------------------------------------------------------------------------------
+DG-6 — THE GUARD'S PREDICATE
+
+  M05  clause-scoped negation reverted to LINE-scoped   the first draft's defect, now a pin
+  M06  the allow-list loses "never"                     the word every corrected site uses
+  M07  the predicate stops matching at all              every page passes
+
+--------------------------------------------------------------------------------------------------
+DECLARED, NOT DISCOVERED LATER — what this guard does NOT do.
+
+  It is a TEXT check over `docs/`, not a proof that the docs describe the shipped wiring. It can
+  only ever catch this ONE falsified premise being re-asserted, because that premise is the one
+  thing it knows a keyword for. A page that describes the hook route wrongly in some new way
+  passes it completely. That is the honest bound: DG-6 closes the door this particular claim went
+  stale behind, and claims no more.
+
+  It also cannot see a page that asserts the premise across a LINE BREAK — "cmd.exe completes the
+  extension-less path" on one line and "via PATHEXT" on the next. The scan is line-then-clause, so
+  the mention and its negation must share a physical line. Left as-is deliberately: joining lines
+  before scanning would make the clause split meaningless again (a paragraph would become one
+  clause) and hand back the exemption M01 was raised to remove. Named here rather than omitted,
+  because the difference between "we did not think of it" and "we thought of it and chose" is the
+  whole value of the list.

@@ -20,7 +20,7 @@ import re
 from ..manifest import ManifestError
 from .graph_backend import CodeReviewGraphBackend, GraphQueryClient
 from .grep_backend import GrepBackend
-from .query import BackendError, GraphBackend, QueryResult
+from .query import BASIS_LEXICAL, BackendError, GraphBackend, QueryResult
 
 # Tools that ARE real structural graphs (everything else is the lexical floor).
 GRAPH_TOOLS = ("code-review-graph", "serena", "neo4j")
@@ -225,7 +225,10 @@ class KnowledgeLayer:
                 fresh = None
         if fresh is not None and fresh.answer_from_floor and self.fallback is not None:
             floor = self.fallback.query(kind, target, depth=depth)
-            floor.degraded = True
+            # D2 — a demotion, not a flag flip: the floor may itself have certified a verified
+            # ZERO, and a KNOWN-stale graph is not a basis on which to pass that certification on.
+            # `demote_to_floor` moves the basis and the reason together so the two can't drift.
+            floor.demote_to_floor()
             floor.note = _join_note(floor.note, fresh.note)
             self._surface_index_staleness(floor)
             self.history.append(floor)
@@ -272,7 +275,11 @@ class KnowledgeLayer:
                     detail=f"graph backend '{self.primary.name}' could not answer "
                            f"{kind}({target}) and did not recover")
                 result = self.fallback.query(kind, target, depth=depth)
-                result.degraded = True
+                # D2 — the ADOPTED graph is the backend the user configured, and it failed. What
+                # the floor found stands in for it, but it does not inherit the adopted graph's
+                # authority: a verified zero from the floor is demoted here rather than presented
+                # as the answer the wired graph would have given.
+                result.demote_to_floor()
                 # CRG-NAV (d): JOIN, never overwrite. This used to ASSIGN, which threw away the
                 # note the floor itself attached — including the honest "grep floor — install
                 # <graph> for full navigation" line — so the one answer that MOST needed the
@@ -352,13 +359,13 @@ class KnowledgeLayer:
                 fresh = None
         if not self.supports_semantic:
             return QueryResult(kind="semantic", target=query, references=[],
-                               backend=self.backend_name, degraded=True,
+                               backend=self.backend_name, basis=BASIS_LEXICAL,
                                note="no semantic-capable code graph wired (lexical floor)")
         try:
             result = self.primary.semantic(query, kind=kind, limit=limit)
         except BackendError:
             result = QueryResult(kind="semantic", target=query, references=[],
-                                 backend=self.backend_name, degraded=True,
+                                 backend=self.backend_name, basis=BASIS_LEXICAL,
                                  note="semantic search failed; degraded to no result")
         if fresh is not None and fresh.note and not fresh.answer_from_floor:
             result.note = _join_note(result.note, fresh.note)

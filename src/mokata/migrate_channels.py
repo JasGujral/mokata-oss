@@ -256,12 +256,40 @@ def _migrate_memory_share(surface: Any, *, confirm, assume_yes, file, ledger,
 def _migrate_vault(surface: Any, *, confirm, assume_yes, force, ledger,
                    emit) -> ChannelMigrateResult:
     """Re-home portable session bundles from the deprecated `vault` transport onto the mode-derived
-    canonical transport (SIMP.S1). Gated (one human decision over the batch), NON-destructive (the
-    vault copies stay), idempotent (a tag already present in the target is skipped). Each bundle is
-    integrity-verified before it is copied — a corrupt one is refused, never silently re-homed."""
+    canonical transport (SIMP.S1). NON-destructive (the vault copies stay), idempotent (a tag
+    already present in the target is skipped). Each bundle is integrity-verified before it is
+    copied — a corrupt one is refused, never silently re-homed.
+
+    GATED THROUGH THE UNIVERSAL WriteGate (0.0.17 stage 17, VAULT-CHANNEL-UNSCANNED). The bundle
+    bytes come off a store nobody has re-read since they were captured, and until this stage they
+    were copied with a raw `dst.write_bundle` — no secret scan on a durable write, the one thing
+    I2 exists to make impossible. The gate is REUSED, never re-implemented (I2/P2).
+
+    ONE HUMAN DECISION, ONE SCAN PER BUNDLE, and the split is deliberate. The scan is per-CONTENT,
+    so the gate must see each bundle's own bytes; the DECISION is per-BATCH and is taken once at
+    the consent below. Each per-bundle submit therefore carries that decision forward rather than
+    re-prompting N times, which would be a UX regression dressed as governance — as `human_approved`
+    when a human actually answered, and as `assume_yes` when `--yes` meant nobody was asked. A
+    bundle the gate refuses is announced and skipped individually; the rest of the batch continues,
+    matching the integrity refusal directly above it."""
     from . import session_bundle as SB
+    from .govern import WriteGate, WriteRequest
+    from .govern.trust import CLI_SURFACE
     from .session_transport import make_transport, transport_kind_for_mode, VaultTransport
     root = surface.root
+    if ledger is None:
+        # P7 — the record is UNCONDITIONAL, and this is how. It used to sit under
+        # `if ledger is not None:`, so a caller with no ledger re-homed durable bundles leaving
+        # nothing behind at all. That is a REACHABLE production state, not a test-only one: the one
+        # production caller (`cli_commands/migrate.py:34`) passes `_ledger_for(path)`, which
+        # degrades to None on an unreadable/uninitialized repo. Refuse LOUDLY rather than write
+        # unrecorded — an unauditable durable write is worse than a migration that did not happen,
+        # and the vault copies are still there to migrate once the ledger opens.
+        return ChannelMigrateResult(
+            channel="vault", aborted=True, migrated=0,
+            message="migrate vault: no audit ledger for this repo — REFUSING to re-home session "
+                    "bundles that would leave no record. Nothing was moved (the vault copies are "
+                    "untouched). Fix .mokata/ so the ledger opens, then re-run.")
     src = VaultTransport(root)
     tags = src.list_tags()
     if not tags:
@@ -288,6 +316,9 @@ def _migrate_vault(surface: Any, *, confirm, assume_yes, force, ledger,
                     f"'{dst.name}'? The vault copies are left in place."):
             return ChannelMigrateResult(channel="vault", aborted=True, migrated=0,
                                         message="migrate vault: declined at the human gate.")
+    # NOT named `gate`: that name is already the batch CONSENT callable four lines up, and the two
+    # are different things — one asks the human once, this one governs every bundle's bytes.
+    write_gate = WriteGate(ledger=ledger)
     migrated = 0
     for tag in tags:
         blob = src.read_bundle(tag)
@@ -301,10 +332,34 @@ def _migrate_vault(surface: Any, *, confirm, assume_yes, force, ledger,
             continue
         if dst.read_bundle(tag) is not None:
             continue                               # idempotent: already present in the target
-        dst.write_bundle(tag, blob)
+        # The write now executes INSIDE the gate's commit callable — that is what makes this call
+        # site GATED in the register's sense, and what expires the declared exception that named it
+        # as `write_bundle`'s third, ungated caller. The secret scan runs per bundle and still
+        # hard-blocks regardless of either flag below.
+        #
+        # THE TWO FLAGS ARE NOT INTERCHANGEABLE, and `gate.py:146` says so: `human_approved` means
+        # "an explicit human decision on THIS write was obtained out-of-band"; `assume_yes` is a
+        # STAND-IN ("nobody is here to ask; proceed"). Under `--yes` the batch consent above is
+        # SKIPPED entirely — no human was asked anything — so claiming a human decision there is a
+        # lie the gate is entitled to believe. It is inert today (this gate is built with no trust,
+        # so the propose-only rung never engages), but `req.tool`/`req.surface` are already stamped:
+        # the day the trust dial is threaded (SI.4-b), a hardcoded True would satisfy propose-only
+        # with no human in the loop. So the batch decision rides in on `human_approved` only when a
+        # human actually made one, and the stand-in rides in as itself.
+        outcome = write_gate.submit(
+            WriteRequest("config", dst.location(tag), content=blob, actor="migrate",
+                         tool="migrate_vault", surface=CLI_SURFACE),
+            commit=(lambda tag=tag, blob=blob: dst.write_bundle(tag, blob)),
+            human_approved=not assume_yes, assume_yes=assume_yes)
+        if not outcome.committed:
+            # ANNOUNCED, never a silent skip — the same contract as the integrity refusal above.
+            # `outcome.reason` is the gate's own shared block builder (`render_block`), the surface
+            # the secret-guard hook prints, so the literal is never echoed back to the terminal.
+            emit(f"migrate vault: bundle '{tag}' was REFUSED at the write gate — not re-homed. "
+                 f"{outcome.reason}")
+            continue
         migrated += 1
-        if ledger is not None:
-            ledger.record("migrate_channel", channel="vault", tag=tag, to=dst.name)
+        ledger.record("migrate_channel", channel="vault", tag=tag, to=dst.name)
     return ChannelMigrateResult(channel="vault", migrated=migrated,
                                 message=f"migrate vault: re-homed {migrated} session bundle(s) to "
                                         f"'{dst.name}' (vault copies left in place).")
