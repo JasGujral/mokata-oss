@@ -256,7 +256,7 @@ class ReemitVerdict:
 def _reemit_run(store: Any, run_id: str) -> str:
     """The run identity the archive key is built from.
 
-    NOT a resolution path (doc 85 — there is exactly one, `badge_run.resolve_run_for_evidence`, and
+    NOT a resolution path (doc 85 — there is exactly one, `run_resolver.resolve_run`, and
     both MCP callers reach it through `consent._evidence_store`). Every caller that HAS a resolved
     run passes it. The fallback covers only the callers that structurally have none — the engine
     pipeline's `phases.py:_emit`, and the CLI's standalone-repo branch where `_run_scoped_store`

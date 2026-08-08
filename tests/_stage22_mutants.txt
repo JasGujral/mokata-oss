@@ -1,0 +1,85 @@
+STAGE 22 — RUN-REG-ENFORCED-BY-PROSE-ALONE (OSS #28) — mutation record
+======================================================================
+
+Driver : tests/_stage22_mutants.sh   (via scripts/mutate.sh — doc 85 §7b, no hand-mutation)
+Graded : tests/test_run_reg_prose_pin.py   (17 tests) over tests/_skill_prose.py
+Targets: tests/_skill_prose.py · src/mokata/skills/brainstorm/SKILL.md
+         src/mokata/templates/commands/brainstorm.md
+Result : 14 mutants, 14 RED, 0 survivors — first batch.
+
+WHAT WAS UNPINNED BEFORE THIS STAGE
+-----------------------------------
+`brainstorm`'s step 1 is prose and nothing else:
+
+    ## First: register the run (so this brainstorm is TRACKED, not invisible)
+    Before you ask the first question, REGISTER the run — call the `session_save` tool with
+    `register` = true. …
+
+`gate_hook.py:483` binds on the checkpoint that call writes. With no checkpoint the phase gate
+answers `"no active mokata run — not policed"` and the write proceeds — which is the CORRECT
+answer to the question the gate was asked. So a vanished instruction and a followed one are
+indistinguishable at the gate, and nothing in the tree reds when the sentence goes. Doc 84's row
+scoped "the SKILL.md pin only" into 0.0.17 and sourced it to a "19d grounding" that does not
+exist: there is no 19d commit, no 19d in doc 02, and no test pinning the instruction. It was
+scoped and never ran.
+
+SCOPE — THE CHEAP HALF, AND ONLY THAT
+-------------------------------------
+Registration is NOT made structural and `gate_hook.py` is NOT touched. Firing registration from a
+non-prose surface collides with the gate's positive-trigger contract: a run registered at
+SessionStart would police ordinary hand-editing in a mokata repo, the house arrest the
+`not policed` floor exists to prevent. That triage was already recorded on the row and is not
+re-litigated here. `src/` diff is EMPTY.
+
+FOUR REQUIREMENTS, NOT ONE STRING (§7g)
+---------------------------------------
+"Absent" and "reworded" must not share a representation, so `check_registration_step` grades four
+requirements independently and each failure names what went missing:
+
+  registration-step-present               the step exists at all
+  names-the-session_save-tool             it names the tool to call
+  requires-register-true                  it requires `register` be SET true, not merely named
+  positioned-before-the-first-question    it precedes the question-asking instruction
+
+A FIFTH OUTCOME IS NOT A REQUIREMENT and is deliberately not folded into one. The ordering is
+relative to an anchor; a document with no question-asking instruction left gives it nothing to be
+relative to, so it renders UNGRADABLE with its reason and `ProseReport.ok` is FALSE. "No anchor
+found" silently meaning "the order is fine" is the two-meanings defect 0.0.17 spent itself closing
+— B04 is the mutant that grades it.
+
+WHY REAL-TREE MUTANTS EXIST HERE (§7i)
+--------------------------------------
+The shipped prose is CORRECT today, so every real-tree assertion is green from the moment it was
+written. Two layers fix that: the checker is a PURE FUNCTION over supplied text so the test can
+feed it synthetic offenders derived from the real file, and C01–C03 degrade the REAL prose on both
+shipped surfaces. C01/C03 are the ones that matter — after them the instruction still NAMES
+`register`, so a naive substring pin stays green while the requirement that it be SET has gone.
+
+THE MUTANTS
+-----------
+C01  SKILL.md: `register` = true -> "the `register` parameter"           RED (5 failures)
+C02  SKILL.md: heading stops announcing that the step REGISTERS          RED (10 failures)
+C03  command template: `register` = true -> "the `register` parameter"   RED (1 failure)
+B01  _REGISTER_TRUE collapses to merely matching `register`              RED (2 failures)
+B02  the tool-name requirement stops being checked                       RED (1 failure)
+B03  the ordering comparison stops firing                                RED (1 failure, 1 error)
+B04  an UNGRADABLE ordering reads as GREEN  ← the one prohibition        RED (1 failure)
+B05  the heading basis is reported for a body-fallback find              RED (11 failures)
+B06  an ABSENT step resolves to the first section instead of None        RED (2 failures, 1 error)
+B07  the question anchor widens past a single clause                     RED (1 failure)
+B08  fenced code stops being excluded from section detection             RED (1 failure)
+B09  the registration section may be its own ordering anchor             RED (2 failures)
+B10  section bounds stop partitioning the document                       RED (1 failure)
+B11  the regist- STEM tightens to the exact word `register`              RED (1 failure)
+
+COVERAGE THIS BATCH DOES NOT CLAIM
+----------------------------------
+* `names-the-session_save-tool` is graded at SECTION level, not sentence level. The shipped step
+  names `session_save` twice — once in the instruction, once in the "if the tool call never comes
+  back" aside — so a mutation that strips the tool from the INSTRUCTION alone still passes,
+  because the step as a whole still names it. That is the cost of the §7g tolerance and it is
+  stated rather than papered over: the requirement is graded by B02 and by the synthetic offender
+  (which strips every occurrence within the step), not by a real-tree mutant.
+* Nothing here observes an agent. The pin proves the INSTRUCTION is present, positioned and
+  specific. Whether the model FOLLOWS it is exactly the half this stage does not build, and the
+  row's ruling is why.

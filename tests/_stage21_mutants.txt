@@ -1,0 +1,125 @@
+0.0.17 stage 21 — KNOWLEDGE-WALKERS-INDEX-NESTED-CHECKOUTS + SYNC-PUBLIC-NESTED-CHECKOUT.
+The mutant list, committed beside the score.
+
+TARGETS:
+  src/mokata/repo_walk.py            — the shared rule (the boundary predicate + the walk policy)
+  src/mokata/knowledge/index.py      — the walker that RECORDS the skip, and the renderer
+  src/mokata/cli_commands/index.py   — the surface the skip is DECLARED on
+  scripts/sync-public.sh             — the same rule on the distribution surface
+
+GRADED BY:
+  tests/test_nested_checkout_boundary.py  (stage 20 — the boundary rule + the sweep)
+  tests/test_nested_checkout_walkers.py   (stage 21 — the six product walkers + the declaration)
+  tests/test_sync_public_nested_checkout.py (stage 21 — the mirror, by RUNNING the real script)
+
+Run: PYTHON=/Users/jas/jsvenv_mk312/bin/python tests/_stage21_mutants.sh
+
+RED   = the tests caught it. The pin is real.
+GREEN = it survived. That is a finding about a pin, and it is reported, never quietly dropped.
+
+SCORE: 19/19 RED (second grading). The first was 16/16 RED with no survivors, and that is exactly
+why it was not the last: a batch that only confirms what the builder already believed has not
+earned its runtime. Four harder mutants were then added against the riskiest edit — the mirror —
+and two of them (M19/M20 as first written) came back GREEN. Both survivors were real findings
+about the CODE rather than the pins, and the fix is written up below.
+
+
+THE TWO SURVIVORS, AND WHAT THEY WERE ACTUALLY SAYING
+─────────────────────────────────────────────────────
+As first written, the destination-side guard had TWO defences stopping it from treating the
+public mirror's own `.git` as a foreign checkout: `find . -mindepth 2` and a `case` filter on the
+resulting path. Removing either one alone changed nothing, because the other silently covered it.
+Both mutants therefore came back GREEN.
+
+That is not a gap in the tests — no single-mutant harness can kill a redundant pair, and writing a
+test to chase one would have pinned an implementation detail rather than a behaviour. It is a
+finding about the code: the redundancy made a load-bearing line ungradable, and `_check_internal`
+ends in `rm -rf`, so the line in question is the one standing between a release run and deleting
+the public checkout's git directory. "Ungradable and one edit away from catastrophic" is the worst
+pair of properties a line can have.
+
+Collapsed to a SINGLE defence — `find . -path ./.git -prune -o -name .git -print`, which neither
+walks nor reports the mirror's own checkout. The prune is now the only thing doing that job, so
+deleting it is immediately visible: M19 below removes it and the run goes RED with 7 failures, the
+first of which is the public checkout losing its `.git`. One defence that can be graded beats two
+that cannot.
+
+The source-side scan keeps its `-mindepth 2` + `case` pair deliberately and is NOT mutated for it.
+The stakes are not symmetric: a false positive there adds one redundant `--exclude` and nothing
+else, while on the destination side it runs `rm -rf`. Rigor is spent where the consequence is.
+
+
+THE MUTANTS
+───────────
+
+── the boundary predicate: both on-disk shapes, and the rule being real at all ──────────────────
+
+M01  the boundary sees only a .git DIRECTORY — a worktree's gitfile slips through          RED
+     `os.path.exists` → `os.path.isdir`. This is the incident's own shape: `git worktree add`
+     writes `.git` as a FILE. 3 failures, including the real-git test.
+
+M02  the boundary sees only a .git FILE — a clone/submodule slips through                  RED
+     `os.path.exists` → `os.path.isfile`. The other half of "either shape". 12 failures.
+
+M03  the boundary rule goes inert — nothing is ever a checkout                              RED
+M04  the boundary rule swallows the tree — everything is a checkout                         RED
+     The two ways a predicate stops being a predicate. M04 is the one that would look like a
+     fix while quietly indexing nothing: 23 failures.
+
+M05  the rule reverts to a NAME — keyed on `.claude`, the thing this stage refuses           RED
+     `CHECKOUT_MARKER = ".git"` → `".claude"`. The mutant IS the defect this stage exists to
+     close, and it must die against a fixture that plants a checkout at `vendor/lib`.
+
+── the walk policy: the two rules COMPOSE, and the prune is in place ────────────────────────────
+
+M06  the dot-prefix rule is dropped — `.venv` and `.mokata` get indexed                     RED
+     The "unify the two rules" mistake. The boundary rule is ADDITIONAL, never a replacement:
+     `.venv` carries no `.git` entry, so dropping the dot rule widens indexing enormously.
+
+M07  the boundary rule is dropped from the walk — back to dot-prefix alone                  RED
+     The pre-stage state of the world, re-created. 12 failures.
+
+M08  the prune is not in place — `os.walk` keeps descending into everything                 RED
+     `dirnames[:] = kept` → `dirnames = kept`. The classic `os.walk` slip: the list is
+     rebound, the walker never sees it, and every rule above becomes decorative.
+
+M09  the skip is SILENT — the checkout is pruned but never recorded                         RED
+M10  the collector is never offered — nothing can be recorded upstream                      RED
+     The fail-open this release keeps closing, in its two available spellings. A user who
+     vendored a dependency on purpose finds it unsearchable with nothing to read.
+
+── the index: it asks to be told, remembers honestly, and forgets an abandoned walk ─────────────
+
+M11  the index stops asking what was skipped                                                RED
+M12  the record is never written back after the walk                                        RED
+
+M13  an abandoned walk keeps the PREVIOUS walk's record                                     RED
+     The clearing line, deleted. It matters because a walk CAN end part-way — the freshness
+     cold-walk stops at a file cap — and a leftover record would declare a skip this walk never
+     made. False evidence arriving through the very channel added to prevent it.
+
+M14  the extra checkouts are truncated SILENTLY — `+N more` dropped                         RED
+     A cap that does not say what it dropped reads as "that's all of them" (doc 85: no silent
+     caps). Names are capped at 5; the COUNT never is.
+
+M15  the declaration never reaches the user — `mokata index` goes quiet                     RED
+     Everything above can be correct and still useless if the line is not printed.
+
+── the distribution surface: the same rule, graded by RUNNING the real script ───────────────────
+
+M16  the mirror's exclusion reverts to a NAME — a vendored checkout is rsynced public       RED
+     The `find` in `sync-public.sh` looks for `.claude` instead of `.git`. This is the row as
+     filed: the mirror excluded ONE path by name, and any other nested checkout shipped.
+
+M17  the excludes are computed and then not passed to rsync                                 RED
+     The discovery loop is left intact and its output is dropped on the floor — the shape a
+     textual pin on the script would have called green.
+
+M18  the DEST guard is removed — a checkout already in the mirror survives forever          RED
+     Not redundant with M16/M17: rsync's `--delete` deliberately does NOT remove an EXCLUDED
+     path, so a checkout that reached the public checkout on an earlier run is excluded from
+     the copy AND protected from the delete. This loop is the only thing that removes it.
+
+M19  the mirror's OWN .git enters the scan — the guard would `rm -rf` the public checkout   RED
+     The `-path ./.git -prune` deleted. 7 failures. See the survivor write-up above: this
+     mutant exists because the code was restructured to make it gradable.

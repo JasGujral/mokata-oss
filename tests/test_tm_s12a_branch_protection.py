@@ -318,6 +318,15 @@ class ScorecardPatWiring(unittest.TestCase):
                          "the Branch-Protection check scores 0 ('Resource not accessible')")
 
     def test_sha_pin_intact(self):
+        """KEPT, deliberately, after 0.0.17 stage 10's sweep replaced the other bespoke pin.
+
+        NOT SUBSUMED, and the difference is the whole point: `test_s10_workflow_pins.py` asserts
+        the SHAPE of every ref in every workflow (some 40-hex commit SHA), which is a supply-chain
+        property. This asserts the IDENTITY of one — that scorecard-action is still pinned to the
+        exact commit that was reviewed. A silent bump to a different, equally well-formed 40-hex
+        SHA is green under the sweep and red here, and 'somebody repointed our Scorecard action at
+        an unreviewed commit' is precisely the event worth catching.
+        """
         uses = str(self._scorecard_step().get("uses", ""))
         ref = uses.split("@", 1)[1] if "@" in uses else ""
         self.assertEqual(ref, self._SHA,

@@ -1,0 +1,90 @@
+SI.6-DELEGATED-BLINDNESS-a — the 0.0.17 REVIEW's mutant list (NEW logic only)
+=============================================================================
+
+Scope: the logic ADDED at the review — qualified keying (F1), the constructor-bound receiver rule
+(e) and its two guards (F2), the measured key-collision residual, and the blind-spot declaration
+that must ride both reader-facing surfaces. The 17 mutants of the parent stage are ACCEPTED and are
+not re-run (review, 2026-08-03). Fix 3 is four corrected prose strings and has no logic to mutate;
+what pins those is the register's own `test_the_register_carries_no_stale_entries` plus the fact
+that each corrected claim names a file:line a reader can check.
+
+Run with `scripts/mutate.sh` and NOTHING ELSE (doc 85 §7b): only it purges the stale `.pyc`, sets
+PYTHONDONTWRITEBYTECODE=1, and traps EXIT/INT/TERM so an interrupted run cannot leave the tree
+mutated. `_run_mutants.sh` beside this file drives the list.
+
+RED = the mutation was caught. GREEN = it SURVIVED. BROKEN = no verdict (never read as either).
+
+  M01  sweep detector: qualified key -> bare innermost name      (F1, the whole fix)
+  M02  resolver `_qual`: qualified key -> bare innermost name    (F1, caller/callee side)
+  M03  `def_counts` frozen at 1 — collisions become invisible    (F1 residual, measured)
+  M04  `qualname_collisions` threshold n>1 -> n>0                (F1 residual, measured)
+  M05  rule (e) disabled — receiver binding never consulted      (F2, the closure)
+  M06  rule (e) drops the "the class DEFINES this method" guard  (F2, the anti-explosion guard)
+  M07  `_binding` membership -> truthiness: a stale binding      (F2, rebinding must shadow)
+       survives a rebind to something unknown
+  M08  rule (a) climbs THROUGH class scopes                      (bare-name match in a class body)
+  M09  `_enclosing_class` ignores the is_class flag              (rule (c) target)
+  M10  `_declared_blind_spots` renders no shapes                 (F2, the declaration)
+  M11  the collision COUNT in that declaration is hard-coded 0   (F2, measured not asserted)
+  M12  the audit report omits the declaration entirely           (F2, second reader surface)
+  M13  a rebind KEEPS the stale binding instead of clearing it   (F2, the same invariant as M07,
+                                                                  broken from the writing side)
+  M14  rule (e) offers a class-BODY binding to a method body     (F2, the scope rule M08 pins for
+                                                                  rule (a), on rule (e)'s side)
+
+  ---- 0.0.17 STAGE 1a-FU: derived caller lists, gate enclosure, the contract's 2nd direction ----
+
+  M15  `derive_callers` returns an empty caller list per site   (CALLER-LIST-UNPINNED, the pin)
+  M16  `is_gate_run` answers TRUE for every call site           (direction B silenced; expiry dead)
+  M17  gate-run = "reached from a commit span at least ONCE"    (the unsafe direction of error:
+       instead of ALWAYS                                         a shared helper would EXCUSE its
+                                                                 ungated caller)
+  M18  direction B never consults the enclosure                 (the verdict stops being derived)
+  M19  direction B excuses every DECLARED site rather than       (the exception set becomes the
+       the declared EXCEPTIONS                                    caller table — vacuous by design)
+  M20  commit spans drop the positional-lambda runner half       (`mcp/tools_share.py:59`, the
+       (`_gated_write(…, lambda: …, …)`)                          shape `commit=` alone misses)
+  M21  commit spans drop the `commit=` keyword half              (the WriteGate's own signature)
+  M22  rule (e)'s edge LIST is not recorded, only its count      (a count with no list can only be
+                                                                  re-asserted — doc 85 §7b)
+  M23  the call-name index records nothing                       (a DECLARED caller could drift off
+                                                                  its line and re-green the sweep)
+  M24  a def OWNS only its own line, not its body                (enclosure by owner collapses)
+  M25  the declared DIRECTIONS render as nothing                 (COHERENCE-CONTRACT-ONE-DIRECTIONAL
+                                                                  — coverage un-declared again)
+  M26  the declared UNSEEN-ENCLOSURE limits render as nothing    (a direction-B green is only as
+                                                                  good as that list)
+
+FIRST PASS: 12/13 RED, M07 GREEN (survivor). SECOND PASS: 14/14 RED (M13 and M14 added after it).
+STAGE 1a-FU PASS: 26/26 RED (M01–M14 re-run unchanged, M15–M26 new). No survivors, no BROKEN.
+
+ATTRIBUTION, because a RED from an unrelated test is not a pin. Each of M15, M17, M18, M19, M22 and
+M23 was re-run against ONLY the file whose test is supposed to catch it — the planted
+gate-enclosure package and the red-without-the-exception pair in `test_si_6_delegated_blindness.py`,
+the caller pin and the rule-(e) yield in `test_si_6_writegate_side_doors.py` — and each stayed RED
+there with 1–2 failures. A mutant that only reds the whole suite has shown that something noticed;
+it has not shown that the thing meant to notice did.
+
+MEASUREMENT PASSES also went through `scripts/mutate.sh`, with a measurement label, because "I am
+only measuring, not mutation-testing" IS NOT AN EXEMPTION (doc 85 §7b, whose second worked example
+is this suite's own stage-1a deviation). Rule (e)'s yield was baselined by running a measurement
+harness twice — once under a NO-OP mutation and once under the M05 shape — so both numbers are
+re-derivable by the sanctioned path rather than re-assertable: rule (e) ON = 118 derived sites,
+OFF = 116, delta +2 (`mcp/tools_read.py:session_save`, `team_journal.py:_floor_rows`), with
+receiver_calls 35 -> 0 and unresolved 11576 -> 11611. Those two verdicts print as "GREEN ✗
+SURVIVOR" and that reading is meaningless here — the harness grades pass/fail, and a measurement
+harness always passes. The deliverable is the JSON it wrote, not the verdict line.
+
+M07's survival is worth recording rather than just fixing, because the survivor was honest and the
+test was the thing at fault. M07 changes `_binding`'s frame lookup from MEMBERSHIP (`name in
+frame`) to TRUTHINESS (`frame.get(name)`), so a binding recorded as "assigned something that is NOT
+a constructor" stops halting the outward walk. The input the suite had — a rebind in the SAME
+function scope — cannot tell the two lookups apart: either way the walk finds nothing in the outer
+frames and returns None. Only a rebind in a NESTED scope, with a live constructor binding in the
+enclosing one, separates them; without it the resolver would happily invent an edge from an inner
+`s = make_store()` to the outer `s = Store()`'s methods.
+
+So the fix was to BUILD THE INPUT THAT REACHES IT (`by_shadowed.inner` in
+`test_the_receiver_rule_resolves_a_constructor_bound_local`), never to delete the rule — and M13
+was added at the same time to pin the other way the same invariant breaks: an assignment that fails
+to CLEAR a binding, rather than a lookup that fails to STOP at one.

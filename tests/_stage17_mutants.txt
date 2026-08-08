@@ -1,0 +1,95 @@
+0.0.17 stage 17 — VAULT-CHANNEL-UNSCANNED. The mutant list, committed beside the score.
+
+TARGET: src/mokata/migrate_channels.py, `_migrate_vault` — the vault channel's re-home, now routed
+through the universal WriteGate with an UNCONDITIONAL audit record.
+
+GRADED BY: tests/test_stage17_vault_rehome_gated.py (behaviour), except M19, which is graded by
+tests/test_si_6*.py because the thing it breaks is the REGISTER's claim rather than the runtime's.
+
+Run: PYTHON=/Users/jas/jsvenv_mk312/bin/python tests/_stage17_mutants.sh
+
+RED   = the tests caught it. The pin is real.
+GREEN = it survived. That is a finding about a pin, and it is reported, never quietly dropped.
+
+SCORE: 22/22 RED. The 19-mutant batch was graded twice — the FIRST grading was 18/19, see M15
+below, the only thing it found and the only reason it was worth running. M20–M22 were added at the
+review fix (GATE-HUMAN-APPROVED-CONFLATES-ASSUME-YES) and cover the two consent flags.
+
+--------------------------------------------------------------------------------------------------
+THE RECORD IS UNCONDITIONAL (deliverable 2)
+  M01  the no-ledger refusal deleted            if ledger is None:        -> if False:
+  M02  the no-ledger refusal inverted           if ledger is None:        -> if ledger is not None:
+  M03  the refusal reports success              aborted=True              -> aborted=False
+       (M03 is the marker mutant: a refusal that does not set `aborted` lets
+       `run_channel_migration` write the once-migrated marker, and the channel is permanently
+       "already migrated" with nothing moved.)
+  M11  the per-bundle channel record deleted    ledger.record("migrate_channel", ...) -> pass
+  M12  the record names the wrong bundle        tag=tag                   -> tag="?"
+
+THE SCAN (deliverable 1) — the gate must see each bundle's own bytes and its verdict must bind
+  M04  the gate's verdict ignored               if not outcome.committed: -> if False:
+  M05  the gate's verdict inverted              if not outcome.committed: -> if outcome.committed:
+  M08  nothing is handed to the scanner         content=blob              -> content=""
+  M09  the gate loses its ledger                WriteGate(ledger=ledger)  -> WriteGate()
+  M18  the write escapes the commit callable    commit=(lambda ...)       -> a bare call after submit
+       (M18 is the load-bearing one: it is the exact regression that would make the register's
+       GATED claim false again, and it is graded twice — here for behaviour, M19 for the register.)
+
+THE REFUSAL IS ANNOUNCED, AND SECRET-SAFE
+  M06  the refusal goes silent                  emit(...) deleted
+  M07  the announcement echoes the bundle       f"{outcome.reason}"       -> f"{blob}"
+       (a planted leak: the refusal is printed to a human's terminal, so echoing the bytes the
+       scan just blocked would re-emit the secret at the refusal surface.)
+
+ONE HUMAN DECISION, NOT N (the 1a-FU ruling, pinned so it cannot be undone by accident)
+  M10  the batch decision becomes N prompts     human_approved=True       -> confirm=..., assume_yes=...
+
+THE DO-NOT-CHANGE SET (unchanged by this stage — mutated to prove "did not change it" is a fact)
+  M13  fail-closed consent flipped open         (lambda _t: False)        -> (lambda _t: True)
+  M14  the idempotence skip removed             if dst.read_bundle(...)   -> if False:
+  M15  the integrity verification removed       SB.verify_bundle(...)     -> json.loads(...)
+       ⚠ M15 SURVIVED THE FIRST GRADING, and it is the one finding this batch produced. The
+       corrupt-bundle pin planted `{not json at all`, which dies in `json.loads` — so deleting
+       `verify_bundle` and keeping the parse left the suite fully GREEN. The refusal looked pinned
+       and only its cheaper half was: nothing anywhere covered a bundle that PARSES but fails its
+       content-hash, i.e. a tampered or truncated session. Closed by
+       `test_a_bundle_that_parses_but_fails_its_content_hash_is_refused`, after which M15 reds.
+       The score below is the SECOND grading; the first was 18/19.
+  M16  the migration becomes destructive        src.delete_bundle(tag) inserted before the count
+  M17  the typed degrade stops saying why       f"transport ({exc})"      -> "transport"
+
+THE REGISTER (deliverable 3's closing loop)
+  M19  the write escapes the commit callable, graded by the SI.6 sweep instead of by behaviour —
+       direction B must convict it, because a call site that leaves the gate is exactly what
+       `GATED`'s header forbids and what the deleted exception used to excuse.
+
+THE TWO CONSENT FLAGS CARRY THE BATCH DECISION TRUTHFULLY
+  M20  the pre-fix conflation restored          human_approved=True (under --yes, uncorrected)
+  M21  the stand-in approval is not carried     assume_yes=assume_yes dropped from the submit
+  M22  the two flags inverted                   a real human decision submitted as a stand-in
+
+--------------------------------------------------------------------------------------------------
+⚠ A DECLARATION THIS LIST USED TO CARRY, NOW WITHDRAWN — recorded rather than deleted, because a
+retracted claim teaches more than a claim that was quietly rewritten.
+
+  The 19-mutant batch declared `human_approved=True` -> `assume_yes=True` an EQUIVALENT MUTANT that
+  could not be caught: both flags clear the gate's human prompt, and the paths diverge only through
+  the K3 trust dial, which `_migrate_vault` does not thread. Every word of that reasoning was
+  about RUNTIME BEHAVIOUR, and as a statement about runtime behaviour it was correct — the review
+  re-derived it independently and agreed the defect is not exploitable today.
+
+  It was still the wrong conclusion, and the error is worth naming: the mutant was declared
+  uncatchable because the only pins in scope asserted on OUTCOMES, and behaviour genuinely cannot
+  separate the two flags here. What the batch did not ask was whether the CALL ITSELF could be
+  pinned. It can — `TestTheBatchDecisionIsCarriedTRUTHFULLY` wraps a spy round the real
+  `WriteGate.submit` and reads the flags the live call site submits, so a lie told to the gate is
+  caught where it is told rather than only once a trust policy exists to punish it. M20-M22 all
+  RED against those pins.
+
+  THE LESSON: "no test can catch this" is a claim about the tests that exist, not about the code.
+  A mutant that survives because the contract is asserted NOWHERE is a pin gap wearing an
+  equivalence argument, and the equivalence argument is the more convincing of the two.
+
+  What the original declaration got right and keeps: the defect is inert today, and the day the
+  trust dial is threaded (SI.4-b, 0.0.18 stage 13) `human_approved=True` would clear propose-only
+  with no human in the loop. That is why it was fixed before commit rather than filed.

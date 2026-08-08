@@ -88,6 +88,21 @@ def pid_alive(pid: Any) -> bool:
     return True
 
 
+def _sticky_pid(prev_pid: Any, own_pid: int) -> int:
+    """The pid an entry keeps: the RECORDED owner's while that process is still alive, otherwise
+    this process's.
+
+    Reachable only when two processes share one session id (a `MOKATA_SESSION_ID` pin), which is the
+    only way `touch` can be called by a process that is not the entry's author. There, the owner is
+    whoever is still running: stomping its pid with a short-lived sibling's makes the entry name a
+    dead process the moment that sibling exits, and `list_sessions` then prunes a window that is
+    very much alive. A dead (or unreadable/absent) recorded pid means the session was abandoned, so
+    this process takes ownership — otherwise a restarted pinned session could never re-register."""
+    if prev_pid == own_pid:
+        return own_pid
+    return prev_pid if isinstance(prev_pid, int) and pid_alive(prev_pid) else own_pid
+
+
 def touch(surface: Any, phase: Optional[str] = None, scope: Optional[str] = None,
           branch: Optional[str] = None) -> None:
     """Register / refresh THIS window's entry (atomic + cross-process locked, via MS.S1). Upserts
@@ -107,7 +122,17 @@ def touch(surface: Any, phase: Optional[str] = None, scope: Optional[str] = None
         sessions[sess.session_id] = {
             "session_id": sess.session_id,
             "started_at": prev.get("started_at") or sess.started_at,
-            "pid": sess.pid,
+            # RUN-ID-DRIFT — STICKY, like `phase`/`scope`/`branch` below, but for a different
+            # reason: `pid` is the field liveness is decided on, and a session id can be SHARED
+            # across processes whenever `MOKATA_SESSION_ID` is pinned. Unconditional assignment let
+            # any such process overwrite the owner's pid with its own; when that writer then exited,
+            # the entry named a dead pid and the still-running owner was pruned as stale — a LIVE
+            # window erased from the one record that proves it is live. The shipped wiring never
+            # pins the variable across processes, so this is latent rather than live today (measured
+            # — the stomp did not reproduce without an explicit pin), and it stops being latent the
+            # day anything pins it. Ownership transfers only when the recorded owner is GONE, so a
+            # legitimately restarted pinned session still re-registers.
+            "pid": _sticky_pid(prev.get("pid"), sess.pid),
             "repo_root": root,
             "last_seen": _now_iso(),
             "phase": phase if phase is not None else prev.get("phase"),

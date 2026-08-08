@@ -86,11 +86,18 @@ class ApproachImpact:
     degraded: bool = False
     note: str = ""
     # GR.S3 — the QUERY-LEVEL floor signal, distinct from the display `degraded` caveat above:
-    # True only when the blast-radius query itself fell to the lexical grep floor (no layer, a
-    # failed query, or `qr.degraded` — the grep floor / empty-AST fallthrough answered). The AST
-    # floor answering WITH evidence keeps `degraded=True` (uses_graph=False) for the display, but
-    # `graph_degraded=False` — so AST-with-evidence is NOT refused. This is the signal the
-    # `graph.required` gate reads; a repo with a real graph OR real AST evidence is not degraded.
+    # True only when a structural answer was ATTEMPTED and WITHHELD — no layer, a failed query, or
+    # a query that reached the lexical floor (`qr.degraded`). The AST floor answering structurally
+    # keeps `degraded=True` (uses_graph=False) for the display but `graph_degraded=False`, so it is
+    # NOT refused. This is the signal the `graph.required` gate reads.
+    #
+    # D2 — "answering structurally" INCLUDES a structurally verified ZERO. This comment used to say
+    # "the grep floor / empty-AST fallthrough", and that second clause was the defect written down:
+    # a LEAF (a symbol the AST floor holds the definition of, that nothing calls) fell through to
+    # grep and set this True, so one entry point among an approach's targets refused `spec_emit`
+    # for the whole approach. The fix is at the BACKEND, where the distinction actually lives
+    # (`ast_backend._holds_definition`), which is why this OR is unchanged and all three GR.S3
+    # consumers inherit it — none of them carries its own copy of the rule.
     graph_degraded: bool = False
 
     @property

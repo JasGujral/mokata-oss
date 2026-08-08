@@ -30,12 +30,26 @@ def _read(rel):
         return fh.read()
 
 
+#: Immediate subdirs of `docs/` that are NOT user-facing. `build`/`launch`/`talks` are internal
+#: planning trees; `marketing` is internal AND gitignored (`.gitignore:60`), so it exists on one
+#: laptop and in no clone.
+#:
+#: ★ That last one is why this is a set and not the old `"build" in dirpath` test (stage 29 rider).
+#: A corpus built by WALKING THE FILESYSTEM sees untracked and ignored files, so this test's
+#: "every command is mentioned in the docs" was answered against four marketing `.md` files that
+#: no `git clone` carries — a corpus that measured the machine. The direction was the lenient one
+#: (a wider corpus makes fewer commands look undocumented), which is worse for a check run locally
+#: before a push: it passes HERE and decides nothing THERE.
+_INTERNAL_DOC_DIRS = ("build", "launch", "marketing", "talks")
+
+
 def _user_docs_text():
-    """All user-facing docs concatenated (excludes the internal docs/build/ planning tree)."""
+    """All user-facing docs concatenated (excludes the internal planning trees)."""
     parts = []
-    for dirpath, _dirs, files in os.walk(os.path.join(ROOT, "docs")):
-        if os.sep + "build" in dirpath:
-            continue
+    docs_root = os.path.join(ROOT, "docs")
+    for dirpath, dirs, files in os.walk(docs_root):
+        if dirpath == docs_root:
+            dirs[:] = [d for d in dirs if d not in _INTERNAL_DOC_DIRS]
         for name in files:
             if name.endswith(".md"):
                 with open(os.path.join(dirpath, name), encoding="utf-8") as fh:

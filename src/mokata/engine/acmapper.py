@@ -74,9 +74,13 @@ def scan_tests(root: str, ac_ids: List[str]) -> List[TestRef]:
     heuristics in `mokata.languages`. Degrade-clean: an unknown language with no test
     convention simply contributes nothing (never a crash)."""
     from .. import languages
+    from ..repo_walk import prune_source_dirs
     refs: List[TestRef] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        # Hidden dirs and nested checkouts: a vendored dependency's own tests are not coverage
+        # of THIS repo's acceptance criteria, and counting them would let the completeness gate
+        # pass on a criterion nothing here tests.
+        prune_source_dirs(dirpath, dirnames)
         for fn in filenames:
             if not languages.is_source_file(fn):
                 continue

@@ -689,11 +689,18 @@ class BrainstormSession:
         turns on; nothing downstream proceeds without it.
 
         GR.S3 — `graph_gate` is the `graph.required` verdict for the chosen approach's Lens-1 blast
-        radius (a `GraphRequiredOutcome`, computed by the caller via
-        `govern.graph_required.brainstorm_impact_gate`). When it REFUSES — the radius is degraded,
-        `graph.required` is on, and the session has no ledgered override — the approval is blocked
-        with the informative refusal, exactly as the CLI and the MCP loop enforce it. Absent (the
-        `graph.required=false` path, or a legacy caller) it is a no-op — byte-identical."""
+        radius (a `GraphRequiredOutcome`, as `govern.graph_required.brainstorm_impact_gate`
+        computes one). When it REFUSES — the radius is degraded, `graph.required` is on, and the
+        session has no ledgered override — the approval is blocked with the informative refusal.
+
+        ⚠ NO PRODUCTION CALLER PASSES ONE. The parameter is live and tested, but the only
+        `graph_gate=` argument pass anywhere in `src/` is `domains.py`, one internal function
+        handing the value to another; nothing ORIGINATES a `graph_gate`, so this refusal never
+        fires in the shipped product (`GATE-UNREACHABLE-BRAINSTORM`, doc 84). The GR.S3 refusal
+        that DOES fire is the MCP emit-path twin in `mcp/tools_spec.py`, at phase 7. Wiring this
+        one is deferred to 0.0.19 by ruling D14, alongside the JS/TS floor: landing it sooner moves
+        a TypeScript user's refusal from phase 7 to phase 1 two releases before they have a graph
+        that can answer it. Absent — every production call today — it is a no-op, byte-identical."""
         if not self.approaches:
             raise BrainstormGateError(
                 "cannot approve before any approaches are on the table"

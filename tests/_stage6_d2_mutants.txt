@@ -1,0 +1,14 @@
+RED   ✓  M01 every zero is certified — absence is dressed as a verified answer
+RED   ✓  M02 nothing is ever certified — the leaf falls through again (the original defect)
+RED   ✓  M06 the predicate reads CALLERS not DEFS — a leaf has none, so the fix silently reverts
+RED   ✓  M07 imports joins the symbol-edge kinds — a module token is certified off a def site
+RED   ✓  M11 blast_radius leaves the symbol-edge kinds — D2's own surface stops being fixed
+RED   ✓  M03 verified-empty rejoins the degraded camp — the verdict flips back
+RED   ✓  M04 the lexical floor counts as structural — every absence is admitted
+RED   ✓  M05 degraded becomes a stored field again — the two halves can disagree once more
+RED   ✓  M08 the verified-empty coherence check is dropped — a certified zero may carry hits
+RED   ✓  M09 demote_to_floor stops moving the basis — a stale graph passes on a certification
+RED   ✓  M10 the verified-empty answer stops saying what verified it
+RED   ✓  M12 the CLI calls a leaf a grep fallback again — the human-facing conflation returns
+RED   ✓  M13 the fixture's LEAF gains a caller — do the leaf pins actually read the fixture?
+RED   ✓  M14 the fixture's ABSENT symbol becomes defined — do the absence pins read the fixture?

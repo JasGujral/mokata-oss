@@ -390,12 +390,22 @@ class TestOverride(unittest.TestCase):
 
         # grep-guard: the ONLY env var the hook path may consult is the run-id PIN (which selects
         # WHICH run to enforce — it never disables enforcement).
-        with open(G.__file__, encoding="utf-8") as fh:
-            src = fh.read()
-        env_reads = [ln for ln in src.splitlines()
-                     if "os.environ" in ln and not ln.strip().startswith("#")]
+        #
+        # RUN-ID-DRIFT — the hook path is now TWO modules: `gate_hook` (enforcement) and
+        # `run_resolver` (the one resolver it delegates run identity to). The guard follows the
+        # code, or it guards a file the env read has moved out of — which is how a grep-guard
+        # silently stops guarding anything.
+        from mokata import run_resolver as RRmod
+        env_reads = []
+        for mod in (G, RRmod):
+            with open(mod.__file__, encoding="utf-8") as fh:
+                env_reads += [ln for ln in fh.read().splitlines()
+                              if "os.environ" in ln and not ln.strip().startswith("#")]
         self.assertEqual(len(env_reads), 1, f"unexpected env reads in the hook path: {env_reads}")
-        self.assertIn("MOKATA_SESSION_ID", env_reads[0])
+        # The read is the PIN and nothing else — checked through the named constant, and the
+        # constant is checked against its value, so neither can drift without failing here.
+        self.assertIn("PIN_ENV", env_reads[0])
+        self.assertEqual(RRmod.PIN_ENV, "MOKATA_SESSION_ID")
 
 
 # ======================================================================================

@@ -74,17 +74,24 @@ def _approval_run(path: str) -> str:
     genuine approval unredeemable, which taught users to re-approve reflexively. Consent fatigue is
     a weakening of the gate, not a hardening of it.
 
-    FAIL-CLOSED. `resolve_run_for_evidence` returns None when it cannot tell (2+ pipelines and no
-    pin), and mokata does NOT guess a run there — it falls back to this process's own session id,
-    which is the NARROWEST key available and exactly today's behaviour. So an unresolvable repo can
-    only ever be stricter than a resolved one: the fallback can refuse a redemption that a guess
-    would have granted, never the reverse. Nothing on this path can let a write through without a
-    human-minted record; the key decides only WHICH id a content maps to, never whether it commits.
+    RUN-ID-DRIFT — resolution is THE resolver (`run_resolver.resolve_run`), and it now carries an
+    OWN rung that matters here: an MCP process that registered its own run resolves to that run
+    directly, so a repo with five live windows no longer drops every one of them to the fallback
+    below. What remains unfixed is the RESTART case with no evidence yet on disk (approve an
+    approach, restart the server before it persists): the new process's own run is a new id, and no
+    rung can tie it to the old one until the harness exposes Claude's session id to MCP (#25642).
+
+    FAIL-CLOSED, unchanged. When the ladder cannot tell (2+ pipelines, no pin, no own run) mokata
+    does NOT guess — it falls back to this process's own session id, the NARROWEST key available.
+    So an unresolvable repo can only ever be stricter than a resolved one: the fallback can refuse
+    a redemption that a guess would have granted, never the reverse. Nothing on this path can let a
+    write through without a human-minted record; the key decides only WHICH id a content maps to,
+    never whether it commits.
     """
     from ..session import current_run_id
     try:
-        from ..badge_run import resolve_run_for_evidence
-        return resolve_run_for_evidence(path) or current_run_id()
+        from ..run_resolver import resolve_run_id
+        return resolve_run_id(path) or current_run_id()
     except Exception:                    # noqa: BLE001 — resolution is never worth failing a call
         return current_run_id()
 
@@ -108,12 +115,12 @@ def _evidence_store(surface: "Surface", path: str):
     Fixing only the READS would leave RE-ENTRY's keying fix SINGLE-SHOT. The proposal resolves to
     the pipeline's run, the human approves it, and the commit then lands under the WRITING
     session's scope — creating a SECOND `emitted_spec__<run>`, i.e. a second EVIDENCE run. From the
-    next call on, `badge_run._evidence_run` sees 2+ and correctly declines to choose, resolution
+    next call on, `run_resolver._evidence_run` sees 2+ and correctly declines to choose, resolution
     degrades back to per-process keying, and the human is walked to a terminal again. One
     cross-session commit would undo the fix. So the same resolved run scopes the write.
 
     ONE SEAM, NOT A FOURTH RESOLUTION PATH. The run comes from `_approval_run` — i.e. from
-    `badge_run.resolve_run_for_evidence`, the same tiers the CLI emit path and the approval chain
+    `run_resolver.resolve_run`, the same tiers the CLI emit path and the approval chain
     already use. That makes the invariant structural rather than remembered: **the run a proposal
     is filed under IS the run the state is scoped to.** If those two could disagree, a gate would
     read one pipeline's evidence and license another pipeline's write.

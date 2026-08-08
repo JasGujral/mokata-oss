@@ -392,23 +392,50 @@ class TestTheRegisterRecordsTheClosure(unittest.TestCase):
         # `memory/store.py` register — and it is a stronger result than registering the public
         # function, because it is the shape `TestTheStoreCannotWriteOutsideACommitClosure` exists to
         # enforce: a write that cannot execute except inside a gate.
-        self.assertIn(("share.py", "_commit"), GATED)
+        # (Keyed `apply_manifest._commit` since 0.0.17 stage 1a's review made the register key the
+        # QUALIFIED name — one entry per definition. Same site, same claim, spelled unambiguously.)
+        self.assertIn(("share.py", "apply_manifest._commit"), GATED)
 
     def test_the_setup_cluster_that_si_6b_left_is_now_closed_by_kb_s1(self):
         """SI.6b left exactly 6 setup one-shots on the bypass register and claimed nothing more.
         KB.S1 (0.0.14) closes all 6 — each now keeps its bespoke TTY consent and leaves an audit
         record, moving to the LEDGERED register — so KNOWN_BYPASS is empty and this stack-share
         stage's remainder is gone. (This pin flips SI.6b's transient "6 remain" to its resolution;
-        the live count lives in test_si_6's `test_the_known_bypass_register_is_empty`.)"""
+        the live count lives in test_si_6's `test_the_known_bypass_register_is_empty`.)
+
+        0.0.17 stage 1a's review touched this pin twice, and neither is a weakening: `init.py`'s
+        key became QUALIFIED (`InitPlan.write_files` — one entry per definition), and
+        `memory/reembed.py:run_reembed` JOINED the register, moved out of UNGATED_BY_DESIGN because
+        its own reason read "human-gated, but NOT through the WriteGate … and it is ledgered",
+        which is this register's definition verbatim. So the assertion below is no longer "LEDGERED
+        IS the setup cluster" — it is "the setup cluster is all still there, and here is exactly
+        what else is", which is the claim that can actually stay true.
+
+        0.0.17 STAGE 16 adds the third non-setup member, `memory/migrate.py:_drop_source`, and this
+        pin is why it is a REVIEWED addition rather than a silent one: it went RED the moment the
+        entry appeared, which is exactly the job. It is `--drop-source`'s destructive delete, split
+        out of `migrate_memory` so it could earn its own key (REGISTER-KEY-COLLISION), keeping its
+        bespoke batch consent and gaining the `migrate_drop_source` audit record it had been
+        missing since SI.6 (MIGRATE-DROP-SOURCE-UNLEDGERED, doc 84). Same shape as `run_reembed`:
+        bespoke consent + a record + no WriteGate."""
         from test_si_6_writegate_side_doors import KNOWN_BYPASS, LEDGERED
         self.assertEqual(KNOWN_BYPASS, {},
                          "the 0.0.13 exit criterion: no durable write bypasses both gate and ledger")
+        setup_cluster = [("agent_skills.py", "prune_orphan_skills"),
+                         ("agent_skills.py", "write_skill_files"),
+                         ("govern/lifecycle.py", "_remove"),
+                         ("harness_setup.py", "_write_command_file"),
+                         ("harness_setup.py", "_write_json"),
+                         ("init.py", "InitPlan.write_files")]
+        for site in setup_cluster:
+            self.assertIn(site, LEDGERED,
+                          f"{site} is one of KB.S1's 6 setup one-shots — recorded, not bypassing")
         self.assertEqual(
-            sorted(LEDGERED),
-            [("agent_skills.py", "prune_orphan_skills"), ("agent_skills.py", "write_skill_files"),
-             ("govern/lifecycle.py", "_remove"), ("harness_setup.py", "_write_command_file"),
-             ("harness_setup.py", "_write_json"), ("init.py", "write_files")],
-            "the former setup/bootstrap cluster is now the LEDGERED set — recorded, not bypassing")
+            sorted(LEDGERED), sorted(setup_cluster + [("memory/migrate.py", "_drop_source"),
+                                                      ("memory/reembed.py", "run_reembed")]),
+            "LEDGERED is KB.S1's 6 setup one-shots, `run_reembed` (0.0.17 stage 1a review) and "
+            "`_drop_source` (0.0.17 stage 16). Anything else arriving here is a bespoke-consent "
+            "durable write nobody reviewed into it.")
 
 
 if __name__ == "__main__":

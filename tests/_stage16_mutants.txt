@@ -1,0 +1,44 @@
+MIGRATE-DROP-SOURCE-UNLEDGERED — 0.0.17 stage 16's mutant list (NEW logic only)
+===============================================================================
+
+Scope: the logic ADDED at stage 16 — `memory/migrate.py:_drop_source` (the extraction, its
+refusals, its consent wiring, the delete loop's counter, and the `migrate_drop_source` ledger
+record) plus the caller's `if drop_source:` dispatch. Nothing else in `migrate_memory` is re-graded
+here; the per-item WriteGate path is SI.6's and was graded there.
+
+Run with `scripts/mutate.sh` and NOTHING ELSE (doc 85 §7b): only it purges the stale `.pyc`, sets
+PYTHONDONTWRITEBYTECODE=1, takes an exclusive lock, restores by CONTENT IDENTITY, and traps
+EXIT/INT/TERM so an interrupted run cannot leave the tree mutated. `_stage16_mutants.sh` beside
+this file drives the list and consumes mutate.sh's exit contract (0.0.17 stage 18b).
+
+Committed BECAUSE of MUTATION-SCORE-AUDIT (doc 84): a score with no mutant list cannot be
+re-graded, only re-asserted. The audit that row asked for was unrunnable precisely because ten
+recorded passes kept scores and threw the lists away.
+
+RED = the mutation was caught. GREEN = it SURVIVED. BROKEN = no verdict (never read as either).
+
+  M01  the self-migration refusal inverted                       (guard, unchanged behaviour)
+  M02  the pending/conflict refusal `or` -> `and`                (guard — the load-bearing one)
+  M03  the pending/conflict refusal removed entirely             (guard, the whole refusal)
+  M04  consent: `approved = assume_yes` -> `approved = True`     (the decline path)
+  M05  consent: the fail-closed default -> an always-yes gate    (the read_yes_no finding)
+  M06  the caller's `if drop_source:` inverted                   (dispatch)
+  M07  the ledger record deleted outright                        (THE STAGE — the record itself)
+  M08  the record fires on a drop that destroyed nothing         (`and dropped`)
+  M09  `items=` reports the count ASKED FOR, not the count done  (partial honesty)
+  M10  `attempted=` collapses onto `items=`                      (partial honesty)
+  M11  `complete=` inverted                                      (partial honesty)
+  M12  the record runs only on the happy path — a partial drop   (the placement, the whole point)
+       goes unrecorded
+       ⚠ FIRST ATTEMPT WAS A FALSE RED, corrected before the score below was taken. It swapped
+       `finally:` for `else:`, which is a SyntaxError (a `try` needs an `except` before an
+       `else`), so it went RED on an IMPORT failure — `Ran 1 test ... errors=1`, a mutant
+       grading the parser rather than the pins. The valid form (`except BaseException: raise`
+       + `else:`) runs 16 tests and reds on the partial-drop pin, which is the claim. Recorded
+       because a RED nobody read is how a mutation score inflates, and this list exists so the
+       next reader can re-grade rather than re-assert (MUTATION-SCORE-AUDIT, doc 84).
+  M13  the record echoes the migrated ITEMS into `subject`       (SECRET-SAFETY)
+  M14  the delete loop's counter increments before the delete    (the count must follow the act)
+  M15  `_drop_source` returns 0 regardless of what it destroyed  (the caller's `dropped` result)
+
+SCORE: 15/15 RED. Run 2026-08-04 on /Users/jas/jsvenv_mk312/bin/python; see doc 02's stage-16 row.

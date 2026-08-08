@@ -68,6 +68,7 @@ from mokata.mcp import tools_spec as TS
 from mokata.mcp.consent import _evidence_store
 from mokata.session_save import register_run
 from mokata.spec_scope import archive_key
+from mokata.knowledge.query import BASIS_LEXICAL
 
 # Spec A (one AC) and spec B (two) — a genuine refinement of the same brainstorm, not a rename.
 A_C = [{"id": "AC1", "text": "slugify keeps unicode"}]
@@ -391,7 +392,7 @@ class _Layer:
     def blast_radius(self, symbol, depth=2):
         return QueryResult("blast_radius", symbol,
                            references=[Reference("app/pay.py", 5, snippet="", symbol="charge")],
-                           backend=self.backend_name, degraded=True)
+                           backend=self.backend_name, basis=BASIS_LEXICAL)
 
 
 def _degraded_brainstorm():

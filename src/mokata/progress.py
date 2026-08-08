@@ -122,7 +122,7 @@ def _shipped_run_ids(store: Any, run_id: Optional[str] = None) -> set:
     to contain the evidence. Where it did not, the old read was wrong in the worst direction:
     RETIREMENT itself got truncated away, so a shipped run read as unshipped and `find_active_run`
     resurrected it as "the current run". Passing `run_id` asks the single-run question
-    (`badge_run._run_is_shipped`) and stops the scan at that run's first match."""
+    (`run_resolver._run_is_shipped`) and stops the scan at that run's first match."""
     try:
         from .progress_events import ProgressLog, STAGE_ENTER
         furthest: dict = {}
@@ -144,40 +144,51 @@ def _shipped_run_ids(store: Any, run_id: Optional[str] = None) -> set:
     return {rid for rid, s in furthest.items() if s == "ship"}
 
 
-def find_active_run(store: Any, phases=PIPELINE_PHASES) -> Optional[str]:
-    """The ACTIVE run to show: the first incomplete-checkpoint run, else the most-recent run that has
-    NOT shipped, else None.
-
-    B-LIFE (ship-based retirement) — a complete pipeline CHECKPOINT means the spec emitted and the
-    user is AT `develop`, a healthy ACTIVE state, NOT that the run finished (develop/review/ship are
-    tracked in the progress-event log, not the checkpoint). So a spec-emitted run STAYS active. Only
-    a run that reached the terminal `ship` stage is retired: it finished, and reporting it as the
-    current run is the live bug. The incomplete-checkpoint ordering is unchanged; the completed-but-
-    unshipped fallback is byte-identical to the old "most recent" pick. Shipped runs are never
-    deleted — still readable by explicit run_id, surfaced as finished-then by `build_progress`.
-
-    REVIEW-FIX.R1 fold-in — the fallback now walks `list_runs_by_recency` (checkpoint mtime), so
-    "most recent" is REAL. It used to walk `reversed(list_runs(...))`, i.e. the highest run id in
-    lexicographic order over `uuid4().hex` ids: an arbitrary pick that contradicted this docstring.
-    The incomplete-checkpoint loop above is unchanged (it claims "the first", not "the newest")."""
-    runs = list_runs(store)
-    for rid in runs:
-        if not PipelineCheckpoint(store, rid).is_complete(phases):
-            return rid
-    shipped = _shipped_run_ids(store)
-    for rid in reversed(list_runs_by_recency(store)):
-        if rid not in shipped:
-            return rid                                   # most-recent completed-but-unshipped run
-    return None
+def _root_of(store: Any) -> Optional[str]:
+    """The repo root behind a `StateStore` — `tdd_state.root_of_state_dir` over `store.root`, so
+    every read surface here recovers the repo the SAME way (RUN-ID-DRIFT). None when the store is
+    not a mokata state dir; the caller then has nothing to resolve against and says so."""
+    try:
+        from .tdd_state import root_of_state_dir
+        return root_of_state_dir(getattr(store, "root", "") or "")
+    except Exception:
+        return None
 
 
-def _no_active_run_message(store: Any, phases=PIPELINE_PHASES) -> str:
-    """The message for "no active run". B-LIFE — when the repo HAS runs but none is active (every run
-    has shipped, since `find_active_run` returned None), report the most-recent one as finished-THEN
-    — "last run '<id>' completed <when> — no active run" — followed by the SAME PH-GATE.S0 recovery
-    guidance (`NO_RUN_MESSAGE`) so the user still learns how to start / resume a tracked run. No
-    timestamp on record (a legacy shipped run stamped before this stage) ⇒ "completed" without the
-    when, never a crash. No runs at all ⇒ the plain `NO_RUN_MESSAGE`, byte-identical to before.
+def _no_active_run_message(store: Any, root: Optional[str] = None,
+                           res: Any = None) -> str:
+    """The message for "no run to show" — and RUN-ID-DRIFT makes it say WHICH kind of nothing.
+
+    Three cases, three sentences, because the human needs a different thing from each (Class 1 on
+    the user-facing surface): several runs the resolver refused to choose between ⇒ name one
+    (`run_resolver.unresolved_reason`, shared word-for-word with every other surface); every run
+    shipped ⇒ report the most-recent as finished-THEN — "last run '<id>' completed <when>" — plus
+    the PH-GATE.S0 recovery guidance; no runs at all ⇒ the plain `NO_RUN_MESSAGE`.
+
+    Before this stage the ambiguous case did not exist as a case: `find_active_run` picked a run and
+    the message was never reached. That pick is OSS #44.
+
+    REVIEW-FIX.R1 fold-in — "the most recent one" is read off `list_runs_by_recency` (checkpoint
+    mtime), not off the by-NAME order's last element, which over `uuid4().hex` ids named an
+    arbitrary run in the sentence that says "last run"."""
+    if res is not None and getattr(res, "ambiguous", False):
+        # "Cannot name a run" splits once more on the DISPLAY surface: a repo whose every run has
+        # SHIPPED is not ambiguous to a human, it is finished, and B-LIFE's finished-THEN sentence
+        # is the useful thing to say. The resolver is right to call it ambiguous — it genuinely
+        # cannot name a current run — but "which of these five did you mean?" is the wrong question
+        # when the honest answer is "none, they are all done".
+        if not set(res.candidates) - _shipped_run_ids(store):
+            return _finished_then_message(store)
+        from .run_resolver import unresolved_reason
+        return "mokata · " + unresolved_reason(res)
+    return _finished_then_message(store)
+
+
+def _finished_then_message(store: Any) -> str:
+    """B-LIFE's finished-THEN sentence — "last run '<id>' completed <when> — no active run" — plus
+    the PH-GATE.S0 recovery guidance (`NO_RUN_MESSAGE`), so the user still learns how to start or
+    resume a tracked run. No timestamp on record ⇒ "completed" without the when, never a crash. No
+    runs at all ⇒ the plain `NO_RUN_MESSAGE`.
 
     REVIEW-FIX.R1 fold-in — "the most recent one" is read off `list_runs_by_recency` (checkpoint
     mtime), not off the by-NAME order's last element, which over `uuid4().hex` ids named an
@@ -185,7 +196,7 @@ def _no_active_run_message(store: Any, phases=PIPELINE_PHASES) -> str:
     runs = list_runs_by_recency(store)
     if not runs:
         return NO_RUN_MESSAGE
-    rid = runs[-1]                                        # the most recent (all runs shipped here)
+    rid = runs[-1]                                        # the most recent on record
     when = PipelineCheckpoint(store, rid).completed_at
     when_txt = f" {when}" if when else ""
     return (f"mokata · last run '{rid}' completed{when_txt} — no active run. " + NO_RUN_MESSAGE)
@@ -193,19 +204,50 @@ def _no_active_run_message(store: Any, phases=PIPELINE_PHASES) -> str:
 
 # --------------------------------------------------------------- the model
 def build_progress(store: Any, run_id: Optional[str] = None,
-                   phases=PIPELINE_PHASES) -> RunProgress:
-    """Derive the progress view for `run_id` (or the active run). No run → a clean,
-    inactive view carrying the friendly message (never raises)."""
+                   phases=PIPELINE_PHASES, root: Optional[str] = None) -> RunProgress:
+    """Derive the progress view for `run_id` — or, given `root`, for THE run this caller is in.
+
+    RUN-ID-DRIFT — resolution is `run_resolver.resolve_run`, the one resolver every surface reads,
+    so `mokata progress` can no longer report a different run than the one a call stamps into.
+    Resolution is rooted at the REPO, which `root` names; when it is omitted the root is recovered
+    from the store's own directory (`tdd_state.root_of_state_dir`, the declared inverse of
+    `state_dir`) — so a caller holding only a `StateStore` still gets THE run rather than a scan.
+    A store that is not a mokata state dir recovers no root and the view is inactive, which is the
+    honest answer: the scan that used to fill that gap is the defect. Never raises.
+
+    B-LIFE retirement is applied HERE, to a RESOLVED run only, not inside the resolver: a run that
+    reached its terminal `ship` stage is reported as finished-THEN rather than current-NOW. It is a
+    DISPLAY rule, and the resolver must stay free of it so the review verdict key survives
+    `mokata progress mark ship` (REVIEW-FIX.R1). An EXPLICIT `run_id` is never retired — asking for
+    a run by name means you want to see that run, shipped or not."""
     total = len(phases)
-    rid = run_id or find_active_run(store, phases)
+    rid, res = run_id, None
+    if rid is None:
+        root = root if root is not None else _root_of(store)
+    if rid is None and root is not None:
+        from .run_resolver import resolve_run
+        res = resolve_run(root)
+        rid = res.run_id
+        if rid is not None and rid in _shipped_run_ids(store, rid):
+            rid = None                       # B-LIFE — finished; fall to the finished-THEN message
     if rid is None:
         return RunProgress(active=False, total=total, pending=total,
-                           message=_no_active_run_message(store, phases))
+                           message=_no_active_run_message(store, root, res))
 
     if store.read(CHECKPOINT_PREFIX + rid) is None:
-        # an explicit run_id that doesn't exist -> friendly, inactive (never an error)
-        return RunProgress(active=False, total=total, pending=total, run_id=run_id,
-                           message=f"mokata · no run '{run_id}' on record. " + NO_RUN_MESSAGE)
+        # No checkpoint for this run — friendly, inactive (never an error). The two ways to get
+        # here read differently to a human and so are worded differently: a NAMED run that does not
+        # exist is a typo or a stale id, while a RESOLVED run without a checkpoint is a run whose
+        # evidence is on disk but whose phase tracking never started (the candidate set counts
+        # approach/spec/tdd state, not just checkpoints — deliberately, since that is the set the
+        # gate hook enforces on).
+        if run_id is not None:
+            return RunProgress(active=False, total=total, pending=total, run_id=run_id,
+                               message=f"mokata · no run '{run_id}' on record. " + NO_RUN_MESSAGE)
+        return RunProgress(active=False, total=total, pending=total, run_id=rid,
+                           message=(f"mokata · run '{rid}' has state in this repo but no tracked "
+                                    f"pipeline checkpoint, so there are no phases to show. "
+                                    + NO_RUN_MESSAGE))
 
     cp = PipelineCheckpoint(store, rid)
     passed = [p for p in cp.passed if p in phases]
@@ -248,10 +290,18 @@ class SessionInfo:
     active: bool                    # the run `resume` (with no id) would pick
 
 
-def list_sessions(store: Any, phases=PIPELINE_PHASES) -> List["SessionInfo"]:
+def list_sessions(store: Any, phases=PIPELINE_PHASES,
+                  root: Optional[str] = None) -> List["SessionInfo"]:
     """All runs with a checkpoint — id, progress, last-passed/resume phase, complete/active.
-    Read-only + bounded (one row per recorded run); empty list when there are none."""
-    active = find_active_run(store, phases)
+    Read-only + bounded (one row per recorded run); empty list when there are none.
+
+    RUN-ID-DRIFT — `active` is the ONE resolver's answer (given `root`), so the run this listing
+    stars is the run every other surface acts on. Without a `root` NO row is starred: an unstarred
+    listing is honest about not knowing, where the old scan starred an arbitrary row and made five
+    drifted runs look like one chosen one."""
+    from .run_resolver import resolve_run
+    root = root if root is not None else _root_of(store)
+    active = resolve_run(root).run_id if root is not None else None
     out: List[SessionInfo] = []
     for rid in list_runs(store):
         cp = PipelineCheckpoint(store, rid)
@@ -387,7 +437,8 @@ def build_todo_items(surface: Any, run_id: Optional[str] = None,
     read-only, deterministic; no run / an unreadable surface -> `{"summary": "", "items": []}`."""
     try:
         store = surface.state
-        prog = build_progress(store, run_id=run_id, phases=phases)
+        prog = build_progress(store, run_id=run_id, phases=phases,
+                              root=getattr(surface, "root", None))
     except Exception:
         return {"summary": "", "items": []}
     if not prog.active:
@@ -485,13 +536,16 @@ def _badge_state(surface: Any, *, run_id: Optional[str] = None, session_mode: bo
     checkpoint but a log -> the log's stage (the user did enter it).
 
     B-BADGE — `session_mode` selects the run SESSION-AWARELY (the caller resolved `run_id` for THIS
-    Claude Code session via `badge_run.resolve_badge_run`): `run_id is None` renders CLEAN (the
-    session is bound to no run), and a set `run_id` renders exactly that run — the badge never falls
-    back to `find_active_run` (which is session-blind) here. The brainstorm-progress short-circuit
-    is SKIPPED in session mode: that key is scoped by the CURRENT process's mokata session_id (a
-    statusline-hook uuid), unrelated to the Claude session being rendered, so trusting it would leak
-    a foreign session's mid-stream state. The default (`session_mode=False`, no `session_id` in the
-    payload) is byte-identical to today — the load-bearing degrade for older/non-Claude callers."""
+    Claude Code session via `run_resolver.resolve_badge_run`): `run_id is None` renders CLEAN (the
+    session is bound to no run), and a set `run_id` renders exactly that run. The brainstorm-progress
+    short-circuit is SKIPPED in session mode: that key is scoped by the CURRENT process's mokata
+    session_id (a statusline-hook uuid), unrelated to the Claude session being rendered, so trusting
+    it would leak a foreign session's mid-stream state.
+
+    RUN-ID-DRIFT — the non-session path resolves through the SAME one resolver (`root=surface.root`)
+    rather than the deleted `find_active_run` scan, so an older/non-Claude caller's badge names the
+    same run as every other surface, and an ambiguous repo badges nothing instead of an arbitrary
+    run's stage strip."""
     store = surface.state                       # may raise on a broken surface -> caller guards
     if session_mode:
         if run_id is None:
@@ -508,7 +562,7 @@ def _badge_state(surface: Any, *, run_id: Optional[str] = None, session_mode: bo
             # just less specific), so nothing degrades — and a notice printed from the statusline,
             # which the harness re-runs on every state change, would be the noisiest line in mokata.
             pass
-        prog = build_progress(store)
+        prog = build_progress(store, root=getattr(surface, "root", None))
     # checkpoint-derived candidate (today's behaviour) + the active run id to scope the log.
     if not prog.active:
         ckpt_stage, counter, run_id = None, "", None
@@ -553,14 +607,14 @@ def build_stage_badge(surface: Any, *, session_name: Optional[str] = None,
     minimal `mokata`, never an error.
 
     B-BADGE — when `session_id` (Claude Code's session id, off the statusLine payload) is given, the
-    run is resolved SESSION-AWARELY (`badge_run.resolve_badge_run`: bound run -> single live run ->
+    run is resolved SESSION-AWARELY (`run_resolver.resolve_badge_run`: bound run -> single live run ->
     none) instead of via the session-blind `find_active_run`, so a cleared session never wears a
     dead run's strip and a fresh run flips the badge. `session_id=None` (no such field in the
     payload — an older/non-Claude caller) keeps today's behaviour byte-for-byte."""
     try:
         if session_id is not None:
             try:
-                from .badge_run import resolve_badge_run
+                from .run_resolver import resolve_badge_run
                 run_id = resolve_badge_run(surface.root, session_id)
             except Exception:
                 run_id = None
@@ -756,12 +810,16 @@ def _subagent_state(entry: dict) -> str:
 
 
 def build_run_lanes(store: Any, ledger: Any = None, run_id: Optional[str] = None,
-                    phases=PIPELINE_PHASES, tail: int = LANE_LEDGER_TAIL) -> RunLanes:
+                    phases=PIPELINE_PHASES, tail: int = LANE_LEDGER_TAIL,
+                    root: Optional[str] = None) -> RunLanes:
     """Derive the lane view from run-state (phase header) + the most recent execmode batch in a
     BOUNDED tail of the ledger. Parallel → one lane per subagent; sequential (or a parallel run
     that degraded) → a single lane; no batch → a single lane from the current phase; no run →
-    a friendly empty state. Never raises, never writes."""
-    progress = build_progress(store, run_id=run_id, phases=phases)
+    a friendly empty state. Never raises, never writes.
+
+    RUN-ID-DRIFT — `root` is threaded straight into `build_progress` (which recovers it from the
+    store when omitted), so the lanes render THE caller's run, never a scanned one."""
+    progress = build_progress(store, run_id=run_id, phases=phases, root=root)
     if not progress.active:
         return RunLanes(active=False, mode="none", progress=progress,
                         message=progress.message)

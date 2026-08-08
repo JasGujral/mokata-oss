@@ -1,0 +1,142 @@
+SI.6-DELEGATED-BLINDNESS-b — the BEHAVIOURAL harness's mutant list (0.0.17 stage 1b)
+====================================================================================
+
+Scope: the logic ADDED at stage 1b — `tests/test_si_6_behavioural_write_freedom.py`, the write-free
+harness and the nine charters it binds. The static half's 26 mutants (`_writegraph_mutants.txt`) are
+the parent stage's and are NOT re-run here; nothing in this stage touches that logic.
+
+Run with `scripts/mutate.sh` and NOTHING ELSE (doc 85 §7b): only it purges the stale `.pyc`, sets
+PYTHONDONTWRITEBYTECODE=1, and traps EXIT/INT/TERM so an interrupted run cannot leave the tree
+mutated. Each mutant's exact invocation is written out below so the run is reproducible verbatim.
+
+RED = the mutation was caught. GREEN = it SURVIVED. BROKEN = no verdict (never read as either).
+
+WHY THIS LIST HAS TWO GROUPS. A behavioural pin can be weak in two independent ways, and only
+mutating both finds them. Group A asks "does the pin catch a write in its subject?" Group B asks
+"could the pin pass while asserting nothing?" — the failure mode the whole stage is built around,
+and the one 0.0.17 has already shipped twice (WINDOW_HOLDER, doc 85 §7e; stage 16's leak test).
+
+C is a CONTROL whose expected verdict is GREEN and is scored separately, never in the kill-rate.
+
+
+GROUP A — a durable write planted in a bound subject. Each must be RED.
+------------------------------------------------------------------------------------
+
+  M01  SQLiteBackend.get delegates to `record_usage`     the P10 shape on the live tree: a
+       (the registered writer beside it)                 read-only charter one resolved call
+                                                         away from a registered writer
+  M02  SQLiteBackend.open_edges does the same            a second bound subject, so M01 cannot
+                                                         pass by pinning one lucky binding
+  M03  SQLiteBackend.usage_stats does the same           the READ twin of the writer it calls —
+                                                         the shortest possible drift
+  M04  _sqlite._current_mode writes a file directly      the crudest shape (not delegated), on
+                                                         the one bound subject outside backends.py
+
+GROUP B — the harness's own anti-vacuity mechanism. Each must be RED.
+------------------------------------------------------------------------------------
+
+  M05  `_tree_snapshot` records nothing                  if the snapshot is empty every pin in
+                                                         the file passes forever
+  M06  `assert_write_free` stops checking the evidence   P10's (a)/(b): without it a no-op
+                                                         subject satisfies the byte comparison
+  M07  the `MissingEvidence` refusal never fires         a binding with no "it really ran" check
+                                                         becomes constructible again
+  M08  the falsifiability control neuters nothing        `_noop_like` hands back the REAL
+                                                         function, so evidence that survives a
+                                                         no-op would no longer be caught
+  M10  ...and the same on its STATICMETHOD branch        M08 replaces one of `_noop_like`'s two
+                                                         returns, so it reaches 8 of the 9
+                                                         bindings; `fts5_available` is a
+                                                         staticmethod and stays correctly
+                                                         neutered under it. Measured, not
+                                                         assumed — M08 reds with 8 failures and
+                                                         M10 with the missing 1. An ungraded
+                                                         branch in the anti-vacuity mechanism is
+                                                         exactly the thing this stage exists to
+                                                         refuse.
+
+GROUP C — control. Expected GREEN, scored separately.
+------------------------------------------------------------------------------------
+
+  M09  fts5_available leaves its probe table behind      The register entry claims the probe
+       (the DROP is deleted)                             "runs against the `temp` schema … so
+                                                         nothing durable is touched at all". If
+                                                         that is true, dropping or not dropping
+                                                         changes no durable byte and this MUST
+                                                         survive. A RED here would mean the temp
+                                                         schema reaches the disk and the entry is
+                                                         wrong. The mutant is here to show the
+                                                         pin measures DURABILITY rather than
+                                                         reacting to any edit at all.
+
+
+THE INVOCATIONS (PYTHON=<venv>/bin/python; run from the repo root)
+------------------------------------------------------------------------------------
+
+B=src/mokata/memory/backends.py
+S=src/mokata/memory/_sqlite.py
+H=tests/test_si_6_behavioural_write_freedom.py
+T='test_si_6_behavioural_write_freedom.py'
+
+M01  scripts/mutate.sh "M01 get delegates a write" $B \
+       '        return MemoryItem.from_dict(json.loads(row[0])) if row else None' \
+       $'        self.record_usage([item_id], "2026-01-01T00:00:00+00:00")\n        return MemoryItem.from_dict(json.loads(row[0])) if row else None' \
+       "$T"
+
+M02  scripts/mutate.sh "M02 open_edges delegates a write" $B \
+       $'                _edges.open_edges_sql(_edges.LOCAL_EDGES_TABLE), (item_id,)).fetchall()\n        return [_edges.edge_from_row(r) for r in rows]' \
+       $'                _edges.open_edges_sql(_edges.LOCAL_EDGES_TABLE), (item_id,)).fetchall()\n        self.record_usage([item_id], "2026-01-01T00:00:00+00:00")\n        return [_edges.edge_from_row(r) for r in rows]' \
+       "$T"
+
+M03  scripts/mutate.sh "M03 usage_stats delegates a write" $B \
+       '                out.update({r[0]: (int(r[1] or 0), r[2]) for r in rows})' \
+       $'                out.update({r[0]: (int(r[1] or 0), r[2]) for r in rows})\n        self.record_usage(ids, "2026-01-01T00:00:00+00:00")' \
+       "$T"
+
+M04  scripts/mutate.sh "M04 _current_mode stamps the db header" $S \
+       '        row = conn.execute("PRAGMA journal_mode").fetchone()' \
+       $'        conn.execute("PRAGMA user_version=42")\n        row = conn.execute("PRAGMA journal_mode").fetchone()' \
+       "$T"
+
+M05  scripts/mutate.sh "M05 the snapshot records nothing" $H \
+       '                snap[os.path.relpath(path, root)] = fh.read()' \
+       '                pass' \
+       "$T"
+
+M06  scripts/mutate.sh "M06 the evidence check is bypassed" $H \
+       '            binding.evidence(fx, result),' \
+       '            True or binding.evidence(fx, result),' \
+       "$T"
+
+M07  scripts/mutate.sh "M07 the MissingEvidence refusal never fires" $H \
+       '        if evidence is None:' \
+       '        if False:' \
+       "$T"
+
+M08  scripts/mutate.sh "M08 the falsifiability control neuters nothing" $H \
+       '    return lambda *a, **kw: None' \
+       '    return owner.__dict__.get(attr)' \
+       "$T"
+
+M09  scripts/mutate.sh "M09 CONTROL fts5 probe table is not dropped" $B \
+       '            conn.execute("DROP TABLE temp.mokata_fts5_probe")' \
+       '            pass' \
+       "$T"
+
+M10  scripts/mutate.sh "M10 the control's staticmethod branch neuters nothing" $H \
+       '        return staticmethod(lambda *a, **kw: None)' \
+       '        return original' \
+       "$T"
+
+
+RESULT — 0.0.17 stage 1b, PYTHON=/Users/jas/jsvenv_mk312/bin/python
+------------------------------------------------------------------------------------
+
+  M01 RED   M02 RED   M03 RED   M04 RED   M05 RED
+  M06 RED   M07 RED   M08 RED   M10 RED
+
+  9 graded, 9 RED, 0 survivors  —  kill rate 9/9.
+
+  M09 GREEN, as designed. It is the CONTROL and is scored separately: the fts5 probe table lives
+  in the per-connection `temp.` schema, so not dropping it changes no durable byte, and the pin is
+  correct to stay silent. A RED there would have convicted the register entry instead.

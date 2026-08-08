@@ -33,7 +33,7 @@ from pathlib import Path
 import _support  # noqa: F401  (puts src/ on the path)
 
 from mokata import MOKATA_DIR, hook_cli, progress
-from mokata.badge_run import bind_session_run, read_binding, resolve_badge_run
+from mokata.run_resolver import bind_session_run, read_binding, resolve_badge_run
 from mokata.config import Surface
 from mokata.govern import PipelineCheckpoint
 from mokata.state import StateStore
@@ -119,13 +119,21 @@ def _set_manifest_statusline(root, value):
 class TestBBadgeRegression(unittest.TestCase):
     def test_b_badge_regression(self):
         """Persisted (dead) run from session A + a statusline render for a FRESH session B with no
-        binding ⇒ CLEAN badge, no stage strip. This is what the old `find_active_run` got wrong."""
+        binding ⇒ CLEAN badge, no stage strip. This is what the old `find_active_run` got wrong.
+
+        RUN-ID-DRIFT — the pin is now sharper than "two functions disagree". THE resolver DOES name
+        runA (it is the only run with state), and the badge still declines to wear it, because the
+        badge's ATTACHED-OR-LIVE rule is a DISPLAY filter over that one answer rather than a second
+        resolution. That is the invariant the whole stage rests on: a surface may abstain, but it
+        may never name a different run than every other surface."""
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _persist_run(d, "runA", passed=["brainstorm"])   # A's run: on disk, NOT live
 
-            # Old code (find_active_run) DOES pick runA — proving the strip the bug rendered:
-            self.assertEqual(progress.find_active_run(surface.state), "runA")
+            from mokata.run_resolver import resolve_run
+            res = resolve_run(d, session_id="sessB")
+            self.assertEqual(res.run_id, "runA")             # the ONE resolver names it...
+            self.assertFalse(res.attached)                   # ...but not as sessB's own run
 
             # New session-aware badge for a fresh session B (no binding, run not live) -> clean.
             badge = progress.build_stage_badge(Surface.load(d), session_id="sessB")
@@ -135,7 +143,7 @@ class TestBBadgeRegression(unittest.TestCase):
 
     def test_no_session_field_degrade_is_byte_identical(self):
         """No `session_id` in the payload (older harness / non-Claude caller) ⇒ the badge is
-        byte-identical to today's `find_active_run`-derived badge. The load-bearing negative."""
+        byte-identical to the badge the one resolver produces. The load-bearing negative."""
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _persist_run(d, "runX", passed=["brainstorm"])   # -> spec stage today
@@ -145,7 +153,7 @@ class TestBBadgeRegression(unittest.TestCase):
             self.assertEqual(via_none, today)
             self.assertIn("›spec‹", today)                   # today still resolves the run
 
-            # statusline payload with NO session_id renders exactly the find_active_run badge.
+            # statusline payload with NO session_id renders exactly the resolved-run badge.
             rc, out = _run_statusline({"cwd": d})
             self.assertEqual(rc, 0)
             self.assertIn("›spec‹", out)

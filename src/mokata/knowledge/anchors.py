@@ -13,6 +13,8 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from ..repo_walk import prune_source_dirs
+
 ANCHOR_RE = re.compile(r"(?://|#)\s*@lat:\s*([^\s]+)")
 _SCAN_EXTENSIONS = (".py", ".js", ".ts", ".go", ".rb", ".java", ".rs", ".c", ".h")
 _CONCEPT_LINE = re.compile(r"^\s*(?:-\s+|#{1,6}\s+)([^\s#].*?)\s*$")
@@ -61,7 +63,9 @@ class LatReport:
 def scan_anchors(root: str) -> List[Anchor]:
     out: List[Anchor] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        # Hidden dirs and nested checkouts: an `@lat` anchor inside a vendored dependency is
+        # that project's concept graph, and reading it here invents drift against `lat.md`.
+        prune_source_dirs(dirpath, dirnames)
         for fn in filenames:
             if not fn.endswith(_SCAN_EXTENSIONS):
                 continue

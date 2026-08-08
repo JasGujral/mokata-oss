@@ -77,7 +77,7 @@ class FinishDecision:
 
 
 def record_finish_decision(ledger: Any, choice: str, approve: Optional[bool] = None,
-                           note: str = "", confirmed: Optional[bool] = None) -> FinishDecision:
+                           note: str = "") -> FinishDecision:
     """Record the human's landing choice (one of LANDING_OPTIONS) in the audit ledger.
     mokata performs the git action ONLY when `approve` is the human's explicit yes; it
     never merges/PRs/deletes on its own. This records the decision; it does not land it.
@@ -85,12 +85,15 @@ def record_finish_decision(ledger: Any, choice: str, approve: Optional[bool] = N
     Stage 60: the returned decision also carries the read-only "what I changed and WHY" recap
     (a bounded `audit --why` over this run's ledger) so finishing a run shows what changed.
 
-    Stage 37R (H3): the boolean is `approve`, consistent with the MCP write tools; `confirmed`
-    is a DEPRECATED alias kept for backward-compat."""
+    Stage 37R (H3): the boolean is `approve`, consistent with the MCP write tools. It carried a
+    DEPRECATED `confirmed=` alias until 0.0.17 stage 5, deleted under the pre-1.0 no-backward-
+    compatibility rule (doc 85 §7d): it had ZERO production call sites — the only three uses in the
+    tree were tests asserting the alias itself — and a second parameter nobody calls is a second
+    code path the gates and the mutation harness must carry."""
     if choice not in LANDING_OPTIONS:
         raise ValueError(
             f"unknown landing choice '{choice}'; one of {LANDING_OPTIONS}")
-    approved = bool(approve) or bool(confirmed)
+    approved = bool(approve)
     if ledger is not None:
         ledger.record("finish", choice=choice, approved=approved, note=note)
     # Build the recap AFTER recording, so the finish decision itself appears in the timeline.

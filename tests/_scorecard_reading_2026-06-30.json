@@ -1,0 +1,30 @@
+{
+  "_provenance": "RECONSTRUCTED from docs/build/archive/42-mokata-0.1.x-plan.md §R1.S1j, which records this pull in PROSE, not as a stored API response ('Baseline breakdown (live API pull, run of 2026-06-30 ... Already 10/10: Binary-Artifacts, Dangerous-Workflow, Dependency-Update-Tool, License, SAST, Security-Policy, Vulnerabilities'). It is NOT a captured response and must not be presented as one. Scores are all stated in doc 42. Reasons are recorded ONLY where doc 42 quotes them; everywhere else the reason is null, meaning WE NEVER WROTE IT DOWN -- not that Scorecard gave none. That distinction is why the differ has a REASON_UNRECORDED state: comparing a real reason string against our own missing note would invent a finding. This file exists so the differ is graded against the ACTUAL historical regression rather than a planted one: diffed against _scorecard_reading_2026-08-04.json the aggregate RISES 5.5 -> 6.6 while SAST DROPS 10 -> 8.",
+  "_the_ten_that_was_not_a_ten": "Doc 42 records SAST 10 here alongside CI-Tests -1 'no pull request found'. Those two readings are the same fact: with no merged PRs in the window, Scorecard's per-commit SAST sub-check had nothing to check, went inconclusive, and the score fell through to 'a CodeQL config exists'. CodeQL had never run on the public mirror at this date either -- see the stage 23 report. So this 10 is an ABSENT answer wearing a real answer's representation, in the instrument itself.",
+  "repo": {
+    "name": "github.com/JasGujral/mokata-oss",
+    "commit": "unrecorded-doc42-prose-baseline"
+  },
+  "date": "2026-06-30T00:00:00Z",
+  "score": 5.5,
+  "checks": [
+    { "name": "Binary-Artifacts", "score": 10, "reason": null },
+    { "name": "Branch-Protection", "score": -1, "reason": "Resource not accessible by integration" },
+    { "name": "CI-Tests", "score": -1, "reason": "no pull request found" },
+    { "name": "CII-Best-Practices", "score": 0, "reason": null },
+    { "name": "Code-Review", "score": 0, "reason": null },
+    { "name": "Contributors", "score": 3, "reason": null },
+    { "name": "Dangerous-Workflow", "score": 10, "reason": null },
+    { "name": "Dependency-Update-Tool", "score": 10, "reason": null },
+    { "name": "Fuzzing", "score": 0, "reason": null },
+    { "name": "License", "score": 10, "reason": null },
+    { "name": "Maintained", "score": 0, "reason": null },
+    { "name": "Packaging", "score": -1, "reason": null },
+    { "name": "Pinned-Dependencies", "score": 0, "reason": null },
+    { "name": "SAST", "score": 10, "reason": null },
+    { "name": "Security-Policy", "score": 10, "reason": null },
+    { "name": "Signed-Releases", "score": -1, "reason": "no releases found" },
+    { "name": "Token-Permissions", "score": 0, "reason": null },
+    { "name": "Vulnerabilities", "score": 10, "reason": null }
+  ]
+}

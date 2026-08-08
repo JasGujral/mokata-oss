@@ -18,7 +18,8 @@ from __future__ import annotations
 import warnings
 from typing import Any, Dict, List, Optional, Protocol
 
-from .query import QUERY_KINDS, BackendError, GraphBackend, QueryResult, Reference
+from .query import (BASIS_LEXICAL, BASIS_STRUCTURAL, QUERY_KINDS, BackendError,
+                    GraphBackend, QueryResult, Reference)
 
 
 class GraphQueryClient(Protocol):
@@ -95,7 +96,7 @@ class CodeReviewGraphBackend(GraphBackend):
         refs = [Reference.from_dict(r) for r in rows]
         return QueryResult(
             kind=kind, target=target, references=refs, backend=self.name,
-            degraded=False, note="answered by the codebase graph",
+            basis=BASIS_STRUCTURAL, note="answered by the codebase graph",
         )
 
     @property
@@ -171,7 +172,7 @@ class CodeReviewGraphBackend(GraphBackend):
         if not self.supports_semantic:
             return QueryResult(
                 kind="semantic", target=query, references=[], backend=self.name,
-                degraded=True, note="the adopted graph exposes no semantic index")
+                basis=BASIS_LEXICAL, note="the adopted graph exposes no semantic index")
         try:
             rows = self.client.semantic(query, root=self.root, kind=kind, limit=limit)
         except Exception as exc:
@@ -180,4 +181,4 @@ class CodeReviewGraphBackend(GraphBackend):
         refs = [Reference.from_dict(r) for r in rows]
         return QueryResult(
             kind="semantic", target=query, references=refs, backend=self.name,
-            degraded=False, note="answered by the codebase graph's semantic index")
+            basis=BASIS_STRUCTURAL, note="answered by the codebase graph's semantic index")

@@ -49,7 +49,7 @@ from unittest import mock
 import _support  # noqa: F401  (puts src/ on the path)
 
 from mokata import parity
-from mokata.badge_run import bind_session_run
+from mokata.run_resolver import bind_session_run
 from mokata.config import Surface
 from mokata.govern.resume import PipelineCheckpoint
 from mokata.mcp import registry as REG
@@ -253,9 +253,18 @@ class TestOrphanDeleted(unittest.TestCase):
                             hits.append(f"{os.path.relpath(p, REPO)}:{i}")
         self.assertEqual(hits, [], f"live references to the deleted orphan: {hits}")
 
-    def test_the_landing_decision_half_of_ship_py_is_untouched(self):
-        """The deletion is surgical: ship.py's real job — recording the human's landing choice —
-        still works exactly as before."""
+    def test_the_landing_decision_half_of_ship_py_still_works_when_called(self):
+        """The deletion is surgical: ship.py's landing-decision recorder still WORKS.
+
+        ⚠ READ THE SCOPE OF THAT CLAIM. This test constructs its own precondition — it imports
+        `record_finish_decision` and calls it — so what it proves is that the CODE is correct. It
+        proves nothing about whether anything reaches it, and until 0.0.17 this docstring said
+        "still works exactly as before", which a reader takes as "still in service". It is not:
+        stage 4 measured `engine/ship.py` a CERTIFIED ZERO — no module in the package imports it —
+        because `ship` is an agent-facing SKILL, so "record the finish" is prose an agent follows
+        rather than code a surface runs. That gap between "the code works" and "production reaches
+        it" is `REACHABILITY-PINS-MISSING` (doc 84), and this test is a specimen of the shape:
+        `tests/test_gate_reachability.py` is what asks the other question."""
         from mokata.engine import LANDING_OPTIONS, record_finish_decision
         self.assertEqual(set(LANDING_OPTIONS), {"merge", "pr", "keep", "discard"})
         dec = record_finish_decision(None, "keep", approve=True)
@@ -263,13 +272,26 @@ class TestOrphanDeleted(unittest.TestCase):
         with self.assertRaises(ValueError):
             record_finish_decision(None, "rm-rf", approve=True)
 
-    def test_the_ship_readiness_gate_stays_a_backed_gate(self):
-        """doc 85 §4: `ship-readiness` is one of the 10 backed gates and its enforcement-point file
-        must exist. Deleting the orphan removes a FUNCTION, never the module or the gate."""
+    def test_the_ship_readiness_gate_is_advisory_and_ship_py_still_exists(self):
+        """R3 removed a FUNCTION, never the module — and 0.0.17 stage 5 then removed the GATE
+        CLAIM, which is a different thing again.
+
+        This test asserted `backed is True` until stage 5, on doc 85 §4's authority that
+        `ship-readiness` was one of the 10 backed gates. Stage 4's reachability derivation showed
+        why that was aspirational: nothing in the package so much as IMPORTS `engine/ship.py`, so
+        the "landing-decision half" this suite's sibling test exercises has no production consumer.
+        `backed=True` means "an executable gate a Contract clause may cite"; nothing executes this
+        one, so it is advisory now and carries no enforcement point.
+
+        What R3 established is UNCHANGED and still asserted here: `engine/ship.py` exists and the
+        landing-decision recorder in it still works. The module was never the thing in doubt."""
         from mokata.skill_contracts import GATES
         ref = GATES["ship-readiness"]
-        self.assertTrue(ref.backed)
-        self.assertTrue(os.path.exists(os.path.join(REPO, ref.enforcement_point)))
+        self.assertFalse(ref.backed, "nothing executes ship-readiness — it is a protocol boundary")
+        self.assertEqual(ref.enforcement_point, "",
+                         "an advisory boundary must not name an enforcement point")
+        self.assertTrue(os.path.exists(os.path.join(REPO, "src/mokata/engine/ship.py")),
+                        "the DEMOTION is not a deletion — R3's surgical removal still holds")
 
 
 # ======================================================= 2 · MCP `review_status` (the read)

@@ -223,18 +223,13 @@ class TestPyPIPublishJob(unittest.TestCase):
         self.assertTrue(all("python -m build" not in r for r in runs),
                         "pypi must NOT rebuild — publish the reproducible, attested artifact")
 
-    def test_pypi_actions_are_sha_pinned(self):
-        # Supply-chain hygiene: third-party actions pinned to a 40-hex commit SHA, like the rest.
-        import re
-        if not _HAVE_YAML:
-            self.skipTest("PyYAML not installed (not a mokata dependency); run in CI")
-        for s in self._job()["steps"]:
-            u = str(s.get("uses", ""))
-            if not u:
-                continue
-            ref = u.split("@", 1)[1] if "@" in u else ""
-            self.assertRegex(ref, r"^[0-9a-f]{40}$",
-                             "action '" + u + "' must be pinned to a 40-char commit SHA")
+    # `test_pypi_actions_are_sha_pinned` lived here and is DELETED (0.0.17 stage 10). It walked
+    # this one job's steps asserting a 40-hex ref — the suite's ONLY generic pinning check, over
+    # 1 job of 1 of the 9 workflows, and it skipTest'd itself away without PyYAML. That coverage
+    # is now `tests/test_s10_workflow_pins.py`, which sweeps all nine, walks job-level `uses:`
+    # as well as steps, and RAISES rather than skips when the parser is absent.
+    # Subsumption was PROVEN before deletion, not assumed: mutant T06 in `_stage10_mutants.sh`
+    # drops this exact pypi step to `@v1.14.1` and the new sweep goes RED on it.
 
 
 class TestReproducibleBuild(unittest.TestCase):

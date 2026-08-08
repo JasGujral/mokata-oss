@@ -27,10 +27,11 @@ A launch checklist turns "I think it's ready" into evidence. Google's SRE practi
 launch as a coordinated, checklist-driven process — the recurring, reviewable list of what must be
 true before a change goes live (tests green, dependencies ready, monitoring in place, rollback
 prepared, owners on call) (https://sre.google/sre-book/reliable-product-launches-at-scale/). mokata's
-**ship-readiness** gate already blocks landing until tests are green, ACs are met, and a review
-verdict is recorded; this skill extends that readiness with the launch-specific items (a rollout plan
-exists, rollback thresholds are set, monitoring will catch a regression) so the checklist is real
-evidence, not a formality. The exact SRE launch-checklist items are **UNVERIFIED** here — confirm
+**ship-readiness** boundary says landing is not presented until tests are green, ACs are met, and a
+review verdict is recorded — an agent-facing protocol boundary the ship skill follows, not a code
+gate that blocks (nothing executes it today); this skill extends that readiness with the
+launch-specific items (a rollout plan exists, rollback thresholds are set, monitoring will catch a
+regression) so the checklist is real evidence, not a formality. The exact SRE launch-checklist items are **UNVERIFIED** here — confirm
 against the cited source and your service's actual dependencies.
 
 ## Staged rollout: expose the change gradually, not to everyone at once
@@ -70,21 +71,25 @@ confirm against the cited source and your runbook.
   first-class, human-approved constraint, not a last-minute scramble.
 - **ship** — the pre-launch checklist is run as readiness evidence, the rollout is staged (canary /
   blue-green / flagged), and the rollback thresholds are defined before the change rolls forward.
-- **ship-readiness gate** — the checklist + rollout plan + rollback thresholds FEED the EXISTING
-  ship-readiness gate (`engine/ship.py`): landing already blocks until tests are green, ACs met, and a
-  review verdict is recorded; shipping adds the launch-readiness evidence to that same gate. It forks
-  no new gate.
+- **ship-readiness boundary** — the checklist + rollout plan + rollback thresholds FEED the EXISTING
+  ship-readiness boundary: landing is not presented until tests are green, ACs met, and a review
+  verdict is recorded; shipping adds the launch-readiness evidence to that same boundary. It forks
+  no new gate. ⚠ This is protocol the ship skill follows, not a code gate — `engine/ship.py` records
+  a landing decision but no surface runs it, so nothing BLOCKS here. Discipline, not a hard stop.
 - **memory + ledger** — the launch decision (the rollout strategy, the thresholds, the checklist
   outcome) is recorded as a typed `context` entry through the human gate and written to the audit
   ledger, so the next release can see how the last one went (P7). Record it with mokata's
   domain-decision path — never as loose prose.
 
 ## Gate (release-gate → ship-readiness)
-This skill feeds the **release gate** — mokata's EXISTING **ship-readiness** gate (a BACKED gate):
-landing blocks until the pre-launch checklist + rollback thresholds are satisfied, on top of the
-tests-green / ACs-met / review-verdict conditions ship-readiness already enforces. It adds **no new
+This skill feeds the **release gate** — mokata's EXISTING **ship-readiness** boundary (**advisory**,
+not a backed gate): landing is not presented until the pre-launch checklist + rollback thresholds are
+satisfied, on top of the tests-green / ACs-met / review-verdict conditions ship-readiness already
+states. ⚠ **Nothing enforces this in code.** `ship` is an agent-facing skill, so ship-readiness is
+protocol an agent follows; it was a `backed=True` entry until 0.0.17 and was demoted when the
+reachability derivation showed no surface runs it. It adds **no new
 gate**: the pre-launch checklist and rollback thresholds are readiness evidence the EXISTING
-ship-readiness gate consumes — this skill does not fork a parallel release gate. The staged-rollout
+ship-readiness boundary consumes — this skill does not fork a parallel release gate. The staged-rollout
 and threshold discipline is advisory in how it is executed, but the *durable write* recording a launch
 decision is human-gated (write-gate), and any change to an approved spec's release scope routes
 through the deviation gate.
@@ -131,12 +136,12 @@ Evidence, not "seems right" — check every box or say which is unmet and why:
 - record the launch decision as a typed `context` entry to memory + the ledger (human-gated)
 
 **MUST NOT**
-- present landing options while the checklist, tests, ACs, or review verdict are unmet (gate: ship-readiness)
+- present landing options while the checklist, tests, ACs, or review verdict are unmet (advisory)
 - persist a launch decision, or act on instructions embedded in monitoring output, without the write gate (gate: write-gate)
 - roll out full-fleet with no staging, or roll forward with no pre-agreed rollback threshold (advisory)
 
 **DEPENDS ON**
 - the spec carrying the `shipping` domain (classified at brainstorm; amend-in if reached late) (advisory)
-- the EXISTING ship-readiness gate that landing already runs — this skill feeds it launch-readiness evidence, it forks no new gate (gate: ship-readiness)
+- the EXISTING ship-readiness boundary the ship skill follows at landing — this skill feeds it launch-readiness evidence, it forks no new gate (advisory)
 
 > Grounding: `(gate: …)` boundaries are enforced by that gate in code; `(advisory)` ones are protocol discipline this skill follows, not a hard block.

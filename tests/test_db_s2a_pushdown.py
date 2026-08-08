@@ -34,6 +34,7 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _translating import Declaration, TranslatingConnection, placeholder_rewrite
 
 from mokata.memory.backends import (
     PostgresBackend,
@@ -97,16 +98,34 @@ def _ids(items):
 
 
 # ------------------------------------------------------------- a REAL SQL Postgres stand-in
-class _PgShim:
+_DECLARATION = Declaration(
+    suite="DB.S2a mtype/status pushdown",
+    reason="the pushdown must be proven to FILTER, and the pre-existing project-scoping fake "
+           "hand-parses SQL so it can only confirm the strings it was taught. Running the emitted "
+           "SQL through a real engine exercises the WHERE instead of simulating it.",
+    rewrites=(placeholder_rewrite(),),
+    not_proven=(
+        "Postgres's own planner behaviour — the SQL is proven VALID and proven to FILTER, not "
+        "proven to be planned the way Postgres plans it",
+        "anything about Postgres data types: SQLite is dynamically typed, so a value this suite "
+        "stores and reads back says nothing about how Postgres would coerce it",
+    ),
+)
+
+
+class _PgShim(TranslatingConnection):
     """Executes the Postgres backend's SQL for real, on SQLite (`%s` -> `?`).
 
     The existing project-scoping fake hand-parses SQL and so can only confirm the strings it was
     taught. A pushdown must be proven to FILTER, so this runs the emitted SQL through an actual SQL
     engine on a table shaped like the provisioned `mokata_memory`. Every statement is recorded for
-    the structural assertions."""
+    the structural assertions.
+
+    The translation is DECLARED and ENFORCED by `_translating.TranslatingConnection`: this class
+    supplies a schema, never a rewrite."""
 
     def __init__(self):
-        self._c = sqlite3.connect(":memory:")
+        super().__init__(_DECLARATION)
         self._c.execute(
             """CREATE TABLE mokata_memory (
                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,22 +140,6 @@ class _PgShim:
                    hit_count INTEGER NOT NULL DEFAULT 0, last_recalled_at TEXT
                )"""
         )
-        self.sql_log = []
-
-    def execute(self, sql, params=()):
-        self.sql_log.append(sql)
-        return self._c.execute(sql.replace("%s", "?"), tuple(params or ()))
-
-    def close(self):
-        self._c.close()
-
-    # -- helpers ----------------------------------------------------------
-    def last_select(self):
-        return [s for s in self.sql_log if s.lstrip().upper().startswith("SELECT")][-1]
-
-    def table_names(self):
-        return {r[0] for r in self._c.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
 
 
 def _seeded_sqlite(items):

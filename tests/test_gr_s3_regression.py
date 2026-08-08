@@ -20,6 +20,7 @@ import _support  # noqa: F401
 from mokata.brainstorm import Approach, BrainstormGateError, BrainstormSession
 from mokata.brainstorm_impact import DesignFitVerdict
 from mokata.knowledge.query import QueryResult, Reference
+from mokata.knowledge.query import BASIS_LEXICAL, BASIS_STRUCTURAL
 
 
 class _Layer:
@@ -31,7 +32,8 @@ class _Layer:
     def blast_radius(self, symbol, depth=2):
         refs = [Reference("app/pay.py", 5, "", "charge"), Reference("app/api.py", 9, "", "h")]
         return QueryResult("blast_radius", symbol, references=refs,
-                           backend=self.backend_name, degraded=self._degraded)
+                           backend=self.backend_name,
+                           basis=(BASIS_LEXICAL if self._degraded else BASIS_STRUCTURAL))
 
 
 def _init(root):

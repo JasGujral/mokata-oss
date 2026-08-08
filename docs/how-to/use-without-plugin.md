@@ -210,7 +210,9 @@ mokata now launches the hooks through the **`mokata-hook` console entry point** 
 `session-start`, `secret-guard`, and `gate-guard` subcommands). When you `pip install` mokata, `mokata-hook`
 lands on PATH exactly like the `mokata` CLI and the `mokata-mcp` server — so if the MCP server
 resolves for you (it must, for its tools to work), the hooks resolve identically. No bare
-`python3`, no `sh`, no PATH guessing. `mokata setup` additionally pins it to its absolute path.
+`python3`, no `sh`, no PATH guessing. `mokata setup` additionally pins it to its absolute path and
+wires it in **exec form** — `{"command": "<abs>/mokata-hook", "args": ["secret-guard"]}` — which
+Claude Code spawns directly, with no shell involved on any platform.
 
 **The plugin route (no `pip install`, or a GUI-launched app).** A plugin's `hooks.json` is
 static — it can't carry the absolute path `mokata setup` writes — so it invokes a
@@ -228,7 +230,11 @@ to absolute paths. `mokata doctor` reports the same thing before you hit it: a w
 command doesn't resolve is an error finding — *"gates are NOT firing"* — naming the exact
 command it tried.
 
-On **Windows** the shim ships twice: the extension-less POSIX file above and
-`mokata-hook-launch.cmd` beside it. `hooks.json` names the path *without* an extension, so
-cmd.exe completes it to the `.cmd` through `PATHEXT` while any POSIX shell (including the Git
-Bash from [Git for Windows](https://git-scm.com/downloads/win)) runs the `sh` one.
+On **Windows**, `hooks.json` pins **`"shell": "bash"`** on every hook, so the shim runs under the
+Git Bash from [Git for Windows](https://git-scm.com/downloads/win). If Git Bash isn't installed,
+Claude Code fails with a named error rather than skipping the hook.
+
+`mokata-hook-launch.cmd` ships beside the POSIX shim and carries the same ladder and the same exit
+codes, but it is **not on the hook path**: cmd.exe is never a hook shell, so **no** `PATHEXT`
+completion of the extension-less path in `hooks.json` ever happens. It is there for invoking the
+launcher directly from a `cmd.exe` prompt.

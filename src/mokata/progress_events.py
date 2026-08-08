@@ -305,14 +305,20 @@ def _resolve_verdict_run(surface: Any) -> Optional[str]:
 
     Replaces the session-BLIND `progress.find_active_run`, which scanned every `pipeline_run__*`
     checkpoint in the shared state root and re-answered when `mark ship` retired a run: a `/clear`ed
-    or second session resolved a FOREIGN run and shipped on its review. `badge_run.resolve_verdict_run`
-    refuses on ambiguity instead (returning None), and None here means the caller FAILS CLOSED.
+    or second session resolved a FOREIGN run and shipped on its review.
+
+    RUN-ID-DRIFT — this is now THE resolver (`run_resolver.resolve_run`), the same call every other
+    surface makes, rather than a verdict-specific twin of it. Two properties R1 established are
+    preserved by the ladder itself and must stay that way: ambiguity resolves to None so the caller
+    FAILS CLOSED (mokata refuses rather than reading a foreign run's verdict), and ship RETIREMENT
+    is not applied, so the verdict key survives `mokata progress mark ship` — otherwise ship's own
+    entry mark would re-key the read away from the run whose verdict was recorded.
     Total: a surface with no readable `root` resolves to None rather than raising."""
     root = getattr(surface, "root", None)
     if not isinstance(root, str) or not root:
         return None
-    from .badge_run import resolve_verdict_run
-    return resolve_verdict_run(root)
+    from .run_resolver import resolve_run_id
+    return resolve_run_id(root)
 
 
 def record_review_verdict(surface: Any, *, passed: bool, independent: bool,

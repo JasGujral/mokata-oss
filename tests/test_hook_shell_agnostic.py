@@ -50,6 +50,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -247,21 +248,125 @@ class TestNoExtensionSearchDependence(unittest.TestCase):
         self.assertNotIn("PATHEXT", src)
         self.assertNotIn('".cmd"', src)
 
+    # A mention of the extension search is allowed ONLY where it is negated. The check is scoped
+    # to the CLAUSE holding the mention, never to the whole line.
+    #
+    # ⚠ LINE-SCOPED WAS THE ORIGINAL, AND MUTATION TESTING KILLED IT (DG-6). Re-asserting the
+    # premise inside `docs/reference/platform-support.md` — the most authoritative page a Windows
+    # user would check — SURVIVED the widened guard, because the whole entry is one markdown table
+    # row and that row already says "No bare `python3`" about something else entirely. One
+    # unrelated "no" anywhere on a line exempted every other word on it, permanently, and a
+    # markdown table makes a line arbitrarily long. The guard would have shipped looking like it
+    # covered `docs/` while structurally unable to see the one page that mattered most.
+    _CLAUSE = re.compile(r"(?<=[.!?])\s+|\|")
+    _NEGATIONS = ("not ", "never", "no ", "falsified", "wrong")
+
+    @classmethod
+    def _pathext_scan(cls, paths):
+        """`(files_walked, offenders)` — the count and the verdict from ONE call, deliberately.
+
+        ⚠ A SURVIVING MUTANT PUT THE COUNT HERE (M04). While this returned offenders alone, a
+        mutant that handed the scan an EMPTY corpus — `_pathext_offenders([])` — left the suite
+        fully green: an empty corpus yields no offenders, and `assertEqual([], [])` is true for
+        the same reason whether the guard walked forty pages or none. The walk was asserted
+        separately, so nothing tied the thing checked to the thing counted. Returning both from
+        one call is what makes "it found no offenders" inseparable from "it looked at something".
+
+        A clause naming the extension search while also negating it is the premise being
+        documented as FALSE — the whole point of the rewritten sites — and must keep passing."""
+        paths = list(paths)
+        offenders = []
+        for path in paths:
+            text = path.read_text(encoding="utf-8")
+            for n, line in enumerate(text.splitlines(), 1):
+                for clause in cls._CLAUSE.split(line):
+                    low = clause.lower()
+                    if "pathext" in low and not any(w in low for w in cls._NEGATIONS):
+                        try:
+                            name = path.relative_to(ROOT)
+                        except ValueError:
+                            name = path        # the fixture below walks a temp dir, not the repo
+                        offenders.append(f"{name}:{n}: {clause.strip()}")
+        return len(paths), offenders
+
     def test_no_source_file_still_asserts_the_cmd_exe_premise(self):
         # The four comments that made this survive an audit. They are a deliverable: a
         # confident, wrong comment is what let a reader check Windows support and move on.
-        offenders = []
-        for path in (SHIM, SHIM_CMD, ROOT / "src" / "mokata" / "hook_wiring.py",
-                     ROOT / "tests" / "test_hook_resolve.py"):
-            text = path.read_text(encoding="utf-8")
-            for n, line in enumerate(text.splitlines(), 1):
-                low = line.lower()
-                if "pathext" in low and not any(
-                        w in low for w in ("not ", "never", "no ", "falsified", "wrong")):
-                    offenders.append(f"{path.name}:{n}: {line.strip()}")
-        self.assertEqual(offenders, [],
-                         "the Windows extension search may only be mentioned as the "
-                         "FALSIFIED premise")
+        walked, offenders = self._pathext_scan(
+            (SHIM, SHIM_CMD, ROOT / "src" / "mokata" / "hook_wiring.py",
+             ROOT / "tests" / "test_hook_resolve.py"))
+        self.assertEqual(walked, 4, "the four rewritten source sites were not all walked")
+        self.assertEqual(
+            offenders, [],
+            "the Windows extension search may only be mentioned as the FALSIFIED premise")
+
+    def test_no_user_facing_doc_still_asserts_the_cmd_exe_premise(self):
+        """DG-6 — the guard above was SOURCE-ONLY, and that is exactly how three user-facing pages
+        went on asserting the premise for a whole release after it was falsified. A guard that
+        walks a hardcoded tuple of four source files cannot see `docs/`, so the pages a Windows
+        user actually reads to decide whether mokata's gates work on their machine — the
+        platform-support table among them — were the LEAST guarded text in the repo.
+
+        `docs/build/` is deliberately excluded: it is the internal planning tree, it does not ship
+        to the public mirror, and its whole job is to record the false premise and how it was
+        falsified. Everything under `docs/` that a user can read is walked."""
+        docs = sorted(p for p in (ROOT / "docs").rglob("*.md")
+                      if "build" not in p.relative_to(ROOT / "docs").parts)
+        walked, offenders = self._pathext_scan(docs)
+        # Not `assertTrue(walked)`: a guard that walks one page is as vacuous as one that walks
+        # none, and the floor is what makes an accidental narrowing of the glob visible.
+        self.assertGreater(walked, 20,
+                           f"only {walked} user-facing doc(s) were walked — the guard is passing "
+                           f"over a corpus too small to be the docs tree")
+        self.assertEqual(
+            offenders, [],
+            "a user-facing doc asserts that cmd.exe PATHEXT-completes the extension-less hook "
+            "path. HOOK-SHELL-AGNOSTIC's deliverable 0 read the shipped harness and established "
+            "that cmd.exe is NEVER a hook shell, so no such completion happens. Describe the real "
+            "route (`hooks.json` pins `shell: bash`; `mokata setup` wires exec form) rather than "
+            "re-asserting the premise")
+
+    def test_the_doc_guard_can_actually_fire(self):
+        """A guard whose only evidence is that it passes is indistinguishable from one that walks
+        nothing. This drives the same predicate over a line that DOES assert the premise, and over
+        the negated form the real pages use, so both directions are demonstrated rather than
+        assumed."""
+        with tempfile.TemporaryDirectory() as d:
+            asserts_it = Path(d) / "bad.md"
+            asserts_it.write_text("cmd.exe completes it to the `.cmd` through `PATHEXT`.\n",
+                                  encoding="utf-8")
+            denies_it = Path(d) / "good.md"
+            denies_it.write_text("cmd.exe is never a hook shell, so `PATHEXT` never applies.\n",
+                                 encoding="utf-8")
+            self.assertEqual(len(self._pathext_scan([asserts_it])[1]), 1,
+                             "the predicate does not catch a line asserting the premise")
+            self.assertEqual(self._pathext_scan([denies_it])[1], [],
+                             "the predicate flags the premise being documented as FALSE, which "
+                             "would make every correct page red and force the guard's removal")
+
+    def test_an_unrelated_negation_elsewhere_on_the_line_does_not_grant_an_exemption(self):
+        """THE MUTANT THAT KILLED THE FIRST DRAFT OF THIS GUARD, kept as a pin.
+
+        The original predicate asked whether the whole LINE carried a negation. Re-asserting the
+        premise inside `docs/reference/platform-support.md` then survived the widened guard,
+        because that entry is a single markdown table row and the row already said "No bare
+        `python3`" about the interpreter. One unrelated "no" exempted every other claim on the
+        line, forever — and a table row can be arbitrarily long, so the pages most worth guarding
+        were the ones the guard could least see.
+
+        The shape below is that row in miniature: a negation about something else, then the
+        premise asserted as true. Line-scoped passes it; clause-scoped catches it."""
+        with tempfile.TemporaryDirectory() as d:
+            row = Path(d) / "table.md"
+            row.write_text(
+                "| **Hooks** | No bare `python3` here. "
+                "cmd.exe completes the extension-less path via `PATHEXT`. "
+                "`mokata doctor` reports any hook that will not resolve. |\n",
+                encoding="utf-8")
+            self.assertEqual(
+                len(self._pathext_scan([row])[1]), 1,
+                "a line that negates something ELSE bought the PATHEXT claim an exemption — the "
+                "negation must be read from the clause holding the mention, not from the line")
 
     def test_both_existing_shims_still_ship_in_the_wheel_glob(self):
         # The `hooks/*` explicit-depth glob trap test_hook_resolve already guards — re-pinned

@@ -178,11 +178,18 @@ def repo_fingerprint(root: str) -> str:
 
 # ----------------------------------------------------------------------------- build (the bundle)
 def _resume_summary(store: Any, run_id: Optional[str],
-                    phases=PIPELINE_PHASES) -> Dict[str, Any]:
+                    phases=PIPELINE_PHASES, root: Optional[str] = None) -> Dict[str, Any]:
     """A small, read-only resume descriptor for `list` — the run id, its resume phase, and
-    done/total — derived from the run checkpoint (the first run if none is named). Bounded."""
-    from .progress import find_active_run
-    rid = run_id or find_active_run(store, phases)
+    done/total — derived from the run checkpoint.
+
+    RUN-ID-DRIFT — an unnamed run comes from THE resolver, so a bundle describes the run the
+    session is actually in. It used to come from a scan whose answer was "the first incomplete
+    checkpoint", i.e. an arbitrary run over `uuid4` ids: a bundle could be labelled with one run
+    while carrying another's state. Unresolvable ⇒ no run id, never a guess. Bounded."""
+    rid = run_id
+    if rid is None and root is not None:
+        from .run_resolver import resolve_run_id
+        rid = resolve_run_id(root)
     if not rid or store.read(CHECKPOINT_PREFIX + rid) is None:
         return {"run_id": rid, "resume_phase": None, "done": 0, "total": len(phases)}
     cp = PipelineCheckpoint(store, rid)
@@ -254,7 +261,7 @@ def build_session_bundle(surface: Any, run_id: Optional[str] = None,
         "source": os.path.basename(os.path.abspath(surface.root)),   # a label, NOT a machine path
         "created": now or now_iso(),
     }
-    bundle["resume"] = _resume_summary(store, run_id)
+    bundle["resume"] = _resume_summary(store, run_id, root=getattr(surface, "root", None))
     return bundle
 
 

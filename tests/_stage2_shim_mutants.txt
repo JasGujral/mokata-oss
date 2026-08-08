@@ -1,0 +1,97 @@
+0.0.17 stage 2 — SHIM-FALSE-GREEN. The mutant list, committed beside the score.
+
+TARGETS:
+  tests/_translating.py            — the mechanism: the declaration vocabulary AND its enforcement
+  tests/test_shim_declaration.py   — the repo-wide sweep, the derived allow-list, the runtime pins
+  tests/test_db_s3_fts.py          — the suite whose declaration this stage measured to be false
+  tests/test_ms_s5_single_flusher.py — a suite no NAME-based sweep had ever found
+
+GRADED BY:
+  tests/test_shim_declaration.py        (the stage's own pins, mechanism + sweep + refusal)
+  tests/test_db_s3_fts.py               (the FTS suite, against its own declaration)
+  tests/test_ms_s5_single_flusher.py    (the cross-process exactly-once suite)
+
+Run: PYTHON=/path/to/venv/bin/python tests/_stage2_shim_mutants.sh
+
+RED   = the tests caught it. The pin is real.
+GREEN = it survived. That is a finding about a pin, and it is reported, never quietly dropped.
+
+SCORE: 18/18 RED, no survivors — ON THE THIRD GRADING. The first two are the point of this file.
+
+
+THE THREE SURVIVORS, AND WHY THEY ALL SAID THE SAME THING
+──────────────────────────────────────────────────────────
+Run 1: 13 RED · 2 GREEN (M14, M15) · 1 BROKEN (M16, pattern escaping) · 2 never ran.
+Run 2: 15 RED · 1 GREEN (M16)      · 1 BROKEN (M17, pattern indentation) · 1 never ran.
+Run 3: 18 RED · 0 GREEN.
+
+All three survivors were THE SAME DEFECT IN THREE PLACES, and it is the defect this stage was
+written to stop, committed by the stage itself:
+
+    M14  killing the allow-list gate     (`if ... in allow_list:` -> `if True:`)     GREEN
+    M15  killing the stale-entry check   (`sorted(...)` -> `[]`)                     GREEN
+    M16  asserting the module set against ITSELF (`expected, found` -> `expected,
+         expected`)                                                                 GREEN
+
+Each gate was written INLINE INSIDE ITS TEST, and after the retrofit the tree has no offender for
+any of them to catch — every real translation site is allow-listed, no allow-list entry is stale,
+and the declared module set matches. So each gate passed whether or not it worked. `test_the_
+sweep_can_actually_fire` existed and was RED-able, but it graded the DETECTOR only; nothing stood
+outside the GATES to check they would report anything.
+
+That is doc 85's pin-that-grades-nothing shape exactly, and the stage-2 brief predicted it in as
+many words: "three stages running have found a pin that was green while grading nothing." The
+prediction landed on the stage's own guards.
+
+THE FIX, applied to all three: extract each gate into a PURE FUNCTION that takes its inputs
+(`undeclared_sites`, `stale_entries`, `module_set_drift`) and feed it synthetic offenders from a
+test. A comparison written inline inside an assertion has nothing standing outside it to check
+that it compares the right two things; a function does.
+
+WHAT THIS COSTS TO BELIEVE: run 1 and run 2 are not "a lower score we improved on". They are the
+evidence that a batch which only confirms what the builder already believed has not earned its
+runtime — the same lesson stage 21 recorded, arrived at independently.
+
+
+THE TWO BROKEN MUTANTS (not verdicts, and not counted as either)
+─────────────────────────────────────────────────────────────────
+M16 run 1 and M17 run 2 both aborted the batch with MUTATION-BROKEN: pattern occurs 0 times.
+Both were MY pattern-escaping errors, not findings about the tree — `"\\n"` where the source has
+`"\n"`, and 8 spaces of indentation where the source has 16. Recorded because the exit contract
+did exactly its job: `BROKEN` is not `GREEN`, the batch stopped dead rather than grading the
+remaining mutants against a tree holding an uncontrolled edit, and 2-then-1 mutants are recorded
+as NEVER RAN rather than silently counted as passes.
+
+
+THE MUTANTS
+────────────
+ 1 · THE REFUSAL IS REAL (enforcement, not just declaration)
+  M01  the refusal goes inert — every undeclared translation silently executed        RED
+  M02  the analysis finds nothing — the divergence table never consulted              RED
+  M03  a surviving `%s` stops being a divergence — the literal-match false green      RED
+       returns (SQLite reads `%s` as a LITERAL, so the query runs and matches nothing)
+  M04  `WITH RECURSIVE` allowed — the MEASURED DB.S7b hazard walks back in            RED
+  M05  text-collation ordering stops being a divergence                               RED
+  M06  a declaration no longer has to state what it does NOT prove                    RED
+
+ 2 · THE DECLARED RULES ARE WHAT RUNS
+  M07  declared rewrites never applied — the declaration becomes decoration           RED
+  M08  a rewrite fires but is never counted — the log stops attributing               RED
+  M09  the basis collapses — a translated pass reports itself as postgres-live        RED
+       (the §7g split representation, destroyed)
+  M10  an interception no longer short-circuits — it falls through to the engine      RED
+
+ 3 · THE SUITE DECLARATIONS ARE LOAD-BEARING
+  M11  DB.S3 loses the jsonb-value-accessor rewrite — the undeclared rewrite this     RED
+       stage FOUND behind the word "NARROW"
+  M12  MS.S5 loses the `now()` rewrite — the semantic substitution nobody had         RED
+       declared, in a suite about cross-process write ordering
+
+ 4 · AIMED AT THE TESTS THEMSELVES (a third of the batch, deliberately)
+  M13  the sweep's rewrite detector goes blind                                        RED
+  M14  the sweep allow-lists everything                          GREEN run 1  ->      RED
+  M15  the stale-entry check is dropped                          GREEN run 1  ->      RED
+  M16  the module-set drift check reports nothing                GREEN run 2  ->      RED
+  M17  the bypass check always says the subclass delegated                            RED
+  M18  the can-fire test plants something that does NOT translate — i.e. does the     RED
+       guard's own guard grade anything?

@@ -24,7 +24,7 @@ partitioned a team on ANY bump — the first client to upgrade refused until the
 the migrated DB then refused every client still on the old build. The artifact now carries
 `(min_supported, current)` and `compatibility()` is the ONE predicate both directions read.
 
-Golden path = plain Postgres ≥14, NO extensions (ADR-54): the probe requires none. `psycopg`
+Golden path = plain Postgres ≥15, NO extensions (ADR-54; floor ratified >=15 target 17 on 2026-08-03 — PG14 EOL 2026-11-12): the probe requires none. `psycopg`
 stays an optional extra (lazy import via `memory/_pg.py`); a missing driver degrades to a
 clear "driver absent" verdict, never a crash.
 
@@ -612,7 +612,7 @@ def ensure_schema(dsn: str, unavailable: Type[Exception], *,
 # `team init` (TM.S3) is the SOLE owner of DDL (doc 48 C4): runtime connects never CREATE/ALTER,
 # so there is no concurrent-create race and a least-privilege runtime role can be DML-only. Every
 # statement is IF NOT EXISTS / ON CONFLICT so ONE idempotent pass (doc 48 E5) is safe to re-run.
-# Golden path = vanilla Postgres ≥14, NO extensions (pgvector stays opt-in, off this path).
+# Golden path = vanilla Postgres ≥15, NO extensions (pgvector stays opt-in, off this path).
 
 class ProvisionError(MokataError):
     """Raised when the one-pass provision cannot run (driver absent / DB unreachable / DDL error)."""

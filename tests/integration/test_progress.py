@@ -17,6 +17,7 @@ from mokata.execmode import SEQUENTIAL, ExecutionChoice
 from mokata.govern.resume import PipelineCheckpoint
 from mokata.init import init_repo
 from mokata.playbook import run_playbook
+from mokata.session import current_run_id
 
 
 def _silent(_):
@@ -43,20 +44,27 @@ class TestProgressMcpTool(unittest.TestCase):
             r = run_playbook(surface, ExecutionChoice(SEQUENTIAL))
             self.assertTrue(r.ok)
             # …and an actual pipeline checkpoint is the run-state the tracker reads.
-            cp = PipelineCheckpoint(surface.state, "story-1")
+            #
+            # RUN-ID-DRIFT — the checkpoint goes on the run the playbook ACTUALLY ran, not on a
+            # bolted-on `story-1`. Resolution is no longer a scan that happens to find the only
+            # `pipeline_run__*` file: it names the run holding this repo's pipeline evidence, which
+            # is the playbook's own. A synthetic id beside that run was only ever findable because
+            # the scan counted a narrower set of files than the resolver (and the gate) do.
+            run_id = current_run_id()
+            cp = PipelineCheckpoint(surface.state, run_id)
             for phase in PIPELINE_PHASES[:4]:
                 cp.mark_passed(phase)
 
             res = M.progress(path=d, response_format="detailed")   # active run + block (MCP-R.D1b)
             self.assertTrue(res["active"])
-            self.assertEqual(res["run_id"], "story-1")
+            self.assertEqual(res["run_id"], run_id)
             self.assertEqual(res["done"], 4)
             self.assertEqual(res["total"], len(PIPELINE_PHASES))
             self.assertEqual(res["current"], PIPELINE_PHASES[4])
             self.assertIn("[4/7 done]", res["block"])
 
             # a fresh session (reloaded Surface) reads the same run-state from disk
-            res2 = M.progress(path=d, run="story-1")
+            res2 = M.progress(path=d, run=run_id)
             self.assertEqual(res2["done"], 4)
 
 

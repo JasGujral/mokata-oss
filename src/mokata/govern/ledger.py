@@ -174,7 +174,14 @@ class AuditLedger:
     @classmethod
     def from_mokata_dir(cls, mokata_dir: str) -> "AuditLedger":
         # The ledger is transient runtime data (Stage 24D): under .mokata/temp_local/.
-        return cls(os.path.join(mokata_dir, TEMP_LOCAL_DIRNAME, AUDIT_DIRNAME,
+        #
+        # WT-ROOT — and it is REPO-scoped, so it resolves to the MAIN checkout (Jas, 2026-08-04:
+        # branches/worktrees are separate, but the audit trail is shared). The redirect lives HERE,
+        # in the one factory, rather than at the ~25 `from_mokata_dir(surface.mokata_dir)` call
+        # sites — an audit trail that splits per worktree is not a trail, and no caller should be
+        # able to opt out of that by construction. Identity for a main checkout / non-git dir.
+        from ..repo_identity import canonical_mokata_dir
+        return cls(os.path.join(canonical_mokata_dir(mokata_dir), TEMP_LOCAL_DIRNAME, AUDIT_DIRNAME,
                                 LEDGER_FILENAME))
 
     # --- cross-process locking (reentrant in-process) -----------------------------------------

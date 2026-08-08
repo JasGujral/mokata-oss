@@ -127,6 +127,48 @@ def sqlite_disk_ok():
     return _SQLITE_DISK_OK
 
 
+# --- The repo walk: a nested checkout is NOT this repo's source -------------------------
+# A repo-wide sweep that walks the checkout root will happily descend into a SECOND checkout
+# placed inside it and count its files as mokata's own. That is not hypothetical: a git
+# worktree at `.claude/worktrees/…`, created by Claude Code for a parallel session, duplicated
+# every action-pin file and turned `test_pin_drift_all_pins_guarded` red at a clean HEAD.
+#
+# The rule itself lives in `mokata.repo_walk` — ONE definition, because the product walkers
+# (the knowledge index, both graph floors, the anchor scan, the AC mapper, `detect`) need the
+# same boundary and a second copy here is the name-drift shape this repo has already paid for.
+# It is keyed on STRUCTURE, not on a name: a directory carrying a `.git` entry is the root of a
+# different checkout, `.git` as a DIRECTORY (clone, submodule) or as a FILE (the `gitdir:`
+# pointer `git worktree add` writes).
+from mokata.repo_walk import is_checkout_boundary  # noqa: E402  (after the sys.path fix above)
+
+
+def iter_repo_files(root, skip_dirs=()):
+    """Yield `(rel_posix_path, abs_path)` for every file under `root`, skipping nested
+    checkouts and `skip_dirs`.
+
+    `skip_dirs` entries match either a bare directory name (`node_modules`) or a
+    repo-relative path (`docs/build`). `.git` needs no entry — it is pruned as the boundary
+    marker it is. Use this for any sweep rooted at the REPO ROOT so the nested-checkout
+    property is a fact about the repo rather than a habit each author has to remember.
+
+    Deliberately NOT `repo_walk.prune_source_dirs`: that prunes every hidden directory, and a
+    sweep over this repo must still reach `.github/workflows` (where the action pins live).
+    The BOUNDARY rule is shared; the dot policy is each walker's own."""
+    skip = set(skip_dirs)
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = os.path.relpath(dirpath, root)
+        rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if d != ".git"
+            and d not in skip
+            and f"{rel_dir}/{d}".lstrip("/") not in skip
+            and not is_checkout_boundary(os.path.join(dirpath, d))
+        )
+        for name in sorted(filenames):
+            yield (f"{rel_dir}/{name}".lstrip("/"), os.path.join(dirpath, name))
+
+
 # --- H-1a: the BEHAVIOURAL read-only pin ------------------------------------------------
 # "This code path writes nothing durable" cannot be pinned by a name-based sweep (asserting no
 # call to `record_usage`/`all_active` catches only the mutations someone thought to name, and

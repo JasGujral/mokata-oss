@@ -14,8 +14,16 @@ signal and asks `check_graph_required` for the verdict.
 
 Honesty over convenience (P22): the escape does NOT strip the caveat. `--allow-degraded` records a
 session-scoped, ledgered acceptance and the run proceeds — but the evidence stays EXPLICITLY marked
-degraded in the output. The floor's honesty (GR.S1: empty-AST evidence stays `degraded=True`) is
-never weakened to dodge a refusal; the refusal UX is the fix.
+degraded in the output. The floor's honesty is never weakened to dodge a refusal; the refusal UX is
+the fix.
+
+D2 — that honesty is about what the floor CANNOT SEE, and it used to be written here as "empty-AST
+evidence stays `degraded=True`". That sentence was the defect: a LEAF (a symbol the AST floor holds
+the definition of, that nothing calls) is not empty evidence, it is a structurally verified ZERO,
+and refusing it meant naming one entry point among an approach's targets refused `spec_emit` on
+mokata's own primary language. The distinction now lives at the backend (`knowledge.query`'s basis
+vocabulary), so this gate is unchanged and every consumer inherits it: a symbol the floor cannot
+ACCOUNT FOR still degrades and is still refused.
 
 Consent (SI.3 / PH-GATE.S0 P14): the override is a session-scoped state record keyed by `run_id`,
 written only by a re-confirmed human action (`mokata spec-check --allow-degraded` at a TTY, or the
@@ -227,10 +235,17 @@ def check_graph_required(*, degraded: bool, required: bool, overridden: bool, co
 # --------------------------------------------------------------------------- consumer entry points
 def brainstorm_impact_gate(session: Any, approach_name: str, *, surface: Any, run_id: str,
                            layer: Any = None) -> GraphRequiredOutcome:
-    """The Lens-1 verdict the CLI skill AND the MCP loop both compute the same way: read the chosen
-    approach's query-level `graph_degraded`, the project's `graph.required`, and this session's
-    override, and fire the one-time upgrade notice on the first refusal. Pass the result to
-    `BrainstormSession.approve(graph_gate=...)`."""
+    """The Lens-1 verdict: read the chosen approach's query-level `graph_degraded`, the project's
+    `graph.required`, and this session's override, and fire the one-time upgrade notice on the
+    first refusal. The result is what `BrainstormSession.approve(graph_gate=...)` consumes.
+
+    ⚠ NOTHING IN `src/` CALLS THIS. It is a consumer entry point with no consumer: neither the CLI
+    skill nor the MCP loop computes it (they did not "both compute it the same way", as this
+    docstring claimed until 0.0.17), so the approve-path refusal it feeds never fires in the
+    shipped product — `GATE-UNREACHABLE-BRAINSTORM`, doc 84. The GR.S3 refusal that DOES fire is
+    the emit-path one in `mcp/tools_spec.py`, which reaches the same verdict through
+    `check_graph_required` without going through this function. Wiring this one into the approve
+    path is deferred to 0.0.19 by ruling D14, alongside the JS/TS floor."""
     imp = (getattr(session, "impacts", {}) or {}).get(approach_name)
     degraded = bool(getattr(imp, "graph_degraded", False))
     required = graph_required_enabled(surface)
