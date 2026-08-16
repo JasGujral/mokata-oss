@@ -87,7 +87,51 @@ jobs:
         timeout-minutes: 5
         run: python -m unittest discover -s tests -t tests -p "test_ms_s7_stress.py" -v
       - name: Run unit test suite
-        run: python -m unittest discover -s tests -t tests
+        # TEMPORARY INSTRUMENTATION (CI-SPEED) — same discovery, same pass/fail semantics, plus a
+        # per-test duration report. This step is 91% of the slowest leg's wall clock, and the
+        # `~45 min` figure in the matrix comment above has never been measured. Attributing the
+        # cost per test and per module is the prerequisite for cutting it without cutting coverage.
+        # Reverted once the numbers are in.
+        run: |
+          python - <<'PY'
+          import collections, time, unittest, sys
+
+          durations = []
+
+          class TimedResult(unittest.TextTestResult):
+              def startTest(self, test):
+                  self._t0 = time.perf_counter()
+                  super().startTest(test)
+
+              def stopTest(self, test):
+                  durations.append((time.perf_counter() - self._t0, test.id()))
+                  super().stopTest(test)
+
+          suite = unittest.TestLoader().discover('tests', top_level_dir='tests')
+          t0 = time.perf_counter()
+          result = unittest.TextTestRunner(resultclass=TimedResult, verbosity=1).run(suite)
+          total = time.perf_counter() - t0
+
+          durations.sort(reverse=True)
+          print("\n===== CI-SPEED: %.1fs of test bodies over %d tests =====" % (
+              sum(d for d, _ in durations), len(durations)))
+          print("===== CI-SPEED: %.1fs wall for the whole run =====" % total)
+
+          print("\n----- TOP 50 SLOWEST TESTS -----")
+          for d, name in durations[:50]:
+              print("%8.2fs  %s" % (d, name))
+
+          by_mod, counts = collections.Counter(), collections.Counter()
+          for d, name in durations:
+              mod = name.split('.')[0]
+              by_mod[mod] += d
+              counts[mod] += 1
+          print("\n----- TOP 40 MODULES BY TOTAL TIME -----")
+          for mod, d in by_mod.most_common(40):
+              print("%8.2fs  %5d tests  %s" % (d, counts[mod], mod))
+
+          sys.exit(0 if result.wasSuccessful() else 1)
+          PY
       - name: Run integration suite (the release gate)
         run: python -m unittest discover -s tests/integration -t tests/integration
       - name: Playbook smoke run (fresh init)
