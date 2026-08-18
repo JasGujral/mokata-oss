@@ -161,6 +161,9 @@ def _lensed_session():
 
 def _src_files():
     import mokata
+    # CORPUS: THE WORKING TREE. This asks what mokata SHIPS, and `sync-public.sh` mirrors
+    # with `rsync`, which copies the working tree — an untracked `.py` under `src/` really is
+    # published. The index would be blind to exactly the file most likely to break the rule.
     return list(pathlib.Path(mokata.__file__).parent.rglob("*.py"))
 
 

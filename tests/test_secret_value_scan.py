@@ -508,6 +508,9 @@ def _entropy_findings_in_repo():
     exts = (".py", ".md", ".json", ".toml", ".yml", ".yaml", ".sh", ".cfg", ".txt")
     out = []
     for target in ("src", "tests"):
+        # CORPUS: THE WORKING TREE. This asks what mokata SHIPS, and `sync-public.sh` mirrors
+        # with `rsync`, which copies the working tree — an untracked `.py` under `src/` really is
+        # published. The index would be blind to exactly the file most likely to break the rule.
         for dirpath, dirnames, filenames in os.walk(os.path.join(REPO, target)):
             dirnames[:] = [d for d in dirnames if not _is_debris(d)]
             for name in sorted(filenames):
@@ -609,6 +612,9 @@ class TestOwnCorpusFalsePositiveRate(unittest.TestCase):
         """A shrinking corpus would make the bar above pass for the wrong reason."""
         n_files = n_lines = 0
         for target in ("src", "tests"):
+            # CORPUS: THE WORKING TREE. This asks what mokata SHIPS, and `sync-public.sh` mirrors
+            # with `rsync`, which copies the working tree — an untracked `.py` under `src/` really is
+            # published. The index would be blind to exactly the file most likely to break the rule.
             for dirpath, dirnames, filenames in os.walk(os.path.join(REPO, target)):
                 dirnames[:] = [d for d in dirnames if not _is_debris(d)]
                 for name in filenames:

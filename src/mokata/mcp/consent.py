@@ -288,6 +288,21 @@ def _propose(path: str, tool: str, args: Dict[str, Any], payload: Dict[str, Any]
         out["note"] = ("`approve`/`confirm` no longer commit: an approval is MINTED BY A HUMAN "
                        "out-of-band (`mokata approve <id>`) and can only be REFERENCED here by id. "
                        "Typing approve=true is not consent — it never was.")
+    # Lane F — the wait now RAISES something, not just renders something. `awaiting` made this wait
+    # legible on three channels and could not make anyone look at them: the allow-grant means Claude
+    # Code prompts for nothing, so no harness `Notification` fires and a correct wait is silent.
+    #
+    # Wired at the ONE `_propose` seam for the same reason the loud `awaiting_block` head is built
+    # there — all propose sites inherit it and none can word it its own way. It is the LAST thing
+    # the function does, after `out` is fully built, so a notifier that somehow took time or died
+    # could not affect what this call returns; and `announce_wait` raises nothing regardless.
+    #
+    # ⚠ NOT a synthesized harness event (the `UX-NOTIFY` doctrine stands): it is mokata's own
+    # process making its own sound, and it CONSUMES `signal_wait`'s classification rather than
+    # growing a firing side inside a function documented as pure.
+    if not p.approved:
+        from ..notify import announce_wait
+        announce_wait(path, tool=tool, proposal_id=p.proposal_id)
     return out
 
 

@@ -18,6 +18,23 @@ from ._common import (
     _backend_projects,
     _cli_ask,
 )
+from ..deprecation import REMOVED_CHANNELS, RemovedChannelError
+from ..session_transport import TRANSPORT_KINDS as _LIVE_KINDS
+
+# The `--to/--from` choices are DERIVED, never re-typed. They were a hand-written
+# `("local", "vault", "postgres")` triple — a second copy of `TRANSPORT_KINDS` that this slice
+# would have had to remember to edit, which is exactly how a removed channel goes on being
+# advertised in `--help` after the code behind it is gone.
+#
+# ⚠⚠ AND IT IS `TRANSPORT_KINDS + REMOVED_CHANNELS`, NOT `TRANSPORT_KINDS`, WHICH IS THE WHOLE
+# LESSON OF THIS LANE ARRIVING ON THE SLICE THAT WROTE IT DOWN. Deriving from the live registry
+# alone makes `--to vault` answer `invalid choice: 'vault'` (exit 2) — argparse's word for a TYPO —
+# on a flag a year of published docs and shipped `--help` text told people to pass. That is
+# `MIGRATE-ANSWERS-A-REMOVED-CHANNEL-AS-A-TYPO` (stage 11) on a second surface, and the first draft
+# of this slice introduced it while removing it somewhere else. Accepted here and refused by
+# `make_transport` with the channel's own removal record; `metavar` advertises only what works.
+STX_KINDS = tuple(_LIVE_KINDS) + tuple(REMOVED_CHANNELS)
+STX_METAVAR = "{%s}" % ",".join(_LIVE_KINDS)
 
 
 def cmd_vault(args: argparse.Namespace) -> int:
@@ -122,6 +139,30 @@ def cmd_vault(args: argparse.Namespace) -> int:
     return 2
 
 
+def _announce_removed_bundles(root: str) -> None:
+    """Say so when this repo still holds session bundles in a REMOVED channel's store.
+
+    ⚠ THE REASON THIS IS NOT AN `if not infos` BRANCH. `session list` used to span local + the
+    vault store; dropping the vault leg silently turns "nine bundles, all in the vault" into
+    *"no shared bundles — `mokata session push <tag>` to package this session"* — an invitation to
+    re-do work that is already saved, which is slice 1's empty-SQLite-floor answer wearing a
+    friendlier face. It runs unconditionally because the mixed case (one local bundle, nine
+    stranded) produces a NON-empty listing that is still short, and that is the case a
+    is-the-list-empty guard cannot see.
+
+    Not a raise: unlike slice 1's chain resolution, the listing that WAS produced is true and
+    complete for the transports that survive. What was missing is a fact, so a fact is what gets
+    added — on stderr, so a script parsing the listing is unaffected."""
+    from .. import session_transport as STX
+    from .. import deprecation
+    stranded = STX.removed_bundle_tags("vault", root)
+    if not stranded:
+        return
+    print(deprecation.removal_answer("vault", root, True), file=sys.stderr)
+    print(f"session: {len(stranded)} bundle(s) are in that store and are NOT listed above: "
+          + ", ".join(stranded), file=sys.stderr)
+
+
 def cmd_session(args: argparse.Namespace) -> int:
     # Stage 55a/55b — portable tagged sessions: push / pull / list / name across transports.
     from .. import session_bundle as SB
@@ -145,6 +186,12 @@ def cmd_session(args: argparse.Namespace) -> int:
             return STX.make_transport(_kind(explicit), root), 0
         except STX.SessionTransportUnavailable as exc:
             print(f"session: {exc}", file=sys.stderr)
+            return None, 1
+        except RemovedChannelError as exc:
+            # ⚠ NOT folded into the degrade above. "Unavailable" tells a user to fix their
+            # environment and retry; a removed transport will never come back, and the record
+            # carries the remedy instead. Two facts, two answers (§7g).
+            print(str(exc), file=sys.stderr)
             return None, 1
 
     if action == "list":
@@ -186,8 +233,14 @@ def cmd_session(args: argparse.Namespace) -> int:
                   "present. (Refusing to dump every project's sessions.)")
             return 2
 
-        # span local + the committed vault, plus shared Postgres when a DSN is configured.
-        transports = [STX.LocalTransport(root), STX.VaultTransport(root)]
+        # span local, plus shared Postgres when a DSN is configured.
+        # ⚠ THE REMOVED VAULT LEG IS NOT SIMPLY DROPPED. It used to be listed here, so a user whose
+        # bundles all sit in `.mokata/vault/sessions/` would now read "no shared bundles" — slice
+        # 1's empty-store defect on a different surface. `_announce_removed_bundles` below says
+        # they are still there and how to reach them, and it runs whether or not the listing is
+        # empty (a repo with one local bundle and nine vault ones is the case a not-empty guard
+        # would miss).
+        transports = [STX.LocalTransport(root)]
         if has_shared:
             try:
                 # default scope → derive the current project; --all → span (None); --project → id.
@@ -197,6 +250,7 @@ def cmd_session(args: argparse.Namespace) -> int:
             except STX.SessionTransportUnavailable:
                 pass                                       # degrade clean — local/vault still list
         infos = SB.list_session_bundles_across(root, transports)
+        _announce_removed_bundles(root)
         if not infos:
             print("session: no shared bundles — `mokata session push <tag>` to package this "
                   "session for another machine / a teammate.")
@@ -377,12 +431,12 @@ def register(sub, common):
                            help="pull target repo root (default: this repo)")
     p_session.add_argument("--author", default=None,
                            help="push author for provenance (default: $USER)")
-    p_session.add_argument("--to", choices=("local", "vault", "postgres"), default=None,
+    p_session.add_argument("--to", choices=STX_KINDS, metavar=STX_METAVAR, default=None,
                            help="push/name transport (default: DERIVED from the repo mode — a "
                                 "team-connected repo uses postgres, a solo repo uses local); "
                                 "vault = committed/synced. An explicit value is honored verbatim")
     p_session.add_argument("--from", dest="frm",
-                           choices=("local", "vault", "postgres"), default=None,
+                           choices=STX_KINDS, metavar=STX_METAVAR, default=None,
                            help="pull transport (default: derived from the repo mode) — same "
                                 "choices as --to")
     p_session.add_argument("--file", dest="file", action="store_true",

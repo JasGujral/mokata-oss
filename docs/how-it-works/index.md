@@ -21,6 +21,10 @@ config, or a git action — happens without an explicit human approval.
 
 ## The layers
 
+<!-- mokata:gates backed -->
+<!-- The diagram's gate row is a backed-gates roster, so the guard grades this whole block:
+     no gate id may appear anywhere in the layer diagram unless it is backed in the registry.
+     See tests/test_public_counts_guard.py. -->
 ```
         you  +  Claude Code (the harness)
         │
@@ -33,7 +37,7 @@ config, or a git action — happens without an explicit human approval.
 │  PIPELINE — brainstorm → spec → test → develop → review → ship │
 │  backed gates: approach-approval · completeness · spec-persisted│
 │  · no-code-without-failing-test · deviation · hard-rule ·      │
-│  ship-readiness · write-gate · secret-guard                    │
+│  self-protect · write-gate · secret-guard                      │
 ├───────────────────────────────────────────────────────────────┤
 │  KNOWLEDGE graph   │  MEMORY engine (local + team scopes)      │
 │  structural facts  │  typed, human-gated, precedence-resolved  │
@@ -44,6 +48,7 @@ config, or a git action — happens without an explicit human approval.
 │  · gate-guard (run-state gates, P14-overridable) + MCP tools   │
 └───────────────────────────────────────────────────────────────┘
 ```
+<!-- /mokata:gates -->
 
 Each box is a link into the deep-dive. The rest of this page walks them in order.
 
@@ -54,8 +59,10 @@ developer-facing arc is `brainstorm → spec → test → develop → review →
 7-phase spec engine (`brainstorm → analysis → strawman → pre_mortem → probes → completeness_gate
 → emit`) turns an approved approach into testable acceptance criteria.
 
-The gates are real code, not advice. **Nine are *backed*** — each names the module that enforces
-it (`skill_contracts.GATES`):
+The gates are real code, not advice. There are **9 backed gates** — each names the module that
+enforces it, and each is a `skill_contracts.GATES` row carrying `backed=True`:
+
+<!-- mokata:gates backed -->
 
 | Gate | Where | Blocks on |
 |---|---|---|
@@ -63,19 +70,35 @@ it (`skill_contracts.GATES`):
 | `completeness` | spec | any acceptance criterion with no mapped test (or an empty spec) |
 | `spec-persisted` | before develop/test | no saved spec with ≥1 acceptance criterion |
 | `no-code-without-failing-test` | test → develop | implementing before a recorded RED test exists |
-| `spec-scope` | develop | a write outside the spec's authorized surface, or one spelling a deferred item's marker |
 | `deviation` | spec/refine/develop | a change that would break a saved spec or recorded decision |
 | `hard-rule` | any phase | an in-scope hard governance rule (fail-closed, no runtime override) |
-| `write-gate` + `secret-guard` | emit, ship, memory, config | an un-approved durable write; a secret in the payload |
-| `ship-readiness` | ship | landing before green tests + met ACs + a passed review |
+| `write-gate` | emit, ship, memory, config | an un-approved durable write |
+| `secret-guard` | emit, ship, memory, config | a secret in the payload |
+| `self-protect` | any write, before every other gate | a write to an installed package tree, to mokata's own install, or outside your workspace |
 
-Four of them — `approach-approval`, `spec-persisted`, `no-code-without-failing-test` and
-`spec-scope` — are also enforced **outside** mokata's own tools, on the harness's native
-`Write`/`Edit`, by the
-[gate-guard hook](skills-and-gates.md#the-gate-guard-the-gates-enforced-on-native-edits) (§7). That
-is what makes them structural rather than advisory. Everything else a skill states as its headline
-(`red-before-green`, `spec-then-quality`, `measure-first`, …) is an **advisory protocol boundary**,
-labelled as such in the code rather than dressed up as enforcement.
+<!-- /mokata:gates -->
+
+Nine gates, nine rows — deliberately, on a page about gate accounting. `write-gate` and
+`secret-guard` used to share one, which made the table read as eight.
+
+The [gate-guard hook](skills-and-gates.md#the-gate-guard-the-gates-enforced-on-native-edits) (§7)
+holds **4 run-state gates** *outside* mokata's own tools, on the harness's native `Write`/`Edit`:
+
+<!-- mokata:gates run-state -->
+`approach-approval` · `spec-persisted` · `no-code-without-failing-test` · `spec-scope`
+<!-- /mokata:gates -->
+
+That is what makes them structural rather than advisory. Note that this is **not** "four of the
+nine": three of them are in the table above, and `spec-scope` is a run-state gate the hook
+enforces without being a Contract-citable one. The hook lane and the backed set are two
+overlapping sets, so the honest phrasing is *the hook stops 5 things* — those four plus
+`self-protect`, which runs ahead of all of them — never *5 of the 9*.
+
+Everything else a skill states as its headline (`ship-readiness`, demoted to advisory in 0.0.17
+because nothing in the package executes it, `red-before-green`, `spec-then-quality`,
+`measure-first`, …) is an **advisory protocol boundary**, labelled as such in the code rather than
+dressed up as enforcement. The boundary still binds the skill; it is just not a claim that code
+stops you.
 
 You can run the whole thing (`mokata playbook`), enter a slice (`mokata enter <phase>`), or run
 one skill standalone (`mokata run <skill>`) — the gates apply either way. Full detail:
@@ -120,9 +143,7 @@ what a change's blast-radius is, where a symbol is defined. Brainstorm grounds a
 develop pulls it JIT for the symbols in play, review reads it for the architecture axis, and the
 domain classifier derives the domains-in-play from it. The layer answers structurally from an
 **embedded, zero-dependency stdlib-AST floor** out of the box, and lets you adopt an external
-graph (`code-review-graph` / `serena`) for cross-language precision. (The Neo4j backend still
-works but is **deprecated**, scheduled for removal in 0.0.17 — the graph is derived data, so
-re-index with a supported backend rather than migrating.) `graph.required` is on
+graph (`code-review-graph` / `serena`) for cross-language precision. `graph.required` is on
 by default: mokata refuses to present a *degraded* (grep-floor) blast radius as decision input
 unless you accept it (`--allow-degraded`, ledgered). See
 [Knowledge layer](../concepts/knowledge.md).

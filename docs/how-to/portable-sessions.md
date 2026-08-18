@@ -22,7 +22,6 @@ gates are identical on every one; only the byte store changes:
 | Transport | Where | Use it for |
 |---|---|---|
 | `local` | `.mokata/session-bundles/<tag>.json` | this machine / committing the file |
-| `vault` *(deprecated)* | `.mokata/vault/sessions/<tag>.json` | the old committed-artifact route — still works, warns once (see below) |
 | `postgres` | a shared, owned DB table (`mokata_session_bundle`) | a **shared team store** — everyone pushes/pulls one place |
 
 ### The default is DERIVED from your repo's mode
@@ -40,17 +39,23 @@ Two escape hatches:
   guessing `local` — *cannot determine repo mode … fix `.mokata/manifest.json` or pass an explicit
   transport / `--file`*.
 
-!!! warning "`--to vault` / `--from vault` is deprecated (removal: 0.0.17)"
-    The vault session transport **still works** and nothing has been removed — it warns once per
-    repo on first use, naming the replacement and the migration. Re-home existing bundles onto the
-    mode-derived transport with the one-time, human-gated:
+!!! warning "`--to vault` / `--from vault` was REMOVED in 0.0.18 — and your bundles are fine"
+    The vault session transport is gone. **Nothing of yours was deleted.** Those bundles are the
+    same JSON the `local` transport reads — the store was a directory, not a format — so:
 
     ```bash
-    mokata migrate vault          # gated · previewed · idempotent · non-destructive
+    mv .mokata/vault/sessions/*.json .mokata/session-bundles/
+    mokata session list                  # they are all there
+    mokata session pull <tag>            # …and still gated, hash-verified and secret-scanned
     ```
 
-    It is **one-time** (a re-run reports "already migrated"; `--force` re-runs it) and leaves the
-    source in place — deleting the old bundles is your call.
+    There is nothing to convert and no older mokata to install. `mokata session list` tells you
+    unprompted if this repo still holds any, and names them; typing `--to vault` gets you that same
+    answer rather than *"invalid choice"*.
+
+    ⚠ The **design vault** at `.mokata/vault/` is a different thing and is **not** removed —
+    `mokata vault list / search / pull / push` all still work. See
+    [share a design vault](share-a-design-vault.md).
 
 **Postgres is opt-in & local-first.** It reads its DSN from `MOKATA_SESSION_PG_DSN` (or the shared
 `MOKATA_PG_DSN`) — never inline in the committed manifest. Its table (`mokata_session_bundle`) is
@@ -139,7 +144,7 @@ Re-pushing the same tag is safe and explicit:
 ## List what's shared (read-only)
 
 ```bash
-mokata session list      # spans local + the committed vault (+ shared Postgres when a DSN is set)
+mokata session list      # spans local (+ shared Postgres when a DSN is set)
                          # each row: tag @transport · resume point · author · date
 ```
 
@@ -233,7 +238,7 @@ The MCP tools mirror the CLI: `session_list` is read-only (and spans transports)
 `proposal_id` and write nothing until *you* approve it out-of-band with `mokata approve <id>`
 (bare `mokata approve` lists what's waiting; consistent with the vault and memory write tools —
 `approve=true` on the tool call commits nothing). Each carries a `transport` argument
-(`local` | `vault` | `postgres`), defaulting to the mode-derived one; an unreachable remote
+(`local` | `postgres`), defaulting to the mode-derived one; an unreachable remote
 returns a clean `unavailable` status.
 
 See also [share a design vault](share-a-design-vault.md) and

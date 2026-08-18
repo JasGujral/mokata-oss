@@ -41,7 +41,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..repo_walk import prune_source_dirs
+from ..repo_walk import posix_name, prune_source_dirs
 from .grep_backend import GrepBackend
 from .query import (BASIS_STRUCTURAL, BASIS_VERIFIED_EMPTY, QUERY_KINDS,
                     GraphBackend, QueryResult, Reference)
@@ -296,7 +296,7 @@ class AstBackend(GraphBackend):
         edges: Dict[str, FileEdges] = {}
         fresh: Dict[str, Any] = {}
         for ab in self._py_files():
-            rel = os.path.relpath(ab, self.root)
+            rel = posix_name(os.path.relpath(ab, self.root))
             try:
                 st = os.stat(ab)
             except OSError:

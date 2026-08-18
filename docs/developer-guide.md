@@ -3,15 +3,17 @@
 mokata is a pure-Python package under `src/mokata/`, with one capability model. Supported
 Python: **3.10–3.13**.
 
-**Dependencies.** The one required runtime dependency is the **MCP SDK** (`mcp>=1.2`) — it ships
-by default so the bundled `mokata-mcp` server works straight out of `pip install mokata`.
+**Dependencies.** The one required runtime dependency is the **MCP SDK** (`mcp>=1.2,<2`) — it
+ships by default so the bundled `mokata-mcp` server works straight out of `pip install mokata`.
+The upper bound is deliberate: `mcp` 2.0.0 removed `mcp.server.fastmcp`, which the mokata MCP
+server is built on, so 2.x needs a port rather than a version bump. If your environment already
+has `mcp` 2.x, `mokata-mcp` says so and tells you to run `pip install 'mcp<2'`.
 Everything else is optional and **degraded over when absent**, never fatal:
 
 | Extra | Pulls | Absent ⇒ |
 |---|---|---|
 | `schema` | `jsonschema>=4.0` | the built-in structural validator still validates the manifest |
 | `postgres` | `psycopg>=3.1` | memory degrades to the SQLite floor |
-| `neo4j` | `neo4j>=5.0` | `code_graph` degrades to the ast → ripgrep → grep floor |
 | `embeddings` | `model2vec>=0.3`, `numpy>=1.24` | the semantic tier falls to the zero-dep hashing floor (token-hash overlap, **not** meaning) — `mokata doctor` reports which tier is actually ranking recall |
 | `mcp` | *(no-op alias of the default dep — kept so `mokata[mcp]` still resolves)* | — |
 
@@ -49,7 +51,7 @@ drift anchors + `lat_check`).
 
 ### Part C — Memory (`memory/`)
 `item.py` (`MemoryItem` + the three types), `backends.py` (`SQLiteBackend` default,
-`ObsidianBackend`, `NativeMemoryBackend`), `store.py` (the logic: gated writes, toggles,
+`PostgresBackend`), `store.py` (the logic: gated writes, toggles,
 instrumentation, consolidation), `healing.py` (surfacing detection), `episodic.py`
 (searchable turns, lexical fallback), `consolidation.py` (proposal-only).
 
@@ -140,9 +142,33 @@ python -m unittest discover -s tests -t tests
 ```
 
 CI runs **both jsonschema states on `ubuntu-latest` and `windows-latest`**, on **Python 3.12**,
-plus a `mokata playbook` smoke run. (The matrix is deliberately light — the package floor stays
-Python ≥ 3.10 and the classifiers cover 3.10–3.13; see
-[platform support](reference/platform-support.md#ci-coverage).) Tests are written RED-before-GREEN.
+plus a `mokata playbook` smoke run — **and the declared floor on three further legs** (`ubuntu` ×
+present, `ubuntu` × absent, `windows` × present). The matrix is deliberately light; the classifiers
+cover 3.10–3.13. See [platform support](reference/platform-support.md#ci-coverage).
+Tests are written RED-before-GREEN.
+
+### On the declared floor
+
+`python -m unittest` above runs on whatever interpreter is on your PATH, which on many machines is
+*older* than the floor the package promises. Do not guess — provision it:
+
+```bash
+scripts/floor-python.sh                    # build build/floor-venv at the declared floor
+scripts/floor-python.sh --jsonschema absent   # the same, with jsonschema removed
+scripts/floor-python.sh --dry-run          # both routes, and whether this machine has either
+scripts/floor-python.sh --check            # what version is actually in there?
+scripts/floor-python.sh --exec -m unittest discover -s tests -t tests
+```
+
+The floor is read from `pyproject.toml`'s `requires-python` on every run, never hard-coded, so the
+command keeps working when the floor moves. `--check` distinguishes *at the floor*, *below it*,
+*above it* and *not provisioned* with four separate exit statuses: an interpreter newer than the
+floor is refused too, because a run on it is not a floor run.
+
+Provisioning needs **one of two routes**: [`uv`](https://docs.astral.sh/uv/), which fetches the
+interpreter itself, or a `python<floor>` already on your PATH. `--dry-run` prints the command each
+route would run and marks each `available` or `absent`; if you have neither it **exits 2** and says
+so, rather than printing an empty plan and succeeding.
 
 ## Contributing
 

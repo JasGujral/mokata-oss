@@ -42,7 +42,7 @@ def _tree_snapshot(root):
         for name in sorted(files):
             p = os.path.join(base, name)
             with open(p, "rb") as fh:
-                snap[os.path.relpath(p, root)] = fh.read()
+                snap[_support.posix_rel(p, root)] = fh.read()
     return snap
 
 
@@ -786,9 +786,15 @@ class TestNoSecondGraphDatabase(unittest.TestCase):
         """Doc 04's standing constraint, and doc 84's for this row specifically. MUTATION: import a
         graph library in `memory/edges.py` and this goes RED.
 
-        Over IMPORTS, not over source text: the module's own docstring names `neo4j_backend.py` as
-        the deprecated counter-example, and a guard that cannot tell a citation from a dependency
-        would forbid explaining the rule it enforces."""
+        Over IMPORTS, not over source text: the module's own docstring still NAMES `neo4j` while
+        recounting the counter-example (the file it used to cite was deleted at 0.0.18 stage 14 and
+        the episode is the justification, so the prose kept the name), and a guard that cannot tell
+        a citation from a dependency would forbid explaining the rule it enforces.
+
+        ⚠ `neo4j` STAYS IN THE FORBIDDEN SET BELOW, and that is the point of a do-NOT-build rule:
+        the set names what must never be imported, not what happens to be importable today.
+        Removing the member because the tree no longer has an offender is exactly the §7i mistake —
+        it would retire the guard in the release that made it true."""
         import ast
         import inspect
         tree = ast.parse(inspect.getsource(E))

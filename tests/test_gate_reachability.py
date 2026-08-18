@@ -378,6 +378,9 @@ class TestTheEntryPointDerivationIsGrounded(unittest.TestCase):
         """No silent drops: a `set_defaults(func=…)` the derivation cannot resolve would shrink
         the closure without saying so."""
         declared = 0
+        # CORPUS: THE WORKING TREE. This asks what mokata SHIPS, and `sync-public.sh` mirrors
+        # with `rsync`, which copies the working tree — an untracked `.py` under `src/` really is
+        # published. The index would be blind to exactly the file most likely to break the rule.
         for base, _dirs, files in os.walk(os.path.join(SRC, "cli_commands")):
             for name in files:
                 if not name.endswith(".py"):

@@ -82,11 +82,11 @@ class TestNoOp(unittest.TestCase):
     def test_adding_an_already_wired_integration_is_a_noop(self):
         with tempfile.TemporaryDirectory() as d:
             _init(d)
-            OB.run_reconfigure(d, add=["obsidian"], assume_yes=True,
-                               detector=_detector({"obsidian"}))
+            OB.run_reconfigure(d, add=["postgres"], assume_yes=True,
+                               detector=_detector({"postgres"}))
             before = _manifest_bytes(d)
-            res = OB.run_reconfigure(d, add=["obsidian"], assume_yes=True,
-                                     detector=_detector({"obsidian"}))
+            res = OB.run_reconfigure(d, add=["postgres"], assume_yes=True,
+                                     detector=_detector({"postgres"}))
             self.assertFalse(res.changed)
             self.assertEqual(_manifest_bytes(d), before, "re-adding rewrote the manifest")
 
@@ -118,28 +118,28 @@ class TestRemove(unittest.TestCase):
     def test_remove_unwinds_clean_with_no_residue(self):
         with tempfile.TemporaryDirectory() as d:
             _init(d)
-            OB.run_reconfigure(d, add=["obsidian"], assume_yes=True,
-                               detector=_detector({"obsidian"}))
-            self.assertIn("obsidian", _chain(d, "memory_store"))
-            res = OB.run_reconfigure(d, remove=["obsidian"], confirm=_yes, out=lambda _: None,
-                                     detector=_detector({"obsidian"}))
+            OB.run_reconfigure(d, add=["postgres"], assume_yes=True,
+                               detector=_detector({"postgres"}))
+            self.assertIn("postgres", _chain(d, "memory_store"))
+            res = OB.run_reconfigure(d, remove=["postgres"], confirm=_yes, out=lambda _: None,
+                                     detector=_detector({"postgres"}))
             self.assertTrue(res.changed)
-            self.assertIn("obsidian", res.removed)
+            self.assertIn("postgres", res.removed)
             # gone from the capability chain AND from the tools table — no residue (K6).
-            self.assertNotIn("obsidian", _chain(d, "memory_store"))
+            self.assertNotIn("postgres", _chain(d, "memory_store"))
             from mokata import config_cmd
             _f, tools = config_cmd.config_get(d, "tools")
-            self.assertNotIn("obsidian", tools or {})
+            self.assertNotIn("postgres", tools or {})
 
     def test_remove_round_trips_back_to_the_original_manifest(self):
         with tempfile.TemporaryDirectory() as d:
             _init(d)
             original = json.loads(_manifest_bytes(d))            # semantic, not byte, identity
-            OB.run_reconfigure(d, add=["obsidian"], assume_yes=True,
-                               detector=_detector({"obsidian"}))
+            OB.run_reconfigure(d, add=["postgres"], assume_yes=True,
+                               detector=_detector({"postgres"}))
             self.assertNotEqual(json.loads(_manifest_bytes(d)), original)
-            OB.run_reconfigure(d, remove=["obsidian"], assume_yes=True,
-                               detector=_detector({"obsidian"}))
+            OB.run_reconfigure(d, remove=["postgres"], assume_yes=True,
+                               detector=_detector({"postgres"}))
             self.assertEqual(json.loads(_manifest_bytes(d)), original,
                              "add→remove left residue (manifest didn't return to its original)")
 
@@ -232,7 +232,7 @@ class TestModes(unittest.TestCase):
             def confirm(prompt):
                 if "postgres" in prompt:             # "Wire newly-available 'postgres'?"
                     return True
-                if "obsidian" in prompt or "Keep" in prompt:
+                if "postgres" in prompt or "Keep" in prompt:
                     return True                      # keep anything already wired
                 return "Apply" in prompt             # the final gate
 

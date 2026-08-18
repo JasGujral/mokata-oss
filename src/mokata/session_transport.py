@@ -10,10 +10,8 @@ a teammate can pull it — without touching any of the gates. The split is delib
     `list_tags()` / `delete_bundle(tag)`. Because every push/pull still runs through the
     `session_bundle` gates regardless of transport, a remote can NEVER downgrade security.
 
-Three implementations, backend-agnostic for team sharing:
+Two implementations, backend-agnostic for team sharing:
   * `local`   — 55a's `.mokata/session-bundles/` file store (the default);
-  * `vault`   — the committed/synced artifact store (`.mokata/vault/sessions/`, Stage 35d's
-                pattern) — bundles travel with the repo for a teammate to pull;
   * `postgres`— a shared, OWNED, namespaced table (`mokata_session_bundle`) reached by an
                 env-var DSN, mirroring the shared-memory Postgres backend. OPT-IN and
                 LOCAL-FIRST: absent psycopg or DSN, it DEGRADES CLEAN (a clear
@@ -47,7 +45,14 @@ PG_DSN_ENVS = (SESSION_OVERRIDE_ENV, DEFAULT_DSN_ENV)
 PG_TABLE = "mokata_session_bundle"          # mokata-OWNED, namespaced (never a generic name)
 
 LOCAL_DIRNAME = "session-bundles"           # 55a's store (kept identical)
-VAULT_SUBDIR = "sessions"                   # bundles namespaced inside `.mokata/vault/`
+
+# SIMP.S3 (0.0.18, lane D slice 4): `VAULT_SUBDIR` and `VaultTransport` are REMOVED. The bundles
+# they addressed are not: they are `_FileTransport` JSON blobs under `.mokata/vault/sessions/`, the
+# LOCAL transport reads that exact shape, and `deprecation.REMOVED["vault"]` carries both the
+# location and the move-then-`session pull` remedy. ⚠ The `.mokata/vault/` directory ITSELF stays —
+# it is the live design-artifact vault, which was never this channel (see `deprecation`'s docstring
+# for the rule). A deletion here that reached the directory would destroy a user's specs to remove
+# a transport.
 
 # Stage 71a — sentinel meaning "scope to the CURRENT project (derive from root)"; distinct from
 # ALL_PROJECTS (None → span all) and from a concrete project-id string.
@@ -68,8 +73,13 @@ def _safe_tag(tag: str) -> str:
 
 # --------------------------------------------------------------------------------- file stores
 class _FileTransport:
-    """Shared implementation for the file-backed transports (local + vault): a directory of
-    `<tag>.json` blobs. Degrade-clean — a missing dir lists empty, never raises."""
+    """Shared implementation for the file-backed transport(s): a directory of `<tag>.json` blobs.
+    Degrade-clean — a missing dir lists empty, never raises.
+
+    ⚠ IT STAYS A BASE CLASS WITH ONE SUBCLASS, deliberately, and not as leftover scaffolding: it is
+    also the reason the removed vault channel needs no converter. The bundles in
+    `.mokata/vault/sessions/` are this class's format, so `LocalTransport` reads them the moment
+    they are moved — the remedy in `deprecation.REMOVED["vault"]` is `mv`, not a migration."""
 
     name = "file"
 
@@ -123,16 +133,6 @@ class LocalTransport(_FileTransport):
 
     def __init__(self, root: str) -> None:
         super().__init__(os.path.join(root, MOKATA_DIR, LOCAL_DIRNAME))
-
-
-class VaultTransport(_FileTransport):
-    """The committed/synced artifact store (Stage 35d pattern): `.mokata/vault/sessions/`, so a
-    pushed session travels with the repo for a teammate to pull + resume."""
-
-    name = "vault"
-
-    def __init__(self, root: str) -> None:
-        super().__init__(os.path.join(root, MOKATA_DIR, "vault", VAULT_SUBDIR))
 
 
 # --------------------------------------------------------------------------------- postgres
@@ -295,23 +295,68 @@ def transport_kind_for_mode(root: Optional[str]) -> str:
     return "postgres" if connect_status(surface) else "local"
 
 
+def removed_bundle_tags(channel: str, root: str) -> List[str]:
+    """The bundle tags still sitting in a REMOVED file channel's directory — `[]` when there are
+    none, or when the location is not a directory at all.
+
+    Degrade-clean and READ-ONLY: it lists names and opens nothing. The location comes from the
+    channel's own removal record, so this generalises to the next removed file channel without
+    learning a second path.
+
+    ⚠ THIS IS WHY IT EXISTS AT ALL. Drop the vault transport and say nothing else, and `mokata
+    session list` — which spanned local + vault — answers *"no shared bundles"* to a user whose
+    bundles are all in the vault store. That is slice 1's empty-SQLite-floor defect exactly: a
+    successful, cheerful, WRONG answer, where the honest one is "they are still there, here is how
+    to reach them". `list` cannot tell the difference without looking, so it looks."""
+    from . import deprecation
+    try:
+        directory = deprecation.removed_file_path(channel, root)
+    except KeyError:
+        return []
+    try:
+        return sorted(fn[:-len(".json")] for fn in os.listdir(directory)
+                      if fn.endswith(".json"))
+    except OSError:
+        return []
+
+
+def _refuse_removed_kind(kind: str, root: str) -> None:
+    """A transport kind this release REMOVED gets its removal record, not `unknown transport`.
+
+    Same §7g split the whole lane is about, at the surface a repo actually arrives on: a manifest
+    or a script that still says `vault` is not a TYPO, and answering it with the message reserved
+    for one tells a user their data was never real. HARD (`RemovedChannelError`), not a degrade —
+    a degrade means there is a floor giving a weaker but true answer, and silently handing back a
+    LocalTransport would point a push at a different store than the caller named.
+
+    ⚠ Derived from the REMOVED registry, never a list of names, so a channel removed AFTER this
+    stage is answered here without anyone editing this function."""
+    from . import deprecation
+    # BY TYPE since 0.0.18 stage 14: `REMOVED` gained a DERIVED channel (`neo4j`) with no location
+    # under `.mokata/`, and `removed_bundle_tags` resolves one — so a bare membership test made the
+    # "derived from the registry, never a list of names" claim below TRUE of the set and FALSE of
+    # the shapes in it. A transport kind is a file channel or it is not this function's business.
+    if not deprecation.is_removed_file_channel(kind):
+        return
+    present = bool(removed_bundle_tags(kind, root))
+    raise deprecation.RemovedChannelError(deprecation.removal_answer(kind, root, present))
+
+
 def make_transport(kind: Optional[str], root: str, *, dsn_env: Optional[str] = None,
                    client: Any = None, project: Any = _PROJECT_CURRENT) -> Any:
-    """Build a transport by name (`local` default, `vault`, `postgres`). The Postgres leg is
+    """Build a transport by name (`local` default, `postgres`). The Postgres leg is
     OPT-IN and degrades clean: with no injected client and no DSN it raises
     `SessionTransportUnavailable` (a clear message) rather than crashing or silently downgrading
     to a less-secure store. Stage 71a — the Postgres leg is SCOPED to the current project by
     default (derived from `root`); pass `project=` a specific id, or `ALL_PROJECTS` (None) to span
-    all. Local/vault are per-repo already and ignore it."""
+    all. The local transport is per-repo already and ignores it.
+
+    ⚠ A kind this release REMOVED is refused with that channel's own removal record, BEFORE the
+    unknown-transport degrade — see `_refuse_removed_kind`."""
     kind = (kind or "local").lower()
     if kind == "local":
         return LocalTransport(root)
-    if kind == "vault":
-        # SIMP.S2 — the vault transport kind is DEPRECATED (removed 0.0.17). It keeps working
-        # (the shim), warning once per repo, with `mokata migrate vault` to re-home the bundles.
-        from . import deprecation
-        deprecation.warn_deprecated("vault", os.path.join(root, MOKATA_DIR))
-        return VaultTransport(root)
+    _refuse_removed_kind(kind, root)
     if kind == "postgres":
         from .project import derive_project_id
         scope = derive_project_id(root) if project is _PROJECT_CURRENT else project
@@ -321,7 +366,7 @@ def make_transport(kind: Optional[str], root: str, *, dsn_env: Optional[str] = N
         # memory/journal use — instead of silently falling through to the literal default.
         return PostgresTransport(dsn=resolve_pg_dsn(dsn_env, root=root), project=scope)
     raise SessionTransportUnavailable(
-        f"unknown session transport '{kind}' (use local | vault | postgres)")
+        "unknown session transport '%s' (use %s)" % (kind, " | ".join(TRANSPORT_KINDS)))
 
 
-TRANSPORT_KINDS = ("local", "vault", "postgres")
+TRANSPORT_KINDS = ("local", "postgres")

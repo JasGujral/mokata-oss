@@ -6,8 +6,8 @@ are selected through the capability router; what you configure here is each back
 **parameters**.
 
 > **Two stores, one shape.** The canonical memory store is **local SQLite** or **your team's one
-> Postgres DSN**. The Obsidian and native-memory backends still work but are **deprecated**
-> (removal: 0.0.17) — see [below](#external-obsidian-vault-deprecated).
+> Postgres DSN**. The Obsidian and native-memory backends were **REMOVED in 0.0.18** — see
+> [below](#obsidian-and-native-memory-removed-in-0018).
 
 > **Defaults are unchanged when you set nothing.** Out of the box, memory lives in
 > `.mokata/temp_local/memory/memory.db` (SQLite, stdlib, zero dependencies). Everything below is opt-in.
@@ -31,36 +31,36 @@ mokata config set tools.sqlite.config.path ~/data/mokata-memory.db
 
 `~` is expanded. The parent directory is created on first use.
 
-## External Obsidian vault — deprecated
+## Obsidian and native-memory — REMOVED in 0.0.18
 
-!!! warning "The Obsidian memory backend is deprecated (removal: 0.0.17)"
-    It **still works** and nothing has been removed. On first use in a repo mokata prints the
-    notice once, naming the replacement and the one-command migration:
+!!! danger "These backends are gone, and your data is not"
+    `obsidian` and `native-memory` were deprecated in 0.0.15 and **REMOVED in mokata 0.0.18**.
+    They are no longer memory backends, no longer detected, and no longer migration channels.
 
-    > ⚠ deprecated: the Obsidian memory backend is deprecated and will be REMOVED in mokata
-    > 0.0.17. The canonical memory store is local SQLite (or your team's one Postgres DSN).
-    > Migrate now with `mokata migrate obsidian` (one-time, human-gated).
+    **Nothing on your disk was touched.** If you used the Obsidian backend, your notes are still
+    markdown files in the vault directory, exactly as mokata left them.
+
+    **If your repo's manifest still names one**, mokata tells you rather than quietly serving you
+    an empty store:
+
+    * with data behind it, every command **refuses**, names the vault directory, and names the
+      remedy — it will not hand back an empty store instead;
+    * with nothing behind it, mokata says so once per repo and carries on with the SQLite floor.
+
+    **To bring the items into the canonical store**, run the migration under the last release
+    that shipped it, then upgrade again:
 
     ```bash
-    mokata migrate obsidian     # gated · previewed · idempotent · non-destructive
+    pip install 'mokata==0.0.17'
+    mokata migrate obsidian          # or: mokata migrate native-memory
+    pip install -U mokata
     ```
 
-    Every item lands through the existing WriteGate with provenance, secrets hard-blocked. It is
-    **one-time** (a re-run reports "already migrated"; `--force` re-runs it) and **leaves the
-    source in place** — deleting the vault copy is your call. The same applies to the
-    `native-memory` backend (`mokata migrate native-memory`).
+    **To carry on without them**, drop the entry from the chain:
 
-Point the Obsidian backend at a real vault directory (the tool must be wired — it is on the
-`full` profile; on `standard` switch with `mokata init --profile full` or add the tool):
-
-```bash
-mokata config set tools.obsidian.config.vault ~/Documents/MyVault
-```
-
-mokata also now **detects** Obsidian from its real config locations (macOS
-`~/Library/Application Support/obsidian`, Linux `~/.config/obsidian` and Flatpak, Windows
-`%APPDATA%\obsidian`) and treats a configured `config.vault` that exists as "present" — so a
-wired Obsidian backend is actually used instead of silently falling back.
+    ```bash
+    mokata config set memory_store sqlite
+    ```
 
 ## Hosted Postgres (opt-in, remote)
 

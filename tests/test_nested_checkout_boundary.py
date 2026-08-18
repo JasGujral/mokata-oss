@@ -23,7 +23,7 @@ it sits.** Both on-disk shapes count — `.git` as a DIRECTORY (a clone or submo
 as a FILE (a `gitdir:` pointer, which is what `git worktree add` writes, and the shape that
 caused the incident).
 
-SCOPE, deliberately. `tests/_support.iter_repo_files` is the shared walker this pins; the pin
+SCOPE, deliberately. `tests/_support.iter_worktree_files` is the shared walker this pins; the pin
 drift sweep is the one caller that was actually exposed, because it is the only sweep in the
 suite rooted at the REPO ROOT. Sweeps scoped to a subtree (`src/mokata`, `tests/`, `docs/`)
 were left on their own walks — see the stage report — because a nested checkout does not appear
@@ -42,7 +42,7 @@ import subprocess
 import tempfile
 import unittest
 
-from _support import iter_repo_files
+from _support import iter_worktree_files
 
 from mokata.session_worktree import worktree_path_for
 
@@ -74,7 +74,7 @@ class _TempTree(unittest.TestCase):
         return tmp
 
     def _rels(self, root):
-        return sorted(rel for rel, _ab in iter_repo_files(root))
+        return sorted(rel for rel, _ab in iter_worktree_files(root))
 
 
 class TestNestedCheckoutIsNotCounted(_TempTree):
@@ -144,7 +144,7 @@ class TestIterRepoFilesContract(_TempTree):
 
     def test_paths_are_repo_relative_posix_and_the_abspath_opens(self):
         root = self._repo(self.tmp())
-        rels = dict(iter_repo_files(root))
+        rels = dict(iter_worktree_files(root))
         self.assertIn("docs/how-to/pin.md", rels)
         self.assertNotIn("\\", "".join(rels))
         with open(rels["docs/how-to/pin.md"], encoding="utf-8") as fh:
@@ -163,7 +163,7 @@ class TestIterRepoFilesContract(_TempTree):
         rels = self._rels(root)
         self.assertIn("editors/vscode/node_modules/f.md", rels)   # nothing skipped by default
         self.assertIn("docs/build/f.md", rels)
-        kept = sorted(r for r, _ in iter_repo_files(root, skip_dirs={"node_modules",
+        kept = sorted(r for r, _ in iter_worktree_files(root, skip_dirs={"node_modules",
                                                                     "docs/build"}))
         self.assertNotIn("editors/vscode/node_modules/f.md", kept)   # bare name, nested
         self.assertNotIn("docs/build/f.md", kept)                    # relative path

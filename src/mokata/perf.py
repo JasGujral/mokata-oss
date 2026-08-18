@@ -129,10 +129,15 @@ def build_hot_ops(surface: Any) -> Dict[str, Callable[[], Any]]:
     from .bootstrap import build_bootstrap
     from .govern.secrets import scan
     from .knowledge.grep_backend import GrepBackend
-    from .progress import build_stage_badge
+    # Lane F — the budgeted op is `statusline_badge`, the line the harness ACTUALLY renders, not
+    # `build_stage_badge`, which is one component of it. The distinction became load-bearing when
+    # the composed line grew the awaiting segment: that segment reads the approval store off disk,
+    # so the 50 ms ceiling now bounds an I/O path it previously did not reach at all. A budget
+    # pointed at a component is a budget that does not cover the thing the user waits for.
+    from .progress import statusline_badge
 
     ops: Dict[str, Callable[[], Any]] = {
-        "statusline": lambda: build_stage_badge(surface),
+        "statusline": lambda: statusline_badge(surface),
         "briefing": lambda: build_bootstrap(surface),
         "secret_scan": lambda: scan(text=_SCAN_SAMPLE),
         "status": lambda: [r.summary() for r in surface.router.resolve_all()],

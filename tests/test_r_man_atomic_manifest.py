@@ -261,6 +261,11 @@ OUT_OF_SCOPE = {
     #     would change behaviour beyond R-MAN's remit; each is pinned as atomic by its own suite.
     ("atomicfile.py", "atomic_write_text"):
         "IS the primitive — this open() is the temp-file write itself.",
+    ("notify.py", "_debounced"):
+        "Writes ZERO BYTES. The notification rate limiter carries its whole state in a file's "
+        "MTIME under gitignored temp_local/, so the open() exists only to create the inode; there "
+        "is no content for a torn write to tear. It is not committed config, holds nothing a human "
+        "approved, and its worst-case loss is one extra desktop notification.",
     ("harness_setup.py", "_write_json"):
         "Already atomic: same-dir mkstemp + fsync + os.replace, its own impl predating the MS.S6 "
         "extraction. Writes HARNESS config (~/.claude etc), not mokata's manifest. Deduping it "
@@ -280,9 +285,6 @@ OUT_OF_SCOPE = {
     ("vault.py", "vault_pull"):
         "Writes a pulled artifact to a caller-named `dest` (a READ's optional side-output). The "
         "vault's own artifact + index writes were made atomic at MS.S6.",
-    ("memory/backends.py", "ObsidianBackend.put"):
-        "Writes ONE memory note into the user's Obsidian vault — an adopted external store with "
-        "its own per-item file, not mokata's committed config. Deprecated channel (0.0.17).",
     # --- DERIVED / REGENERABLE: rebuilt on demand, never a source of truth.
     ("dashboard.py", "write_dashboard"):
         "Rendered HTML view, regenerated on every `mokata watch` refresh tick.",
@@ -295,9 +297,8 @@ OUT_OF_SCOPE = {
         "Writes `--comment-file`, a CI scratch file consumed once by the workflow that asked for "
         "it; already best-effort (warns to stderr on OSError).",
     # --- BEST-EFFORT LOCAL STATE: contracted to be lossy, under temp_local/ or the user's home.
-    ("migrate_channels.py", "_write_marker"):
-        "One-time migration marker under temp_local/; explicitly best-effort (swallows OSError) — "
-        "the migration already succeeded and the marker only suppresses a re-offer.",
+    # `migrate_channels.py` was DELETED at 0.0.18 lane D slice 4 (the vault channel); its
+    # once-migrated marker entry went with it — there is no migration left to record.
     ("plugin_cache.py", "record_plugin_root"):
         "~/.mokata/plugin-root cache; must never raise (SessionStart hook) and is re-derived when "
         "absent.",
@@ -317,13 +318,16 @@ OUT_OF_SCOPE = {
 def _bare_write_sites():
     """Every `open(..., "w")` (and `"wt"`/`"w+"`) call site in src/mokata, as (relpath, qualname)."""
     found = []
+    # CORPUS: THE WORKING TREE. This asks what mokata SHIPS, and `sync-public.sh` mirrors
+    # with `rsync`, which copies the working tree — an untracked `.py` under `src/` really is
+    # published. The index would be blind to exactly the file most likely to break the rule.
     for root, _dirs, files in os.walk(SRC):
         for name in sorted(files):
             if not name.endswith(".py"):
                 continue
             path = os.path.join(root, name)
             # POSIX-style always, so the register's keys are canonical on every platform.
-            rel = os.path.relpath(path, SRC).replace(os.sep, "/")
+            rel = _support.posix_rel(path, SRC).replace(os.sep, "/")
             with open(path, encoding="utf-8") as fh:
                 tree = ast.parse(fh.read(), filename=path)
             _walk(tree, rel, [], found)

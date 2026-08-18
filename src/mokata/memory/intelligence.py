@@ -322,7 +322,7 @@ def _backend_read_errors() -> tuple:
     so the optional-driver import costs nothing on the healthy path.
 
     * `sqlite3.Error`      — the SQLite floor: a locked / corrupt / permission-broken `.mokata/` DB.
-    * `OSError`            — the local file IO under it (and the Obsidian vault backend).
+    * `OSError`            — the local file IO under it.
     * `DegradedCapability` — a backend that could not be BUILT (`PostgresUnavailable` & family).
     * psycopg's `Error`    — the Postgres backend does NOT wrap its query errors, so a mid-session
                              network drop surfaces the DRIVER's class here. It is named only when

@@ -4,15 +4,20 @@ Turns the previously degrade-tested-only / MANUAL-VERIFICATION residual risks in
 round-trips against real services:
 
   - shared Postgres memory (D3/D17) — two clients see one store + a contradiction surfaces;
-  - pgvector semantic recall (D21) — a real pgvector index ranks the semantically-near item;
-  - Neo4j graph (D22) — a real Cypher query answers callers / blast-radius.
+  - pgvector semantic recall (D21) — a real pgvector index ranks the semantically-near item.
+
+⚠ D22 (a live Neo4j graph answering callers / blast-radius over a real Cypher query) was the third
+leg here until 0.0.18 lane D stage 14 REMOVED the Neo4j backend. It is deleted, not skipped: a
+`skipUnless` leg whose subject no longer exists reports "off (need NEO4J_URI …)" forever, which
+reads as an un-run check rather than a removed one — §7g, in the one place that is meant to turn a
+manual-verification residual into a real round trip. The CI `live-db` job lost its neo4j service
+container in the same edit.
 
 Gate (explicit, never accidental): these run ONLY when MOKATA_LIVE_DB=1 AND the matching
 service env vars are present AND the optional driver is installed AND the DB is reachable.
 On a dev box (no hosted DB) they skip cleanly; in the CI `live-db` job they run and are
 required. The env-var-only DSN contract is unchanged (no inline credentials):
   - Postgres / pgvector:  MOKATA_PG_DSN  (password via PGPASSWORD, never inline)
-  - Neo4j:                NEO4J_URI / NEO4J_USERNAME / NEO4J_PASSWORD
 
 The dependency-free core is untouched — the drivers stay optional extras, installed only in
 the live-db job.
@@ -53,10 +58,8 @@ def _pg_dsn():
 
 
 _PG_LIVE = LIVE and _have("psycopg") and bool(_pg_dsn())
-_NEO4J_LIVE = LIVE and _have("neo4j") and bool(os.environ.get("NEO4J_URI"))
 
 _PG_REASON = "live PG off (need MOKATA_LIVE_DB=1 + MOKATA_PG_DSN + psycopg + reachable DB)"
-_NEO4J_REASON = "live Neo4j off (need MOKATA_LIVE_DB=1 + NEO4J_URI + neo4j driver + reachable DB)"
 
 
 def setUpModule():
@@ -217,34 +220,6 @@ class TestLiveTwoProjectIsolation(unittest.TestCase):
         self.assertEqual(tb.read_bundle("auth"), '{"who":"B"}')
         self.assertEqual(ta.list_tags(), ["auth"])
         self.assertEqual(tb.list_tags(), ["auth"])
-
-
-@unittest.skipUnless(_NEO4J_LIVE, _NEO4J_REASON)
-class TestLiveNeo4jGraph(unittest.TestCase):
-    """D22 — a real Cypher query answers callers + blast-radius over a seeded graph."""
-
-    def test_real_cypher_answers_callers_and_blast_radius(self):
-        from mokata.knowledge.neo4j_backend import build_neo4j_client
-        client = build_neo4j_client({})          # reads NEO4J_URI/USERNAME/PASSWORD
-        self.assertIsNotNone(client, "build_neo4j_client returned None against a live DB")
-        try:
-            driver = client._driver
-            with driver.session() as s:
-                # seed: main -> helper -> util  (CALLS edges); :Symbol{name,path,line}
-                s.run("MATCH (n) DETACH DELETE n")
-                s.run("CREATE (:Symbol {name:'util', path:'u.py', line:1})")
-                s.run("CREATE (:Symbol {name:'helper', path:'h.py', line:2})")
-                s.run("CREATE (:Symbol {name:'main', path:'m.py', line:3})")
-                s.run("MATCH (a:Symbol {name:'helper'}), (b:Symbol {name:'util'}) "
-                      "CREATE (a)-[:CALLS]->(b)")
-                s.run("MATCH (a:Symbol {name:'main'}), (b:Symbol {name:'helper'}) "
-                      "CREATE (a)-[:CALLS]->(b)")
-            callers = client.query("callers", "util", root=".")
-            self.assertEqual({r["symbol"] for r in callers}, {"helper"})
-            blast = client.query("blast_radius", "util", root=".", depth=2)
-            self.assertEqual({r["symbol"] for r in blast}, {"helper", "main"})
-        finally:
-            client.close()
 
 
 if __name__ == "__main__":

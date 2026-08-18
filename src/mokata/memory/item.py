@@ -578,7 +578,7 @@ class MemoryItem:
 
     def to_doc(self) -> Dict[str, Any]:
         """D6 — the DURABLE-WRITE serializer: `to_dict`, but only if this build may rewrite the
-        doc. Every durable sink (the SQLite/Obsidian/native/Postgres/vector backends, the team
+        doc. Every durable sink (the SQLite/Postgres/vector backends, the team
         journal payload, the migrate payload) calls THIS, so "an older client cannot serialize a
         newer doc" is a structural property of the write path, not a promise made by its callers.
 

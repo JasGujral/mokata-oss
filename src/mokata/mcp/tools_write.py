@@ -11,15 +11,16 @@ an approval a HUMAN minted out-of-band, in a process this one is not driving:
 `approve`/`confirm` are still ACCEPTED (schema stability — no caller breaks) but DEMOTED: they commit
 nothing. The consent lives in `approval.py`, and the whole consent boundary lives in `mcp/consent.py`.
 
-Layout (PRE-SIMP, release 0.0.15 — split for the 0.0.17 SIMP.S3 removal)
------------------------------------------------------------------------
+Layout (PRE-SIMP, release 0.0.15 — split for the SIMP.S3 removal)
+-----------------------------------------------------------------
 This module used to hold the consent boundary AND all the tool bodies (1.3k LOC). It is now a thin
 aggregator: the consent boundary is `mcp/consent.py`, and the tools live in per-domain modules —
 
   * `tools_memory`  — memory writes: core (remember, apply_proposal) + the BACKUP surface
                       (memory_export, memory_import) re-homed here at 35b (it survives SIMP)
-  * `tools_share`   — the artifact-VAULT tool (vault_push): the 0.0.17 SIMP.S3 DELETION SET,
-                      isolated so the removal is a one-file diff
+  * `tools_share`   — the artifact-VAULT tool (vault_push): a SURVIVING gated write. ⚠ It was
+                      described here as the SIMP.S3 deletion set; the deletion lane arrived and it
+                      stayed — see that module's docstring
   * `tools_session` — portable-session share/hydrate/rename
   * `tools_team`    — shared-audit publish
   * `tools_spec`    — spec emit/amend/check (+ the GR emit backstops)
@@ -56,9 +57,9 @@ __all__ = [
 
 # ---- registration: registry-driven, in the EXACT historical order (parity with the pre-split
 # single-file registration). The domain modules define the functions; the `@_tool` mechanism
-# (registry._tool) records each ToolSpec into the shared TOOLS list here, once, on import. SIMP.S3
-# drops the deprecated vault by deleting `tools_share` + the `vault_push` line below (the memory
-# BACKUP surface re-homed to `tools_memory` at 35b and survives).
+# (registry._tool) records each ToolSpec into the shared TOOLS list here, once, on import.
+# ⚠ SIMP.S3 DID NOT DROP `vault_push`. This comment said it would — the removal took the vault
+# session-TRANSPORT kind, not the design-artifact vault this tool fronts (0.0.18 lane D slice 4).
 _tool("remember", "write")(remember)
 _tool("import_stack", "write")(import_stack)
 _tool("reset", "write")(reset)

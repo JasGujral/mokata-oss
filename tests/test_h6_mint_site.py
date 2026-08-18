@@ -119,14 +119,20 @@ class RidesTheGate(_Base):
     # DECLINED write still appends its `write_gate` decision to the audit ledger. That record is
     # the point of the gate — a refusal nobody can see is not a governed refusal — so the ledger
     # is expected to move here and everything else is not. Named as a path prefix, not a guess.
-    _LEDGER = os.path.join(".mokata", "temp_local", "audit")
+    # ⚠ `/`-SPELLED: `_snapshot` keys with `posix_rel`, so the prefix it is matched against is a
+    # NAME, not a path. Built with `os.path.join` this read `.mokata\temp_local\audit` on Windows,
+    # `startswith` matched nothing, and the gate's own audit record — the carve-out immediately
+    # above, the thing that makes a refusal visible — was reported as a write the decline had
+    # leaked. Nothing leaked: with the carve-out disabled entirely, the only two files a DECLINED
+    # write touches are `audit/ledger.jsonl` and its `.count`, on every platform.
+    _LEDGER = ".mokata/temp_local/audit"
 
     def _snapshot(self):
         out = {}
         for dirpath, dirnames, filenames in os.walk(self.root):
             for fn in filenames:
                 ab = os.path.join(dirpath, fn)
-                rel = os.path.relpath(ab, self.root)
+                rel = _support.posix_rel(ab, self.root)
                 if rel.startswith(self._LEDGER):
                     continue
                 try:

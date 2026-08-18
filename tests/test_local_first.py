@@ -79,9 +79,22 @@ class TestNetworkCapableToolsAreExplicit(unittest.TestCase):
         m = Manifest.from_dict(build_manifest_data("full", "0.1.0"))
         net = set(network_capable_tools(m))
         self.assertIn("code-review-graph", net)   # mcp
-        self.assertIn("native-memory", net)       # external
         self.assertNotIn("grep", net)             # builtin stays local
         self.assertNotIn("sqlite", net)           # library stays local
+
+    def test_an_EXTERNAL_kind_tool_is_still_classified_as_network_capable(self):
+        # ⚠ THIS ASSERTION USED TO RIDE ON `native-memory`, AND 0.0.18 STAGE 10 REMOVED IT —
+        # leaving NO profile that wires an `external`-kind tool at all. The classifier still has
+        # an `external` arm, so dropping the assertion would have left that arm graded by nothing
+        # (doc 85 §7i, on a sweep whose subject is network egress). The offender is PLANTED
+        # instead: one external tool, added to a real built manifest.
+        data = build_manifest_data("full", "0.1.0")
+        data["tools"]["some-external-thing"] = {
+            "provides": "memory_store", "kind": "external", "version": None,
+            "detect": {"type": "command", "name": "some-external-thing"}, "enabled": True}
+        net = set(network_capable_tools(Manifest.from_dict(data)))
+        self.assertIn("some-external-thing", net)
+        self.assertNotIn("sqlite", net)           # …and `library` is still local beside it
 
     def test_disabled_network_tool_is_not_counted(self):
         data = build_manifest_data("full", "0.1.0")

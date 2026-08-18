@@ -1,13 +1,23 @@
-"""artifact-VAULT write tool — the 0.0.17 SIMP.S3 DELETION SET, isolated.
+"""artifact-VAULT write tool — `vault_push`, the gated write half of the design vault.
 
-Domain split out of `mcp/tools_write.py` (PRE-SIMP, release 0.0.15). What REMAINS here is
-deletion-bound: `vault_push` fronts the DEPRECATED artifact vault (`vault.py`), which SIMP.S3
-removes at 0.0.17 — deleting THIS file and its registration line in the `tools_write.py`
-aggregator, touching nothing else.
+Domain split out of `mcp/tools_write.py` (PRE-SIMP, release 0.0.15).
+
+⚠⚠ THIS DOCSTRING CALLED ITSELF *"the SIMP.S3 DELETION SET, isolated"* FOR THREE RELEASES AND IT
+WAS WRONG — it named this file for deletion at `deprecation.REMOVAL_RELEASE`, and the deletion lane
+arrived, and this file SURVIVED (0.0.18 lane D slice 4). What SIMP.S3 removed was the vault
+SESSION-TRANSPORT kind; `vault.py` is the Stage 35d design-artifact store, which was never the
+channel — the deprecation notice offered a replacement for sessions only, `mokata migrate vault`
+moved session bundles only, and nothing on this path ever warned a user it was going. Four CLI
+verbs, three MCP read tools, this write tool and `team join --vault` all depend on it.
+
+★ IT IS LEFT HERE AS A CORRECTION RATHER THAN A DELETION because a file that spent three releases
+telling every reader it was scheduled for removal is exactly how the gate came to point at a
+feature: the lane's acceptance test mapped `vault` → `mokata.vault`, and the only way to satisfy it
+as written was to delete a supported command (doc 85 §7h — a stale claim in prose is a claim, and
+this one was load-bearing).
 
 35b — the memory BACKUP surface (`memory_export` / `memory_import`) that ALSO lived here has been
-re-homed to `tools_memory.py`: it SURVIVES SIMP as the single gated backup-and-restore command, so
-it must not sit in the deletion set. Only the genuine deprecated sharing channel stays here.
+re-homed to `tools_memory.py` and survives as the single gated backup-and-restore command.
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """

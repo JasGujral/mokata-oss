@@ -29,7 +29,7 @@ Run `mokata init` interactively (or `/setup` inside Claude Code) and you get a g
 
 1. **Pick a profile** — `minimal` (engine only), `standard` (engine + graph + memory on lean
    local defaults), or `full` (every known provider).
-2. **mokata detects your integrations** — graph backends, memory backends, Postgres / Obsidian /
+2. **mokata detects your integrations** — graph backends, memory backends, Postgres /
    vector — and shows you exactly what's installed.
 3. **You choose what to wire.** For something detected-but-not-installed, mokata **recommends**
    the install command (e.g. `pip install 'mokata[postgres]'`) — it **never installs a
@@ -83,7 +83,7 @@ current→proposed diff, and applies behind one gate:
 ```bash
 mokata reconfigure                                   # interactive — or /reconfigure
 mokata reconfigure --add postgres --yes              # wire a now-installed integration
-mokata reconfigure --remove obsidian --yes           # cleanly unwire one (no residue)
+mokata reconfigure --remove serena --yes             # cleanly unwire one (no residue)
 mokata reconfigure --profile full --yes              # switch the profile
 mokata reconfigure --set tools.sqlite.config.path=mem/custom.db --yes   # switch a backend
 ```

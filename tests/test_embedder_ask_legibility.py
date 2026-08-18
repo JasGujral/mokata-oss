@@ -195,7 +195,7 @@ class TheAskSiteIsREACHED(FreshNoticeGuard):
         from mokata.memory import selection
 
         return selection._select_raw_backend(
-            "pgvector", tempfile.mkdtemp(), {}, config, None, None)
+            "pgvector", tempfile.mkdtemp(), config, None, None)
 
     def test_a_NAMED_pgvector_ask_still_flags_itself_as_a_semantic_store(self):
         """The named half, unchanged by VECTOR-TIER-NOISE: `embedder: model2vec` in a pgvector

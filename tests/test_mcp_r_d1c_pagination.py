@@ -51,6 +51,7 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+import _mcp_sdk  # noqa: E402 - the MCP SDK disposition gate
 
 from mokata import mcp_server as M
 from mokata.config import Surface
@@ -547,7 +548,7 @@ class TestComposesWithResponseFormat(unittest.TestCase):
 
 class TestSchema(unittest.TestCase):
 
-    @unittest.skipUnless(MS.mcp_available(), "optional MCP SDK not installed")
+    @_mcp_sdk.requires_mcp_sdk
     def test_mcp_r_d1c_schema_adds_only_limit_and_offset(self):
         import asyncio
 
@@ -568,7 +569,7 @@ class TestSchema(unittest.TestCase):
                 sig = set(inspect.signature(fn_by_name[name]).parameters)
                 self.assertEqual(set(props), sig)
 
-    @unittest.skipUnless(MS.mcp_available(), "optional MCP SDK not installed")
+    @_mcp_sdk.requires_mcp_sdk
     def test_mcp_r_d1c_other_tools_byte_identical(self):
         import asyncio
 

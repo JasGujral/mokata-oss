@@ -19,7 +19,9 @@ from __future__ import annotations
 from .mcp import tools_approve, tools_read, tools_write  # noqa: F401 - register tools into TOOLS
 from .mcp.registry import (SERVER_NAME, TOOLS, ToolSpec, read_tool_names,
                            tool_names, write_tool_names)
-from .mcp.server import build_server, main, mcp_available
+from .mcp.server import (SDK_ABSENT, SDK_BROKEN, SDK_INCOMPATIBLE, SDK_MAJOR_CEILING,
+                         SDK_MIN_VERSION, SDK_REQUIREMENT, SDK_SUPPORTED, SdkDisposition,
+                         build_server, classify_sdk, main, mcp_available, sdk_state)
 from .mcp.tools_approve import *  # noqa: F401,F403 - re-export the AP-MCP `approve` tool
 from .mcp.tools_read import *   # noqa: F401,F403 - re-export the read tool functions
 from .mcp.tools_write import *  # noqa: F401,F403 - re-export the write tool functions
@@ -27,6 +29,9 @@ from .mcp.tools_write import *  # noqa: F401,F403 - re-export the write tool fun
 __all__ = [
     "SERVER_NAME", "TOOLS", "ToolSpec", "tool_names", "read_tool_names",
     "write_tool_names", "build_server", "main", "mcp_available",
+    # MCP-SDK-2-BREAKS-THE-SERVER — the SDK's disposition, in four representations (§7g).
+    "sdk_state", "classify_sdk", "SdkDisposition", "SDK_SUPPORTED", "SDK_ABSENT",
+    "SDK_INCOMPATIBLE", "SDK_BROKEN", "SDK_MIN_VERSION", "SDK_MAJOR_CEILING", "SDK_REQUIREMENT",
     *tools_read.__all__, *tools_write.__all__, *tools_approve.__all__,
 ]
 

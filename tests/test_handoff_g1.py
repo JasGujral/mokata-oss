@@ -461,22 +461,100 @@ class TestPhaseDocsPointAtSpecShow(unittest.TestCase):
         self.assertIn("`spec_check` is NOT a spec fetch", review)
 
     def test_shipped_skill_md_mirrors_are_regenerated(self):
-        """The single-source chain: skills.py -> templates/commands/<n>.md -> skills/<n>/SKILL.md.
-        A stage that edits the source but ships a stale mirror hands the agent the OLD instruction."""
-        from mokata.agent_skills import CURATED_SKILLS, skill_markdown
-        from mokata.skills import SKILL_NAMES, command_markdown, get_skill
+        """TWO links with DIFFERENT domains, each derived from its own registry — not one chain.
+
+            link 1  registry -> templates/commands/<n>.md   domain = skills.SKILL_NAMES     (12)
+            link 2  templates/commands/<n>.md -> SKILL.md   domain = agent_skills.CURATED_SKILLS (16)
+
+        A stage that edits the source but ships a stale mirror hands the agent the OLD instruction.
+        The domains are derived, not typed (doc 85 §7j: the corpus is an axis too), and absence is
+        never a skip on either link — see `tests/_skill_mirrors.py` for the disposition split and
+        `tests/test_s4_skill_mirrors.py`, which grades each one against a planted offender."""
+        import _skill_mirrors as SM
+        from mokata.agent_skills import CURATED_SKILLS
+        from mokata.skills import SKILLS, SKILL_NAMES
+
+        l1 = SM.grade_link1(SKILLS, _TEMPLATES, SKILL_NAMES)
+        self.assertEqual(set(l1), set(SKILL_NAMES))          # the loop RAN over the whole domain
+        self.assertEqual(len(l1), 12, "link 1's domain moved — re-derive it, don't retype it")
+        self.assertEqual(SM.offenders(l1, SM.L1_HEALTHY), {},
+                         "a command template drifted from (or stopped extending) its registry entry")
+
+        # ⚠ The four this pin used to grade, still named — but as a FLOOR under the derivation, so
+        # a widening that silently narrowed again is visible. They must be graded, and generated.
         for name in ("review", "develop", "test", "ship"):
             with self.subTest(skill=name):
-                self.assertIn(name, SKILL_NAMES)
-                self.assertEqual((_TEMPLATES / f"{name}.md").read_text(encoding="utf-8"),
-                                 command_markdown(get_skill(name)))
-        for name in CURATED_SKILLS:
-            p = _SKILLS / name / "SKILL.md"
-            if not p.is_file():
-                continue
-            with self.subTest(skill_md=name):
-                self.assertEqual(p.read_text(encoding="utf-8"),
-                                 skill_markdown(name, _TEMPLATES))
+                self.assertEqual(l1[name], SM.L1_GENERATED_MATCH)
+
+        l2 = SM.grade_link2(CURATED_SKILLS, _TEMPLATES, _SKILLS, CURATED_SKILLS)
+        self.assertEqual(set(l2), set(CURATED_SKILLS))       # the loop RAN over the whole domain
+        self.assertEqual(len(l2), 16, "link 2's domain moved — re-derive it, don't retype it")
+        self.assertEqual(SM.offenders(l2, SM.L2_HEALTHY), {},
+                         "a shipped SKILL.md is missing or stale — regenerate, never hand-edit")
+        # No name may reach here as "nothing to check": every curated name got a real verdict.
+        self.assertEqual(sorted(l2.values()), [SM.L2_MATCH] * 16)
+
+    def test_the_two_domains_differ_and_every_name_outside_one_is_accounted_for(self):
+        """WHY the sets differ, asserted rather than assumed — three wrong denominators came from
+        reading one set as the other's superset. Neither contains the other."""
+        import _skill_mirrors as SM
+        from mokata.agent_skills import CURATED_SKILLS
+        from mokata.skills import SKILLS, SKILL_NAMES, SkillNotFound, get_skill
+
+        curated, registry = set(CURATED_SKILLS), set(SKILL_NAMES)
+        self.assertEqual(curated - registry,
+                         {"docsync", "govern", "mcp-repair", "playbook", "session"})
+        self.assertEqual(registry - curated, {"version"})
+        self.assertEqual(len(curated & registry), 11)
+
+        # (a) curated-but-not-registered: link 1 does not EXIST for them — `get_skill` raises. The
+        #     exclusion is derived from that, never from a `continue`.
+        for name in sorted(curated - registry):
+            with self.subTest(no_registry_entry=name):
+                with self.assertRaises(SkillNotFound):
+                    get_skill(name)
+                self.assertEqual(SM.grade_link1(SKILLS, _TEMPLATES, [name])[name],
+                                 SM.L1_NOT_IN_REGISTRY)
+
+        # (b) registered-but-not-curated: `version` is deliberately not model-invocable, so link 1
+        #     grades it and link 2 must find NO mirror. Absence is the assertion, not the skip.
+        self.assertEqual(SM.grade_link1(SKILLS, _TEMPLATES, ["version"])["version"],
+                         SM.L1_GENERATED_MATCH)
+        self.assertFalse((_SKILLS / "version").exists(),
+                         "version gained a shipped SKILL.md — it is excluded from CURATED_SKILLS")
+        self.assertEqual(SM.grade_link2(CURATED_SKILLS, _TEMPLATES, _SKILLS, ["version"])["version"],
+                         SM.L2_NOT_CURATED)
+
+    def test_brainstorms_template_is_declared_hand_authored_and_still_carries_what_it_extends(self):
+        """`brainstorm.md` is the SOURCE, not a stale mirror. Regenerating it from the registry —
+        the "fix the drift" reading — would DELETE the run-registration protocol, the auto-engage
+        announcement and the declined-permission note from the shipped SKILL.md. The declaration
+        says so; this asserts the declaration is TRUE of the bytes, in both directions."""
+        import _skill_mirrors as SM
+        from mokata.agent_skills import skill_markdown
+        from mokata.skills import SKILLS, command_markdown, get_skill
+
+        skill = get_skill("brainstorm")
+        self.assertIsNotNone(skill.hand_authored_template, "the split must stay DECLARED")
+        self.assertTrue(skill.hand_authored_template.strip(), "a declaration needs its reason")
+        self.assertEqual(SM.grade_link1(SKILLS, _TEMPLATES, ["brainstorm"])["brainstorm"],
+                         SM.L1_HAND_AUTHORED)
+
+        template = (_TEMPLATES / "brainstorm.md").read_text(encoding="utf-8")
+        rendered = command_markdown(skill)
+        shipped = (_SKILLS / "brainstorm" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertEqual(shipped, skill_markdown("brainstorm", _TEMPLATES))
+        # The three sections that exist ONLY because the template is hand-authored. Each is in the
+        # template and in the shipped mirror, and in NEITHER case in what the registry renders —
+        # so "regenerate to fix the drift" is a deletion, stated as an executable fact.
+        for lost in ("When mokata engages this on its own",
+                     "First: register the run",
+                     "mokata mcp status"):
+            with self.subTest(section=lost):
+                self.assertIn(lost, template)
+                self.assertIn(lost, shipped)
+                self.assertNotIn(lost, rendered)
+        self.assertGreater(len(template), len(rendered))
 
 
 # ======================================================================================

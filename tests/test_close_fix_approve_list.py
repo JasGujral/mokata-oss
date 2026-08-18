@@ -30,6 +30,7 @@ import unittest
 from unittest import mock
 
 import _support  # noqa: F401
+from mokata import deprecation as D
 
 from mokata import approval, session                               # noqa: E402
 from mokata import awaiting as A                                   # noqa: E402
@@ -227,16 +228,49 @@ class HelpStringsAreTrue(unittest.TestCase):
     # the fourth (GR.S4 dirty-track) cannot be dropped again — is asserted where it belongs, in
     # `test_harness_setup.test_no_hooks_help_names_every_hook_it_skips`. One authority per fact.
 
-    def test_migrate_help_does_not_claim_the_channels_are_already_removed(self):
+    def test_migrate_help_sells_no_channel_and_no_schedule(self):
         """Both surfaces a user meets: `mokata migrate --help` (the parser description) and the
-        subcommand line in `mokata --help` (the parser's `help=`)."""
-        for text in (_help("migrate"), _help_top()):
-            self.assertNotIn("removed 0.0.17", text)
+        subcommand line in `mokata --help` (the parser's `help=`).
+
+        REVERSED TWICE, AND THE SECOND REVERSAL IS THE POINT OF THIS SLICE.
+
+        At 0.0.18 stage 10 this was the SEVENTH pin of `REMOVAL-RELEASE-ALREADY-PASSED`: three
+        assertions here HAND-TYPED "0.0.17" and stayed green through the release that shipped
+        0.0.17 removing nothing — certifying a passed schedule on a surface that prints to a user.
+
+        At slice 4 the sentences they were rewritten to assert became false in their turn:
+        `mokata migrate` no longer migrates anything, so *"the channels work today with a
+        deprecation warning, scheduled for removal in X"* would be selling a channel in the release
+        that removed the last one (`MIGRATE-HELP-SELLS-REMOVED-CHANNELS`, doc 84 §1). The command
+        is now a removal-ANSWER surface and its help says only that.
+
+        ⚠ The `{}` half is graded too. With the live set empty, the old
+        `metavar="{%s}" % ",".join(CHANNELS)` rendered a literal empty brace pair — a usage line
+        offering the user nothing at all, in the command the notices told them to run."""
+        removal = D.REMOVAL_RELEASE
         detail = " ".join(_help("migrate").split())
-        self.assertIn("scheduled for removal in 0.0.17", detail)
-        self.assertIn("work today with a deprecation warning", detail)
         top = " ".join(_help_top().split())
-        self.assertIn("scheduled for removal in 0.0.17", top)
+        for text in (detail, top):
+            self.assertNotIn(f"removed {removal}", text)
+            self.assertNotIn(f"scheduled for removal in {removal}", text)
+            self.assertNotIn("work today with a deprecation warning", text)
+            self.assertNotIn("{}", text)
+        self.assertIn("no longer migrates", detail)
+
+    def test_migrate_help_offers_exactly_the_channels_it_answers_for(self):
+        """The other half, INVERTED at slice 4 and it is the same rule, not a new one: the help
+        must advertise exactly what the command accepts.
+
+        Until this slice that meant "name the live channels, hide the removed ones", because the
+        command MIGRATED and a removed channel was not something you could ask it to do. It now
+        ANSWERS for removed channels and nothing else, so the same rule points the other way.
+        `--help` renders argparse's `choices`, so this is the rendered surface, not the tuple."""
+        detail = " ".join(_help("migrate").split())
+        for channel in D.REMOVED:
+            self.assertIn(channel, detail, f"the help must name {channel}, which it answers for")
+        for channel in D.CHANNELS:
+            self.assertNotIn(channel, detail,
+                             f"{channel} is still deprecated and has no migration to offer")
 
 
 if __name__ == "__main__":

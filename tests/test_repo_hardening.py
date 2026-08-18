@@ -1,18 +1,13 @@
 """Stage 45 — repo / OSS hardening: the new workflows + config are present, valid, and
-carry the intended (least-privilege) shape. YAML is parsed when PyYAML is available
-(not a mokata dependency); the structural checks run unconditionally either way."""
+carry the intended (least-privilege) shape. YAML is PARSED, and PyYAML is a required test
+dependency (requirements/ci.txt) — its absence raises, it does not skip."""
 
 import glob
 import os
 import unittest
 
 from _support import sample_manifest_data  # noqa: F401  (path fix side-effect)
-
-try:
-    import yaml
-    _HAVE_YAML = True
-except ImportError:
-    _HAVE_YAML = False
+from _workflow_pins import safe_load
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 
@@ -34,14 +29,18 @@ class TestRepoHardening(unittest.TestCase):
         for rel in self.NEW_FILES:
             self.assertTrue(os.path.exists(os.path.join(ROOT, rel)), f"missing {rel}")
 
-    @unittest.skipUnless(_HAVE_YAML, "PyYAML not installed (not a mokata dependency)")
     def test_all_github_yaml_parses(self):
+        # This test IS the parse. Skipping it when the parser is absent reported "every .github
+        # YAML is valid" having read none of them (PYYAML-SKIP-CLUSTER); `safe_load` raises.
+        # CORPUS: THE WORKING TREE. These files are shipped assets — `rsync` copies whatever is on
+        # disk, so a stray untracked one is published and belongs in this check. An extra file makes
+        # the assertion STRICTER, never more likely to pass, so the walk cannot hide a violation.
         files = set(glob.glob(os.path.join(ROOT, ".github/**/*.yml"), recursive=True))
         files.add(os.path.join(ROOT, ".github/dependabot.yml"))
         for path in sorted(files):
             with self.subTest(file=path):
                 with open(path, encoding="utf-8") as fh:
-                    yaml.safe_load(fh)            # raises on invalid YAML
+                    safe_load(fh.read(), "verify every .github YAML file parses")
 
     def test_dependabot_is_github_actions_weekly(self):
         text = _read(".github/dependabot.yml")

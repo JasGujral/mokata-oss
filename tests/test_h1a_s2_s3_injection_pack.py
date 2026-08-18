@@ -90,7 +90,15 @@ def _emitted(stdout):
 
 # The S4 ledger's own leaf, named from the module that owns it so the read-only carve-out below
 # cannot drift into meaning something wider than one directory.
-_LEDGER_REL = os.path.join(".mokata", "temp_local", LEDGER_DIRNAME) + os.sep
+#
+# ⚠ `/`-SPELLED, AND NOT WITH `os.path.join`. This is a NAME being matched against the keys of
+# `_support.tree_snapshot`, which spells them with `posix_rel` on every platform — so building
+# this side with `os.path.join` made it `.mokata\temp_local\injection_ledger\` on Windows, the
+# carve-out matched nothing, and three tests reported the ledger's own append as an ungoverned
+# durable write. It was introduced by the round-2 sweep, which converted `tree_snapshot`'s keys
+# and left this declaration native: half of the pair moved. `_windows_portability`'s B.4 detector
+# is the guard for that shape and reds on a POSIX box, which is the only reason it is a guard.
+_LEDGER_REL = "/".join((".mokata", "temp_local", LEDGER_DIRNAME)) + "/"
 
 
 def _governed_snapshot(root):

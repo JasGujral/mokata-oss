@@ -164,10 +164,13 @@ class TestNoRuntimeDDLGuard(unittest.TestCase):
         src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                            "src", "mokata")
         sites = []
+        # CORPUS: THE WORKING TREE. This asks what mokata SHIPS, and `sync-public.sh` mirrors
+        # with `rsync`, which copies the working tree — an untracked `.py` under `src/` really is
+        # published. The index would be blind to exactly the file most likely to break the rule.
         for root, _dirs, files in os.walk(src):
             for fn in sorted(f for f in files if f.endswith(".py")):
                 path = os.path.join(root, fn)
-                rel = os.path.relpath(path, src).replace(os.sep, "/")
+                rel = _support.posix_rel(path, src).replace(os.sep, "/")
                 with open(path, encoding="utf-8") as fh:
                     tree = ast.parse(fh.read(), filename=path)
                 for cls, node in _walk_strings(tree):
@@ -319,7 +322,7 @@ class TestDmlOnlyRoleRegression(unittest.TestCase):
             conn = _DmlOnlyConn(schema_absent=True)
             with _psycopg(conn):
                 with _env({CUSTOM: _DSN}):
-                    be = build_backend("postgres", root, {}, {"dsn_env": CUSTOM},
+                    be = build_backend("postgres", root, {"dsn_env": CUSTOM},
                                        routing=routing)
         self.assertIsInstance(_unwrap(be), SQLiteBackend)      # fell back to the floor …
         self.assertTrue(routing.degraded)                      # … and said so, LOUDLY

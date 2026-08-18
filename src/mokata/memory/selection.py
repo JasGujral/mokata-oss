@@ -1,15 +1,27 @@
-"""Backend selection & store-composition resolution — the deprecated-backend branches in ONE file.
+"""Backend selection & store-composition resolution — the backend branches in ONE file.
 
-Extracted from `memory/store.py` (PRE-SIMP, release 0.0.15) so the 0.0.17 SIMP.S3 removal of the
+Extracted from `memory/store.py` (PRE-SIMP, release 0.0.15) so the SIMP.S3 removal of the
 deprecated channels (Obsidian / native-memory backends, and the detection/scope chains around them)
-is a near one-file diff rather than surgery inside the store. Everything here is the backend
+would be a near one-file diff rather than surgery inside the store. Everything here is the backend
 build/select/scope/identity resolution that used to be module-level in store.py; `store.py` keeps a
 re-export shim so every existing `from .store import build_backend` / `from ..memory.store import X`
 caller works unchanged.
 
-The SIMP.S3 deletion set lives HERE: `_select_raw_backend`'s `obsidian` and `native-memory` branches
-are the deprecated-backend selection the removal deletes — SQLite is the guaranteed floor and Postgres
-(+vector) is the one remote store that stays. Removing them is a change to this file alone.
+SIMP.S3 LANDED HERE (0.0.18, lane D slice 1). The `obsidian` and `native-memory` branches of
+`_select_raw_backend` are gone — SQLite is the guaranteed floor and Postgres (+vector) is the one
+remote store that stays. ⚠ **The deletion was not the whole job, and the half that is easy to miss
+is the one that touches a user's data.** Both of those tools are still named by the `memory_store`
+chain in every manifest written by the `full` / `custom` profiles, and after the branches go the
+resolution path SUCCEEDS anyway: the removed detect strategy reads as absent, the router degrades
+past it, and the read is served by an empty SQLite floor. That is a repo whose memory silently
+reads as erased. So there are TWO refusals below, and they are two because they are two facts
+(doc 85 §7g):
+
+  * `_refuse_removed_memory_chain` — the manifest still routes to a removed backend AND the data
+    is there. RAISES (`RemovedChannelError`). Nothing is deleted, nothing is read, and the message
+    names where the data is and the one command that brings it across.
+  * the same function with no data behind it — a stale config entry, not data loss. A LOUD
+    `note_degraded` once, and resolution carries on past it.
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
@@ -21,13 +33,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .. import TEMP_LOCAL_DIRNAME
 from ..manifest import ManifestError
-from .backends import (
-    MemoryBackend,
-    NativeMemoryBackend,
-    ObsidianBackend,
-    SQLiteBackend,
-    build_postgres_backend,
-)
+from .backends import MemoryBackend, SQLiteBackend, build_postgres_backend
 
 MEMORY_DIRNAME = "memory"
 
@@ -51,7 +57,6 @@ def _overlay_for_team(backend: MemoryBackend, routing: Any, root: str) -> Memory
 
 
 def build_backend(tool: str, root: str,
-                  clients: Optional[Dict[str, Any]] = None,
                   config: Optional[Dict[str, Any]] = None,
                   project: Optional[str] = None,
                   routing: Any = None) -> MemoryBackend:
@@ -59,8 +64,8 @@ def build_backend(tool: str, root: str,
     (Stage 24A) and degrading to the SQLite floor when a chosen backend needs external
     wiring that isn't present. `config` is the manifest's `tools.<id>.config` block;
     defaults are unchanged when it's absent. `project` (Stage 71a) SCOPES the shared
-    Postgres backend to the current project; None spans all (review). Local SQLite/Obsidian
-    are already per-repo and ignore it.
+    Postgres backend to the current project; None spans all (review). The local SQLite floor
+    is already per-repo and ignores it.
 
     CM.S2 (C-2): `routing` is the ONE read-routing decision (`degrade.resolve_read_routing`).
     For the shared Postgres tool it GATES the choice on the SAME cached E2 health verdict the
@@ -76,7 +81,7 @@ def build_backend(tool: str, root: str,
     a particular tool. LOCAL / no routing returns the raw backend UNWRAPPED (byte-identical
     zero-network hot path; the journal is never consulted). This RETIRES the B3 read-through
     cache (D7): stores are per-call and the overlay supplies coherence."""
-    backend = _select_raw_backend(tool, root, clients or {}, config or {}, project, routing)
+    backend = _select_raw_backend(tool, root, config or {}, project, routing)
     return _overlay_for_team(backend, routing, root)
 
 
@@ -93,20 +98,30 @@ def memory_dir_for(mokata_dir: str) -> str:
     return os.path.join(canonical_mokata_dir(mokata_dir), TEMP_LOCAL_DIRNAME, MEMORY_DIRNAME)
 
 
-def _select_raw_backend(tool: str, root: str, clients: Dict[str, Any], config: Dict[str, Any],
+def _select_raw_backend(tool: str, root: str, config: Dict[str, Any],
                         project: Optional[str], routing: Any) -> MemoryBackend:
     """Resolve the concrete storage backend (NO overlay — `build_backend` applies that). This is
     the CM.S2 selection body verbatim: the shared-Postgres choice is gated on the routing verdict,
     and any unavailability degrades to the guaranteed SQLite floor."""
     # Default runtime stores are transient: under .mokata/temp_local/memory/ (Stage 24D).
-    # A user-set config.path/config.vault overrides this and may point anywhere.
+    # A user-set config.path overrides this and may point anywhere.
+    from .. import deprecation
     mem_dir = memory_dir_for(root)
     floor = lambda: SQLiteBackend(os.path.join(mem_dir, "memory.db"))  # noqa: E731
 
-    if tool == "obsidian":
-        vault = config.get("vault")
-        vault = os.path.expanduser(vault) if vault else os.path.join(mem_dir, "vault")
-        return ObsidianBackend(vault)
+    if isinstance(deprecation.REMOVED.get(tool), deprecation.RemovedNotice):
+        # An EXPLICIT ask for a removed backend — `build_backend("obsidian", …)`, the migrate
+        # path, a hand-written call. It never falls to the floor: the floor is an empty store,
+        # and handing one back in answer to "open my Obsidian vault" is the §7g collapse this
+        # whole slice is about. `select_memory_backend` refuses earlier and with the vault path
+        # in the message; this is the backstop for every caller that does not go through it.
+        #
+        # ⚠ BY TYPE, NOT BY MEMBERSHIP, SINCE 0.0.18 STAGE 14. `REMOVED` now holds channels of
+        # three record kinds and only ONE of them is a memory backend. A bare `tool in REMOVED`
+        # sent `build_backend("neo4j", …)` — a `code_graph` channel that can never be a memory
+        # store — into `removed_notice`, which refuses a non-backend record and raises `KeyError`.
+        # A backstop that answers a wrong call with the wrong exception class is not a backstop.
+        raise deprecation.RemovedChannelError(deprecation.removed_notice(tool).render())
     if tool == "sqlite":
         path = config.get("path")
         path = os.path.expanduser(path) if path else os.path.join(mem_dir, "memory.db")
@@ -183,12 +198,6 @@ def _select_raw_backend(tool: str, root: str, clients: Dict[str, Any], config: D
             _note_vector_degrade(failures)
             return floor()
         return backend
-    if tool == "native-memory":
-        client = clients.get("native-memory")
-        if client is not None:
-            return NativeMemoryBackend(client)
-        # no client wired -> degrade to the guaranteed floor (not a second detection)
-        return floor()
     # "ripgrep"/unknown, or unavailable -> SQLite floor
     return floor()
 
@@ -260,33 +269,107 @@ def _note_vector_degrade(failures: List[Exception]) -> None:
         detail=(str(exc) if exc else "pgvector store unconfigured or unreachable"))
 
 
-def _warn_deprecated_memory_chain(router: Any, root: str) -> None:
-    """SIMP.S2 — MANIFEST PARITY (Jas 2026-07-15). A committed manifest that LISTS `native-memory`
-    or `obsidian` in its memory_store chain keeps resolving (never silently vanishes) but emits the
-    once-per-repo deprecation warn — so a repo whose config still names a deprecated provider is
-    told it goes away at 0.0.17 and how to migrate, whether that provider serves the read or has
-    already fallen back to the SQLite floor (the swap-to-come is never silent). Degrade-clean: a
-    duck-typed router with no `.manifest.fallback_order` warns for nothing rather than raising."""
+def obsidian_vault_path(config: Dict[str, Any], root: str) -> str:
+    """Where an `obsidian` tool's items were — the configured vault, or the default under
+    `temp_local/memory/`. The SAME resolution the deleted `_select_raw_backend` branch used, kept
+    for ONE purpose: naming the location in the refusal. It resolves a path and reads nothing.
+
+    ⚠ This is not a legacy reader and must never become one. It answers "where would your notes
+    be?", not "what is in them" — the refusal has to say WHERE, or `remedy` sends a user hunting
+    for a directory only mokata knew the name of."""
+    vault = (config or {}).get("vault")
+    return os.path.expanduser(vault) if vault else os.path.join(memory_dir_for(root), "vault")
+
+
+def removed_channel_data(tool: str, config: Dict[str, Any], root: str) -> str:
+    """The evidence a removed channel still HOLDS something, as a human-readable location — or ""
+    when it holds nothing we can see. Pure over a supplied `(tool, config, root)`.
+
+    THE SPLIT IS THE POINT (§7g), and it decides between a raise and a notice:
+
+      * `obsidian` — the items are `*.md` files in a vault directory. Their presence is
+        observable without opening one, so a repo that HAS them gets a refusal that names the
+        directory. Counting files is not reading items: nothing is parsed and nothing is served.
+      * `native-memory` — the store was always EXTERNAL, behind an injected client mokata never
+        held. There is no location to look in, so no repo can be shown to hold data, and the
+        honest answer here is "" every time. Saying otherwise would invent evidence."""
+    if tool != "obsidian":
+        return ""
+    vault = obsidian_vault_path(config, root)
+    try:
+        notes = [fn for fn in os.listdir(vault) if fn.endswith(".md")]
+    except OSError:
+        return ""
+    if not notes:
+        return ""
+    return f"({len(notes)} note(s) are still in {vault}.)"
+
+
+def _refuse_removed_memory_chain(router: Any, root: str) -> None:
+    """A committed manifest that still routes `memory_store` to a channel this release REMOVED.
+
+    ★ THIS IS WHY THE DELETION IS NOT JUST A DELETION. `full` and `custom` wrote
+    `["native-memory", "obsidian", "sqlite"]` into every manifest they generated. Take the
+    backends away and that chain still resolves — past the removed entries, onto the SQLite floor
+    — and the user is handed an EMPTY store with no error, no notice and exit 0. Their memory
+    reads as erased by an upgrade. Doc 85 §7d's one exception (a user's `.mokata/` store is DATA)
+    and P2 both land on the same requirement: refuse loudly, name the remedy, destroy nothing.
+
+    TWO OUTCOMES, because they are two facts:
+      * data is there  → RAISE `RemovedChannelError`. Nothing is read, nothing is written,
+        nothing is deleted, and the message carries the vault path and the one way across.
+      * no data        → a stale config entry. `warn_removed` ONCE PER REPO on stderr, and
+        resolution carries on. Refusing here would break every repo ever created with
+        `--profile full` over a line of config that costs them nothing.
+
+    ⚠ THE NO-DATA HALF IS NOT `note_degraded`, AND THAT WAS A CORRECTION, NOT A PREFERENCE. It
+    was written that way first and the rendered sentence read *"Writes are journaled and NOT
+    lost; run `mokata sync`…"* over a class label of *"local mokata state is present but
+    unreadable/corrupt"* — two false statements, because `DegradeNotice`'s whole model is a
+    team-mode DSN degrade and this is neither a degrade nor a DSN. `warn_removed` is the
+    once-per-repo primitive the deprecation notices already used, which is the shape this
+    actually is.
+
+    Degrade-clean on the READ of the config itself: a duck-typed router with no
+    `.manifest.fallback_order` refuses nothing rather than raising — the same contract the
+    deprecation warn it replaces had."""
     from .. import deprecation
     try:
         chain = router.manifest.fallback_order("memory_store")
     except (ManifestError, AttributeError):
         return
-    for tool in deprecation.DEPRECATED_MEMORY_TOOLS:
-        if tool in chain:
-            deprecation.warn_deprecated(tool, root)
+    # `kind` became REQUIRED at 0.0.18 stage 14 (a second capability now has a removed channel of a
+    # DIFFERENT record type). A `memory_store` chain can only hold removed BACKENDS.
+    for tool in deprecation.removed_channels_in(chain, deprecation.RemovedNotice):
+        try:
+            config = router.manifest.tool_config(tool)
+        except (ManifestError, AttributeError):
+            config = {}
+        detail = removed_channel_data(tool, config, root)
+        if detail:
+            raise deprecation.RemovedChannelError(
+                deprecation.removed_notice(tool).render(detail=detail))
+        deprecation.warn_removed(tool, root)
 
 
 def select_memory_backend(router: Any, root: str,
-                          clients: Optional[Dict[str, Any]] = None,
                           project: Optional[str] = None,
                           routing: Any = None) -> MemoryBackend:
-    _warn_deprecated_memory_chain(router, root)
+    from .. import deprecation
+    _refuse_removed_memory_chain(router, root)
     try:
         res = router.resolve("memory_store")
     except (ManifestError, AttributeError):
         res = None
     tool = res.tool if (res is not None and res.available and res.tool) else "sqlite"
+    if tool in deprecation.REMOVED:
+        # We reach here ONLY past `_refuse_removed_memory_chain`, i.e. only when it found no data
+        # behind this channel and said so out loud. The router can still RESOLVE to a removed tool
+        # — `native-memory` detected on the presence of the `claude` command, which is still on
+        # the machine — and `_select_raw_backend` would then raise on a repo that has nothing to
+        # lose, breaking every `--profile full` repo ever created over a stale line of config.
+        # Falling to the floor here is not the silent case: the notice already fired.
+        tool = "sqlite"
     config: Dict[str, Any] = {}
     try:
         config = router.manifest.tool_config(tool)
@@ -294,7 +377,7 @@ def select_memory_backend(router: Any, root: str,
         config = {}
     # CM.S2 — thread the ONE read-routing decision so the shared-tool choice is gated on the
     # SAME E2 health verdict (never a second, divergent availability answer). None → unchanged.
-    return build_backend(tool, root, clients, config, project=project, routing=routing)
+    return build_backend(tool, root, config, project=project, routing=routing)
 
 
 def _scope_context_for(surface: Any, project: Any) -> Any:

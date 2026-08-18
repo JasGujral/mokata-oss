@@ -343,6 +343,20 @@ LOCK_NEW = '"mutated--aa"'
 # The inner test the harness runs. Its whole job is to hand a THIRD PARTY a window INSIDE the
 # run: the hook executes at exactly the moment `mutate.sh` is holding the `.bak` snapshot, which
 # is precisely the state both 0.0.17 near-misses were in.
+#
+# ⚠ IT MUST NAME WHICH TEST PHASE IT WANTS, and this is stage 31's doing. `mutate.sh` now runs the
+# selected pattern TWICE per invocation — once as the GREEN BASELINE with the target pristine, and
+# once as the graded mutant run — so `MUTATE_HOOK` fires twice unless something gates it. Every
+# story below is about the window in which the MUTATION is on disk, and firing in the baseline
+# would move the target BEFORE the mutation was applied: the run would then die at
+# `MUTATION-BROKEN: the source changed between the plan and the apply`, and each of these tests
+# would be green or red for a reason that has nothing to do with the interlock it names.
+#
+# The gate is the TARGET'S OWN CONTENT, deliberately, and not a "you are the baseline" variable
+# exported by `mutate.sh`. A harness that announces its phase to the tests it runs is a harness
+# whose tests can pass in one phase and fail in the other — a second code path through the same
+# suite, which is the shape every hole in the mutator's header turned out to be. Sniffing the
+# target keeps the knowledge entirely inside this fixture, where it belongs.
 LOCK_TEST = '''\
 import os
 import unittest
@@ -351,9 +365,15 @@ import unittest
 class TestTheWindow(unittest.TestCase):
     def test_the_window(self):
         hook = os.environ.get("MUTATE_HOOK")
-        if hook:
-            with open(hook, encoding="utf-8") as fh:
-                exec(compile(fh.read(), hook, "exec"), {"__name__": "mutate_hook"})
+        if not hook:
+            return
+        gate = os.environ.get("MUTATE_HOOK_WHEN_TARGET_CONTAINS")
+        if gate:
+            with open(os.environ["MUTATE_VICTIM"], encoding="utf-8") as fh:
+                if gate not in fh.read():
+                    return          # the baseline phase — not the window under test
+        with open(hook, encoding="utf-8") as fh:
+            exec(compile(fh.read(), hook, "exec"), {"__name__": "mutate_hook"})
 '''
 
 # A third party replaces the file wholesale. Nothing subtle — this is the plain shape of "somebody
@@ -547,6 +567,9 @@ class _InterlockFixture(unittest.TestCase):
         # Hermetic lock — see `_run` for why the real default lives at the checkout root instead.
         env = dict(os.environ, PYTHON=sys.executable, MUTATE_TESTS_DIR=self.tmp,
                    MUTATE_VICTIM=self.victim, MUTATE_HOOK_REPORT=self.report,
+                   # Every hook in this file wants the post-mutation window; see LOCK_TEST for why
+                   # the baseline phase has to be excluded and why the gate is content, not a flag.
+                   MUTATE_HOOK_WHEN_TARGET_CONTAINS=LOCK_NEW.strip('"'),
                    MUTATE_LOCKFILE=os.path.join(self.tmp, ".mutate.lock"))
         env.pop("PYTHONDONTWRITEBYTECODE", None)
         env.pop("MUTATE_HOOK", None)
@@ -1089,7 +1112,12 @@ class TestEveryHasherAgreesWithHashlib(unittest.TestCase):
                 env["PYTHON"] = sys.executable
             elif shutil.which(tool) is None:
                 continue                      # not installed here; another host's branch
-            proc = subprocess.run(["bash", "-c", body, "_", path],
+            # `bash_argv`, not a bare argv[0] — see `tests/test_windows_shell_and_paths.py`. This
+            # site skips on Windows for its own reason, so it never reached the defect; it is
+            # converted anyway so the tree has ONE way to spawn a shell and no exemption to go
+            # stale.
+            proc = subprocess.run(_support.bash_argv("-c", body, "_", _support.as_posix(path)),
+                                  stdin=subprocess.DEVNULL,
                                   capture_output=True, text=True, env=env)
             self.assertEqual(0, proc.returncode, f"{tool} form failed: {proc.stderr!r}")
             self.assertEqual(want, proc.stdout.strip(),
@@ -1217,6 +1245,261 @@ class TestTheExitContract(_Fixture):
                              f"report it as an unknown failure")
 
 
+# ---------------------------------------------------------------------------------------------
+# THE SEVENTH HOLE — MUTANT-BATCH-NEEDS-A-GREEN-BASELINE (0.0.18 stage 31).
+# ---------------------------------------------------------------------------------------------
+#
+# Every mutant ran against a tree nobody had verified. If anything unrelated was ALREADY FAILING
+# in the selected test set, the mutant run found `FAILED` and was graded RED — for a failure the
+# mutation had nothing to do with. A whole batch of those is a PERFECT SCORE, and it is the most
+# convincing false green this harness can produce, because a sweep of REDs is exactly what a
+# healthy batch looks like. Stage 28 shipped a 27/27 that way; the 29b rider re-measured 4 of the
+# 27 as false and a 5th as machine-dependent.
+#
+# ⚠ WHERE THE CHECK RUNS IS THE WHOLE DESIGN, and the obvious place is the wrong one. Stage 28's
+# contaminant was `.mutate.lock`, which `mutate.sh` creates for the DURATION OF EACH MUTANT RUN
+# and which is a literal `sync-public.sh --exclude` entry — so under the then-current disk-probe
+# derivation it joined the deriving set while, and only while, the mutator was up. A baseline in
+# the DRIVER, before mutant 1, executes with no lock on disk: it would have come back green, the
+# batch would have proceeded, and every mutant would still have been scored RED off a contaminated
+# corpus. The guard would have been decorative — a check that cannot fail, read as a check that
+# passed, which is the same class as `NULLGLOB-DISARMS-THE-EXISTENCE-CHECK` in the release path.
+#
+# So the baseline runs INSIDE `mutate.sh`, after the lock is taken and after the snapshot exists,
+# with only the mutation itself skipped. `TestTheBaselineSeesWhatAMutantRunSees` proves that BY
+# CONSTRUCTION rather than by assertion: the fixture's own test process writes down what it found
+# on disk each time it is run, and the pin reads the BASELINE's line back.
+#
+# §7g — three outcomes, three representations, and the third must not be confusable with either
+# of the other two:
+#
+#     RED                 the tests failed BECAUSE of the mutation
+#     GREEN               the tests passed DESPITE the mutation
+#     BASELINE NOT GREEN  the tests were already failing — NO mutant result is meaningful
+#
+# "the tests never ran at all" is a FOURTH thing and already has exit 6. It is deliberately NOT
+# folded in here: `test_a_pattern_matching_no_tests_is_still_exit_6` and its sibling hold that
+# line, because an empty run is the absence of evidence, not evidence that the tree is broken.
+
+# A victim with both a COVERED marker (so a mutation of it is caught) and an uncovered branch (so
+# GREEN is still reachable) — the completeness check this file has insisted on since hole 1.
+PHASE_VICTIM = '''\
+MARKER = "pristine-aa"
+
+
+def never_exercised(flag):
+    """Nothing in the fixture suite calls this — the honest-survivor case."""
+    if flag:
+        return "yes"
+    return "no"
+'''
+
+PHASE_OLD = '"pristine-aa"'
+PHASE_NEW = '"mutated--aa"'
+
+# THE INSTRUMENT. It runs in EVERY test phase `mutate.sh` has, and each time it appends one record
+# of what the tree looked like from inside that phase. Two records means the baseline happened;
+# the FIRST record is the baseline's own account of the lock, the snapshot and the target.
+#
+# The recording is its own test method and does no asserting, on purpose: the marker assertion
+# below FAILS during the mutant phase (that is what makes the mutant RED), and a recorder that
+# shared a method with it would never write the mutant phase's line.
+PHASE_TEST = '''\
+import json
+import os
+import unittest
+
+import victim
+
+
+class TestRecordWhatThisPhaseSees(unittest.TestCase):
+    def test_record(self):
+        target = os.environ["MUTATE_VICTIM"]
+        with open(os.environ["MUTATE_PHASE_REPORT"], "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({
+                "lock": os.path.exists(os.environ["MUTATE_LOCKFILE"]),
+                "bak": os.path.exists(target + ".bak"),
+                "target": open(target, encoding="utf-8").read(),
+            }) + "\\n")
+
+
+class TestTheMarkerIsPristine(unittest.TestCase):
+    def test_marker(self):
+        self.assertEqual("pristine-aa", victim.MARKER)
+'''
+
+# The same instrument, plus a failure that has NOTHING to do with any mutation — which is the
+# defect's own premise: "if anything unrelated is already failing in the selected test set".
+PHASE_TEST_ALREADY_FAILING = PHASE_TEST + '''
+
+class TestSomethingUnrelatedIsAlreadyBroken(unittest.TestCase):
+    def test_unrelated(self):
+        self.fail("an unrelated failure that was in the tree before any mutation was applied")
+'''
+
+
+class _BaselineFixture(unittest.TestCase):
+    def setUp(self):
+        if sys.platform.startswith("win"):
+            self.skipTest("POSIX shell harness; the Windows legs do not run mutation passes")
+        if not os.access(MUTATE_SH, os.X_OK):
+            self.skipTest("scripts/mutate.sh is not executable in this checkout")
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.victim = os.path.join(self.tmp, "victim.py")
+        pathlib.Path(self.victim).write_text(PHASE_VICTIM, encoding="utf-8")
+        pathlib.Path(os.path.join(self.tmp, "test_phase.py")).write_text(
+            PHASE_TEST, encoding="utf-8")
+        pathlib.Path(os.path.join(self.tmp, "test_redtree.py")).write_text(
+            PHASE_TEST_ALREADY_FAILING, encoding="utf-8")
+        self.phases = os.path.join(self.tmp, "phases.jsonl")
+
+    def _run(self, pattern="test_phase.py", old=PHASE_OLD, new=PHASE_NEW, label="baseline",
+             **extra):
+        env = dict(os.environ, PYTHON=sys.executable, MUTATE_TESTS_DIR=self.tmp,
+                   MUTATE_VICTIM=self.victim, MUTATE_PHASE_REPORT=self.phases,
+                   MUTATE_LOCKFILE=os.path.join(self.tmp, ".mutate.lock"))
+        env.pop("PYTHONDONTWRITEBYTECODE", None)
+        env.update(extra)
+        return subprocess.run([MUTATE_SH, label, self.victim, old, new, pattern],
+                              capture_output=True, text=True, env=env, cwd=ROOT)
+
+    def _recorded(self):
+        if not os.path.exists(self.phases):
+            return []
+        return [json.loads(line) for line in
+                pathlib.Path(self.phases).read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+class TestTheBaselineSeesWhatAMutantRunSees(_BaselineFixture):
+    """THE CRUX. A baseline in the wrong PLACE would have passed stage 28's exact scenario."""
+
+    def test_the_selected_tests_are_run_once_unmutated_before_being_graded(self):
+        proc = self._run()
+        seen = self._recorded()
+        self.assertEqual(2, len(seen),
+                         f"the selected pattern was run {len(seen)} time(s), not twice. There is "
+                         f"no baseline: the first mutant of every batch is still graded against a "
+                         f"tree nothing has verified. Harness said: {proc.stdout + proc.stderr!r}")
+        self.assertEqual(PHASE_VICTIM, seen[0]["target"],
+                         "the FIRST run saw a mutated target, so it is not a baseline — a "
+                         "'baseline' that runs with the mutation applied grades nothing and "
+                         "cannot distinguish an already-failing tree from a killed mutant")
+        self.assertIn(PHASE_NEW, seen[1]["target"],
+                      "the SECOND run did not see the mutation, so the baseline replaced the "
+                      "graded run instead of preceding it")
+
+    def test_the_baseline_runs_with_the_mutation_lock_on_disk(self):
+        # THE POINT OF THE PLACEMENT, and the reason a driver-level pre-check is decorative.
+        # `.mutate.lock` exists ONLY for the duration of a mutant run, and at stage 28 its mere
+        # presence was what reddened the graded corpus. A baseline that cannot see it cannot see
+        # the contamination it exists to catch: stage 28 would have gone green through it and
+        # scored 27/27 exactly as it did.
+        self._run()
+        seen = self._recorded()
+        # The count comes first or this pin is VACUOUS: with no baseline at all, `seen[0]` is the
+        # MUTANT run's record, which carries the lock too and would satisfy the assertion below
+        # while proving nothing. A pin that passes on the unfixed harness is not a pin.
+        self.assertEqual(2, len(seen), f"there is no baseline run to inspect: {seen!r}")
+        self.assertTrue(seen[0]["lock"],
+                        "the baseline ran with NO mutation lock on disk, so it is outside the "
+                        "lock's lifetime — every contaminant that exists only while the mutator "
+                        "is up is invisible to it, which is the stage-28 scenario passing through "
+                        "a guard that was supposed to catch it")
+
+    def test_the_baseline_runs_with_the_snapshot_on_disk(self):
+        # The `.bak` is the second artefact a mutant run puts in the tree, and it is in the tree
+        # for exactly the same window as the lock. Same argument, second file.
+        self._run()
+        seen = self._recorded()
+        self.assertEqual(2, len(seen), f"there is no baseline run to inspect: {seen!r}")  # see above
+        self.assertTrue(seen[0]["bak"],
+                        "the baseline ran before the snapshot was taken, so a test that trips over "
+                        "`<target>.bak` reddens the mutant run and not the baseline — the "
+                        "contamination class this guard exists for, one artefact over")
+
+
+class TestAnAlreadyFailingTreeIsNotGraded(_BaselineFixture):
+    """§7g — the third outcome, and it must abort rather than be scored."""
+
+    def test_an_already_failing_selection_aborts_instead_of_scoring_the_mutant(self):
+        proc = self._run(pattern="test_redtree.py")
+        out = proc.stdout + proc.stderr
+        self.assertEqual(7, proc.returncode,
+                         f"an already-failing tree did not abort with the documented baseline "
+                         f"status. Got {proc.returncode}: {out!r}")
+        self.assertIn("BASELINE", proc.stdout,
+                      f"stdout does not name the baseline, so a batch log shows an abort with no "
+                      f"way to tell it from a mutation that could not be applied: {proc.stdout!r}")
+
+    def test_no_verdict_is_printed_for_a_tree_that_was_already_red(self):
+        # The whole defect in one assertion. On the unfixed harness this run printed
+        # `RED ✓ ... (FAILED (failures=1))` and the batch counted a kill.
+        proc = self._run(pattern="test_redtree.py")
+        for verdict in ("RED", "GREEN", "SURVIVOR"):
+            self.assertNotIn(verdict, proc.stdout,
+                             f"{verdict!r} was printed for a tree that was failing before the "
+                             f"mutation was applied. That grade belongs to nothing — it is the "
+                             f"false green of hole 1 wearing the costume of a healthy kill: "
+                             f"{proc.stdout!r}")
+
+    def test_the_mutation_is_never_applied_and_the_tree_is_left_clean(self):
+        proc = self._run(pattern="test_redtree.py")
+        self.assertEqual(1, len(self._recorded()),
+                         "the graded run happened anyway — the abort did not stop the batch, it "
+                         "merely complained on the way past")
+        self.assertEqual(PHASE_VICTIM, pathlib.Path(self.victim).read_text(encoding="utf-8"),
+                         "the target was left mutated by a run that produced no verdict")
+        self.assertFalse(os.path.exists(self.victim + ".bak"), "a .bak was left behind")
+        self.assertFalse(os.path.exists(self.victim + ".REFUSED-RESTORE.bak"),
+                         "a refusal artefact was left by a run that refused nothing")
+
+    def test_the_baseline_status_is_not_shared_with_any_other_outcome(self):
+        # §7g mechanically: the abort code must be reachable and must not collide with a verdict,
+        # with the restore refusal (4 — the target is deliberately left mutated), or with the
+        # no-verdict statuses. Derived from the script's own contract, not restated.
+        red = self._run(pattern="test_phase.py")
+        self.assertEqual(0, red.returncode, f"the ordinary graded path stopped working: {red!r}")
+        baseline = self._run(pattern="test_redtree.py")
+        self.assertNotIn(baseline.returncode, (0, 1, 2, 3, 4, 5, 6),
+                         f"the baseline abort reuses a status that already means something else, "
+                         f"so no caller can tell an unverifiable tree from that other thing: "
+                         f"{baseline.returncode}")
+
+
+class TestTheBaselineDoesNotSwallowTheOtherOutcomes(_BaselineFixture):
+    """Anti-vacuity from the other side: a guard that aborts everything grades nothing."""
+
+    def test_a_mutation_the_tests_catch_is_still_RED(self):
+        proc = self._run()
+        self.assertTrue(proc.stdout.strip().startswith("RED"),
+                        f"a green baseline no longer leads to a graded mutant: {proc.stdout!r}")
+        self.assertEqual(0, proc.returncode)
+
+    def test_a_mutation_nothing_exercises_is_still_GREEN(self):
+        proc = self._run(old='return "yes"', new='return "no!"')
+        self.assertTrue(proc.stdout.strip().startswith("GREEN"),
+                        f"the harness stopped being able to report a survivor, so its REDs prove "
+                        f"nothing either: {proc.stdout!r}")
+        self.assertEqual(0, proc.returncode)
+
+    def test_a_pattern_matching_no_tests_is_still_exit_6(self):
+        # §7g the other way. "Ran 0 tests ... OK" is the ABSENCE of evidence — it is not a tree
+        # that was already failing, and folding it into the baseline abort would collapse two
+        # distinct facts back into one representation.
+        proc = self._run(pattern="test_no_such_file_xyz.py")
+        self.assertEqual(6, proc.returncode,
+                         f"an empty test selection was reported as an already-failing tree. Those "
+                         f"are different facts and want different reactions — fix the pattern vs "
+                         f"fix the tree: {proc.stdout + proc.stderr!r}")
+
+    def test_a_test_tree_that_cannot_be_imported_is_still_exit_6(self):
+        proc = self._run(MUTATE_TESTS_DIR="/no/such/directory")
+        self.assertEqual(6, proc.returncode,
+                         f"a discovery failure was reported as an already-failing tree: "
+                         f"{proc.stdout + proc.stderr!r}")
+
+
 class TestTheHarnessIsShippable(unittest.TestCase):
     """It is a dev tool and ships PUBLIC — no internal-only exclusion, so nothing to keep in step."""
 
@@ -1232,7 +1515,11 @@ class TestTheHarnessIsShippable(unittest.TestCase):
                        # next person to make this guard cheaper will reach for mtime + size,
                        # which is the very comparison it exists to defeat.
                        "SNAPSHOT INTERLOCK", "WHY THE CHECK IS A CONTENT HASH",
-                       "REFUSED-RESTORE", "THE KILL PATH IS UNAFFECTED"):
+                       "REFUSED-RESTORE", "THE KILL PATH IS UNAFFECTED",
+                       # Hole 7. "WHY IT RUNS HERE" is the load-bearing one: the next person to
+                       # make this cheaper will hoist it into the driver, where it runs outside
+                       # the lock's lifetime and would have passed stage 28's exact scenario.
+                       "THE GREEN BASELINE", "WHY IT RUNS HERE"):
             self.assertIn(needle, src,
                           f"{needle!r} is gone from the header — the reasoning that makes the "
                           f"fixes non-negotiable must not be simplified away")

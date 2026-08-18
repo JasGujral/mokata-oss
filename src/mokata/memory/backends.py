@@ -1,10 +1,14 @@
 """C4 — pluggable memory storage backends (STORAGE ONLY).
 
-All three live behind one `MemoryBackend` contract; the memory *logic* (gating, healing,
+Every backend lives behind one `MemoryBackend` contract; the memory *logic* (gating, healing,
 toggles, instrumentation) is mokata's own and lives in `store.py`. SQLite is the
-guaranteed default floor (stdlib, no dependency). Obsidian (markdown vault) is a real
-local adapter. native-memory is an optional adapter delegating to an injected client —
-when no client is wired, selection degrades to the SQLite floor (never a hard failure).
+guaranteed default floor (stdlib, no dependency); Postgres (+ the pgvector variant) is the one
+remote store, opt-in and degrading to that floor.
+
+SIMP.S3 (0.0.18, lane D slice 1): the `ObsidianBackend` markdown adapter, the `MemoryClient`
+protocol and the `NativeMemoryBackend` that delegated to it are REMOVED. Their removal record —
+what a repo that still names one is told, and what happens to the data — is
+`deprecation.REMOVED`, not a shim here.
 """
 
 from __future__ import annotations
@@ -13,7 +17,7 @@ import json
 import os
 from abc import ABC, abstractmethod
 from contextlib import closing, contextmanager
-from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import edges as _edges
 from ._sqlite import connect_sqlite, is_memory_path
@@ -385,8 +389,8 @@ class MemoryBackend(ABC):
     # --- DB.S2b: the scope-pushdown seam ------------------------------------
     # OFF by default, and the default is the SAFE one. A backend advertises this only if it can
     # filter on scope columns it KNOWS are a faithful projection of each item's doc; a caller
-    # passes `scope_path` only to a backend that advertises it. Everything else — a vault of
-    # files, an injected native client, a shared table whose backfill hasn't run — leaves it False
+    # passes `scope_path` only to a backend that advertises it. Everything else — a third-party
+    # adapter, a shared table whose backfill hasn't run — leaves it False
     # and gets the whole (correctly unfiltered) set back, which `scope.union_read` then narrows
     # from the doc. The cost of False is a slower read; the cost of a wrongly-True is another
     # tenant's rows going missing, so False is where an unknown belongs.
@@ -398,8 +402,8 @@ class MemoryBackend(ABC):
 
     # --- DB.S3: the lexical-search seam -------------------------------------
     # OPTIONAL by design. A backend that can rank in the database implements `lexical_search` and
-    # reports a non-jaccard `lexical_mode`; everything else (Obsidian's files, the injected native
-    # client) simply doesn't, and `tiered_recall` uses the Jaccard floor for it — which is that
+    # reports a non-jaccard `lexical_mode`; everything else (a store with no index of its own)
+    # simply doesn't, and `tiered_recall` uses the Jaccard floor for it — which is that
     # backend's DESIGN, not a degrade, so it must not be reported as one.
     lexical_mode: str = LEXICAL_MODE_JACCARD
 
@@ -872,8 +876,8 @@ class SQLiteBackend(MemoryBackend):
                 for i in range(0, len(ids), SQLiteBackend._ID_CHUNK)]
 
     # THE ONE PLACE the local store's usage columns are written, and the ONE place they are read.
-    # Both are deliberately NOT part of the `MemoryBackend` ABC: a backend without them (Obsidian's
-    # files, the native client) is not broken, it simply supplies no usage signal, and the fusion
+    # Both are deliberately NOT part of the `MemoryBackend` ABC: a backend without them (any
+    # third-party adapter) is not broken, it simply supplies no usage signal, and the fusion
     # falls back to its three original terms. Capability is probed with `hasattr`, never assumed —
     # the same posture as `lexical_search`/`semantic_search`.
     def record_usage(self, item_ids: Sequence[str], now: str) -> int:
@@ -1101,131 +1105,6 @@ class SQLiteBackend(MemoryBackend):
         if self._mem_conn is not None:
             self._mem_conn.close()
             self._mem_conn = None
-
-
-# ------------------------------------------------------------------------- obsidian
-_FENCE = "```"
-
-
-class ObsidianBackend(MemoryBackend):
-    """Stores each item as a human-readable markdown note in a vault directory; the
-    authoritative item dict lives in a fenced JSON block so edges round-trip exactly."""
-
-    name = "obsidian"
-
-    def __init__(self, vault: str, name: str = "obsidian") -> None:
-        self.vault = vault
-        self.name = name
-        os.makedirs(vault, exist_ok=True)
-
-    def _path(self, item_id: str) -> str:
-        return os.path.join(self.vault, f"{item_id}.md")
-
-    def put(self, item: MemoryItem) -> None:
-        body = (
-            f"# memory: {item.subject}  ({item.mtype})\n\n"
-            f"{item.value}\n\n"
-            f"{_FENCE}json\n{json.dumps(item.to_doc(), indent=2)}\n{_FENCE}\n"
-        )
-        with open(self._path(item.id), "w", encoding="utf-8") as fh:
-            fh.write(body)
-
-    @staticmethod
-    def _parse(text: str) -> Optional[MemoryItem]:
-        start = text.find(_FENCE + "json")
-        if start == -1:
-            return None
-        start = text.find("\n", start) + 1
-        end = text.find(_FENCE, start)
-        if end == -1:
-            return None
-        return MemoryItem.from_dict(json.loads(text[start:end]))
-
-    def get(self, item_id: str) -> Optional[MemoryItem]:
-        path = self._path(item_id)
-        if not os.path.exists(path):
-            return None
-        with open(path, encoding="utf-8") as fh:
-            return self._parse(fh.read())
-
-    def all(self, mtype: Optional[str] = None,
-            statuses: Optional[Tuple[str, ...]] = None,
-            limit: Optional[int] = None,
-            scope_path: Optional[Sequence[Any]] = None) -> List[MemoryItem]:
-        # DB.S2a — a vault is FILES, not a queryable store: there is no WHERE to push into, so the
-        # filter stays in Python here. Only the SQL backends gained the pushdown; the contract
-        # (including `limit`) is uniform so callers never branch on backend.
-        #
-        # DB.S2b — `scope_path` is accepted for that same uniformity and deliberately IGNORED:
-        # `supports_scope_pushdown` stays False, so no caller passes one, and `scope.union_read`
-        # does the scope filtering over the returned items exactly as before.
-        items: List[MemoryItem] = []
-        for fn in sorted(os.listdir(self.vault)):
-            if not fn.endswith(".md"):
-                continue
-            with open(os.path.join(self.vault, fn), encoding="utf-8") as fh:
-                it = self._parse(fh.read())
-            if it is not None:
-                items.append(it)
-        # stable order by creation time, then id
-        items.sort(key=lambda i: (i.created_at, i.id))
-        if mtype is not None:
-            items = [i for i in items if i.mtype == mtype]
-        if statuses is not None:
-            items = [i for i in items if i.status in statuses]
-        return items[:limit] if limit is not None else items
-
-    def delete(self, item_id: str) -> bool:
-        path = self._path(item_id)
-        if os.path.exists(path):
-            os.remove(path)
-            return True
-        return False
-
-
-# -------------------------------------------------------------------- native-memory
-class MemoryClient(Protocol):
-    """Contract for the Anthropic native memory tool (or any external store). The
-    adapter delegates storage entirely to this; mokata's logic stays in the store."""
-
-    def put(self, doc: Dict[str, Any]) -> None: ...
-    def get(self, item_id: str) -> Optional[Dict[str, Any]]: ...
-    def all(self) -> List[Dict[str, Any]]: ...
-    def delete(self, item_id: str) -> bool: ...
-
-
-class NativeMemoryBackend(MemoryBackend):
-    name = "native-memory"
-
-    def __init__(self, client: MemoryClient, name: str = "native-memory") -> None:
-        self.client = client
-        self.name = name
-
-    def put(self, item: MemoryItem) -> None:
-        self.client.put(item.to_doc())
-
-    def get(self, item_id: str) -> Optional[MemoryItem]:
-        doc = self.client.get(item_id)
-        return MemoryItem.from_dict(doc) if doc else None
-
-    def all(self, mtype: Optional[str] = None,
-            statuses: Optional[Tuple[str, ...]] = None,
-            limit: Optional[int] = None,
-            scope_path: Optional[Sequence[Any]] = None) -> List[MemoryItem]:
-        # DB.S2a — the injected `MemoryClient.all()` takes no filter arguments (it is someone
-        # else's contract, not ours to widen), so the filter stays in Python on this adapter.
-        # DB.S2b — and for the same reason `scope_path` is accepted-and-ignored here:
-        # `supports_scope_pushdown` stays False, so `scope.union_read` keeps doing the work.
-        items = [MemoryItem.from_dict(d) for d in self.client.all()]
-        items.sort(key=lambda i: (i.created_at, i.id))
-        if mtype is not None:
-            items = [i for i in items if i.mtype == mtype]
-        if statuses is not None:
-            items = [i for i in items if i.status in statuses]
-        return items[:limit] if limit is not None else items
-
-    def delete(self, item_id: str) -> bool:
-        return self.client.delete(item_id)
 
 
 # -------------------------------------------------------------------------- postgres

@@ -35,6 +35,9 @@ _NON_PRODUCT_DIRS = {"build", "launch", "marketing", "talks", "assets", "stylesh
 
 def _product_sections():
     return sorted(
+        # CORPUS: THE WORKING TREE. These files are shipped assets — `rsync` copies whatever is on
+        # disk, so a stray untracked one is published and belongs in this check. An extra file makes
+        # the assertion STRICTER, never more likely to pass, so the walk cannot hide a violation.
         d for d in os.listdir(DOCS_DIR)
         if os.path.isdir(os.path.join(DOCS_DIR, d)) and d not in _NON_PRODUCT_DIRS
     )

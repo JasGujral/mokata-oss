@@ -53,14 +53,26 @@ a sentence the model is trusted to honour:
 
 If a skill's prose promised a boundary the engine didn't back, that would be a bug the skill-lint
 catches — Contracts are grounded in a boundary→gate map, so a Contract never claims enforcement
-that isn't there. There are **10 *backed* gates** — `write-gate`, `secret-guard`, `spec-persisted`,
-`completeness`, `no-code-without-failing-test`, `deviation`, `hard-rule`, `ship-readiness`,
-`approach-approval` (the nine in the `skill_contracts.GATES` map) and `self-protect` — and only a
-backed gate may be cited as enforcement. `self-protect` sits outside that map because it is not a
-pipeline boundary at all: it keys on the **target path** alone, so it runs ahead of every
-run-state gate and applies with no run registered. The rest (`red-before-green`, `spec-then-quality`, `measure-first`,
-`finish-is-human-landed`, …) are **advisory protocol boundaries**: they are a skill's headline
-copy, never a claim that code stops you.
+that isn't there. Only a *backed* gate may be cited as enforcement, and there are **9 backed
+gates** — every one of them a row in the `skill_contracts.GATES` map carrying `backed=True`:
+
+<!-- mokata:gates backed -->
+`write-gate` · `secret-guard` · `spec-persisted` · `completeness` ·
+`no-code-without-failing-test` · `deviation` · `hard-rule` · `approach-approval` · `self-protect`
+<!-- /mokata:gates -->
+
+`self-protect` is the structurally unusual one — not because it sits outside that map, but because
+of *what it keys on*. Every other entry asks where a run has got to; `self-protect` asks only about
+the **target path**. So it runs ahead of every run-state gate and applies with no run registered at
+all.
+
+**`ship-readiness` is absent from that list on purpose — it used to be on it.** 0.0.17 demoted it
+to advisory, and it now carries its own verdict in the registry: *"an agent-facing protocol
+boundary, not a code gate"*. Nothing in the package executes it. The boundary it describes is
+unchanged and still binds the `ship` skill, and promotion back would take a surface that actually
+runs it. Until then it sits with the rest (`red-before-green`, `spec-then-quality`,
+`measure-first`, `finish-is-human-landed`, …) as an **advisory protocol boundary**: a skill's
+headline copy, never a claim that code stops you.
 
 ### 2. One activation surface (the `⛭` line)
 

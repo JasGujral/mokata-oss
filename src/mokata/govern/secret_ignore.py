@@ -61,6 +61,7 @@ from ..atomicfile import atomic_write_text, lock_path_for
 from ..errors import MokataError
 from ..oslock import file_lock
 from .secrets import Finding, _matches_known_shape, _scan_entropy, _scan_signatures
+from ..repo_walk import posix_name
 
 # The committed .mokata/ ROOT, never `temp_local/` — see (e) above. `temp_local/` is what the
 # init-written `.mokata/.gitignore` excludes, so a file placed there would be exactly the
@@ -151,6 +152,30 @@ def ignores_path(root: str) -> str:
     return os.path.join(root, MOKATA_DIR, IGNORES_FILENAME)
 
 
+def escapes_root(rel: str) -> bool:
+    r"""Does this repo-relative path leave the repo? Answered for BOTH separators, always.
+
+    ⚠ THIS IS A SECURITY BOUNDARY THAT A SPELLING CHANGE SILENTLY OPENED, so it is a named,
+    pure function rather than a condition inline in `normalize_target` — it can be graded on any
+    platform against both spellings, which is the only reason a macOS run says anything about it.
+
+    The defect it exists to prevent, recorded because it already happened once: the containment
+    check used to read `rel.startswith(os.pardir + os.sep)` and was CORRECT while `rel` came
+    straight from `os.path.relpath` — on Windows that yields `..\outside.py` and `os.sep` is
+    `\`, so the two halves agreed. The 0.0.18 Windows-portability sweep then wrapped the
+    producer in `posix_name`, making `rel` read `../outside.py`, and left the comparison spelled
+    with `os.sep`. Half of the pair moved. On run 32117189879 `add_ignore(root, tok,
+    "../outside.py")` was ACCEPTED on all three Windows legs — a path-traversal defence that did
+    not fire, and the only reason it was caught is that a test asserted the refusal.
+
+    So the predicate no longer depends on how `rel` happens to be spelled. `..` alone, `../x` and
+    `..\x` are all outside; a leading `..` inside a NAME (`..config`) is not, which is why the
+    separator is required rather than a bare `startswith("..")`."""
+    if rel in (os.curdir, os.pardir, ""):
+        return True
+    return rel.startswith((os.pardir + "/", os.pardir + "\\"))
+
+
 def normalize_target(root: str, path: str) -> str:
     """`path` as a repo-relative POSIX path, or raise.
 
@@ -169,7 +194,7 @@ def normalize_target(root: str, path: str) -> str:
     target = raw if os.path.isabs(raw) else os.path.join(root_abs, raw)
     target = os.path.realpath(target)
     try:
-        rel = os.path.relpath(target, root_abs)
+        rel = posix_name(os.path.relpath(target, root_abs))
     except ValueError:
         # WINDOWS — `ntpath.relpath` RAISES when the two paths sit on different drives
         # ("path is on mount 'D:', start on mount 'C:'"); there is no relative path between
@@ -181,13 +206,13 @@ def normalize_target(root: str, path: str) -> str:
         raise IgnoreError(
             f"'{raw}' is outside the repo — an ignore only ever applies to a file in this "
             f"repository, because that is what makes it reviewable in the diff")
-    if rel == os.curdir or rel.startswith(os.pardir + os.sep) or rel == os.pardir:
+    if escapes_root(rel):
         raise IgnoreError(
             f"'{raw}' is outside the repo — an ignore only ever applies to a file in this "
             f"repository, because that is what makes it reviewable in the diff")
     if os.path.isdir(target):
         raise IgnoreError(f"'{raw}' is a directory — an ignore is scoped to ONE exact file")
-    return rel.replace(os.sep, "/")
+    return rel
 
 
 @dataclass(frozen=True)

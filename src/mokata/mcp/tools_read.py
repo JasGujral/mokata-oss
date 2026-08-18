@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional
 from .. import MOKATA_DIR
 from ..adapters import AdapterContract, negotiate, overlapping_capabilities
 from ..config import Surface
+from ..deprecation import RemovedChannelError
 from ..engine import preview_pipeline
 from ..govern import AuditLedger, BudgetReport, diagnose
 from ..knowledge import QUERY_KINDS, KnowledgeLayer
@@ -636,8 +637,10 @@ def session_list(path: str = ".", transport: str = "", limit: int = DEFAULT_PAGE
                  offset: int = 0) -> Dict[str, Any]:
     """Stage 55a/55b — list the tagged, shareable session bundles (tag, provenance, resume point,
     transport). Read-only; a friendly empty state when there are none. With no `transport` it
-    spans LOCAL + the committed VAULT (+ shared Postgres when a DSN is configured); pass a single
-    transport name to scope it. A missing/unavailable remote is skipped clean. PAGED from the start
+    spans LOCAL (+ shared Postgres when a DSN is configured); pass a single transport name to scope
+    it. A missing/unavailable remote is skipped clean, and a REMOVED one answers `status:
+    "removed"` with its record. Bundles stranded in a removed channel's store are reported in
+    `removed_channel` rather than silently omitted. PAGED from the start
     of the listing (`limit` defaults to 50, `limit=0` opts out); the result carries `count` (this
     page), `total`, `has_more`, and `next_offset`. Push/pull/rename are the human-gated
     `session_push`/`session_pull`/`session_name` write tools."""
@@ -649,19 +652,38 @@ def session_list(path: str = ".", transport: str = "", limit: int = DEFAULT_PAGE
         except STX.SessionTransportUnavailable as exc:
             return {"count": 0, "bundles": [], "transport": transport,
                     "status": "unavailable", "message": str(exc)}
+        except RemovedChannelError as exc:
+            # A REMOVED kind is not an unavailable one, and the two must not share a status:
+            # "unavailable" invites a retry with a DSN exported, which will never work for a
+            # transport that no longer exists (§7g).
+            return {"count": 0, "bundles": [], "transport": transport,
+                    "status": "removed", "message": str(exc)}
     else:
-        transports = [STX.LocalTransport(path), STX.VaultTransport(path)]
+        # The removed vault leg is gone; a repo that still holds bundles there is TOLD so rather
+        # than silently listed short (see `cli_commands/collab.py`'s note).
+        transports = [STX.LocalTransport(path)]
         if STX.resolve_pg_dsn(root=path):
             try:
                 transports.append(STX.make_transport("postgres", path))
             except STX.SessionTransportUnavailable:
                 pass
     infos = SB.list_session_bundles_across(path, transports)
-    return paginate([{"tag": i.tag, "author": i.author, "created": i.created,
-                      "source": i.source, "run_id": i.run_id,
-                      "resume_phase": i.resume_phase, "done": i.done, "total": i.total,
-                      "transport": i.transport}
-                     for i in infos], key="bundles", limit=limit, offset=offset)
+    result = paginate([{"tag": i.tag, "author": i.author, "created": i.created,
+                        "source": i.source, "run_id": i.run_id,
+                        "resume_phase": i.resume_phase, "done": i.done, "total": i.total,
+                        "transport": i.transport}
+                       for i in infos], key="bundles", limit=limit, offset=offset)
+    # Same fact the CLI prints, in the shape this surface speaks. A model that reads a short list
+    # and reports "you have no sessions" is the empty-store defect with a narrator — and it is
+    # attached whether or not the page is empty, because a repo with one local bundle and nine
+    # stranded ones is exactly the case an is-it-empty guard would miss.
+    stranded = STX.removed_bundle_tags("vault", path)
+    if stranded:
+        from .. import deprecation
+        result["removed_channel"] = {
+            "channel": "vault", "stranded": len(stranded),
+            "message": deprecation.removal_answer("vault", path, True)}
+    return result
 
 
 @_tool("config_get", "read")

@@ -42,6 +42,26 @@ from .errors import DegradedCapability, MokataError
 from .memory import edges as _edges
 from .memory import lifecycle as _lifecycle
 
+# ============================================================ the declared PostgreSQL floor
+# ADR-54 V1, ratified 2026-08-03 (`601ca35`): the team-mode floor moved from `>= 14` to `>= 15`,
+# target 17 (PG15 EOL 2027-11-11; PG17 EOL 2029-11-08; PG14 reaches upstream EOL 2026-11-12).
+#
+# WHY THESE ARE NUMBERS AND NOT A SENTENCE. The ratification moved the ADR box and one comment,
+# and nine other surfaces went on telling users to stand up a PostgreSQL that dies on 2026-11-12
+# — `PG-FLOOR-RATIFIED-NOWHERE-BUT-THE-ADR` (doc 84). Nothing connected the decision to the
+# places that state it, because there was no place to connect them TO: the floor was prose in
+# every one of them, so every one had to be remembered separately. These two names are that
+# place. Every user-facing string that quotes the floor now interpolates them (`team.py`'s three
+# backend-guidance strings are the first callers), and `tests/test_pg_floor_drift.py` grades the
+# whole tracked corpus against them, so the next time the floor moves the guard names every
+# surface that did not move with it instead of a stage finding them nine releases later.
+#
+# ⚠ THIS IS A DECLARATION, NOT YET AN ENFORCEMENT. Nothing here refuses a connection to a
+# PostgreSQL below the floor — see `PG-FLOOR-UNENFORCED-AT-CONNECT` (doc 84) for the residual and
+# why it is not this stage's to build: it needs the live-DB legs, not a docs sweep.
+MIN_PG_MAJOR = 15
+TARGET_PG_MAJOR = 17
+
 # The shared-schema version this build of mokata speaks. `team init` (TM.S3) writes/migrates
 # the row in `mokata_schema_version`; the probe reads it and refuses on a mismatch. Bump this
 # in lockstep with a breaking shared-schema change.

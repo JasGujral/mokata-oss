@@ -51,6 +51,17 @@ SETTINGS: Tuple[Setting, ...] = (
     Setting("settings.ux.badge_verbosity", "ux.badge_verbosity",
             "full | minimal", "full",
             "badge detail: full (everything on) or minimal (just the current stage) — opt-DOWN"),
+    # Lane F — THREE keys, not one. "disable it" and "silence the audio but keep the notification"
+    # are different wishes (Jas, 2026-08-15), so they are different keys; folding them into one
+    # enum would have made the second a mode of the first and made it impossible to keep the
+    # banner while dropping the sound.
+    Setting("settings.ux.notify", "ux.notify", "true | false", "true",
+            "notify you when it is YOUR move (a gated write or a CLI prompt) — opt-out"),
+    Setting("settings.ux.notify_audio", "ux.notify_audio", "true | false", "true",
+            "play a sound with the notification; false keeps the notification, silent — opt-out"),
+    Setting("settings.ux.notify_level", "ux.notify_level",
+            "harness-silent | all-waits | all-prompts", "all-prompts",
+            "what notifies: only waits the harness leaves silent, every wait, or waits + prompts"),
     Setting("settings.review.independent", "review.independent",
             "on | off", "on",
             "closing review as a fresh-context subagent (on) or the inline two-pass (off)"),

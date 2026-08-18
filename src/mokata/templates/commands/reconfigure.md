@@ -38,7 +38,7 @@ eval "$ENGINE detect --path ."     # re-detect — catches anything newly instal
 ## 3. Ask what to change
 
 Ask the user what they want to change — add/remove an integration (e.g. wire a now-installed
-Postgres or Obsidian, or unwire one), switch a backend setting, or change the profile. For
+Postgres or a graph backend, or unwire one), switch a backend setting, or change the profile. For
 anything detected-but-not-installed, **recommend** the install command (e.g.
 `pip install 'mokata[postgres]'`) and let them run it — **never install it for them**.
 
@@ -55,7 +55,7 @@ eval "$ENGINE reconfigure --profile full --yes --path ."
 # add a now-installed integration (only wired if detected; absent → recommended):
 eval "$ENGINE reconfigure --add postgres --yes --path ."
 # cleanly remove one (reversible — no residue):
-eval "$ENGINE reconfigure --remove obsidian --yes --path ."
+eval "$ENGINE reconfigure --remove serena --yes --path ."
 # switch a backend setting:
 eval "$ENGINE reconfigure --set tools.sqlite.config.path=mem/custom.db --yes --path ."
 ```

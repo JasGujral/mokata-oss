@@ -73,7 +73,7 @@ Everything is a toggle in `.mokata/manifest.json` (see the
 - **Output density** — `settings.governance.output_density: true` to enable F4 compression.
 - **Karpathy gates** — `settings.governance.karpathy.<id>: false` to disable a gate.
 
-- **Backend paths** — point a backend at a custom location (SQLite path, Obsidian vault,
+- **Backend paths** — point a backend at a custom location (SQLite path,
   hosted Postgres) via each tool's `config` block: see
   [configure storage backends & paths](configure-storage-backends.md).
 - **Codebase graph** — `full` wires a real graph (code-review-graph / serena) for structural

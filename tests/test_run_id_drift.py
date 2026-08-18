@@ -459,7 +459,7 @@ class TestEagerRegistration(unittest.TestCase):
                 # this an environment test. Stub the availability check and `.run()` — the latter
                 # stands in for serving, so registration is proved to have happened by the time the
                 # server would start, without blocking this process on stdio.
-                "S.mcp_available = lambda: True;"
+                "S.sdk_state = lambda: S.SdkDisposition(S.SDK_SUPPORTED, '1.x');"
                 "S.build_server = lambda: type('X',(),{'run':lambda s: None})();"
                 f"S.main(['--path', {d!r}]);"
                 "import json, os;"

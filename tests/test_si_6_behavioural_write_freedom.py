@@ -120,7 +120,7 @@ def _tree_snapshot(root):
         for name in sorted(files):
             path = os.path.join(base, name)
             with open(path, "rb") as fh:
-                snap[os.path.relpath(path, root)] = fh.read()
+                snap[_support.posix_rel(path, root)] = fh.read()
     return snap
 
 
@@ -317,6 +317,14 @@ _SHARED_DB_SUBSTRATE = "refused (a) — reads a shared Postgres/pgvector DB; its
                        "whatever it did. The SQLite twin of this read IS bound."
 
 REFUSED = {
+    # Lane F. It WRITES — and saying so here is the point, because the register entry beside it
+    # leads with "writes ZERO BYTES" and a reader could take that for write-freedom. It is not:
+    # `_debounced` creates an inode under temp_local/ and stamps its mtime, because the mtime IS
+    # the rate limiter's entire state. There is no content, and there is nothing an approval could
+    # review, but a binding asserting "not one byte changed" would be false about the tree.
+    ("notify.py", "_debounced"):
+        "writes — creates/touches the notification rate-limit stamp under temp_local/ (no content: "
+        "the state is the file's mtime), so it cannot be bound as write-free",
     ("memory/backends.py", "PostgresBackend._read_edges_present"): _SHARED_DB_SUBSTRATE,
     ("memory/backends.py", "PostgresBackend._read_scope_backfilled"): _SHARED_DB_SUBSTRATE,
     ("memory/backends.py", "PostgresBackend.all"): _SHARED_DB_SUBSTRATE,
@@ -410,7 +418,8 @@ REFUSED = {
     ("memory/store.py", "MemoryStore.recall_relevant"): "writes — it is the CALL SITE of the usage "
         "stamp; the entry's own words are 'the read path that STAMPS'",
     ("memory/store.py", "MemoryStore.record_usage"): "writes — the telemetry counters",
-    ("migrate_channels.py", "_write_marker"): "writes — the once-migrated idempotence marker",
+    # `migrate_channels.py` was DELETED at 0.0.18 lane D slice 4 (the vault channel); its
+    # once-migrated marker entry went with it — there is no migration left to record.
     ("plans.py", "write_plan_file"): "writes — the plan draft under temp_local/",
     ("plugin_cache.py", "record_plugin_root"): "writes — the machine-local cache under ~/.mokata",
     ("progress_events.py", "ProgressLog.append_event"): "writes — appends a run-telemetry event "

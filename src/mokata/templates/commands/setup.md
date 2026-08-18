@@ -30,7 +30,7 @@ installs** a third-party tool. Writing config / harness wiring is a durable writ
 
 ## 2. Detect the environment (read-only)
 
-Show the user what's actually installed — graph backends, memory backends, Postgres / Obsidian /
+Show the user what's actually installed — graph backends, memory backends, Postgres /
 vector — so the choices are grounded:
 
 ```bash
@@ -44,7 +44,7 @@ Ask the user (briefly explaining the trade-off):
 
 - **profile** — `minimal` (engine only), `standard` (engine + graph + memory on lean local
   defaults), or `full` (every known provider).
-- **which detected integrations to wire** — e.g. a present Obsidian vault or Postgres
+- **which detected integrations to wire** — e.g. a present graph backend or Postgres
   (`MOKATA_PG_DSN`). For anything detected-but-not-installed, **recommend** the install command
   (e.g. `pip install 'mokata[postgres]'`) and let the user run it — **never install it for them**.
 - **wire the harness?** — copy the slash commands, register the `mokata` MCP server, and wire the

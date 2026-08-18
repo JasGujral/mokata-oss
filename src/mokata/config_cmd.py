@@ -1,6 +1,6 @@
 """`mokata config get/set` — read and update the committed manifest (Stage 24A).
 
-So users set backend parameters (a custom SQLite path, an Obsidian vault, a Postgres
+So users set backend parameters (a custom SQLite path, a Postgres
 `dsn_env`) without hand-editing JSON. `get` is read-only. `set` is **human-gated** (P2):
 it previews the old→new change, runs it through the one `WriteGate` — which **secret-scans
 the whole resulting manifest** (an inline DSN/credential is a hard block, since the

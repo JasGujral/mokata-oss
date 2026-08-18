@@ -73,6 +73,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+import _mcp_sdk  # noqa: E402 - the MCP SDK disposition gate
 
 from mokata import parity
 from mokata.config import Surface
@@ -776,7 +777,7 @@ class TestFastMcpStartupSmoke(unittest.TestCase):
     Skipped only in a stripped environment with no SDK; `mcp` is an unconditional dependency, so on
     CI and on any healthy `pip install mokata` this runs."""
 
-    @unittest.skipUnless(MS.mcp_available(), "the MCP SDK is absent (stripped env)")
+    @_mcp_sdk.requires_mcp_sdk
     def test_build_server_evaluates_every_tool_signature(self):
         import asyncio
 
@@ -788,7 +789,7 @@ class TestFastMcpStartupSmoke(unittest.TestCase):
             self.assertIsInstance(tool.inputSchema, dict, tool.name)
             self.assertEqual(tool.inputSchema.get("type"), "object", tool.name)
 
-    @unittest.skipUnless(MS.mcp_available(), "the MCP SDK is absent (stripped env)")
+    @_mcp_sdk.requires_mcp_sdk
     def test_every_tool_registers_individually_under_real_fastmcp(self):
         """Per-tool, so the failure message names the tool whose annotation stopped evaluating —
         the diagnostic the 0.0.14 reporter had to reconstruct by hand."""
