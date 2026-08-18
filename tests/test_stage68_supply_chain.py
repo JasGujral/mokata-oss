@@ -5,8 +5,10 @@ coordinated-disclosure policy. The actual signing/attestation + SBOM generation 
 release time in CI (when the user cuts the tagged release); these tests assert the workflow
 DECLARES those steps, is least-privilege, and is gated to the real repo — and that the local,
 verifiable pieces (reproducible-build settings, the disclosure policy, the Stage-61b fail-closed
-ordering) are present. YAML is parsed when PyYAML is available (not a mokata dependency); the
-structural text checks run either way.
+ordering) are present. YAML is PARSED; PyYAML is a required test dependency (requirements/ci.txt)
+and its absence RAISES. This file was the worst of PYYAML-SKIP-CLUSTER (0.0.18 stage 2) — it held
+the suite's only bare `if not _HAVE_YAML: return`, which reported a pass for the per-job repo
+gating loop having checked one substring, with no skip marker to show for it.
 
 What runs WHERE:
   * release-time (CI, on a `v*` tag, gated to the public repo): build -> reproducible-build
@@ -18,11 +20,8 @@ What runs WHERE:
 import os
 import unittest
 
-try:
-    import yaml
-    _HAVE_YAML = True
-except ImportError:
-    _HAVE_YAML = False
+import _release_repo_guards as rg
+from _workflow_pins import safe_load
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RELEASE_YML = os.path.join(ROOT, ".github", "workflows", "release.yml")
@@ -43,9 +42,7 @@ class TestReleaseWorkflowSigningAndSBOM(unittest.TestCase):
         self.text = _read(RELEASE_YML)
 
     def test_release_yaml_parses(self):
-        if not _HAVE_YAML:
-            self.skipTest("PyYAML not installed (not a mokata dependency)")
-        doc = yaml.safe_load(self.text)
+        doc = safe_load(self.text, "verify release.yml parses at all")
         self.assertIn("jobs", doc)
 
     def test_declares_build_provenance_attestation(self):
@@ -61,22 +58,30 @@ class TestReleaseWorkflowSigningAndSBOM(unittest.TestCase):
     def test_signing_steps_are_gated_to_the_real_repo(self):
         # Signing/attestation must be a no-op on a fork/mirror.
         self.assertIn("github.repository == '" + REAL_REPO + "'", self.text)
-        if not _HAVE_YAML:
-            return
-        doc = yaml.safe_load(self.text)
-        for name, job in doc["jobs"].items():
+        # ⚠ THE SITE THE BACKLOG ROW CALLED THE WORST OF THE FOUR SHAPES. What stood here was a
+        # bare `if not _HAVE_YAML: return` — no assertion, no fallback, no skip marker — so on a
+        # runner without the parser this test reported PASS having checked that the gate string
+        # appears SOMEWHERE in the file, never that each job carries it. A skip is at least
+        # visible in the run summary; this was indistinguishable from a test that ran.
+        # ⚠ AND `assertIn(REAL_REPO, …)` USED TO STAND HERE, WHICH IS THE SAME HOLE ONE LAYER IN:
+        # `github.repository != 'JasGujral/mokata-oss'` CONTAINS the repository name, so a
+        # substring test cannot tell a publish guard from its exact inverse. The class is now
+        # decided by EVALUATING the condition against two synthetic repository names
+        # (0.0.18 stage 7 — see tests/_release_repo_guards.py).
+        doc = safe_load(self.text, "check every release job is gated to the real repo")
+        for name, cls in rg.guard_classes(doc).items():
             with self.subTest(job=name):
-                self.assertIn(REAL_REPO, str(job.get("if", "")),
-                              "release job '" + name + "' is not gated to the real repo")
+                self.assertIn(cls, (rg.GUARD_PUBLISH, rg.GUARD_REFUSAL),
+                              "release job '" + name + "' is neither gated to the real repo nor "
+                              "an explicit refusal off it (class: " + cls + ")")
 
     def test_least_privilege_permissions(self):
         # Default (top-level) permission is read; only the job that attests elevates id-token.
         self.assertIn("id-token: write", self.text)
         self.assertIn("attestations: write", self.text)
-        if not _HAVE_YAML:
-            self.assertIn("contents: read", self.text)
-            return
-        doc = yaml.safe_load(self.text)
+        # The deleted fallback asserted `contents: read` appears somewhere in the file — true of
+        # any job-level block, and of a comment, while the TOP-LEVEL default could be anything.
+        doc = safe_load(self.text, "verify release.yml permissions are least-privilege")
         top = doc.get("permissions", {})
         self.assertEqual(top.get("contents"), "read",
                          "top-level permissions must default to least-privilege (contents: read)")
@@ -107,72 +112,77 @@ class TestEveryReleaseJobIsRepoGated(unittest.TestCase):
     """Stage 4g — the release/publish pipeline is OSS-only, un-regressably.
 
     The other guards (above, and test_repo_hardening.py) assert the gate string
-    `github.repository == 'JasGujral/mokata-oss'` appears SOMEWHERE in release.yml, and the
-    YAML leg of test_signing_steps_are_gated_to_the_real_repo loops the jobs — but that leg
-    is skipped when PyYAML is absent, and it matches only the bare repo NAME. Neither makes
-    it impossible to add a NEW job with no `if:` that would run the GitHub release / OIDC
-    PyPI publish from the PRIVATE `JasGujral/mokata` repo.
+    `github.repository == 'JasGujral/mokata-oss'` appears SOMEWHERE in release.yml, and it
+    matches only the bare repo NAME. That does not make it impossible to add a NEW job with no
+    `if:` that would run the GitHub release / OIDC PyPI publish from the PRIVATE
+    `JasGujral/mokata` repo.
 
     This asserts EVERY job under `jobs:` carries an `if:` containing the full
-    `github.repository == 'JasGujral/mokata-oss'` equality — with a real plain-text fallback
-    (an indentation parse of the `jobs:` block) for the PyYAML-absent leg, so the invariant
-    holds in CI's jsonschema/pyyaml-absent matrix legs too. If some job legitimately should
-    NOT be gated, this test must FAIL and name it (update the test to exempt it explicitly) —
-    never a silent exemption.
+    `github.repository == 'JasGujral/mokata-oss'` equality. If some job legitimately should NOT
+    be gated, this test must FAIL and name it (update the test to exempt it explicitly) — never
+    a silent exemption.
+
+    ⚠⚠ IT DID FAIL, AND HERE IS THE EXEMPTION, NAMED (0.0.18 stage 7). Exactly ONE job carries
+    the INVERSE guard `github.repository != 'JasGujral/mokata-oss'`:
+    `refuse-to-publish-from-a-non-publishing-repository`. It exists because the equality guards,
+    correct as they are, are SILENT — a tag pushed to the private repo skipped all five jobs and
+    the run concluded GREEN, which is `TAG-ON-THE-DEV-REPO-IS-A-SILENT-NO-OP` (doc 84 §9). The
+    refusal runs ONLY where publishing does not, so it cannot reach the publish path.
+
+    The exemption is not a hole: the equality check below is replaced by a CLASSIFICATION over
+    two synthetic repository names (`tests/_release_repo_guards.py`), so the guarded set is still
+    derived, an unguarded sixth job still reddens, and a SECOND refusal job would too. A
+    substring test could not have expressed this — `!=` contains `==`'s repository name.
+
+    ⚠ THE INDENTATION-PARSE FALLBACK THAT LIVED HERE IS DELETED, AND ITS STATED REASON WAS
+    FALSE (doc 85 §7h — a pin that justifies a behaviour is an argument, and arguments can be
+    wrong). It said it existed "for the PyYAML-absent leg, so the invariant holds in CI's
+    jsonschema/pyyaml-absent matrix legs". There is no pyyaml-absent leg: the `jsonschema` axis
+    varies jsonschema, and every job that RUNS this module installs requirements/ci.txt —
+    derived per job at 0.0.18 stage 2. So it was a second, never-exercised code path standing
+    between a reader and the parse, which is where false greens live.
     """
 
     GUARD = "github.repository == '" + REAL_REPO + "'"
 
+    # THE ONE EXEMPTION, NAMED. Not a list this test may grow quietly: `test_the_exemption_is_one
+    # _job_and_it_is_this_one` asserts the refusal set is EXACTLY this, so a second refusal job —
+    # or a rename of this one — reddens as loudly as an unguarded job would.
+    REFUSAL_JOB = "refuse-to-publish-from-a-non-publishing-repository"
+
     def setUp(self):
         self.text = _read(RELEASE_YML)
 
-    def _job_if_conditions(self):
-        """Map {job_name: its `if:` text}. PyYAML when present; an indentation parse otherwise.
+    def _job_classes(self):
+        """Map {job_name: guard class}, from the PARSED workflow.
 
-        The fallback splits the top-level `jobs:` block by indentation into one text blob per
-        job, so the guard is attributed to the job it actually sits under (not merely present
-        somewhere in the file).
+        Attribution is the whole point: the guard must sit under the job it gates, not merely
+        appear somewhere in the file. Only a parse can tell those apart — and only an EVALUATION
+        can tell `==` from `!=`, which differ by one character and share every other one.
         """
-        if _HAVE_YAML:
-            doc = yaml.safe_load(self.text)
-            return {name: str(job.get("if", "")) for name, job in doc["jobs"].items()}
-        return self._job_blocks_textual()
-
-    def _job_blocks_textual(self):
-        lines = self.text.splitlines()
-        # Find the top-level `jobs:` key.
-        i = 0
-        while i < len(lines) and lines[i].rstrip() != "jobs:":
-            i += 1
-        i += 1
-        blocks, current, child_indent = {}, None, None
-        for line in lines[i:]:
-            if not line.strip() or line.lstrip().startswith("#"):
-                if current is not None:
-                    blocks[current] += line + "\n"
-                continue
-            indent = len(line) - len(line.lstrip())
-            if child_indent is None:
-                child_indent = indent
-            if indent < child_indent:
-                break                                   # dedented out of the `jobs:` block
-            if indent == child_indent and line.rstrip().endswith(":"):
-                current = line.strip().rstrip(":")      # a top-level job header
-                blocks[current] = ""
-            elif current is not None:
-                blocks[current] += line + "\n"
-        return blocks
+        doc = safe_load(self.text, "attribute the repo gate to each release job")
+        return rg.guard_classes(doc)
 
     def test_every_job_is_gated_to_the_oss_repo(self):
-        conditions = self._job_if_conditions()
-        self.assertTrue(conditions, "release.yml has no jobs — parse failed")
-        ungated = sorted(name for name, cond in conditions.items() if self.GUARD not in cond)
+        classes = self._job_classes()
+        self.assertTrue(classes, "release.yml has no jobs — parse failed")
+        ungated = sorted(name for name, cls in classes.items()
+                         if cls != rg.GUARD_PUBLISH and name != self.REFUSAL_JOB)
         self.assertEqual(
             ungated, [],
             "release.yml job(s) not gated to " + REAL_REPO + " — they could run the release / "
             "OIDC PyPI publish from the PRIVATE repo: " + ", ".join(ungated) + ". Every job's "
             "`if:` must contain \"" + self.GUARD + "\". If a job legitimately must NOT be gated, "
             "update this test to name the exemption explicitly.")
+
+    def test_the_exemption_is_one_job_and_it_is_this_one(self):
+        """A named exemption that could quietly cover a second job is a silent exemption with a
+        label. The refusal set is asserted EXACT, in both directions."""
+        classes = self._job_classes()
+        self.assertEqual(
+            sorted(n for n, c in classes.items() if c == rg.GUARD_REFUSAL), [self.REFUSAL_JOB])
+        self.assertEqual(classes[self.REFUSAL_JOB], rg.GUARD_REFUSAL,
+                         "the named exemption is no longer the inverse guard it was exempted for")
 
 
 class TestPyPIPublishJob(unittest.TestCase):
@@ -185,11 +195,9 @@ class TestPyPIPublishJob(unittest.TestCase):
         self.text = _read(RELEASE_YML)
 
     def _job(self):
-        return yaml.safe_load(self.text)["jobs"].get("pypi")
+        return safe_load(self.text, "verify the pypi publish job")["jobs"].get("pypi")
 
     def test_pypi_job_exists_gated_and_oidc(self):
-        if not _HAVE_YAML:
-            self.skipTest("PyYAML not installed (not a mokata dependency); run in CI")
         job = self._job()
         self.assertIsNotNone(job, "release.yml has no `pypi` publish job")
         # runs ONLY after the reproducible-build job — a red matrix/validate/build never publishes
@@ -203,11 +211,10 @@ class TestPyPIPublishJob(unittest.TestCase):
                          "pypi needs id-token: write for OIDC trusted publishing")
 
     def test_pypi_publishes_the_built_artifact_not_a_rebuild(self):
-        if not _HAVE_YAML:
-            # text-level fallback still proves the two load-bearing invariants
-            self.assertIn("gh-action-pypi-publish", self.text)
-            self.assertIn("mokata-dist", self.text)
-            return
+        # The deleted fallback called two `assertIn`s "the two load-bearing invariants". They
+        # are not: the load-bearing one is that `python -m build` does NOT appear in this job's
+        # steps, and a substring search over the whole file cannot express a negative scoped to
+        # one job. It reported a pass for the assertion it could not make.
         steps = self._job()["steps"]
         uses = [str(s.get("uses", "")) for s in steps]
         runs = [str(s.get("run", "")) for s in steps]
@@ -229,7 +236,10 @@ class TestPyPIPublishJob(unittest.TestCase):
     # is now `tests/test_s10_workflow_pins.py`, which sweeps all nine, walks job-level `uses:`
     # as well as steps, and RAISES rather than skips when the parser is absent.
     # Subsumption was PROVEN before deletion, not assumed: mutant T06 in `_stage10_mutants.sh`
-    # drops this exact pypi step to `@v1.14.1` and the new sweep goes RED on it.
+    # drops this exact pypi step from its SHA pin to the matching `@v<tag>` pin, and the new
+    # sweep goes RED on it. The version is deliberately NOT named here — this comment used to
+    # say `@v1.14.1`, dependabot moved the action to v1.14.2 mid-release, and prose that quotes
+    # a pinned version is wrong from the next bump onward while reading as though it were fact.
 
 
 class TestReproducibleBuild(unittest.TestCase):

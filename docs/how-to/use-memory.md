@@ -37,9 +37,9 @@ content-identical.
 
 !!! note "Backup ≠ sharing"
     This is a **backup** surface. Cross-repo/team sharing is the team Postgres store (see
-    [team setup](team-setup.md)). The old `memory-share.json` channel still works as a destination
-    but is **deprecated** (removal: 0.0.17) and warns once — fold it into the canonical store with
-    the one-time, human-gated `mokata migrate memory-share`.
+    [team setup](team-setup.md)). The old `memory-share.json` **channel** was removed in 0.0.18:
+    the filename is now just a path, and your existing file is untouched. It *is* a mokata memory
+    backup — restore it with `mokata memory import --file .mokata/memory-share.json`.
 
 ## How recall actually ranks — the retrieval tiers
 
@@ -143,5 +143,5 @@ its writes and never surfaces it on read. See [memory concepts](../concepts/memo
 
 ## Change where memory is stored
 
-Point the backend at a custom SQLite path, an external Obsidian vault, or a hosted Postgres
+Point the backend at a custom SQLite path or a hosted Postgres
 database — see [configure storage backends & paths](configure-storage-backends.md).

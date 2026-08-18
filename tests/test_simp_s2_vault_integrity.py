@@ -42,7 +42,7 @@ def _push(root, name):
 
 
 class TestVaultIntegrityShim(unittest.TestCase):
-    def test_corrupt_artifact_refused_naming_the_migration(self):
+    def test_corrupt_artifact_refused_naming_what_is_actually_true(self):
         with tempfile.TemporaryDirectory() as d:
             init_repo(root=d, profile="standard", assume_yes=True, out=_silent)
             _push(d, "p")
@@ -51,7 +51,16 @@ class TestVaultIntegrityShim(unittest.TestCase):
                 V.vault_pull(d, "p")
             msg = str(cm.exception)
             self.assertIn("content-hash", msg)          # DB.S9 check still fires
-            self.assertIn("mokata migrate vault", msg)  # …and names the migration (SIMP.S2)
+            # ⚠ THIS PINNED A FALSE REMEDY, GREEN, ON A LIVE USER SURFACE. The refusal told a
+            # user holding a corrupt DESIGN ARTIFACT that the vault was deprecated and to run
+            # `mokata migrate vault` — a command that re-homed SESSION BUNDLES and never touched
+            # an artifact. Slice 2's false-refusal class, shipped and asserted. The artifact vault
+            # is not deprecated and never was; what is true is that nothing was served and the
+            # bytes are still on disk.
+            self.assertNotIn("migrate vault", msg)
+            self.assertNotIn("deprecated", msg)
+            self.assertIn("untouched at", msg)
+            self.assertIn(os.path.join(MOKATA_DIR, "vault", "p.md"), msg)
 
     def test_intact_pull_still_works_and_names_nothing(self):
         with tempfile.TemporaryDirectory() as d:
@@ -75,19 +84,13 @@ class TestVaultIntegrityShim(unittest.TestCase):
 
 
 class TestVaultTransportWarns(unittest.TestCase):
-    def test_building_the_vault_transport_warns_once(self):
-        from mokata.session_transport import make_transport
-        with tempfile.TemporaryDirectory() as d:
-            init_repo(root=d, profile="standard", assume_yes=True, out=_silent)
-            buf = io.StringIO()
-            with redirect_stderr(buf):
-                make_transport("vault", d)
-            self.assertIn("0.0.17", buf.getvalue())
-            self.assertIn("vault", buf.getvalue())
-            buf2 = io.StringIO()
-            with redirect_stderr(buf2):
-                make_transport("vault", d)
-            self.assertEqual(buf2.getvalue(), "")       # once per repo
+    """⚠ THE WARN IS GONE BECAUSE THE THING IT WARNED ABOUT IS (0.0.18 lane D slice 4).
+    `test_building_the_vault_transport_warns_once` graded the once-per-repo DEPRECATION notice on
+    `make_transport("vault", …)`; the kind is removed, so a warn-and-carry-on there would now be a
+    lie in the other direction. What the same call does instead — refuse HARD with the channel's
+    removal record — is graded in `test_stage13_vault_slice.py`. The silence pin below stays,
+    because "a surviving transport says nothing" is a property the removal must not have broken."""
+
 
     def test_local_transport_is_silent(self):
         from mokata.session_transport import make_transport

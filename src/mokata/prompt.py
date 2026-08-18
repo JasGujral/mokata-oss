@@ -12,6 +12,8 @@ import sys
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from .notify import announce_prompt
+
 
 def read_yes_no(prompt: str, question: str = "") -> bool:
     """Show `prompt` (plus an optional tailored `question`), read a y/N answer, and return True
@@ -30,6 +32,13 @@ def read_yes_no(prompt: str, question: str = "") -> bool:
               "(approve non-interactively with --yes / assume_yes).", file=sys.stderr)
         return False
     full = prompt + (f"\n{question} [y/N] " if question else "")
+    # Lane F — mokata's own attention channel, raised HERE and not at the twenty-four call sites
+    # that reach this reader, for the same reason `awaiting_block` builds the loud head once: a
+    # signal each caller emits its own way is a signal that drifts. It sits AFTER the TTY guard on
+    # purpose — "never fire off a TTY" is then structural rather than a second check that can part
+    # company with the first. Raises nothing (`notify.notify` is the seam), so the gate below is
+    # exactly as reliable as it was before this line existed.
+    announce_prompt()
     try:
         return input(full).strip().lower() in ("y", "yes")
     except (EOFError, OSError) as exc:
@@ -88,6 +97,10 @@ def read_approve_edit_reject(prompt: str, proposed: Optional[str], *,
     unreadable/captured stdin defaults to reject (no change), logged — never raises."""
     reader = reader or input
     full = prompt + "\n  [a]pprove · [e]dit · [r]eject (default: reject — no change): "
+    # Lane F — this reader blocks a human exactly as `read_yes_no` does; it is only a different
+    # SHAPE of answer. A notifier wired to the y/N reader alone would have left the memory-edit and
+    # config-wizard gates silent, which is the corpus axis §7j is about.
+    announce_prompt()
     try:
         ans = reader(full).strip().lower()
     except (EOFError, OSError) as exc:

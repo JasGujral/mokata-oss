@@ -5,9 +5,20 @@ column names, the validity rule and the idempotency predicate all live HERE, so 
 floor, the shared Postgres table and the team-flush CAS path cannot disagree about any of them —
 the same argument `lifecycle.py` makes for the v4 item window, applied to relations.
 
-NEVER A SECOND GRAPH DB (doc 84 DB.S7, doc 04). Edges are rows in the store that already exists,
-traversed with recursive CTEs. Nothing here opens a connection, imports a graph engine, or writes
-a file. `neo4j_backend.py` is the deprecated counter-example, not the precedent.
+NEVER A SECOND GRAPH DB (doc 84 DB.S7, doc 04, doc 85 §6). Edges are rows in the store that already
+exists, traversed with recursive CTEs. Nothing here opens a connection, imports a graph engine, or
+writes a file.
+
+⚠ THE COUNTER-EXAMPLE IS NOW HISTORY RATHER THAN A FILE, AND THE REASON MUST SURVIVE THE FILE. This
+line used to cite a module by name as the deprecated counter-example — and that file
+(neo4j_backend.py, deliberately un-backticked, because a backticked name is a citation of
+something that EXISTS) was DELETED at 0.0.18 lane D stage 14, which would have left the rule standing with its
+justification pointing at nothing. The justification is the episode, not the module: mokata did
+once wire a second graph DB (an external Neo4j adopted as a `code_graph` provider), it was
+deprecated at 0.0.15 for contradicting two-modes-one-shape, and it was REMOVED at 0.0.18 without a
+migration because a code graph is derived data. That is the counter-example. The rule below is what
+was learned from it, and `test_db_s7a_edge_substrate` still enforces it over this module's IMPORTS
+— `neo4j` remains in the forbidden set precisely because nothing in the tree imports it any more.
 
 
 THE FOUR DECISIONS THIS MODULE ENCODES

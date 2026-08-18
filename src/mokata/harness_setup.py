@@ -245,6 +245,11 @@ class SetupPlan:
     unsupported: List[str] = field(default_factory=list)  # capabilities this harness lacks
     skill_names: List[str] = field(default_factory=list)  # Agent Skills to install (claude)
     skill_orphans: List[str] = field(default_factory=list)  # stale mokata skills to PRUNE (sync)
+    # The home override the targets were resolved under. Carried on the plan because
+    # `render_setup_plan` has to re-read the SAME settings.json to disclose what mokata would
+    # run through a shell (F10) — a preview that resolved a different file than the apply is
+    # exactly the drift the disclosure exists to prevent.
+    home: Optional[str] = None
 
 
 # The hook scripts (kept as standalone shims) map to `mokata-hook` subcommands.
@@ -303,16 +308,177 @@ def _hook_command(script: str) -> str:
     return " ".join(parts)
 
 
-def _statusline_command(wrap_command: Optional[str] = None) -> str:
-    # Stage 54b / B1: the Claude Code statusLine command — the SAME absolute-path-resolved
-    # `mokata-hook` console entry point the hooks use (shared `resolved_console_script`, so it
-    # also survives the GUI-launched minimal PATH). With `wrap_command` set, mokata COMPOSES
-    # over a user's existing statusLine (runs theirs, then appends mokata's) instead of clobbering.
+# ---------------------------------------------------------------------------------------
+# F10 — the statusLine composition is the one thing mokata writes into a user's harness
+# config that later reaches a SHELL. `hook_cli._run_wrapped` runs it with `shell=True`, and
+# `shell=True` is CORRECT there: it is the user's own statusLine and it has to keep working,
+# pipes and `$VARS` and all. What was NOT correct was the reason written beside it.
+#
+# The `# nosec B602` justification claimed the string is "the user's OWN pre-existing
+# statusLine command … Not attacker input." That is a claim about THIS caller graph, and at
+# the DEFAULT scope it is false: `scope` defaults to "project" everywhere setup is driven
+# from, so the file read is `<root>/.claude/settings.json` — which in Claude Code's own
+# layout is the checked-in, shared project settings file (`settings.local.json` is the
+# personal one). A clone can carry it. Nobody in this repo authored it.
+#
+# THE PROPERTY THAT IS ACTUALLY TRUE, AND IS NOW ENFORCED RATHER THAN ASSERTED: mokata
+# composes only over a statusLine it read from THE VERY FILE IT IS WRITING. It never carries
+# a command from one settings.json into another, and never across scopes. So mokata adds no
+# execution path that the harness's own reading of that same file does not already have —
+# and that is a statement about two paths being equal, which code can check.
+#
+# `WrapOrigin` is §7g's model (`RunResolution`): an answer that carries its own provenance
+# cannot be mistaken for a different answer. The command travels WITH the file it came from,
+# so `_statusline_command` can refuse a foreign one instead of trusting a comment.
+
+@dataclass(frozen=True)
+class WrapOrigin:
+    """A pre-existing statusLine command AND the settings.json it was read from."""
+    command: str
+    origin: Path
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    """Path equality by RESOLVED path — `/tmp` is a symlink to `/private/tmp` on macOS, and a
+    textual compare would refuse a legitimate setup for a spelling."""
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except OSError:
+        return False
+
+
+def _read_wrap_origin(path: Path, data: Dict) -> Optional[WrapOrigin]:
+    """The ONE place a `--wrap` value is derived: the existing `statusLine` in `data`, stamped
+    with the file it came from. None when there is nothing to compose over.
+
+    Two shapes yield a command — a user's own block, and the original we stashed under
+    ``_mokataWrapped`` on a previous setup (so re-running never double-wraps). Read by BOTH
+    `_merge_statusline` (which writes it) and `statusline_wrap_disclosure` (which shows it
+    before approval), so the preview and the write cannot disagree."""
+    existing = data.get("statusLine")
+    if not isinstance(existing, dict):
+        return None
+    if _is_mokata_statusline(existing):
+        wrapped = existing.get(_WRAPPED_KEY)
+    else:
+        wrapped = existing
+    if not isinstance(wrapped, dict):
+        return None
+    command = wrapped.get("command")
+    if not isinstance(command, str) or not command:
+        return None
+    return WrapOrigin(command=command, origin=path)
+
+
+def _statusline_command(destination: Path, wrap: Optional[WrapOrigin] = None) -> str:
+    """The Claude Code statusLine command mokata writes into `destination`.
+
+    Stage 54b / B1: the SAME absolute-path-resolved `mokata-hook` console entry point the
+    hooks use (shared `resolved_console_script`, so it also survives the GUI-launched minimal
+    PATH). With `wrap` set, mokata COMPOSES over an existing statusLine (runs theirs, then
+    appends mokata's) instead of clobbering.
+
+    F10 — REFUSES a `wrap` that came from any file other than `destination`. This is the
+    property `hook_cli._run_wrapped`'s `# nosec B602` reasons from; enforcing it here is what
+    turns that comment from a promise into a consequence."""
+    if wrap is not None and not _same_file(wrap.origin, destination):
+        raise SetupError(
+            f"refusing to compose a statusLine command read from {wrap.origin} into "
+            f"{destination}. mokata wraps ONLY a statusLine it read from the same "
+            f"settings.json it is writing, so a command can never be carried across scopes "
+            f"(project <-> user) or between files — that string is run through a shell on "
+            f"every statusline tick, and the file's owner is the only person who ever "
+            f"approved it."
+        )
     exe = resolved_console_script(HOOK_COMMAND)
     cmd = f'"{exe}" statusline'
-    if wrap_command:
-        cmd += f" --wrap {shlex.quote(wrap_command)}"
+    if wrap is not None and wrap.command:
+        cmd += f" --wrap {shlex.quote(wrap.command)}"
     return cmd
+
+
+# --- P2: the human SEES the command before approving it --------------------------------
+# Three human gates can reach `_merge_statusline` (`mokata setup`, the first-run wizard,
+# `mokata reconfigure`). All three render this; the cross-check in
+# `tests/test_stage5_statusline_wrap_origin.py` fails if a fourth appears.
+
+WRAP_NONE = "none"                # no existing statusLine — nothing will run through a shell
+WRAP_COMPOSES = "composes"        # there IS one, and mokata will run it
+WRAP_UNREADABLE = "unreadable"    # settings.json exists and cannot be parsed — setup refuses
+
+# ⚠ THREE STATES, NEVER TWO (doc 85 §7g). "nothing to disclose" and "I could not read the file
+# I would have disclosed" are different facts, and only the first is a reassurance. Folded
+# together they would render as silence, and silence here reads as "no shell command involved".
+
+
+@dataclass(frozen=True)
+class WrapDisclosure:
+    """What the human is told about the statusLine composition before they approve it."""
+    state: str
+    settings_path: Path
+    scope: str
+    origin: Optional[WrapOrigin] = None   # set iff state == WRAP_COMPOSES
+    composed: str = ""                    # the exact command line that lands in settings.json
+    error: str = ""                       # set iff state == WRAP_UNREADABLE
+
+
+def statusline_wrap_disclosure(harness: str, root: str, scope: str = "project",
+                               home: Optional[str] = None,
+                               with_hooks: bool = True) -> WrapDisclosure:
+    """READ-ONLY probe of the settings.json setup would merge: what (if anything) mokata would
+    run through a shell, and where it came from. Never writes."""
+    t = resolve_targets(scope, root, home, harness)
+    path = t.settings_path
+    wired = (with_hooks and harness == "claude" and path is not None
+             and _statusline_setting_on(root))
+    if not wired:
+        return WrapDisclosure(state=WRAP_NONE, settings_path=path or Path(root), scope=scope)
+    try:
+        data = _load_json(path)
+    except SetupError as exc:
+        return WrapDisclosure(state=WRAP_UNREADABLE, settings_path=path, scope=scope,
+                              error=str(exc))
+    origin = _read_wrap_origin(path, data)
+    if origin is None:
+        return WrapDisclosure(state=WRAP_NONE, settings_path=path, scope=scope)
+    return WrapDisclosure(state=WRAP_COMPOSES, settings_path=path, scope=scope, origin=origin,
+                          composed=_statusline_command(path, origin))
+
+
+def render_wrap_disclosure(d: WrapDisclosure) -> List[str]:
+    """The disclosure lines for a human gate — EMPTY when nothing would run through a shell,
+    so a preview with no composition is byte-identical to before."""
+    if d.state == WRAP_NONE:
+        return []
+    if d.state == WRAP_UNREADABLE:
+        return ["",
+                "!! mokata could NOT read the statusLine in:",
+                f"     {d.settings_path}",
+                "   so it cannot show you what it would run. Setup will REFUSE this file "
+                "rather than",
+                "   overwrite it:",
+                f"     {d.error}"]
+    origin = d.origin
+    where = ("a PROJECT file — it lives in this checkout and can be committed, so it is not "
+             "necessarily one you wrote"
+             if d.scope == "project" else "your own user settings")
+    return ["",
+            "!! This settings.json ALREADY has a statusLine, and mokata composes over it "
+            "rather than",
+            "   replacing it — which means mokata will RUN IT THROUGH A SHELL on every "
+            "statusline",
+            "   tick, exactly as your harness runs it now. Read it before approving:",
+            "",
+            f"     it came from : {d.settings_path}",
+            f"     which is     : {where}",
+            f"     it runs      : {origin.command}",
+            "",
+            "   and this is the exact line mokata will write:",
+            "",
+            f"     {d.composed}",
+            "",
+            "   Approving this approves that command. `mokata unsetup` restores your original "
+            "statusLine verbatim."]
 
 
 def _is_mokata_statusline(block: Dict) -> bool:
@@ -422,6 +588,7 @@ def plan_setup(
         unsupported=unsupported,
         skill_names=skill_names,
         skill_orphans=skill_orphans,
+        home=home,
     )
 
 
@@ -484,6 +651,10 @@ def render_setup_plan(plan: SetupPlan) -> str:
                      "opt out with `mokata config set settings.ux.statusline false`):")
         lines.append(f"  {t.settings_path}")
         lines.append("  (any existing statusLine is composed/wrapped, not overwritten.)")
+        # P2 — the composition is the one thing here that later reaches a shell, so the human
+        # sees the exact command before they say yes, not after.
+        lines.extend(render_wrap_disclosure(statusline_wrap_disclosure(
+            plan.harness, plan.root, plan.scope, plan.home, plan.with_hooks)))
     if plan.unsupported:
         # Degrade CLEARLY — never pretend a capability exists or silently skip it.
         lines.append("")
@@ -708,8 +879,12 @@ def _merge_statusline(path: Path) -> None:
         # a user's own statusLine — compose over it, preserving the original
         wrapped = existing
 
-    inner = wrapped.get("command") if isinstance(wrapped, dict) else None
-    block: Dict = {"type": "command", "command": _statusline_command(inner)}
+    # F10 — the wrap value is stamped with the file it came from, and that file is `path`:
+    # the SAME one this function is about to write. `_statusline_command` refuses anything
+    # else, so "mokata never carries a statusLine command between files" is enforced here
+    # rather than asserted next to the `shell=True` three modules away.
+    origin = _read_wrap_origin(path, data)
+    block: Dict = {"type": "command", "command": _statusline_command(path, origin)}
     if isinstance(wrapped, dict):
         block[_WRAPPED_KEY] = wrapped
     data["statusLine"] = block

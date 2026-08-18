@@ -19,6 +19,58 @@ permissions:
   contents: read
 
 jobs:
+  # ============================================================================================
+  # THE INVERSE GUARD — `TAG-ON-THE-DEV-REPO-IS-A-SILENT-NO-OP` (doc 84 §9, 0.0.18 stage 7).
+  #
+  # Every publishing job below carries `if: github.repository == 'JasGujral/mokata-oss'`. Those
+  # guards are CORRECT and must not be removed. What they could not do is SPEAK: tag `v0.0.17` on
+  # the private `JasGujral/mokata` and this workflow triggers, all five jobs skip, and the run
+  # concludes GREEN — no build, no Release, no PyPI upload, and no signal anywhere that a release
+  # was attempted and did not happen. "This repository does not publish" and "publishing
+  # succeeded" shared one representation, and the representation was a green check (doc 85 §7g).
+  #
+  # It nearly shipped: the 0.0.17 cut was instructed to "tag v0.0.17 and let release.yml publish"
+  # against the DEV repo. What caught it was a human choosing to re-derive the publish path. This
+  # job is that habit becoming a mechanism.
+  #
+  # ⚠ NO `needs:` AND NO `always()`, DELIBERATELY, AND THE OMISSION IS THE POINT.
+  #   * `needs:` on any job below would make THIS job inherit their skip on the dev repo — the
+  #     refusal would itself be silently skipped, which is this row again one job over.
+  #   * `always()` is what you reach for to survive an upstream status. There is no upstream: a
+  #     job with no `needs:` has no status function to override, and a custom `if:` already
+  #     replaces the implicit `success()`. Adding it would suggest a dependency that is absent.
+  # ⚠ IT CANNOT REGRESS THE PUBLISH PATH: on `JasGujral/mokata-oss` the condition is false and
+  #   this job never runs. Graded both ways by `tests/test_tag_is_not_a_publish.py`, which
+  #   evaluates the condition against two synthetic repository names and EXECUTES the step below.
+  # ============================================================================================
+  refuse-to-publish-from-a-non-publishing-repository:
+    if: github.repository != 'JasGujral/mokata-oss'
+    runs-on: ubuntu-latest
+    permissions: {}          # it reads nothing and writes nothing; it exists to fail
+    steps:
+      # `$GITHUB_REPOSITORY`, not `${{ github.repository }}`, so this step is runnable OFFLINE:
+      # the pin executes this exact text under bash with the variable set, rather than asserting
+      # that its source reads correctly (doc 85 §7i).
+      - name: This repository does not publish — refuse the tag, loudly
+        run: |
+          echo "::error title=Wrong repository for a release tag::${GITHUB_REPOSITORY} does not publish."
+          echo ""
+          echo "A version tag was pushed to ${GITHUB_REPOSITORY}."
+          echo "mokata publishes ONLY from JasGujral/mokata-oss. Every job in this workflow is"
+          echo "guarded to JasGujral/mokata-oss, so this run would otherwise have skipped all of"
+          echo "them and concluded GREEN: no build, no signatures, no GitHub Release, no PyPI"
+          echo "upload — and no release."
+          echo ""
+          echo "THE CORRECT SEQUENCE (scripts/release.sh runs it for you, confirm-gated):"
+          echo "  1. bump every version field, commit, push master here"
+          echo "  2. scripts/sync-public.sh -> release/<ver> branch -> PR -> squash-merge to main"
+          echo "     ON JasGujral/mokata-oss"
+          echo "  3. wait for JasGujral/mokata-oss CI to conclude GREEN on the merged commit"
+          echo "  4. tag JasGujral/mokata-oss LAST — that tag is what publishes"
+          echo ""
+          echo "Delete the tag pushed here (git push --delete origin <tag>) and start at step 1."
+          exit 1
+
   test:
     if: github.repository == 'JasGujral/mokata-oss'   # releases only from the public repo
     runs-on: ubuntu-latest
@@ -121,7 +173,11 @@ jobs:
         # Sigstore keyless signing of the release artifacts. Scorecard's Signed-Releases check
         # looks for signature ASSETS on the GitHub Release (suffixes .sig/.sigstore.json/…) — the
         # existing attest-build-provenance lands in GitHub's attestation store, which Scorecard
-        # can't see, so releases scored 0. Cosign emits real signature files we attach below.
+        # can't see, so releases scored 0. Cosign emits a real signature bundle we attach below.
+        #
+        # ⚠ NO `cosign-release:` INPUT, so this installs the action's OWN DEFAULT, which is
+        # cosign v3.0.6 at the pinned v4.1.2. That is not a detail: cosign v3 writes the NEW
+        # BUNDLE FORMAT by default, and the signing step below depends on what that version does.
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Install build + SBOM tooling (hash-pinned)
         # `build` (PyPA) for sdist/wheel; `cyclonedx-bom` (the CycloneDX Python project, ships
@@ -160,41 +216,122 @@ jobs:
           done
       - name: Generate the CycloneDX SBOM
         # Scope the SBOM to a clean venv that has ONLY the built wheel installed, so it describes
-        # the published package (mokata has no required runtime deps) + the install baseline.
+        # the published package, its REQUIRED dependency closure, and the install baseline.
+        #
+        # ⚠ THIS COMMENT USED TO ASSERT THAT MOKATA REQUIRED NOTHING AT RUNTIME, AND THAT HAS BEEN
+        # FALSE SINCE THE MCP SDK BECAME UNCONDITIONAL: `pyproject.toml` declares `mcp>=1.2,<2`, whose
+        # resolved closure is THIRTY packages (measured 2026-08-13 off an installed 3.12 venv:
+        # mcp + anyio, httpx, httpcore, h11, certifi, idna, jsonschema, attrs, referencing,
+        # jsonschema-specifications, rpds-py, pydantic, pydantic-core, pydantic-settings,
+        # annotated-types, typing-inspection, python-dotenv, httpx-sse, sse-starlette, starlette,
+        # uvicorn, click, colorama, pyjwt, python-multipart, pywin32, exceptiongroup,
+        # typing_extensions, typing-extensions). The SBOM is describing a real closure, not an
+        # empty one — which is exactly why it is worth generating.
+        #
+        # ⚠⚠ THERE WAS AN UNPINNED `pip install --upgrade pip` HERE AND IT IS GONE (0.0.18 stage 8,
+        # `PINNED-DEPS-PIP-EDITABLE`). It was the ONE `pip install` anywhere in `.github/workflows/`
+        # that fetched a package BY NAME FROM AN INDEX with no hash — every other install is either
+        # `--require-hashes -r requirements/*.txt` or an install of THIS package from the checkout
+        # (`-e .`) or from `dist/`. Deleting it is strictly stronger than hash-pinning it: there is
+        # no fetch left to pin, and the venv's pip is now the one `ensurepip` bundles with the
+        # setup-python interpreter above, so the SBOM's own `pip` entry stops varying with whatever
+        # PyPI served that morning. The property — NOT the Scorecard number — is asserted by
+        # `tests/test_pinned_dependency_property.py`; reversing this means editing that test.
         run: |
           python -m venv /tmp/sbomenv
-          /tmp/sbomenv/bin/python -m pip install --upgrade pip >/dev/null
           /tmp/sbomenv/bin/python -m pip install dist/*.whl >/dev/null
           cyclonedx-py environment /tmp/sbomenv/bin/python \
             --output-format JSON --outfile dist/sbom.cdx.json
           echo "SBOM written:"; head -c 400 dist/sbom.cdx.json; echo
       - name: Attest build provenance (Sigstore) for the artifacts + SBOM
+        # ⚠ THIS STEP IS NOT NEW AND WAS NEVER MISSING. `SIGNED-RELEASES-PROVENANCE (ii)` reads as
+        # though the attestation had to be added; it has been here since stage 68. What was missing
+        # is the step BELOW: the attestation lands in GitHub's attestation store, and Scorecard's
+        # Signed-Releases check reads RELEASE ASSETS, not that store. A workflow that attests and a
+        # Release that carries the attestation are two different claims (P22), and only the second
+        # is the one a stranger can verify — which is stage 6's finding one attestation over.
+        id: provenance
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           # SBOM now lives in dist/ alongside the wheel+sdist, so dist/* covers all three.
+          # ⚠ THE ORDER OF THE NEXT TWO STEPS IS LOAD-BEARING. This subject-path must expand to the
+          # three distributables ONLY, so the provenance bundle is copied in AFTERWARDS — an
+          # attestation cannot be a subject of itself.
           subject-path: dist/*
+      - name: Attach the provenance bundle to the Release as an .intoto.jsonl asset
+        # ⭐ THE WHOLE OF `SIGNED-RELEASES-PROVENANCE (ii)`, and it is a copy.
+        #
+        # `actions/attest-build-provenance` v4.1.1 delegates to `actions/attest` v4.1.1, which
+        # writes the signed Sigstore bundle to `$RUNNER_TEMP/<mkdtemp>/attestation.json` and
+        # publishes that path as its `bundle-path` OUTPUT (`actions/attest` src/main.ts:
+        # `ATTESTATION_FILE_NAME = 'attestation.json'`; `core.setOutput('bundle-path', outputPath)`;
+        # the write is `JSON.stringify(att.bundle) + os.EOL` with flag 'a', i.e. JSON LINES). The
+        # file already exists on every release run — it just never left the runner.
+        #
+        # ⚠ THE `.intoto.jsonl` SUFFIX IS THE POINT, not decoration. Scorecard's Signed-Releases
+        # check scores a release by the SUFFIXES OF ITS ASSET NAMES: a signature asset scores 8, a
+        # provenance asset (`.intoto.jsonl`) scores 10, averaged over the last five releases. Ours
+        # reads 6 = 4 signed releases × 8 ÷ 5, which is the arithmetic the live 2026-08-04 reason
+        # string states in words ("4 out of the last 5 releases have a total of 4 signed
+        # artifacts"). ⚠ That model is an EXTERNAL rule read off Scorecard's documented behaviour
+        # plus our own observed 6 — it is not derivable from this repo, and it is not re-verified
+        # until a live Scorecard read after the next cut. See the stage-8 report's obligations.
+        #
+        # ⚠ DO NOT FOLD THIS INTO THE COSIGN STEP. Signing attests WHO signed the artifact;
+        # provenance attests WHAT BUILT it. Conflating them is how the original row came to mean
+        # two incompatible things.
+        #
+        # `$BUNDLE_PATH`, not the `${{ }}` expression inline, so this step's `run:` is runnable
+        # OFFLINE with the variable set — the pin EXECUTES this text rather than asserting that its
+        # source reads correctly (doc 85 §7i), exactly as the refusal job above does.
+        env:
+          BUNDLE_PATH: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          if [ -z "$BUNDLE_PATH" ] || [ ! -f "$BUNDLE_PATH" ]; then
+            echo "ABORT: attest-build-provenance produced no bundle-path (got '${BUNDLE_PATH}')."
+            echo "The attestation is still in GitHub's store, but the Release would carry no"
+            echo "provenance asset and Scorecard cannot see the store. Failing the cut instead of"
+            echo "publishing a Release that silently lost its provenance."
+            exit 1
+          fi
+          cp "$BUNDLE_PATH" dist/provenance.intoto.jsonl
+          echo "Provenance bundle attached as dist/provenance.intoto.jsonl:"
+          wc -c dist/provenance.intoto.jsonl
       - name: Sign artifacts with cosign (keyless) → attach signatures to the Release
         # Runs AFTER attest so the attestation subject-path (dist/*) covers only the three
-        # distributables, not their signatures. For each of wheel/sdist/SBOM we emit:
-        #   <file>.sig            detached signature      (Scorecard-recognized)
-        #   <file>.pem            signing certificate     (verification chain)
-        #   <file>.sigstore.json  Sigstore bundle         (Scorecard-recognized)
+        # distributables, not their signatures. For each of wheel/sdist/SBOM we emit exactly ONE
+        # artefact:
+        #   <file>.sigstore.json  Sigstore bundle — carries the signature AND the certificate
+        #                         (Scorecard-recognized)
         # Verify later with:  cosign verify-blob --bundle <file>.sigstore.json \
         #   --certificate-identity-regexp 'https://github.com/JasGujral/mokata-oss/.+' \
         #   --certificate-oidc-issuer https://token.actions.githubusercontent.com <file>
+        #
+        # ⚠⚠ THIS STEP USED TO ALSO PASS `--output-signature "$f.sig"` AND
+        # `--output-certificate "$f.pem"`, AND THEY WROTE NOTHING. cosign v3 (v3.0.6 here) defaults
+        # `--new-bundle-format=true` and then ACCEPTS, WARNS ABOUT AND IGNORES both flags —
+        # `WARNING: --output-signature is deprecated when using --new-bundle-format and will be
+        # ignored`, printed twelve times in run 31271824251 and read by nobody. The bundle already
+        # contains both; do not re-add the flags. Measured on cosign v3.0.6, 2026-08-13; the
+        # transcript is `tests/_release_assets.py`.
+        #
+        # ⚠ AND THE OLD `ls -l dist/*.sig dist/*.pem dist/*.sigstore.json` COULD NOT FAIL. It sat
+        # under a `shopt -s nullglob`, where an unmatched glob expands to NOTHING rather than to
+        # itself, so `ls` saw only the three bundles and exited 0 — and doc 84 read that exit 0
+        # back as proof the missing files existed. The set is now asserted on EXACT PATHS by
+        # scripts/check-release-assets.sh, which also OWNS the pattern list, so the loop that signs
+        # and the check that follows cannot range over different files.
         env:
           COSIGN_YES: "true"   # non-interactive: accept the transparency-log entry
         run: |
-          shopt -s nullglob
-          for f in dist/*.whl dist/*.tar.gz dist/sbom.cdx.json; do
+          inputs="$(bash scripts/check-release-assets.sh dist --inputs)"
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
             echo "Signing $f"
-            cosign sign-blob \
-              --output-signature   "$f.sig" \
-              --output-certificate "$f.pem" \
-              --bundle             "$f.sigstore.json" \
-              "$f"
-          done
-          echo "Signature assets:"; ls -l dist/*.sig dist/*.pem dist/*.sigstore.json
+            cosign sign-blob --bundle "$f.sigstore.json" "$f"
+          done <<< "$inputs"
+          echo "Release asset set:"
+          bash scripts/check-release-assets.sh dist
       - name: Upload artifacts for the release job
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -225,17 +362,31 @@ jobs:
             f {print}
           ' CHANGELOG.md > RELEASE_NOTES.md
           [ -s RELEASE_NOTES.md ] || echo "See CHANGELOG.md for details." > RELEASE_NOTES.md
+      - name: Verify the DOWNLOADED asset set before anything is published
+        # The build job asserted the set it PRODUCED; this asserts the set that ARRIVED. They are
+        # two different claims (P22) and only the second one decides what users get — so the same
+        # derivation runs on both sides rather than the build job's exit 0 being taken on trust.
+        run: bash scripts/check-release-assets.sh dist
       - name: Create GitHub Release (attach signed artifacts + SBOM)
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           body_path: RELEASE_NOTES.md
           generate_release_notes: true
+          # ⚠⚠ THE SECOND CHECK THAT COULD NOT FAIL, and it is the one nearest the user.
+          # `fail_on_unmatched_files` DEFAULTS TO FALSE; the action then only `console.warn`s and
+          # publishes the short set anyway (v3.0.2, src/run.ts:15-21). That is exactly what
+          # happened at v0.0.17: the log carries `🤔 Pattern 'dist/*.sig' does not match any
+          # files.` and `dist/*.pem` (run 31271824251, lines 24593-24594), and a Release with two
+          # missing asset classes went out green. TRUE means a short list fails the cut.
+          fail_on_unmatched_files: true
+          # Derived from scripts/check-release-assets.sh, which owns the pattern list;
+          # tests/test_release_asset_set.py fails the build if these two ever part. The removed
+          # `dist/*.sig` / `dist/*.pem` entries were never satisfiable — see the signing step.
           files: |
             dist/*.whl
             dist/*.tar.gz
             dist/sbom.cdx.json
-            dist/*.sig
-            dist/*.pem
+            dist/provenance.intoto.jsonl
             dist/*.sigstore.json
 
   # ---------------------------------------------------------------------------------------
@@ -267,13 +418,22 @@ jobs:
           name: mokata-dist
           path: dist
       - name: Keep only the wheel + sdist (PyPI takes distributions, not the SBOM/signatures)
-        # The mokata-dist bundle also carries dist/sbom.cdx.json and the cosign signature files
-        # (.sig/.pem/.sigstore.json); drop them all so twine uploads ONLY dist/*.whl + dist/*.tar.gz.
-        # The SBOM and signatures stay on the GitHub Release.
-        run: rm -f dist/sbom.cdx.json dist/*.sig dist/*.pem dist/*.sigstore.json
+        # The mokata-dist bundle also carries dist/sbom.cdx.json, dist/provenance.intoto.jsonl and
+        # one cosign bundle per artifact (.sigstore.json); drop them so twine uploads ONLY
+        # dist/*.whl + dist/*.tar.gz. The SBOM, provenance and signatures stay on the GitHub
+        # Release. (`dist/*.sig` and `dist/*.pem` used to be listed here too and never existed —
+        # cosign v3 does not write them.)
+        #
+        # ⚠ THIS LINE IS A THIRD COPY OF THE ASSET SET AND NOTHING GRADED IT UNTIL 0.0.18 STAGE 8.
+        # `check-release-assets.sh` owns the declaration; the release job's `files:` was already
+        # derived from it (stage 6) and this was not — so adding a fifth asset class and forgetting
+        # this line hands twine a file it will not accept, at the last job of a cut. It is now
+        # derived too, by `tests/test_release_provenance.py`: every published asset that is not a
+        # DISTRIBUTION must be named here.
+        run: rm -f dist/sbom.cdx.json dist/provenance.intoto.jsonl dist/*.sigstore.json
       - name: Publish to PyPI (Trusted Publishing) — the reproducible, attested artifact
         # No `python -m build` here BY DESIGN: a rebuild would yield a DIFFERENT, unsigned wheel
         # than the one attached to the GitHub Release. We upload the downloaded dist verbatim.
-        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: dist

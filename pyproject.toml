@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mokata"
-version = "0.0.17"
+version = "0.0.18"
 description = "The memory + seatbelt for your AI coding agent. Spec-driven TDD for Claude Code — knowledge-aware, human-gated, local-first."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,23 +27,30 @@ classifiers = [
 # with it absent — where `mokata-mcp` then fails LOUD with a fix. Every OTHER external tool
 # mokata orchestrates remains optional with a built-in fallback (see capability router /
 # graceful degradation).
-dependencies = ['mcp>=1.2']
+#
+# ⚠ THE UPPER BOUND IS LOAD-BEARING (MCP-SDK-2-BREAKS-THE-SERVER, 0.0.18). `mcp` 2.0.0 (released
+# 2026-07-28) REMOVED `mcp.server.fastmcp` — the module `mcp/server.py` builds the whole server on.
+# With no ceiling here, a fresh resolve took 2.0.0 and every `pip install mokata` from that day
+# produced a mokata whose MCP surface (61 tools) could not start. v0.0.17 shipped 2026-08-08,
+# eleven days into it. Supporting 2.x is a PORT, not a version bump — do not widen this bound
+# without doing that port. `SDK_MIN_VERSION`/`SDK_MAJOR_CEILING` in `mcp/server.py` mirror it and
+# are asserted equal to it by `test_mcp_sdk_2_breaks_the_server`.
+dependencies = ['mcp>=1.2,<2']
 
 [project.optional-dependencies]
 # Optional upgrades. Absence is detected and degraded over, never fatal.
 schema = ["jsonschema>=4.0"]
 # `[mcp]` is a no-op ALIAS of the default MCP SDK dependency above (same spec), kept so an
 # existing `pip install "mokata[mcp]"` still resolves cleanly.
-mcp = ['mcp>=1.2']
+mcp = ['mcp>=1.2,<2']
 # Optional hosted/remote memory backend (Stage 24A): the Postgres store. Lazy-imported;
 # the core, the CLI, and every default profile run with this absent (memory degrades to
 # the SQLite floor). Opt-in only — a remote store is explicit user wiring (local-first).
 postgres = ["psycopg>=3.1"]
-# Optional external codebase-graph backend (Stage 35f): query a team-populated Neo4j graph
-# for structural questions. Lazy-imported; the core, the CLI, and every default profile run
-# with this absent (code_graph degrades to the ripgrep→grep floor). Opt-in only — the URI and
-# credentials come from env vars, never the committed manifest (local-first, no egress).
-neo4j = ["neo4j>=5.0"]
+# 0.0.18 lane D stage 14 — the `[neo4j]` extra is GONE with the backend it installed a driver
+# for. An extra is a SELL SURFACE, not a dependency list: `pip install "mokata[neo4j]"` is a
+# published, resolvable instruction, so leaving it would have shipped a release that still sells
+# the driver for a backend it deleted — and no import-graph sweep reaches packaging metadata.
 # DB.S4 — the ONE blessed embeddings extra: model2vec STATIC embeddings (a distilled lookup
 # table — numpy-only, no torch, ~30MB, CPU-fast). Lazy-imported and AUTO-DETECTED: with it
 # absent, `make_embedder("auto")` returns the zero-dep HashingEmbedder and everything still

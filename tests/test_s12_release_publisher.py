@@ -179,6 +179,9 @@ class TestExactlyOneWorkflowPublishes(unittest.TestCase):
         """The whole-tree count, not one file's — a second workflow adding the action is the
         same defect wearing different clothes."""
         hits = []
+        # CORPUS: THE WORKING TREE. These files are shipped assets — `rsync` copies whatever is on
+        # disk, so a stray untracked one is published and belongs in this check. An extra file makes
+        # the assertion STRICTER, never more likely to pass, so the walk cannot hide a violation.
         for name in sorted(os.listdir(WORKFLOWS)):
             if not name.endswith((".yml", ".yaml")):
                 continue

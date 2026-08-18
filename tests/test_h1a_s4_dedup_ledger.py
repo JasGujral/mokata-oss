@@ -105,8 +105,11 @@ class TestTheLedgerPrimitive(unittest.TestCase):
     def test_it_lives_in_transient_run_state_never_in_committed_config(self):
         with tempfile.TemporaryDirectory() as d:
             injection_ledger.record_injected(d, ["a"], session_id="s")
-            rel = os.path.relpath(injection_ledger.ledger_dir(d), d)
-            self.assertEqual(os.path.join(".mokata", "temp_local", "injection_ledger"), rel)
+            # BOTH SIDES POSIX. `posix_rel` answers with a NAME, so the declaration it is
+            # matched against is a name too — spelling the expectation with `os.path.join` would
+            # re-open the mixed comparison one line after closing it.
+            rel = _support.posix_rel(injection_ledger.ledger_dir(d), d)
+            self.assertEqual(".mokata/temp_local/injection_ledger", rel)
             self.assertTrue(os.path.isdir(injection_ledger.ledger_dir(d)))
 
     def test_a_session_id_with_a_separator_cannot_escape_the_ledger_dir(self):

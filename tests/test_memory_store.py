@@ -17,7 +17,6 @@ from mokata.memory import (
     MemoryDisabledError,
     MemoryItem,
     MemoryStore,
-    ObsidianBackend,
     SQLiteBackend,
     enabled_memory_types,
 )
@@ -127,32 +126,18 @@ class TestDecisionMemoryWired(unittest.TestCase):
 class TestBackendSelectionViaRouter(unittest.TestCase):
     def test_defaults_to_sqlite_floor(self):
         with tempfile.TemporaryDirectory() as d:
-            router = full_router({"native-memory": False, "obsidian": False})
-            store = MemoryStore.from_router(router, root=d)
+            store = MemoryStore.from_router(full_router({}), root=d)
             self.assertEqual(store.backend.name, "sqlite")
 
-    def test_selects_obsidian_when_router_resolves_it(self):
+    def test_the_full_profile_resolves_to_the_floor_because_that_is_all_it_wires(self):
+        # REVERSED at 0.0.18 stage 10. This asserted `obsidian` was SELECTED when detected — the
+        # backend is gone and no profile wires it, so the assertion that carries the same meaning
+        # now is that `full` reaches the floor no matter what the detector says. (A committed
+        # manifest that still NAMES it is a different case with its own refusal;
+        # `test_stage10_removed_backends.py` owns that.)
         with tempfile.TemporaryDirectory() as d:
-            router = full_router({"native-memory": False, "obsidian": True})
-            store = MemoryStore.from_router(router, root=d)
-            self.assertEqual(store.backend.name, "obsidian")
-
-
-class TestBackendSwap(unittest.TestCase):
-    def test_same_behavior_across_backends(self):
-        with tempfile.TemporaryDirectory() as d:
-            results = {}
-            for label, backend in (
-                ("sqlite", SQLiteBackend(os.path.join(d, "m.db"))),
-                ("obsidian", ObsidianBackend(os.path.join(d, "vault"))),
-            ):
-                store = MemoryStore(backend)
-                store.remember(MemoryItem.create("db.engine", "postgres"),
-                               assume_yes=True)
-                results[label] = [i.value for i in store.recall("db.engine")]
-                store.close()
-            self.assertEqual(results["sqlite"], results["obsidian"])
-            self.assertEqual(results["sqlite"], ["postgres"])
+            store = MemoryStore.from_router(full_router({"obsidian": True}), root=d)
+            self.assertEqual(store.backend.name, "sqlite")
 
 
 class TestInstrumentation(unittest.TestCase):

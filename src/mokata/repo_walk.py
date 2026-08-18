@@ -47,6 +47,26 @@ from typing import List, Optional
 CHECKOUT_MARKER = ".git"
 
 
+def posix_name(path: str, *, sep: str = os.sep) -> str:
+    """A repo-relative path spelled the way the repo NAMES it — `/`, on every platform.
+
+    A repo-relative path is not a filesystem path: it is an IDENTITY. It becomes a knowledge-index
+    key, an anchor, a corpus key, an exemption-table entry, and the file name a human types into a
+    query — and every one of those is `/`-spelled, because a human wrote it that way. On Windows
+    `os.path.relpath` returns `mokata\\deprecation.py`, so the comparison against the declaration
+    is false on exactly the platform nobody develops on. That was five of the twenty failures that
+    halted the 0.0.18 cut, and `tests/_windows_portability.py` is the sweep that keeps it closed.
+
+    ONE definition, because three modules had already hand-rolled `rel.replace(os.sep, "/")` and a
+    fourth had not — which is precisely the name-drift shape this repo has paid for before. The
+    test-side twin is `tests/_support.as_posix` (tests cannot import product code for a check ABOUT
+    product code, so the two exist deliberately, with the same body and the same `sep` seam).
+
+    `sep` is a parameter so the Windows branch is EXECUTED on a POSIX host rather than being a
+    line only CI can reach (doc 85 §7i)."""
+    return path.replace(sep, "/") if sep != "/" else path
+
+
 def is_checkout_boundary(path: str) -> bool:
     """True when `path` is the root of a checkout — i.e. it carries a `.git` entry of either
     shape (a directory for a clone/submodule, a file for a linked worktree).
@@ -80,4 +100,4 @@ def prune_source_dirs(dirpath: str, dirnames: List[str], *,
     dirnames[:] = kept
 
 
-__all__ = ["CHECKOUT_MARKER", "is_checkout_boundary", "prune_source_dirs"]
+__all__ = ["CHECKOUT_MARKER", "is_checkout_boundary", "posix_name", "prune_source_dirs"]

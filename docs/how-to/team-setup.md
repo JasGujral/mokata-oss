@@ -45,7 +45,7 @@ mokata team init                      # guided: provision → pin identity → l
 3. runs **one idempotent provision pass** — the shared tables (`mokata_memory`,
    `mokata_session_bundle`, `mokata_audit_log`, `mokata_events`) plus the `mokata_schema_version`
    row (which records both the version the schema **is** and the oldest client it still **serves**)
-   — on **vanilla Postgres ≥14, no extensions**. Re-running is safe: an already-current schema is a
+   — on **vanilla Postgres ≥15, no extensions**. Re-running is safe: an already-current schema is a
    reported no-op, and only a *real* change asks for your approval;
 4. **pins the team project identity** (`settings.project.id`, human-gated) so every teammate's
    clients agree on the same shared namespace instead of splitting by local path-hash;
@@ -271,7 +271,7 @@ surface. The guarantees:
   manifest, a stack file, a vault, or the audit log. Every durable write is **secret-scanned**, and a
   detected secret is a **hard block** that approval cannot override. Passing an inline DSN where a
   name is expected is refused.
-- **No extensions on the golden path.** The shared schema is plain Postgres ≥14 — no `CREATE
+- **No extensions on the golden path.** The shared schema is plain Postgres ≥15 — no `CREATE
   EXTENSION`, no pgvector required. Fewer moving parts, less to trust.
 - **The runtime role needs no DDL rights at all.** Everyday runtime connections run **zero DDL** —
   schema checking is a cached, SELECT-only probe, and *all* DDL belongs to `mokata team init` alone.

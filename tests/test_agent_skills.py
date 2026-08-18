@@ -73,6 +73,9 @@ class TestShippedSkillFiles(unittest.TestCase):
         # every dir under skills/ maps to a curated pipeline skill OR a shipped domain skill
         # (DK.S1+ hand-authored) — no orphans left behind.
         from mokata.agent_skills import installed_skill_names
+        # CORPUS: THE WORKING TREE. These files are shipped assets — `rsync` copies whatever is on
+        # disk, so a stray untracked one is published and belongs in this check. An extra file makes
+        # the assertion STRICTER, never more likely to pass, so the walk cannot hide a violation.
         present = {d for d in os.listdir(_SKILLS_DIR)
                    if os.path.isdir(os.path.join(_SKILLS_DIR, d))}
         self.assertEqual(present, set(installed_skill_names()))

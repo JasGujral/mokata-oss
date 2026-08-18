@@ -53,7 +53,6 @@ Optional extras (each is degrade-clean when absent — never required):
 
 ```bash
 pip install "mokata[postgres]"  # optional shared-memory / session Postgres backend
-pip install "mokata[neo4j]"     # optional external code-graph backend
 pip install "mokata[schema]"    # richer manifest validation messages (jsonschema)
 ```
 

@@ -105,6 +105,9 @@ class TestPluginBundleUsableInCowork(unittest.TestCase):
         cmds_rel = plugin["commands"].lstrip("./")
         cmds_dir = os.path.join(ROOT, cmds_rel)
         self.assertTrue(os.path.isdir(cmds_dir))
+        # CORPUS: THE WORKING TREE. These files are shipped assets — `rsync` copies whatever is on
+        # disk, so a stray untracked one is published and belongs in this check. An extra file makes
+        # the assertion STRICTER, never more likely to pass, so the walk cannot hide a violation.
         mds = [f for f in os.listdir(cmds_dir) if f.endswith(".md")]
         self.assertTrue(mds)                            # /mokata:* commands ship in the bundle
 

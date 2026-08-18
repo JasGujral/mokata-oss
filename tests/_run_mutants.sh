@@ -89,6 +89,12 @@ abort() {
            remedy="  The tree is RESTORED. Either the test pattern matched no files, or discovery never
   reported at all. Either way nothing was exercised, so this mutant is UNGRADED — it is not a
   survivor. Fix the pattern (or the tests dir) and re-run." ;;
+        7) meaning="THE BASELINE WAS NOT GREEN — the selected tests were ALREADY FAILING, unmutated."
+           remedy="  Nothing was mutated and nothing was graded. This is the one status that condemns the
+  WHOLE BATCH rather than this mutant: every later mutant would find the same failure, be scored
+  RED, and credit the kill to a mutation that had nothing to do with it — and a batch of those
+  reports a PERFECT SCORE. That is what 0.0.17 stage 28's clean sweep turned out to be.
+  REMEDY: make the selected tests pass on an unmutated tree, then re-run the batch." ;;
         *) meaning="UNKNOWN STATUS $rc — not in scripts/mutate.sh's EXIT CONTRACT."
            remedy="  Treat the tree as SUSPECT: check 'git status' and 'git diff' before doing anything
   else, and reconcile this status with the contract in scripts/mutate.sh's header." ;;

@@ -20,7 +20,7 @@ import subprocess
 import tempfile
 import unittest
 
-from _support import iter_repo_files  # also applies the `src/` path fix on import
+from _support import iter_tracked_files  # also applies the `src/` path fix on import
 
 from mokata import __version__
 from mokata.packaging import (
@@ -177,15 +177,25 @@ class TestPinDriftCoverageSweep(_TmpMixin):
                  "__pycache__", "site", "dist", "build", ".mypy_cache",
                  ".pytest_cache", ".ruff_cache"}
 
+    # CORPUS: THE INDEX. This rule is "every pin THE REPO PUBLISHES is guarded", so the
+    # question is what git tracks — not what happens to be sitting on this disk.
+    #
+    # It walked the working tree until stage 3, and passed only by luck. Measured at that
+    # commit, the walk's corpus here was 11,912 files of which 11,404 were untracked —
+    # 11,327 of them `.mokata/temp_local/*.json` a suite run had left in the repo root. Not
+    # one contained the pin string, so the sweep was index-equivalent by coincidence: the
+    # first untracked file to carry `mokata-check@vX.Y.Z` (a scratch note, a downloaded
+    # workflow, a second checkout's docs) would have reddened this test at a clean HEAD.
+    #
+    # Reading the index also retires the nested-checkout special case rather than restating
+    # it: `git ls-files` never reports another checkout's files, so the duplicate-pin
+    # incident below cannot recur BY CONSTRUCTION instead of by a boundary rule someone
+    # maintains. `test_nested_checkout_boundary.py` still pins that rule for the walker,
+    # which other callers legitimately still use.
     def _sweep(self, root=ROOT):
-        """Every repo-relative file under `root` containing a `mokata-check@v` pin.
-
-        The walk is `iter_repo_files`, which drops NESTED CHECKOUTS. That is not tidiness: a
-        git worktree under the repo root duplicates every pinned file, and this sweep counted
-        the copies as unguarded pins and failed at a clean HEAD (see
-        `test_nested_checkout_boundary.py` for the reproduction and the pin)."""
+        """Every repo-relative TRACKED file under `root` containing a `mokata-check@v` pin."""
         return sorted(
-            rel for rel, ab in iter_repo_files(root, skip_dirs=self.SKIP_DIRS)
+            rel for rel, ab in iter_tracked_files(root, skip_dirs=self.SKIP_DIRS)
             if _matches(ab, ACTION_PIN_RE)
         )
 

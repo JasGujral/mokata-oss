@@ -5,8 +5,9 @@ an explicit human-owned FILE, gated egress) and `mokata memory import` = restore
 via WriteGate, provenance-stamped). It is a BACKUP surface, not a sharing channel.
 
 Covers the 35b test bar:
-  * default dest is a timestamped `.mokata/backups/` path (NOT the deprecated memory-share channel);
-  * writing the legacy path still works but warns ONCE (existing SIMP.S2 machinery);
+  * default dest is a timestamped `.mokata/backups/` path (NOT the removed memory-share path);
+  * the legacy `memory-share.json` path still works and warns about NOTHING (0.0.18: the
+    channel it named was removed; the path is a path — see `TestLegacyDestIsNowJustAPath`);
   * restore goes through the WriteGate with item-level provenance + an `import_batch` ledger anchor;
   * preview (keys-only) / approve / decline / idempotent re-run;
   * secret-scan on ingest (seeded secret → blocked, named, not imported);
@@ -33,7 +34,6 @@ from mokata.govern.ledger import AuditLedger
 from mokata.init import init_repo
 from mokata.memory import (
     ACTIVE,
-    MEMORY_SHARE_FILENAME,
     MemoryItem,
     MemoryStore,
     SHARE_KIND,
@@ -41,7 +41,6 @@ from mokata.memory import (
     default_backup_path,
     export_memory,
     import_memory,
-    is_legacy_share_dest,
     load_memory_share,
     plan_memory_import,
 )
@@ -72,10 +71,10 @@ def _share(items):
 class TestDefaultDestIsBackupPath(unittest.TestCase):
     def test_35b_default_dest_is_backup_path(self):
         # the library default AND the CLI default land under `.mokata/backups/memory-<UTC>.json`,
-        # never the deprecated memory-share.json channel.
+        # never the (now removed) memory-share.json path.
         self.assertIn(os.path.join(MOKATA_DIR, "backups"), default_backup_path("/repo"))
         self.assertTrue(default_backup_path("/repo").endswith(".json"))
-        self.assertNotIn(MEMORY_SHARE_FILENAME, default_backup_path("/repo"))
+        self.assertNotIn("memory-share.json", default_backup_path("/repo"))
 
         with tempfile.TemporaryDirectory() as d:
             store = _repo(d)
@@ -86,7 +85,7 @@ class TestDefaultDestIsBackupPath(unittest.TestCase):
             backups = glob.glob(os.path.join(d, MOKATA_DIR, "backups", "memory-*.json"))
             self.assertEqual(len(backups), 1)                        # one timestamped backup file
             self.assertFalse(os.path.exists(
-                os.path.join(d, MOKATA_DIR, MEMORY_SHARE_FILENAME)))  # NOT the deprecated channel
+                os.path.join(d, MOKATA_DIR, "memory-share.json")))    # NOT the removed channel
 
     def test_35b_default_dest_never_clobbers_prior_backup(self):
         with tempfile.TemporaryDirectory() as d:
@@ -99,36 +98,43 @@ class TestDefaultDestIsBackupPath(unittest.TestCase):
             self.assertEqual(len(backups), 2)                        # distinct UTC-stamped files
 
 
-class TestLegacyDestWarns(unittest.TestCase):
-    def test_35b_legacy_dest_warns(self):
+class TestLegacyDestIsNowJustAPath(unittest.TestCase):
+    """⚠ REVERSED AT 0.0.18 LANE D SLICE 2, IN PLACE, RATHER THAN DELETED.
+
+    This class asserted that exporting to `memory-share.json` still worked and earned ONE
+    deprecation warn naming the removal release. The channel is now REMOVED, so both halves of
+    that claim are false and the honest move is to state what is true instead: the path lost its
+    special meaning, not its usability. Deleting the class would have left the tree with no record
+    that the filename was ever special and nothing asserting it stopped being so — and the second
+    test (`warn fires once per repo`) is gone because its subject, the warn, no longer exists.
+
+    P22 in one assertion: removing a deprecated destination did not remove the command."""
+
+    def test_35b_legacy_dest_no_longer_warns_and_still_writes(self):
         with tempfile.TemporaryDirectory() as d:
             store = _repo(d)
             store.remember(MemoryItem.create("y", "2"), assume_yes=True)
-            legacy = os.path.join(d, MOKATA_DIR, MEMORY_SHARE_FILENAME)
-            self.assertTrue(is_legacy_share_dest(legacy))
+            legacy = os.path.join(d, MOKATA_DIR, "memory-share.json")
 
             err = io.StringIO()
             with redirect_stdout(io.StringIO()), redirect_stderr(err):
                 rc = main(["memory", "export", legacy, "--path", d])
             self.assertEqual(rc, 0)
             self.assertTrue(os.path.exists(legacy))                  # writing it still WORKS
-            warn = err.getvalue()
-            self.assertIn("deprecated", warn.lower())                # ONE deprecation line
-            self.assertIn("0.0.17", warn)                            # names the removal release
 
-    def test_35b_legacy_warn_fires_once_per_repo(self):
-        with tempfile.TemporaryDirectory() as d:
-            store = _repo(d)
-            store.remember(MemoryItem.create("y", "2"), assume_yes=True)
-            legacy = os.path.join(d, MOKATA_DIR, MEMORY_SHARE_FILENAME)
-            first, second = io.StringIO(), io.StringIO()
-            with redirect_stdout(io.StringIO()), redirect_stderr(first):
-                main(["memory", "export", legacy, "--path", d])
-            with redirect_stdout(io.StringIO()), redirect_stderr(second):
-                main(["memory", "export", legacy, "--path", d])
-            # once-per-repo state marker (SIMP.S2 machinery): warns the FIRST time, silent after
-            self.assertIn("deprecated", first.getvalue().lower())
-            self.assertNotIn("deprecated", second.getvalue().lower())
+            # ⚠ THE ANNOUNCEMENT IS GRADED BY THE MARKER DIRECTORY, NOT BY A WORD.
+            # This first read `assertNotIn("deprecated", stderr)` plus a `memory-share.marker`
+            # path — both keyed on the vocabulary and the filename the DEPRECATION notice used.
+            # A mutant that re-announced the same channel through `warn_removed` sailed straight
+            # past: it says "removed", not "deprecated", and its marker is keyed
+            # `<channel>@removed-<release>`. That is stage 10's own marker-key finding landing on
+            # the test written after it. Both first-use notices — deprecation and removal — mint
+            # under `temp_local/deprecations/`, so the directory being EMPTY is the property, and
+            # it does not care what the notice calls itself.
+            markers = os.path.join(d, MOKATA_DIR, "temp_local", "deprecations")
+            self.assertEqual(os.listdir(markers) if os.path.isdir(markers) else [], [])
+            for word in ("deprecated", "removed"):
+                self.assertNotIn(word, err.getvalue().lower())
 
 
 # ================================================ deliverable 3 — import via WriteGate + provenance

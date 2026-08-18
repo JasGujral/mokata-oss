@@ -40,6 +40,9 @@ def _is_validator_exempt(rel_path, line):
 
 
 def _iter_shipped_py():
+    # CORPUS: THE WORKING TREE. This asks what mokata SHIPS, and `sync-public.sh` mirrors
+    # with `rsync`, which copies the working tree — an untracked `.py` under `src/` really is
+    # published. The index would be blind to exactly the file most likely to break the rule.
     for dirpath, _dirs, files in os.walk(_SRC):
         for fn in files:
             if fn.endswith(".py"):

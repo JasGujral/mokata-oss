@@ -11,8 +11,21 @@ secret-scanned on ingest and stamped with import provenance (source file · impo
 at); provenance is preserved so a round trip is content-identical.
 
 This is a BACKUP surface, NOT a sharing channel — cross-repo/team sharing is the team Postgres
-(SIMP.S1) and nothing else. The legacy `memory-share.json` path still WORKS as a destination but
-is the SIMP.S2-deprecated channel: writing to it warns once (existing `deprecation` machinery).
+(SIMP.S1) and nothing else.
+
+⚠ WHAT LEFT THIS FILE AT 0.0.18 LANE D SLICE 2, AND WHAT DID NOT. The SIMP.S2-deprecated
+`memory-share` CHANNEL was the special treatment of one destination filename — the
+`MEMORY_SHARE_FILENAME` constant, the `is_legacy_share_dest` detector that made writing there
+warn, and the `mokata migrate memory-share` path that read it. All of that is REMOVED. Everything
+below it — `export` / `import`, the preview, the gated restore, the provenance stamp — is the 35b
+backup surface and SURVIVES UNCHANGED: removing a deprecated channel must not cost a user a
+supported feature that happened to share a file with it (P22).
+
+⚠ `SHARE_KIND` STAYS, AND DELIBERATELY. It is not the channel's name, it is the `kind` field
+INSIDE every backup a user has already written, and `_validate` refuses a file that does not carry
+it. Renaming it pre-1.0 would be free for our code and would make every existing backup on disk
+unreadable — the one thing §7d's exception forbids (P2/P23). The channel was a filename; the
+format is the user's data.
 
 Local-first (P8): nothing egresses — the backup is a file the user keeps/syncs, not a mokata
 service. Storage-agnostic: works over any `MemoryBackend`.
@@ -30,13 +43,11 @@ from .healing import CONTRADICTION, HealingProposal
 from .item import ACTIVE, MemoryItem, now_iso
 from ..errors import MokataError
 
-MEMORY_SHARE_FILENAME = "memory-share.json"      # the SIMP.S2-DEPRECATED channel file (removed 0.0.17)
-SHARE_KIND = "mokata-memory-share"
+SHARE_KIND = "mokata-memory-share"               # the BACKUP FORMAT's id — inside the user's files
 SHARE_SCHEMA_VERSION = 1
 
 # 35b — the backup destination. A backup is a FILE the human owns (P23): a timestamped, human-
-# readable JSON under `.mokata/backups/`, committable and never clobbering a prior backup. This is
-# the DEFAULT export dest — the deprecated `memory-share.json` channel is no longer a default.
+# readable JSON under `.mokata/backups/`, committable and never clobbering a prior backup.
 BACKUPS_DIRNAME = "backups"
 
 
@@ -44,16 +55,10 @@ def default_backup_path(root: str) -> str:
     """The default backup destination for `memory export`: `<root>/.mokata/backups/memory-<UTC>.json`.
 
     UTC-stamped to the microsecond so successive backups never clobber each other. A distinct,
-    human-owned FILE (P23) — deliberately NOT the SIMP.S2-deprecated `memory-share.json` channel."""
+    human-owned FILE (P23)."""
     from .. import MOKATA_DIR
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
     return os.path.join(root, MOKATA_DIR, BACKUPS_DIRNAME, f"memory-{stamp}.json")
-
-
-def is_legacy_share_dest(dest: str) -> bool:
-    """True when `dest` is the SIMP.S2-deprecated `memory-share.json` channel file — writing to it
-    still WORKS but earns a once-per-repo deprecation warn (P16 honesty; existing machinery)."""
-    return os.path.basename(dest or "") == MEMORY_SHARE_FILENAME
 
 
 class MemoryShareError(MokataError):

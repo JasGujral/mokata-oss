@@ -80,6 +80,7 @@ import os
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, Iterable, List, Optional, Sequence, Set, Tuple
+import _support
 
 # A site is keyed exactly as the SI.6 register keys it: the module's path relative to the package
 # root, and the QUALIFIED name of the enclosing definition — the dotted scope path, classes
@@ -248,7 +249,7 @@ def _parse_package(root: str) -> Dict[str, ast.Module]:
             continue
         for name in sorted(f for f in files if f.endswith(".py")):
             path = os.path.join(base, name)
-            rel = os.path.relpath(path, root).replace(os.sep, "/")
+            rel = _support.posix_rel(path, root).replace(os.sep, "/")
             with open(path, encoding="utf-8") as fh:
                 trees[rel] = ast.parse(fh.read(), filename=path)
     return trees

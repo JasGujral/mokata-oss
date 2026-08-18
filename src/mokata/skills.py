@@ -48,6 +48,16 @@ class Skill:
     ground: bool = True                   # Stage 33 — append the anti-assumption discipline
     record_verdict: bool = False          # Stage 6r — persist a review_verdict to the 6b log
     next_step: Optional[str] = None       # Stage 6r — explicit next-step section (no generic <next>)
+    # 0.0.18 stage 4 — WHICH WAY DOES LINK 1 OF THE MIRROR CHAIN RUN FOR THIS SKILL?
+    #   None  -> GENERATED. `templates/commands/<name>.md` IS `command_markdown(skill)`, byte for
+    #            byte; this registry entry is the source and the template is the mirror.
+    #   str   -> HAND-AUTHORED. The TEMPLATE is the source and it EXTENDS the rendered body; the
+    #            string states what it carries that `prompt` does not. Regenerating it DELETES
+    #            that content — which is the whole reason the fact is declared here rather than
+    #            inferred from a byte-comparison that cannot tell "extended on purpose" from
+    #            "stale" (doc 85 §7g). A reason is mandatory: a declaration nobody had to justify
+    #            is an allow-list entry, and `tests/_skill_mirrors.py` grades it as an offender.
+    hand_authored_template: Optional[str] = None
 
 
 # Stage 32 — the precondition surfaced on implementation skills: a persisted, complete spec
@@ -495,6 +505,16 @@ _SKILLS: List[Skill] = [
         phase="brainstorm",
         show_progress=True,
         when_to_use=BRAINSTORM_AUTO_TRIGGER,   # Stage 29 — model-invocable when exploring
+        hand_authored_template=(
+            "brainstorm.md is the SOURCE, not a mirror: it carries the run-REGISTRATION protocol "
+            "(`session_save` with register=true — without it the whole brainstorm is untracked, "
+            "`progress` reports no run and the spec has nothing to attach to), the auto-engage "
+            "announcement + `settings.brainstorm.auto` toggle, and the declined-permission note "
+            "that tells the user a hung mokata tool call is `mokata mcp status`, not a mokata "
+            "bug. None of the three is in `BRAINSTORM_PROTOCOL`, so regenerating this template "
+            "from the registry would strip ~3.7KB of live instruction out of the shipped "
+            "brainstorm/SKILL.md — the exact class of loss the mirror pin exists to prevent."
+        ),
     ),
     Skill(
         name="refine",

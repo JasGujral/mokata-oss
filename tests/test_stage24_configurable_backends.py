@@ -18,14 +18,16 @@ _HAS_PSYCOPG = importlib.util.find_spec("psycopg") is not None
 
 import _support  # noqa: F401  (puts src/ on the path)
 
+from mokata import detect
+from mokata.deprecation import RemovedChannelError
 from mokata.detect import Detector
 from mokata.manifest import Manifest
 from mokata.memory.backends import (
-    ObsidianBackend,
     PostgresUnavailable,
     SQLiteBackend,
     build_postgres_backend,
 )
+from mokata.memory.selection import obsidian_vault_path
 from mokata.memory.store import build_backend, select_memory_backend
 from mokata.netguard import network_capable_tools
 from mokata.govern.secrets import scan
@@ -66,17 +68,24 @@ class TestBuildBackendConfig(unittest.TestCase):
             self.assertEqual(be.path,
                              os.path.join(d, "temp_local", "memory", "memory.db"))
 
-    def test_obsidian_vault_from_config(self):
+    def test_the_removed_backend_is_REFUSED_rather_than_built_or_floored(self):
+        # REVERSED at 0.0.18 stage 10. Two tests here asserted `build_backend("obsidian", …)`
+        # honoured `config.vault` and its default. The backend is gone, and the one thing this
+        # call must NEVER do now is return the SQLite floor: an empty store handed back in answer
+        # to "open my Obsidian vault" is the exact §7g collapse the slice exists to prevent.
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(RemovedChannelError):
+                build_backend("obsidian", d, config={"vault": os.path.join(d, "my-vault")})
+            with self.assertRaises(RemovedChannelError):
+                build_backend("obsidian", d)
+
+    def test_the_configured_vault_LOCATION_is_still_resolvable_for_the_refusal(self):
+        # …and the config key is still READ, because the refusal has to name where the notes are.
+        # Resolving a path is not reading a store.
         with tempfile.TemporaryDirectory() as d:
             vault = os.path.join(d, "my-vault")
-            be = build_backend("obsidian", d, config={"vault": vault})
-            self.assertIsInstance(be, ObsidianBackend)
-            self.assertEqual(be.vault, vault)
-
-    def test_obsidian_default_unchanged_when_no_config(self):
-        with tempfile.TemporaryDirectory() as d:
-            be = build_backend("obsidian", d)
-            self.assertEqual(be.vault,
+            self.assertEqual(obsidian_vault_path({"vault": vault}, d), vault)
+            self.assertEqual(obsidian_vault_path({}, d),
                              os.path.join(d, "temp_local", "memory", "vault"))
 
     def test_config_path_expands_user(self):
@@ -105,49 +114,45 @@ class TestBuildBackendConfig(unittest.TestCase):
 
 # ----------------------------------------------------------------- 2. Obsidian detection
 
-class TestObsidianDetection(unittest.TestCase):
-    def _tool(self, **config):
-        t = {"provides": "memory_store", "kind": "external",
-             "detect": {"type": "obsidian"}}
-        if config:
-            t["config"] = config
-        return t
+class TestObsidianDetectionIsGone(unittest.TestCase):
+    """REVERSED at stage 10. Five tests here graded the `obsidian` detect strategy — the per-OS
+    config dirs, a configured vault, absence. The strategy is REMOVED with the backend it
+    detected, so what is graded now is that it detects nothing, that detection is still TOTAL
+    (an unknown strategy is a value, never a raise), and that the private helpers are gone rather
+    than merely unreferenced."""
 
-    def test_configured_vault_present(self):
+    def _tool(self, vault=None):
+        return {"provides": "memory_store", "kind": "external",
+                "config": ({"vault": vault} if vault else {}),
+                "detect": {"type": "obsidian"}}
+
+    def test_the_strategy_detects_nothing_even_with_a_real_vault_directory(self):
         with tempfile.TemporaryDirectory() as vault:
             det = Detector(cache=False)
-            self.assertTrue(det.is_present("obsidian", self._tool(vault=vault)))
+            self.assertFalse(det.is_present("obsidian", self._tool(vault=vault)))
 
-    def test_configured_vault_absent_when_missing(self):
+    def test_detection_is_still_total_for_an_unknown_strategy(self):
         det = Detector(cache=False)
-        with mock.patch("mokata.detect._obsidian_config_dirs", return_value=[]):
-            self.assertFalse(
-                det.is_present("obsidian", self._tool(vault="/nope/not/here")))
+        self.assertFalse(det.is_present("x", {"detect": {"type": "invented"}}))
+        self.assertFalse(det.is_present("y", {}))
+        self.assertTrue(det.is_present("z", {"detect": {"type": "always"}}))
 
-    def test_real_os_location_present(self):
-        with tempfile.TemporaryDirectory() as appdir:
-            det = Detector(cache=False)
-            with mock.patch("mokata.detect._obsidian_config_dirs",
-                            return_value=[appdir]):
-                self.assertTrue(det.is_present("obsidian", self._tool()))
+    def test_the_helpers_are_DELETED_not_merely_unreferenced(self):
+        # A private helper left behind is dead code the mutation harness and every sweep must
+        # carry (doc 85 §7d). `hasattr` is the assertion because an unreferenced function is
+        # invisible to every other check in this file.
+        self.assertFalse(hasattr(detect, "_obsidian_config_dirs"))
+        self.assertFalse(hasattr(detect, "_obsidian_present"))
 
-    def test_absent_when_no_vault_and_no_app_dir(self):
+    def test_the_live_strategies_that_SURVIVE_still_work(self):
         det = Detector(cache=False)
-        with mock.patch("mokata.detect._obsidian_config_dirs", return_value=[]):
-            self.assertFalse(det.is_present("obsidian", self._tool()))
+        self.assertTrue(det.is_present("py", {"detect": {"type": "python_module",
+                                                         "name": "sqlite3"}}))
+        self.assertFalse(det.is_present("nope", {"detect": {"type": "python_module",
+                                                            "name": "no_such_module_xyz"}}))
+        with tempfile.TemporaryDirectory() as d:
+            self.assertTrue(det.is_present("p", {"detect": {"type": "path", "name": d}}))
 
-    def test_candidate_dirs_cover_each_platform(self):
-        from mokata import detect
-        with mock.patch.dict(os.environ, {"APPDATA": "C:\\Users\\me\\AppData\\Roaming"}):
-            dirs = detect._obsidian_config_dirs()
-        joined = " ".join(dirs)
-        self.assertIn(os.path.join("Library", "Application Support", "obsidian"),
-                      joined)                                   # macOS
-        self.assertIn(os.path.join(".config", "obsidian"), joined)  # Linux
-        self.assertTrue(any("AppData" in d and "obsidian" in d for d in dirs))  # Windows
-
-
-# ------------------------------------------------------------------------- 3. Postgres
 
 class TestPostgresBackend(unittest.TestCase):
     def test_degrades_when_dsn_env_unset(self):

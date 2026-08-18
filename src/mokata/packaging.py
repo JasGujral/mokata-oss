@@ -166,6 +166,121 @@ def _normalize_tag(target: str) -> str:
     return (target or "").strip().lstrip("vV")
 
 
+# =====================================================================================
+# 0.0.18 stage 7 — WHICH mokata answered? (`RELEASE-CHECK-BARE-COMMAND-READS-SITE-PACKAGES`)
+# =====================================================================================
+# `python3 -m mokata release-check 0.0.17` run bare from the repo root imported mokata 0.0.9
+# out of `~/Library/Python/3.9/.../site-packages` — EIGHT tagged releases behind — read the
+# version fields out of THIS checkout, compared them against 0.0.9's five-entry
+# `_VERSION_FIELDS`, and printed PASS. The two `action-pin` fields did not exist in 0.0.9, so
+# they were not checked and nothing said so. A five-field PASS and a seven-field PASS were the
+# same sentence.
+#
+# THE TAG-TIME PATH WAS NEVER AFFECTED and is not changed here: `scripts/release.sh` runs this
+# command with `PYTHONPATH="${root}/src"`, so it imports from the checkout it is asked about.
+# The residual was the HUMAN path — every doc, help string and runbook line showing the bare
+# command handed a reader a green computed by stale code.
+#
+# THE FIX IS §7g: an answer that carries its own provenance cannot be mistaken for a different
+# answer. `answering_package()` splits three states that used to share one representation —
+#   IN-ROOT      the package answering lives inside the checkout being asked about
+#   OUT-OF-ROOT  it lives somewhere else (site-packages, another checkout, a venv)
+#   UNRESOLVABLE the package has no `__file__` at all (namespace/frozen import)
+# — and the CLI REFUSES on the last two rather than answering. The remedy it names,
+# `PYTHONPATH=<root>/src`, is the one `release.sh` already uses, so it exists before it is
+# advertised (§7g's corollary: a refusal pointing at a remedy nobody built is a new defect).
+
+ANSWERED_IN_ROOT = "in-root"
+ANSWERED_OUT_OF_ROOT = "out-of-root"
+ANSWERED_UNRESOLVABLE = "unresolvable"
+
+
+@dataclass
+class PackageProvenance:
+    """WHICH installed mokata is answering, and whether it is the one being asked about."""
+
+    state: str
+    root: str                                  # the checkout the caller asked about (realpath)
+    package_dir: Optional[str]                 # where the answering package lives (realpath)
+    version: str                               # the answering package's own __version__
+    field_count: int                           # how many guarded fields THIS code knows about
+
+    @property
+    def trustworthy(self) -> bool:
+        return self.state == ANSWERED_IN_ROOT
+
+    @property
+    def remedy(self) -> str:
+        # ⚠ `os.path.join`, NOT `"%s/src"`. This string is SHIPPED, USER-FACING OUTPUT — it is the
+        # command a refused release-check tells a human to run — and welding a `/` onto a native
+        # path produced `D:\a\mokata-oss\mokata-oss/src` on the 0.0.18 Windows legs: a path with
+        # both separators, in the one line whose entire job is to be copy-pasteable.
+        #
+        # Found by the WSL repair, not by a new test. This module asserted `returncode != 0`, and
+        # WSL's launcher also exits non-zero, so the assertion was satisfied by a shell that never
+        # read the step — a vacuous green. Fixing cause A made the module actually run, and it
+        # surfaced this the same hour. That is the argument for repairing a false green even when
+        # the suite was already "passing": the green was hiding a real product defect, not merely
+        # failing to add confidence.
+        return 'PYTHONPATH="%s" python3 -m mokata release-check <version> --root "%s"' % (
+            os.path.join(self.root, "src"), self.root)
+
+    def render(self) -> str:
+        where = self.package_dir if self.package_dir is not None else "(no __file__)"
+        return "answered by mokata %s from %s — %d guarded fields; checking %s" % (
+            self.version, where, self.field_count, self.root)
+
+    def refusal(self) -> str:
+        if self.state == ANSWERED_UNRESOLVABLE:
+            why = ("this mokata has no importable location, so there is no way to tell whether "
+                   "it is the code that belongs to the checkout being verified")
+        else:
+            why = ("this mokata was imported from OUTSIDE the checkout it was asked about, so a "
+                   "PASS here is that package's opinion of this tree — including which fields it "
+                   "knows to guard, which is exactly what changes between releases")
+        return "\n".join([
+            "release-check REFUSED — %s" % why,
+            "  answering package: %s" % (self.package_dir or "(no __file__)"),
+            "  checkout asked about: %s" % self.root,
+            "  run it against the checkout's own code instead:",
+            "    %s" % self.remedy,
+        ])
+
+
+def _within(child: str, parent: str) -> bool:
+    """Whether `child` is `parent` or lives under it. BOTH MUST ALREADY BE REALPATHS.
+
+    ⚠ IT USED TO RESOLVE THEM ITSELF, AND THAT SECOND RESOLUTION MADE THE FIRST UNGRADABLE
+    (doc 85 §7f, found by mutation at 0.0.18 stage 7). `answering_package` resolves both paths for
+    its own reasons — the rendered line must show a reader the path that actually answered — so
+    the calls here were a duplicate defence: mutating either one alone left the other covering,
+    and the symlink mutant came back GREEN. Deleted rather than split, because the second bought
+    nothing: there is exactly one caller and it resolves first.
+
+    The prefix test keeps the separator on purpose. `/…/mokata-oss` starts with `/…/mokata`, and
+    those are the two checkouts this whole stage exists to keep apart.
+    """
+    return child == parent or child.startswith(parent.rstrip(os.sep) + os.sep)
+
+
+def answering_package(root: str, package_file: Optional[str], version: str,
+                      field_count: Optional[int] = None) -> PackageProvenance:
+    """Where the mokata that is about to answer came from, relative to `root`.
+
+    PURE: the caller supplies the package's `__file__` rather than this reading its own, so the
+    OUT-OF-ROOT and UNRESOLVABLE states are reachable from a test on a healthy tree (doc 85 §7i
+    — a guard whose offender only exists on a broken machine grades nothing on this one).
+    """
+    resolved_root = os.path.realpath(root or ".")
+    if field_count is None:
+        field_count = len(_VERSION_FIELDS)
+    if not package_file:
+        return PackageProvenance(ANSWERED_UNRESOLVABLE, resolved_root, None, version, field_count)
+    package_dir = os.path.realpath(os.path.dirname(package_file))
+    state = ANSWERED_IN_ROOT if _within(package_dir, resolved_root) else ANSWERED_OUT_OF_ROOT
+    return PackageProvenance(state, resolved_root, package_dir, version, field_count)
+
+
 @dataclass
 class ReleaseConsistency:
     """Whether every version field equals the intended tag — fail-closed."""

@@ -158,7 +158,7 @@ def _needs_live_services(job):
     """Whether a job depends on service containers a LOCAL preflight cannot stand up.
 
     Read off `services:` — the declaration itself, not a name we recognise. `live-db` boots
-    postgres+pgvector and neo4j as containers and runs one live-only integration pattern against
+    postgres+pgvector as containers and runs one live-only integration pattern against
     them; demanding release.sh reproduce that would be demanding the preflight be CI, which it
     explicitly is not (`run_test_preflight`'s own comment: "a local run can't cover ... the
     live-db matrix (only CI can)").

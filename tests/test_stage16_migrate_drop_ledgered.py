@@ -87,21 +87,28 @@ class _FakeBackend:
 
 class _Harness:
     """A real repo/surface with both backends replaced by doubles, so the drop path runs end to end
-    without a live store. `to_backend` is a LOCAL destination (obsidian) — the team funnel is not
-    what this stage is about."""
+    without a live store.
+
+    ⚠ The destination NAME changed at 0.0.18 stage 10 (`obsidian` was removed) and nothing else
+    did. It has to be a name `migrate_memory` accepts, and both backends are doubles the harness
+    supplies, so the name selects a branch and never a real store. `postgres` is chosen for one
+    reason and it is worth stating: `to_funnel = (to_backend == "postgres")` routes the write
+    through the TEAM JOURNAL, and this stage's subject is the DROP record, not the funnel — see
+    `test_the_drop_path_is_unchanged_by_the_destination_name` below, which pins that the record is
+    the same either way."""
 
     def __init__(self, d, items=(), fail_delete_after=None):
         self.surface = _repo(d)
         self.src = _FakeBackend(items, fail_delete_after=fail_delete_after)
         self.dest = _FakeBackend()
 
-    def _build(self, tool, root, config=None, clients=None, project=None):
-        return self.dest if tool == "obsidian" else self.src
+    def _build(self, tool, root, config=None, project=None):
+        return self.dest if tool == "pgvector" else self.src
 
     def run(self, **kw):
         kw.setdefault("assume_yes", True)
         with mock.patch("mokata.memory.migrate.build_named_backend", self._build):
-            return migrate_memory(self.surface, to_backend="obsidian", from_backend="sqlite",
+            return migrate_memory(self.surface, to_backend="pgvector", from_backend="sqlite",
                                   out=_silent, **kw)
 
 

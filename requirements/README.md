@@ -18,7 +18,7 @@ pip install --require-hashes -r requirements/<file>.txt
 
 ## What is NOT pinned here (deliberately)
 
-- **`pip install -e .` / `-e ".[postgres,neo4j]"` / `-e "$sub"`** — the editable/local install of
+- **`pip install -e .` / `-e ".[postgres]"` / `-e "$sub"`** — the editable/local install of
   **mokata itself**. Hash-pinning applies to the CI/release *dependency* installs, never to the
   local package under test. These stay exactly as they were.
 - **`pip install dist/*.whl`** (release SBOM venv) — installs the freshly-built mokata artifact,

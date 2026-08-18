@@ -61,14 +61,17 @@ class TestFailLoudNotDead(unittest.TestCase):
     a raw traceback that Claude Code surfaces only as a failed/absent server."""
 
     def test_main_exits_nonzero_with_actionable_stderr_when_sdk_absent(self):
-        original = M.mcp_available
-        M.mcp_available = lambda: False        # simulate the stripped/broken-env case
+        # MCP-SDK-2-BREAKS-THE-SERVER moved the gate from the BOOLEAN to the DISPOSITION, because
+        # a bool could not say WHICH failure it was and so every message was written for the wrong
+        # one. Simulating "absent" therefore means handing main() an absent DISPOSITION.
+        original = M.sdk_state
+        M.sdk_state = lambda: M.SdkDisposition(M.SDK_ABSENT)
         try:
             err = io.StringIO()
             with redirect_stderr(err):
                 rc = M.main([])
         finally:
-            M.mcp_available = original
+            M.sdk_state = original
         self.assertNotEqual(rc, 0, "a missing SDK must be a non-zero exit, not a silent success")
         msg = err.getvalue()
         self.assertIn("mokata-mcp", msg, "the message must identify the failing server")
@@ -78,13 +81,13 @@ class TestFailLoudNotDead(unittest.TestCase):
 
     def test_main_does_not_raise_when_sdk_absent(self):
         # No uncaught ImportError/RuntimeError may escape — the failure is reported, not thrown.
-        original = M.mcp_available
-        M.mcp_available = lambda: False
+        original = M.sdk_state
+        M.sdk_state = lambda: M.SdkDisposition(M.SDK_ABSENT)
         try:
             with redirect_stderr(io.StringIO()):
                 rc = M.main([])          # must return, not raise
         finally:
-            M.mcp_available = original
+            M.sdk_state = original
         self.assertIsInstance(rc, int)
 
 

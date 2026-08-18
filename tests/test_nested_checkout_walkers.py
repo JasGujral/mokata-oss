@@ -128,7 +128,9 @@ class TestTheRuleIsDefinedOnce(unittest.TestCase):
         wanted = repo_walk.is_checkout_boundary.__name__
         hits = []
         for base in ("src", "tests"):
-            for rel, ab in _support.iter_repo_files(os.path.join(_REPO, base)):
+            # CORPUS: THE WORKING TREE. The walker IS the subject here — this pins `iter_worktree_files`'
+            # own nested-checkout boundary, so reading the index instead would delete the test.
+            for rel, ab in _support.iter_worktree_files(os.path.join(_REPO, base)):
                 if not rel.endswith(".py"):
                     continue
                 with open(ab, encoding="utf-8", errors="replace") as fh:

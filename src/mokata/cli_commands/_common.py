@@ -21,6 +21,7 @@ from .. import mcp_admin
 from ..crossplat import current_user as _current_user
 from ..detect import Detector
 from ..init import init_repo, plan_init, render_plan
+from ..notify import announce_prompt
 from ..prompt import read_yes_no
 from .. import MOKATA_DIR
 from ..adapters import (
@@ -125,6 +126,9 @@ def _cli_ask(question: str, default: str) -> str:
         print(f"execution: stdin is not a TTY — defaulting to '{default}' without "
               f"prompting.", file=sys.stderr)
         return default
+    # Lane F — the execution-mode ask blocks a human on a free-text answer; announced after the
+    # TTY guard, like every other blocking read in the package.
+    announce_prompt()
     try:
         return input(f"{question} [{default}] ").strip() or default
     except (EOFError, OSError):

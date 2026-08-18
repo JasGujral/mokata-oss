@@ -28,7 +28,7 @@ waits for confirmation).
 
 **Magical first run (Stage 56):** run interactively on a fresh repo (or `mokata init --wizard`)
 and `init` becomes a guided **Q&A wizard** — it **asks** the profile, **detects** your
-integrations (graph backend, memory backend, Postgres / Obsidian / vector), **asks which to
+integrations (graph backend, memory backend, Postgres / vector), **asks which to
 wire**, then **wires them with your approval** (orchestrating `init` + `config` + `setup`).
 mokata **detects → recommends → runs with approval** — it **never silently installs** a
 third-party tool (an absent one is recommended, not installed). It finishes with a 30-second
@@ -141,10 +141,30 @@ invalid manifest.
 ### `mokata release-check [version] [--root <checkout>]`
 Release plumbing (pure/offline). Assert every version field — `pyproject.toml`,
 `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` (metadata + `plugins[0]`),
-and `src/mokata/__init__.py` `__version__` — equals the intended tag (default: this
-package's version; `--root` checks another checkout before you tag it).
+`src/mokata/__init__.py` `__version__`, and the published `mokata-check@vX.Y.Z` action pins —
+equals the intended tag (default: this package's version; `--root` checks another checkout
+before you tag it).
 Exits non-zero **naming each offender** — the release preflight that refuses to tag a commit
 whose versions lag the tag (the 0.0.4 lesson).
+
+**It tells you which mokata answered, and refuses if it is the wrong one.** The first line names
+the package that produced the result, where it was imported from, and how many fields that code
+knows to guard:
+
+```
+answered by mokata 0.0.18 from /path/to/checkout/src/mokata — 7 guarded fields; checking /path/to/checkout
+```
+
+Run bare from a checkout with an older mokata installed, the command used to import the INSTALLED
+package, read this checkout's files, and print PASS against **its own, smaller** field set — a
+green computed by code that predates the fields it was not checking. So when the answering package
+lives outside `--root` it now **refuses** (exit `3`) and prints the remedy, and a package with no
+importable location refuses too (exit `4`). Exit `1` still means, and only means, that the version
+fields disagree.
+
+```bash
+PYTHONPATH=/path/to/checkout/src python3 -m mokata release-check 0.0.18 --root /path/to/checkout
+```
 
 ### `mokata release-notes-check [version] [--root <checkout>]`
 Release plumbing (pure/offline). The disclosure half of `release-check`: assert that
@@ -161,10 +181,27 @@ mokata release-notes-check 0.0.16
 ### `mokata branch-protection-check [--repo <owner/repo>] [--branch <name>]`
 Release plumbing (**fail-closed**). Verify the public mirror's default branch is protected —
 no force-push, no deletion, required status checks — by reading protection via the `gh` CLI
-(which supplies its own auth: your login locally, `GH_TOKEN` in CI). Exits non-zero on **any**
-inability to prove it: protection absent, `gh` unavailable/unauthed, the API errors, or unsafe
-settings. The release preflight runs this so no release proceeds onto an unprotected `main`.
+(which supplies its own auth: your login locally, `GH_TOKEN` in CI). The release preflight runs
+this so no release proceeds onto an unprotected `main`.
 Defaults: `--repo JasGujral/mokata-oss --branch main`. No token is hard-coded or accepted.
+
+**"I could not read it" and "it is not protected" are different answers, and there is an exit
+code for each.** Exit `0` is protected. Exit `1` means, and only means, that a read **succeeded**
+and showed protection absent or too weak — the one state that prints the apply-protection remedy,
+because it is the one state where applying it destroys nothing. Exit `2` means the protection
+detail could not be **obtained** at all (`gh` missing or unauthed, a `5xx`, an unparseable body)
+**and** could not be corroborated — a read failure, so its remedy is retry, never a write. Exit
+`3` is a **degraded pass**: the detail was unreadable but positively corroborated by reads that
+succeeded (`repos/<repo>/branches/<branch>` says `protected: true` and `repos/<repo>/rulesets`
+parses with every ruleset actively enforced). It is deliberately **non-zero** — a caller that has
+not been taught what `3` means reads it as a refusal, which is the safe way round — and it prints
+a dated notice naming the four assurances it did **not** obtain. A failed corroborating read does
+not buy a pass; it refuses.
+
+⚠ Before 0.0.18 this command had two codes and exit `1` covered *unprotected or unverifiable*.
+**A caller that special-cases exit `1` must be updated:** what `1` used to catch is now split
+across `1` and `2`, and a caller that treats every non-zero alike will refuse a cut this check
+passed.
 
 ### `mokata route [need]`
 Resolve a capability to its tool, showing the attempted fallback chain and the reason.
@@ -392,7 +429,7 @@ proposals. `--kind` filters to one category. Commits nothing.
 **Project scoping (Stage 71a).** On a **shared** backend (a team Postgres DSN that can host many
 projects), review **defaults to the current project** — no cross-project bleed. `--all` reviews
 across every project; `--project <id>` reviews a specific one; `--list-projects` prints the projects
-present on the shared backend and exits. Local SQLite/Obsidian are already per-repo and ignore these.
+present on the shared backend and exits. The local SQLite store is already per-repo and ignores these.
 See [Multi-project on one shared backend](../how-to/multi-project-shared-backend.md).
 
 ### `mokata memory edit <subject> --value <new> [--kind <k>] [--yes]`
@@ -414,8 +451,9 @@ dedups, gate-adds new items, and routes a same-subject-different-value conflict 
 self-healing old→new surface — **never a silent overwrite**; provenance is preserved.
 (MCP: `memory_export` / `memory_import`, propose-only without `confirm`.)
 
-The older `.mokata/memory-share.json` file-share channel is **deprecated** (it still works and
-warns); move it across for good with [`mokata migrate memory-share`](#mokata-migrate-channel-file-f-force-yes).
+The older `.mokata/memory-share.json` file-share **channel** was **removed in 0.0.18**. Nothing
+was deleted: that file is a mokata memory backup, so `mokata memory import --file
+.mokata/memory-share.json` restores it — previewed, gated and secret-scanned, with no downgrade.
 
 ### `mokata memory reembed [--yes]`
 Re-compute the **vector index** with the configured embedder (`settings.memory.embedder`) and
@@ -444,9 +482,9 @@ summaries, and prunes — one bounded line each (silent when there's nothing to 
 (`apply_consolidation`); this command only shows what *could* be consolidated.
 
 ### `mokata memory migrate --to <backend> [--from <backend>] [--drop-source] [--yes]`
-Port the **live store** between backends (`sqlite` / `obsidian` / `postgres`) via the
-`MemoryBackend` contract — e.g. local SQLite → a shared Postgres, or → the Obsidian vault, and
-back. Reads all items and writes them **with provenance** into the destination (resolved from
+Port the **live store** between backends (`sqlite` / `postgres` / `pgvector`) via the
+`MemoryBackend` contract — e.g. local SQLite → a shared Postgres, and back. Reads all items and
+writes them **with provenance** into the destination (resolved from
 the manifest's `tools.<backend>.config`). **Human-gated** (previews count + destination),
 **idempotent** (re-run upserts by id — no duplicates), and **non-destructive**: the source is
 left intact unless you pass `--drop-source` (separately gated). **Degrade-clean** — if the
@@ -454,20 +492,23 @@ destination can't be built (e.g. Postgres unreachable) it reports and writes not
 source is never partially migrated. `export/import` shares content as a *file*; `migrate` moves
 the *store* between databases.
 
-### `mokata migrate <channel> [--file F] [--force] [--yes]`
-One-time, **human-gated** migration of a **deprecated channel** into the canonical shape
-(`channel` is one of `obsidian` · `native-memory` · `memory-share` · `vault`). Each deprecated
-channel keeps working but warns once per repo; this command moves its data across for good. It
-**previews** (counts + a sample of keys), asks for approval, then routes the move through the
-existing gated write path — the memory backends (`obsidian`/`native-memory`) through `migrate`,
-`memory-share.json` through the gated import, and `vault` re-homes session bundles onto the
-mode-derived transport. Every item lands via the WriteGate **with provenance**; secrets are
-hard-blocked on ingest. **Non-destructive** (the source is left in place — deletion is your
-choice), **idempotent** (a re-run is a no-op: "already migrated" unless `--force`).
+### `mokata migrate <channel>`
+**It no longer migrates anything, and it is still here on purpose.** Every deprecated channel that
+had a migration has now been removed (`obsidian`, `native-memory`, `memory-share` and `vault`), so
+this command exists to **answer** the command a year of deprecation notices told you to run: it
+names what was removed, in which release, **where your data still is**, and the one way to bring
+it across. It writes nothing and always exits 1.
 
-**These channels are deprecated, not gone.** Each still works today and warns once per repo;
-they are **scheduled for removal in 0.0.17**, and this command is the migration path off them
-before then.
+Deleting the command instead would answer those users with `invalid choice: 'migrate'` — which is
+what a parser says about a **typo** — so a removed channel is answered by name here rather than
+refused. A channel removed in a *later* release is answered automatically; the list is derived
+from the removal registry, not typed.
+
+Each channel's answer differs because the remedies differ: a removed **backend** points at the
+last release that shipped it, while a removed **file channel** points at the command in *this*
+release that reads your file. See
+[configure storage backends](../how-to/configure-storage-backends.md#obsidian-and-native-memory-removed-in-0018)
+and [portable sessions](../how-to/portable-sessions.md).
 
 ## Design vault (Part 35d)
 
@@ -499,13 +540,13 @@ is idempotent. A session with nothing to save is an honest empty result, not an 
 **autosaves** as you work — that is model-driven, silent on success, and surfaces only on failure;
 you never have to call it.
 
-### `mokata session push <tag> [--to local|vault|postgres] [--file] [--run ID] [--author NAME] [--save-first] [--allow-in-progress] [--requirements-only] [--force] [--yes]`
+### `mokata session push <tag> [--to local|postgres] [--file] [--run ID] [--author NAME] [--save-first] [--allow-in-progress] [--requirements-only] [--force] [--yes]`
 Package the **current session** (the resumable run checkpoint(s) + approved approach + emitted
 spec + in-progress brainstorm) into a **machine-path-free, versioned** bundle carrying provenance
 (author, source, created) + a content hash + a repo fingerprint, shared over a **transport**:
-`local` (`.mokata/session-bundles/<tag>.json`), `vault` (the committed/synced
-`.mokata/vault/sessions/`, so it travels with the repo), or `postgres` (a shared, owned DB table
-reached by `$MOKATA_SESSION_PG_DSN` / `$MOKATA_PG_DSN`).
+`local` (`.mokata/session-bundles/<tag>.json`) or `postgres` (a shared, owned DB table reached by
+`$MOKATA_SESSION_PG_DSN` / `$MOKATA_PG_DSN`). ⚠ The `vault` transport was **removed in 0.0.18**;
+passing it prints where your bundles are and how to reach them rather than `invalid choice`.
 
 **The transport is DERIVED from the repo's mode by default** — a team-connected repo pushes to
 `postgres`, a solo repo to `local` — so you don't have to remember which one this repo is on. An
@@ -523,7 +564,7 @@ crash, never a silent fallback to a less-secure store).
 | `--allow-in-progress` | consent to share **unfinished thinking** (a brainstorm with no approved approach). **Required**: without it, such a push is **refused** and nothing is written |
 | `--requirements-only` | bundle **only the distilled requirements** (anchor + goal + constraints + requirement lines) as a **cross-repo handoff** — no approaches, no approval, no transcript; the repo-fingerprint check is replaced by an origin label. An *alternative* consent to `--allow-in-progress` |
 
-### `mokata session pull <tag> [--from local|vault|postgres] [--file] [--into REPO] [--force] [--yes]`
+### `mokata session pull <tag> [--from local|postgres] [--file] [--into REPO] [--force] [--yes]`
 Read the tagged bundle over the chosen transport (`--from`, **derived from the repo mode** by
 default, same as `push`; `--file` forces local), **verify its content
 hash** (corruption caught from any source, not served), then **re-hydrate** it into the target repo
@@ -539,7 +580,7 @@ Bundles are **schema v2**; a v1 bundle still pulls fine, and a bundle **newer** 
 Be precise about the boundary — the **emitted spec does cross intact** (it is not de-approved), and
 write proposals, gate overrides, and TDD red/green state are **never bundled at all**.
 
-### `mokata session name <tag> <new> [--to local|vault|postgres] [--force] [--yes]`
+### `mokata session name <tag> <new> [--to local|postgres] [--force] [--yes]`
 Rename a tagged session to a human-friendly name (what `push`/`pull`/`resume` and the status badge
 read). **Human-gated** where it writes durable; **idempotent** (renaming to the current name is a
 no-op); a name **collision is refused unless `--force`** (never a silent clobber). **Provenance is
@@ -723,7 +764,7 @@ recommended skills land in your manifest's `settings.stack` (reviewable). See
 (`--backend managed|compose|local`; managed DSN is the golden path), **fails closed** with a named
 fix when `$MOKATA_PG_DSN` is unset (writing nothing), runs **one idempotent provision pass** that
 creates the shared tables (`mokata_memory`, `mokata_session_bundle`, `mokata_audit_log`,
-`mokata_events`) + the `mokata_schema_version` row on **vanilla Postgres ≥14, no extensions**,
+`mokata_events`) + the `mokata_schema_version` row on **vanilla Postgres ≥15, no extensions**,
 **pins** the team project identity (`settings.project.id`, human-gated) so clients don't split by
 path-hash, and runs the **live CONNECTED test** (the same probe `mode set team` uses). The DSN
 value is **never persisted** (env-var only, secret-scanned). Re-running is safe (idempotent). After
@@ -918,7 +959,7 @@ exit non-zero only on a red baseline.
 
 ### `mokata config get <key>` · `mokata config set <key> <value> [--yes]`
 Read or update a dotted manifest key — e.g. backend paths (`tools.sqlite.config.path`,
-`tools.obsidian.config.vault`, `tools.postgres.config.dsn_env`). `set` is **human-gated**
+`tools.postgres.config.dsn_env`). `set` is **human-gated**
 (preview → confirm; `--yes` skips), validates the result, and **hard-blocks any secret**
 (an inline DSN/credential is refused — use an env-var reference). `get` exits non-zero if
 the key is unset. See [configure storage backends & paths](../how-to/configure-storage-backends.md).

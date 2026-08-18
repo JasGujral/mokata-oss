@@ -394,6 +394,9 @@ class TestWiringGuards(unittest.TestCase):
     def test_no_shipped_skill_leaks_an_internal_doc_path(self):
         # the DK.S5 additions must keep the leak count at 0 (public-safe footer/body).
         skills_dir = os.path.join(_REPO, "src", "mokata", "skills")
+        # CORPUS: THE WORKING TREE. These files are shipped assets — `rsync` copies whatever is on
+        # disk, so a stray untracked one is published and belongs in this check. An extra file makes
+        # the assertion STRICTER, never more likely to pass, so the walk cannot hide a violation.
         for name in os.listdir(skills_dir):
             sk = os.path.join(skills_dir, name, "SKILL.md")
             if not os.path.isfile(sk):
@@ -427,6 +430,9 @@ class TestSlashCommandFactSetIsTheShippedSurface(unittest.TestCase):
         from mokata.parity import slash_command_names
         surface = set(slash_command_names())
         tmpl_dir = os.path.join(_REPO, "src", "mokata", "templates", "commands")
+        # CORPUS: THE WORKING TREE. These files are shipped assets — `rsync` copies whatever is on
+        # disk, so a stray untracked one is published and belongs in this check. An extra file makes
+        # the assertion STRICTER, never more likely to pass, so the walk cannot hide a violation.
         templates = {f[:-3] for f in os.listdir(tmpl_dir) if f.endswith(".md")}
         self.assertEqual(surface, templates,
                          "parity slash surface must match the shipped command templates")

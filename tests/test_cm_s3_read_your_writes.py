@@ -293,6 +293,9 @@ class TestReadThroughCacheRetired(unittest.TestCase):
     def test_readthroughcache_referenced_nowhere_in_src(self):
         src = os.path.join(os.path.dirname(__file__), "..", "src")
         hits = []
+        # CORPUS: THE WORKING TREE. This asks what mokata SHIPS, and `sync-public.sh` mirrors
+        # with `rsync`, which copies the working tree — an untracked `.py` under `src/` really is
+        # published. The index would be blind to exactly the file most likely to break the rule.
         for base, _dirs, files in os.walk(src):
             for fn in files:
                 if not fn.endswith(".py"):

@@ -119,15 +119,19 @@ class TestVersionFlag(unittest.TestCase):
     def test_version_flag_works_without_sdk(self):
         # The probe target must never need MCP deps: --version must resolve BEFORE the SDK check,
         # so it works in a stripped env where the SDK is absent.
-        original = M.mcp_available
-        M.mcp_available = lambda: False
+        # Patched at the DISPOSITION, which is what main() now gates on (MCP-SDK-2-BREAKS-THE-
+        # SERVER). Patching the old boolean would leave this test green while grading nothing —
+        # main() no longer reads it, so `--version` would appear to resolve early even if it did
+        # not, which is exactly the vacuous pin doc 85 §7e warns about.
+        original = M.sdk_state
+        M.sdk_state = lambda: M.SdkDisposition(M.SDK_ABSENT)
         try:
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 with self.assertRaises(SystemExit) as ctx:
                     M.main(["--version"])
         finally:
-            M.mcp_available = original
+            M.sdk_state = original
         self.assertEqual(ctx.exception.code, 0)
         self.assertIn(__version__, out.getvalue())
 

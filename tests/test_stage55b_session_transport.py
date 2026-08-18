@@ -126,25 +126,31 @@ class _FakePg:
         self.closed = True
 
 
-# ================================================================ vault transport round-trip
-class TestVaultRoundTrip(unittest.TestCase):
-    def test_push_to_vault_then_pull_into_a_different_repo_resumes(self):
+# ================================================================ file transport round-trip
+class TestFileTransportRoundTrip(unittest.TestCase):
+    """RE-POINTED AT 0.0.18 LANE D SLICE 4, FROM `vault` ONTO `local`. The property — a bundle
+    pushed over a FILE transport pulls into a DIFFERENT repo and resumes at the right phase — was
+    never the vault's; it is `_FileTransport`'s, and `LocalTransport` is the surviving subclass.
+    Deleting the class with its witness would have retired a property the removal did not touch,
+    which is the mistake the last two slices each caught in themselves."""
+
+    def test_push_then_pull_into_a_different_repo_resumes(self):
         with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
             src = _repo(a)
             run = _seed_run(src, passed=("brainstorm", "analysis"))
-            t = ST.make_transport("vault", a)
+            t = ST.make_transport("local", a)
             plan = SB.plan_session_push(a, src, "auth-refactor", transport=t,
                                         now="2026-06-30T00:00:00+00:00")
             self.assertEqual(plan.status, "new")
             res = SB.commit_session_push_gated(plan, confirm=_yes)
             self.assertTrue(res.committed)
-            # the bundle lives in the committed/synced vault dir, not temp_local/
+            # the bundle lives in the file store, not temp_local/
             self.assertTrue(os.path.exists(
-                os.path.join(a, ".mokata", "vault", "sessions", "auth-refactor.json")))
+                os.path.join(a, ".mokata", ST.LOCAL_DIRNAME, "auth-refactor.json")))
 
             dst = _repo(b)
             pull = SB.plan_session_pull(a, "auth-refactor", b,
-                                        transport=ST.make_transport("vault", a))
+                                        transport=ST.make_transport("local", a))
             self.assertEqual(pull.status, "ok")
             self.assertTrue(SB.hydrate_bundle(dst, pull.bundle, confirm=_yes).committed)
             cp = PipelineCheckpoint(dst.state, run)
@@ -213,18 +219,21 @@ class TestPostgresRoundTripFake(unittest.TestCase):
 # ================================================================ secret + gate on remotes
 class TestRemoteSecretAndGate(unittest.TestCase):
     def _transports(self, root, pg):
-        return [("vault", ST.make_transport("vault", root)),
+        # `vault` was the first witness until slice 4 removed the kind. Re-pointed at `local`
+        # rather than dropped: these are properties of EVERY transport, and a two-witness pin that
+        # quietly becomes a one-witness pin stops being able to see a per-transport regression.
+        return [("local", ST.make_transport("local", root)),
                 ("postgres", ST.make_transport("postgres", root, client=pg))]
 
     def test_secret_is_hard_blocked_on_push_over_every_remote(self):
-        for kind in ("vault", "postgres"):
+        for kind in ("local", "postgres"):
             with tempfile.TemporaryDirectory() as d:
                 surface = _repo(d)
                 _seed_run(surface)
                 surface.state.write(APPROACH_STATE_KEY,
                                     {"approach": {"name": "x", "notes": _SECRET_DSN}})
                 pg = _FakePg()
-                t = (ST.make_transport("vault", d) if kind == "vault"
+                t = (ST.make_transport("local", d) if kind == "local"
                      else ST.make_transport("postgres", d, client=pg))
                 plan = SB.plan_session_push(d, surface, "leaky", transport=t,
                                             now="2026-06-30T00:00:00+00:00")
@@ -235,12 +244,12 @@ class TestRemoteSecretAndGate(unittest.TestCase):
                                  f"{kind}: a secret-bearing bundle was stored")
 
     def test_decline_writes_nothing_on_push_over_every_remote(self):
-        for kind in ("vault", "postgres"):
+        for kind in ("local", "postgres"):
             with tempfile.TemporaryDirectory() as d:
                 surface = _repo(d)
                 _seed_run(surface)
                 pg = _FakePg()
-                t = (ST.make_transport("vault", d) if kind == "vault"
+                t = (ST.make_transport("local", d) if kind == "local"
                      else ST.make_transport("postgres", d, client=pg))
                 plan = SB.plan_session_push(d, surface, "auth", transport=t,
                                             now="2026-06-30T00:00:00+00:00")
@@ -250,12 +259,12 @@ class TestRemoteSecretAndGate(unittest.TestCase):
                                  f"{kind}: a declined push still stored the bundle")
 
     def test_secret_in_remote_bundle_is_blocked_on_pull(self):
-        for kind in ("vault", "postgres"):
+        for kind in ("local", "postgres"):
             with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
                 src = _repo(a)
                 _seed_run(src)
                 pg = _FakePg()
-                t = (ST.make_transport("vault", a) if kind == "vault"
+                t = (ST.make_transport("local", a) if kind == "local"
                      else ST.make_transport("postgres", a, client=pg))
                 # craft a nasty (re-sealed, not corrupt) bundle straight into the remote store,
                 # bypassing push's gate — the pull side is untrusted and must re-scan it.
@@ -265,7 +274,7 @@ class TestRemoteSecretAndGate(unittest.TestCase):
                 t.write_bundle("nasty", SB.serialize_bundle(bundle))
 
                 dst = _repo(b)
-                t2 = (ST.make_transport("vault", a) if kind == "vault"
+                t2 = (ST.make_transport("local", a) if kind == "local"
                       else ST.make_transport("postgres", a, client=pg))
                 pull = SB.plan_session_pull(a, "nasty", b, transport=t2)
                 res = SB.hydrate_bundle(dst, pull.bundle, confirm=_yes)
@@ -377,22 +386,25 @@ class TestRename(unittest.TestCase):
 
 # ================================================================ list spans local + remote
 class TestListSpans(unittest.TestCase):
-    def test_list_across_local_and_vault(self):
+    def test_list_across_two_transports_tags_each_row_with_its_source(self):
+        # RE-POINTED FROM local+vault ONTO local+postgres (0.0.18 lane D slice 4). The property is
+        # that a spanning list attributes every row to the transport it came from — it needs TWO
+        # transports, not the vault specifically.
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _seed_run(surface, passed=("brainstorm", "analysis"))
             local = ST.make_transport("local", d)
-            vault = ST.make_transport("vault", d)
+            remote = ST.make_transport("postgres", d, client=_FakePg())
             SB.commit_session_push(SB.plan_session_push(
                 d, surface, "local-tag", transport=local, now="2026-06-30T00:00:00+00:00"))
             SB.commit_session_push(SB.plan_session_push(
-                d, surface, "vault-tag", transport=vault, now="2026-06-30T00:00:00+00:00"))
+                d, surface, "remote-tag", transport=remote, now="2026-06-30T00:00:00+00:00"))
 
-            infos = SB.list_session_bundles_across(d, [local, vault])
+            infos = SB.list_session_bundles_across(d, [local, remote])
             by_tag = {i.tag: i for i in infos}
             self.assertEqual(by_tag["local-tag"].transport, "local")
-            self.assertEqual(by_tag["vault-tag"].transport, "vault")
-            self.assertEqual(by_tag["vault-tag"].resume_phase, "strawman")
+            self.assertEqual(by_tag["remote-tag"].transport, "postgres")
+            self.assertEqual(by_tag["remote-tag"].resume_phase, "strawman")
 
     def test_list_across_skips_an_unavailable_remote_clean(self):
         with tempfile.TemporaryDirectory() as d:
@@ -438,15 +450,11 @@ class TestCliSurfaces(unittest.TestCase):
             self.assertIsNone(t.read_bundle("auth"))
             self.assertIsNotNone(t.read_bundle("auth-refactor"))
 
-    def test_session_push_to_vault_via_cli(self):
-        with tempfile.TemporaryDirectory() as d:
-            surface = _repo(d)
-            _seed_run(surface)
-            rc, out, err = self._run(["session", "push", "auth", "--to", "vault",
-                                      "--yes", "--path", d])
-            self.assertEqual(rc, 0, err)
-            self.assertTrue(os.path.exists(
-                os.path.join(d, ".mokata", "vault", "sessions", "auth.json")))
+    # `test_session_push_to_vault_via_cli` stood here until 0.0.18 lane D slice 4. It graded "an
+    # explicit `--to` is routed by the CLI rather than ignored", and that property keeps a witness
+    # in this same class: `test_session_push_postgres_no_dsn_degrades_clean_cli` below can only
+    # produce its degrade if the flag actually reached `make_transport`. What `--to vault` does now
+    # is graded in `test_stage13_vault_slice`.
 
     def test_session_push_postgres_no_dsn_degrades_clean_cli(self):
         with tempfile.TemporaryDirectory() as d:
@@ -489,10 +497,15 @@ class TestMcpSurfaces(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _seed_run(surface)
-            res = mcp_commit(M.session_push, path=d, tag="auth", transport="vault")
+            res = mcp_commit(M.session_push, path=d, tag="auth", transport="local")
             self.assertTrue(res["committed"])
             self.assertTrue(os.path.exists(
-                os.path.join(d, ".mokata", "vault", "sessions", "auth.json")))
+                os.path.join(d, ".mokata", ST.LOCAL_DIRNAME, "auth.json")))
+            # …and the argument is genuinely ROUTED, not accepted and ignored: an unknown kind has
+            # to come back as a refusal. Without this half, re-pointing the test at the DEFAULT
+            # transport would have made it pass on a `transport=` parameter that did nothing.
+            bogus = mcp_commit(M.session_push, path=d, tag="auth2", transport="nope")
+            self.assertFalse(bogus.get("committed"), bogus)
 
 
 class TestSlashTemplate(unittest.TestCase):
@@ -503,8 +516,15 @@ class TestSlashTemplate(unittest.TestCase):
             md = fh.read()
         self.assertIn("name <tag>", md)
         self.assertIn("--to", md)
-        self.assertIn("vault", md)
+        self.assertIn("local", md)
         self.assertIn("postgres", md)
+        # ⚠ AND THE TEMPLATE MUST NOT GO ON OFFERING THE REMOVED KIND. A slash-command template is
+        # a user surface: it is copied into the repo at init and read as the menu of what works.
+        # The pin is on the OFFER, not on the word — the template may still mention the removed
+        # store to say bundles left there are reported, and a bare `assertNotIn("vault", …)` would
+        # forbid telling the user the one thing they need to hear.
+        for offer in ("--to vault", "--from vault", "local|vault"):
+            self.assertNotIn(offer, md, f"the template still offers {offer!r}")
 
 
 # ================================================================ parity stays green

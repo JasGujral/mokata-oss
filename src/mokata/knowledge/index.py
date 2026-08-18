@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..repo_walk import prune_source_dirs
+from ..repo_walk import posix_name
 
 DEFAULT_EXTENSIONS = (".py",)
 
@@ -72,7 +73,7 @@ class KnowledgeIndex:
     def _current(self, root: str, extensions) -> Dict[str, str]:
         out: Dict[str, str] = {}
         for ab in self._iter_files(root, extensions):
-            rel = os.path.relpath(ab, root)
+            rel = posix_name(os.path.relpath(ab, root))
             out[rel] = file_fingerprint(ab)[0]
         return out
 
@@ -80,7 +81,7 @@ class KnowledgeIndex:
         """Index every source file from scratch. Returns the indexed paths."""
         self.entries = {}
         for ab in self._iter_files(root, extensions):
-            rel = os.path.relpath(ab, root)
+            rel = posix_name(os.path.relpath(ab, root))
             h, m, s = file_fingerprint(ab)
             self.entries[rel] = IndexEntry(rel, h, m, s)
         return list(self.entries)

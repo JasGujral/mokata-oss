@@ -145,13 +145,12 @@ The `full` profile declares the richest fallback chain for each capability. Here
 | | `ast` | embedded stdlib-AST floor — structural queries **non-degraded** on Python (name-resolution) | a `.py` file in the repo |
 | | `ripgrep` | fast lexical floor (better than plain grep) | `rg` on `PATH` |
 | | `grep` | universal lexical floor — always present | always |
-| `memory_store` | `native-memory` | delegate to Claude Code's native memory | `claude` on `PATH` |
-| | `obsidian` | a human-readable markdown vault you can Git | `~/.obsidian` exists |
-| | `sqlite` | guaranteed stdlib floor | `sqlite3` importable (always) |
+| `memory_store` | `sqlite` | guaranteed stdlib floor | `sqlite3` importable (always) |
+| | `postgres` | opt-in shared team store (your own DSN) | `psycopg` importable |
 
 Plus two Python extras: **`schema`** (richer manifest validation via `jsonschema`) and **`mcp`** (the `mokata-mcp` server that exposes mokata as native Claude Code tools; needs Python ≥ 3.10).
 
-The router binds the **first present** provider in each chain. Our goal in §2 is to make the top of each chain present, so `code_graph → code-review-graph` and `memory_store → native-memory` instead of the floors.
+The router binds the **first present** provider in each chain. Our goal in §2 is to make the top of the `code_graph` chain present, so it binds `code-review-graph` instead of the lexical floor. `memory_store` has one local provider by design — `sqlite`, the guaranteed floor — and a shared Postgres is an explicit opt-in, never a detection.
 
 ### 2.1 Step 1 — base system (Python, git, a shell)
 
@@ -212,32 +211,19 @@ command -v serena               # optional; sits between code-review-graph and r
 
 > **Why bother, when grep works?** The graph turns "who calls this / what's the blast radius / what implements this interface" from a fuzzy lexical guess (`degraded=True`) into exact, edge-accurate answers — which is what makes brainstorm and review *grounded in real structure* and what powers JIT retrieval's 60%+ token savings (§8, §11). The floors keep mokata working everywhere; the graph makes it strong.
 
-### 2.5 Step 5 — wire the `memory_store` providers
+### 2.5 Step 5 — the `memory_store` provider
 
-> **Heads-up — `native-memory` and `obsidian` are deprecated.** mokata has consolidated on
-> **sqlite** (local default — zero setup, nothing to do) and **Postgres** (team mode via
-> `mokata team init`). The two providers below **still work**, but selecting one now prints a
-> deprecation warning and they are **scheduled for removal in 0.0.17**. If you already use one,
-> move it into the canonical store with the one-time, human-gated
-> `mokata migrate obsidian` / `mokata migrate native-memory`. **New setups should skip straight to
-> Checkpoint B** — sqlite needs no wiring at all.
-
-**native-memory** — detected by the **`claude`** CLI being on `PATH` (it delegates persistence to Claude Code's own memory). If you use Claude Code, you already have it:
-
-```bash
-command -v claude               # present → memory_store can bind native-memory
-```
-
-**obsidian** — a human-readable markdown vault mokata can write memory into, which you can diff and Git. mokata detects Obsidian from its **real per-OS config locations** (macOS `~/Library/Application Support/obsidian`, Linux `~/.config/obsidian` + Flatpak, Windows `%APPDATA%\obsidian`) **or** a vault you point it at via config:
-
-```bash
-# install the Obsidian app (it creates the config dir), or point mokata at an existing vault:
-mokata config set tools.obsidian.config.vault ~/Documents/MyVault   # a configured vault that exists counts as "present"
-```
+> **Nothing to wire, and that is the design.** mokata has consolidated on **sqlite** (the local
+> default — zero setup) and **Postgres** (team mode via `mokata team init`, an explicit opt-in
+> with your own DSN, never a detection). The `native-memory` and `obsidian` providers that used
+> to sit above sqlite in the `full` chain were **REMOVED in 0.0.18**. If you used one, your data
+> was not touched and mokata will tell you so rather than serve you an empty store — see
+> [configure storage backends](../how-to/configure-storage-backends.md#obsidian-and-native-memory-removed-in-0018)
+> for the one command that brings the items across.
 
 **sqlite** — the guaranteed floor. Nothing to install: Python ships `sqlite3` in the stdlib, so this is always available as the bottom of the chain.
 
-> **Checkpoint B.** `command -v rg code-review-graph` resolve (plus `claude` / an Obsidian vault only if you opted into those providers). The top of both capability chains is now present on this machine.
+> **Checkpoint B.** `command -v rg code-review-graph` resolve. The top of the `code_graph` chain is now present on this machine, and `memory_store` needs nothing.
 
 ### 2.6 Step 6 — initialize the `full` profile (human-gated)
 
@@ -260,7 +246,7 @@ mokata status       # ← the key check: what each capability resolves to RIGHT 
 mokata route        # the full attempted fallback chain + the reason it bound where it did
 ```
 
-`mokata status` is the proof. On a fully-wired machine you want to see `code_graph` resolving to **`code-review-graph`** (not `grep`) and `memory_store` resolving to **`native-memory`** (not `sqlite`). If you see a floor instead, the provider above it isn't detected — run `mokata route code_graph` to see the chain and fix the missing tool (re-check `command -v …`).
+`mokata status` is the proof. On a fully-wired machine you want to see `code_graph` resolving to **`code-review-graph`** (not `grep`). If you see a floor instead, the provider above it isn't detected — run `mokata route code_graph` to see the chain and fix the missing tool (re-check `command -v …`). `memory_store` resolving to `sqlite` is not a floor you failed to escape — it is the local default.
 
 ```bash
 mokata coverage     # capability coverage + any unmet gaps + role overlaps (resolved by precedence)
@@ -315,8 +301,7 @@ python3 -m venv .venv && source .venv/bin/activate && pip install -U pip
 pip install "mokata[schema]"                   # from PyPI, no clone (add [postgres] for a hosted store); the MCP SDK comes by default
 brew install ripgrep                           # (or apt/dnf/pacman) — the rg floor
 #  …install code-review-graph + serena per their READMEs so both commands are on PATH
-#  …install Obsidian (or `mokata config set tools.obsidian.config.vault <path>`) for that backend
-command -v rg code-review-graph serena claude  # confirm providers are present
+command -v rg code-review-graph serena          # confirm providers are present
 cd /path/to/your/project
 mokata init --profile full                     # human-gated scaffold
 mokata status && mokata doctor                 # verify real providers, no errors
@@ -347,7 +332,7 @@ Everything mokata creates as its own data lives under `.mokata/`, with a clear *
 |---|---|
 | `temp_local/state/` | pipeline state (JSON) — handoffs and resume checkpoints |
 | `temp_local/audit/ledger.jsonl` | the append-only audit ledger (every gate decision, tool call, write) |
-| `temp_local/memory/memory.db` | the SQLite memory backend (plus `memory/vault/` for the Obsidian backend) |
+| `temp_local/memory/memory.db` | the SQLite memory backend |
 
 Inside `temp_local/state/` you'll find files that make the pipeline durable and inspectable. The pipeline ones are **run-scoped** — the `__<run_id>` suffix is what lets two Claude Code windows drive two runs in one repo without clobbering each other:
 
@@ -466,7 +451,7 @@ Profiles are deterministic "enabled sets" — they decide which layers are on an
 |---|---|---|---|---|
 | `minimal` | engine, governance | — | — | **zero egress** |
 | `standard` *(default)* | all four | ast → ripgrep → grep | sqlite | local-only |
-| `full` | all four | code-review-graph → serena → ast → ripgrep → grep | native-memory → obsidian → sqlite | only present tools, all gated |
+| `full` | all four | code-review-graph → serena → ast → ripgrep → grep | sqlite | only present tools, all gated |
 | `custom` | all four | full chains (hand-tune) | full chains (hand-tune) | — |
 
 The embedded stdlib-**AST floor** answers structural `code_graph` queries when no graph is adopted (grep is the universal lexical floor beneath it); `sqlite` (stdlib) is the guaranteed floor for `memory_store`. **Every richer provider degrades to its floor when absent — never a hard failure.** Pick a profile at init:
@@ -502,7 +487,7 @@ mokata init --profile custom     # full chains wired as a starting point to hand
     "memory_store": {
       "description": "durable memory backend",
       "layer": "memory",
-      "fallback": ["native-memory", "obsidian", "sqlite"]
+      "fallback": ["sqlite"]
     }
   },
   "tools": {
@@ -553,7 +538,6 @@ Each tool can carry a `config` block so you point a backend wherever you want, a
 
 ```bash
 mokata config set tools.sqlite.config.path ~/data/mokata-memory.db   # custom SQLite path
-mokata config set tools.obsidian.config.vault ~/Documents/MyVault    # external Obsidian vault
 mokata config get tools.sqlite.config.path                            # read it back
 ```
 
@@ -865,7 +849,7 @@ This commits nothing. The read/write ratio is the **instrumentation (C8)**: if w
 
 Chosen through the router (`memory_store`). Two backends are canonical: **SQLite** (default, stdlib, the guaranteed floor) and **Postgres** (team mode — your own DSN, referenced by env-var name; §5.5). These are *storage only* — the memory *logic* is mokata's own.
 
-**Obsidian** (a markdown vault under `memory/vault/`) and **native-memory** (an adapter delegating to an injected client) still work but are **deprecated**: selecting one prints a warning, and both are **scheduled for removal in 0.0.17**. Move off them with the one-time, human-gated `mokata migrate obsidian` / `mokata migrate native-memory`, which folds the channel into the canonical store. When native-memory has no client wired, selection degrades to the SQLite floor.
+**Obsidian** (a markdown vault under `memory/vault/`) and **native-memory** (an adapter delegating to an injected client) were **REMOVED in 0.0.18**. Nothing on your disk was touched — an Obsidian vault is still the directory of markdown files mokata left. A repo whose manifest still names one is told so rather than served an empty store: it refuses loudly where there is data behind it, naming the vault and the remedy, and says so once per repo where there is not. See [configure storage backends](../how-to/configure-storage-backends.md#obsidian-and-native-memory-removed-in-0018).
 
 ### 9.4 Recording facts and decisions (human-gated — C6)
 
@@ -936,7 +920,7 @@ mokata memory export my-backup.json        # custom destination
 mokata memory import <file> --yes          # restore (human-gated, secret-scanned, dedups)
 ```
 
-`export`/`import` are the **backup** surface — a timestamped file that never clobbers a previous backup, and an import that routes conflicts through the same old→new heal as C5. (This is *not* the deprecated `memory-share.json` channel; see §9.3.)
+`export`/`import` are the **backup** surface — a timestamped file that never clobbers a previous backup, and an import that routes conflicts through the same old→new heal as C5. (The `memory-share.json` **channel** was removed in 0.0.18; an existing one is a backup like any other and `memory import` reads it. See §9.3.)
 
 ---
 
@@ -1261,10 +1245,9 @@ Assumes you've completed §2 (so `mokata status` shows real providers). If you o
 mokata status
 #   mokata <version> · profile: full
 #   code_graph   → code-review-graph        (not grep — the real graph is bound)
-#   memory_store → native-memory            (not sqlite — real memory is bound)
 ```
 
-> **What just happened:** the router bound the *top* of each chain. If you see `grep`/`sqlite`, a provider isn't detected — revisit §2.4–2.5. The rest of the tour assumes real providers so you can see their effect.
+> **What just happened:** the router bound the *top* of the `code_graph` chain. If you see `grep`, a provider isn't detected — revisit §2.4. The rest of the tour assumes a real graph provider so you can see its effect.
 
 ### Step 1 — see the plan before touching anything (zero side effects)
 
@@ -1473,7 +1456,7 @@ sessions (`mokata session`, `sessions`, `resume`), and the graph/docs tooling (`
 | `mokata memory import <file> --yes` | restore a backup — human-gated, secret-scanned, dedups |
 | `mokata memory migrate --to <backend>` | move the live store between backends (`--from`, `--drop-source`, `--yes`) |
 | `mokata memory reembed` | rebuild the vector index after an embedder change (human-gated) |
-| `mokata migrate <channel>` | one-time gated migration of a **deprecated** channel (`obsidian`, `native-memory`, `memory-share`, `vault`) into the canonical store — `--file`, `--force` |
+| `mokata migrate <channel>` | one-time gated migration of a **deprecated** channel (`vault`) into the canonical store — `--force`; an already-removed channel is answered by name |
 | `mokata rules` | 4-tier rules + line budgets (exit non-zero if over cap) |
 | `mokata budget` | token savings readout + statusline |
 | `mokata audit` | the append-only audit ledger |
@@ -1541,7 +1524,7 @@ The four gates marked **native `Write`/`Edit`** are the **run-state gates** — 
 | `audit.shared` / `audit.standing_consent` | team audit publishing + its revocable consent | off |
 | `access.grants` / `project.id` | team scoped-access grants + pinned project identity | unset |
 
-Per-tool backend config (Stage 24A): `tools.sqlite.config.path`, `tools.obsidian.config.vault`, `tools.postgres.config.dsn_env` (env-var name — never an inline DSN).
+Per-tool backend config (Stage 24A): `tools.sqlite.config.path`, `tools.postgres.config.dsn_env` (env-var name — never an inline DSN).
 
 ### `temp_local/state/` files
 

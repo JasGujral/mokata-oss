@@ -23,7 +23,8 @@ from .grep_backend import GrepBackend
 from .query import BASIS_LEXICAL, BackendError, GraphBackend, QueryResult
 
 # Tools that ARE real structural graphs (everything else is the lexical floor).
-GRAPH_TOOLS = ("code-review-graph", "serena", "neo4j")
+# `neo4j` left at 0.0.18 lane D stage 14 — see `_announce_removed_graph_chain` below.
+GRAPH_TOOLS = ("code-review-graph", "serena")
 
 STORY_ANALYSIS_PREFIX = "story_analysis__"
 
@@ -66,6 +67,55 @@ def _floor_backend(router: Any, root: str) -> GraphBackend:
     return GrepBackend(root=root, name="grep")
 
 
+def _announce_removed_graph_chain(router: Any, root: str) -> frozenset:
+    """A committed manifest that still routes `code_graph` to a channel this release REMOVED.
+
+    ★ THIS IS THE `code_graph` HALF OF `memory.selection._refuse_removed_memory_chain`, AND IT
+    DELIBERATELY DOES NOT RAISE. The rule is not a preference, it is written down in
+    `RemovedChannelError`'s own docstring: that class is HARD *"deliberately not a
+    `DegradedCapability`: a degrade means there is a floor that gives a weaker but TRUE answer, and
+    here there is none"*. For a removed memory BACKEND that held it: the candidate floor is an
+    empty SQLite store, which does not answer "what do you remember" weakly — it answers it wrongly.
+    For a removed code GRAPH there IS such a floor and it is the canonical one — the embedded AST
+    floor gives real Python call/import edges, and `mokata query callers <sym>` keeps working. So
+    the honest outcome is: SAY SO, then answer from the floor. Raising would refuse to run over
+    derived data the survivor re-derives.
+
+    ⚠ WHAT IS NOT ALLOWED IS SILENCE, AND SILENCE IS WHAT A BARE DELETION PRODUCES. Drop `neo4j`
+    from `GRAPH_TOOLS` and delete the branch, and a user whose driver is installed still RESOLVES
+    to `neo4j` — the detect strategy is `python_module`, which survives — and falls through to this
+    function's last line, which builds `GrepBackend(name=res.tool)`. That is the emergency LEXICAL
+    floor wearing the removed backend's name, on a Python repo that has an AST floor sitting right
+    there: the user is told `code graph: floor 'neo4j'`, silently loses structural answers they had
+    yesterday, and nothing anywhere says a backend was removed. Slice 1's empty-store read, one
+    capability over, and the degrade-to-floor that makes it invisible is documented as CORRECT
+    behaviour today — which is exactly what makes it dangerous the day the backend is gone.
+
+    Returns the removed channels the chain names, so the caller can refuse to let one of them
+    LABEL a backend. Degrade-clean on the read of the config itself: a duck-typed router with no
+    `.manifest.fallback_order` announces nothing rather than raising, the same contract
+    `_refuse_removed_memory_chain` has."""
+    import os as _os
+    from .. import MOKATA_DIR as _MD, deprecation as _dep
+    try:
+        chain = router.manifest.fallback_order("code_graph")
+    except (ManifestError, AttributeError):
+        return frozenset()
+    # BY TYPE, NOT BY MEMBERSHIP: a `code_graph` chain can only name a removed GRAPH provider, and
+    # announcing a removed memory backend's downgrade-and-migrate remedy here would be slice 2's
+    # false refusal on a third surface.
+    removed = _dep.removed_channels_in(chain, _dep.RemovedDerivedNotice)
+    if not removed:
+        return frozenset()
+    # Guarded on a real repo dir so a bare `root="."` unit call fabricates no `.mokata` — the same
+    # guard the deleted neo4j arm carried for `warn_deprecated`.
+    md = _os.path.join(root, _MD)
+    if _os.path.isdir(md):
+        for channel in removed:
+            _dep.warn_removed(channel, md)
+    return frozenset(removed)
+
+
 def select_backends(
     router: Any,
     root: str,
@@ -79,11 +129,15 @@ def select_backends(
     Availability probing is UNIFORM across graph tools (Stage 39 / M5), it just happens at the
     layer each tool lives in: command-based tools (`code-review-graph`, `serena`, `ripgrep`) are
     probed by the detector — `router.resolve` only returns a tool whose command is present, so an
-    absent tool never reaches here (it resolves to grep). The external `neo4j` needs an extra
-    BUILD-TIME probe (below) because a present driver module ≠ a reachable DB. In all cases a
-    tool that's present-but-broken at query time raises `BackendError`, which `_run` degrades to
-    the grep floor — so the floor is the universal guarantee no matter where a tool fails.
-    """
+    absent tool never reaches here (it resolves to grep). A tool that's present-but-broken at query
+    time raises `BackendError`, which `_run` degrades to the grep floor — so the floor is the
+    universal guarantee no matter where a tool fails.
+
+    ⚠ There used to be a THIRD availability shape here: the external `neo4j` needed an extra
+    BUILD-TIME probe, because a present driver module was not a reachable DB. That whole arm left
+    at 0.0.18 lane D stage 14, and what replaced it is not nothing —
+    `_announce_removed_graph_chain` runs first so a chain that still names it is answered rather
+    than silently re-labelled as the lexical floor."""
     # GR.S2: the `ast` provider is routed by the `python_files` strategy, which reads the
     # detector's root. Point it at THIS layer's root so `ast` resolves only where it can
     # answer (a zero-Python repo routes past it to the lexical floor, byte-identical).
@@ -97,6 +151,15 @@ def select_backends(
         res = router.resolve("code_graph")
     except (ManifestError, AttributeError):
         res = None
+
+    # 0.0.18 lane D stage 14 — announce a removed provider the committed chain still names, BEFORE
+    # anything resolves, and never let one label a backend (see `_announce_removed_graph_chain`).
+    removed_here = _announce_removed_graph_chain(router, root)
+    if res is not None and res.tool in removed_here:
+        # The floor, named for what it IS. `_floor_backend` is the AST floor on a Python repo and
+        # grep otherwise — the canonical graph the removal record points the user at, not the
+        # emergency lexical floor the fall-through would have produced under the dead name.
+        return _floor_backend(router, root), None
 
     # GR.S2 (g)+(h): detect-and-OFFER. A real graph binary present on PATH but NOT pinned in
     # the committed chain may be USED read-only via the router (pinning stays gated — P2). The
@@ -117,46 +180,6 @@ def select_backends(
         return AstBackend(root=root, grep=GrepBackend(root=root, name="grep")), None
 
     if res is not None and res.available and res.tool in GRAPH_TOOLS:
-        if res.tool == "neo4j":
-            # SIMP.S2 (0.0.15): the Neo4j code-graph backend is DEPRECATED (a 3rd DB contradicts
-            # two-modes-one-shape). WARN once per repo the first time it is selected; removed
-            # 0.0.17. No migration — the graph is derived data (the warn says re-index). Guarded on
-            # a real repo dir so a bare `root="."` unit call fabricates no `.mokata`.
-            import os as _os
-            from .. import MOKATA_DIR as _MD, deprecation as _dep
-            _md = _os.path.join(root, _MD)
-            if _os.path.isdir(_md):
-                _dep.warn_deprecated("neo4j", _md)
-            # External Neo4j graph (Stage 35f): build its client from env; if it can't be
-            # built (no driver / no NEO4J_* env / DB down) degrade cleanly to the grep floor.
-            #
-            # D5 — the degrade is LOUD now. Reaching this branch means the graph was CONFIGURED:
-            # `neo4j` is wired into no default profile (P8), so the router only resolves it when the
-            # user put it in their own `code_graph` chain AND the driver module imports. A user who
-            # never wired a graph resolves to ripgrep/grep and never gets here — that is the default,
-            # not a degrade, and it must stay silent. A user who DID wire it and gets the grep floor
-            # is looking at a live failure, and used to be told "no codebase graph wired"
-            # (`graph_guidance`) — a sentence that blames their config for mokata's silence.
-            from .neo4j_backend import Neo4jUnavailable, connect_neo4j_client
-            cfg: Dict[str, Any] = {}
-            try:
-                cfg = router.manifest.tool_config("neo4j")
-            except (AttributeError, ManifestError):
-                cfg = {}
-            gclient = client
-            if gclient is None:
-                try:
-                    gclient = connect_neo4j_client(cfg)
-                except Neo4jUnavailable as exc:
-                    from ..degrade import FAILURE_UNREACHABLE, note_degraded
-                    from ..errors import failure_class_of
-                    note_degraded(
-                        "code-graph", failure_class_of(exc) or FAILURE_UNREACHABLE,
-                        fallback="the code graph fell back to the grep floor",
-                        fix="check the graph tool / NEO4J_* env", detail=str(exc))
-                    return GrepBackend(root=root, name="grep"), None
-            return (CodeReviewGraphBackend(name="neo4j", root=root, client=gclient),
-                    _floor_backend(router, root))
         primary = CodeReviewGraphBackend(name=res.tool, root=root, client=client)
         return primary, _floor_backend(router, root)
 
@@ -478,9 +501,11 @@ def make_graph_scorer(layer: Any, query: str):
 
     D5 — a graph that FAILS here used to be indistinguishable from a graph that simply found no
     anchor: both produced `None`, both left recall running on the lexical floor, and neither said a
-    word. That is the whole harm — the user who wired neo4j believes graph-proximity recall is live
-    when it is not. It still degrades to the floor (the fallback keeps falling back); it just says
-    so, once, loudly."""
+    word. That is the whole harm — the user who wired a code graph believes graph-proximity recall
+    is live when it is not. It still degrades to the floor (the fallback keeps falling back); it
+    just says so, once, loudly. (The sentence named `neo4j` until 0.0.18 stage 14 removed it; the
+    PROPERTY outlived its witness — every surviving graph provider is wired by the same explicit
+    act and produces the same false belief when it silently stops answering.)"""
     if layer is None or not getattr(layer, "uses_graph", False):
         return None
     anchors = set()

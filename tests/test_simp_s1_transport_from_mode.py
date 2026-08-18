@@ -253,26 +253,29 @@ class TestExplicitKindsUnchanged(unittest.TestCase):
             # make_transport's own default stays "local"; explicit kinds build the same classes.
             self.assertIsInstance(ST.make_transport(None, d), ST.LocalTransport)
             self.assertIsInstance(ST.make_transport("local", d), ST.LocalTransport)
-            self.assertIsInstance(ST.make_transport("vault", d), ST.VaultTransport)
+            # `vault` was the third assertion here until 0.0.18 lane D slice 4 removed the kind.
+            # What replaced it is not "one fewer line": a removed kind must be REFUSED with its
+            # removal record rather than built, and that is graded in `test_stage13_vault_slice`.
 
-    def test_simp_s1_explicit_kind_honored_and_vault_now_warns(self):
-        # an explicitly-passed kind is honored verbatim on a team repo — the derivation NEVER
-        # overrides it. SIMP.S2 now OWNS deprecation: `--to vault` selects the DEPRECATED vault
-        # transport, so it keeps working (the shim writes the bundle) AND emits the once-per-repo
-        # deprecation warn (this is the S1→S2 handoff the original pin anticipated).
+    def test_simp_s1_explicit_kind_honored_over_the_derivation(self):
+        # THE S1 INVARIANT, RE-POINTED AT A SURVIVING WITNESS (0.0.18 lane D slice 4). An
+        # explicitly-passed kind is honored verbatim on a TEAM repo — the mode derivation never
+        # overrides it. Its witness used to be `--to vault` on a team-connected repo, which proved
+        # the point structurally by landing the bundle somewhere postgres could not be; `--to
+        # local` proves the identical thing with a transport that still exists, and a team repo is
+        # exactly where "local" cannot be what the derivation would have chosen.
+        #
+        # ⚠ The DEPRECATION half of the old test did not move here, it ENDED: there is no longer a
+        # deprecated transport kind to warn about. What `--to vault` does now (refuse, name the
+        # record, write nothing anywhere) is graded in `test_stage13_vault_slice`.
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _seed_run(surface)
             _connect_team(d, surface)
-            rc, out, err = run_cli(["session", "push", "auth", "--path", d, "--yes", "--to", "vault"])
+            rc, out, err = run_cli(["session", "push", "auth", "--path", d, "--yes",
+                                    "--to", "local"])
             self.assertEqual(rc, 0, err)
-            # the S1 invariant: the explicit `vault` kind was honored, NOT derived to postgres —
-            # proven structurally by the bundle landing in the vault path (never a local/pg one).
-            self.assertTrue(os.path.exists(
-                os.path.join(d, ".mokata", "vault", "sessions", "auth.json")), err)
-            blob = (out + err).lower()
-            self.assertIn("deprecated", blob)           # …and the vault channel now warns (S2)
-            self.assertIn("mokata migrate vault", blob)
+            self.assertTrue(os.path.exists(_local_bundle_path(d, "auth")), err)
 
 
 # ==================================================== Deliverable 4 — team + missing DSN refuses

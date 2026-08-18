@@ -200,7 +200,7 @@ class TestPgVectorReachable(unittest.TestCase):
         with mock.patch.dict(os.environ, {"MOKATA_DSN": "postgres://host/db"}), \
              mock.patch("mokata.memory._pg.connect_psycopg", return_value=shim):
             backend = selection._select_raw_backend(
-                "pgvector", tempfile.mkdtemp(), {},
+                "pgvector", tempfile.mkdtemp(),
                 {"dsn_env": "MOKATA_DSN", "embedder": "hashing"}, None, None)
         self.assertIsInstance(backend, PgVectorBackend,
                               "an opted-in pgvector config selects the vector backend — the "
@@ -226,7 +226,7 @@ class TestPgVectorReachable(unittest.TestCase):
         # NEGATIVE + the ADR-54 guarantee: without the opt-in, nothing about selection changes.
         root = tempfile.mkdtemp()
         for tool in ("sqlite", "ripgrep", "unknown-tool"):
-            be = selection._select_raw_backend(tool, root, {}, {}, None, None)
+            be = selection._select_raw_backend(tool, root, {}, None, None)
             self.assertEqual("sqlite", be.name,
                              f"'{tool}' still resolves to the SQLite floor — no pgvector anywhere")
             be.close()
@@ -235,7 +235,7 @@ class TestPgVectorReachable(unittest.TestCase):
         # No DSN env var set ⇒ no backend ⇒ the SQLite floor, and it SAYS so (never silent).
         with mock.patch("mokata.memory.selection._note_vector_degrade") as noted:
             be = selection._select_raw_backend(
-                "pgvector", tempfile.mkdtemp(), {}, {"dsn_env": "MOKATA_ABSENT_DSN"}, None, None)
+                "pgvector", tempfile.mkdtemp(), {"dsn_env": "MOKATA_ABSENT_DSN"}, None, None)
         self.assertEqual("sqlite", be.name, "unavailable pgvector falls to the guaranteed floor")
         self.assertTrue(noted.called, "the fallback is announced — a silent degrade was the bug")
         be.close()

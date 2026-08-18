@@ -222,8 +222,11 @@ class TestTheCommentHole(_CorpusMixin):
 class TestFailsLoudWithoutPyYAML(unittest.TestCase):
     """§7g — an absent answer is not an answer.
 
-    The 17 other PyYAML call sites in this suite skip themselves when the parser is missing, so
-    on such a runner the pinning property is unchecked AND the run reports OK. This sweep raises.
+    When this was written, the 17 other PyYAML call sites in this suite skipped, weakened or
+    silently returned when the parser was missing, so on such a runner the pinning property was
+    unchecked AND the run reported OK. This sweep raised. ⚠ All 17 were converted to raise at
+    0.0.18 stage 2 (`PYYAML-SKIP-CLUSTER`) and `tests/test_pyyaml_skip_cluster.py` now keeps them
+    that way — the sentence above is history, not a description of the tree.
     """
 
     @staticmethod

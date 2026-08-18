@@ -1,0 +1,159 @@
+GATE-COUNT-TRUTH — LANDING-COUNTS-UNGUARDED — mutation record
+=============================================================
+
+Driver : tests/_gate_count_mutants.sh   (via scripts/mutate.sh — doc 85 §7b, no hand-mutation)
+Graded : tests/test_public_counts_guard.py   (24 tests) over tests/_public_counts.py
+Targets: tests/_public_counts.py · src/mokata/skill_contracts.py
+Result : see the SCORE block at the foot of this file.
+
+⚠ BASELINE VERIFIED BY HAND BEFORE MUTANT 1, and stated here because no driver in this tree does
+it (stage 31, MUTANT-DRIVER-NO-GREEN-BASELINE, doc 84). A mutation batch that never establishes a
+green baseline cannot distinguish "the mutant was caught" from "these tests were already red", and
+every RED it prints is then unattributable. The baseline command and its output are pasted in the
+stage report; the driver re-runs it as its step 0 and refuses to grade a single mutant unless it
+passes.
+
+WHAT WAS UNGUARDED BEFORE THIS STAGE
+------------------------------------
+Nothing derived any public count. `docsync` sweeps `docs/` for command forms and section
+staleness and returned ZERO findings for `docs/index.md` while that page asserted 10 backed gates
+against a code truth of 9. `overrides/home.html` was worse than unguarded: `docsync.find_docs`
+walks `README.md` + `docs/` only (`docsync.py:733-740`) and `overrides/` is not under `docs/`, so
+no sweep in mokata's history had ever read that file. It drifted four numbers across two releases
+while `docs/index.md` stayed current.
+
+TWO MUTATION SUBJECTS, AND THE SECOND IS THE POINT
+--------------------------------------------------
+A guard that reads the docs and compares against a constant would pass every doc mutant in group
+B below and still be worthless — it would pin the pages to a number a human typed in a test file
+instead of to the registry. So group A mutates `src/mokata/skill_contracts.py` itself: flip a
+`backed` flag and the DERIVED expectation moves under the docs, which must red. That is the only
+evidence that the derivation is load-bearing.
+
+⚠ Group A mutates a file this stage is otherwise forbidden to touch. `scripts/mutate.sh` restores
+byte-for-byte, purges the stale `.pyc` and runs under `PYTHONDONTWRITEBYTECODE=1`; nothing from
+group A is committed. `git diff --stat` in the stage report is the proof.
+
+THE MUTANTS
+-----------
+
+A · the derivation is pinned to the REGISTRY, not to a hardcoded 9
+  A01 ★★ skill_contracts.py  ship-readiness backed=False -> True
+         The exact defect the docs carried, injected at the source instead of in prose. Derived
+         backed set becomes 10 and gains `ship-readiness`; every page saying 9 must red, and the
+         two markered rosters must red on membership.
+  A02 ★★ skill_contracts.py  self-protect backed=True -> False
+         The other half. Derived set drops to 8; the rosters that name `self-protect` must red.
+  A03 ★  skill_contracts.py  deviation backed=True -> False
+         A gate neither half of the original defect touched — proves A01/A02 are not two
+         special cases the guard happens to know about.
+
+B · the guard's own mechanism (each graded by a PLANTED offender, doc 85 §7i)
+  B01 ★  _public_counts.py  backed filter `getattr(gate, "backed", False)` -> `True`
+         Every gate becomes "backed". The membership assertion must red.
+  B02 ★  _public_counts.py  membership compare `roster.ids == fact.members` -> `<=`
+         Subset instead of equality: a roster that DROPS a gate goes quiet. The planted
+         missing-member offender must red.
+  B03 ★  _public_counts.py  `grade` mismatch test `claim.stated != fact.value` -> `False`
+         The count gate stops reporting anything at all.
+  B04 ★  _public_counts.py  the `backed_gates` claim pattern is de-anchored to match nothing
+         The regex that reads "9 backed gates" stops matching. Caught by the anti-vacuity floor,
+         which exists exactly so a dead anchor cannot read as agreement.
+  B05 ★  _public_counts.py  `unmarked_rosters` enumeration floor 2 -> 99
+         The corpus gate stops seeing enumerations outside a marker (§7j — the axis that decides
+         WHAT gets graded, not what it is graded against).
+  B06 ★  _public_counts.py  `public_claim_files` drops `overrides/`
+         The structural finding LP-15 surfaced, re-injected: the corpus stops covering the one
+         file no sweep had ever read.
+  B07 ★  _public_counts.py  mirror-derived exclusions replaced by an empty set
+         The corpus stops honouring `sync-public.sh`, so `docs/build/` and `docs/talks/` flood in
+         and internal working notes get graded as public claims.
+  B08 ★  _public_counts.py  `normalise` stops stripping HTML tags
+         `<span>9</span><span>backed gates` welds into one token and every claim in
+         `overrides/home.html` becomes invisible. This is how a Markdown-only guard would have
+         shipped green over the file that actually drifted.
+  B09    _public_counts.py  `normalise` stops stripping Markdown emphasis
+         `**10 *backed* gates**` stops reading as `10 backed gates`.
+  B10    _public_counts.py  the word-number table loses `five`
+         `docs/index.md` states the hook count in words ("Five of those gates"). A digits-only
+         reader would never grade it.
+  B11    _public_counts.py  `mcp_read`/`mcp_write`/`mcp_approve` split legs are transposed
+         The 40/20/1 triple stops being read in order.
+  B12    _public_counts.py  `_runtime_dependencies` returns the whole file's quoted strings
+         The pyproject parse stops being scoped to the `dependencies` array.
+
+C · claim EXTENT — added at pass 3, after a coverage audit found two live holes
+    Derived by asking which numbers on the four key public pages NO claim covered. Two answers
+    came back, and one of them was this stage's own repair.
+  B13 ★  _public_counts.py  `paragraphs` stops joining — only the last line of a block is read
+         ⭐ THE HOLE THAT MATTERED. Prose wraps. The repaired paragraph in
+         `skills-and-gates.md` wraps as `there are **9 backed` / `gates**`, and the original
+         line-at-a-time reader saw NO CLAIM THERE AT ALL — the guard was green over the exact
+         sentence it was built to grade, on the exact page the stage exists to fix. Claims are
+         now matched over blank-line-delimited blocks.
+  B14 ★  _public_counts.py  the blank-line boundary is dropped — numbers WELD across paragraphs
+         The other side of joining: a number ending one paragraph must not marry a phrase
+         opening the next.
+  B15    _public_counts.py  the MCP split stops tolerating an intervening parenthetical
+         `docs/how-it-works/index.md:191` writes "40 read (`progress`, `lanes`, …), 20 write,
+         and 1 approve" and wraps mid-list. Both the write and approve legs were ungraded.
+
+SCORE
+-----
+Pass 1 : 15 mutants, 13 RED, **2 SURVIVORS** (B01, B10). Baseline verified GREEN first.
+Pass 2 : 15 mutants, 15 RED, 0 survivors, after both survivors were fixed at the source.
+Pass 3 : 18 mutants, **18 RED, 0 survivors**, after the coverage audit added group C.
+         Baseline re-verified GREEN (29 tests) before mutant 1 of every pass.
+Pass 4 : 18 mutants, **18 RED, 0 survivors** — re-run after GATE-COUNT-TRUTH-FU added the mirror
+         decorators, the `MirrorScriptAbsent` refusal and the skip control. FINAL.
+         ⭐ **Every verdict is UNCHANGED from pass 3**, which is the assertion worth recording: the
+         follow-up altered where the guard RUNS, not what it GRADES. A moved verdict would have
+         meant the mirror fix had quietly changed the grading, and that would have been a finding.
+         Baseline GREEN at **36 tests** (29 + 4 control + 3 refusal), not 29 — the pass-3 line
+         above is true at its own date and must not be read as the current count.
+
+⚠ PASS 3 ALSO PRODUCED A NON-VERDICT, AND IT IS RECORDED AS ONE.
+B14's first spelling neutered the OUTER blank-line skip, which stopped the loop index advancing
+and made the mutated function spin forever. `scripts/mutate.sh` has no timeout, so the batch sat
+**12 minutes with the target left mutated** and emitted nothing; SIGTERM to the wrapper did not
+reach the hung child, the EXIT trap did not fire, and the file was recovered from the `.bak` by
+hand (then `__pycache__` purged and the suite re-verified green before continuing). A hang is the
+EXIT CONTRACT's BROKEN state with no way to say so — it shares a representation with "still
+running", which is §7g inside the mutation harness itself. Filed as
+`MUTATE-SH-NO-TIMEOUT` (doc 84 §2, beside `MUTATE-SH-NO-CONCURRENCY-INTERLOCK` and stage 31's
+`MUTANT-BATCH-NEEDS-A-GREEN-BASELINE` — all three are "the harness cannot distinguish did-not-grade
+from graded-fine"). B14 was re-spelled to weld paragraphs while still advancing, and REDs.
+
+Both survivors are recorded here rather than quietly re-run, because each was a finding about the
+guard and neither would have been visible from the score alone.
+
+  B01 SURVIVED — and the mutation could not have done anything else.
+      The filter read `getattr(gate, "backed", False)`. `GateRef` is a dataclass with
+      `backed: bool = True`, so **the default was unreachable**: every row in `GATES` carries the
+      attribute. Flipping an unreachable default is a no-op, and no test can grade it — doc 85
+      §7f, "a clean mutation score can mean the defence is UNGRADABLE", reached from the other
+      side (here the redundant half was dead rather than merely duplicative).
+      Worse than dead: the fallback said `False` while the field it was defending defaults to
+      `True`. Had it ever been reachable it would have silently DEMOTED a real gate — the precise
+      failure this stage exists to repair, hiding inside the guard against it.
+      FIX: deleted, per the pre-1.0 no-scaffolding rule (CLAUDE.md) — `gate.backed`, one path.
+      RE-SPELLED as `if gate.backed` -> `if gate or True`, which now REDs with 9 failures.
+
+  B10 SURVIVED — and it exposed a real hole, not a weak mutant.
+      A number written in words that stops resolving is **dropped, not failed**: `_number`
+      returns None and the claim vanishes. The anti-vacuity floor stayed green because every fact
+      is also stated in digits on some other page, so deleting `five` silently un-graded
+      `docs/index.md:26` ("Five of those gates are enforced by a hook") with nothing going red.
+      A drop and an agreement had the same representation — doc 85 §7g at the level of a claim.
+      FIX: `WORDS_IN_USE` in the test module pins the four spellings the public pages actually
+      lean on (`one` ×2, `four` ×12, `five` ×1, `ten` ×1), in BOTH directions — each must still
+      read back as its value (kills B10), and no page may use an unpinned spelling (so a new one
+      reds instead of joining the ungraded set). The literal is declared with its reason: which
+      word a writer reaches for has no source to derive it from (§7j).
+
+WHAT THIS BATCH STILL CANNOT GRADE, stated before the score is read (§7i)
+------------------------------------------------------------------------
+Group A proves the guard moves when the REGISTRY moves. It does not prove the registry is
+complete — `GATES-COMPLETENESS-UNDERIVED` (doc 84) is still open, and it is the hole that let
+`self-protect` sit outside the map for six weeks. Nothing here would notice a tenth enforcing gate
+that was never given a row.

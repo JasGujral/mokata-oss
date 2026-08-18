@@ -424,7 +424,7 @@ def _tree_snapshot(root):
         for name in sorted(files):
             p = os.path.join(base, name)
             with open(p, "rb") as fh:
-                snap[os.path.relpath(p, root)] = fh.read()
+                snap[_support.posix_rel(p, root)] = fh.read()
     return snap
 
 

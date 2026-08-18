@@ -396,7 +396,7 @@ CONTRACTS: Dict[str, Contract] = {
         skill="session", headline_gate="portable-human-gated",
         can=(
             "package session state into a path-free, hashed bundle",
-            "push/pull via local/vault/postgres transports (human-gated), and resume",
+            "push/pull via the local/postgres transports (human-gated), and resume",
         ),
         must_not=(
             _c("push or commit anywhere without approval", "write-gate"),

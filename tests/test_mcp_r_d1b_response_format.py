@@ -32,6 +32,7 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+import _mcp_sdk  # noqa: E402 - the MCP SDK disposition gate
 
 from mokata import mcp_server as M
 from mokata.config import Surface
@@ -244,7 +245,7 @@ class TestSharedMechanism(unittest.TestCase):
 
 class TestSchema(unittest.TestCase):
 
-    @unittest.skipUnless(MS.mcp_available(), "optional MCP SDK not installed")
+    @_mcp_sdk.requires_mcp_sdk
     def test_mcp_r_d1b_schema_adds_only_response_format(self):
         import asyncio
 

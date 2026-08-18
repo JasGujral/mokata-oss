@@ -17,6 +17,7 @@ import tempfile
 import unittest
 
 from _support import mcp_commit, write_sample_repo
+import _mcp_sdk  # noqa: E402 - the MCP SDK disposition gate
 
 from mokata import mcp_server as M
 from mokata.config import Surface
@@ -207,7 +208,7 @@ class TestWriteToolsAreHumanGated(unittest.TestCase):
             store2.close()
 
 
-@unittest.skipUnless(M.mcp_available(), "optional MCP SDK not installed")
+@_mcp_sdk.requires_mcp_sdk
 class TestServerConstructsWithSdk(unittest.TestCase):
     def test_server_builds_and_lists_every_tool(self):
         import asyncio

@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .backends import MemoryBackend
 # PRE-SIMP (0.0.15) — backend build/select/scope/identity resolution moved to `selection.py` (the
-# deprecated-backend selection branches land in ONE file for the 0.0.17 SIMP.S3 removal). Re-exported
+# deprecated-backend selection branches land in ONE file for the SIMP.S3 removal). Re-exported
 # here so every existing `from .store import build_backend` / `from ..memory.store import X` caller
 # works unchanged — no caller edits needed.
 from .selection import (  # noqa: F401 - re-export shim (import-compat)
@@ -231,15 +231,13 @@ class MemoryStore:
     def from_router(cls, router: Any, root: str,
                     enabled_types: Optional[Tuple[str, ...]] = None,
                     stats_store: Any = None,
-                    clients: Optional[Dict[str, Any]] = None,
                     project: Optional[str] = None) -> "MemoryStore":
-        backend = select_memory_backend(router, root, clients, project=project)
+        backend = select_memory_backend(router, root, project=project)
         types = enabled_types if enabled_types is not None else MEMORY_TYPES
         return cls(backend, enabled_types=types, stats_store=stats_store)
 
     @classmethod
     def from_surface(cls, surface: Any,
-                     clients: Optional[Dict[str, Any]] = None,
                      project: Any = _PROJECT_CURRENT) -> "MemoryStore":
         # Stage 71a — SCOPE the shared backend to the current project by default. `project` can be
         # overridden for review: a specific id (str), or `ALL_PROJECTS` (None) to span all.
@@ -250,7 +248,7 @@ class MemoryStore:
         # returns a non-degraded decision with NO probe (zero-network hot path, byte-identical).
         from ..degrade import resolve_read_routing
         routing = resolve_read_routing(surface)
-        backend = select_memory_backend(surface.router, surface.mokata_dir, clients,
+        backend = select_memory_backend(surface.router, surface.mokata_dir,
                                         project=scope, routing=routing)
         # attach the audit ledger so consolidation proposals/decisions are recorded (I3)
         from ..govern import AuditLedger
@@ -371,7 +369,7 @@ class MemoryStore:
             # into SQL. It is not redundant belt-and-braces: it is what makes the pushdown an
             # OPTIMIZATION rather than a second, competing definition of visibility. Filtering an
             # already-filtered list is a no-op, so the result is identical either way — and on any
-            # backend that can't push (a vault, a native client, a store whose backfill hasn't run)
+            # backend that can't push (a third-party adapter, a store whose backfill hasn't run)
             # this line is still the ONLY thing doing the scope filtering.
             items = union_read(items, self.scope_context)
             # M-A2 — collapse the union to the single precedence WINNER per key (doc 62 §3), so two
@@ -1427,8 +1425,8 @@ class MemoryStore:
         """The backend's `expand_from` seam, or `None` when the tier must not run.
 
         `None` in THREE cases, and all three must produce a byte-identical pre-DB.S7b ranking:
-        the config is off; the backend has no `expand_from` at all (Obsidian's files, the native
-        client, any third-party adapter); or — for the shared store — the team is still on v4 and
+        the config is off; the backend has no `expand_from` at all (any third-party adapter);
+        or — for the shared store — the team is still on v4 and
         `expand_from` itself answers `[]`. Capability-PROBED with `getattr`, never assumed, exactly
         as `lexical_search` / `record_usage` / `usage_stats` are probed above.
         """
@@ -1444,8 +1442,8 @@ class MemoryStore:
         """The `{id: UsageSignal}` telemetry for `item_ids` — READ-ONLY, and it writes nothing.
 
         Degrade-clean in the same direction as everything else on a read path: a backend with no
-        usage columns (Obsidian, native, any third-party adapter), a v3 shared store that has not
-        been migrated, or a driver error all return `{}` — and an absent signal is the ZERO signal,
+        usage columns (any third-party adapter), a v3 shared store that has not been
+        migrated, or a driver error all return `{}` — and an absent signal is the ZERO signal,
         which the fusion treats as "no recency, no usage" and therefore ranks exactly as it did
         before this stage. There is no arrangement of failures in which missing telemetry can
         change a result rather than merely fail to improve it.
@@ -1643,8 +1641,8 @@ class MemoryStore:
         silently withhold information at the one surface where withholding it changes an outcome.
 
         Capability-PROBED, never assumed (`getattr`), exactly as `expand_from` / `lexical_search` /
-        `usage_stats` are: a backend with no edge table — Obsidian's files, the native client, any
-        third-party adapter, an un-migrated v4 team — yields records with no subgraph, and those
+        `usage_stats` are: a backend with no edge table — any third-party adapter, an
+        un-migrated v4 team — yields records with no subgraph, and those
         render as the pre-K2 proposal rather than as an error.
         """
         read = getattr(self.backend, "open_edges", None)

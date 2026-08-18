@@ -61,6 +61,7 @@ from ..atomicfile import atomic_write_text, lock_path_for
 from ..errors import MokataError
 from ..oslock import file_lock
 from .secrets import Finding, _matches_known_shape, _scan_entropy, _scan_signatures
+from ..repo_walk import posix_name
 
 # The committed .mokata/ ROOT, never `temp_local/` — see (e) above. `temp_local/` is what the
 # init-written `.mokata/.gitignore` excludes, so a file placed there would be exactly the
@@ -169,7 +170,7 @@ def normalize_target(root: str, path: str) -> str:
     target = raw if os.path.isabs(raw) else os.path.join(root_abs, raw)
     target = os.path.realpath(target)
     try:
-        rel = os.path.relpath(target, root_abs)
+        rel = posix_name(os.path.relpath(target, root_abs))
     except ValueError:
         # WINDOWS — `ntpath.relpath` RAISES when the two paths sit on different drives
         # ("path is on mount 'D:', start on mount 'C:'"); there is no relative path between

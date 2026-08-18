@@ -126,7 +126,7 @@ class RidesTheGate(_Base):
         for dirpath, dirnames, filenames in os.walk(self.root):
             for fn in filenames:
                 ab = os.path.join(dirpath, fn)
-                rel = os.path.relpath(ab, self.root)
+                rel = _support.posix_rel(ab, self.root)
                 if rel.startswith(self._LEDGER):
                     continue
                 try:

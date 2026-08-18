@@ -110,7 +110,7 @@ class TestHooksJsonUsesConsoleEntryPoint(unittest.TestCase):
 class TestLauncherResolver(unittest.TestCase):
     def _run(self, target, *, env=None, extra_args=()):
         return subprocess.run(
-            [SH, str(LAUNCH), str(target), *extra_args],
+            [SH, str(LAUNCH), str(target), *extra_args], stdin=subprocess.DEVNULL,
             capture_output=True, text=True, env=env)
 
     def _marker_script(self, d):
@@ -164,7 +164,8 @@ class TestLauncherResolver(unittest.TestCase):
             self.assertIn("mokata", res.stderr.lower())
 
     def test_missing_target_arg_degrades_clean(self):
-        res = subprocess.run([SH, str(LAUNCH)], capture_output=True, text=True)
+        res = subprocess.run([SH, str(LAUNCH)], stdin=subprocess.DEVNULL,
+                             capture_output=True, text=True)
         self.assertEqual(res.returncode, 0)
         self.assertIn("mokata", res.stderr.lower())
 
