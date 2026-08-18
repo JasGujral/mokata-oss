@@ -61,6 +61,8 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Sequence, Set, Tuple
 
+from .repo_paths import as_name, escapes_root, name_of
+
 # The spec's additive scope key, and the two SI-DEV state keys. Siblings of SI.1's
 # `gate_override__<run_id>` and SI.2's `tdd_phase__<run_id>` — the run id is IN the name, so both
 # are session-scoped for free and pass through a `SessionScopedStore` verbatim.
@@ -171,17 +173,28 @@ ALLOW_NO_SCOPE = ScopeVerdict(True, "the spec declares no machine-checkable scop
 
 
 def _rel(path: str, root: str = "") -> str:
-    """`path` as a repo-relative POSIX path, for matching. An absolute path outside the root, or an
-    unrelativisable one, is matched as given — never rejected for being unfamiliar."""
-    p = path.replace("\\", "/")
+    """`path` as a repo-relative NAME, for matching against the spec's declared globs.
+
+    It matches NAMES — `src/api/**` as a human wrote it into a spec — so the value must be
+    `/`-spelled on every platform, and `name_of` is what makes it so. This function used to spell
+    the conversion itself, twice, with a bare `.replace("\\\\", "/")`; that is the shape the
+    invariant in `repo_paths` exists to remove, because a conversion a site performs is a
+    conversion a site can forget.
+
+    ⚠ TWO BOUNDARIES, NOT ONE, AND BOTH LIVE IN `repo_paths`. An ABSOLUTE path under `root` has a
+    name and `name_of` produces it. Anything else — a relative string the hook payload handed us,
+    or an absolute path outside the repo — never went through this process's `relpath` at all; it
+    crossed in from outside, so `as_name` is the boundary for it. Neither conversion is spelled
+    here, which is the difference between this function today and the two hand-rolled
+    `.replace("\\\\", "/")` calls it used to contain."""
     if root and os.path.isabs(path):
         try:
-            rel = os.path.relpath(path, root).replace("\\", "/")
-            if not rel.startswith(".."):
+            rel = name_of(path, root)
+            if not escapes_root(rel):
                 return rel
         except (ValueError, OSError):
             pass
-    return p.lstrip("./") if p.startswith("./") else p
+    return as_name(path)
 
 
 def _matches(path: str, globs: Sequence[str]) -> bool:

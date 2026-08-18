@@ -466,15 +466,25 @@ def dirty_track_main(argv: Optional[List[str]] = None) -> int:
 
         from .config import find_project_root
         from .knowledge.freshness import mark_dirty
+        from .repo_paths import name_of
         root = find_project_root(cwd)
+        # The dirty set is a serialized list of NAMES: `freshness`'s cold walk fills the same
+        # channel with `name_of(...)` and the two are matched against each other and against the
+        # knowledge index's keys. This loop built them with a bare `relpath` until the invariant
+        # landed, so on Windows the hook wrote `src\a.py` into a set the walker wrote `src/a.py`
+        # into — the same half-moved pair as the eleven, in a lane too quiet to fail loudly.
         rels = []
         for p in paths:
             ab = p if os.path.isabs(p) else os.path.join(cwd, p)
             try:
-                rel = os.path.relpath(ab, root)
+                rels.append(name_of(ab, root))
             except (ValueError, OSError):
-                rel = p
-            rels.append(rel)
+                # DROPPED, not passed through raw. A path that cannot be expressed relative to
+                # the root (a different drive on Windows) has no NAME, and the old fallback put
+                # the caller's own string — an absolute native path — into a set of names, where
+                # it could never match anything and would be re-serialized as one. Nothing is
+                # lost that could have been used; the async lane stays silent either way.
+                continue
         mark_dirty(root, rels, session_id=session_id)
         return 0
     except Exception:  # noqa: BLE001 — the async lane NEVER fails a tool call

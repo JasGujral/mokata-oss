@@ -138,7 +138,18 @@ def is_shadowed(name):
 
 #: The conversions that turn an OS path into a repo NAME. A call wrapped in one of these has
 #: already answered the question this sweep asks.
-_POSIX_WRAPPERS = frozenset({"as_posix", "posix_rel", "posix_name"})
+#:
+#: ⚠ `posix_name` IS GONE FROM THIS SET BECAUSE IT IS GONE FROM THE PRODUCT. It converted an
+#: ALREADY-RELATIVE string, which made it a step a site could remember or forget — and every site
+#: that remembered created a fresh half-converted pair with every site that did not. Its
+#: replacements, `repo_paths.name_of` / `names_of`, take the PATH and the ROOT and do the
+#: relativisation and the spelling in one call, so there is no intermediate value to forget about.
+#: `posix_rel` is the test-side twin of `name_of` and `as_posix` is its `sep`-parameterised helper.
+#:
+#: ⭐ Leaving `posix_name` here would have been the worst outcome available: a wrapper name that
+#: matches nothing acquits nothing, so the sweep would keep working — and the day someone
+#: re-introduced a converter by that name it would be silently blessed.
+_POSIX_WRAPPERS = frozenset({"as_posix", "posix_rel", "name_of", "names_of"})
 
 #: Names and calls whose value is an ABSOLUTE, OS-SPELLED filesystem path — the only kind for
 #: which welding a `/` on is wrong. Deliberately NARROW: `repos/{repo}/branches/{branch}` is a

@@ -40,7 +40,7 @@ import os
 import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional
-from ..repo_walk import posix_name
+from ..repo_paths import name_of
 
 # --- layout (transient run-state under temp_local — ungated, GR.S1-cache precedent) -------
 DIRTY_DIRNAME = "knowledge_freshness"
@@ -392,7 +392,7 @@ class FreshnessController:
                     break
             for ab in paths:
                 from .index import file_fingerprint, IndexEntry
-                rel = posix_name(os.path.relpath(ab, self.root))
+                rel = name_of(ab, self.root)
                 try:
                     h, m, s = file_fingerprint(ab)
                 except OSError:

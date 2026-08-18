@@ -105,3 +105,52 @@ jobs:
           MOKATA_REQUIRE_MCP_SDK: '1'
         working-directory: tests
         run: python -m unittest -v ${PROBE_MODULES}
+      - name: Skip inventory — WHICH tests do not run on Windows, and why
+        # ⭐ ALWAYS, even when the probe above went red: the inventory is the answer to a
+        # different question and withholding it because something else failed is how "204 skips"
+        # stayed a number for three releases. It reads DECORATOR skips at LOAD time, so it costs
+        # seconds rather than the ~30 minutes a full Windows unit run costs — which is the only
+        # reason this inventory exists at all.
+        if: always()
+        run: python tests/skip_inventory.py
+
+  e2e:
+    # ★ THE JOB THE UNIT LEGS CANNOT STAND IN FOR. A green suite proves the suite agrees with
+    # itself; it does not prove a user can run mokata. `ci.yml` already runs `mokata init` +
+    # `mokata playbook` on windows-latest, so the CLI's happy path is covered — but NOTHING in
+    # this repo has ever SPAWNED `mokata-mcp` on Windows. `ci.yml`'s MCP step builds the server
+    # object in-process; "can be constructed" and "answers a client on stdio" are different
+    # facts, and only the second is the one a user has.
+    #
+    # It is a SEPARATE JOB, not a step, so it runs even when the unit probe is red: which of the
+    # two failed is the whole diagnostic, and a step chain would hide it behind the first red.
+    name: e2e · windows · a user's first five minutes
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install mokata the way a user does
+        # NON-EDITABLE and no test extras: this job's entire premise is that it exercises the
+        # INSTALLED package and its console entry points (`mokata`, `mokata-mcp`), not the
+        # source tree with `src/` bolted onto sys.path.
+        run: pip install .
+      - name: Install jsonschema (the MCP SDK hard-requires it)
+        run: pip install --require-hashes -r requirements/jsonschema.txt
+      - name: Prove the console entry points resolved
+        # Named separately from the check below so that "pip put no scripts on PATH" — the
+        # Windows-specific failure this whole entry-point design exists to prevent (see
+        # `hook_cli`'s header) — reports as itself and not as a server that would not start.
+        run: |
+          which mokata
+          which mokata-mcp
+          mokata --version
+      - name: END-TO-END — init · mcp start · tools/list · gated remember · approve · recall
+        run: python tests/windows_e2e_check.py

@@ -61,7 +61,7 @@ from ..atomicfile import atomic_write_text, lock_path_for
 from ..errors import MokataError
 from ..oslock import file_lock
 from .secrets import Finding, _matches_known_shape, _scan_entropy, _scan_signatures
-from ..repo_walk import posix_name
+from ..repo_paths import NotARepoName, escapes_root, name_of
 
 # The committed .mokata/ ROOT, never `temp_local/` — see (e) above. `temp_local/` is what the
 # init-written `.mokata/.gitignore` excludes, so a file placed there would be exactly the
@@ -152,28 +152,13 @@ def ignores_path(root: str) -> str:
     return os.path.join(root, MOKATA_DIR, IGNORES_FILENAME)
 
 
-def escapes_root(rel: str) -> bool:
-    r"""Does this repo-relative path leave the repo? Answered for BOTH separators, always.
-
-    ⚠ THIS IS A SECURITY BOUNDARY THAT A SPELLING CHANGE SILENTLY OPENED, so it is a named,
-    pure function rather than a condition inline in `normalize_target` — it can be graded on any
-    platform against both spellings, which is the only reason a macOS run says anything about it.
-
-    The defect it exists to prevent, recorded because it already happened once: the containment
-    check used to read `rel.startswith(os.pardir + os.sep)` and was CORRECT while `rel` came
-    straight from `os.path.relpath` — on Windows that yields `..\outside.py` and `os.sep` is
-    `\`, so the two halves agreed. The 0.0.18 Windows-portability sweep then wrapped the
-    producer in `posix_name`, making `rel` read `../outside.py`, and left the comparison spelled
-    with `os.sep`. Half of the pair moved. On run 32117189879 `add_ignore(root, tok,
-    "../outside.py")` was ACCEPTED on all three Windows legs — a path-traversal defence that did
-    not fire, and the only reason it was caught is that a test asserted the refusal.
-
-    So the predicate no longer depends on how `rel` happens to be spelled. `..` alone, `../x` and
-    `..\x` are all outside; a leading `..` inside a NAME (`..config`) is not, which is why the
-    separator is required rather than a bare `startswith("..")`."""
-    if rel in (os.curdir, os.pardir, ""):
-        return True
-    return rel.startswith((os.pardir + "/", os.pardir + "\\"))
+# ⚠ `escapes_root` USED TO BE DEFINED HERE AND IS NOW IMPORTED FROM `repo_paths`, where the
+# invariant it belongs to lives. It is the one predicate in the tree that deliberately answers for
+# BOTH separators, and the reason is written at its definition: it is a security boundary, and a
+# security predicate that is correct only when its caller is correct is one refactor from being
+# neither. The defect it exists to prevent — `add_ignore(root, tok, "../outside.py")` ACCEPTED on
+# all three Windows legs of run 32117189879, because the producer had been posix-wrapped and this
+# comparison had not — is pinned by name in `tests/test_repo_paths_invariant.py` as Gate A.
 
 
 def normalize_target(root: str, path: str) -> str:
@@ -194,7 +179,17 @@ def normalize_target(root: str, path: str) -> str:
     target = raw if os.path.isabs(raw) else os.path.join(root_abs, raw)
     target = os.path.realpath(target)
     try:
-        rel = posix_name(os.path.relpath(target, root_abs))
+        rel = name_of(target, root_abs)
+    except NotARepoName:
+        # POSIX ONLY, and it gets its OWN message rather than the drive one below. A backslash is
+        # a legal character in a POSIX filename and `repo_paths` refuses to NAME such a file (a
+        # stated cost, argued at `RepoName`). Folding it into "outside the repo" would tell the
+        # user something false about a file that is very much inside it — §7g: two different
+        # refusals do not get to share a sentence.
+        raise IgnoreError(
+            f"'{raw}' contains a backslash, which mokata cannot use as a file identity — the "
+            f"name would be unspellable on Windows and would collide with a native path. "
+            f"Rename the file if you need it ignored")
     except ValueError:
         # WINDOWS — `ntpath.relpath` RAISES when the two paths sit on different drives
         # ("path is on mount 'D:', start on mount 'C:'"); there is no relative path between

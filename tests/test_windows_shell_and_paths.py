@@ -390,12 +390,20 @@ class TestRepoRelativePathsAreSpelledPosix(unittest.TestCase):
         self.assertNotIn("\\", got)
 
     def test_the_product_side_twin_exists_and_agrees(self):
-        """`src/` needed the same conversion and three modules had hand-rolled it. ONE definition
-        (`repo_walk.posix_name`) plus the test-side twin, and they must not drift: a test cannot
-        import product code to CHECK product code, which is why there are deliberately two."""
-        from mokata.repo_walk import posix_name
-        for raw, sep in (("mokata\\deprecation.py", "\\"), ("a/b/c.py", "/")):
-            self.assertEqual(as_posix(raw, sep=sep), posix_name(raw, sep=sep))
+        """`posix_rel` is the test-side twin of `repo_paths.name_of`, and they must not drift: a
+        test cannot import product code to CHECK product code, which is why there are two.
+
+        ⚠ THE TWIN CHANGED SHAPE AND THAT IS THE POINT. It used to be `repo_walk.posix_name(rel)`
+        — a converter over an ALREADY-RELATIVE string, i.e. a step a caller could remember or
+        forget. Three sweeps failed to converge on it. `name_of(path, root)` does the
+        relativisation and the spelling in one call, matching what `posix_rel` always did, so the
+        two sides are now the same SHAPE and not merely the same output."""
+        from mokata.repo_paths import name_of
+        for path, root in (
+                (os.path.join(ROOT, "src", "mokata", "notify.py"), os.path.join(ROOT, "src")),
+                (os.path.join(ROOT, "tests", "_support.py"), ROOT)):
+            self.assertEqual(posix_rel(path, root), name_of(path, root))
+            self.assertNotIn("\\", name_of(path, root))
 
     # --- B.1 — a relpath used as an identity -----------------------------------------------
     def test_the_relpath_sweep_convicts_a_planted_builder_and_acquits_the_fixed_one(self):
@@ -557,12 +565,20 @@ class TestRepoRelativePathsAreSpelledPosix(unittest.TestCase):
     def test_the_native_sep_sweep_convicts_THE_LINE_THAT_OPENED_THE_TRAVERSAL(self):
         r"""★ GRADED AGAINST THE REAL DEFECT, not a paraphrase of it. The offender below is the
         exact pair of lines `govern/secret_ignore.normalize_target` held on run 32117189879: a
-        producer wrapped in `posix_name`, and the containment check beside it still spelled with
-        `os.sep`. `add_ignore(root, token, "../outside.py")` was accepted on all three Windows
-        legs — a path-traversal defence that did not fire."""
-        offender = ('from ..repo_walk import posix_name\n'
+        producer routed through the name boundary, and the containment check beside it still
+        spelled with `os.sep`. `add_ignore(root, token, "../outside.py")` was accepted on all
+        three Windows legs — a path-traversal defence that did not fire.
+
+        ⚠ ONE WORD OF THE OFFENDER IS RE-SPELLED, AND THE READER IS OWED THE REASON. The line as
+        it actually stood said `posix_name(os.path.relpath(...))`; `posix_name` no longer exists
+        (the invariant replaced it with `repo_paths.name_of`, which takes the path AND the root),
+        so an offender written against it would be graded against a vocabulary the tree cannot
+        produce — a paraphrase of a dead world rather than of a live one. What is preserved is the
+        SHAPE the detector actually keys on, unchanged: a producer that has been routed to the
+        name boundary meeting a comparison that has not."""
+        offender = ('from ..repo_paths import name_of\n'
                     'def normalize_target(root, path):\n'
-                    '    rel = posix_name(os.path.relpath(target, root_abs))\n'
+                    '    rel = name_of(target, root_abs)\n'
                     '    if rel == os.curdir or rel.startswith(os.pardir + os.sep):\n'
                     '        raise IgnoreError("outside the repo")\n')
         self.assertEqual(1, len(WP.native_sep_comparison_sites({"p.py": offender})))

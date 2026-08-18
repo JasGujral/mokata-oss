@@ -93,6 +93,13 @@ HARD_ERRORS = {
     # MIGRATION has none. Silently doing nothing while reporting success is how a user ends up
     # trusting a stale index — the exact outcome the stamp binding exists to prevent.
     "ReembedError",
+    # THE NAME/PATH INVARIANT (0.0.18) — a value offered as a repo NAME is spelled like a PATH.
+    # HARD, and there is genuinely no floor: a value that cannot be a name cannot be half a name,
+    # and coercing it would write into the index the exact thing `repo_paths` exists to keep out.
+    # It carries a secondary `ValueError` base for the same reason `LockTimeout` carries
+    # `TimeoutError` — every caller that already wrapped `os.path.relpath` in `except ValueError`
+    # keeps working, which is what makes routing a producer a one-line change.
+    "NotARepoName",
     "ReproRequiredError", "RevertError", "RootCauseRequiredError",
     "SessionBundleError", "SetupError", "SkillNotFound", "SkillSourceError", "StackError",
     # MCP-R.D1d — a caller-side bad ARGUMENT on the MCP surface. Hard, not degraded: nothing fell

@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass, field
 from typing import List
 
+from ..repo_paths import name_of
 from .spec import Spec, TestRef
 
 
@@ -91,7 +92,9 @@ def scan_tests(root: str, ac_ids: List[str]) -> List[TestRef]:
             except OSError:
                 continue
             lang = languages.language_for(fn)
-            rel = os.path.relpath(path, root)
+            # `TestRef.path` is a NAME — the completeness gate reports it and tests compare it
+            # against `t/test_mod.py`. Two of the eleven Windows failures on run 32144708930.
+            rel = name_of(path, root)
             for name, start_line, body in lang.tests(lines):
                 found = [a for a in ac_ids if _mentions(body, a)]
                 if found:
