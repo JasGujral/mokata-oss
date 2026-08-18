@@ -29,7 +29,9 @@ T09  RED  real-crg.yml          (   "   )
 T06  RED  release.yml `pypi` job — ★ THE SUBSUMPTION PROOF.
 
      T06 is the only one of the nine that the deleted bespoke pin covered. It drops that job's
-     `pypa/gh-action-pypi-publish` step to `@v1.14.1` and requires the NEW sweep to go red on it,
+     `pypa/gh-action-pypi-publish` step from its SHA pin to the matching `@v<tag>` pin — the
+     version is NOT named, here or in the fixture, because both are DERIVED from release.yml at
+     run time (this line used to say `@v1.14.1`) — and requires the NEW sweep to go red on it,
      with the sweep's test file run in isolation so the verdict is attributable to the sweep and
      not to the pin being replaced. Only after T06 came back RED was
      `test_stage68_supply_chain.py::test_pypi_actions_are_sha_pinned` deleted. Had it come back

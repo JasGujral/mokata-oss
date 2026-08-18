@@ -41,6 +41,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..repo_paths import name_of
 from ..repo_walk import prune_source_dirs
 from .grep_backend import GrepBackend
 from .query import (BASIS_STRUCTURAL, BASIS_VERIFIED_EMPTY, QUERY_KINDS,
@@ -296,7 +297,7 @@ class AstBackend(GraphBackend):
         edges: Dict[str, FileEdges] = {}
         fresh: Dict[str, Any] = {}
         for ab in self._py_files():
-            rel = os.path.relpath(ab, self.root)
+            rel = name_of(ab, self.root)
             try:
                 st = os.stat(ab)
             except OSError:

@@ -244,7 +244,11 @@ def expand_touch_set(layer: Any, symbols: List[str],
                 res = getattr(layer, getter)(sym)
             except Exception:           # noqa: BLE001
                 # BROAD ON PURPOSE: a pluggable optional graph backend's error types are not
-                # nameable at module scope (neo4j, a custom adapter). No longer silent — the fault
+                # nameable at module scope. The instance that used to be named here was `neo4j`,
+                # removed at 0.0.18 stage 14 — the ARGUMENT survives it, because the surviving
+                # `CodeReviewGraphBackend` takes an INJECTED `GraphQueryClient` (a subprocess CRG,
+                # a serena adapter, a caller's own double) whose failure classes are the caller's,
+                # not this module's. No longer silent — the fault
                 # forces the lexical-floor flag and is announced once, below.
                 faulted = True
                 continue

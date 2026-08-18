@@ -57,6 +57,12 @@
 #      returning into its wait (0.0.17 stage 18c). Like every non-zero status it means NO VERDICT
 #      EXISTS, so a batch driver must stop; it is the ordinary status for a Ctrl-C.
 #
+#   7  ★ THE BASELINE WAS NOT GREEN. The selected tests were ALREADY FAILING with the target
+#      PRISTINE, so no result from this tree can be attributed to a mutation. The mutation was
+#      never applied and the tree is RESTORED untouched. A caller MUST abort the whole batch:
+#      the next mutant would be graded against the same broken tree and would report the same
+#      unattributable failure, which a batch driver counts as a kill. See THE GREEN BASELINE.
+#
 #   6  NO VERDICT FROM THE TEST RUN. The mutation applied and the tree is RESTORED, but the run
 #      produced nothing to grade, in one of two shapes:
 #        (a) the test pattern matched no files — unittest prints "Ran 0 tests ... OK" (hole 5);
@@ -169,6 +175,65 @@
 # it does not queue and it does not proceed, because a queue would just make the collision later.
 # A lockfile whose pid is dead is a corpse, not a holder, and is reclaimed: a dev tool that bricks
 # a checkout after one Ctrl-C would be turned off, and a guard that is turned off guards nothing.
+#
+# ---------------------------------------------------------------------------------------------
+# HOLE 7 — THE GREEN BASELINE (0.0.18 stage 31, MUTANT-BATCH-NEEDS-A-GREEN-BASELINE).
+#
+# Holes 1-5 are about BYTECODE and hole 6 is about the SNAPSHOT. This one is about the TREE, and
+# it produces the most convincing false result the harness can produce, because it wears the
+# costume of a perfect run.
+#
+# THE DEFECT. Every mutant ran against a tree nobody had verified. If anything unrelated was
+# ALREADY FAILING in the selected test set, the mutant run found `FAILED` and was graded RED — a
+# kill credited to a mutation that had nothing to do with it. Do that to a whole batch and every
+# mutant reports RED, the driver scores a clean sweep, and the log is indistinguishable from a
+# healthy batch. A GREEN at least sends somebody to look; this produces nothing to look at.
+#
+# NOT HYPOTHETICAL. 0.0.17 stage 28 shipped a 27/27 this way. The 29b rider re-measured it and
+# found 4 of the 27 false and a 5th machine-dependent. The contaminant was `.mutate.lock`.
+#
+# ★ WHY IT RUNS HERE — THE PLACEMENT IS THE WHOLE DESIGN, AND THE OBVIOUS PLACE IS WRONG.
+#
+# The natural instinct is to run one clean suite in the BATCH DRIVER before mutant 1. That guard
+# would have been DECORATIVE, and stage 28 is the proof. Its contaminant was `.mutate.lock`, which
+# this script creates for the DURATION OF EACH MUTANT RUN and which is a literal
+# `sync-public.sh --exclude` entry — so under the then-current disk-probe derivation it joined the
+# deriving set while, and only while, the mutator was up. A driver-level pre-check executes with
+# NO LOCK ON DISK. In stage 28's scenario it would have come back green, the batch would have
+# proceeded, and all 27 mutants would still have been scored off a contaminated corpus. A check
+# that cannot fail, read as a check that passed.
+#
+# So the baseline runs INSIDE this script, AFTER the lock is taken and AFTER the snapshot exists,
+# with only the mutation itself skipped. Every artefact a mutant run puts in the tree — the lock,
+# the `.bak` — is on disk while the baseline executes, so the baseline sees what the graded run
+# sees. `TestTheBaselineSeesWhatAMutantRunSees` proves that by construction: the fixture's own
+# test process writes down the lock, the snapshot and the target's bytes from inside each phase,
+# and the pin reads the BASELINE's record back. DO NOT HOIST THIS INTO THE DRIVER TO SAVE TIME.
+#
+# ONE PLACE, NOT TWENTY-THREE. Every mutant driver in `tests/` routes through this script, so the
+# mechanism reaches all of them without a 23-file edit — and without a 23rd copy of a contract
+# that `MUTANT-DRIVER-CONTRACT-DUPLICATED` already files as over-duplicated.
+#
+# WHAT IT COVERS, STATED RATHER THAN IMPLIED. The baseline runs THIS mutant's own test pattern,
+# immediately before THIS mutant, inside THIS mutant's lock. A batch that uses a different pattern
+# per mutant is therefore covered pattern-by-pattern with no union to reason about, and
+# contamination that appears MID-BATCH is caught at the mutant it first affects rather than only
+# at mutant 1. WHAT IT DOES NOT CATCH: a failure that appears BETWEEN the baseline and the graded
+# run of the same mutant — including one caused by the mutant's own test run — is still scored as
+# a kill. That window is one test run wide and nothing here closes it.
+#
+# THE COST IS A SECOND TEST RUN PER MUTANT, and it was accepted deliberately. The cheaper design
+# is to memoise the baseline per batch, which needs a cross-process cache keyed on something that
+# identifies "this batch" (the parent pid), plus its invalidation and its staleness rules. That is
+# a second code path through the harness that nothing routinely exercises, and every hole above is
+# a second code path that nothing routinely exercised. A doubled dev-tool runtime is the cheaper
+# of the two prices.
+#
+# §7g — THREE OUTCOMES, THREE REPRESENTATIONS. "the tests were already failing" gets exit 7 of its
+# own. It is NOT folded into exit 6: an empty or unreportable test run is the ABSENCE of evidence
+# and wants "fix the pattern", while a red baseline is evidence of a broken TREE and wants "fix the
+# tree". So the abort fires only on POSITIVE evidence — a `Ran` line AND a `FAILED` — and every
+# other shape falls through to the machinery that already classifies it.
 #
 # ---------------------------------------------------------------------------------------------
 # ★ STANDING RULE: NEVER MUTATE A SOURCE FILE BY HAND. THIS SCRIPT OR NOTHING.
@@ -457,6 +522,41 @@ PYEOF
 if ! mutant_sha="$(mutation_step plan "$target" "$old" "$new")"; then
     echo "BROKEN!!  $label   <-- MUTATION COULD NOT BE APPLIED (not a verdict)"
     exit 3
+fi
+
+# HOLE 7: THE GREEN BASELINE. The selected tests, once, with the target PRISTINE — see the header
+# for why this runs here and not in the batch driver. It is placed AFTER the plan so a mutation
+# that cannot be applied still costs nothing and still exits 3, and BEFORE the apply so it grades
+# a tree carrying the lock and the snapshot but no mutation.
+rm -f "$pycdir/$base".*.pyc          # HOLE 1 applies to the baseline too: nothing stale may be READ
+
+set +e
+baseline_out=$(PYTHONDONTWRITEBYTECODE=1 "$PYTHON" -m unittest discover \
+        -s "$TESTS_DIR" -t "$TESTS_DIR" -p "$pattern" 2>&1 \
+      | grep -E "^(Ran|OK|FAILED)")   # HOLE 2: nothing may be written either
+set -e
+
+baseline_summary="$(echo "$baseline_out" | tr '\n' ' ')"
+
+# POSITIVE EVIDENCE ONLY, and the conjunction is load-bearing. `Ran` alone would let a discovery
+# failure through as "already failing"; `FAILED` alone would fire on any line that happened to
+# carry the word. Both together is the one shape that means "tests executed, and they failed" —
+# every other shape is the absence of evidence and belongs to exit 6, which classifies it after
+# the mutation has been applied exactly as it always did.
+if echo "$baseline_out" | grep -qE "^Ran " && echo "$baseline_out" | grep -q FAILED; then
+    echo "BASELINE!!  $label   ($baseline_summary)  <-- THE TESTS WERE ALREADY FAILING (not a verdict)"
+    {
+        echo ""
+        echo "BASELINE-NOT-GREEN!!  $label"
+        echo "  The selected tests were run with $target PRISTINE and they FAILED:"
+        echo "    pattern: $pattern   (in $TESTS_DIR)"
+        echo "    result : $baseline_summary"
+        echo "  NOTHING WAS MUTATED and nothing was graded. A mutant run against this tree would"
+        echo "  have found the same failure, been scored RED, and credited the kill to a mutation"
+        echo "  that had nothing to do with it — and a whole batch of those is a perfect score."
+        echo "  REMEDY: make the selected tests pass on an unmutated tree, then re-run the batch."
+    } >&2
+    exit 7
 fi
 
 # ⚠ THIS LINE MUST PRECEDE THE APPLY, and stage 18c exists because it did not. Recording the

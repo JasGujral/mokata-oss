@@ -41,6 +41,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from .repo_paths import as_name
+
 # --------------------------------------------------------------- severities (OUTPUT labels)
 # These label the audit OUTPUT to triage discrepancies; they are NOT gates and change no gate —
 # the same output-only discipline SK.S2 uses for review severities.
@@ -370,7 +372,9 @@ def resolve_command_route(text: str, path: str = "") -> str:
     fm = _frontmatter_route(text)
     if fm is not None:
         return fm
-    norm = str(path).replace("\\", "/")
+    # `path` is whatever the caller was handed; the suffixes it is matched against are
+    # `/`-spelled declarations, so this is the external-input NAME boundary.
+    norm = as_name(path)
     for suffix, route in _PAGE_COMMAND_ROUTE.items():
         if norm == suffix or norm.endswith("/" + suffix) or norm.endswith(suffix):
             return route

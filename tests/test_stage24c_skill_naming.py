@@ -44,6 +44,9 @@ class TestCommandTemplatesPrefixed(unittest.TestCase):
         return None
 
     def test_every_command_template_description_carries_the_marker(self):
+        # CORPUS: THE WORKING TREE. These files are shipped assets — `rsync` copies whatever is on
+        # disk, so a stray untracked one is published and belongs in this check. An extra file makes
+        # the assertion STRICTER, never more likely to pass, so the walk cannot hide a violation.
         paths = sorted(glob.glob(os.path.join(COMMANDS_DIR, "*.md")))
         self.assertTrue(paths, "no command templates found")
         for path in paths:

@@ -1,5 +1,12 @@
-"""C4 — pluggable storage backends. SQLite (default) and an Obsidian markdown adapter
-must satisfy the SAME storage contract (storage only; logic lives in the store)."""
+"""C4 — pluggable storage backends: every one satisfies the SAME storage contract.
+
+⚠ 0.0.18 stage 10 (lane D slice 1) removed `TestObsidianBackend`, and the CONTRACT MIXIN is the
+reason that is a deletion rather than a reversal: it exists to be run against two or more
+backends, and its five cases were the ONLY thing an `ObsidianBackend` test could assert once the
+class was gone. What the removal must not do is quietly leave the mixin with a single
+implementation and no one noticing — `test_the_contract_mixin_still_has_more_than_one_
+implementation` below is the guard against that, because a shared contract exercised by exactly
+one class has stopped being a contract."""
 
 import os
 import tempfile
@@ -7,7 +14,7 @@ import unittest
 
 from _support import sample_manifest_data  # noqa: F401  (path fix side-effect)
 
-from mokata.memory import MemoryItem, ObsidianBackend, SQLiteBackend
+from mokata.memory import MemoryItem, PostgresBackend, SQLiteBackend
 
 
 class BackendContractMixin:
@@ -78,15 +85,30 @@ class TestSQLiteBackend(BackendContractMixin, unittest.TestCase):
         reopened.close()
 
 
-class TestObsidianBackend(BackendContractMixin, unittest.TestCase):
-    def make_backend(self, root):
-        return ObsidianBackend(os.path.join(root, "vault"))
+class TestInMemorySQLiteBackend(BackendContractMixin, unittest.TestCase):
+    """The second implementation of the contract. `:memory:` is a genuinely different storage
+    regime from the file-backed one — it holds a live connection where the file-backed backend
+    opens per operation — so the mixin still discriminates rather than running twice over one
+    code path."""
 
-    def test_writes_markdown_notes(self):
-        it = MemoryItem.create("db.engine", "postgres")
-        self.backend.put(it)
-        files = os.listdir(os.path.join(self.tmp.name, "vault"))
-        self.assertTrue(any(f.endswith(".md") for f in files))
+    def make_backend(self, root):
+        return SQLiteBackend(":memory:")
+
+
+class TestTheContractIsStillShared(unittest.TestCase):
+    def test_the_contract_mixin_still_has_more_than_one_implementation(self):
+        # ⚠ A contract test with ONE implementation is not a contract test; it is a unit test
+        # wearing a mixin. The Obsidian adapter's removal took one of the two, so this asserts
+        # what the mixin is FOR rather than trusting the file to keep looking right.
+        implementations = [cls for cls in globals().values()
+                           if isinstance(cls, type) and issubclass(cls, BackendContractMixin)
+                           and cls is not BackendContractMixin]
+        self.assertGreaterEqual(len(implementations), 2, implementations)
+
+    def test_the_removed_adapter_is_not_importable_from_the_memory_package(self):
+        with self.assertRaises(ImportError):
+            from mokata.memory import ObsidianBackend  # noqa: F401
+        self.assertIsNotNone(PostgresBackend)          # …and the survivors still are
 
 
 if __name__ == "__main__":

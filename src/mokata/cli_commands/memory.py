@@ -36,17 +36,17 @@ def cmd_memory(args: argparse.Namespace) -> int:
 
     action = getattr(args, "action", None)
     if action == "export":
-        from .. import deprecation
         from ..govern import WriteGate, WriteRequest
         from ..govern.trust import CLI_SURFACE
-        from ..memory import (default_backup_path, export_memory,
-                              export_payload, is_legacy_share_dest)
+        from ..memory import default_backup_path, export_memory, export_payload
         # 35b — a backup is a FILE the human owns (P23): default to a timestamped
-        # `.mokata/backups/memory-<UTC>.json`, NOT the SIMP.S2-deprecated `memory-share.json`
-        # channel. An explicit --file wins; writing to the legacy path still works but warns once.
+        # `.mokata/backups/memory-<UTC>.json`. An explicit --file wins.
+        #
+        # SIMP.S3 (0.0.18, lane D slice 2): the `memory-share.json` special case that used to sit
+        # here is GONE with the channel. `--file .mokata/memory-share.json` is now just a path like
+        # any other — it writes a normal backup and warns about nothing, because there is no longer
+        # a channel for it to be. Removing a deprecated destination must not remove the command.
         dest = args.file or default_backup_path(args.path)
-        if is_legacy_share_dest(dest):
-            deprecation.warn_deprecated("memory-share", surface.mokata_dir)
         data = export_memory(store)              # read-only on the source; scans every value
         blocked = data["blocked"]
         # SI.6 (74 C2): the CLI export had the SAME scanning hole as the MCP one — it wrote a
@@ -96,7 +96,7 @@ def cmd_memory(args: argparse.Namespace) -> int:
         from ..memory import migrate_memory
         if not args.to:
             print("error: `memory migrate --to <backend>` requires --to "
-                  "(sqlite|obsidian|postgres)", file=sys.stderr)
+                  "(sqlite|postgres|pgvector)", file=sys.stderr)
             return 2
         ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
         res = migrate_memory(surface, to_backend=args.to, from_backend=args.from_backend,
@@ -471,7 +471,7 @@ def register(sub, common):
                        help="with `consolidate`: submit the summary you drafted for SESSION "
                             "(needs --value); human-gated before anything is written")
     p_mem.add_argument("--to", default=None,
-                       help="migrate destination backend (sqlite|obsidian|postgres|pgvector), or the "
+                       help="migrate destination backend (sqlite|postgres|pgvector), or the "
                             "target enforcement (advisory|soft|hard) with `promote`")
     p_mem.add_argument("--from", dest="from_backend", default=None,
                        help="migrate source backend (default: the resolved store)")

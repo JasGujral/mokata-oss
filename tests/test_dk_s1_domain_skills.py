@@ -70,6 +70,9 @@ class TestBothDomainSkillsShip(unittest.TestCase):
         for name in DOMAIN_SKILLS:
             refs = os.path.join(_SKILLS_DIR, name, "references")
             self.assertTrue(os.path.isdir(refs), f"{name} must ship a references/ tree (SK.S2)")
+            # CORPUS: THE WORKING TREE. These files are shipped assets — `rsync` copies whatever is on
+            # disk, so a stray untracked one is published and belongs in this check. An extra file makes
+            # the assertion STRICTER, never more likely to pass, so the walk cannot hide a violation.
             self.assertTrue(any(f.endswith(".md") for f in os.listdir(refs)))
 
     def test_full_anatomy_is_present_indistinguishable_from_native(self):

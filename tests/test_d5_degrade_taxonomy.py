@@ -52,7 +52,6 @@ SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
 DEGRADE_FAMILY = {
     "DsnUnset": FAILURE_UNSET,                      # the DSN env var was never set
     "PostgresUnavailable": FAILURE_UNREACHABLE,     # → the SQLite floor
-    "Neo4jUnavailable": FAILURE_UNREACHABLE,        # → the grep floor
     "VectorUnavailable": FAILURE_UNREACHABLE,       # → the lexical floor
     # DB.S4 — two embeddings-tier degrades, and they are ENGINE, not UNREACHABLE, on purpose.
     # `unreachable` renders as "the shared database is unreachable", and that sentence is false
@@ -94,6 +93,13 @@ HARD_ERRORS = {
     # MIGRATION has none. Silently doing nothing while reporting success is how a user ends up
     # trusting a stale index — the exact outcome the stamp binding exists to prevent.
     "ReembedError",
+    # THE NAME/PATH INVARIANT (0.0.18) — a value offered as a repo NAME is spelled like a PATH.
+    # HARD, and there is genuinely no floor: a value that cannot be a name cannot be half a name,
+    # and coercing it would write into the index the exact thing `repo_paths` exists to keep out.
+    # It carries a secondary `ValueError` base for the same reason `LockTimeout` carries
+    # `TimeoutError` — every caller that already wrapped `os.path.relpath` in `except ValueError`
+    # keeps working, which is what makes routing a producer a one-line change.
+    "NotARepoName",
     "ReproRequiredError", "RevertError", "RootCauseRequiredError",
     "SessionBundleError", "SetupError", "SkillNotFound", "SkillSourceError", "StackError",
     # MCP-R.D1d — a caller-side bad ARGUMENT on the MCP surface. Hard, not degraded: nothing fell
@@ -112,6 +118,14 @@ HARD_ERRORS = {
     # that must never raise (the scanner), which is a named refusal with a printed reason — not
     # a silent fallback.
     "IgnoreError", "NotIgnorable", "TamperedIgnoreFile",
+    # SIMP.S3 (0.0.18 stage 10) — a repo asked for a channel this release REMOVED, and it holds
+    # data. HARD, and the classification is the interesting half: a `DegradedCapability` means
+    # there is a floor that gives a WEAKER BUT TRUE answer, and here the only candidate floor is
+    # the empty SQLite store. That does not answer "open my Obsidian vault" weakly; it answers it
+    # wrongly, and reporting "0 items" for a store mokata can no longer open is the §7g collapse
+    # the refusal exists to refuse. So there is nothing to fall back to, `failure_class` is ""
+    # and honest, and it propagates.
+    "RemovedChannelError",
 }
 
 # Hard errors that fail CLOSED (nothing degrades to a floor) but are still ABOUT a schema, so
@@ -145,6 +159,9 @@ def _exception_classes():
     """Every exception class defined in src/, by AST — so a new one cannot be added without this
     test seeing it. Keyed by name → (relpath, base names)."""
     found = {}
+    # CORPUS: THE WORKING TREE. This asks what mokata SHIPS, and `sync-public.sh` mirrors
+    # with `rsync`, which copies the working tree — an untracked `.py` under `src/` really is
+    # published. The index would be blind to exactly the file most likely to break the rule.
     for root, _dirs, files in os.walk(SRC):
         for name in sorted(files):
             if not name.endswith(".py"):
@@ -475,9 +492,12 @@ def _live_classes():
     from mokata import netguard, oslock, skills, stacks, teamdb, team_audit, team_journal, vault
     from mokata import config, config_cmd, brainstorm, dsn, manifest, pipeline, plans, refine
     from mokata import agent_skills, harness_setup, session_bundle, session_transport, share
+    # SIMP.S3 (0.0.18 stage 10) — `RemovedChannelError` lives here, beside the REMOVED registry
+    # whose refusal it carries.
+    from mokata import deprecation
     from mokata.execmode import tasks
     from mokata.govern import authoring, graph_required, revert, secret_ignore, tdd
-    from mokata.knowledge import crg_client, neo4j_backend, query
+    from mokata.knowledge import crg_client, query
     # DB.S4 adds `embed` (ModelUnavailable) and `reembed` (ReembedError) to the sweep's reach.
     # DB.S7a adds `edges` (EdgeKindError — the closed typed-edge set's hard refusal).
     from mokata.memory import (backends, edges, embed, item, migrate, reembed,
@@ -488,9 +508,10 @@ def _live_classes():
 
     mods = (netguard, oslock, skills, stacks, teamdb, team_audit, team_journal, vault, config,
             config_cmd, brainstorm, dsn, manifest, pipeline, plans, refine, agent_skills,
-            harness_setup, session_bundle, session_transport, share, tasks, authoring,
+            harness_setup, session_bundle, session_transport, share, deprecation, tasks,
+            authoring,
             graph_required, revert, secret_ignore, tdd,
-            crg_client, neo4j_backend, query, backends, edges, embed, item,
+            crg_client, query, backends, edges, embed, item,
             migrate, reembed, mshare, store, vector, bug, debug, optimize, mcp_validation)
     live = {"MokataError": MokataError}
     for mod in mods:

@@ -36,15 +36,20 @@ def scan_py_for_internal_doc_refs(text):
 def _is_validator_exempt(rel_path, line):
     """The ONLY exemption, owned HERE (never in the scanned file): docsync's exclusion-list
     constant, which must name the internal dirs because it is the list used to SKIP them."""
-    return rel_path == os.path.join("mokata", "docsync.py") and "_INTERNAL_DOC_DIRS" in line
+    return rel_path == "mokata/docsync.py" and "_INTERNAL_DOC_DIRS" in line
 
 
 def _iter_shipped_py():
+    # CORPUS: THE WORKING TREE. This asks what mokata SHIPS, and `sync-public.sh` mirrors
+    # with `rsync`, which copies the working tree — an untracked `.py` under `src/` really is
+    # published. The index would be blind to exactly the file most likely to break the rule.
     for dirpath, _dirs, files in os.walk(_SRC):
         for fn in files:
             if fn.endswith(".py"):
                 full = os.path.join(dirpath, fn)
-                yield os.path.relpath(full, os.path.join(_REPO, "src")), full
+                # the yielded name is an IDENTITY — it is compared against the `/`-spelled
+                # declaration in `_is_validator_exempt` — so it is a NAME, not a path.
+                yield _support.posix_rel(full, os.path.join(_REPO, "src")), full
 
 
 class TestNoShippedSourceLeaksAnInternalDocPath(unittest.TestCase):
@@ -76,7 +81,7 @@ class TestNoShippedSourceLeaksAnInternalDocPath(unittest.TestCase):
     def test_exemption_is_narrow_and_still_flags_a_real_leak_in_docsync(self):
         # The docsync exemption is line-scoped to the constant: any OTHER docsync line naming an
         # internal path (a planted docstring leak) is still an offender.
-        rel = os.path.join("mokata", "docsync.py")
+        rel = "mokata/docsync.py"
         self.assertTrue(_is_validator_exempt(
             rel, '_INTERNAL_DOC_DIRS = ("docs/build", "docs/launch", "docs/marketing")'))
         self.assertFalse(_is_validator_exempt(

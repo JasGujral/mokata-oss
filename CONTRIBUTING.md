@@ -31,6 +31,26 @@ python -m unittest discover -s tests -t tests
 
 CI runs both states across Python 3.10–3.13 plus a `mokata playbook` smoke run.
 
+### And on the declared floor
+
+The commands above run on whatever `python` is on your PATH — often *newer* than the floor the
+package promises, so they cannot catch a fault that only exists below it. Provision the floor
+from the repo instead of by hand:
+
+```bash
+scripts/floor-python.sh                        # build build/floor-venv at the declared floor
+scripts/floor-python.sh --jsonschema absent    # the same, with jsonschema removed
+scripts/floor-python.sh --dry-run              # both routes, and whether you have either
+scripts/floor-python.sh --check                # what is actually in there?
+scripts/floor-python.sh --exec -m unittest discover -s tests -t tests
+```
+
+The floor comes from `pyproject.toml`'s `requires-python` every time, so the command follows the
+floor when it moves. It needs `uv` (which fetches the interpreter for you) or a matching
+`pythonX.Y` on PATH; without either it refuses and says so rather than quietly using the wrong one
+— including `--dry-run`, which **exits 2** on a machine with no route instead of printing an empty
+plan and succeeding.
+
 ## The rules (non-negotiable)
 
 1. **TDD / RED-before-GREEN.** Write the test, watch it fail, then implement. PRs without

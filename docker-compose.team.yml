@@ -1,6 +1,8 @@
 # mokata — team shared-DB stack (self-host path)
 #
-# The "bring one Postgres" golden path (ADR-54): ONE vanilla Postgres >= 14, NO extensions.
+# The "bring one Postgres" golden path (ADR-54): ONE vanilla Postgres >= 15, NO extensions.
+# The floor is ADR-54 V1's, ratified 2026-08-03; `src/mokata/teamdb.py`'s MIN_PG_MAJOR is where it
+# is declared and `tests/test_pg_floor_drift.py` grades this line against it.
 # This file stands that up in one command for teams who prefer self-hosting over a managed DSN
 # (Supabase / Neon / RDS free tiers all work too — same green preflight either way).
 #
@@ -20,7 +22,9 @@
 services:
   # The one service on the golden path: a plain Postgres with a healthcheck + a durable volume.
   postgres:
-    image: postgres:16              # any vanilla Postgres >= 14 works; no extensions required
+    image: postgres:16              # a pin that SATISFIES the floor; any vanilla Postgres >= 15
+                                # works, no extensions required (the file's contract is the
+                                # floor, not this tag — raise the tag freely, never below 15)
     container_name: mokata-postgres
     restart: unless-stopped
     environment:

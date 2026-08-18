@@ -76,6 +76,9 @@ def _skiptest_raising_fixtures():
     method (as the demonstrations above do) is never discovered by unittest, so it cannot make
     anything vanish from anyone's count and is not this rule's business."""
     hits = []
+    # CORPUS: THE WORKING TREE. `sync-public.sh` rsyncs `tests/` to the public mirror, so an
+    # untracked test file ships and must be held to this rule. Converting to the index here is
+    # what would reintroduce `SHIPPED-TEST-READS-INTERNAL-FILE` from the blind side.
     for path in sorted(glob.glob(os.path.join(TESTS_DIR, "**", "*.py"), recursive=True)):
         rel = os.path.relpath(path, TESTS_DIR)
         with open(path, encoding="utf-8") as fh:
@@ -106,6 +109,9 @@ def _called_names(fn):
 
 
 def _parsed_test_trees():
+    # CORPUS: THE WORKING TREE. `sync-public.sh` rsyncs `tests/` to the public mirror, so an
+    # untracked test file ships and must be held to this rule. Converting to the index here is
+    # what would reintroduce `SHIPPED-TEST-READS-INTERNAL-FILE` from the blind side.
     for path in sorted(glob.glob(os.path.join(TESTS_DIR, "**", "*.py"), recursive=True)):
         with open(path, encoding="utf-8") as fh:
             yield os.path.relpath(path, TESTS_DIR), ast.parse(fh.read(), filename=path)

@@ -1,4 +1,4 @@
-"""Stage 52c — docs-vs-code consistency guard, so the reference can't drift again.
+r"""Stage 52c — docs-vs-code consistency guard, so the reference can't drift again.
 
 Every `mokata <subcommand>` registered in the argparse parser MUST have a `### \`mokata
 <cmd> …\`` entry in reference/cli.md, and every shipped `/mokata:*` command template MUST be
@@ -47,6 +47,10 @@ def _user_docs_text():
     """All user-facing docs concatenated (excludes the internal planning trees)."""
     parts = []
     docs_root = os.path.join(ROOT, "docs")
+    # CORPUS: THE WORKING TREE. The published docs are what `rsync` copies, minus the internal
+    # trees pruned above. ⚠ The lenient direction is real here — extra text can only make a
+    # "is it mentioned?" check MORE likely to pass — which is why the internal-dir prune is
+    # load-bearing and not tidiness (stage 29b fixed exactly that, against `docs/marketing/`).
     for dirpath, dirs, files in os.walk(docs_root):
         if dirpath == docs_root:
             dirs[:] = [d for d in dirs if d not in _INTERNAL_DOC_DIRS]
@@ -81,6 +85,9 @@ class TestDocsConsistency(unittest.TestCase):
     def test_every_slash_command_template_is_mentioned_in_docs(self):
         cmds_dir = os.path.join(ROOT, "src", "mokata", "templates", "commands")
         stems = sorted(os.path.splitext(f)[0]
+                       # CORPUS: THE WORKING TREE. These files are shipped assets — `rsync` copies whatever is on
+                       # disk, so a stray untracked one is published and belongs in this check. An extra file makes
+                       # the assertion STRICTER, never more likely to pass, so the walk cannot hide a violation.
                        for f in os.listdir(cmds_dir) if f.endswith(".md"))
         self.assertTrue(stems, "no command templates found?")
         docs = _user_docs_text()

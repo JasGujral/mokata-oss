@@ -86,6 +86,8 @@ import tempfile
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
+from .repo_paths import split_path
+
 # The gate's name in refusals. NOT in `gate_hook.GATES` — see the module docstring.
 GATE_SELF_PROTECT = "self-protect"
 
@@ -202,8 +204,10 @@ def is_path_like(target: str) -> bool:
 
 
 def _components(path: str) -> List[str]:
-    norm = path.replace("\\", "/")
-    return [p for p in norm.split("/") if p]
+    """The components of a real filesystem path. NOT a name — these are absolute paths, and an
+    absolute path has no repo to be relative to; `repo_paths.split_path` is the PATH-side
+    helper and it answers for both separators so this file no longer spells either."""
+    return split_path(path)
 
 
 def in_installed_tree(resolved: str) -> bool:
@@ -488,7 +492,8 @@ _PY_OSMUT_RE = re.compile(
 
 def _basename_command(token: str) -> str:
     """The verb, stripped of any path (`/usr/bin/sed` -> `sed`) and of a `.exe` tail."""
-    base = os.path.basename(token.replace("\\", "/"))
+    parts = split_path(token)
+    base = parts[-1] if parts else ""
     return base[:-4] if _norm(base).endswith(".exe") else base
 
 

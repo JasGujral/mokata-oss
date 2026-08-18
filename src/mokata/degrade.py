@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Set
 
 # The shared/team memory backend id — the only tool whose team-mode read can degrade to the
-# LOCAL floor (SQLite/Obsidian are already per-repo, so there is nothing shared to fall back
+# LOCAL floor (SQLite is already per-repo, so there is nothing shared to fall back
 # from). Kept as a name so a call site can't typo the literal.
 SHARED_TOOL = "postgres"
 

@@ -1,20 +1,24 @@
-"""Stage 35f — Neo4j graph adapter + live graph-proximity memory tier.
+"""Stage 35f — the live graph-proximity memory tier, over an ADOPTED graph.
 
-Both jsonschema states (no jsonschema is imported here — these exercise the knowledge +
-memory layers, which are dependency-free, so behaviour is identical ABSENT/PRESENT).
+⚠ THIS FILE USED TO BE HALF A NEO4J-ADAPTER SUITE. The Neo4j `code_graph` provider was REMOVED at
+0.0.18 lane D stage 14, and with it `Neo4jGraphClient`, `build_neo4j_client`, `Neo4jUnavailable`
+and `select_backends`' neo4j arm — so `TestNeo4jGraphClient`, `TestBuildNeo4jClient` and
+`TestSelectBackendsNeo4j` went with their subject, along with the fake driver and fake `neo4j`
+module they drove it with.
 
-No live Neo4j in CI, so the adapter is proven two ways:
-  - DEGRADE paths: no env / no driver / unreachable DB ⇒ `build_neo4j_client` returns None and
-    `select_backends` falls back to the grep floor (queries still answer).
-  - LIVE path with a DOUBLE: a fake neo4j driver drives `Neo4jGraphClient.query` so the Cypher
-    row → typed-row mapping is covered, and a fake `GraphQueryClient` stands in as an in-process
-    graph so the auto-wired memory graph tier fuses by default (and stays silent on the floor).
+★ WHAT SURVIVES IS THE PROPERTY, NOT ITS WITNESS. `make_graph_scorer` and the auto-wired memory
+graph tier were never about Neo4j: they key on `layer.uses_graph`, i.e. on ANY adopted graph, and
+they were exercised through an injected `GraphQueryClient` double the whole time — the Neo4j name
+on the backend was decoration. The doubles below are unchanged; only the name they carry moved to
+a provider that still exists.
 
-MANUAL VERIFICATION (named live gap): with `pip install neo4j`, a reachable Neo4j, the
-conventional schema populated (`(:Symbol {name,path,line})` + `[:CALLS]/[:IMPLEMENTS]/
-[:IMPORTS]`), and `NEO4J_URI`/`NEO4J_USERNAME`/`NEO4J_PASSWORD` exported, run
-`mokata query callers <sym>` and confirm it answers via the graph (not the grep floor), then
-`mokata index` reports `code graph 'neo4j' wired`. Exercised live only where a DB exists.
+Both jsonschema states (no jsonschema is imported here — these exercise the knowledge + memory
+layers, which are dependency-free, so behaviour is identical ABSENT/PRESENT).
+
+⚠ THE MANUAL-VERIFICATION NOTE THAT USED TO SIT HERE IS DELETED, NOT RE-POINTED. It told a reader
+to `pip install neo4j`, populate a conventional schema and confirm `mokata index` reports
+`code graph 'neo4j' wired` — a live gap that can no longer be closed by anyone, because the code
+it verifies does not exist. A named gap nobody can ever discharge is worse than no note at all.
 """
 
 import os
@@ -30,8 +34,6 @@ from mokata.knowledge import (
     CodeReviewGraphBackend,
     GrepBackend,
     KnowledgeLayer,
-    Neo4jGraphClient,
-    build_neo4j_client,
     make_graph_scorer,
 )
 from mokata.knowledge.layer import GRAPH_TOOLS, select_backends
@@ -39,53 +41,6 @@ from mokata.memory import DECISION, MemoryItem, MemoryStore, SQLiteBackend
 
 
 # ----------------------------------------------------------------- doubles
-
-class _FakeSession:
-    def __init__(self, rows):
-        self._rows = rows
-        self.last = None
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-    def run(self, cypher, **params):
-        self.last = (cypher, params)
-        return list(self._rows)
-
-
-class _FakeDriver:
-    """Stands in for a neo4j driver so the live query path is covered without a DB."""
-
-    def __init__(self, rows, fail_connect=False):
-        self._rows = rows
-        self._fail = fail_connect
-        self.closed = False
-
-    def session(self, database=None):
-        return _FakeSession(self._rows)
-
-    def verify_connectivity(self):
-        if self._fail:
-            raise RuntimeError("connection refused")
-
-    def close(self):
-        self.closed = True
-
-
-def _fake_neo4j_module(driver):
-    mod = types.ModuleType("neo4j")
-
-    class _GDB:
-        @staticmethod
-        def driver(uri, auth=None):
-            return driver
-
-    mod.GraphDatabase = _GDB
-    return mod
-
 
 class _FakeGraphClient:
     """In-process `GraphQueryClient`: a tiny graph where only `known` symbols have callers."""
@@ -122,96 +77,34 @@ class _Router:
         return _Res(self._tool)
 
 
-# ----------------------------------------------------------------- Neo4jGraphClient (live path via double)
+# ----------------------------------------------------------------- select_backends (adopted graph)
 
-class TestNeo4jGraphClient(unittest.TestCase):
-    def test_callers_maps_rows_to_typed_shape(self):
-        rows = [{"symbol": "main", "path": "app.py", "line": 3}]
-        client = Neo4jGraphClient(_FakeDriver(rows))
-        out = client.query("callers", "run", root=".")
-        self.assertEqual(out, [{"path": "app.py", "line": 3,
-                                "symbol": "main", "snippet": "main"}])
+class TestSelectBackendsAdoptedGraph(unittest.TestCase):
+    """The routing property the deleted `TestSelectBackendsNeo4j` graded, re-pointed at a provider
+    that still exists. ⚠ The neo4j-specific half of it — "a present driver module is not a
+    reachable DB, so there is a BUILD-TIME probe" — is not re-pointed onto anything, because no
+    surviving provider has that shape: `code-review-graph` and `serena` are probed by the detector
+    like every other command tool, so `router.resolve` never returns an absent one."""
 
-    def test_blast_radius_inlines_depth_safely(self):
-        drv = _FakeDriver([{"symbol": "x", "path": "x.py", "line": 1}])
-        out = Neo4jGraphClient(drv).query("blast_radius", "core", root=".", depth=3)
-        self.assertEqual(out[0]["symbol"], "x")
+    def test_an_adopted_graph_is_a_real_graph_tool(self):
+        self.assertEqual(GRAPH_TOOLS, ("code-review-graph", "serena"))
+        self.assertNotIn("neo4j", GRAPH_TOOLS)
 
-    def test_unknown_kind_raises(self):
-        client = Neo4jGraphClient(_FakeDriver([]))
-        with self.assertRaises(ValueError):
-            client.query("nonsense", "t", root=".")
-
-    def test_close_is_safe(self):
-        drv = _FakeDriver([])
-        Neo4jGraphClient(drv).close()
-        self.assertTrue(drv.closed)
-
-
-# ----------------------------------------------------------------- build_neo4j_client (degrade paths)
-
-class TestBuildNeo4jClient(unittest.TestCase):
-    def test_no_uri_env_returns_none(self):
-        with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertIsNone(build_neo4j_client({}))
-
-    def test_driver_absent_returns_none(self):
-        # setting the module to None in sys.modules makes `import neo4j` raise ImportError.
-        with mock.patch.dict(os.environ, {"NEO4J_URI": "bolt://x"}), \
-                mock.patch.dict(sys.modules, {"neo4j": None}):
-            self.assertIsNone(build_neo4j_client({}))
-
-    def test_unreachable_db_returns_none(self):
-        fake = _fake_neo4j_module(_FakeDriver([], fail_connect=True))
-        with mock.patch.dict(os.environ, {"NEO4J_URI": "bolt://x"}), \
-                mock.patch.dict(sys.modules, {"neo4j": fake}):
-            self.assertIsNone(build_neo4j_client({}))
-
-    def test_reachable_db_builds_client(self):
-        fake = _fake_neo4j_module(_FakeDriver([]))
-        with mock.patch.dict(os.environ, {"NEO4J_URI": "bolt://x",
-                                          "NEO4J_USERNAME": "u", "NEO4J_PASSWORD": "p"}), \
-                mock.patch.dict(sys.modules, {"neo4j": fake}):
-            client = build_neo4j_client({})
-        self.assertIsInstance(client, Neo4jGraphClient)
-
-    def test_custom_env_var_names_honored(self):
-        fake = _fake_neo4j_module(_FakeDriver([]))
-        with mock.patch.dict(os.environ, {"GRAPH_URL": "bolt://y"}, clear=True), \
-                mock.patch.dict(sys.modules, {"neo4j": fake}):
-            client = build_neo4j_client({"uri_env": "GRAPH_URL"})
-        self.assertIsInstance(client, Neo4jGraphClient)
-
-
-# ----------------------------------------------------------------- select_backends (neo4j routing)
-
-class TestSelectBackendsNeo4j(unittest.TestCase):
-    def test_neo4j_is_a_real_graph_tool(self):
-        self.assertIn("neo4j", GRAPH_TOOLS)
-
-    def test_neo4j_without_env_degrades_to_grep_floor(self):
-        # router resolves neo4j, but no env/driver -> build returns None -> grep floor.
-        with mock.patch.dict(os.environ, {}, clear=True):
-            primary, fallback = select_backends(_Router("neo4j"), root=".")
-        self.assertIsInstance(primary, GrepBackend)
-        self.assertIsNone(fallback)
-        self.assertFalse(primary.is_graph)
-
-    def test_injected_client_makes_neo4j_primary(self):
+    def test_injected_client_makes_the_adopted_graph_primary(self):
         primary, fallback = select_backends(
-            _Router("neo4j"), root=".", client=_FakeGraphClient({"foo"}))
+            _Router("code-review-graph"), root=".", client=_FakeGraphClient({"foo"}))
         self.assertIsInstance(primary, CodeReviewGraphBackend)
-        self.assertEqual(primary.name, "neo4j")
+        self.assertEqual(primary.name, "code-review-graph")
         self.assertTrue(primary.is_graph)
         self.assertIsInstance(fallback, GrepBackend)
 
-    def test_neo4j_queries_still_answer_on_floor(self):
-        # Degrade-clean: callers() returns a (grep) result even with no graph wired.
+    def test_queries_still_answer_on_the_floor(self):
+        # Degrade-clean: callers() returns a (floor) result even with no graph wired.
         with tempfile.TemporaryDirectory() as d, \
                 mock.patch.dict(os.environ, {}, clear=True):
             with open(os.path.join(d, "m.py"), "w", encoding="utf-8") as fh:
                 fh.write("def run():\n    return 1\n")
-            primary, fallback = select_backends(_Router("neo4j"), root=d)
+            primary, fallback = select_backends(_Router("ripgrep"), root=d)
             layer = KnowledgeLayer(primary, fallback)
             res = layer.callers("run")
             self.assertFalse(layer.uses_graph)
@@ -223,7 +116,7 @@ class TestSelectBackendsNeo4j(unittest.TestCase):
 class TestMakeGraphScorer(unittest.TestCase):
     def _graph_layer(self, known):
         return KnowledgeLayer(
-            CodeReviewGraphBackend(name="neo4j", root=".",
+            CodeReviewGraphBackend(name="code-review-graph", root=".",
                                    client=_FakeGraphClient(known)),
             GrepBackend(root="."))
 
@@ -254,7 +147,7 @@ class TestMemoryGraphTierAutoWired(unittest.TestCase):
 
     def test_graph_tier_fuses_by_default_when_layer_wired(self):
         layer = KnowledgeLayer(
-            CodeReviewGraphBackend(name="neo4j", root=".",
+            CodeReviewGraphBackend(name="code-review-graph", root=".",
                                    client=_FakeGraphClient({"process_payment"})),
             GrepBackend(root="."))
         with tempfile.TemporaryDirectory() as d:

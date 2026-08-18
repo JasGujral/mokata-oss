@@ -41,14 +41,38 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+# `release-check`'s exit contract. Three outcomes, three codes (doc 85 §7g) — 1 has always meant
+# "the versions do not agree"; collapsing "another package answered" into it would hand `release.sh`
+# and a human the same number for two different facts.
+RELEASE_CHECK_OK = 0
+RELEASE_CHECK_MISMATCH = 1
+RELEASE_CHECK_ANSWERED_ELSEWHERE = 3
+RELEASE_CHECK_UNRESOLVABLE_PACKAGE = 4
+
+
 def cmd_release_check(args: argparse.Namespace) -> int:
     """Stage 61b — PURE/OFFLINE: assert every version field == the intended tag. Exit 1
-    (fail-closed) naming any mismatch so `release.sh` can REFUSE to tag a lagging commit."""
-    from ..packaging import check_release_consistency
+    (fail-closed) naming any mismatch so `release.sh` can REFUSE to tag a lagging commit.
+
+    0.0.18 stage 7 (`RELEASE-CHECK-BARE-COMMAND-READS-SITE-PACKAGES`): the answer now names the
+    package that produced it, and REFUSES when that package lives outside `--root`. Run bare from
+    the repo root this used to import a 0.0.9 install from site-packages and print PASS against
+    its own five-field set while the checkout had seven. The tag-time path is unaffected —
+    `release.sh` already passes `PYTHONPATH="${root}/src"`, which resolves inside `--root`.
+    """
+    from .. import packaging
+    from ..packaging import answering_package, check_release_consistency
+    prov = answering_package(args.root, getattr(packaging, "__file__", None), __version__)
+    print(prov.render())
+    if not prov.trustworthy:
+        print(prov.refusal())
+        return (RELEASE_CHECK_UNRESOLVABLE_PACKAGE
+                if prov.state == packaging.ANSWERED_UNRESOLVABLE
+                else RELEASE_CHECK_ANSWERED_ELSEWHERE)
     target = args.version or __version__
     res = check_release_consistency(target, root=args.root)
     print(res.render())
-    return 0 if res.consistent else 1
+    return RELEASE_CHECK_OK if res.consistent else RELEASE_CHECK_MISMATCH
 
 
 def cmd_release_notes_check(args: argparse.Namespace) -> int:
@@ -64,14 +88,32 @@ def cmd_release_notes_check(args: argparse.Namespace) -> int:
 
 
 def cmd_branch_protection_check(args: argparse.Namespace) -> int:
-    """TM.S12a — FAIL-CLOSED: verify the public mirror's default branch is protected (no
-    force-push, no deletion, required status checks). Exit 1 on any inability to prove it so
-    `release.sh` REFUSES to release onto an unprotected `main`. No token hard-coded (gh supplies
-    auth: login locally / GH_TOKEN in CI)."""
+    """TM.S12a — verify the public mirror's default branch is protected (no force-push, no
+    deletion, required status checks). THREE states, three exit codes (0.0.18, 2026-08-17):
+
+        0  PROTECTED      the detail was read and is safe
+        1  NOT PROTECTED  a read SUCCEEDED and shows protection absent/too weak
+        2  UNREADABLE     the detail could not be read AND could not be corroborated
+        3  DEGRADED       unreadable, but positively corroborated — a pass that says so
+
+    3 is deliberately non-zero: only a caller taught what it means may proceed on it, and every
+    caller that has not been taught reads it as a refusal. `release.sh` handles it explicitly.
+    No token hard-coded (gh supplies auth: login locally / GH_TOKEN in CI)."""
     from ..branch_protection import check_branch_protection
+    from ..degrade import FAILURE_UNREACHABLE, note_degraded
     verdict = check_branch_protection(repo=args.repo, branch=args.branch)
     print(verdict.render())
-    return 0 if verdict.ok else 1
+    if verdict.degraded:
+        # Also into the D5 register, so `mokata doctor` can answer "what degraded this session?"
+        # after the block above has scrolled away.
+        note_degraded(
+            "branch-protection", FAILURE_UNREACHABLE,
+            fallback=f"passed on corroboration alone ({verdict.observed_on}); force-push, "
+                     "deletions, strict and contexts were NOT verified",
+            fix="Retry once GitHub's branch-protection endpoints answer; do NOT apply protection "
+                "to clear a read failure",
+            detail=verdict.unreadable_because)
+    return verdict.exit_code
 
 
 def cmd_route(args: argparse.Namespace) -> int:
@@ -225,8 +267,8 @@ def register(sub, common):
 
     p_bpc = sub.add_parser(
         "branch-protection-check",
-        help="verify the public mirror's default branch is protected "
-             "(fail-closed; exit 1 if unprotected/unverifiable)",
+        help="verify the public mirror's default branch is protected (fail-closed; exit 0 "
+             "protected, 1 not protected, 2 unreadable+uncorroborated, 3 degraded pass)",
     )
     p_bpc.add_argument(
         "--repo", default="JasGujral/mokata-oss",

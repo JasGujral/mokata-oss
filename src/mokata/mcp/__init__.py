@@ -49,9 +49,14 @@ from .registry import (SERVER_NAME, TOOLS, ToolSpec, read_tool_names,
                        tool_names, write_tool_names)
 # tools_read / tools_write register every tool into TOOLS as an import side effect.
 from . import tools_read, tools_write  # noqa: F401
-from .server import build_server, main, mcp_available
+from .server import (SDK_ABSENT, SDK_BROKEN, SDK_INCOMPATIBLE, SDK_MAJOR_CEILING,
+                     SDK_MIN_VERSION, SDK_REQUIREMENT, SDK_SUPPORTED, SdkDisposition,
+                     build_server, classify_sdk, main, mcp_available, sdk_state)
 
 __all__ = [
     "SERVER_NAME", "TOOLS", "ToolSpec", "tool_names", "read_tool_names",
     "write_tool_names", "build_server", "main", "mcp_available",
+    # MCP-SDK-2-BREAKS-THE-SERVER — the SDK's disposition, in four representations (§7g).
+    "sdk_state", "classify_sdk", "SdkDisposition", "SDK_SUPPORTED", "SDK_ABSENT",
+    "SDK_INCOMPATIBLE", "SDK_BROKEN", "SDK_MIN_VERSION", "SDK_MAJOR_CEILING", "SDK_REQUIREMENT",
 ]

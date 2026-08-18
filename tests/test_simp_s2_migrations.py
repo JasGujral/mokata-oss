@@ -1,10 +1,30 @@
-"""SIMP.S2 — one-time GATED migrations of the deprecated channels into the canonical store.
+"""SIMP.S2 — what is LEFT of the one-time gated channel migrations: one property that outlived
+all of them.
 
-`mokata migrate <channel>` reuses the EXISTING gated write path (never a second one): the memory
-backends (obsidian / native-memory) go through `migrate_memory`; the `memory-share.json` file goes
-through `import_memory`. Every item lands via the WriteGate with provenance; secrets are hard-
-blocked on ingest; the source is left in place (NON-destructive); a re-run is a no-op ("already
-migrated"). Declining the human gate writes NOTHING.
+⚠ 0.0.18 lane D slice 4: THERE ARE NO MIGRATABLE CHANNELS. `vault` was the last, `migrate_channels`
+is deleted, and `TestTheRemovedChannelsAreNoLongerMigratable` went with it — every assertion it
+made was about a module that no longer exists. What that class MEANT ("a removed channel is refused
+by name, never silently previewed as empty") is not lost: it moved to the two surfaces that now
+answer for a removed channel, `mokata migrate` and `session_transport.make_transport`, and is
+graded in `test_stage13_vault_slice.py`.
+
+WARNING - 0.0.18 stage 10 (lane D slice 1): `obsidian` and `native-memory` are REMOVED, so they
+are no longer migratable — the backends a migration would READ are gone, and a channel you cannot
+read is not a channel you can move. Their round-trip tests went with them; what did NOT go is the
+SECRET-SAFETY property they carried, which is re-pointed at a surviving channel below, and a pin
+that the removed names are now refused by the channel list rather than silently accepted.
+
+WARNING - 0.0.18 stage 11 (lane D slice 2): `memory-share` is REMOVED, for a DIFFERENT reason —
+its backend was never missing. Its file is a 35b backup and `mokata memory import` reads it
+through the identical `import_memory` call this module wrapped, so the migrator was a second route
+to one destination and the surviving route is the one a user can find. `TestMemoryShareMigration`
+went with it; what a repo that still asks for the channel is TOLD is graded in
+`test_stage11_memory_share_channel.py`, which owns that surface.
+
+⚠ AND THE SECRET-SAFETY PROPERTY MOVED A SECOND TIME. Stage 10 re-pointed it OFF obsidian and ONTO
+memory-share; that host has now gone too. Re-pointing it again rather than letting it die with its
+second host is the whole point of the exercise — see `TestMigrationSecretSafety` below for where
+it lives now and why that is its real home rather than its third rental.
 """
 
 import json
@@ -18,9 +38,8 @@ from mokata import MOKATA_DIR
 from mokata.config import Surface
 from mokata.init import init_repo
 from mokata.memory import MemoryItem, MemoryStore
-from mokata.memory.backends import ObsidianBackend
-from mokata.memory.share import SHARE_KIND, SHARE_SCHEMA_VERSION, MEMORY_SHARE_FILENAME
-from mokata import migrate_channels as MC
+from mokata.memory import plan_memory_import
+from mokata.memory.share import SHARE_KIND, SHARE_SCHEMA_VERSION
 
 
 def _silent(_):
@@ -36,20 +55,6 @@ def _manifest_path(d):
     return os.path.join(d, MOKATA_DIR, "manifest.json")
 
 
-def _wire_obsidian(d, vault_path):
-    """Make `obsidian` a resolvable source pointing at `vault_path` (does NOT change the resolved
-    store — that stays the canonical sqlite floor, so the migration has a real destination)."""
-    p = _manifest_path(d)
-    with open(p, encoding="utf-8") as fh:
-        data = json.load(fh)
-    data.setdefault("tools", {})["obsidian"] = {
-        "provides": "memory_store", "kind": "external", "enabled": True,
-        "detect": {"type": "obsidian"}, "config": {"vault": vault_path}, "deprecated": "0.0.17"}
-    with open(p, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2)
-    return Surface.load(d)
-
-
 def _canonical_items(surface):
     store = MemoryStore.from_surface(surface)
     items = store.all_active()
@@ -57,143 +62,40 @@ def _canonical_items(surface):
     return {i.subject: i for i in items}
 
 
-class _FakeNativeClient:
-    """A minimal native-memory client (the `MemoryClient` protocol) over an in-memory dict."""
-
-    def __init__(self):
-        self._docs = {}
-
-    def put(self, doc):
-        self._docs[doc["id"]] = doc
-
-    def get(self, item_id):
-        return self._docs.get(item_id)
-
-    def all(self):
-        return list(self._docs.values())
-
-    def delete(self, item_id):
-        return self._docs.pop(item_id, None) is not None
-
-
-class TestObsidianMigration(unittest.TestCase):
-    def test_round_trip_preview_approve_provenance_idempotent(self):
-        with tempfile.TemporaryDirectory() as d:
-            surface = _repo(d)
-            vault = os.path.join(d, "obs-vault")
-            be = ObsidianBackend(vault)
-            be.put(MemoryItem.create("api-timeout", "30s", source="obsidian-note", author="alice"))
-            be.put(MemoryItem.create("retries", "3", source="obsidian-note", author="alice"))
-            surface = _wire_obsidian(d, vault)
-
-            # preview — counts + a sample, NO writes
-            plan = MC.plan_channel_migration(surface, "obsidian")
-            self.assertEqual(plan.count, 2)
-            self.assertIn("api-timeout", plan.sample)
-            self.assertEqual(_canonical_items(surface), {})       # nothing written by the preview
-
-            # approve → items land in the canonical store WITH provenance
-            res = MC.run_channel_migration(surface, "obsidian", assume_yes=True, out=_silent)
-            self.assertFalse(res.aborted)
-            self.assertEqual(res.migrated, 2)
-            canon = _canonical_items(Surface.load(d))
-            self.assertEqual(canon["api-timeout"].value, "30s")
-            self.assertEqual(canon["api-timeout"].provenance.get("author"), "alice")
-
-            # source left intact (NON-destructive)
-            self.assertEqual(len(ObsidianBackend(vault).all()), 2)
-
-            # idempotent re-run — "already migrated, nothing to do"
-            res2 = MC.run_channel_migration(surface, "obsidian", assume_yes=True, out=_silent)
-            self.assertTrue(res2.already_migrated)
-            self.assertEqual(res2.migrated, 0)
-
-    def test_decline_writes_nothing(self):
-        with tempfile.TemporaryDirectory() as d:
-            surface = _repo(d)
-            vault = os.path.join(d, "obs-vault")
-            ObsidianBackend(vault).put(
-                MemoryItem.create("k", "v", source="obsidian-note", author="bob"))
-            surface = _wire_obsidian(d, vault)
-
-            res = MC.run_channel_migration(surface, "obsidian",
-                                           confirm=lambda _t: False, out=_silent)
-            self.assertTrue(res.aborted)
-            self.assertEqual(res.migrated, 0)
-            self.assertEqual(_canonical_items(Surface.load(d)), {})   # zero writes
-
-
-class TestNativeMemoryMigration(unittest.TestCase):
-    def test_round_trip_from_injected_client(self):
-        with tempfile.TemporaryDirectory() as d:
-            surface = _repo(d)
-            client = _FakeNativeClient()
-            client.put(MemoryItem.create("db-pool", "10", source="native", author="carol").to_doc())
-            res = MC.run_channel_migration(surface, "native-memory", assume_yes=True,
-                                           client=client, out=_silent)
-            self.assertEqual(res.migrated, 1)
-            canon = _canonical_items(Surface.load(d))
-            self.assertEqual(canon["db-pool"].value, "10")
-
-    def test_missing_client_refuses_never_reads_floor(self):
-        with tempfile.TemporaryDirectory() as d:
-            surface = _repo(d)
-            res = MC.run_channel_migration(surface, "native-memory", assume_yes=True, out=_silent)
-            self.assertTrue(res.aborted)               # no client → refuse, never silently a floor
-            self.assertEqual(res.migrated, 0)
-
-
-class TestMemoryShareMigration(unittest.TestCase):
-    def _write_share(self, path, items):
-        data = {"schema_version": SHARE_SCHEMA_VERSION, "kind": SHARE_KIND,
-                "items": [MemoryItem.create(s, v, source="share", author="dave").to_dict()
-                          for s, v in items]}
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(data, fh)
-
-    def test_round_trip_and_idempotent(self):
-        with tempfile.TemporaryDirectory() as d:
-            surface = _repo(d)
-            share = os.path.join(d, MOKATA_DIR, MEMORY_SHARE_FILENAME)
-            self._write_share(share, [("region", "eu-west"), ("tier", "gold")])
-
-            plan = MC.plan_channel_migration(surface, "memory-share")
-            self.assertEqual(plan.count, 2)
-
-            res = MC.run_channel_migration(surface, "memory-share", assume_yes=True, out=_silent)
-            self.assertEqual(res.migrated, 2)
-            canon = _canonical_items(Surface.load(d))
-            self.assertEqual(canon["region"].value, "eu-west")
-            # share file left in place (NON-destructive)
-            self.assertTrue(os.path.exists(share))
-
-            res2 = MC.run_channel_migration(surface, "memory-share", assume_yes=True, out=_silent)
-            self.assertTrue(res2.already_migrated)
-
-    def test_decline_writes_nothing(self):
-        with tempfile.TemporaryDirectory() as d:
-            surface = _repo(d)
-            share = os.path.join(d, MOKATA_DIR, MEMORY_SHARE_FILENAME)
-            self._write_share(share, [("region", "eu-west")])
-            res = MC.run_channel_migration(surface, "memory-share",
-                                           confirm=lambda _t: False, out=_silent)
-            self.assertTrue(res.aborted)
-            self.assertEqual(_canonical_items(Surface.load(d)), {})
-
-
 class TestMigrationSecretSafety(unittest.TestCase):
-    def test_preview_shows_keys_not_values_and_no_dsn(self):
+    """RE-POINTED TWICE, AND THIS TIME ONTO ITS ACTUAL OWNER.
+
+    The property — a preview shows KEYS and never VALUES, so a credential sitting in an incoming
+    item cannot reach a terminal — was written against the obsidian channel, re-pointed at stage 10
+    onto memory-share, and would now die with THAT host if it were left where it was. It never
+    belonged to any channel: it belongs to the PREVIEW of an untrusted incoming item set, and the
+    one surviving preview of exactly that is `plan_memory_import` — the same data, read from the
+    same file, previewed before the same gated restore that `_migrate_memory_share` used to wrap.
+
+    ⚠ A property that has to move every time its host is deleted is a property that was pinned to
+    the wrong thing twice. It is pinned to the mechanism now.
+
+    The credential is ASSEMBLED from parts rather than written out: a literal one in the source
+    trips mokata's own secret-guard hook, which is the feature working on its own test corpus."""
+
+    def test_preview_shows_keys_not_values_and_no_credential(self):
+        parts = ["postgres", "://", "user", ":", "pw", "@host/db"]
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
-            vault = os.path.join(d, "obs-vault")
-            ObsidianBackend(vault).put(MemoryItem.create(
-                "conn", "postgres://user:pw@host/db", source="obsidian-note", author="e"))
-            surface = _wire_obsidian(d, vault)
-            plan = MC.plan_channel_migration(surface, "obsidian")
-            blob = plan.render()
-            self.assertIn("conn", blob)                 # the KEY is fine to show
-            self.assertNotIn("://", blob)               # never the value / a DSN
-            self.assertNotIn("pw@host", blob)
+            backup = os.path.join(d, MOKATA_DIR, "memory-share.json")
+            data = {"schema_version": SHARE_SCHEMA_VERSION, "kind": SHARE_KIND,
+                    "items": [MemoryItem.create("conn", "".join(parts),
+                                                source="share", author="e").to_dict()]}
+            with open(backup, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+            store = MemoryStore.from_surface(surface)
+            try:
+                blob = plan_memory_import(store, data, source=backup).render()
+            finally:
+                store.close()
+            self.assertIn("conn", blob)                  # the KEY is fine to show
+            self.assertNotIn("://", blob)                # never the value
+            self.assertNotIn("@host/db", blob)
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from ..repo_paths import name_of
 from ..repo_walk import prune_source_dirs
 
 ANCHOR_RE = re.compile(r"(?://|#)\s*@lat:\s*([^\s]+)")
@@ -78,7 +79,10 @@ def scan_anchors(root: str) -> List[Anchor]:
             for i, line in enumerate(lines, start=1):
                 m = ANCHOR_RE.search(line)
                 if m:
-                    out.append(Anchor(os.path.relpath(path, root), i, m.group(1),
+                    # `Anchor.path` is a NAME: `lat-check` prints it, tests compare it against
+                    # `["pkg/mod.py"]`, and it is never opened. Two of the eleven Windows
+                    # failures on run 32144708930 were this one bare relpath.
+                    out.append(Anchor(name_of(path, root), i, m.group(1),
                                       line.strip()))
     return out
 

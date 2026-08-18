@@ -11,7 +11,8 @@ stale (it pinned a 0.0.5 URL and a literal `sha256 "pending-publication-..."`):
 
 (3) is not optional. Homebrew installs a Python formula with `--no-deps` (see
 `Formula#std_pip_args`), so `virtualenv_install_with_resources` installs ONLY what the formula
-declares as `resource` stanzas. mokata depends unconditionally on `mcp>=1.2` (pyproject.toml),
+declares as `resource` stanzas. mokata depends unconditionally on the `mcp` SDK (pyproject.toml,
+bounded `<2` since MCP-SDK-2-BREAKS-THE-SERVER — read here, never retyped),
 so a formula with no resources yields a venv WITHOUT the MCP SDK — `mokata --version` still
 passes (the SDK is lazily imported) while `mokata-mcp`, mokata's primary in-harness surface,
 is broken. Silent breakage is the worst kind, so the resources are generated here and the
@@ -268,7 +269,9 @@ def cmd_refresh_lock(args) -> int:
         subprocess.run([args.python, "-m", "venv", venv], check=True)
         py = os.path.join(venv, "bin", "python")
         subprocess.run([py, "-m", "pip", "install", "-q", "--upgrade", "pip"], check=True)
-        # Resolve the SAME requirement pyproject declares, so the lock can't drift from it.
+        # Resolve the SAME requirement pyproject declares, so the lock can't drift from it —
+        # which is now TRUE: the default comes from `declared_mcp_requirement()`, which reads
+        # pyproject.toml. It was a hand-typed copy when this comment was first written.
         subprocess.run([py, "-m", "pip", "install", "-q", args.requirement], check=True)
         frozen = subprocess.run(
             [py, "-m", "pip", "list", "--format=freeze"],
@@ -304,7 +307,31 @@ def cmd_refresh_lock(args) -> int:
     return 0
 
 
-def main(argv=None) -> int:
+def declared_mcp_requirement() -> str:
+    """The `mcp` requirement AS PYPROJECT DECLARES IT — read, not retyped.
+
+    MCP-SDK-2-BREAKS-THE-SERVER: `--requirement` used to default to the literal `"mcp>=1.2"`,
+    directly under a comment claiming it "resolve[s] the SAME requirement pyproject declares, so
+    the lock can't drift from it". Nothing read pyproject, so the comment justified the behaviour
+    instead of describing it — and it was false (doc 85 §7h). The consequence was not theoretical:
+    `mcp` 2.0.0 (2026-07-28) removed `mcp.server.fastmcp`, so a `refresh-lock` on any day after it
+    would have resolved 2.0.0 and vendored the broken SDK into the Homebrew formula — carrying
+    into brew the exact defect pip was already shipping, and past a bound that now excludes it.
+
+    Reading the one declaration makes drift impossible rather than merely discouraged.
+    """
+    with open(os.path.join(ROOT, "pyproject.toml"), encoding="utf-8") as fh:
+        text = fh.read()
+    match = re.search(r"(?m)^dependencies = \[(?P<body>.*)\]", text)
+    if match is None:
+        raise FormulaError("pyproject.toml has no top-level [project].dependencies array")
+    spec = re.search(r"mcp[<>=!,.0-9]*", match.group("body"))
+    if spec is None:
+        raise FormulaError("pyproject.toml's dependencies declare no `mcp` requirement")
+    return spec.group(0)
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -329,9 +356,14 @@ def main(argv=None) -> int:
 
     p_lock = sub.add_parser("refresh-lock", parents=[common], help="re-resolve the dependency tree")
     p_lock.add_argument("--python", default="python3.12")
-    p_lock.add_argument("--requirement", default="mcp>=1.2")
+    # Derived from pyproject, never typed here — see `declared_mcp_requirement`.
+    p_lock.add_argument("--requirement", default=declared_mcp_requirement())
     p_lock.set_defaults(func=cmd_refresh_lock)
+    return parser
 
+
+def main(argv=None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
     try:
         return args.func(args)

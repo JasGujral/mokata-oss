@@ -28,14 +28,14 @@ WHY THE TWO HALVES ARE STORED DIFFERENTLY, because it is the load-bearing design
 
   * **validity** (`valid_from`/`valid_to`) is ITEM SEMANTICS. It lives on the DOC (like `scope`,
     `review`, `about_code`) and is PROJECTED into columns by the write path, so it survives an
-    Obsidian vault, the native client, an export and a teammate's read — and so closing a window
+    a third-party adapter, an export and a teammate's read — and so closing a window
     is a governed, gated, journaled doc write like any other.
   * **usage** (`hit_count`/`last_recalled_at`) is COLUMN-ONLY and never touches the doc. Putting
     it on the doc would make every recall rewrite an approved memory: it would collide with the
     D6 write-refusal, enter the WriteGate, and journal a team CAS write — turning a read into a
     governed write that can fail the read. A bare `UPDATE … SET hit_count = hit_count + 1` on the
     row touches no approved content and can be dropped on the floor when it fails. A backend with
-    no columns (Obsidian, native) simply has no usage signal, and the fusion falls back to its
+    no columns (a third-party adapter) simply has no usage signal, and the fusion falls back to its
     three original terms — which is exactly the back-compat floor.
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.

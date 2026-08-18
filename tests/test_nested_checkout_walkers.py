@@ -128,7 +128,9 @@ class TestTheRuleIsDefinedOnce(unittest.TestCase):
         wanted = repo_walk.is_checkout_boundary.__name__
         hits = []
         for base in ("src", "tests"):
-            for rel, ab in _support.iter_repo_files(os.path.join(_REPO, base)):
+            # CORPUS: THE WORKING TREE. The walker IS the subject here — this pins `iter_worktree_files`'
+            # own nested-checkout boundary, so reading the index instead would delete the test.
+            for rel, ab in _support.iter_worktree_files(os.path.join(_REPO, base)):
                 if not rel.endswith(".py"):
                     continue
                 with open(ab, encoding="utf-8", errors="replace") as fh:
@@ -161,7 +163,7 @@ class TestKnowledgeIndex(_Fixture):
             with self.subTest(marker=marker):
                 root = self.repo(marker=marker)
                 built = KnowledgeIndex().build(root)
-                self.assertIn(os.path.join("pkg", "mod.py"), built)
+                self.assertIn("pkg/mod.py", built)
                 self.assertEqual(
                     [p for p in built if p.startswith("vendor")], [],
                     "the freshness index counted a vendored checkout's files as this repo's "
@@ -169,7 +171,7 @@ class TestKnowledgeIndex(_Fixture):
 
     def test_a_dot_directory_is_still_skipped(self):
         built = KnowledgeIndex().build(self.hidden_repo())
-        self.assertIn(os.path.join("pkg", "mod.py"), built)
+        self.assertIn("pkg/mod.py", built)
         self.assertEqual([p for p in built if ".venv" in p], [],
                          "the dot-prefix rule was dropped rather than added to")
 
@@ -180,13 +182,13 @@ class TestGrepFloor(_Fixture):
 
     def test_a_nested_checkout_does_not_double_answer_defs(self):
         refs = self._defs(self.repo())
-        self.assertEqual([r.path for r in refs], [os.path.join("pkg", "mod.py")],
+        self.assertEqual([r.path for r in refs], ["pkg/mod.py"],
                          "the lexical floor answered `defs widget` twice — once from a checkout "
                          "the user does not maintain")
 
     def test_a_dot_directory_is_still_skipped(self):
         refs = self._defs(self.hidden_repo())
-        self.assertEqual([r.path for r in refs], [os.path.join("pkg", "mod.py")])
+        self.assertEqual([r.path for r in refs], ["pkg/mod.py"])
 
 
 class TestAstFloor(_Fixture):
@@ -196,37 +198,37 @@ class TestAstFloor(_Fixture):
 
     def test_a_nested_checkout_does_not_double_answer_defs(self):
         refs = self._defs(self.repo())
-        self.assertEqual([r.path for r in refs], [os.path.join("pkg", "mod.py")],
+        self.assertEqual([r.path for r in refs], ["pkg/mod.py"],
                          "the AST floor parsed a vendored checkout into the edge graph — impact "
                          "analysis and blast radius now carry duplicate symbols")
 
     def test_a_dot_directory_is_still_skipped(self):
         refs = self._defs(self.hidden_repo())
-        self.assertEqual([r.path for r in refs], [os.path.join("pkg", "mod.py")])
+        self.assertEqual([r.path for r in refs], ["pkg/mod.py"])
 
 
 class TestAnchorScan(_Fixture):
     def test_a_nested_checkout_contributes_no_anchors(self):
         anchors = scan_anchors(self.repo())
         self.assertEqual(sorted(a.path for a in anchors),
-                         [os.path.join("pkg", "mod.py")],
+                         ["pkg/mod.py"],
                          "`lat-check` read drift anchors out of a vendored checkout")
 
     def test_a_dot_directory_is_still_skipped(self):
         anchors = scan_anchors(self.hidden_repo())
-        self.assertEqual(sorted(a.path for a in anchors), [os.path.join("pkg", "mod.py")])
+        self.assertEqual(sorted(a.path for a in anchors), ["pkg/mod.py"])
 
 
 class TestAcMapper(_Fixture):
     def test_a_nested_checkout_contributes_no_ac_coverage(self):
         refs = scan_tests(self.repo(), ["AC-1"])
-        self.assertEqual([r.path for r in refs], [os.path.join("t", "test_mod.py")],
+        self.assertEqual([r.path for r in refs], ["t/test_mod.py"],
                          "the completeness gate counted a vendored checkout's tests as coverage "
                          "of THIS repo's acceptance criteria")
 
     def test_a_dot_directory_is_still_skipped(self):
         refs = scan_tests(self.hidden_repo(), ["AC-1"])
-        self.assertEqual([r.path for r in refs], [os.path.join("t", "test_mod.py")])
+        self.assertEqual([r.path for r in refs], ["t/test_mod.py"])
 
 
 class TestDetector(_Fixture):
@@ -303,7 +305,7 @@ class TestTheSkipIsDeclared(_Fixture):
         idx = KnowledgeIndex()
         root = self.repo(nested="vendor/lib")
         idx.build(root)
-        self.assertEqual(idx.skipped_checkouts, [os.path.join("vendor", "lib")])
+        self.assertEqual(idx.skipped_checkouts, ["vendor/lib"])
 
     def test_a_clean_repo_records_nothing(self):
         idx = KnowledgeIndex()
@@ -326,7 +328,7 @@ class TestTheSkipIsDeclared(_Fixture):
         root = self.repo()
         idx.build(root)
         idx.build(root)
-        self.assertEqual(idx.skipped_checkouts, [os.path.join("vendor", "lib")],
+        self.assertEqual(idx.skipped_checkouts, ["vendor/lib"],
                          "repeated walks accumulated duplicate entries")
 
     def test_an_abandoned_walk_leaves_no_stale_record(self):
@@ -335,7 +337,7 @@ class TestTheSkipIsDeclared(_Fixture):
         # evidence, arriving through the very channel added to prevent it.
         idx = KnowledgeIndex()
         idx.build(self.repo())
-        self.assertEqual(idx.skipped_checkouts, [os.path.join("vendor", "lib")])
+        self.assertEqual(idx.skipped_checkouts, ["vendor/lib"])
         clean = self.tmp()
         self._source_tree(clean)
         for _ab in idx._iter_files(clean, (".py",)):

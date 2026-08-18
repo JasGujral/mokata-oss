@@ -19,6 +19,7 @@ import re
 from typing import List, Optional, Tuple
 
 from .. import languages
+from ..repo_paths import RepoName, name_of
 from ..repo_walk import prune_source_dirs
 from .query import (BASIS_LEXICAL, GREP_FLOOR_NAV_NOTE, NAVIGATION_KINDS, QUERY_KINDS,
                     GraphBackend, QueryResult, Reference)
@@ -90,8 +91,11 @@ class GrepBackend(GraphBackend):
         except OSError:
             return []
 
-    def _rel(self, path: str) -> str:
-        return os.path.relpath(path, self.root)
+    def _rel(self, path: str) -> RepoName:
+        """The NAME every `Reference` this backend emits carries. Not a path — nothing opens
+        it; it is rendered into `crg nav` output and compared against `svc/core.py`. Four of
+        the eleven Windows failures on run 32144708930 came through this one method."""
+        return name_of(path, self.root)
 
     @staticmethod
     def _lang(path: str) -> languages.Language:

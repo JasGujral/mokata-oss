@@ -1,7 +1,7 @@
 """mokata memory layer (Part C) — persistent, self-healing, default-on, human-gated.
 
 Memory is a native part of the framework, on by default, with per-type toggles. It is
-durable and pluggable (SQLite default / Obsidian / native-memory — storage only; the
+durable and pluggable (SQLite default / Postgres — storage only; the
 logic is mokata's own), heals by SURFACING contradictions and staleness for human
 approval (never silent rewrite), and gates every durable write. The memory triad —
 persistent (C1), decision (C2), episodic (C3) — is individually toggleable. Consolidation
@@ -9,7 +9,7 @@ persistent (C1), decision (C2), episodic (C3) — is individually toggleable. Co
 
 Public API:
   - MemoryItem + types/statuses                                   (C1/C5 model)
-  - SQLiteBackend / ObsidianBackend / NativeMemoryBackend         (C4 storage)
+  - SQLiteBackend / PostgresBackend                               (C4 storage)
   - MemoryStore / enabled_memory_types / select_memory_backend    (C1/C2/C6/C8/C9 logic)
   - HealingProposal / detect_issues / render_proposal             (C5 surfacing)
   - EpisodicMemory / lexical_score                                (C3 episodic)
@@ -18,9 +18,6 @@ Public API:
 
 from .backends import (
     MemoryBackend,
-    MemoryClient,
-    NativeMemoryBackend,
-    ObsidianBackend,
     PostgresBackend,
     PostgresUnavailable,
     SQLiteBackend,
@@ -28,7 +25,6 @@ from .backends import (
 )
 from .share import (
     BACKUPS_DIRNAME,
-    MEMORY_SHARE_FILENAME,
     ImportResult,
     MemoryImportPlan,
     MemoryShareError,
@@ -38,7 +34,6 @@ from .share import (
     export_memory,
     export_payload,
     import_memory,
-    is_legacy_share_dest,
     load_memory_share,
     plan_memory_import,
     scan_export_item,
@@ -267,12 +262,9 @@ __all__ = [
     "render_item_line",
     "MemoryBackend",
     "SQLiteBackend",
-    "ObsidianBackend",
-    "NativeMemoryBackend",
     "PostgresBackend",
     "PostgresUnavailable",
     "build_postgres_backend",
-    "MemoryClient",
     "MemoryStore",
     "MemoryStats",
     "WriteResult",
@@ -330,10 +322,8 @@ __all__ = [
     "scan_export_item",
     "ImportResult",
     "MemoryShareError",
-    "MEMORY_SHARE_FILENAME",
     "BACKUPS_DIRNAME",
     "default_backup_path",
-    "is_legacy_share_dest",
     # Stage 35c — migrate between backends
     "migrate_memory",
     "build_named_backend",

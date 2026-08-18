@@ -4,8 +4,8 @@ mokata can answer **structural** questions about your code — who calls a funct
 implements an interface, what the blast radius of a change is — by orchestrating a codebase
 graph tool. There are three tiers, tried in order:
 
-1. an **adopted graph** (`code-review-graph` / `serena`, or a deprecated external Neo4j) — full,
-   cross-language structural precision;
+1. an **adopted graph** (`code-review-graph` / `serena`) — full, cross-language structural
+   precision;
 2. the **embedded stdlib-AST floor** — ships with mokata, zero-dependency, answers structural
    queries **cleanly (`degraded=False`)** on Python out of the box;
 3. the **grep floor** — the universal lexical emergency floor beneath everything, marked
@@ -106,63 +106,29 @@ semantic (hybrid FTS + local-embedding) symbol search on top of the structural q
 3. **Confirm** with `mokata graph status` — the precise report of which backend answers
    (adopted graph / AST floor / grep) — or `mokata status` for the one-line hint.
 
-## Wire an external graph database (Neo4j) — deprecated
+## Wire an external graph database (Neo4j) — REMOVED in 0.0.18
 
-!!! warning "The Neo4j backend is deprecated (removal: 0.0.17)"
-    It **still works**, and nothing about it has been removed — but a third database contradicts
-    mokata's two-stores shape, so the backend is on its way out. On first use in a repo mokata
-    prints the notice once:
+!!! warning "The Neo4j backend was removed in mokata 0.0.18"
+    mokata briefly supported an external **Neo4j** graph as an optional `code_graph` provider. It
+    was deprecated at 0.0.15 — a third database contradicts mokata's two-stores shape — and
+    **removed at 0.0.18**. This section documented how to wire it; the instructions are gone
+    because following them no longer works.
 
-    > ⚠ deprecated: the Neo4j code-graph backend is deprecated and will be REMOVED in mokata
-    > 0.0.17. The canonical code graph is the embedded AST floor / adopted CRG. No migration
-    > needed — the graph is derived data; re-index with your current code-graph backend.
+    **Nothing of yours was touched.** mokata only ever *queried* a graph your team populated; it
+    never built or stored one, so your Neo4j server and its contents are exactly as you left them.
+    There was never a `mokata migrate neo4j` and there deliberately never needed to be: a code
+    graph is **derived** data, and the canonical one already answers here — the embedded AST floor
+    on Python out of the box, or an adopted `code-review-graph` / `serena` for cross-language
+    depth (wired above).
 
-    There is **no `mokata migrate neo4j`** and there deliberately isn't one: a code graph is
-    derived data, so the move is to adopt `code-review-graph` (or `serena`) and re-index. The
-    section below documents the backend as it works today.
+    **If a repo's committed chain still names `neo4j`**, mokata says so once, on stderr, then
+    answers from the AST floor rather than silently pretending the graph is live. Clear the dead
+    entry with:
 
-If your team already populates a **Neo4j** graph of the codebase, mokata can query it directly
-— it becomes an optional provider for the `code_graph` capability, sitting in front of the grep
-floor. mokata never builds the graph; it adopts the one you populated. The whole loop is four
-steps: **install → wire → `mokata index` → `mokata lat-check`**.
-
-### 1. Install the driver and have a reachable DB
-
-```bash
-pip install "mokata[neo4j]"     # or: pip install neo4j   (the driver is an optional extra)
-```
-
-mokata queries a **conventional schema** — populate it with whatever indexer you use:
-
-- nodes `(:Symbol {name, path, line})`
-- relationships `[:CALLS]`, `[:IMPLEMENTS]`, `[:IMPORTS]`
-
-### 2. Wire it — credentials via environment variables only
-
-Point a few env vars at your DB (mokata **never** stores a URI or password in the committed
-manifest — only the *names* of the env vars it should read):
-
-```bash
-export NEO4J_URI="bolt://localhost:7687"
-export NEO4J_USERNAME="neo4j"
-export NEO4J_PASSWORD="…"          # from your secret manager, not committed
-```
-
-Then add `neo4j` to the front of the `code_graph` chain (human-gated, previewed before write):
-
-```bash
-# register the tool (env-var names only; defaults are NEO4J_URI/NEO4J_USERNAME/NEO4J_PASSWORD)
-mokata config set tools.neo4j '{"provides":"code_graph","kind":"external","enabled":true,"detect":{"type":"python_module","name":"neo4j"},"config":{"uri_env":"NEO4J_URI","user_env":"NEO4J_USERNAME","password_env":"NEO4J_PASSWORD"}}'
-
-# put it first in the fallback chain, ahead of the grep floor
-mokata config set capabilities.code_graph.fallback '["neo4j","ripgrep","grep"]'
-```
-
-Confirm with `mokata status` — you should see *code graph active (neo4j)*. If the driver is
-missing, the env vars are unset, or the DB is unreachable, mokata drops to the next tier instead
-(the embedded AST floor on a Python repo, grep beneath — see
-[Degrade is honest, not silent](#degrade-is-honest-not-silent) below) — wiring is never a hard
-failure.
+    ```bash
+    mokata reconfigure --remove neo4j     # reversible, human-gated, no residue
+    mokata index                          # refresh against what answers now
+    ```
 
 ### 3 & 4. Keep it fresh — `mokata index`, then `mokata lat-check`
 
@@ -175,7 +141,7 @@ mokata lat-check    # flag concept↔code drift against the wired backend
 
 ```text
 # graph wired:
-index: code graph 'neo4j' wired — `mokata lat-check` flags drift against it.
+index: code graph 'code-review-graph' wired — `mokata lat-check` flags drift against it.
 
 # only the grep floor:
 index: no code graph wired — refresh runs on the grep floor (`mokata lat-check` still flags
@@ -233,8 +199,8 @@ If a real graph is absent or errors mid-query, mokata degrades **loudly and in o
 to stale data. On a Python repo the **embedded AST floor** carries the structural queries cleanly
 (`degraded=False`); only when even that can't answer (a zero-Python repo, or non-Python files)
 does it fall to the **grep floor**, marked degraded. A graph rebuild failure answers from the AST
-floor on *current* files, never from a stale graph. This holds for an external DB too: no `neo4j`
-driver, no `NEO4J_*` env, or an unreachable Neo4j ⇒ mokata drops to the next tier and your
+floor on *current* files, never from a stale graph. This holds for an adopted graph too: an
+absent binary, a version skew, or an unreachable server ⇒ mokata drops to the next tier and your
 `mokata query …` / `index` / `lat-check` commands all still work.
 
 The one place degrade is **not** waved through: a *grep-floor* result offered as **decision

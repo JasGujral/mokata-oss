@@ -13,20 +13,17 @@ store that travels with the repo, **not** under `temp_local/`. No service is req
 (local-first). Each entry is `<name>.md` plus a record in `index.json` carrying provenance
 (author, source, kind, timestamps) and a content hash.
 
-!!! warning "The vault channel is deprecated (removal: 0.0.17)"
-    It **still works** — everything on this page functions today and nothing has been removed. But
-    a separate artifact channel duplicates what the two canonical stores already do, so it is
-    scheduled to go in **0.0.17**.
+!!! info "The design vault is supported — it was the vault *transport* that was removed"
+    Everything on this page works and is staying. A `vault` **channel** was deprecated and removed
+    in **0.0.18**, and it was a different thing wearing the same word: the vault
+    **session-transport kind**, which stored portable session bundles under
+    `.mokata/vault/sessions/`. The design artifacts this page is about — the brainstorm/spec
+    markdown at `.mokata/vault/<name>.md` — were never that channel and were never deprecated.
 
-    - **Session bundles** that ride the vault transport have a one-time, human-gated migration onto
-      the mode-derived transport: **`mokata migrate vault`** (previewed, idempotent,
-      non-destructive — the source is left in place). See
-      [portable sessions](portable-sessions.md).
-    - **Design artifacts** (the brainstorm/spec markdown this page is about) have **no automatic
-      migration** — there is no canonical store to fold prose into. They are read-shimmed and left
-      for you to re-home before 0.0.17. If you want the *decisions* to outlive the artifacts,
-      capture them as typed memory via [`/onboard`](capture-project-rules-and-context.md), which is
-      where the pipeline reads them anyway.
+    If you pushed **session bundles** to the vault transport, see
+    [portable sessions](portable-sessions.md) for where they are and how to reach them. Your
+    design artifacts need nothing: `mokata vault list / search / pull / push` all work as
+    documented below.
 
 ## Push a brainstorm or spec (human-gated)
 

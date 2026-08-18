@@ -10,7 +10,11 @@ Both jsonschema states (no jsonschema imported here). Verifies:
   MINTED BY A HUMAN out-of-band (`mokata approve <id>`, see `mokata/approval.py`). H3's original
   claim survives where it is still true: `record_finish_decision` (an in-process engine call, not a
   model-facing tool) keeps the same spelling + alias.
-- M1: Neo4j degrade now flows through the typed `Neo4jUnavailable` path.
+- M1: the Neo4j degrade flowed through the typed `Neo4jUnavailable` path. ⚠ REMOVED AT 0.0.18
+  LANE D STAGE 14 with the backend that raised it. `TestNeo4jTypedDegrade` graded ONE member of
+  the `DegradedCapability` family and nothing generic — there is no `except DegradedCapability` in
+  `src/`, so no surviving behaviour changed when the subclass left. The FAMILY's typed contract is
+  graded where it belongs and always was, over every live member: `test_d5_degrade_taxonomy`.
 """
 
 import os
@@ -21,6 +25,7 @@ import unittest
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _local_second_store import DESTINATION_TOOL, second_store
 from _support import mcp_commit   # SI.3: propose -> a HUMAN approves out-of-band -> redeem by id
 
 from mokata.config import Surface
@@ -126,15 +131,21 @@ class TestMigrateSecretScanAndLedger(unittest.TestCase):
             surface = Surface.load(d)
             ledger = AuditLedger(os.path.join(d, "ledger.jsonl"))
 
-            # migrate sqlite -> obsidian (distinct backends, no live external DB needed)
-            res = migrate_memory(surface, to_backend="obsidian", from_backend="sqlite",
-                                 assume_yes=True, ledger=ledger, out=_silent)
+            # sqlite -> a REAL second local store (no live external DB needed). Stage 10 removed
+            # the Obsidian destination this used; `_local_second_store` declares the substitute
+            # and what it does not prove.
+            from mokata.memory.backends import SQLiteBackend
+            with second_store(d) as dest_path:
+                res = migrate_memory(surface, to_backend=DESTINATION_TOOL, from_backend="sqlite",
+                                     assume_yes=True, ledger=ledger, out=_silent)
             self.assertEqual(res.migrated, 1)        # clean item only
             self.assertEqual(res.blocked, 1)         # secret hard-blocked
 
             # the secret never reached the destination
-            dest = build_named_backend("obsidian", surface.mokata_dir, {})
+            dest = SQLiteBackend(dest_path)
             self.assertFalse(any(SECRET in i.value for i in dest.all()))
+            self.assertTrue(any(i.subject == "clean" for i in dest.all()))   # …and the clean one did
+            dest.close()
 
             # per-item ledger entries recorded (approved + blocked)
             decisions = {e.get("decision") for e in ledger.entries()
@@ -152,8 +163,10 @@ class TestMigrateSecretScanAndLedger(unittest.TestCase):
             store.backend.put(MemoryItem.create("leak", f"token {SECRET}"))
             store.close()
             surface = Surface.load(d)
-            res = migrate_memory(surface, to_backend="obsidian", from_backend="sqlite",
-                                 assume_yes=True, drop_source=True, out=_silent)
+            with second_store(d):
+                res = migrate_memory(surface, to_backend=DESTINATION_TOOL,
+                                     from_backend="sqlite", assume_yes=True, drop_source=True,
+                                     out=_silent)
             self.assertEqual(res.dropped, 1)          # only the migrated (clean) item dropped
             from mokata.memory import build_named_backend
             src = build_named_backend("sqlite", surface.mokata_dir, {})
@@ -237,39 +250,6 @@ class TestApproveParam(unittest.TestCase):
         # no-back-compat, doc 85 §7d) — there is ONE spelling now, which is what H3 wanted.
         with self.assertRaises(TypeError):
             record_finish_decision(None, "keep", confirmed=True)
-
-
-# ----------------------------------------------------------------- M1: Neo4j typed degrade
-
-class TestNeo4jTypedDegrade(unittest.TestCase):
-    def test_unreachable_raises_typed_and_build_degrades(self):
-        from mokata.knowledge import Neo4jGraphClient, Neo4jUnavailable, build_neo4j_client
-
-        class _DownDriver:
-            def verify_connectivity(self):
-                raise RuntimeError("connection refused")
-
-        # the client raises the TYPED signal when the DB is unreachable
-        with self.assertRaises(Neo4jUnavailable):
-            Neo4jGraphClient(_DownDriver())
-
-        # build_neo4j_client catches the typed signal and degrades to None
-        fake = types.ModuleType("neo4j")
-
-        class _GDB:
-            @staticmethod
-            def driver(uri, auth=None):
-                return _DownDriver()
-        fake.GraphDatabase = _GDB
-        with mock.patch.dict(os.environ, {"NEO4J_URI": "bolt://x"}), \
-                mock.patch.dict(sys.modules, {"neo4j": fake}):
-            self.assertIsNone(build_neo4j_client({}))
-
-    def test_missing_driver_raises_typed_internally(self):
-        from mokata.knowledge import build_neo4j_client
-        with mock.patch.dict(os.environ, {"NEO4J_URI": "bolt://x"}), \
-                mock.patch.dict(sys.modules, {"neo4j": None}):
-            self.assertIsNone(build_neo4j_client({}))
 
 
 if __name__ == "__main__":

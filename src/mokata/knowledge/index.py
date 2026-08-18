@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..repo_walk import prune_source_dirs
+from ..repo_paths import name_of, names_of
 
 DEFAULT_EXTENSIONS = (".py",)
 
@@ -67,12 +68,16 @@ class KnowledgeIndex:
             for fn in filenames:
                 if fn.endswith(tuple(extensions)):
                     yield os.path.join(dirpath, fn)
-        self.skipped_checkouts = sorted(os.path.relpath(p, root) for p in skipped)
+        # NAMES, not paths: `cmd_index` prints them and `test_nested_checkout_walkers`
+        # compares them against `["vendor/lib"]`. Round 2 moved `_current` and `build` below
+        # to POSIX and left this line native, so on Windows the record read `vendor\\lib`
+        # against a `/`-spelled declaration — three of the eleven failures on run 32144708930.
+        self.skipped_checkouts = names_of(skipped, root)
 
     def _current(self, root: str, extensions) -> Dict[str, str]:
         out: Dict[str, str] = {}
         for ab in self._iter_files(root, extensions):
-            rel = os.path.relpath(ab, root)
+            rel = name_of(ab, root)
             out[rel] = file_fingerprint(ab)[0]
         return out
 
@@ -80,7 +85,7 @@ class KnowledgeIndex:
         """Index every source file from scratch. Returns the indexed paths."""
         self.entries = {}
         for ab in self._iter_files(root, extensions):
-            rel = os.path.relpath(ab, root)
+            rel = name_of(ab, root)
             h, m, s = file_fingerprint(ab)
             self.entries[rel] = IndexEntry(rel, h, m, s)
         return list(self.entries)
@@ -144,11 +149,17 @@ def skipped_checkout_lines(skipped: List[str]) -> List[str]:
     """The declaration for a walk that skipped nested checkouts: how many, and where.
 
     Empty when nothing was skipped — the overwhelmingly common case, and a repo with no
-    vendored tree must not gain a line saying so. Paths are rendered POSIX-style so the same
-    repo reads identically on Windows."""
+    vendored tree must not gain a line saying so.
+
+    ⭐ IT TAKES NAMES AND RENDERS THEM, AND THAT IS THE WHOLE CHANGE HERE. This function used to
+    hold `p.replace(os.sep, "/")` — a normalisation at the CONSUMER, defending against a producer
+    that might hand it either spelling. Under the invariant `KnowledgeIndex.skipped_checkouts` is
+    built by `names_of`, so the value arriving here is `/`-spelled by construction and the defence
+    is dead weight. A `.replace` at a consumer is now evidence of an unrouted producer, not a fix,
+    and `tests/test_repo_paths_invariant.py` sweeps for exactly that shape."""
     if not skipped:
         return []
-    shown = [p.replace(os.sep, "/") for p in skipped[:SKIPPED_CHECKOUT_NAME_CAP]]
+    shown = list(skipped[:SKIPPED_CHECKOUT_NAME_CAP])
     where = ", ".join(shown)
     remainder = len(skipped) - len(shown)
     if remainder:

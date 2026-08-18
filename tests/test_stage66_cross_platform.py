@@ -10,8 +10,10 @@ live-db); these tests assert the behaviour os-agnostically so they run on any ho
 
 import os
 import unittest
+from pathlib import Path
 
 from _support import sample_manifest_data  # noqa: F401  (path fix side-effect)
+from _workflow_pins import safe_load
 
 from mokata import crossplat
 from mokata.session_bundle import (
@@ -33,15 +35,12 @@ class TestCIMatrixCoversAllOSes(unittest.TestCase):
             return fh.read()
 
     def test_matrix_lists_windows_and_linux(self):
+        # The `except ImportError` fallback that used to sit here asserted the two OS names
+        # appear ANYWHERE in ci.yml — satisfied by this file's own explanatory comments, and
+        # reported under this test's name as a pass. Deleted; the parser is required
+        # (PYYAML-SKIP-CLUSTER, 0.0.18 stage 2).
         text = self._ci()
-        try:
-            import yaml
-        except ImportError:
-            # core stays dependency-free — fall back to a structural text assertion
-            for os_name in ("ubuntu-latest", "windows-latest"):
-                self.assertIn(os_name, text, f"{os_name} missing from ci.yml")
-            return
-        doc = yaml.safe_load(text)
+        doc = safe_load(text, "assert the CI matrix covers windows and linux")
         matrix = doc["jobs"]["test"]["strategy"]["matrix"]
         self.assertIn("os", matrix, "the test matrix has no `os` axis")
         self.assertEqual(set(matrix["os"]),
@@ -52,12 +51,7 @@ class TestCIMatrixCoversAllOSes(unittest.TestCase):
 
     def test_test_job_runs_on_the_matrix_os(self):
         text = self._ci()
-        try:
-            import yaml
-        except ImportError:
-            self.assertIn("runs-on: ${{ matrix.os }}", text)
-            return
-        doc = yaml.safe_load(text)
+        doc = safe_load(text, "assert the test job runs on the matrix OS")
         self.assertEqual(doc["jobs"]["test"]["runs-on"], "${{ matrix.os }}")
         # the live-db job stays Linux-only (services are Linux containers)
         self.assertEqual(doc["jobs"]["live-db"]["runs-on"], "ubuntu-latest")
@@ -154,7 +148,9 @@ class TestHookCommandNeedsNoShell(unittest.TestCase):
 
     def test_statusline_command_uses_console_entry_not_sh(self):
         from mokata.harness_setup import _statusline_command
-        cmd = _statusline_command()
+        # F10 — the destination settings.json is now a required argument (the wrap origin is
+        # checked against it); nothing is wrapped here, so the composed line is unchanged.
+        cmd = _statusline_command(Path("settings.json"))
         self.assertIn("mokata-hook", cmd)
         self.assertIn("statusline", cmd)
         self.assertNotIn("launch.sh", cmd)

@@ -101,6 +101,7 @@ from . import MOKATA_DIR, TEMP_LOCAL_DIRNAME
 from .awaiting import AMEND_ABORT_CMD, AMEND_FINISH_CMD
 from .run_resolver import (APPROACH_PREFIX, CHECKPOINT_PREFIX, RunResolution,
                            SPEC_PREFIX)
+from .repo_paths import as_name
 from .spec_scope import SCOPE_KEY, amend_from_state, amend_key, classify, scope_from_dict
 from .state import StateStore
 from .tdd_state import PHASE_UNSET, TDD_STATE_PREFIX, from_state, state_dir
@@ -240,8 +241,12 @@ def is_test_path(path: str) -> bool:
     (`test_x.py`, `x_test.go`, `x.test.ts`, `x.spec.ts`). Test writes are ALWAYS allowed."""
     if not path:
         return False
-    norm = path.replace("\\", "/")
-    parts = [p for p in norm.split("/") if p]
+    # The payload's `file_path` crossed in from the harness and is matched against `/`-spelled
+    # declarations (`_TEST_DIRS`), so it is a NAME arriving from outside — `as_name` is that
+    # boundary. ⭐ This is a GATE: on Windows a payload spelled `tests\\x.py` used to be
+    # normalised here by a local `.replace`, and a local conversion is what the last three
+    # rounds each re-broke somewhere else.
+    parts = [p for p in as_name(path).split("/") if p]
     if any(p.lower() in _TEST_DIRS for p in parts[:-1]):
         return True
     stem = os.path.splitext(parts[-1])[0].lower() if parts else ""

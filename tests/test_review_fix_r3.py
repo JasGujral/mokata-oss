@@ -221,6 +221,9 @@ class TestOrphanDeleted(unittest.TestCase):
         """The render bug cannot be produced any more, because the renderer is GONE. Proven over
         the whole shipped source tree, not just the one file it used to live in."""
         hits = []
+        # CORPUS: THE WORKING TREE. This asks what mokata SHIPS, and `sync-public.sh` mirrors
+        # with `rsync`, which copies the working tree — an untracked `.py` under `src/` really is
+        # published. The index would be blind to exactly the file most likely to break the rule.
         for base, _dirs, files in os.walk(SRC):
             for fn in files:
                 if not fn.endswith(".py"):
@@ -241,6 +244,9 @@ class TestOrphanDeleted(unittest.TestCase):
         renders a code symbol in prose inside backticks, so stripping backticked spans leaves
         exactly the live references, which must be none."""
         hits = []
+        # CORPUS: THE WORKING TREE. This asks what mokata SHIPS, and `sync-public.sh` mirrors
+        # with `rsync`, which copies the working tree — an untracked `.py` under `src/` really is
+        # published. The index would be blind to exactly the file most likely to break the rule.
         for base, _dirs, files in os.walk(SRC):
             for fn in sorted(files):
                 if not fn.endswith(".py"):

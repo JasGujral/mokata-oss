@@ -38,11 +38,21 @@ import _workflow_pins as wp
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REAL_CORPUS = os.path.join(ROOT, ".github", "workflows")
 
-# The nine workflows the row enumerates. Named rather than counted so that DELETING one is as
-# visible as adding one — a count alone stays green through a swap.
-NINE_WORKFLOWS = (
+# Every workflow in the tree. NAMED rather than counted so that DELETING one is as visible as
+# adding one — a count alone stays green through a swap. (The constant was `NINE_WORKFLOWS` until
+# `windows-probe.yml` arrived and made the count part of the name a lie; the count is now nowhere.)
+#
+# ⭐ THIS LITERAL IS THE `MIRROR-PIN-COVERS-FOUR-OF-SIXTEEN` SHAPE AND IT IS DELIBERATE. The pin
+# that matters — `test_no_action_reference_in_the_real_tree_is_unpinned` — derives its corpus by
+# LISTING the directory, so a new workflow's `uses:` pins are graded the moment the file lands and
+# no edit here is needed for that. What this literal buys is the second half: a new workflow cannot
+# arrive SILENTLY. It reds until a human writes the name down. Do not "fix" it into a derivation.
+THE_WORKFLOWS = (
     "ci.yml", "codeql.yml", "docs.yml", "embeddings-leg.yml", "live-db-legs.yml",
     "quality-at-scale.yml", "real-crg.yml", "release.yml", "scorecard.yml",
+    # A development aid on a deletion clock — see the header of the file itself and doc 84's
+    # `WINDOWS-PROBE-IS-A-DEV-AID`. Decide at 0.0.19 (by 2026-09-30) whether it stays.
+    "windows-probe.yml",
 )
 
 GOOD_SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1"
@@ -73,9 +83,9 @@ class _CorpusMixin(unittest.TestCase):
 class TestTheSweepSeesTheWholeTree(unittest.TestCase):
     """The real tree is clean — but first prove the sweep actually looked at it."""
 
-    def test_the_corpus_is_the_nine_workflows(self):
+    def test_the_corpus_is_exactly_the_declared_workflows(self):
         self.assertEqual(
-            set(NINE_WORKFLOWS), set(wp.workflow_files(REAL_CORPUS)),
+            set(THE_WORKFLOWS), set(wp.workflow_files(REAL_CORPUS)),
             "the set of workflow files changed. A NEW workflow is swept automatically, but it "
             "must be added here so its arrival is a deliberate act rather than a silent one.")
 
@@ -84,7 +94,7 @@ class TestTheSweepSeesTheWholeTree(unittest.TestCase):
         report zero offenders just as loudly as a healthy tree does."""
         refs = wp.action_refs(REAL_CORPUS)
         seen = {r.workflow for r in refs}
-        missing = sorted(set(NINE_WORKFLOWS) - seen)
+        missing = sorted(set(THE_WORKFLOWS) - seen)
         self.assertEqual(
             [], missing,
             "these workflows yielded NO action references at all, so the sweep is not "
@@ -96,7 +106,7 @@ class TestTheSweepSeesTheWholeTree(unittest.TestCase):
             "means it is walking a narrower structure than it should be" % len(refs))
 
     def test_no_action_reference_in_the_real_tree_is_unpinned(self):
-        """The property itself, over all nine — what the row asked for."""
+        """The property itself, over every workflow — what the row asked for."""
         offenders = wp.unpinned(REAL_CORPUS)
         self.assertEqual(
             (), offenders,
@@ -222,8 +232,11 @@ class TestTheCommentHole(_CorpusMixin):
 class TestFailsLoudWithoutPyYAML(unittest.TestCase):
     """§7g — an absent answer is not an answer.
 
-    The 17 other PyYAML call sites in this suite skip themselves when the parser is missing, so
-    on such a runner the pinning property is unchecked AND the run reports OK. This sweep raises.
+    When this was written, the 17 other PyYAML call sites in this suite skipped, weakened or
+    silently returned when the parser was missing, so on such a runner the pinning property was
+    unchecked AND the run reported OK. This sweep raised. ⚠ All 17 were converted to raise at
+    0.0.18 stage 2 (`PYYAML-SKIP-CLUSTER`) and `tests/test_pyyaml_skip_cluster.py` now keeps them
+    that way — the sentence above is history, not a description of the tree.
     """
 
     @staticmethod

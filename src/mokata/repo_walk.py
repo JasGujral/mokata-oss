@@ -47,6 +47,18 @@ from typing import List, Optional
 CHECKOUT_MARKER = ".git"
 
 
+# ⚠ `posix_name` USED TO LIVE HERE AND IS GONE. It took an already-relative string and converted
+# it, which made the conversion a step a site could REMEMBER — and every site that remembered
+# created a new half-converted pair with every site that did not. Three rounds of sweeping never
+# converged for exactly that reason. The replacement is `repo_paths.name_of(path, root)`, which
+# does the relativisation and the spelling in ONE call, so "relativised but not yet spelled" is
+# not a state this codebase has. See `src/mokata/repo_paths.py` for the invariant it enforces.
+#
+# Nothing here converts anything: this module answers "where does the walk STOP", and every value
+# it hands back — `dirpath`, `skipped` — is a native PATH, which is what its callers open and
+# stat. The one caller that turns those into NAMES (`knowledge/index.py`) does it with `name_of`.
+
+
 def is_checkout_boundary(path: str) -> bool:
     """True when `path` is the root of a checkout — i.e. it carries a `.git` entry of either
     shape (a directory for a clone/submodule, a file for a linked worktree).

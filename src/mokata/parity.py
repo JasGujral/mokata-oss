@@ -248,7 +248,7 @@ def _surfaces() -> List[CommandSurface]:
                        mcp_write=("session_push", "session_pull", "session_name"),
                        note="portable tagged sessions (Stage 55a/55b): list → read (spans local "
                             "+ remote transports); push/pull/name → gated writes (secret-scanned "
-                            "+ human-gated on EVERY transport — local/vault/postgres; content-hash "
+                            "+ human-gated on EVERY transport — local/postgres; content-hash "
                             "verified + cross-codebase mismatch surfaced on pull; rename never a "
                             "silent clobber). SS.S0 `save` → an UNGATED read tool (`session_save`): "
                             "a LOCAL snapshot of this session's in-flight state is the user's own "
@@ -330,11 +330,13 @@ def _surfaces() -> List[CommandSurface]:
             "install plumbing — reverses `setup`; a harness-config + filesystem teardown "
             "run from the shell, the mirror of `setup`.")),
         CommandSurface("migrate", exempt=(
-            "SIMP.S2 — a one-time, human-gated migration of a DEPRECATED channel (obsidian / "
-            "native-memory / memory-share / vault) into the canonical store, run from the shell. "
+            "SIMP.S2 — a one-time, human-gated migration of the DEPRECATED vault channel into "
+            "the canonical store, run from the shell. "
             "The DETECT+OFFER is in-harness: the once-per-repo deprecation WARN a read emits names "
             "the migration command (the `worktree` pattern), so the gap is disclosed, not silent. "
-            "Removed with the channels at 0.0.17.")),
+            "Removed with the channels — see `deprecation.REMOVAL_DECLARATION`. "
+            "It also ANSWERS an already-removed channel by name rather than as a typo, so this "
+            "surface outlives the last migration it can run.")),
         CommandSurface("graph", exempt=(
             "GR.S2 code-graph adoption. `graph adopt` is a DELIBERATE human-gated durable "
             "manifest write (P2) — the same class as `reconfigure`/`config set`, best made at a "

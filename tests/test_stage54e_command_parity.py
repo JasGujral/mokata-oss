@@ -48,7 +48,7 @@ EXEMPT = {"unsetup", "harness", "route", "detect", "validate", "bootstrap",
           "release-notes-check",
           # SIMP.S2 — `migrate` is one-time deprecation→canonical migration run from the shell; the
           # in-harness deprecation WARN detects+points at it (the `worktree` detect-and-offer
-          # pattern), so it is disclosed, not a silent gap. Removed with the channels at 0.0.17.
+          # pattern), so it is disclosed, not a silent gap. Removed with the channels.
           "migrate",
           # SI.1 — `gate` (run-state gate status + P14 override) is exempt BY DESIGN, and this is
           # the one exemption that is a security property rather than plumbing: giving the override

@@ -118,11 +118,11 @@ mid-query, mokata degrades to the embedded AST floor on current files (grep bene
 zero-Python repo) and says so rather than serving stale or fabricated structure. Full loop:
 [use a codebase graph](../how-to/use-a-codebase-graph.md).
 
-> **Neo4j is deprecated.** The external Neo4j code-graph backend still resolves and still works,
-> but selecting it now prints a deprecation warning and it is **scheduled for removal in
-> 0.0.17** (`deprecation.py`; a third database contradicts mokata's two-modes-one-shape store).
-> There is no migration to run — a code graph is *derived* data, so the fix is to adopt
-> `code-review-graph` or `serena` and re-index. Don't wire a new project onto it.
+> **Neo4j was removed in 0.0.18.** mokata briefly supported an external Neo4j graph as a
+> `code_graph` provider; it was deprecated at 0.0.15 (a third database contradicts mokata's
+> two-modes-one-shape store) and removed at 0.0.18. There was never a migration to run — a code
+> graph is *derived* data. If a repo's chain still names it, mokata says so once and answers from
+> the AST floor; clear the entry with `mokata reconfigure --remove neo4j`.
 
 ---
 
@@ -162,12 +162,17 @@ implementation, but no approach is approved for this run yet. Explore and approv
 (/brainstorm), or override: mokata gate override approach-approval --reason "<why>"
 ```
 
-It brought mokata to **9 backed gates** — gates with a real enforcement mechanism behind them, not
-prose — of which **4 are run-state gates** enforced on the agent's native `Write`/`Edit` by the
-`gate-guard` hook (see §4). Like the other three, it is a *methodology* block a human can lift on
-the record. (`self-protect` has since landed as the **tenth**, in 0.0.16. It runs in the same hook
-lane but *ahead* of every run-state gate, because it keys on the target path alone — and unlike a
-methodology block it is security-class and **cannot** be overridden.)
+It was the ninth gate with a real enforcement mechanism behind it rather than prose. mokata backs
+**9 backed gates** today, and the `gate-guard` hook holds **4 run-state gates** on the agent's
+native `Write`/`Edit` (see §4). Like the other three gates in that lane, `approach-approval` is a
+*methodology* block a human can lift on the record.
+
+Two later moves left that total where it was rather than raising it. `self-protect` landed in
+0.0.16 and is a full member of the map: it runs in the same hook lane but *ahead* of every
+run-state gate, because it keys on the target path alone — and unlike a methodology block it is
+security-class and **cannot** be overridden. In the other direction, 0.0.17 demoted
+`ship-readiness` to an advisory protocol boundary, because nothing in the package executes it.
+One in, one out.
 
 ### D30 · Prior-art bound step · D31 · Typed approach `decisions[]`
 
@@ -369,12 +374,12 @@ DSN (mokata owns the schema — D17) and everyone reads/writes the same memory.
 ### D17 · Move the live store between backends
 
 ```bash
-mokata memory migrate --to obsidian --yes
+mokata memory migrate --to postgres --yes
 ```
 
 ```text
-migrate: 3 item(s) sqlite -> obsidian
-migrate: 3 item(s) sqlite -> obsidian (idempotent upsert).
+migrate: 3 item(s) sqlite -> postgres
+migrate: 3 item(s) sqlite -> postgres (idempotent upsert).
 ```
 
 (3, not 2 — `migrate` moves the **full store** including the superseded `postgres` record.)
@@ -382,10 +387,10 @@ Idempotent (upsert by id), non-destructive (the source stays unless you pass `--
 and **degrade-clean** (an unreachable destination writes nothing).
 
 The two canonical backends are **sqlite** (the local, zero-config default) and **postgres** (team
-mode, your own DSN). The `obsidian` and `native-memory` backends still work but are
-**deprecated** — selecting one prints a warning, and they are scheduled for removal in 0.0.17. Move
-off them with the one-time gated `mokata migrate obsidian` / `mokata migrate native-memory`, which
-folds the channel into the canonical store.
+mode, your own DSN); `pgvector` is the opt-in semantic variant of the latter. The `obsidian` and
+`native-memory` backends were **REMOVED in 0.0.18** — your data was not touched, and a repo whose
+manifest still names one is told so rather than served an empty store. See
+[configure storage backends](../how-to/configure-storage-backends.md#obsidian-and-native-memory-removed-in-0018).
 
 ### D4 · Guided capture → referenced *just-in-time* in a later spec
 

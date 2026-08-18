@@ -46,7 +46,7 @@
       <div class="mk-hero__cta">
         <a class="mk-btn mk-btn--primary" href="getting-started/">Get started</a>
         <a class="mk-btn" href="{{ config.repo_url }}">★ Star on GitHub</a>
-        <a class="mk-btn mk-btn--ghost" href="tutorials/catches-a-bad-change/">60-second demo →</a>
+        <a class="mk-btn mk-btn--ghost" href="tutorials/catches-a-bad-change/">Try it in 60 seconds →</a>
       </div>
     </div>
 
@@ -105,8 +105,9 @@
         <div class="mk-features__kicker">// get running in 60s</div>
         <h2>Install, wire, run</h2>
         <div class="mk-quick__cmd"><span class="dim">$</span> pip install mokata &amp;&amp; mokata setup claude</div>
-        <p class="mk-quick__note">One package, zero required dependencies. mokata never calls a
-        model itself — the brain always comes from your harness.</p>
+        <p class="mk-quick__note">One package, one runtime dependency — the MCP SDK, so the server
+        works out of the box. mokata never calls a model itself — the brain always comes from your
+        harness.</p>
         <ul class="mk-quick__links">
           <li><a href="getting-started/">Get started →</a></li>
           <li><a href="concepts/pipeline/">How the pipeline works →</a></li>
@@ -123,10 +124,10 @@
     <div class="mk-grid mk-grid--bento">
 
       <div class="mk-card mk-card--wide">
-        <span class="mk-card__icon">⛨ seatbelt</span>
-        <h3>A Structural Seatbelt</h3>
-        <p>Four run-state gates are enforced by a hook, so they hold for your agent's <em>native</em> edits — not just mokata's own tools. No approved approach, no persisted spec, or no failing test, and the write is blocked outright.</p>
-        <span class="mk-card__tag">9 backed gates · 4 run-state</span>
+        <span class="mk-card__icon">◉ graph</span>
+        <h3>Codebase Graph — Mandatory by Default</h3>
+        <p>Blast radius is answered structurally, not by grep. An embedded stdlib-AST floor ships in the box (no adoption step), and adopted graphs layer on top. A <em>degraded</em> answer is <strong>refused</strong> as decision input unless you accept a ledgered, session-scoped escape — and a graph mokata knows is stale rebuilds <em>before</em> it answers, never serving you old structure.</p>
+        <span class="mk-card__tag">ast floor · degrade refused</span>
       </div>
 
       <div class="mk-card mk-card--wide">
@@ -137,16 +138,16 @@
       </div>
 
       <div class="mk-card">
-        <span class="mk-card__icon">◉ graph</span>
-        <h3>Codebase Graph — Mandatory by Default</h3>
-        <p>Blast radius is answered structurally, not by grep. An embedded stdlib-AST floor ships in the box (no adoption step), and adopted graphs layer on top. A <em>degraded</em> answer is <strong>refused</strong> as decision input unless you accept a ledgered, session-scoped escape.</p>
-        <span class="mk-card__tag">ast floor · degrade refused</span>
+        <span class="mk-card__icon">◔ ageing</span>
+        <h3>Memory That Ages — Without Losing Anything</h3>
+        <p>Items carry usage signals and bi-temporal validity windows. An over-budget scope gets a <strong>proposed</strong> archival sweep, coldest first — and archiving <em>closes a window</em> rather than deleting a row, so what you archive stays re-openable and provenance survives. Two people writing the same fact produce a proposal, not a lost fact.</p>
+        <span class="mk-card__tag">bi-temporal · never deletes</span>
       </div>
 
       <div class="mk-card">
         <span class="mk-card__icon">⌕ recall</span>
         <h3>Retrieval That Tells the Truth</h3>
-        <p>Lexical recall ranks <em>in the database</em> (SQLite FTS5 + bm25, Postgres tsvector + ts_rank). A real semantic tier installs on consent. Both degrade independently — and <code>mokata doctor</code> names which engine is actually ranking your recall.</p>
+        <p>Lexical recall ranks <em>in the database</em> (SQLite FTS5 + bm25, Postgres tsvector + ts_rank), and each tier nominates its own shortlist there, so recall doesn't slow down as your store grows. A real semantic tier installs on consent. Both degrade independently — and <code>mokata doctor</code> names which engine is actually ranking your recall.</p>
         <span class="mk-card__tag">fts5 · consented embeddings</span>
       </div>
 
@@ -160,8 +161,15 @@
       <div class="mk-card">
         <span class="mk-card__icon">⌂ local</span>
         <h3>Local-First &amp; Private</h3>
-        <p>Nothing leaves your machine unless you wire it. mokata never calls a model itself — the brain always comes from your harness.</p>
+        <p>Nothing leaves your machine unless you wire it. mokata never calls a model itself — the brain always comes from your harness. Even memory summaries are drafted by the agent you're already talking to: no model is embedded in mokata, and no API key is involved.</p>
         <span class="mk-card__tag">zero exfiltration</span>
+      </div>
+
+      <div class="mk-card">
+        <span class="mk-card__icon">⛨ seatbelt</span>
+        <h3>A Structural Seatbelt</h3>
+        <p>Four run-state gates are enforced by a hook, so they hold for your agent's <em>native</em> edits — not just mokata's own tools. No approved approach, no persisted spec, no failing test, or a write outside the scope the spec authorized, and the write is blocked outright. Ahead of all four, <code>self-protect</code> refuses any write to an installed package tree or outside your workspace.</p>
+        <span class="mk-card__tag">9 backed gates · 5 in the hook</span>
       </div>
 
       <div class="mk-card">
@@ -195,7 +203,7 @@
       <div class="mk-card">
         <span class="mk-card__icon">◐ adopt</span>
         <h3>Adopt It Gradually</h3>
-        <p><code>mokata init --mode seatbelt</code> gives you the gates and the graph. <code>--mode memory</code> adds typed persistent memory. <code>--mode full</code> turns on everything. Each mode prints the quickstart for that step — you never swallow the whole framework on day one.</p>
+        <p><code>mokata init --mode seatbelt</code> gives you the gates and the graph. <code>--mode memory</code> adds typed persistent memory. <code>--mode full</code> turns on everything. Each mode prints the quickstart for that step — you never swallow the whole framework on day one. And <code>mokata upgrade</code> finishes the job a <code>pip install -U</code> starts: it refreshes the harness wiring through the same preview-diff gate, so a gate added since your last setup can't be silently absent.</p>
         <span class="mk-card__tag">seatbelt → memory → full</span>
       </div>
 
@@ -223,9 +231,9 @@
     <div class="mk-stats">
       <div class="mk-stat"><span class="mk-stat__n">26</span><span class="mk-stat__l">Agent Skills<br><em>16 curated · 10 domain</em></span></div>
       <div class="mk-stat"><span class="mk-stat__n">37</span><span class="mk-stat__l">slash commands<br><em>wired into Claude Code</em></span></div>
-      <div class="mk-stat"><span class="mk-stat__n">67</span><span class="mk-stat__l">CLI subcommands<br><em>harness-independent</em></span></div>
-      <div class="mk-stat"><span class="mk-stat__n">55</span><span class="mk-stat__l">MCP tools<br><em>35 read · 19 write · 1 approve</em></span></div>
-      <div class="mk-stat"><span class="mk-stat__n">9</span><span class="mk-stat__l">backed gates<br><em>4 enforced on native writes</em></span></div>
+      <div class="mk-stat"><span class="mk-stat__n">69</span><span class="mk-stat__l">CLI subcommands<br><em>harness-independent</em></span></div>
+      <div class="mk-stat"><span class="mk-stat__n">61</span><span class="mk-stat__l">MCP tools<br><em>40 read · 20 write · 1 approve</em></span></div>
+      <div class="mk-stat"><span class="mk-stat__n">9</span><span class="mk-stat__l">backed gates<br><em>5 enforced on native writes</em></span></div>
       <div class="mk-stat"><span class="mk-stat__n">1</span><span class="mk-stat__l">runtime dependency<br><em>the MCP SDK</em></span></div>
     </div>
   </section>

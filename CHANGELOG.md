@@ -10,6 +10,246 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.18] — 2026-08-17
+
+> 🔴 **READ THIS FIRST IF YOU USE THE MCP SERVER — 0.0.17 AND EVERY INSTALL SINCE 2026-07-28 SHIPS
+> AN MCP SERVER THAT CANNOT START, AND UPGRADING IS NOT THE WHOLE FIX.**
+>
+> `pyproject.toml` declared `mcp>=1.2` with **no upper bound**. `mcp` **2.0.0** was published on
+> **2026-07-28** and removed `mcp.server.fastmcp` — the module `mokata`'s MCP server is built on.
+> From that date every `pip install mokata` resolved the SDK to 2.0.0, so **`mokata-mcp` fails to
+> start and all 61 tools are absent** from Claude Code. The mokata **CLI is unaffected**; only the
+> MCP server is.
+>
+> **v0.0.17 was published 2026-08-08 — eleven days into that window** — and it is still the latest
+> published release, so a fresh `pip install mokata` today still lands broken. The defect was found
+> and fixed in this release's work on **2026-08-12**, fifteen days after the window opened. It ran
+> undetected because every MCP test is gated behind `skipUnless(<the SDK imports>)`, so **a server
+> that could not start read as `OK (skipped=…)` and CI was green for the whole fifteen days.**
+>
+> **If your MCP server is broken right now, run this — it does not require upgrading mokata:**
+>
+> ```
+> pip install 'mcp<2'      # resolves to mcp 1.29.0, the last release with mcp.server.fastmcp
+> ```
+>
+> then start `mokata-mcp` again. ⚠ **On 0.0.17, `pip install -U mokata` alone does nothing** —
+> 0.0.17's own unbounded `mcp>=1.2` re-resolves to 2.0.0 and reproduces the failure. Once 0.0.18 is
+> published, upgrading *will* pull the SDK back below 2 for you, because 0.0.18 pins it; the direct
+> pin above is the fix that works whichever mokata you are on. A pin change reaches nobody who has
+> already installed — that is why this notice, and not the pin, is the remedy.
+
+**The removal release.** 0.0.18 takes things away: five deprecated channels, an entire optional
+graph database, and the ambiguity in what "the PostgreSQL floor" meant. What it adds is small and
+about one thing — telling you when it is your move. **Three of this release's eight exit criteria
+are not fully met and they are named below rather than quietly dropped.**
+
+### Fixed
+
+- **The MCP SDK is bounded — `mcp>=1.2,<2` — and a dead server can no longer read as green.**
+  Beyond the pin (which is also applied to the no-op `[mcp]` extra and to the Homebrew
+  `refresh-lock` path, which would otherwise have vendored 2.0.0 into the formula), the server now
+  distinguishes **four states where the old code had one wrong branch for two**: the SDK *absent*
+  (skip), *incompatible* (fail loudly), *broken — installed but its own dependency missing* (skip,
+  naming the dependency), and *supported* (run). Each state carries **a remedy that actually
+  works**: the incompatible branch says `pip install 'mcp<2'` and explicitly warns that
+  `pip install -U mokata` re-resolves to the same SDK, which is what the shipped message used to
+  tell you to do. `SDK_MIN_VERSION` / `SDK_MAJOR_CEILING` in `mcp/server.py` are asserted equal to
+  the `pyproject.toml` spec, and a `MOKATA_REQUIRE_MCP_SDK=1` CI leg is the positive control that
+  turns "the MCP tests skipped" from a green into a failure. **Supporting `mcp` 2.x is a port, not
+  a version bump, and is filed separately.**
+- **A settings-sourced command no longer reaches a shell unreviewed (`F10`).**
+  `hook_cli.py`'s statusline wrapper calls `subprocess.run(command, shell=True)` on a command read
+  from `settings.json`, carrying a `# nosec B602` comment that justified it as *"the user's own
+  pre-existing command."* **That justification was false from `9684b62` (0.0.5) and stayed false,
+  byte-unchanged, for four releases** — the setup scope defaults to `project`, so the origin is
+  `<root>/.claude/settings.json`, a checkout file that can arrive by clone, pull or merged PR
+  rather than by anything you typed. `shell=True` is kept — it is the feature, and mokata adds no
+  execution path the harness does not already have — but the wrap command's **origin is now stamped
+  and carried** with the value, `_statusline_command` **refuses a foreign origin**, and the command
+  is **surfaced at setup approval** so no settings-sourced string reaches a shell without a human
+  having seen it. Three approval gates were wired, not one: `run_wizard` and `run_reconfigure` had
+  both been swallowing the setup plan that was supposed to show it to you.
+- **A release can no longer publish a short asset set and call it a success.**
+  **v0.0.17's GitHub Release carries three `.sigstore.json` bundles and no `.sig` and no `.pem`** —
+  they were never created, not lost in transit. `cosign` v3.0.6 defaults to `--new-bundle-format`,
+  under which `--output-signature` and `--output-certificate` are **accepted, warned about on
+  stderr, and ignored**; the bundle already carries both. Two independent checks were disarmed and
+  both are fixed: the build job's own `ls -l dist/*.sig dist/*.pem` **exited 0 because
+  `shopt -s nullglob` was set three lines above it** (an unmatched glob expands to nothing and `ls`
+  is handed no arguments), and the release action's `fail_on_unmatched_files` defaults to **false**,
+  so it merely `console.warn`ed `🤔 Pattern 'dist/*.sig' does not match any files` and published the
+  short list anyway. The Release's asset set is now **declared once** in
+  `scripts/check-release-assets.sh` and asserted **three times on exact paths** — never a glob
+  handed to an existence check — so a missing signature fails the cut instead of shipping.
+  `nullglob` is kept (the signing loop needs it) and now sits next to the loop that needs it.
+- **`mokata branch-protection-check` no longer reports "I could not read it" as "it is not
+  protected" — and its exit contract goes from two codes to four.** GitHub returned `503` on both
+  `/branches/main/protection` (REST) and `branchProtectionRules` (GraphQL) for over an hour while
+  every other endpoint answered `200` and the rate limit sat untouched. The check called that
+  **NOT PROTECTED** and printed its apply-protection remedy — a destructive
+  `gh api -X PUT …/branches/main/protection` that overwrites whatever protection exists with a
+  template. Under time pressure at a cut that is the paste that turns a transient read failure into
+  real data loss. **A read fault may never suggest a write**, and no message this check produces on
+  an unreadable read now contains a `PUT`. The states are named and separated — `PROTECTED`,
+  `NOT_PROTECTED`, `UNREADABLE` — and the unreadable one must **earn** its pass from reads that
+  actually succeeded: `repos/<repo>/branches/<branch>` reporting `protected: true` **and** a
+  `repos/<repo>/rulesets` read that parses and shows every ruleset actively enforced. A *failed*
+  corroborating read refuses, because re-admitting "could not read ⇒ fine" one level down is the
+  same defect wearing a hat. A corroborated unreadable is a **degraded pass, not a green**: dated,
+  and loud about the four assurances it did not obtain (force-push disabled, deletion disabled,
+  status checks strict, the required check contexts).
+  ⚠ **This is a breaking change for anything that scripts this command.** Exit `1` used to mean
+  *not protected **or** unverifiable*; it now means **not protected only** — a read that succeeded
+  and showed protection absent or too weak, and the one state that still carries the
+  apply-protection remedy. `0` is unchanged (protected). `2` is new: the detail is **unreadable and
+  uncorroborated** — refuse, check GitHub's status, retry; never write. `3` is new: the **degraded
+  pass** above, deliberately **non-zero** so a caller that has not been taught what it means reads
+  it as a refusal, which is the safe way round. **A caller that special-cases exit `1` must be
+  updated** — what `1` used to catch is now split across `1` and `2`, and a caller that instead
+  treats every non-zero alike will refuse a cut this check passed. The release preflight handles
+  all four states plus an unknown-code arm that also refuses, since an unexpected exit code proves
+  nothing about protection. The codes are documented on the command's entry in
+  `docs/reference/cli.md`.
+
+### Removed
+
+- **Five deprecated channels are gone, and every one of them tells you so in the way its own data
+  deserves.** The deprecated set is now **empty**; the removed set is `obsidian`, `native-memory`,
+  `memory-share`, `vault` (the session-*transport* kind) and `neo4j`. A channel that is gone still
+  has a user who was told it was going and who may hold data in it, so a removal is not a deletion
+  of the entry — it is a different notice. There are **three classes**, because the removed things
+  are three kinds of thing:
+    - **`obsidian` and `native-memory`** were memory *backends* whose data sits behind a store this
+      release can no longer open. If your manifest's `memory_store` chain still names one **and
+      there is data behind it**, mokata now raises `RemovedChannelError` — **nothing read, nothing
+      written, nothing deleted** — and names your vault path and the one way across. Before this,
+      the chain still resolved: the removed strategy read as merely absent, the router degraded past
+      it, and the SQLite floor answered with an **empty store, no error and exit 0**. Memory that
+      read as erased by an upgrade.
+    - **`memory-share` and `vault`** are files *you own*, and this release still reads them —
+      `mokata memory import` and `mokata session list` restore them directly. So the notice says
+      where the file is and which command opens it, and does **not** tell you to downgrade. Telling
+      you to `pip install` an older mokata for something the release in your hands already does
+      would be a false refusal.
+    - **`neo4j`** is neither. A code graph is *derived* data: there is nothing to bring across,
+      because the canonical graph re-derives it from your code. The old records could only offer
+      you a downgrade plus `mokata migrate neo4j` — a command that **never existed**, since that
+      channel's migration string was empty for its entire deprecated life — or point at a file
+      under `.mokata/` when the graph was never there at all. It is on your own server at
+      `$NEO4J_URI`, untouched.
+  ⚠ **`mokata vault push/list/search/pull` and `team join --vault` are NOT affected and did not go
+  anywhere.** The removed `vault` is the session-transport kind. The design-artifact vault is a
+  live, supported feature that happened to share the word and the storage directory.
+- **The Neo4j code-graph backend is removed** — **153 LOC across 10 modules**, including the
+  **public export surface** (`knowledge/__init__.py`), the `GRAPH_TOOLS` entry and the resolution
+  branches in `knowledge/layer.py`. `Neo4jUnavailable` goes with it. mokata only ever *queried* a
+  graph your team populated; your database, its contents and its server are untouched. The embedded
+  AST floor (or an adopted external code-graph provider) is the supported path, and it re-derives
+  the graph from your code.
+
+### Changed
+
+- **The PostgreSQL floor is a number, not a sentence in a comment.** It moves to **PostgreSQL ≥ 15,
+  target 17** — declared once as `MIN_PG_MAJOR` / `TARGET_PG_MAJOR` and derived everywhere else,
+  including the three backend-guidance strings that used to state a digit and now interpolate one.
+  **The reason is a date: PostgreSQL 14 reaches upstream end-of-life on 2026-11-12**, and mokata
+  was still telling users to stand up a database that dies on that day. `tests/test_pg_floor_drift.py`
+  grades the whole tracked corpus against the declaration, so a floor claim cannot drift out of a
+  doc again. ⚠ **This release declares the floor; it does not yet enforce it at connect time** —
+  see *Known limitations*.
+- **The CI floor legs go from one to three.** The declared Python 3.10 floor was tested by a single
+  matrix leg (`ubuntu · 3.10 · jsonschema=present`). It now also runs on
+  **`ubuntu · 3.10 · jsonschema=absent`** and **`windows · 3.10 · jsonschema=present`** — the
+  combination that had been **configured in no workflow at all**. And `scripts/floor-python.sh`
+  provisions that floor locally in one command, reading the version from `requires-python` on every
+  invocation so no version literal exists in the file to go stale. `--dry-run` prints **both**
+  provisioning routes (`uv` and `python<floor>`) with the command each would run and whether this
+  machine has it, and **exits 2 — not 0 — when it has neither**: a mode that reports "I cannot do
+  this" must not answer with the status that means "I did".
+
+### Added
+
+- **mokata tells you when it is your move.** A desktop notification (and a sound) when mokata is
+  waiting on a human — a gated write, a CLI prompt, an approval that has stopped the run. Both are
+  **on by default** and each has its own switch: `ux.notify` (`true`) and `ux.notify_audio`
+  (`true`), plus `ux.notify_level` with three levels — `harness-silent` (only the waits nothing
+  else announces), `all-waits`, and **`all-prompts`, the default and the widest**. `MOKATA_NOTIFY`
+  is an environment kill-switch that needs no manifest. **It is rate-limited to one notification
+  per 60 seconds**, because mokata stages gated writes in batches and twenty banners for one wait
+  is not twenty times the signal — it is none, plus a user who turns the feature off. It never
+  fires from a test process, never fires off-TTY, in CI or under `--yes`, and never raises.
+  Every OS call is an **argv list under a hard timeout with no user content in it** — same
+  discipline as any other command mokata spawns. macOS and Linux have notification and audio arms;
+  **Windows has neither and says so once** rather than failing quietly. On Linux the sound has
+  **two arms, not one** — `canberra-gtk-play` (which honours your sound theme) and, where that is
+  absent, `paplay` with the freedesktop theme's own sample — because hanging the whole feature on
+  one optional package is not the same as needing a sound stack. Where neither exists and there is
+  no terminal to ring, **mokata says so once** instead of being quietly silent; see
+  *Known limitations*.
+- **The statusline leads with the thing that has stopped.** When mokata is waiting on you, the
+  wait segment is now **first** on the line — `⏳ awaiting approval p-… (+4 more)  local · mokata` —
+  instead of last, behind a strip that grows, on a line every terminal truncates from the right.
+  It is now composed in `statusline_badge` (what anything reusing mokata's statusline actually
+  calls) rather than by hand in the one shipped caller, and the composition is pinned.
+- **A bare status badge no longer means two things.** `mokata` used to be the answer both when your
+  session is bound to no run (healthy) and when the surface could not be read at all (absent). The
+  healthy answer is byte-identical; the unreadable one now reads `mokata ▸ ⚠ unreadable`.
+
+### Known limitations
+
+- **The PostgreSQL ≥ 15 floor is declared and derivable, but nothing in mokata refuses or warns
+  about an older server yet.** Point mokata at PostgreSQL 14 and it will connect and work. The
+  enforcement — WARN before **2026-11-12**, REFUSE after it — is scheduled for **0.0.19**, and the
+  date is PostgreSQL 14's upstream end-of-life. This is a **recorded decision, not an oversight**:
+  the floor is declared, derived from one constant and drift-guarded across every tracked path,
+  nothing regresses for anyone, and PG14 users remain on an upstream-supported release until that
+  date — so holding this release for a window of zero exposure was judged the wrong trade. If you
+  run PostgreSQL 14, plan the upgrade against **2026-11-12** rather than against mokata.
+- **The PR gate takes 26–31 minutes and the target for this release was under 10.** Measured on
+  three mirror runs: **1556 s**, **1791 s** and **1872 s** wall clock. The gate's duration is one
+  leg's duration — `windows-latest · py3.12 · jsonschema=present` was the slowest in all three and
+  the run's wall clock matched it to within 4 seconds — and inside that leg a **single step, the
+  unit suite, is 91% of it** (1413 s of 1552 s; 1627 s of 1787 s; 1708 s of 1868 s). ⚠ **These are
+  exact durations, not estimates and not lower bounds:** all three runs concluded `success` with
+  10 of 10 jobs green, and each figure is the run's own `run_duration_ms` read from the API rather
+  than a job span added up by hand. Do not read 26–31 minutes as a soft or provisional number.
+  This affects contributors, not users of the released package. The target was unmeetable as written — no
+  rearrangement of the other steps reaches 10 minutes — and the work is re-homed to **0.0.19**,
+  where the only thing that can move the number is cutting inside the unit suite itself.
+- **On Linux, the notification's *sound* needs a sound stack — and if there is none, and no
+  terminal to ring, you get the banner and no audio.** mokata tries `canberra-gtk-play`
+  (`libcanberra-gtk3-bin`) and then `paplay` (`pulseaudio-utils`); on a terminal it falls back to
+  the bell, which needs nothing at all. The case with no cover is an **MCP gated write on a
+  headless-audio box**: an MCP server has no TTY, so there is no bell to fall back to. mokata
+  raises the banner, **names the degrade once** (`notify-audio`) and tells you which package to
+  install — it does not pretend to have made a sound. `settings.ux.notify_audio false` stops it
+  asking. macOS is unaffected (`afplay` and the system sound are always present); Windows has no
+  arm at all, as above.
+- **The new Windows Python 3.10 floor leg HAS now executed — for the first time anywhere — and it
+  went red, along with the other six unit legs.** ✎ *Updated 2026-08-18; the previous text said the
+  leg had zero runs, which was true when written and stopped being true on 2026-08-17.* Its first
+  run was the mirror CI for this release (run `32053041561`), and it reded with the same twenty
+  failures as both Windows py3.12 legs. **All twenty were defects in the tests, not in mokata** —
+  nineteen of them were two causes with a wide blast radius (a bare `"bash"` argv, which on Windows
+  resolves through System32 to the WSL launcher rather than to Git Bash; and repo-relative paths
+  built with the OS separator then compared against `/`-spelled names), and the twentieth was the
+  floor provisioner's own dry-run assertion. All are fixed, with guards, before this release
+  publishes. The leg working on its first day is the leg doing its job — the combination was tested
+  by nothing before now, which is precisely why it was added.
+- **The SQLite FTS5/BM25 lexical tier still ranks *worse* than the keyword floor it replaced, for
+  the third release running.** 0.0.16 disclosed it and scheduled the repair for **0.0.17**; 0.0.17
+  shipped no ranking work; 0.0.18 shipped none either, so the measurement and the defect both stand
+  unchanged. `normalize_lexical_scores` scales each engine's scores against the best score *in its
+  own result set*, flattening exactly the gap that would have ranked a mid-pack answer. On the
+  100,000-item benchmark, against the Jaccard keyword floor on the same probes and the same code —
+  only the corpus size differs — the FTS tier measures **−5.6pp recall (0.5000 → 0.4444)** and
+  **−10.8pp MRR@10 (0.8334 → 0.7258)**. At 5,000 items the same comparison loses no recall at all
+  and only −3.3pp MRR, so a small corpus hides more than half of it. **Now scheduled for 0.0.19**,
+  with the rest of the ranking work, because the correct repair is rank-preserving normalization
+  rather than a constant to tune. If you run a large store and your lexical results look
+  mis-ordered, this is why.
+
 ## [0.0.17] — 2026-08-08
 
 **Trustworthy evidence.** A green check means something. This release is mostly about the
@@ -1052,6 +1292,7 @@ spine.
 - Clean-room throughout: no dependency on, or text copied from, any other framework
   (Apache-2.0, under MoStack).
 
+[0.0.18]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.18
 [0.0.17]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.17
 [0.0.16]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.16
 [0.0.15]: https://github.com/JasGujral/mokata-oss/releases/tag/v0.0.15
