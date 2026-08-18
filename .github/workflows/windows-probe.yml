@@ -112,7 +112,10 @@ jobs:
         # seconds rather than the ~30 minutes a full Windows unit run costs — which is the only
         # reason this inventory exists at all.
         if: always()
-        run: python tests/skip_inventory.py
+        run: |
+          python tests/skip_inventory.py
+          echo "--- the same inventory, per test, for crossing against a change set ---"
+          python tests/skip_inventory.py --json
 
   e2e:
     # ★ THE JOB THE UNIT LEGS CANNOT STAND IN FOR. A green suite proves the suite agrees with

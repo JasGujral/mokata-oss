@@ -68,6 +68,32 @@ def _say(step, detail=""):
     print("  %-34s %s" % (step, detail), flush=True)
 
 
+def resolve(program):
+    """The ABSOLUTE path of a console entry point, or a named failure.
+
+    ⚠ NOT A BARE NAME IN AN ARGV, and the guard that made this so is
+    `test_windows_shell_and_paths.TestNoSpawnResolvesThroughSystem32`, which reddened the moment
+    this file first spawned `mokata-mcp` by name. Two reasons, and only the first is about
+    hijacking:
+
+      * a bare `argv[0]` on Windows resolves through the System32 search before PATH, so a name
+        this tree spawns must be one nothing in System32 shadows — a question a human answers
+        once, per name, in a declared set;
+      * `mokata-mcp` on Windows is `mokata-mcp.exe` in the interpreter's `Scripts/` directory.
+        Resolving it explicitly means "pip put no script on PATH" reports AS ITSELF instead of as
+        a server that would not start — which is the precise failure the console-entry-point
+        design exists to prevent (see `hook_cli`'s header), and therefore the last failure this
+        check should be vague about.
+    """
+    found = shutil.which(program)
+    if not found:
+        raise StepFailed(
+            "`%s` is not on PATH. pip installed the package but put no console script where the "
+            "shell can find it — on Windows that means nothing in this product is runnable, and "
+            "it is a packaging failure, not a server failure." % program)
+    return found
+
+
 class Server:
     """The real `mokata-mcp` console entry point, spawned as a subprocess and spoken to on stdio.
 
@@ -78,7 +104,7 @@ class Server:
 
     def __init__(self, cwd):
         self.proc = subprocess.Popen(
-            ["mokata-mcp"], cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            [resolve("mokata-mcp")], cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, bufsize=1)
 
     def _readline(self):
@@ -156,7 +182,9 @@ def check(workdir):
     _say("host", "%s / %s / python %s" % (os.name, sys.platform, sys.version.split()[0]))
 
     # ---- 1 · the CLI scaffolds a repo -----------------------------------------------------
-    init = _run(["mokata", "init", "--profile", "standard", "--yes", "--path", workdir], workdir)
+    mokata = resolve("mokata")
+    _say("console entry points", "mokata -> %s" % mokata)
+    init = _run([mokata, "init", "--profile", "standard", "--yes", "--path", workdir], workdir)
     if init.returncode != 0:
         raise StepFailed("`mokata init` exited %d:\n%s\n%s"
                          % (init.returncode, init.stdout[-2000:], init.stderr[-2000:]))
@@ -204,7 +232,7 @@ def check(workdir):
         _say("remember (proposes)", "ok — gated, id %s, nothing written" % proposal_id)
 
         # ---- 5 · the human approves, non-interactively ------------------------------------
-        approved = _run(["mokata", "approve", "--yes", proposal_id], workdir)
+        approved = _run([mokata, "approve", "--yes", proposal_id], workdir)
         if approved.returncode != 0:
             raise StepFailed("`mokata approve --yes %s` exited %d:\n%s\n%s"
                              % (proposal_id, approved.returncode,
