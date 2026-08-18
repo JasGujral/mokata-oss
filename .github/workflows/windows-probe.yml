@@ -1,0 +1,107 @@
+name: windows-probe
+
+# A DEVELOPMENT AID, not a gate. Its whole purpose is to shorten the Windows feedback loop from
+# ~35 minutes (a full `ci.yml` matrix run on the mirror) to a few minutes, so a Windows-only fix
+# can be exercised before it is believed rather than after it is shipped.
+#
+# ⚠ IT GATES NOTHING AND MUST NEVER BE MADE TO. Branch protection lists required checks by name;
+# this workflow's name is deliberately not among them. A green probe is evidence, never a pass.
+#
+# ⚠ IT IS SCHEDULED FOR DELETION. Backlog row `WINDOWS-PROBE-IS-A-DEV-AID` (doc 84) — decide at
+# the 0.0.19 cut whether it stays or goes. If it is still here after **2026-09-30** with no row
+# saying why, it has become a fourth thing nobody owns.
+#
+# WHY `push:` AND NOT `workflow_dispatch:`. A `workflow_dispatch` trigger is only offered for a
+# workflow file that already exists on the repository's DEFAULT branch, so the first run of a new
+# dispatch-triggered workflow requires landing it on `main` first — which is the opposite of a
+# probe. A `push:` trigger reads the workflow out of the pushed ref itself, so the very first
+# `probe/**` branch runs the version of the file that branch carries. That is the property.
+#
+# WHAT A `probe/**` PUSH CAN AND CANNOT START, derived by parsing every `on:` block in this
+# directory rather than read by eye (`tests/test_windows_probe_workflow.py` re-derives it and
+# reds if any of the following stops being true):
+#
+#   release.yml        on: push.tags ["v*"]        — a BRANCH push carries no tag ref. It is the
+#                                                    only workflow in the tree with a publishing
+#                                                    job (`pypi`, `github-release`), and it is
+#                                                    unreachable from here.
+#   ci.yml             push.branches [master,main] — `probe/**` is neither.
+#                      pull_request                — fires when a PR is OPENED, not when a branch
+#                                                    is pushed. ⚠ Do not open a PR from a probe
+#                                                    branch: that starts the 35-minute matrix.
+#   codeql.yml         push/pr.branches [main,master]
+#   docs.yml           push.branches [master,main] + release.published
+#   scorecard.yml      push.branches [main,master] + schedule + branch_protection_rule
+#   embeddings-leg.yml
+#   live-db-legs.yml   workflow_dispatch + schedule only
+#   quality-at-scale.yml
+#   real-crg.yml       workflow_dispatch only
+#
+# WHERE IT RUNS. The private repo's Actions minutes are exhausted (every job there since
+# 2026-08-17 has failed in <5s with zero steps executed), so probe branches are pushed to the
+# PUBLIC mirror `JasGujral/mokata-oss`, where Actions are free. That is also where `ci.yml`'s
+# Windows legs run, so the probe and the gate observe the same runner image.
+
+on:
+  push:
+    branches: ['probe/**']
+
+# Least-privilege: this workflow reads a checkout and nothing else.
+permissions:
+  contents: read
+
+env:
+  # ⭐ THE ONE LINE TO EDIT. Space-separated unittest module names, run from inside `tests/`.
+  # Point it at the modules whose Windows behaviour you are trying to observe; everything else
+  # in this file stays put. Keep it SHORT — the value of this workflow is its wall clock.
+  #
+  # Currently: the two modules holding all 11 failures on mirror run 32144708930's three Windows
+  # legs (identical failure set on `py3.12 absent`, `py3.12 present` and `py3.10 present`).
+  PROBE_MODULES: "test_crg_nav test_nested_checkout_walkers"
+
+jobs:
+  probe:
+    name: probe · windows · py3.12
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    # Well under the target; a probe that can hang is not a probe. `ci.yml`'s Windows unit leg
+    # takes 30m+, so anything past 10 here means the probe is doing the gate's job by mistake.
+    timeout-minutes: 10
+    # Same shell as `ci.yml`'s test job — windows-latest defaults to pwsh, and every `run:` here
+    # is POSIX. windows-latest ships Git Bash.
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Both pins are DERIVED, not typed: each is the single value every one of the nine existing
+      # workflows already uses (`grep -h 'uses: actions/…@' .github/workflows/*.yml | sort -u`
+      # returns exactly one line apiece). A probe that pinned a different SHA would be testing a
+      # different action from the gate it is standing in for.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install mokata
+        # NON-EDITABLE, and that is a decision rather than a typo. Every other workflow installs
+        # `-e .`, and `tests/test_pinned_dependency_property.py` derives the editable-install
+        # population from this directory and reconciles it against a DATED external reading of
+        # the mirror's open `PinnedDependenciesID` alerts (read 2026-08-13). A ninth editable site
+        # would demand an alert count for a workflow that has never been scanned — inventing an
+        # external reading, which is the one thing that file exists to prevent. A plain `.` is
+        # also what D2's end-to-end wants: the package as a user installs it.
+        run: pip install .
+      - name: Install test tooling (PyYAML — test-only, so any module can be probed)
+        run: pip install --require-hashes -r requirements/ci.txt
+      - name: Install jsonschema (matches ci.yml's `present` leg)
+        run: pip install --require-hashes -r requirements/jsonschema.txt
+      - name: Report the resolved MCP SDK
+        run: python -c "import importlib.metadata as m; print('resolved mcp ==', m.version('mcp'))"
+      - name: Probe the named modules
+        # Run from inside `tests/` so `_support` is importable exactly as `unittest discover
+        # -s tests -t tests` arranges it in ci.yml. `MOKATA_REQUIRE_MCP_SDK` matches the
+        # `present` leg, where a skipped MCP gate is the bug rather than the environment.
+        env:
+          MOKATA_REQUIRE_MCP_SDK: '1'
+        working-directory: tests
+        run: python -m unittest -v ${PROBE_MODULES}
