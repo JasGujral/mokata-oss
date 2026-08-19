@@ -177,6 +177,17 @@ class TestBuildStageBadge(unittest.TestCase):
             self.assertEqual(before, after)        # read-only — no new state written
 
     def test_broken_surface_never_raises(self):
+        """⚠ PIN REVERSED, 0.0.18 lane F (doc 85 §7h — a pin can encode a false premise, and then
+        it protects the defect).
+
+        This asserted `== "mokata"`, which is what an UNREADABLE surface produced AND what a
+        healthy session with no run produced. It was green, it was exercised, and what it graded
+        was wrong: it made the §7g conflation the contract, so any future reader fixing the badge
+        would have found a test telling them the merge was deliberate.
+
+        The behaviour under test — never raise — was always right and still is. What changes is
+        that "I could not read this surface" and "there is no run here" now answer differently,
+        and this pin asserts the DIFFERENCE rather than the string that hid it."""
         class Boom:
             @property
             def state(self):
@@ -185,8 +196,10 @@ class TestBuildStageBadge(unittest.TestCase):
             @property
             def manifest(self):
                 raise RuntimeError("no manifest")
-        # must degrade, never raise
-        self.assertEqual(progress.build_stage_badge(Boom()), "mokata")
+        badge = progress.build_stage_badge(Boom())          # must degrade, never raise
+        self.assertEqual(badge, progress.BADGE_UNRESOLVED)
+        self.assertNotEqual(badge, progress.BADGE_NO_RUN,
+                            "an absent answer must not wear the healthy one's representation")
 
 
 # ===================================================================== statusline command

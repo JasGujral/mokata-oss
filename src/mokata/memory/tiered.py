@@ -212,8 +212,8 @@ def lexical_tier(store: Any, query: str, items: List[Any], top_k: int,
 
     Three outcomes, and the difference between the last two is the honesty:
       * FTS live       — the DB's normalized scores, intersected with what the caller may SEE;
-      * floor by DESIGN — a backend with no `lexical_search` at all (Obsidian's files, the native
-        client). Jaccard is that backend's lexical tier, not a loss. NO notice: one that always
+      * floor by DESIGN — a backend with no `lexical_search` at all (any third-party adapter).
+        Jaccard is that backend's lexical tier, not a loss. NO notice: one that always
         fires is noise, and D5's whole point is that a notice MEANS something;
       * floor by DEGRADE — a SQL backend that SHOULD have FTS and doesn't (FTS5 not compiled), or
         whose search raised. The user asked for FTS recall and is getting keyword overlap, so say
@@ -410,7 +410,7 @@ def tiered_recall(store: Any, query: str, *, embedder: Optional[Embedder] = None
         injection, which must move no durable state on a hook that fires every prompt."""
     # R-1 (DB.S8) — CANDIDATE SELECTION. The store's tiers nominate their own ranked top-k in SQL
     # and only the union is materialized; `None` means this backend cannot nominate (the Jaccard
-    # floor: Obsidian's files, the native client, any third-party adapter) and the full-set read
+    # floor: any third-party adapter with no index of its own) and the full-set read
     # below is its correct tier, not a fallback it is being punished with.
     nominated = _nominate(store, query, top_k, degrade_out, embedder, semantic,
                           kinds=kinds, count_read=count_read)

@@ -238,17 +238,24 @@ def team_connect(root: str, surface: Any, dsn_env: str = DEFAULT_DSN_ENV, *,
 # compose.team.yml + .env.example) ships later (TM.S12); here `compose` only POINTS at it.
 INIT_BACKENDS = ("managed", "compose", "local")
 
+#
+# ⚠ THE FLOOR IS `%(floor)s`, NOT A DIGIT. These three strings said `≥14` for the thirteen days
+# after ADR-54 V1 moved the floor to `>= 15` — three of the ten surfaces `PG-FLOOR-RATIFIED-
+# NOWHERE-BUT-THE-ADR` (doc 84) found, and the only three that a user reads out of the PRODUCT
+# rather than out of a document. They interpolate `teamdb.MIN_PG_MAJOR` at the render site below
+# for the same reason the env var is interpolated rather than spelled: a literal here is a copy,
+# and every copy of a decision is a place the next ratification has to remember.
 _BACKEND_GUIDANCE = {
-    "managed": ("golden path — bring ONE managed Postgres ≥14 (Supabase / Neon / RDS; mokata "
-                "hosts nothing) and export its DSN as $%(env)s. On Supabase/Neon use a "
+    "managed": ("golden path — bring ONE managed Postgres ≥%(floor)s (Supabase / Neon / RDS; "
+                "mokata hosts nothing) and export its DSN as $%(env)s. On Supabase/Neon use a "
                 "DIRECT/session connection string, not the transaction-mode pooler (LISTEN/NOTIFY "
                 "dies behind it)."),
     "compose": ("self-host — a one-command `docker-compose.team.yml` + `.env.example` ship in a "
-                "later step (TM.S12). For now, stand up any Postgres ≥14 and export its DSN as "
-                "$%(env)s; the rest of init is identical."),
-    "local": ("local trial — point $%(env)s at a local Postgres ≥14 (e.g. a dev container) to try "
-              "team mode on one machine. Everyday solo use needs none of this — that's `local` "
-              "mode (the zero-config default)."),
+                "later step (TM.S12). For now, stand up any Postgres ≥%(floor)s and export its "
+                "DSN as $%(env)s; the rest of init is identical."),
+    "local": ("local trial — point $%(env)s at a local Postgres ≥%(floor)s (e.g. a dev container) "
+              "to try team mode on one machine. Everyday solo use needs none of this — that's "
+              "`local` mode (the zero-config default)."),
 }
 
 # The two-role model (doc 48 C3). D1 made the runtime half REAL: no runtime path can reach DDL
@@ -289,7 +296,8 @@ def team_init(root: str, surface: Any, *, backend: str = "managed",
     backend = backend if backend in INIT_BACKENDS else "managed"
 
     emit(honest_note())
-    emit("team init · backend — " + (_BACKEND_GUIDANCE[backend] % {"env": dsn_env}))
+    emit("team init · backend — "
+         + (_BACKEND_GUIDANCE[backend] % {"env": dsn_env, "floor": teamdb.MIN_PG_MAJOR}))
 
     # 1) fail-closed prerequisites — a named fix, BEFORE anything is written.
     if not driver_present():

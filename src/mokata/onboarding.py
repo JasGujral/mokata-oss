@@ -40,14 +40,22 @@ from .profiles import (
     profile_enabled_set,
     profile_names,
 )
+from .notify import announce_prompt
 from .prompt import read_yes_no
 
 # The OPT-IN integrations the wizard asks about — the external/MCP providers beyond the
 # always-on local floors (grep / ripgrep / sqlite). Each maps to a capability; a present one is
 # offered to wire, an absent one is RECOMMENDED (never installed).
+#
+# ⚠ `neo4j` LEFT AT 0.0.18 STAGE 14, AND IT WAS THE LOUDEST SURFACE IN THE WHOLE REMOVAL. This
+# tuple is what the first-run wizard OFFERS, and `INSTALL_HINTS` below is what it tells a user to
+# type: on the day this stage started, a brand-new user was still being handed `pip install neo4j`
+# and told to export three env vars for the backend this release deletes. No import-graph sweep
+# reaches a sales pitch — the strings are data, not calls — which is why it is called out here
+# rather than left to be found by whatever tool finds imports.
 OPTIONAL_INTEGRATIONS = (
-    "code-review-graph", "serena", "neo4j",      # code_graph providers
-    "obsidian", "postgres", "native-memory",     # memory_store providers
+    "code-review-graph", "serena",               # code_graph providers
+    "postgres",                                  # memory_store providers
 )
 
 # CLEAN-ROOM / ADOPT: how a user installs an absent integration THEMSELVES. mokata only ever
@@ -55,8 +63,6 @@ OPTIONAL_INTEGRATIONS = (
 # tool ships with its harness / nothing to pip-install).
 INSTALL_HINTS: Dict[str, str] = {
     "postgres": "pip install 'mokata[postgres]'   # the optional Postgres memory backend",
-    "neo4j": "pip install neo4j   # then set NEO4J_URI / NEO4J_USERNAME / NEO4J_PASSWORD",
-    "obsidian": "install Obsidian (https://obsidian.md) and open a vault, then re-run setup",
     "serena": "install the Serena MCP server per its docs, then re-run setup",
     "code-review-graph": "install the code-review-graph MCP server per its docs, then re-run "
                          "setup",
@@ -119,6 +125,9 @@ def _default_ask(prompt: str, choices: Any, default: str) -> str:
     if not sys.stdin.isatty():
         print(f"mokata: non-interactive stdin — defaulting to '{default}'", file=sys.stderr)
         return default
+    # Lane F — a blocking human read that is not a y/N, and therefore one a notifier wired only to
+    # `read_yes_no` would have missed entirely. Announced AFTER the TTY guard, like every other.
+    announce_prompt()
     try:
         ans = input(f"{prompt} [{'/'.join(choices)}] (default {default}): ").strip()
     except (EOFError, OSError):
@@ -137,7 +146,9 @@ def _available_needs(profile: str) -> set:
 
 
 def render_wizard_plan(profile: str, detected: Dict[str, bool], chosen: List[str],
-                       recommended: List[str], wire_harness: bool, harness: str) -> str:
+                       recommended: List[str], wire_harness: bool, harness: str,
+                       root: str = ".", scope: str = "project",
+                       home: Optional[str] = None) -> str:
     """The human-gate preview — exactly what the wizard WOULD do before any write."""
     lines = ["mokata first-run wizard — here's what I'll do (nothing is written yet):", ""]
     lines.append(f"  • initialize this repo with the '{profile}' profile")
@@ -146,6 +157,12 @@ def render_wizard_plan(profile: str, detected: Dict[str, bool], chosen: List[str
                      f"→ {TOOL_CATALOG[tid]['provides']}")
     if wire_harness:
         lines.append(f"  • wire mokata into {harness} (slash commands + MCP server + hooks)")
+        # F10 — this gate drives `setup_harness(assume_yes=True)`, so `render_setup_plan` is
+        # never printed on this path. Without this the wizard would compose a pre-existing
+        # statusLine into a shell-run command with nothing shown (P2).
+        from .harness_setup import render_wrap_disclosure, statusline_wrap_disclosure
+        lines.extend(render_wrap_disclosure(
+            statusline_wrap_disclosure(harness, root, scope, home)))
     if recommended:
         lines.append("")
         lines.append("  Detected but NOT installed — I'll RECOMMEND (never install for you):")
@@ -186,7 +203,24 @@ def _unwire_integration(root: str, tid: str, *, ledger: Any = None,
     clean-uninstall). Returns True on success; a tool that isn't wired is a no-op (True)."""
     from . import config_cmd
     sink = out or (lambda _s: None)
-    need = TOOL_CATALOG[tid]["provides"]
+    # THE CAPABILITY COMES FROM THE MANIFEST WHEN THE CATALOG NO LONGER KNOWS THE TOOL (stage 14).
+    # `TOOL_CATALOG[tid]["provides"]` KeyErrors on exactly the tool a user most needs to unwire —
+    # one this release removed. The committed manifest is where the answer actually lives; the
+    # catalog is only the faster copy of it.
+    need = ""
+    if tid in TOOL_CATALOG:
+        need = TOOL_CATALOG[tid]["provides"]
+    else:
+        _f, block = config_cmd.config_get(root, f"tools.{tid}.provides")
+        if isinstance(block, str):
+            need = block
+        else:
+            for cap, chain in _current_wiring(root).items():
+                if tid in chain:
+                    need = cap
+                    break
+    if not need:
+        return True                                   # not wired anywhere → clean no-op
     _found, chain = config_cmd.config_get(root, f"capabilities.{need}.fallback")
     chain = chain if isinstance(chain, list) else []
     if tid in chain:
@@ -225,11 +259,38 @@ def _current_wiring(root: str) -> Dict[str, List[str]]:
 
 
 def _wired_integrations(root: str) -> set:
-    """The OPTIONAL integrations currently wired into any capability chain."""
+    """The OPTIONAL integrations currently wired into any capability chain.
+
+    The wizard's question: which of the things I OFFER are already on? It drives `--add`'s
+    idempotency and the "newly available" prompt, and filtering by `OPTIONAL_INTEGRATIONS` is
+    exactly right for that — the always-present floors (grep / ast / ripgrep / sqlite) are never
+    offered, so they must never read as "wired" either."""
     wired = set()
     for chain in _current_wiring(root).values():
         wired.update(t for t in chain if t in OPTIONAL_INTEGRATIONS)
     return wired
+
+
+def _removable_tools(root: str) -> set:
+    """The tools `--remove` may take out of a chain — a DIFFERENT question from the one above.
+
+    ★ THEY ARE TWO QUESTIONS AND THEY WERE ONE FUNCTION, AND 0.0.18 STAGE 14 IS WHERE THAT BILL
+    CAME DUE. `--remove` used `_wired_integrations`, so it could only unwire something the current
+    release still OFFERS — and the single most important thing a user ever needs to unwire is a
+    provider this release REMOVED. Take `neo4j` out of `OPTIONAL_INTEGRATIONS` (which stage 14
+    must, or the wizard goes on selling it) and `mokata reconfigure --remove neo4j` silently
+    becomes a no-op that still exits 0: it reports "no changes — your setup already matches" to a
+    user whose manifest plainly still names it. The removal record points at that command, so the
+    remedy would have been a lie told by the notice that exists to stop lies.
+
+    Removable = an offered integration, OR anything in a chain the catalog no longer knows. The
+    second clause is the new one and it is deliberately narrow: a tool this release does not ship
+    cannot be one of the always-present floors, so `--remove grep` stays the no-op it always was
+    and every other behaviour is byte-identical."""
+    out = set()
+    for chain in _current_wiring(root).values():
+        out.update(t for t in chain if t in OPTIONAL_INTEGRATIONS or t not in TOOL_CATALOG)
+    return out
 
 
 def _harness_wired(root: str, scope: str, home: Optional[str], harness: str) -> bool:
@@ -262,6 +323,11 @@ class ReconfigPlan:
     harness_action: str = ""          # "" | "add" | "remove"
     harness: str = "claude"
     scope: str = "project"
+    # Carried so `render_reconfigure_diff` can re-read the SAME settings.json the apply will
+    # (F10 — the statusLine wrap disclosure). A diff that resolved a different file than the
+    # write is the drift the disclosure exists to prevent.
+    root: str = "."
+    home: Optional[str] = None
 
     @property
     def profile_changed(self) -> bool:
@@ -287,7 +353,8 @@ def plan_reconfigure(root: str = ".", *, detector: Optional[Detector] = None,
     detector = detector or Detector()
     if not Surface.is_initialized(root):
         return ReconfigPlan(initialized=False, current_profile="", target_profile="",
-                            detected={}, current_wired=[], harness=harness, scope=scope)
+                            detected={}, current_wired=[], harness=harness, scope=scope,
+                            root=root, home=home)
 
     current_profile = _current_profile(root)
     target_profile = profile or current_profile
@@ -312,8 +379,9 @@ def plan_reconfigure(root: str = ".", *, detector: Optional[Detector] = None,
                 added.append(tid)
         elif tid in INSTALL_HINTS:
             recommended.append(INSTALL_HINTS[tid])        # ABSENT → recommend, NEVER install
+    removable = _removable_tools(root)
     for tid in (remove or []):
-        if tid in current_wired and tid not in removed:
+        if tid in removable and tid not in removed:
             removed.append(tid)
 
     config_changes: List[tuple] = []
@@ -335,7 +403,7 @@ def plan_reconfigure(root: str = ".", *, detector: Optional[Detector] = None,
         initialized=True, current_profile=current_profile, target_profile=target_profile,
         detected=detected, current_wired=current_wired, added=added, removed=removed,
         config_changes=config_changes, recommended=recommended, harness_action=harness_action,
-        harness=harness, scope=scope)
+        harness=harness, scope=scope, root=root, home=home)
 
 
 def render_reconfigure_diff(plan: ReconfigPlan) -> str:
@@ -352,6 +420,11 @@ def render_reconfigure_diff(plan: ReconfigPlan) -> str:
         lines.append(f"  ~ config  {key}: {shown_old} → {json.dumps(new)}")
     if plan.harness_action == "add":
         lines.append(f"  + harness {plan.harness} ({plan.scope}): slash commands + MCP + hooks")
+        # F10 — same reason as the wizard: reconfigure drives `setup_harness(assume_yes=True)`,
+        # so THIS diff is the only place the human can see what will run through a shell.
+        from .harness_setup import render_wrap_disclosure, statusline_wrap_disclosure
+        lines.extend(render_wrap_disclosure(statusline_wrap_disclosure(
+            plan.harness, plan.root, plan.scope, plan.home)))
     elif plan.harness_action == "remove":
         lines.append(f"  - harness {plan.harness} ({plan.scope}): unwired (reversible)")
     if plan.recommended:
@@ -541,7 +614,8 @@ def run_wizard(root: str = ".", *, ask: Optional[Callable] = None,
 
     # 4. ONE durable-write gate for the whole plan (decline → nothing wired).
     if not assume_yes:
-        emit(render_wizard_plan(profile, detected, chosen, recommended, wire_harness, harness))
+        emit(render_wizard_plan(profile, detected, chosen, recommended, wire_harness, harness,
+                                root=root, scope=scope, home=home))
         if not gate("\nProceed and wire this up?"):
             return WizardResult(profile=profile, detected=detected, recommended=recommended,
                                 aborted=True, message="aborted by user")

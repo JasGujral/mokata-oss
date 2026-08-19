@@ -128,33 +128,46 @@ class TestWizard(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             asker = _Asker("minimal")
             res = OB.run_wizard(d, ask=asker, confirm=lambda p: True, out=lambda _: None,
-                                detector=_detector({"obsidian"}), wire_harness=False)
+                                detector=_detector({"postgres"}), wire_harness=False)
             # the profile was ASKED (not just defaulted)
             self.assertTrue(asker.calls, "the wizard did not ask the profile")
             self.assertEqual(res.profile, "minimal")
-            # the full environment was DETECTED and surfaced
-            self.assertIn("obsidian", res.detected)
-            self.assertTrue(res.detected["obsidian"])
-            self.assertFalse(res.detected["postgres"])
+            # the full environment was DETECTED and surfaced — one PRESENT, one ABSENT, because
+            # a detection map that only ever says True is not a detection map. (0.0.18 stage 10
+            # removed `obsidian`, which was the present exemplar; `postgres` took its place. The
+            # absent exemplar was `neo4j` until 0.0.18 stage 14 removed it — `serena` now carries
+            # that half. The PROPERTY is "one present, one absent"; both halves need a witness
+            # that exists, and re-pointing beats deleting the half whose witness left.)
+            self.assertIn("postgres", res.detected)
+            self.assertTrue(res.detected["postgres"])
+            self.assertFalse(res.detected["serena"])
 
     def test_wires_a_present_integration_only_on_approval(self):
         with tempfile.TemporaryDirectory() as d:
             res = OB.run_wizard(d, ask=_Asker("standard"), confirm=lambda p: True,
-                                out=lambda _: None, detector=_detector({"obsidian"}),
+                                out=lambda _: None, detector=_detector({"postgres"}),
                                 wire_harness=False)
             self.assertFalse(res.aborted)
             self.assertTrue(Surface.is_initialized(d))
-            # obsidian got wired into the memory_store chain (a real config edit)
+            # postgres got wired into the memory_store chain (a real config edit)
             surface = Surface.load(d)
             chain = surface.manifest.capabilities["memory_store"]["fallback"]
-            self.assertIn("obsidian", chain)
-            self.assertTrue(any("obsidian" in w for w in res.wired))
+            self.assertIn("postgres", chain)
+            self.assertTrue(any("postgres" in w for w in res.wired))
 
     def test_never_silently_installs_an_absent_tool_only_recommends(self):
+        # ⚠ THE PRESENT/ABSENT SPLIT IS INVERTED HERE, AND THAT IS A CORRECTION FORCED BY 0.0.18
+        # STAGE 14 RATHER THAN A TIDY-UP. This test asserts TWO things: an absent integration is
+        # recommended, and the recommendation is a COPY-PASTEABLE install command. `neo4j` carried
+        # both — `pip install neo4j   # then set NEO4J_URI / …` — and it was the only absent
+        # integration whose hint was a pip line, because the two surviving graph tools are MCP
+        # servers installed "per their docs". Re-pointing at `serena` would have kept the first
+        # assertion green and quietly retired the second (§7f: a defence nothing can grade).
+        # So `postgres` is made the ABSENT one instead: its hint IS a pip line, and the wizard's
+        # memory_store chain is where a silently-wired absent tool would show up.
         with tempfile.TemporaryDirectory() as d:
-            # postgres ABSENT — the wizard must RECOMMEND its install, never run it, never wire it
             res = OB.run_wizard(d, ask=_Asker("standard"), confirm=lambda p: True,
-                                out=lambda _: None, detector=_detector({"obsidian"}),
+                                out=lambda _: None, detector=_detector({"code-review-graph"}),
                                 wire_harness=False)
             self.assertTrue(any("postgres" in r for r in res.recommended),
                             "an absent integration was not recommended")
@@ -162,7 +175,8 @@ class TestWizard(unittest.TestCase):
                             "the recommendation is not a copy-pasteable install command")
             surface = Surface.load(d)
             self.assertNotIn("postgres",
-                             surface.manifest.capabilities["memory_store"]["fallback"],
+                             surface.manifest.capabilities.get("memory_store", {})
+                             .get("fallback", []),
                              "an absent tool was silently wired")
 
     def test_non_interactive_yes_path_preserved(self):
@@ -177,11 +191,11 @@ class TestWizard(unittest.TestCase):
     def test_summary_names_what_was_wired_and_the_next_step(self):
         with tempfile.TemporaryDirectory() as d:
             res = OB.run_wizard(d, ask=_Asker("standard"), confirm=lambda p: True,
-                                out=lambda _: None, detector=_detector({"obsidian"}),
+                                out=lambda _: None, detector=_detector({"postgres"}),
                                 wire_harness=False)
             summary = OB.render_did_summary(res)
             self.assertIn("standard", summary)          # the profile
-            self.assertIn("obsidian", summary)          # what got wired
+            self.assertIn("postgres", summary)          # what got wired
             self.assertIn("Next:", summary)             # the next step
             self.assertIn("/mokata:", summary)          # a concrete next command
 

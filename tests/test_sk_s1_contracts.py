@@ -71,6 +71,9 @@ class TestActivationLineIsSingleSourced(unittest.TestCase):
         # The single source: the `SKILL_GLYPH = "⛭"` constant is ASSIGNED only in progress.py, and
         # the renderer DELEGATES to active_skill_line rather than constructing its own line.
         src = os.path.join(_REPO, "src", "mokata")
+        # CORPUS: THE WORKING TREE. This asks what mokata SHIPS, and `sync-public.sh` mirrors
+        # with `rsync`, which copies the working tree — an untracked `.py` under `src/` really is
+        # published. The index would be blind to exactly the file most likely to break the rule.
         assigners = [rel for rel in os.listdir(src)
                      if rel.endswith(".py")
                      and f'SKILL_GLYPH = "{SKILL_GLYPH}"' in _read(os.path.join(src, rel))]

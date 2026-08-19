@@ -680,6 +680,31 @@ class TestAdversarialLaundering(_RepoCase):
                     add_ignore(self.root, SURVIVOR, bad, reason="x", assume_yes=True,
                                out=lambda _m: None)
 
+    def test_route_8c_the_containment_predicate_refuses_BOTH_spellings_on_ANY_host(self):
+        r"""★ THE PIN THAT WOULD HAVE CAUGHT THIS ON A MAC, and did not exist when it was needed.
+
+        `test_route_8` above is an END-TO-END test, and end-to-end it can only ever exercise the
+        separator the HOST uses — so on macOS it fed `../outside.py` to a check spelled with
+        `os.sep == "/"`, both halves agreed, and it was green for three weeks while the same code
+        accepted `../outside.py` on every Windows leg of run 32117189879. A path-traversal
+        defence that does not fire, green on the machine it was developed on.
+
+        The repair is not "remember to think about Windows". It is that the DECISION is now a
+        pure predicate over a string, so both spellings can be put through it anywhere. This runs
+        on POSIX and on Windows and asserts the same thing on both."""
+        from mokata.govern.secret_ignore import escapes_root
+        for rel in ("../outside.py", "..\\outside.py", "../../etc/passwd",
+                    "..\\..\\Windows\\System32\\drivers\\etc\\hosts", "..", ".", ""):
+            with self.subTest(outside=rel):
+                self.assertTrue(escapes_root(rel),
+                                "%r leaves the repo and the containment check let it through "
+                                "— this is the 0.0.18 Windows escape, exactly" % rel)
+        for rel in ("a/b.py", "a\\b.py", "..config.py", "src/mokata/__init__.py", "x"):
+            with self.subTest(inside=rel):
+                self.assertFalse(escapes_root(rel),
+                                 "%r is inside the repo; refusing it would break every ignore "
+                                 "on a file whose name merely begins with a dot-dot" % rel)
+
     def test_route_8b_a_cross_drive_target_is_refused_not_crashed(self):
         r"""WINDOWS: `ntpath.relpath` RAISES across drives ("path is on mount 'D:', start on
         mount 'C:'"). A rooted-but-driveless target like `/etc/passwd` resolves against the

@@ -38,8 +38,9 @@ def cmd_index(args: argparse.Namespace) -> int:
     # purpose would otherwise just find it unsearchable with nothing to read.
     for line in skipped_checkout_lines(idx.skipped_checkouts):
         print(line)
-    # Stage 35f: name the code-graph backend the refresh runs against — the wired adapter
-    # (e.g. neo4j) when present, the grep floor when not. Degrade-clean: never a hard error.
+    # Stage 35f: name the code-graph backend the refresh runs against — the adopted graph
+    # (e.g. code-review-graph) when present, the floor when not. Degrade-clean: never a hard error.
+    # (The example read `neo4j` until 0.0.18 stage 14 removed it; an example is a claim.)
     layer = KnowledgeLayer.from_surface(surface)
     if layer.uses_graph:
         print(f"index: code graph '{layer.backend_name}' wired — "

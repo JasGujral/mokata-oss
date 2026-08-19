@@ -270,13 +270,20 @@ def vault_pull(root: str, name: str, dest: Optional[str] = None) -> Tuple[str, V
             # Ledger BEFORE the raise — the copy has not happened and never will, but the fact that
             # this vault served corrupt bytes must survive the exception.
             _record_integrity_failure(root, name, entry.content_hash, actual)
-            # SIMP.S2 — the vault is DEPRECATED (removal scheduled for 0.0.17); a corrupt artifact is refused
-            # LOUDLY and the refusal NAMES the migration, never a silent import of tampered bytes.
+            # ⚠ THIS REFUSAL SOLD A MIGRATION THAT WOULD NOT HAVE MOVED THE THING IT WAS SHOWN
+            # FOR. It said *"The vault is deprecated — scheduled for removal in <release>. Migrate
+            # with `mokata migrate vault`"*, to a user holding a corrupt DESIGN ARTIFACT — and
+            # `mokata migrate vault` re-homed SESSION BUNDLES and never touched an artifact. A
+            # remedy that looks correct and does nothing is slice 2's false-refusal class, on a
+            # shipped surface, and it is what made the artifact vault read as deprecated when the
+            # channel was the transport kind (0.0.18 lane D slice 4).
+            #
+            # The design-artifact vault is NOT deprecated and never leaves this message. What is
+            # true of a corrupt artifact is that it is refused and the bytes are still on disk.
             raise VaultError(
                 f"vault entry '{name}' failed its content-hash check (corrupted) — refusing to "
-                f"serve it. The vault is deprecated — scheduled for removal in 0.0.17; it works "
-                f"today. Migrate with "
-                f"`mokata migrate vault`.")
+                f"serve it. Nothing was written and the stored file is untouched at "
+                f"{_artifact_path(root, name)}; re-push it from its source to repair the entry.")
     if dest is not None:
         parent = os.path.dirname(dest)
         if parent:

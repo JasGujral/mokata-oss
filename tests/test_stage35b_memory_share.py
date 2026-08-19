@@ -21,13 +21,20 @@ from mokata.config import Surface
 from mokata.init import init_repo
 from mokata.memory import (
     ACTIVE,
-    MEMORY_SHARE_FILENAME,
     MemoryItem,
     MemoryStore,
     export_memory,
     import_memory,
     load_memory_share,
 )
+
+
+# ⚠ 0.0.18 LANE D SLICE 2 — THIS LITERAL USED TO BE `memory.MEMORY_SHARE_FILENAME`.
+# That constant was the deprecated CHANNEL, and it is deleted. The tests below never depended on
+# it being a channel: they used it as a convenient export DESTINATION, which is exactly what it is
+# now — an ordinary path a user may choose. So the literal moves here rather than the tests being
+# dropped, and the two assertions that say "NOT the default" keep the only meaning they ever had.
+BACKUP_DEST = "memory-share.json"
 
 
 def _silent(_):
@@ -47,7 +54,7 @@ class TestExport(unittest.TestCase):
             store = _repo(d)
             store.remember(MemoryItem.create("api style", "REST", source="alice",
                                              author="alice"), assume_yes=True)
-            dest = os.path.join(d, ".mokata", MEMORY_SHARE_FILENAME)
+            dest = os.path.join(d, ".mokata", BACKUP_DEST)
             data = export_memory(store, dest=dest)
 
             self.assertTrue(os.path.exists(dest))
@@ -61,13 +68,13 @@ class TestExport(unittest.TestCase):
             store = _repo(d)
             store.remember(MemoryItem.create("x", "1"), assume_yes=True)
             before = [(i.id, i.value, i.status) for i in store.backend.all()]
-            export_memory(store, dest=os.path.join(d, ".mokata", MEMORY_SHARE_FILENAME))
+            export_memory(store, dest=os.path.join(d, ".mokata", BACKUP_DEST))
             after = [(i.id, i.value, i.status) for i in store.backend.all()]
             self.assertEqual(before, after)                 # source untouched
 
     def test_cli_export_default_path_under_mokata_root(self):
         # 35b — the default backup dest is a timestamped `.mokata/backups/memory-<UTC>.json`, not
-        # the deprecated memory-share.json channel.
+        # the (now removed) memory-share.json channel path.
         import glob
         with tempfile.TemporaryDirectory() as d:
             store = _repo(d)
@@ -78,8 +85,8 @@ class TestExport(unittest.TestCase):
             self.assertEqual(rc, 0)
             backups = glob.glob(os.path.join(d, ".mokata", "backups", "memory-*.json"))
             self.assertEqual(len(backups), 1)
-            self.assertFalse(os.path.exists(          # NOT the deprecated channel
-                os.path.join(d, ".mokata", MEMORY_SHARE_FILENAME)))
+            self.assertFalse(os.path.exists(          # NOT that path either
+                os.path.join(d, ".mokata", BACKUP_DEST)))
 
 
 # --------------------------------------------------------------------------- import
@@ -163,7 +170,7 @@ class TestRoundTripAcrossRepos(unittest.TestCase):
                                                author="alice"), assume_yes=True)
             store_a.remember(MemoryItem.create("db", "postgres", source="alice"),
                              assume_yes=True)
-            share = os.path.join(a, ".mokata", MEMORY_SHARE_FILENAME)
+            share = os.path.join(a, ".mokata", BACKUP_DEST)
             export_memory(store_a, dest=share)
 
             store_b = _repo(b)
@@ -206,7 +213,7 @@ class TestMcpMemoryShare(unittest.TestCase):
         with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
             sa = _repo(a)
             sa.remember(MemoryItem.create("w", "1", source="alice"), assume_yes=True)
-            share = os.path.join(a, ".mokata", MEMORY_SHARE_FILENAME)
+            share = os.path.join(a, ".mokata", BACKUP_DEST)
             export_memory(sa, dest=share)
             _repo(b)
             res = self.M.memory_import(path=b, file=share)   # no confirm

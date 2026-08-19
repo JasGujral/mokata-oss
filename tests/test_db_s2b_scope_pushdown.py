@@ -24,6 +24,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
 
 import json
+import os
 import sqlite3
 import unittest
 
@@ -218,7 +219,7 @@ class BackfillTest(unittest.TestCase):
     @staticmethod
     def _stale_store(tmpdir, items):
         """A store in the PRE-DB.S2b state: docs are right, columns carry the DDL default."""
-        path = f"{tmpdir}/memory.db"
+        path = os.path.join(tmpdir, "memory.db")
         backend = SQLiteBackend(path)
         for it in items:
             backend.put(it)

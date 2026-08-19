@@ -55,6 +55,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 import _writegraph                                                 # noqa: E402
 from mokata import team_journal                                    # noqa: E402
 from mokata.config import Surface                                  # noqa: E402
+import _support                                                    # noqa: E402
 from mokata.govern.ledger import AuditLedger                       # noqa: E402
 from mokata.init import init_repo                                  # noqa: E402
 from mokata.memory import (MemoryItem, MemoryStore, SQLiteBackend,  # noqa: E402
@@ -641,12 +642,6 @@ GATED = {
         "its own bare confirm and wrote straight to the backend — no secret-scan, no ledger record, "
         "no WritePolicy seam. It is the reason the register exists, and under the bare key its "
         "justification was shared with seven closures that never had that bug.",
-    ("memory/backends.py", "NativeMemoryBackend.put"): "MemoryBackend contract impl — the injected-"
-        "client adapter (`self.client.put(item.to_doc())`, backends.py:1205). Reached through the "
-        "`MemoryBackend` contract from store._commit; it forwards a doc, it decides nothing.",
-    ("memory/backends.py", "ObsidianBackend.put"): "MemoryBackend contract impl — writes the "
-        "item's markdown file in the vault (`open(w)`, backends.py:1130). Reached through the "
-        "`MemoryBackend` contract from store._commit; the bytes are the approved item's own.",
     ("memory/backends.py", "MemoryBackend.update"): "MemoryBackend contract DEFAULT — the abstract "
         "base's `update` is `self.put(item)` (backends.py:397), because storage is keyed by id. "
         "Every concrete backend that does not override it inherits this, and it is reached the "
@@ -656,10 +651,6 @@ GATED = {
     ("memory/backends.py", "PostgresBackend.delete"): "MemoryBackend contract impl — the SHARED "
         "table's revision-guarded delete (backends.py:1470). From store._commit; on a shared "
         "destination the journal+CAS funnel (C5) is what reaches it.",
-    ("memory/backends.py", "ObsidianBackend.delete"): "MemoryBackend contract impl — removes the "
-        "item's markdown file (`os.remove`, backends.py:1181). From store._commit.",
-    ("memory/backends.py", "NativeMemoryBackend.delete"): "MemoryBackend contract impl — forwards "
-        "to the injected client (backends.py:1228). From store._commit.",
     ("memory/overlay.py", "JournalOverlay.put"): "MemoryBackend contract impl — delegates to the "
                                                  "wrapped backend",
     ("memory/overlay.py", "JournalOverlay.update"): "MemoryBackend contract impl — delegates to "
@@ -692,7 +683,7 @@ GATED = {
     ("session_transport.py", "_FileTransport.write_bundle"): "raw committer, FILE transport "
         "(`atomic_write_text`, session_transport.py:95; inherited by LocalTransport and "
         "VaultTransport). THREE callers, ALL THREE GATED as of 0.0.17 stage 17: "
-        "session_bundle.py:695 (push) + :908 (rename), and migrate_channels.py:352, the vault "
+        "session_bundle.py:695 (push) + :908 (rename), and migrate_channels.py:267, the vault "
         "channel re-home. "
         "⚠ THAT LAST ONE IS THE ENTRY'S OWN HISTORY, kept because it is the evidence: this "
         "sentence used to end 'THIRD, ungated caller: migrate_channels.py:304', which made the "
@@ -703,7 +694,7 @@ GATED = {
         "verdict on each call site is derived from source, not from this sentence.",
     ("session_transport.py", "PostgresTransport.write_bundle"): "raw committer, POSTGRES transport "
         "(the bundle upsert, session_transport.py:188). Same three callers as the file transport "
-        "above — session_bundle.py:695 + :908 + migrate_channels.py:352 — and, since stage 17 "
+        "above — session_bundle.py:695 + :908 + migrate_channels.py:267 — and, since stage 17 "
         "gated the third, the same verdict on all three: gate-enclosed. One exception covered both "
         "twins; closing the single call site retired it for both.",
     ("session_transport.py", "_FileTransport.delete_bundle"): "raw committer, FILE transport "
@@ -717,13 +708,13 @@ GATED = {
         "⚠ THE FIFTH FALSE CALLER STRING, and the one that says the mechanism was worth building: "
         "this entry read 'sole callers gated: collab.py:101 + mcp/tools_write.py:471'. BOTH halves "
         "were wrong. `mcp/tools_write.py` does not contain the string `commit_push` at all — the "
-        "MCP caller is `mcp/tools_share.py:59`, inside `vault_push` — and the CLI call is "
+        "MCP caller is `mcp/tools_share.py:60`, inside `vault_push` — and the CLI call is "
         "`cli_commands/collab.py:109`, not :101 (:101 is where the `WriteGate` is constructed, four "
         "lines above the `commit=` lambda that actually runs the write). Stage 1a corrected four "
         "such strings by hand; this fifth was found by DERIVING the caller list instead, which is "
         "the whole point. The classification is unchanged and now verified: both call sites are "
         "gate-enclosed (`_writegraph.gate_enclosure`) — collab.py:109 lexically inside a `commit=` "
-        "lambda, tools_share.py:59 inside the lambda handed to `_gated_write`.",
+        "lambda, tools_share.py:60 inside the lambda handed to `_gated_write`.",
     ("vault.py", "_save_index"): "vault index — written only from within the gated push/claim flows",
     ("govern/revert.py", "ReversibleStateStore.write"): "reached only via gated_reversible_write's "
                                                         "commit closure",
@@ -788,7 +779,7 @@ GATED = {
         "gate.",
     ("memory/migrate.py", "migrate_memory"): "SI.6 (74 C3): the postgres destination is "
         "journal-first (CAS + approval inheritance), and every MIGRATED item is written inside the "
-        "per-item WriteGate — `migrate_memory` builds the gate at migrate.py:356 and submits each "
+        "per-item WriteGate — `migrate_memory` builds the gate at migrate.py:364 and submits each "
         "item through it at :400. The remaining direct destination write is the LOCAL "
         "sqlite/obsidian one (no shared rows, no funnel), and it is inside that same gate. "
         "⚠ THE `--drop-source` HALF OF THIS SENTENCE WAS FALSE (0.0.17 review F3c) AND IS NOW "
@@ -820,6 +811,17 @@ GATED = {
 
 # ---- register 2: UNGATED BY DESIGN. Not a governed durable write. Each carries its reason.
 UNGATED_BY_DESIGN = {
+    ("notify.py", "_debounced"): "Lane F — the notification RATE LIMITER's stamp, under gitignored "
+        "temp_local/. It DOES write (it creates the inode and stamps its mtime — see REFUSED in "
+        "test_si_6_behavioural_write_freedom); what it does not write is CONTENT. Transient "
+        "run-state by every test the D5 policy applies: zero bytes of payload (the state IS the "
+        "file's mtime), no user content to secret-scan, touches "
+        "nothing a human approved, and there is nothing an approval could meaningfully say yes or "
+        "no to — the question it answers is 'did a desktop notification fire in the last minute'. "
+        "Deleting the whole file costs at most one duplicate notification. It is the same shape as "
+        "`deprecation`'s once-per-repo O_EXCL marker, which is registered one door over, and it "
+        "must stay ungated for the same practical reason: it sits on the propose path itself, so "
+        "routing it through the WriteGate would make every gated write depend on a gated write.",
     ("memory/store.py", "MemoryStore.recall_relevant"): "DB.S5 — the CALL SITE of the usage telemetry below "
         "(`self.record_usage(...)` on the returned top-k). Registered separately from the writer "
         "because the sweep sees a caller and a callee and both deserve an answer: this is the read "
@@ -894,21 +896,12 @@ UNGATED_BY_DESIGN = {
                                     "gated entries — and it runs under the APPEND lock (not the "
                                     "flush mutex, which excludes flushers only) with "
                                     "`atomic_write_text`, so a crash leaves the whole old file.",
-    ("migrate_channels.py", "_write_marker"): "SIMP.S2 — the once-migrated idempotence marker "
-        "under temp_local/deprecations/ (run-state; this marker only makes a re-run a no-op, and "
-        "THAT is what makes it ungated: it records that a migration happened, it is not the "
-        "migration). "
-        "⚠ THE CLAIM ABOUT THE MIGRATION WAS CORRECTED AT THE 0.0.17 REVIEW (F3d) AND IS NOW TRUE "
-        "AGAIN FOR A DIFFERENT REASON (stage 17). The original reason said 'the MIGRATION itself "
-        "is gated via migrate_memory / import_memory' as if that covered every channel; it covered "
-        "TWO of the three, and F3d cut it back to what was actually true — the VAULT channel did "
-        "neither, re-homing bundles with `dst.write_bundle(tag, blob)` at :304 with no WriteGate, "
-        "no secret scan and no `write_gate` ledger record. STAGE 17 CLOSED THAT: all three "
-        "channels are gated now — `_migrate_memory_channel` routes to `memory.migrate_memory`, "
-        "`_migrate_memory_share` to `memory.import_memory`, and `_migrate_vault` submits each "
-        "bundle to the universal WriteGate (migrate_channels.py:339) with the write in the "
-        "`commit=` callable at :342. The marker itself is unchanged and ungated for the reason "
-        "above: it records that a migration happened, it is not the migration.",
+    # `("migrate_channels.py", "_write_marker")` stood here until 0.0.18 lane D slice 4 DELETED
+    # that module with the vault channel. The entry is removed rather than re-pointed: its subject
+    # was a marker recording that a channel migration had happened, and there is no longer a
+    # channel migration to record. Its history — stage 17 closing the ungated `dst.write_bundle`
+    # re-home that this entry once had to declare — is preserved in the two `write_bundle` entries
+    # above, which is where a reader chasing that call site now arrives.
     ("progress_events.py", "ProgressLog.append_event"): "append-only run telemetry under "
                                                         "temp_local/",
     ("state.py", "StateStore._atomic_write"): "StateStore — process/run state under temp_local/",
@@ -1211,7 +1204,7 @@ LEDGERED = {
         "ONE sentence to describe TWO regimes — the collision that let the false `--drop-source` "
         "clause survive inside the GATED entry above from SI.6 until F3c. One entry, one "
         "definition, one regime. "
-        "The same-store and pending/conflict refusals live INSIDE `_drop_source` (:212-:218) with "
+        "The same-store and pending/conflict refusals live INSIDE `_drop_source` (:198-:208) with "
         "the delete they protect, not in the caller: a destructive helper whose safety guards sit "
         "one frame up is one refactor away from being unsafe. Their behaviour is unchanged — "
         "dropping while writes are journaled is the 'partially migrated then lost' case the "
@@ -1284,13 +1277,23 @@ KNOWN_BYPASS: dict = {}
 # in this table, because there is nothing there to verify; they are counted in the UNPINNABLE
 # residual the report prints, rather than given a row that would look checked and not be.
 DECLARED_CALLERS = {
+    # ⚠ THE THIRD CALLER IS GONE, NOT RE-POINTED (0.0.18 lane D slice 4). `migrate_channels.py`
+    # held the vault channel's re-home — the call site this pair spent two releases arguing about
+    # — and the module was deleted with the channel. Two callers each now, both gated, both in
+    # `session_bundle.py`. Line numbers RE-DERIVED, never adjusted until they looked right.
     ("session_transport.py", "_FileTransport.write_bundle"): (
-        ("session_bundle.py", 695), ("session_bundle.py", 908), ("migrate_channels.py", 352)),
+        ("session_bundle.py", 695), ("session_bundle.py", 908)),
     ("session_transport.py", "PostgresTransport.write_bundle"): (
-        ("session_bundle.py", 695), ("session_bundle.py", 908), ("migrate_channels.py", 352)),
+        ("session_bundle.py", 695), ("session_bundle.py", 908)),
     ("session_transport.py", "_FileTransport.delete_bundle"): (("session_bundle.py", 909),),
     ("session_transport.py", "PostgresTransport.delete_bundle"): (("session_bundle.py", 909),),
-    ("vault.py", "commit_push"): (("cli_commands/collab.py", 109), ("mcp/tools_share.py", 59)),
+    # ⚠ BOTH NUMBERS RE-DERIVED AT 0.0.18 LANE D SLICE 4, NOT ADJUSTED UNTIL THEY PASSED. This
+    # slice edited the prose above both call sites (`tools_share.py`'s docstring had spent three
+    # releases calling itself the deletion set; `collab.py` gained a removed-bundle announcer), so
+    # each moved. Derived with an AST walk for the `commit_push` call in each file — the same
+    # operation `gate_enclosure` performs — and the register stayed the authority on WHICH callers
+    # exist. `CALLER-LIST-UNPINNED` (doc 84) is the row that ends this arithmetic; it is not mine.
+    ("vault.py", "commit_push"): (("cli_commands/collab.py", 126), ("mcp/tools_share.py", 69)),
     ("memory/vector.py", "PgVectorBackend.put"): (("memory/reembed.py", 124),),
 }
 
@@ -1361,6 +1364,13 @@ GATED_CALLER_EXCEPTIONS = {
 # covers those is `DECLARED_CALLERS` above, checked by `gate_enclosure` instead of by the graph.
 # The 77 are counted and printed every run rather than left as an impression of completeness.
 CALLER_PINS = {
+    # Lane F — derived from `_writegraph.derive_callers`, not typed. The register entry for
+    # `_debounced` justifies itself on WHAT it writes (zero bytes, run-state, nothing approved),
+    # not on who calls it, so this single caller does not disturb that reasoning — but the pin is
+    # what makes that a checked statement rather than an assumed one.
+    ("notify.py", "_debounced"): (
+        ("notify.py", "_notify"),
+    ),
     ("agent_skills.py", "prune_orphan_skills"): (
         ("agent_skills.py", "_regenerate_plugin_skills"),
         ("harness_setup.py", "apply_setup"),
@@ -1504,9 +1514,6 @@ CALLER_PINS = {
     ),
     ("memory/vector.py", "PgVectorBackend.read_stamp"): (
         ("memory/vector.py", "PgVectorBackend.verify_stamp"),
-    ),
-    ("migrate_channels.py", "_write_marker"): (
-        ("migrate_channels.py", "run_channel_migration"),
     ),
     ("plans.py", "write_plan_file"): (
         ("brainstorm.py", "save_approach_plan"),
@@ -1695,7 +1702,7 @@ def _durable_write_sites(root=None):
             continue
         for name in sorted(f for f in files if f.endswith(".py")):
             p = os.path.join(base_dir, name)
-            rel = os.path.relpath(p, root).replace(os.sep, "/")
+            rel = _support.posix_rel(p, root).replace(os.sep, "/")
             with open(p, encoding="utf-8") as fh:
                 v = V(rel)
                 v.visit(ast.parse(fh.read(), filename=p))

@@ -269,10 +269,28 @@ class TestRunRegistration(unittest.TestCase):
 class TestBackedBoundaryAndProse(unittest.TestCase):
 
     def test_approach_approval_is_a_backed_gate(self):
+        # CORPUS: THE WORKING TREE, anchored at the REPO — not at the process CWD.
+        #
+        # `enforcement_point` is the RELATIVE path `src/mokata/gate_hook.py`, and until stage 3
+        # this checked it with a bare `os.path.exists`, which resolves against whatever
+        # directory the runner was started in. Measured both ways at `65f4ea7`:
+        #
+        #     from tests/ : FAILED (failures=1)  "enforcement point does not exist on disk"
+        #     from root   : OK
+        #
+        # A verdict that depends on the caller's shell is doc 85 §7c — the reviewer's
+        # environment is not the repo's — in one line, and it is why the same suite could be
+        # green for CI and red for a developer who cd'd first. Found by stage 2, deliberately
+        # left for this stage so it would not be a drive-by.
+        #
+        # ⚠ It is also this class's counter-example: `os.path.exists` on a relative path is a
+        # filesystem read whose corpus silently re-roots, and it was NOT in the AST call list
+        # that derived "50 sites" — so the derivation never contained it (§7j).
         from mokata import skill_contracts as sc
         ref = sc.GATES["approach-approval"]
         self.assertTrue(ref.backed, "the brainstorm boundary is still advisory")
-        self.assertTrue(os.path.exists(ref.enforcement_point),
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.assertTrue(os.path.exists(os.path.join(repo, ref.enforcement_point)),
                         "the backed gate's enforcement point does not exist on disk")
 
     def test_no_contract_cites_an_unbacked_gate(self):

@@ -20,8 +20,8 @@ machine unless **you** explicitly configure an external backend.
 ## Optional external services (you control these)
 
 mokata can optionally be wired to external storage you choose and configure yourself — for
-example a Postgres / pgvector database, a Neo4j graph, or an Obsidian vault for shared team
-memory. These integrations are **off by default**. If you enable one, data flows only to the
+example a Postgres / pgvector database, or an adopted code-graph server such as
+code-review-graph or serena. These integrations are **off by default**. If you enable one, data flows only to the
 endpoint **you** specify, using credentials supplied via your own environment variables;
 mokata never transmits that data anywhere else. Your use of any such third-party service is
 governed by that service's own privacy policy.

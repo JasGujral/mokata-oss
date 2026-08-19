@@ -254,15 +254,18 @@ class TestLiteralGuard(unittest.TestCase):
     def test_only_the_resolver_module_names_the_literal(self):
         src_root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 "src", "mokata")
-        resolver_rel = os.path.join("mokata", "dsn.py")
+        resolver_rel = "mokata/dsn.py"
         needle = dsn.DEFAULT_DSN_ENV
         offenders = []
+        # CORPUS: THE WORKING TREE. This asks what mokata SHIPS, and `sync-public.sh` mirrors
+        # with `rsync`, which copies the working tree — an untracked `.py` under `src/` really is
+        # published. The index would be blind to exactly the file most likely to break the rule.
         for dirpath, _dirs, files in os.walk(src_root):
             for fn in files:
                 if not fn.endswith(".py"):
                     continue
                 full = os.path.join(dirpath, fn)
-                rel = os.path.relpath(full, os.path.dirname(src_root))
+                rel = _support.posix_rel(full, os.path.dirname(src_root))
                 if rel == resolver_rel:
                     continue
                 with open(full, encoding="utf-8") as fh:

@@ -76,7 +76,7 @@ class Manifest:
 
     def tool_config(self, tool_id: str) -> Dict[str, Any]:
         """Per-tool `config` block (Stage 24A) — backend parameters the builders read
-        (e.g. an Obsidian vault path, a custom SQLite path, a Postgres `dsn_env`). Empty
+        (e.g. a custom SQLite path, a Postgres `dsn_env`). Empty
         when absent, so defaults are unchanged for tools that declare no config."""
         tool = self.tools.get(tool_id)
         if not isinstance(tool, dict):

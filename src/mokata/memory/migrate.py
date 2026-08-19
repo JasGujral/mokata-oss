@@ -1,7 +1,7 @@
 """Stage 35c — port memory between backends: `mokata memory migrate`.
 
 Move the LIVE store from one database to another — local SQLite → a hosted Postgres for the
-team, or → the Obsidian markdown vault, and back. Reads ALL items from the source and writes
+team, and back. Reads ALL items from the source and writes
 them, WITH provenance, into the destination (resolved from the manifest's per-tool config).
 
 Guarantees:
@@ -14,13 +14,19 @@ Guarantees:
 
 Unlike `build_backend` (which degrades a bad Postgres to the SQLite floor), migrate builds the
 EXACT requested destination and FAILS LOUD if it can't — silently landing in a floor would
-lose the team's data. Works across sqlite / obsidian / postgres via the MemoryBackend contract.
+lose the team's data. Works across sqlite / postgres / pgvector via the MemoryBackend contract.
+
+SIMP.S3 (0.0.18, lane D slice 1): `obsidian` and `native-memory` are gone from `SUPPORTED` and
+from `build_named_backend`. The `clients` parameter went with them — it existed for exactly one
+thing, injecting the native-memory client, and an accommodation whose subject is removed is dead
+weight, not an option (doc 85 §7d / `BACKCOMPAT-SWEEP`).
 """
 
 from __future__ import annotations
 
 from ..prompt import read_yes_no
 
+import contextlib
 import hashlib
 import json
 import uuid
@@ -34,7 +40,7 @@ from .store import build_backend
 from ..errors import MokataError
 
 # Backends migrate can move between (each a MemoryBackend with file/db storage).
-SUPPORTED = ("sqlite", "obsidian", "postgres", "pgvector")
+SUPPORTED = ("sqlite", "postgres", "pgvector")
 
 
 class MigrateError(MokataError):
@@ -106,7 +112,6 @@ def batch_digest(items: List[Any]) -> str:
 
 def build_named_backend(tool: str, root: str,
                         config: Optional[dict] = None,
-                        clients: Optional[dict] = None,
                         project: Optional[str] = None) -> MemoryBackend:
     """Build the EXACT named backend (NON-degrading). Postgres that can't be reached raises
     `MigrateError` rather than falling to the SQLite floor — so a migration never silently
@@ -137,22 +142,9 @@ def build_named_backend(tool: str, root: str,
                 "`mokata team init --vector`")
             raise MigrateError(f"pgvector backend unavailable: {why}")
         return be
-    if tool == "native-memory":
-        # SIMP.S2 — native-memory is a valid migration SOURCE (deprecated → canonical). It needs a
-        # wired client; `build_backend` would DEGRADE a missing client to the SQLite floor, which for
-        # a migration means silently reading the WRONG store. NON-degrading here: refuse loudly.
-        client = (clients or {}).get("native-memory")
-        if client is None:
-            raise MigrateError(
-                "native-memory has no wired client — cannot read it to migrate (a client is the "
-                "external store; without it there is nothing to read, and falling back to the "
-                "local floor would migrate the wrong data)")
-        from .backends import NativeMemoryBackend
-        return NativeMemoryBackend(client)
-    if tool in ("sqlite", "obsidian"):
-        return build_backend(tool, root, clients=clients, config=config)
-    raise MigrateError(f"unsupported migrate backend '{tool}'; choose one of {SUPPORTED} "
-                       f"(source may also be native-memory)")
+    if tool == "sqlite":
+        return build_backend(tool, root, config=config)
+    raise MigrateError(f"unsupported migrate backend '{tool}'; choose one of {SUPPORTED}")
 
 
 def _resolved_memory_tool(surface: Any) -> str:
@@ -255,7 +247,6 @@ def migrate_memory(surface: Any, to_backend: str, from_backend: Optional[str] = 
                    assume_yes: bool = False, drop_source: bool = False,
                    drop_confirm: Optional[Callable[[str], bool]] = None,
                    ledger: Any = None, policy: Any = None,
-                   clients: Optional[dict] = None,
                    out: Optional[Callable[[str], None]] = None) -> MigrateResult:
     """Migrate all memory items from `from_backend` (default: the resolved store) to
     `to_backend`, with provenance, human-gated, idempotent, and non-destructive."""
@@ -271,171 +262,186 @@ def migrate_memory(surface: Any, to_backend: str, from_backend: Optional[str] = 
                              error=f"unsupported destination '{to_backend}' "
                                    f"(one of {SUPPORTED})")
 
-    # Build the source (its config from the manifest). `clients` carries an injected native-memory
-    # client (SIMP.S2) so a deprecated native-memory store can be READ as a migration source.
-    try:
-        source = build_named_backend(src_tool, root, manifest.tool_config(src_tool),
-                                     clients=clients, project=project)
-    except MigrateError as exc:
-        return MigrateResult(from_backend=src_tool, to_backend=to_backend, aborted=True,
-                             error=f"source '{src_tool}' unavailable: {exc}")
-
-    # Build the destination NON-degrading — a failure here writes NOTHING (degrade-clean).
-    try:
-        dest = build_named_backend(to_backend, root, manifest.tool_config(to_backend),
-                                   project=project)
-    except MigrateError as exc:
-        source.close()
-        return MigrateResult(from_backend=src_tool, to_backend=to_backend, aborted=True,
-                             error=str(exc))
-
-    # Self-migrate guard: same tool + same config would copy onto itself; a --drop-source
-    # then would wipe the data we just wrote. Refuse the destructive case.
-    same_store = (src_tool == to_backend
-                  and manifest.tool_config(src_tool) == manifest.tool_config(to_backend))
-
-    items: List[Any] = source.all()      # ALL items (every status) — full-fidelity move
-
-    # SI.6 — the approved batch, hashed BEFORE the human is asked. Every per-item write below must
-    # derive from exactly this; see `item_digest`.
-    approved_digests: Dict[str, str] = {it.id: item_digest(it) for it in items}
-    batch = batch_digest(items)
-
-    # SI.6 (74 C3) — WHERE the writes go. A `postgres` destination is the SHARED team memory table
-    # (`teamdb.MEMORY_TABLE`), which the journal + single-flusher + CAS funnel OWNS. Writing it with
-    # `dest.put` (a bare `ON CONFLICT DO UPDATE` that does NOT bump `revision`) bypassed that funnel
-    # in BOTH directions: it silently clobbered a teammate's concurrent change, AND it left the row's
-    # revision stale, so a later flush's CAS would compare against a revision that no longer
-    # described the doc and overwrite the migrated value in turn. Journal-first is therefore not a
-    # nicety here — a direct write actively corrupts the compare-and-set invariant every other
-    # memory write depends on. sqlite/obsidian destinations are local files with no shared-row
-    # concurrency and no funnel; they keep the direct backend write (byte-identical).
-    to_funnel = (to_backend == "postgres")
-    # The CAS bases: the destination's CURRENT revision per id, read once. Present → a
-    # revision-guarded UPDATE (the idempotent upsert, made safe); absent → an INSERT of a believed-
-    # new row. Either way a concurrent writer SURFACES as a conflict, never a silent lost update.
-    base_revisions: Dict[str, Any] = {}
-    if to_funnel:
+    # ---- the two backend handles, and the one thing that stops them leaking ------------------
+    #
+    # MIGRATE-BACKENDS-UNCLOSED-ON-RAISE (doc 84; 0.0.18 stage 12). Every close in this function
+    # used to be a STATEMENT ON AN EXIT PATH, which means the handles stayed open for exactly the
+    # exits nobody had written down — and after both are built, NONE of the things that can raise
+    # is a `MigrateError`: `source.all()` on an unreadable store, `item_digest` on a malformed
+    # item, `TeamJournal.for_surface`, `policy_trust`, `gate.submit`, the flush, and
+    # `_drop_source`'s `source.delete`. Each of those leaves BOTH handles open, which is why the
+    # row is about the pair and not about the source alone.
+    #
+    # ⚠ AND THE NARROW `except MigrateError` AROUND THE DESTINATION BUILD LEAKED THE SOURCE FOR
+    # THE SAME REASON — the `source.close()` that stood there was on one exit path out of several.
+    # `build_named_backend`'s pgvector leg reaches `make_embedder` and `build_pgvector_backend`,
+    # neither of which promises to raise `MigrateError`, so a bad embedder name left the source
+    # open and returned nothing about it.
+    #
+    # The fix is NOT another except clause — another except clause is another exit path to
+    # remember. It is registering each close AT THE MOMENT ITS HANDLE EXISTS, so "which exits
+    # close it" stops being a question anyone can answer wrongly. `ExitStack` unwinds LIFO, so the
+    # order is still destination-then-source, and an early `return` inside the block unwinds it
+    # exactly as a raise does.
+    with contextlib.ExitStack() as handles:
         try:
-            base_revisions = {i.id: getattr(i, "_revision", None) for i in dest.all()}
-        except Exception as exc:                 # unreachable mid-migration → write NOTHING
-            source.close()
-            dest.close()
+            source = build_named_backend(src_tool, root, manifest.tool_config(src_tool),
+                                         project=project)
+        except MigrateError as exc:
             return MigrateResult(from_backend=src_tool, to_backend=to_backend, aborted=True,
-                                 error=f"destination '{to_backend}' unreadable: {exc}")
+                                 error=f"source '{src_tool}' unavailable: {exc}")
+        handles.callback(source.close)
 
-    emit(f"migrate: {len(items)} item(s) {src_tool} -> {to_backend}"
-         + (" (same store — copy is a no-op)" if same_store else ""))
-    if not assume_yes:
-        gate = confirm or _default_confirm
-        if not gate(f"Migrate {len(items)} memory item(s) from '{src_tool}' to "
-                    f"'{to_backend}'? The source is left intact."):
-            source.close()
-            dest.close()
-            return MigrateResult(from_backend=src_tool, to_backend=to_backend,
-                                 aborted=True, message="declined at the human gate")
-    if ledger is not None:
-        # The batch decision itself, on the ledger — the anchor every per-item write inherits.
-        ledger.record("migrate_batch", op="migrate", subject=f"{src_tool}->{to_backend}",
-                      items=len(items), batch_digest=batch, journaled=to_funnel)
+        # Build the destination NON-degrading — a failure here writes NOTHING (degrade-clean).
+        try:
+            dest = build_named_backend(to_backend, root, manifest.tool_config(to_backend),
+                                       project=project)
+        except MigrateError as exc:
+            return MigrateResult(from_backend=src_tool, to_backend=to_backend, aborted=True,
+                                 error=str(exc))
+        handles.callback(dest.close)
 
-    # Stage 37R (H1): the source content is UNTRUSTED (an external Obsidian/Postgres store), so
-    # every per-item write goes through the universal WriteGate — secrets in subject/value are
-    # HARD-BLOCKED (not migrated) and each commit is recorded in the audit ledger when provided.
-    from .. import team_journal, teamdb
-    from ..govern.trust import (CLI_SURFACE, policy_surface, policy_tool, policy_trust)
-    try:
-        from ..team_audit import actor as _actor
-        who = _actor()
-    except Exception:
-        # D5 — deliberately left BROAD, with no narrow class to name: `team_audit.actor`'s own
-        # contract is never-raise, so there is no honest class to enumerate. "user" is the same
-        # placeholder author the rest of the write path falls back to.
-        who = "user"
-    journal = team_journal.TeamJournal.for_surface(surface) if to_funnel else None
-    gate = WriteGate(ledger=ledger, trust=policy_trust(policy))
-    migrated_items: List[Any] = []
-    blocked = 0
-    refused = 0
+        # Self-migrate guard: same tool + same config would copy onto itself; a --drop-source
+        # then would wipe the data we just wrote. Refuse the destructive case.
+        same_store = (src_tool == to_backend
+                      and manifest.tool_config(src_tool) == manifest.tool_config(to_backend))
 
-    def _journal_it(it: Any) -> None:
-        """Journal-first (doc 48 E3), with approval inheritance. `ledger_id` is the seq the gate's
-        `approved` record lands at — predicted as `len+1` from INSIDE the commit, which the gate runs
-        under its exclusive ledger hold (B2/MS.S3), so the prediction is provably exact. The deferred
-        flush re-records it: the durable write carries the human decision that licensed it (C5/P2)."""
-        ledger_id = (len(ledger) + 1) if ledger is not None else None
-        base = base_revisions.get(it.id)
-        journal.append(team_journal.JournalEntry(
-            id=uuid.uuid4().hex,
-            op=(team_journal.OP_UPDATE if base is not None else team_journal.OP_PUT),
-            table=teamdb.MEMORY_TABLE, key=it.id,
-            payload={"id": it.id, "mtype": it.mtype, "subject": it.subject,
-                     "status": it.status, "doc": json.dumps(it.to_doc()), "project": project},
-            ledger_id=ledger_id, project=project, actor=who, base_revision=base))
+        items: List[Any] = source.all()      # ALL items (every status) — full-fidelity move
 
-    for it in items:
-        # D6 — a migration is a write-back across backends: it READS a doc from the source store and
-        # WRITES it to the destination. A doc a newer mokata wrote would be re-serialized by THIS
-        # build, i.e. stripped, and land in the destination missing fields the human approved. Refuse
-        # the item (it stays intact in the source), count it, and carry on with the rest — the same
-        # per-item refusal shape as the batch-derivation guard below.
-        refusal = downgrade_refusal(it)
-        if refusal is not None:
-            refused += 1
-            if ledger is not None:
-                ledger.record("write_gate", write_kind="memory", target=f"memory:{it.subject}",
-                              actor="migrate", decision="blocked", reason=refusal)
-            continue
-        # SI.6 — the batch-derivation guard. The human approved THIS content; if the item diverges
-        # from the hash taken at the gate, the approval does not cover what we are about to write.
-        # Refuse it. (The loop iterates only the snapshot taken before the gate, so nothing NEW can
-        # enter either — the two halves together are what make the batch approval mean something.)
-        if item_digest(it) != approved_digests.get(it.id):
-            refused += 1
-            if ledger is not None:
-                ledger.record("write_gate", write_kind="memory", target=f"memory:{it.subject}",
-                              actor="migrate", decision="blocked",
-                              reason="content changed after the batch approval")
-            continue
-        outcome = gate.submit(
-            WriteRequest("memory", f"memory:{it.subject}",
-                         content=f"{it.subject}\n{it.value}", actor="migrate",
-                         tool=policy_tool(policy, "memory_migrate"),
-                         surface=policy_surface(policy, CLI_SURFACE)),
-            # journal-first into the shared funnel, or the direct backend write for a local file
-            # destination. Idempotent either way: upsert by id, provenance kept.
-            commit=((lambda it=it: _journal_it(it)) if to_funnel else (lambda it=it: dest.put(it))),
-            # The human approved the MIGRATION as a batch, above — that decision covers every item
-            # in it, so each per-item write carries it (and a read-only dial still blocks the lot).
-            human_approved=True)
-        if outcome.committed:
-            migrated_items.append(it)
-        elif outcome.findings:
-            blocked += 1                         # secret — hard-blocked, left in the source
+        # SI.6 — the approved batch, hashed BEFORE the human is asked. Every per-item write below must
+        # derive from exactly this; see `item_digest`.
+        approved_digests: Dict[str, str] = {it.id: item_digest(it) for it in items}
+        batch = batch_digest(items)
 
-    # SI.6 — drain the journal through the SINGLE FLUSHER (MS.S5): each entry is secret-scanned at
-    # egress strength, applied under CAS, and marked flushed with the inherited approval id. An
-    # unhealthy/contended flush leaves the entries PENDING (never lost) — `mokata sync` drains them.
-    pending = conflicts = 0
-    if to_funnel and migrated_items:
-        fres = team_journal.flush(surface, ledger=ledger, out=out)
-        pending, conflicts = fres.pending, fres.conflicts
-        if fres.skipped:
-            emit(f"migrate: {fres.reason} — {len(migrated_items)} write(s) are journaled and will "
-                 f"be applied by `mokata sync`; nothing is lost.")
+        # SI.6 (74 C3) — WHERE the writes go. A `postgres` destination is the SHARED team memory table
+        # (`teamdb.MEMORY_TABLE`), which the journal + single-flusher + CAS funnel OWNS. Writing it with
+        # `dest.put` (a bare `ON CONFLICT DO UPDATE` that does NOT bump `revision`) bypassed that funnel
+        # in BOTH directions: it silently clobbered a teammate's concurrent change, AND it left the row's
+        # revision stale, so a later flush's CAS would compare against a revision that no longer
+        # described the doc and overwrite the migrated value in turn. Journal-first is therefore not a
+        # nicety here — a direct write actively corrupts the compare-and-set invariant every other
+        # memory write depends on. A sqlite destination is a local file with no shared-row
+        # concurrency and no funnel; they keep the direct backend write (byte-identical).
+        to_funnel = (to_backend == "postgres")
+        # The CAS bases: the destination's CURRENT revision per id, read once. Present → a
+        # revision-guarded UPDATE (the idempotent upsert, made safe); absent → an INSERT of a believed-
+        # new row. Either way a concurrent writer SURFACES as a conflict, never a silent lost update.
+        base_revisions: Dict[str, Any] = {}
+        if to_funnel:
+            try:
+                base_revisions = {i.id: getattr(i, "_revision", None) for i in dest.all()}
+            except Exception as exc:                 # unreachable mid-migration → write NOTHING
+                return MigrateResult(from_backend=src_tool, to_backend=to_backend, aborted=True,
+                                     error=f"destination '{to_backend}' unreadable: {exc}")
 
-    dropped = 0
-    if drop_source:
-        # The destructive half, in its OWN function so the register can describe it in its own
-        # right (LEDGERED) instead of sharing this one's key with the gated destination write —
-        # see `_drop_source`, which carries the refusals and the audit record.
-        dropped = _drop_source(source, migrated_items, src_tool=src_tool, same_store=same_store,
-                               pending=pending, conflicts=conflicts, assume_yes=assume_yes,
-                               drop_confirm=drop_confirm, ledger=ledger, emit=emit)
+        emit(f"migrate: {len(items)} item(s) {src_tool} -> {to_backend}"
+             + (" (same store — copy is a no-op)" if same_store else ""))
+        if not assume_yes:
+            gate = confirm or _default_confirm
+            if not gate(f"Migrate {len(items)} memory item(s) from '{src_tool}' to "
+                        f"'{to_backend}'? The source is left intact."):
+                return MigrateResult(from_backend=src_tool, to_backend=to_backend,
+                                     aborted=True, message="declined at the human gate")
+        if ledger is not None:
+            # The batch decision itself, on the ledger — the anchor every per-item write inherits.
+            ledger.record("migrate_batch", op="migrate", subject=f"{src_tool}->{to_backend}",
+                          items=len(items), batch_digest=batch, journaled=to_funnel)
 
-    dest.close()
-    source.close()
-    return MigrateResult(migrated=len(migrated_items), dropped=dropped, blocked=blocked,
-                         refused=refused, pending=pending, conflicts=conflicts,
-                         journaled=to_funnel,
-                         from_backend=src_tool, to_backend=to_backend, message="ok")
+        # Stage 37R (H1): the source content is UNTRUSTED (an external Postgres store), so
+        # every per-item write goes through the universal WriteGate — secrets in subject/value are
+        # HARD-BLOCKED (not migrated) and each commit is recorded in the audit ledger when provided.
+        from .. import team_journal, teamdb
+        from ..govern.trust import (CLI_SURFACE, policy_surface, policy_tool, policy_trust)
+        try:
+            from ..team_audit import actor as _actor
+            who = _actor()
+        except Exception:
+            # D5 — deliberately left BROAD, with no narrow class to name: `team_audit.actor`'s own
+            # contract is never-raise, so there is no honest class to enumerate. "user" is the same
+            # placeholder author the rest of the write path falls back to.
+            who = "user"
+        journal = team_journal.TeamJournal.for_surface(surface) if to_funnel else None
+        gate = WriteGate(ledger=ledger, trust=policy_trust(policy))
+        migrated_items: List[Any] = []
+        blocked = 0
+        refused = 0
+
+        def _journal_it(it: Any) -> None:
+            """Journal-first (doc 48 E3), with approval inheritance. `ledger_id` is the seq the gate's
+            `approved` record lands at — predicted as `len+1` from INSIDE the commit, which the gate runs
+            under its exclusive ledger hold (B2/MS.S3), so the prediction is provably exact. The deferred
+            flush re-records it: the durable write carries the human decision that licensed it (C5/P2)."""
+            ledger_id = (len(ledger) + 1) if ledger is not None else None
+            base = base_revisions.get(it.id)
+            journal.append(team_journal.JournalEntry(
+                id=uuid.uuid4().hex,
+                op=(team_journal.OP_UPDATE if base is not None else team_journal.OP_PUT),
+                table=teamdb.MEMORY_TABLE, key=it.id,
+                payload={"id": it.id, "mtype": it.mtype, "subject": it.subject,
+                         "status": it.status, "doc": json.dumps(it.to_doc()), "project": project},
+                ledger_id=ledger_id, project=project, actor=who, base_revision=base))
+
+        for it in items:
+            # D6 — a migration is a write-back across backends: it READS a doc from the source store and
+            # WRITES it to the destination. A doc a newer mokata wrote would be re-serialized by THIS
+            # build, i.e. stripped, and land in the destination missing fields the human approved. Refuse
+            # the item (it stays intact in the source), count it, and carry on with the rest — the same
+            # per-item refusal shape as the batch-derivation guard below.
+            refusal = downgrade_refusal(it)
+            if refusal is not None:
+                refused += 1
+                if ledger is not None:
+                    ledger.record("write_gate", write_kind="memory", target=f"memory:{it.subject}",
+                                  actor="migrate", decision="blocked", reason=refusal)
+                continue
+            # SI.6 — the batch-derivation guard. The human approved THIS content; if the item diverges
+            # from the hash taken at the gate, the approval does not cover what we are about to write.
+            # Refuse it. (The loop iterates only the snapshot taken before the gate, so nothing NEW can
+            # enter either — the two halves together are what make the batch approval mean something.)
+            if item_digest(it) != approved_digests.get(it.id):
+                refused += 1
+                if ledger is not None:
+                    ledger.record("write_gate", write_kind="memory", target=f"memory:{it.subject}",
+                                  actor="migrate", decision="blocked",
+                                  reason="content changed after the batch approval")
+                continue
+            outcome = gate.submit(
+                WriteRequest("memory", f"memory:{it.subject}",
+                             content=f"{it.subject}\n{it.value}", actor="migrate",
+                             tool=policy_tool(policy, "memory_migrate"),
+                             surface=policy_surface(policy, CLI_SURFACE)),
+                # journal-first into the shared funnel, or the direct backend write for a local file
+                # destination. Idempotent either way: upsert by id, provenance kept.
+                commit=((lambda it=it: _journal_it(it)) if to_funnel else (lambda it=it: dest.put(it))),
+                # The human approved the MIGRATION as a batch, above — that decision covers every item
+                # in it, so each per-item write carries it (and a read-only dial still blocks the lot).
+                human_approved=True)
+            if outcome.committed:
+                migrated_items.append(it)
+            elif outcome.findings:
+                blocked += 1                         # secret — hard-blocked, left in the source
+
+        # SI.6 — drain the journal through the SINGLE FLUSHER (MS.S5): each entry is secret-scanned at
+        # egress strength, applied under CAS, and marked flushed with the inherited approval id. An
+        # unhealthy/contended flush leaves the entries PENDING (never lost) — `mokata sync` drains them.
+        pending = conflicts = 0
+        if to_funnel and migrated_items:
+            fres = team_journal.flush(surface, ledger=ledger, out=out)
+            pending, conflicts = fres.pending, fres.conflicts
+            if fres.skipped:
+                emit(f"migrate: {fres.reason} — {len(migrated_items)} write(s) are journaled and will "
+                     f"be applied by `mokata sync`; nothing is lost.")
+
+        dropped = 0
+        if drop_source:
+            # The destructive half, in its OWN function so the register can describe it in its own
+            # right (LEDGERED) instead of sharing this one's key with the gated destination write —
+            # see `_drop_source`, which carries the refusals and the audit record.
+            dropped = _drop_source(source, migrated_items, src_tool=src_tool, same_store=same_store,
+                                   pending=pending, conflicts=conflicts, assume_yes=assume_yes,
+                                   drop_confirm=drop_confirm, ledger=ledger, emit=emit)
+
+        return MigrateResult(migrated=len(migrated_items), dropped=dropped, blocked=blocked,
+                             refused=refused, pending=pending, conflicts=conflicts,
+                             journaled=to_funnel,
+                             from_backend=src_tool, to_backend=to_backend, message="ok")

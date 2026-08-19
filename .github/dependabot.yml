@@ -12,3 +12,24 @@ updates:
     labels:
       - "dependencies"
       - "github-actions"
+    # ★ THE codeql-action FAMILY MUST BUMP TOGETHER, AND THIS IS NOT A TIDINESS PREFERENCE.
+    #
+    # `init`, `analyze` and `upload-sarif` share a version handshake: `init` writes the CodeQL
+    # bundle state that `analyze` reads back, and a mismatched pair fails the analysis. Ungrouped,
+    # Dependabot opens ONE PR PER ACTION, so merging them arrives one at a time and every merge
+    # between the first and the last leaves the trio split — reddening CodeQL on a MERGED commit,
+    # not on a branch.
+    #
+    # ⚠ WHY THAT IS EXPENSIVE HERE SPECIFICALLY. A red CodeQL on a merged commit corrupts the
+    # OpenSSF Scorecard SAST reading, and SAST is the one check with an instrument on it: the
+    # `8/16 -> 8 · 12/16 -> 9 · 16/16 -> 10` sampling curve (SAST-SCORE-REGRESSION, doc 84), which
+    # survived a real test at stage 30. A split handshake would move that score for a reason that
+    # is NOT sampling, and sampling would take the blame — a falsified instrument, which is worse
+    # than an unmeasured one.
+    #
+    # The pattern is the ACTION PATH, not the repo: Dependabot names these dependencies
+    # `github/codeql-action/init` and so on, so the trailing wildcard is what catches all three.
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"

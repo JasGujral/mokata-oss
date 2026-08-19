@@ -61,6 +61,7 @@ from ..atomicfile import atomic_write_text, lock_path_for
 from ..errors import MokataError
 from ..oslock import file_lock
 from .secrets import Finding, _matches_known_shape, _scan_entropy, _scan_signatures
+from ..repo_paths import NotARepoName, escapes_root, name_of
 
 # The committed .mokata/ ROOT, never `temp_local/` — see (e) above. `temp_local/` is what the
 # init-written `.mokata/.gitignore` excludes, so a file placed there would be exactly the
@@ -151,6 +152,15 @@ def ignores_path(root: str) -> str:
     return os.path.join(root, MOKATA_DIR, IGNORES_FILENAME)
 
 
+# ⚠ `escapes_root` USED TO BE DEFINED HERE AND IS NOW IMPORTED FROM `repo_paths`, where the
+# invariant it belongs to lives. It is the one predicate in the tree that deliberately answers for
+# BOTH separators, and the reason is written at its definition: it is a security boundary, and a
+# security predicate that is correct only when its caller is correct is one refactor from being
+# neither. The defect it exists to prevent — `add_ignore(root, tok, "../outside.py")` ACCEPTED on
+# all three Windows legs of run 32117189879, because the producer had been posix-wrapped and this
+# comparison had not — is pinned by name in `tests/test_repo_paths_invariant.py` as Gate A.
+
+
 def normalize_target(root: str, path: str) -> str:
     """`path` as a repo-relative POSIX path, or raise.
 
@@ -169,7 +179,17 @@ def normalize_target(root: str, path: str) -> str:
     target = raw if os.path.isabs(raw) else os.path.join(root_abs, raw)
     target = os.path.realpath(target)
     try:
-        rel = os.path.relpath(target, root_abs)
+        rel = name_of(target, root_abs)
+    except NotARepoName:
+        # POSIX ONLY, and it gets its OWN message rather than the drive one below. A backslash is
+        # a legal character in a POSIX filename and `repo_paths` refuses to NAME such a file (a
+        # stated cost, argued at `RepoName`). Folding it into "outside the repo" would tell the
+        # user something false about a file that is very much inside it — §7g: two different
+        # refusals do not get to share a sentence.
+        raise IgnoreError(
+            f"'{raw}' contains a backslash, which mokata cannot use as a file identity — the "
+            f"name would be unspellable on Windows and would collide with a native path. "
+            f"Rename the file if you need it ignored")
     except ValueError:
         # WINDOWS — `ntpath.relpath` RAISES when the two paths sit on different drives
         # ("path is on mount 'D:', start on mount 'C:'"); there is no relative path between
@@ -181,13 +201,13 @@ def normalize_target(root: str, path: str) -> str:
         raise IgnoreError(
             f"'{raw}' is outside the repo — an ignore only ever applies to a file in this "
             f"repository, because that is what makes it reviewable in the diff")
-    if rel == os.curdir or rel.startswith(os.pardir + os.sep) or rel == os.pardir:
+    if escapes_root(rel):
         raise IgnoreError(
             f"'{raw}' is outside the repo — an ignore only ever applies to a file in this "
             f"repository, because that is what makes it reviewable in the diff")
     if os.path.isdir(target):
         raise IgnoreError(f"'{raw}' is a directory — an ignore is scoped to ONE exact file")
-    return rel.replace(os.sep, "/")
+    return rel
 
 
 @dataclass(frozen=True)

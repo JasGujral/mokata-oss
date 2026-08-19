@@ -224,11 +224,11 @@ class TestEveryNavIntentHasAnOp(unittest.TestCase):
             g = GrepBackend(root=d)
             defs = g.query("defs", "target")
             self.assertEqual(sorted({r.path for r in defs.references}),
-                             [os.path.join("svc", "core.py")])
+                             ["svc/core.py"])
             refs = g.query("refs", "target")
             # the lexical superset sees the def, the import, the call AND the bare-name use
             self.assertEqual(sorted({r.path for r in refs.references}),
-                             [os.path.join("svc", "caller.py"), os.path.join("svc", "core.py")])
+                             ["svc/caller.py", "svc/core.py"])
             self.assertGreaterEqual(len(refs.references), 4)
 
     def test_ast_floor_answers_defs_exactly(self):
@@ -240,7 +240,7 @@ class TestEveryNavIntentHasAnOp(unittest.TestCase):
             res = a.query("defs", "target")
             self.assertFalse(res.degraded)
             self.assertEqual([(r.path, r.line) for r in res.references],
-                             [(os.path.join("svc", "core.py"), 1)])
+                             [("svc/core.py", 1)])
             self.assertEqual(res.references[0].metadata.get("kind"), "function")
 
     def test_ast_floor_refs_delegates_to_the_lexical_superset(self):
@@ -334,7 +334,7 @@ class TestDegradeCleanDownTheChain(unittest.TestCase):
             self.assertIn("floor", res.note)
             # the AST floor answered it EXACTLY — a mapping gap is not a degraded answer
             self.assertFalse(res.degraded)
-            self.assertEqual([r.path for r in res.references], [os.path.join("svc", "core.py")])
+            self.assertEqual([r.path for r in res.references], ["svc/core.py"])
 
     def test_a_mapped_kind_still_goes_to_the_graph(self):
         with tempfile.TemporaryDirectory() as d:
@@ -440,7 +440,7 @@ class TestNegatives(unittest.TestCase):
             res = g.query("callers", "target")
             self.assertTrue(res.degraded)
             self.assertEqual([(r.path, r.line) for r in res.references],
-                             [(os.path.join("svc", "caller.py"), 5)])
+                             [("svc/caller.py", 5)])
 
     def test_crg_kind_mapping_for_existing_kinds_is_unchanged(self):
         calls = []

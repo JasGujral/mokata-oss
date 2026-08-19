@@ -16,8 +16,9 @@ the release checklist (doc 86's ✂ CLOSE row), which is what turned two genuine
 the first two times the workflow was pressed. Do not let a green here read as "the live legs
 are covered".
 
-Needs PyYAML to parse a workflow, which is NOT a mokata dependency — the checks skip when
-it is absent and run for real in CI, which installs it for exactly these workflow-lint tests.
+Needs PyYAML to parse a workflow. That is a required TEST dependency (requirements/ci.txt), not
+a mokata dependency, and its absence RAISES — these checks used to `skipUnless` it away, which
+reported OK for a workflow lint that never ran (PYYAML-SKIP-CLUSTER, 0.0.18 stage 2).
 Pure/offline; deterministic.
 """
 
@@ -25,13 +26,8 @@ import os
 import re
 import unittest
 
-try:
-    import yaml
-    _HAVE_YAML = True
-except ImportError:
-    _HAVE_YAML = False
-
 from _support import sample_manifest_data  # noqa: F401  (path-fix side-effect)
+from _workflow_pins import safe_load
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKFLOW_DIR = os.path.join(ROOT, ".github", "workflows")
@@ -63,12 +59,15 @@ def _named_modules(run_text, workdir):
 def _workflow_named_modules():
     """Every (workflow, step name, module, working-directory) pair in .github/workflows."""
     found = []
+    # CORPUS: THE WORKING TREE. `sync-public.sh` rsyncs `tests/` to the public mirror, so an
+    # untracked test file ships and must be held to this rule. Converting to the index here is
+    # what would reintroduce `SHIPPED-TEST-READS-INTERNAL-FILE` from the blind side.
     for name in sorted(os.listdir(WORKFLOW_DIR)):
         if not name.endswith((".yml", ".yaml")):
             continue
         path = os.path.join(WORKFLOW_DIR, name)
         with open(path, encoding="utf-8") as fh:
-            doc = yaml.safe_load(fh)
+            doc = safe_load(fh.read(), "lint the test modules the workflows name")
         for job in (doc.get("jobs") or {}).values():
             job_dir = ((job.get("defaults") or {}).get("run") or {}).get("working-directory", "")
             for step in job.get("steps") or []:
@@ -80,7 +79,6 @@ def _workflow_named_modules():
     return found
 
 
-@unittest.skipUnless(_HAVE_YAML, "PyYAML absent — workflow lint runs in CI, which installs it")
 class TestEveryNamedModuleResolvesWhereTheStepRuns(unittest.TestCase):
     def setUp(self):
         self.named = _workflow_named_modules()
@@ -128,9 +126,14 @@ class TestEveryNamedModuleResolvesWhereTheStepRuns(unittest.TestCase):
         self.assertEqual(bad, [], "\n" + "\n".join(bad))
 
 
-@unittest.skipUnless(_HAVE_YAML, "PyYAML absent — workflow lint runs in CI, which installs it")
 class TestTheExtractorItself(unittest.TestCase):
-    """A guard that cannot see the steps it is meant to guard passes for the wrong reason."""
+    """A guard that cannot see the steps it is meant to guard passes for the wrong reason.
+
+    ⚠ These four tests never touched YAML — they feed `_named_modules` synthetic `run:` strings —
+    yet they carried the same `skipUnless(_HAVE_YAML, …)` as the class above, so the §7i grading
+    of the extractor was itself skipped on any runner without a parser it does not use. Removing
+    that decorator does not "make them honest"; it makes four already-honest tests RUN.
+    """
 
     def test_it_folds_backslash_continuations(self):
         run = "python -m unittest -v \\\n  test_alpha \\\n  test_beta\n"

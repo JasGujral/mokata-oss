@@ -426,6 +426,9 @@ class TestEveryWriteRequestNamesItsWriter(unittest.TestCase):
         src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                            "src", "mokata")
         anonymous = []
+        # CORPUS: THE WORKING TREE. This asks what mokata SHIPS, and `sync-public.sh` mirrors
+        # with `rsync`, which copies the working tree — an untracked `.py` under `src/` really is
+        # published. The index would be blind to exactly the file most likely to break the rule.
         for root, _dirs, files in os.walk(src):
             for name in sorted(f for f in files if f.endswith(".py")):
                 p = os.path.join(root, name)

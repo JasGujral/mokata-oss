@@ -23,8 +23,6 @@ provenance-stamped** bundle and shares it under a tag, so another machine (or a 
 **Transports (where the bundle travels) — `--to` on push, `--from` on pull:**
 
 - **`local`** (default) — a file under `.mokata/session-bundles/` on this machine.
-- **`vault`** — the committed/synced store `.mokata/vault/sessions/` — the bundle travels **with
-  the repo**, so a teammate who pulls/clones the repo can `session pull --from vault`.
 - **`postgres`** — a **shared DB table** reached by a DSN env var (`MOKATA_SESSION_PG_DSN`, or the
   shared `MOKATA_PG_DSN`) so a whole team pushes/pulls one store. **Opt-in & local-first:** with
   no `psycopg`/DSN it **degrades clean** (a clear message, no crash) and **never** silently falls
@@ -54,14 +52,15 @@ after pull.
 
 ## 2. Pick the sub-action from `$ARGUMENTS`
 
-- **`list`** — show the tagged bundles + their resume point, **spanning local + the committed
-  vault (+ shared Postgres when a DSN is set)**, read-only:
+- **`list`** — show the tagged bundles + their resume point, **spanning local (+ shared Postgres
+  when a DSN is set)**, read-only. If this repo still holds bundles in the REMOVED `vault`
+  transport's store, `list` says so and names them rather than quietly listing short:
 
   ```bash
   eval "$ENGINE session list --path ."
   ```
 
-- **`push <tag> [--to local|vault|postgres]`** — package THIS session under a tag on the chosen
+- **`push <tag> [--to local|postgres]`** — package THIS session under a tag on the chosen
   transport. A **gated write** — follow §3.
 
 - **`pull <tag> [--from …] [--into <repo>]`** — re-hydrate a bundle so `mokata resume` continues.
@@ -83,12 +82,12 @@ after pull.
 3. Only after approval, apply (add `--to` / `--from` to choose the transport — default `local`):
 
    ```bash
-   # push the current session (vault travels with the repo; postgres is the shared team store):
-   eval "$ENGINE session push <tag> --to vault --yes --path ."
+   # push the current session (postgres is the shared team store):
+   eval "$ENGINE session push <tag> --to local --yes --path ."
    # add --force ONLY to overwrite a changed bundle; --author <name> for provenance.
 
    # pull + re-hydrate (default target = this repo; --into to target another):
-   eval "$ENGINE session pull <tag> --from vault --yes --path ."
+   eval "$ENGINE session pull <tag> --from local --yes --path ."
    # add --force ONLY to apply across a cross-codebase mismatch, after the user confirms.
 
    # rename a tagged session:
@@ -105,9 +104,8 @@ after pull.
 
 After a pull, tell the user that `mokata resume` (or `/mokata:resume`) now continues from the
 bundle's resume point. After a push, remind them where the bundle lives for the other side to pull:
-`local` → `.mokata/session-bundles/<tag>.json`; `vault` → `.mokata/vault/sessions/<tag>.json`
-(commit/sync it); `postgres` → the shared DB (the teammate runs `session pull <tag> --from
-postgres`).
+`local` → `.mokata/session-bundles/<tag>.json`; `postgres` → the shared DB (the teammate runs
+`session pull <tag> --from postgres`).
 
 ## Rationalizations — stop if you catch yourself thinking any of these
 
@@ -130,7 +128,7 @@ Evidence, not "seems right" — check every box or say which is unmet and why:
 
 **CAN**
 - package session state into a path-free, hashed bundle
-- push/pull via local/vault/postgres transports (human-gated), and resume
+- push/pull via the local/postgres transports (human-gated), and resume
 
 **MUST NOT**
 - push or commit anywhere without approval (gate: write-gate)

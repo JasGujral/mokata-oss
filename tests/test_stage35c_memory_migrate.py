@@ -1,10 +1,18 @@
 """Stage 35c — `mokata memory migrate` (port the store between backends).
 
-Both jsonschema states. Uses a second SQLite/Obsidian backend as the cross-backend test
-double (no live Postgres in CI). Proves: sqlite -> obsidian -> back preserves items +
+Both jsonschema states. Uses a second REAL local SQLite store as the cross-backend test double
+(no live Postgres in CI). Proves: sqlite -> the second store -> back preserves items +
 provenance; human-gated (decline -> no write); idempotent on re-run; --drop-source removes
 the source only after a gated confirm; an unreachable destination (Postgres) degrades cleanly
 with the source intact.
+
+WARNING - 0.0.18 stage 10 (lane D slice 1) removed `obsidian`, which WAS that second local store,
+and the local cross-backend migration is no longer expressible through the public API: every
+remaining destination except `sqlite` needs a live database, and `sqlite` cannot be its own
+destination. Skipping these without a DB would be `PYYAML-SKIP-CLUSTER` — a suite that stops
+testing and still reports OK — so the second store is SUPPLIED and DECLARED in
+`_local_second_store`, which also states what a green here does not prove (nothing about
+Postgres; the destination is SQLite and the name selects a branch).
 
 MANUAL VERIFICATION (the named live-PG gap): with psycopg installed + a reachable DB and
 `tools.postgres.config.dsn_env` set, `mokata memory migrate --to postgres` ports the local
@@ -19,6 +27,7 @@ import unittest
 from contextlib import redirect_stdout
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _local_second_store import DESTINATION_TOOL, second_store
 
 from mokata.cli import main
 from mokata.config import Surface
@@ -62,58 +71,68 @@ def _snapshot(backend):
 # ---------------------------------------------------------------- round-trip fidelity
 
 class TestRoundTrip(unittest.TestCase):
-    def test_sqlite_to_obsidian_and_back_preserves_items_and_provenance(self):
+    def test_sqlite_out_and_back_preserves_items_and_provenance(self):
+        from mokata.memory.backends import SQLiteBackend
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _seed(surface, [("auth", "jwt", "alice"), ("db", "postgres", "bob")])
             root = surface.mokata_dir
+            expected = {"auth": ("jwt", "alice"), "db": ("postgres", "bob")}
 
-            # leg 1: sqlite -> obsidian
-            res = _migrate(surface, to_backend="obsidian", from_backend="sqlite",
-                                 assume_yes=True)
-            self.assertEqual(res.migrated, 2)
-            obs = build_named_backend("obsidian", root, {})
-            self.assertEqual(_snapshot(obs),
-                             {"auth": ("jwt", "alice"), "db": ("postgres", "bob")})
+            with second_store(d) as dest_path:
+                # leg 1: sqlite -> the second store
+                res = _migrate(surface, to_backend=DESTINATION_TOOL, from_backend="sqlite",
+                               assume_yes=True)
+                self.assertEqual(res.migrated, 2)
+                dest = SQLiteBackend(dest_path)
+                self.assertEqual(_snapshot(dest), expected)
+                dest.close()
 
-            # wipe sqlite, then leg 2: obsidian -> sqlite restores it (round-trip)
-            sq = build_named_backend("sqlite", root, {})
-            for it in sq.all():
-                sq.delete(it.id)
-            self.assertEqual(_snapshot(sq), {})
-            res2 = _migrate(surface, to_backend="sqlite", from_backend="obsidian",
-                                  assume_yes=True)
+                # wipe the source, then leg 2 back — the round trip restores it
+                sq = build_named_backend("sqlite", root, {})
+                for it in sq.all():
+                    sq.delete(it.id)
+                self.assertEqual(_snapshot(sq), {})
+                sq.close()
+                res2 = _migrate(surface, to_backend="sqlite", from_backend=DESTINATION_TOOL,
+                                assume_yes=True)
             self.assertEqual(res2.migrated, 2)
             restored = MemoryStore.from_surface(Surface.load(d))
             vals = {i.subject: (i.value, i.provenance.get("author"))
                     for i in restored.backend.all()}
-            self.assertEqual(vals,
-                             {"auth": ("jwt", "alice"), "db": ("postgres", "bob")})
+            self.assertEqual(vals, expected)
+            restored.close()
 
 
 # ---------------------------------------------------------------- gating + idempotency
 
 class TestGatingAndIdempotency(unittest.TestCase):
     def test_human_gated_decline_writes_nothing(self):
+        from mokata.memory.backends import SQLiteBackend
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _seed(surface, [("x", "1", "alice")])
-            res = _migrate(surface, to_backend="obsidian", from_backend="sqlite",
-                                 confirm=lambda _t: False)
+            with second_store(d) as dest_path:
+                res = _migrate(surface, to_backend=DESTINATION_TOOL, from_backend="sqlite",
+                               confirm=lambda _t: False)
             self.assertTrue(res.aborted)
-            self.assertEqual(_snapshot(build_named_backend("obsidian", surface.mokata_dir,
-                                                           {})), {})
+            dest = SQLiteBackend(dest_path)
+            self.assertEqual(_snapshot(dest), {})
+            dest.close()
 
     def test_idempotent_on_rerun(self):
+        from mokata.memory.backends import SQLiteBackend
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _seed(surface, [("a", "1", "alice"), ("b", "2", "bob")])
-            _migrate(surface, to_backend="obsidian", from_backend="sqlite",
-                           assume_yes=True)
-            _migrate(surface, to_backend="obsidian", from_backend="sqlite",
-                           assume_yes=True)        # re-run
-            obs = build_named_backend("obsidian", surface.mokata_dir, {})
-            self.assertEqual(len(obs.all()), 2)    # upsert by id — no duplicates
+            with second_store(d) as dest_path:
+                _migrate(surface, to_backend=DESTINATION_TOOL, from_backend="sqlite",
+                         assume_yes=True)
+                _migrate(surface, to_backend=DESTINATION_TOOL, from_backend="sqlite",
+                         assume_yes=True)          # re-run
+            dest = SQLiteBackend(dest_path)
+            self.assertEqual(len(dest.all()), 2)   # upsert by id — no duplicates
+            dest.close()
 
 
 # ---------------------------------------------------------------- --drop-source (gated)
@@ -124,9 +143,10 @@ class TestDropSource(unittest.TestCase):
             surface = _repo(d)
             _seed(surface, [("k", "v", "alice")])
             # migrate approved, but the DROP is declined -> source intact
-            res = _migrate(surface, to_backend="obsidian", from_backend="sqlite",
-                                 assume_yes=False, confirm=lambda _t: True,
-                                 drop_source=True, drop_confirm=lambda _t: False)
+            with second_store(d):
+                res = _migrate(surface, to_backend=DESTINATION_TOOL, from_backend="sqlite",
+                               assume_yes=False, confirm=lambda _t: True,
+                               drop_source=True, drop_confirm=lambda _t: False)
             self.assertEqual(res.migrated, 1)
             self.assertEqual(res.dropped, 0)
             self.assertEqual(len(build_named_backend("sqlite", surface.mokata_dir,
@@ -136,12 +156,15 @@ class TestDropSource(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _seed(surface, [("k", "v", "alice")])
-            res = _migrate(surface, to_backend="obsidian", from_backend="sqlite",
-                                 assume_yes=True, drop_source=True)   # assume_yes approves both
+            from mokata.memory.backends import SQLiteBackend
+            with second_store(d) as dest_path:
+                res = _migrate(surface, to_backend=DESTINATION_TOOL, from_backend="sqlite",
+                               assume_yes=True, drop_source=True)   # assume_yes approves both
             self.assertEqual(res.dropped, 1)
             self.assertEqual(build_named_backend("sqlite", surface.mokata_dir, {}).all(), [])
-            self.assertEqual(len(build_named_backend("obsidian", surface.mokata_dir,
-                                                     {}).all()), 1)   # dest has it
+            dest = SQLiteBackend(dest_path)
+            self.assertEqual(len(dest.all()), 1)                    # dest has it
+            dest.close()
 
     def test_self_migrate_refuses_drop(self):
         with tempfile.TemporaryDirectory() as d:
@@ -186,17 +209,32 @@ class TestDegradeClean(unittest.TestCase):
 # ---------------------------------------------------------------- CLI
 
 class TestMigrateCLI(unittest.TestCase):
-    def test_cli_migrate_to_obsidian(self):
+    def test_cli_migrate_to_a_second_store(self):
+        from mokata.memory.backends import SQLiteBackend
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _seed(surface, [("auth", "jwt", "alice")])
             buf = io.StringIO()
-            with redirect_stdout(buf):
-                rc = main(["memory", "migrate", "--to", "obsidian", "--yes", "--path", d])
+            with second_store(d) as dest_path, redirect_stdout(buf):
+                rc = main(["memory", "migrate", "--to", DESTINATION_TOOL, "--yes", "--path", d])
             self.assertEqual(rc, 0)
-            self.assertIn("-> obsidian", buf.getvalue())
-            self.assertEqual(len(build_named_backend("obsidian", surface.mokata_dir,
-                                                     {}).all()), 1)
+            self.assertIn(f"-> {DESTINATION_TOOL}", buf.getvalue())
+            dest = SQLiteBackend(dest_path)
+            self.assertEqual(len(dest.all()), 1)
+            dest.close()
+
+    def test_cli_rejects_a_REMOVED_destination(self):
+        # REVERSED at stage 10: `--to obsidian` used to be the happy path of this class.
+        from contextlib import redirect_stderr
+        with tempfile.TemporaryDirectory() as d:
+            _repo(d)
+            out, err = io.StringIO(), io.StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = main(["memory", "migrate", "--to", "obsidian", "--yes", "--path", d])
+            self.assertNotEqual(rc, 0)
+            said = out.getvalue() + err.getvalue()
+            self.assertIn("unsupported destination", said)
+            self.assertIn("obsidian", said)
 
     def test_cli_migrate_requires_to(self):
         with tempfile.TemporaryDirectory() as d:

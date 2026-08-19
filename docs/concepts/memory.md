@@ -45,11 +45,16 @@ Chosen through the router (`memory_store`): **SQLite** (default, stdlib, the gua
 floor) or **Postgres** (a shared database — below). Storage only — the memory *logic* is
 mokata's own. When a richer backend isn't reachable, selection degrades to the SQLite floor.
 
-> **Deprecated backends (removal in 0.0.17).** **Obsidian** (a markdown vault) and
-> **native-memory** (an adapter delegating to an injected client) are **deprecated**. They
-> **still work**, and using one prints a **once-per-repo warning** naming the canonical shape
-> and the migration. Move off with the one-time, human-gated `mokata migrate obsidian` /
-> `mokata migrate native-memory`. Nothing is dropped and nothing is removed before 0.0.17.
+> **REMOVED in 0.0.18: Obsidian and native-memory.** The **Obsidian** markdown-vault backend and
+> **native-memory** (an adapter delegating to an injected client) were deprecated in 0.0.15 and
+> are **gone**. **Nothing on your disk was touched** — an Obsidian vault is still a directory of
+> markdown files exactly as mokata left it. A repo whose manifest still names one is told so: it
+> **refuses loudly** where there is data behind it (naming the vault and the remedy) rather than
+> serving an empty store, and says so once per repo where there is not. To bring the items
+> across, run the migration under the last release that shipped it —
+> `pip install 'mokata==0.0.17'`, `mokata migrate obsidian`, then upgrade again — or drop it with
+> `mokata config set memory_store sqlite`. See
+> [configure storage backends](../how-to/configure-storage-backends.md#obsidian-and-native-memory-removed-in-0018).
 
 ### Shared team memory — Postgres (mokata owns the schema)
 
@@ -90,24 +95,25 @@ ingest, so a round trip is content-identical. It's local-first: nothing egresses
 is a file you keep, not a mokata service. (MCP: `memory_export` / `memory_import`,
 propose-only.)
 
-> **Deprecated channel (removal in 0.0.17).** The legacy `memory-share.json` path **still
-> works** as an export destination, but it is **deprecated** and writing to it **warns once**.
-> Move its contents into the canonical store with the one-time, human-gated
-> `mokata migrate memory-share`.
+> **Removed channel (0.0.18).** The legacy `memory-share.json` **channel** is gone — the
+> filename no longer means anything special, so writing a backup there is an ordinary export and
+> warns about nothing. **Your file is untouched.** A `memory-share.json` *is* a mokata memory
+> backup, so restore it the normal way: `mokata memory import --file <path>`. No downgrade and no
+> migration command — `mokata migrate memory-share` now says so and points at that file.
 
 ### Move the store — `memory migrate`
 
 `mokata memory migrate --to <backend>` ports the **live store** between `sqlite` / `postgres` /
-`pgvector` (and the deprecated `obsidian`) — e.g. your local SQLite onto the team's shared
+`pgvector` — e.g. your local SQLite onto the team's shared
 Postgres (the on-ramp to the live store above). It's **human-gated**, **idempotent** (re-run
 upserts by id), and **non-destructive** (the source stays unless you add the separately gated
 `--drop-source`); if the destination can't be built it reports and writes nothing — your data
 is never lost. Where `export/import` backs the store up to a *file*, `migrate` moves the
 *store* between databases.
 
-Distinct from it, `mokata migrate <channel>` — `obsidian` · `native-memory` · `memory-share` ·
-`vault` — is the **one-time, human-gated migration off a deprecated channel** into the
-canonical shape. See [the CLI reference](../reference/cli.md).
+Distinct from it, `mokata migrate <channel>` — `vault` — is the **one-time,
+human-gated migration off a deprecated channel** into the canonical shape. See
+[the CLI reference](../reference/cli.md).
 
 ## Tiered retrieval — lexical → graph → semantic
 

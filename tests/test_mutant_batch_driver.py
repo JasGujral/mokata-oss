@@ -43,6 +43,8 @@ import sys
 import tempfile
 import unittest
 
+import _support  # noqa: F401  (puts src/ on the path; also the one bash resolver)
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUN_MUTANTS = os.path.join(ROOT, "tests", "_run_mutants.sh")
 MUTATE_SH = os.path.join(ROOT, "scripts", "mutate.sh")
@@ -73,6 +75,10 @@ if fail_at and label.startswith(fail_at):
         print("LOCK-BUSY!!  " + label, file=sys.stderr)
     elif rc == 6:
         print("BROKEN!!  " + label + "   (Ran 0 tests)  <-- PATTERN MATCHED NO TESTS")
+    elif rc == 7:
+        print("BASELINE!!  " + label + "   (Ran 3 tests FAILED (failures=1) )"
+              "  <-- THE TESTS WERE ALREADY FAILING")
+        print("BASELINE-NOT-GREEN!!  " + label, file=sys.stderr)
     else:
         print("BROKEN!!  " + label + "   <-- MUTATION COULD NOT BE APPLIED")
     sys.exit(rc)
@@ -122,8 +128,10 @@ class _DriverFixture(unittest.TestCase):
     def _drive(self, **stub_env):
         env = dict(os.environ, MUTATE_SH=self.stub, STUB_LOG=self.log, PYTHON=sys.executable)
         env.update({k: str(v) for k, v in stub_env.items()})
-        proc = subprocess.run(["bash", RUN_MUTANTS], capture_output=True, text=True,
-                              env=env, cwd=ROOT)
+        # `bash_argv`, not a bare argv[0] — see `tests/test_windows_shell_and_paths.py`.
+        proc = subprocess.run(_support.bash_argv(_support.as_posix(RUN_MUTANTS)),
+                              stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, env=env, cwd=ROOT)
         return proc, proc.stdout + proc.stderr
 
     def _invoked(self):
@@ -198,6 +206,32 @@ class TestAHarnessFailureAbortsTheBatch(_DriverFixture):
         # Exit 3 predates stage 18 and was being swallowed just as thoroughly.
         proc, out = self._drive(STUB_FAIL_AT="M01", STUB_FAIL_RC=3)
         self._assert_aborted_at(proc, out, 1, 3)
+
+    def test_a_baseline_that_was_not_green_aborts_the_batch_without_printing_a_score(self):
+        # Exit 7 (0.0.18 stage 31). It is the status that condemns the WHOLE batch rather than
+        # one mutant: the tests were failing before anything was mutated, so every grade this
+        # batch could still produce would be unattributable.
+        #
+        # ⚠ THE SCORE IS THE ASSERTION THAT MATTERS. A partial tally printed under an abort gets
+        # read as a tally — the identical mis-read that let `FAILED (failures=1)` mean "the mutant
+        # died". The batch must stop with no number attached to it at all.
+        proc, out = self._drive(STUB_FAIL_AT="M04", STUB_FAIL_RC=7)
+        self._assert_aborted_at(proc, out, 4, 7)
+        self.assertIn("baseline", out.lower(),
+                      f"the abort does not name the baseline, so the one status that means "
+                      f"'stop and go fix the tree' reads like any other harness failure: {out!r}")
+        # A SCORE is a tally line, not the word "RED" — the abort's own remedy prose explains what
+        # a contaminated batch would have scored, and must be free to say so. So the assertion is
+        # made against the shapes a reader takes for a result: a completion banner, an `N/M`
+        # tally, and any line that OPENS with a verdict token.
+        tail = out[out.index("BATCH ABORTED"):]
+        self.assertNotIn("BATCH COMPLETE", tail, f"a completion banner under an abort: {tail!r}")
+        self.assertNotRegex(tail, r"^\s*(?:RED|GREEN)\b", f"a verdict line under an abort: {tail!r}")
+        self.assertNotRegex(
+            tail, r"\b\d+\s*/\s*\d+\b",
+            f"the aborted batch printed an N/M tally. A partial score with an abort above it is "
+            f"read as a score — the same mis-read that let `FAILED (failures=1)` mean 'the mutant "
+            f"died': {tail!r}")
 
     def test_an_exit_zero_that_carries_no_verdict_is_not_taken_on_trust(self):
         # The driver reads the contract off the exit code, but a status of 0 is a CLAIM that a

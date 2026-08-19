@@ -60,9 +60,9 @@ it — a mapping gap is reported honestly, never as a graph failure.
 The layer resolves `code_graph` through the **router** (`code-review-graph → serena → ast →
 ripgrep → grep`) and uses the first present provider:
 
-- A real graph tool (`code-review-graph`/`serena`, or the deprecated external **Neo4j**
-  database) → the adopted **graph backend** (B1), which delegates all graph work to the
-  external tool via an injected client. No parser, no in-house graph.
+- A real graph tool (`code-review-graph`/`serena`) → the adopted **graph backend** (B1), which
+  delegates all graph work to the external tool via an injected client. No parser, no in-house
+  graph.
 - Else, on a repo with Python, the **embedded stdlib-AST floor** answers structurally
   (`degraded=False`, `is_graph=False`) — a floor above grep with real name-resolution, never the
   adopted structural graph.
@@ -114,16 +114,17 @@ unknown extension degrades to **generic identifier matching** (no crash); a lang
 given convention (e.g. Go `implements`) simply returns nothing for that query rather than
 guessing.
 
-**External graph database (Neo4j) — deprecated (removal in 0.0.17).** `neo4j` is an optional
-`code_graph` provider, never a hard dependency: the driver is an optional extra, the URI +
-credentials come from **env vars only**, and no driver / no `NEO4J_*` env / an unreachable DB
-⇒ the layer degrades cleanly to the floors. It **still works**, and first use prints a
-**once-per-repo deprecation warning**; the canonical code graph is the embedded AST floor or
-an adopted `code-review-graph`. There is **no migration command** for it and none is needed —
-a code graph is **derived data**, so you simply re-index with your current backend. See
-[use a codebase graph](../how-to/use-a-codebase-graph.md) for the full install → wire →
-`index` → `lat-check` loop. An adopted graph also keys memory's live graph-proximity
-retrieval tier (see [memory](memory.md)).
+**External graph database (Neo4j) — REMOVED in 0.0.18.** `neo4j` was an optional `code_graph`
+provider, deprecated at 0.0.15 (a third database contradicts mokata's two-stores shape) and
+removed at 0.0.18. mokata only ever *queried* a graph your team populated, so nothing of yours was
+touched by the removal — and there was never a migration command, because a code graph is
+**derived data**. The canonical one is the embedded AST floor or an adopted `code-review-graph` /
+`serena`, and it answers the same queries. A repo whose committed chain still names `neo4j` is told
+so once, on stderr, and then answered from the AST floor rather than silently served the lexical
+floor under the removed backend's name; `mokata reconfigure --remove neo4j` clears the entry. See
+[use a codebase graph](../how-to/use-a-codebase-graph.md) for the full adopt → `index` →
+`lat-check` loop. An adopted graph also keys memory's live graph-proximity retrieval tier (see
+[memory](memory.md)).
 
 ## Incremental index + staleness (B4)
 

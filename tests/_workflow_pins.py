@@ -19,10 +19,16 @@ TWO DESIGN CONSTRAINTS, both from things that already went wrong here:
    satisfied by a COMMENT showing a correctly-pinned example, which is precisely what a workflow
    documenting its own pinning policy would contain.
 
-AND IT FAILS LOUD WITHOUT PyYAML. The 17 other PyYAML call sites in this suite `skipTest` when
-the parser is absent, so on any runner without it the property is simply not checked and the run
-still reads OK — an absent answer wearing a pass (§7g). `MissingParser` is raised instead, and
-`test_s10_workflow_pins.py` pins that the missing-parser path RAISES rather than skips.
+AND IT FAILS LOUD WITHOUT PyYAML. When this was written it was the ONLY site that did: the other
+seventeen skipped, weakened or silently returned when the parser was absent, so on such a runner
+the property went unchecked and the run still read OK — an absent answer wearing a pass (§7g).
+`MissingParser` is raised instead, and `test_s10_workflow_pins.py` pins that the missing-parser
+path RAISES rather than skips.
+
+⚠ THAT IS NO LONGER THE MINORITY POSITION — `PYYAML-SKIP-CLUSTER` (0.0.18 stage 2) converted all
+seventeen, and `safe_load` below is now the single representation of "the parser is absent" for
+the whole suite. Do not re-introduce a second one: `tests/_pyyaml_sweep.py` sweeps for exactly
+that and `tests/test_pyyaml_skip_cluster.py` fails the build on it.
 """
 
 import os
@@ -75,16 +81,23 @@ class ActionRef:
         return "%s %s -> %s" % (self.workflow, self.where, self.uses)
 
 
-def safe_load(text):
+def safe_load(text, what="sweep workflow action pins"):
     """Parse YAML, or raise MissingParser. Imported INSIDE the call so a test can make the
-    import fail and prove this path raises instead of skipping."""
+    import fail and prove this path raises instead of skipping.
+
+    `what` names the property the CALLER could not check. One representation of "the parser is
+    absent", carrying its own provenance, is the §7g fix: the reader of a red learns which check
+    went unperformed without having to find the frame. Every parser-dependent test in the suite
+    comes through here — see `tests/_pyyaml_sweep.py` for the guard that keeps it that way.
+    """
     try:
         import yaml
     except ImportError as exc:                                  # pragma: no cover - proven by test
         raise MissingParser(
-            "PyYAML is required to sweep workflow action pins and is not installed. This is a "
-            "HARD FAILURE, not a skip: skipping would report OK while every action pin in "
-            ".github/workflows/ went unchecked. Install it (requirements/ci.txt)."
+            "PyYAML is required to " + what + " and is not installed. This is a "
+            "HARD FAILURE, not a skip: skipping would report OK while the property went "
+            "unchecked, which is indistinguishable from checking it and finding nothing wrong. "
+            "Install it: pip install -r requirements/ci.txt"
         ) from exc
     return yaml.safe_load(text)
 

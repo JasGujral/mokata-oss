@@ -44,8 +44,17 @@ harness-agnostic: a missing capability degrades clearly, never a silent no-op of
 
 Every push and PR runs the **full unit + integration suite on `ubuntu-latest` and
 `windows-latest`**, on Python 3.12, across both the `jsonschema`-present and
-`jsonschema`-absent legs. (macOS runners bill at 10× and are dropped from the matrix; the
-package floor stays Python ≥ 3.10.) A regression on either OS fails the build.
+`jsonschema`-absent legs. (macOS runners bill at 10× and are dropped from the matrix.) A
+regression on either OS fails the build.
+
+**The declared floor runs on the same gate**, not only at release: three further legs pin
+Python 3.10 — `ubuntu` × jsonschema-present, `ubuntu` × jsonschema-absent, and `windows` ×
+jsonschema-present. They are targeted `include` entries rather than a version axis, so the
+floor is covered on both operating systems and both dependency states without doubling the
+matrix. Every floor leg blocks: none is `continue-on-error`.
+
+To exercise the floor locally, use the provisioner rather than whatever Python is on your
+PATH — see [running the tests](../developer-guide.md#running-the-tests-both-jsonschema-states).
 
 ## Manual-verification leg
 

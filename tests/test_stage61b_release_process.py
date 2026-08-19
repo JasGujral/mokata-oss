@@ -24,13 +24,9 @@ import os
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
-try:
-    import yaml
-    _HAVE_YAML = True
-except ImportError:
-    _HAVE_YAML = False
-
 from _support import sample_manifest_data  # noqa: F401  (path-fix side-effect)
+from _release_repo_guards import call_arguments, live_calls
+from _workflow_pins import safe_load
 
 from mokata import __version__
 from mokata.packaging import (
@@ -161,13 +157,14 @@ class TestReleaseCheckCLI(unittest.TestCase):
         self.assertIn("9.9.9", text)               # names the intended tag it checked against
 
 
-@unittest.skipUnless(_HAVE_YAML, "PyYAML not installed (not a mokata dependency); run in CI")
 class TestDocsDeployGatedToMain(unittest.TestCase):
+    """The Pages deploy is main-only. This class used to `skipUnless(_HAVE_YAML, …)`, which on a
+    runner without the parser reported OK for a gate it had not looked at (PYYAML-SKIP-CLUSTER)."""
+
     def setUp(self):
         with open(DOCS_YML, encoding="utf-8") as fh:
-            self.doc = yaml.safe_load(fh)
-        with open(DOCS_YML, encoding="utf-8") as fh:
             self.raw = fh.read()
+        self.doc = safe_load(self.raw, "verify the Pages deploy is gated to the main branch")
 
     def test_a_deploy_job_is_gated_to_main_only(self):
         jobs = self.doc.get("jobs", {})
@@ -259,17 +256,46 @@ class TestReleaseShHardening(unittest.TestCase):
         self.assertIn("REFUSING TO RELEASE", self.sh,
                       "the preflight must abort (fail-closed) on a red suite")
         # and it is actually invoked BEFORE the master push (no push on a locally-red tree)
-        call_pos = self.sh.rfind("run_test_preflight")   # the call site (after the definition)
+        #
+        # ⚠ `rfind` ON THE RAW TEXT USED TO STAND HERE and it was PIN-SUBSTRING-COMMENT-HOLE: the
+        # last occurrence of the name is not the last CALL of it, so a comment mentioning the
+        # preflight moved this assertion's idea of the call site past the push and reddened a
+        # correct tree (0.0.18 stage 7). The call sites are now derived from the LIVE shell.
+        calls = live_calls(self.sh, "run_test_preflight")
+        self.assertTrue(calls, "release.sh never CALLS run_test_preflight")
+        call_pos = len("\n".join(self.sh.splitlines()[:max(n for n, _a in calls) - 1]))
         push_pos = self.sh.find("git push origin master")
         self.assertNotEqual(call_pos, -1)
         self.assertNotEqual(push_pos, -1)
         self.assertLess(call_pos, push_pos,
                         "the local test preflight must run BEFORE pushing master")
 
-    def test_ci_green_wait_for_both_repos_before_any_tag(self):
-        # After each push, release.sh resolves that exact commit's `CI` run and BLOCKS until it
-        # concludes, aborting unless the conclusion is `success` — on BOTH the dev repo and the
-        # public mirror, BEFORE the tag. A red CI on either repo can never reach a tag.
+    def test_ci_green_wait_for_the_publishing_repo_before_any_tag(self):
+        """The MIRROR's CI gates the tag. The dev repo's does not, and never did since 0.0.10.
+
+        ⚠⚠ THIS PIN USED TO ASSERT THE OPPOSITE, IT WAS GREEN FOR SEVEN RELEASES, AND IT IS WHERE
+        THE FALSE CLAIM AT THE 0.0.17 CUT CAME FROM (doc 85 §7h — a pin that encodes a false
+        premise then protects the defect; reversed at 0.0.18 stage 7). It was named
+        `test_ci_green_wait_for_both_repos_before_any_tag`, its comment read *"on BOTH the dev repo
+        and the public mirror, BEFORE the tag. A red CI on either repo can never reach a tag"*, and
+        it asserted:
+
+            self.assertRegex(self.sh, r'wait_for_ci_green\\s+"\\$DEV_REPO"',
+                             "the dev repo's CI must be waited on before tagging")
+            dev_wait = self.sh.find('wait_for_ci_green "$DEV_REPO"')
+            self.assertLess(dev_wait, real_tag, ...)
+
+        Every one of those was satisfied by the COMMENTED-OUT call at `release.sh:340` —
+        `PIN-SUBSTRING-COMMENT-HOLE` exactly: a scanned region containing a disabled copy of the
+        thing being scanned for. `RELEASE-SH-DEV-CI-WAIVER-OUTLIVED-ITS-SCOPE` says the belief was
+        *"read from the function DEFINITION and never from the call site"*. It was ALSO read from
+        this test, which is a stronger provenance than a misread line: the suite asserted it, in
+        prose, and stayed green while it was false.
+
+        The call sites are now derived from the LIVE shell (`live_calls`), so a commented-out call
+        can never satisfy this again — and `test_tag_is_not_a_publish.py` fails on a disabled call
+        anywhere in the script.
+        """
         self.assertIn("wait_for_ci_green", self.sh,
                       "release.sh must define a CI-green wait helper")
         # uses gh to resolve the commit's CI run and watch it fail-closed
@@ -281,20 +307,20 @@ class TestReleaseShHardening(unittest.TestCase):
                          "the wait must resolve the run for the EXACT commit")
         self.assertIn("REFUSING TO TAG", self.sh,
                       "a non-success / missing / timed-out CI run must abort before tagging")
-        # invoked for BOTH repos
-        self.assertRegex(self.sh, r'wait_for_ci_green\s+"\$DEV_REPO"',
-                         "the dev repo's CI must be waited on before tagging")
-        self.assertRegex(self.sh, r'wait_for_ci_green\s+"\$PUB_REPO"',
-                         "the public mirror's CI must be waited on before tagging")
-        # both waits are positioned BEFORE the real tag step (a red CI can't reach a tag)
-        real_tag = self.sh.find('git tag -a "$TAG"')
-        self.assertNotEqual(real_tag, -1)
-        dev_wait = self.sh.find('wait_for_ci_green "$DEV_REPO"')
-        pub_wait = self.sh.find('wait_for_ci_green "$PUB_REPO"')
-        self.assertNotEqual(dev_wait, -1)
-        self.assertNotEqual(pub_wait, -1)
-        self.assertLess(dev_wait, real_tag, "the dev-repo CI-green wait must precede the tag")
-        self.assertLess(pub_wait, real_tag, "the public-repo CI-green wait must precede the tag")
+        # Invoked for the repo that actually publishes — twice: the release PR branch, and the
+        # merged main commit that is tagged. Derived from LIVE call sites, never from the text.
+        calls = live_calls(self.sh, "wait_for_ci_green")
+        repos = [call_arguments(arguments) for _line, arguments in calls]
+        self.assertEqual(repos, ["$PUB_REPO", "$PUB_REPO"],
+                         "the mirror's CI must be waited on twice (PR branch, merged main) and "
+                         "nothing else may be waited on: found %s" % repos)
+        # Both waits are positioned BEFORE the real tag step (a red CI can't reach a tag).
+        real_tag_line = next(
+            number for number, line in enumerate(self.sh.splitlines(), start=1)
+            if 'git tag -a "$TAG"' in line)
+        for line, _arguments in calls:
+            self.assertLess(line, real_tag_line,
+                            "a mirror CI-green wait sits after the tag step")
 
 
 class TestParityStaysGreen(unittest.TestCase):

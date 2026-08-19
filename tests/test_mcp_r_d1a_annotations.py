@@ -24,6 +24,7 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401 - puts src/ on the path
+import _mcp_sdk  # noqa: E402 - the MCP SDK disposition gate
 
 import mokata.mcp.tool_annotations as A                    # noqa: E402
 from mokata.mcp import server as MS                         # noqa: E402
@@ -141,7 +142,7 @@ class TestCoverage(unittest.TestCase):
 
 class TestSdkAttach(unittest.TestCase):
 
-    @unittest.skipUnless(MS.mcp_available(), "optional MCP SDK not installed")
+    @_mcp_sdk.requires_mcp_sdk
     def test_mcp_r_d1a_annotations_on_fastmcp_tools(self):
         import asyncio
 
@@ -177,7 +178,7 @@ class TestSdkAttach(unittest.TestCase):
 
 class TestSchemaParity(unittest.TestCase):
 
-    @unittest.skipUnless(MS.mcp_available(), "optional MCP SDK not installed")
+    @_mcp_sdk.requires_mcp_sdk
     def test_mcp_r_d1a_schema_unchanged(self):
         import asyncio
 

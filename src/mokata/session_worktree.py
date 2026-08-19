@@ -211,6 +211,9 @@ def create_worktree(surface: Any, topic: Optional[str] = None, *, assume_yes: bo
                    "(`mokata worktree create \"<what you're working on>\"`); nothing created.")
             emit(msg)
             return WorktreeCreateResult(False, reason=msg)
+        # Lane F — a blocking free-text read, announced after the TTY guard just above it.
+        from .notify import announce_prompt
+        announce_prompt()
         try:
             topic = input("what is this session working on? ").strip()
         except (EOFError, OSError):

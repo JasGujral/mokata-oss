@@ -148,8 +148,14 @@ class TestNestedCheckoutNeverReachesTheMirror(unittest.TestCase):
         return dest
 
     def _sync(self, src, dest, expect_rc=0):
+        # `bash_argv`, not a bare argv[0] — see `tests/test_windows_shell_and_paths.py`. This file
+        # never reached the defect (it is guarded on `sync-public.sh`, which the mirror excludes,
+        # so it skips on every CI leg) but it carries the same shape and would inherit the same
+        # failure the day anything runs it on Windows.
         proc = subprocess.run(
-            ["bash", os.path.join(src, "scripts", "sync-public.sh"), dest],
+            _support.bash_argv(_support.as_posix(os.path.join(src, "scripts", "sync-public.sh")),
+                               _support.as_posix(dest)),
+            stdin=subprocess.DEVNULL,
             capture_output=True, text=True, env={**os.environ, **_GIT_ENV})
         self.assertEqual(proc.returncode, expect_rc,
                          f"sync-public.sh rc={proc.returncode}\n"

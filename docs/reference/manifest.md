@@ -32,12 +32,12 @@ travel with the repo, so they are deliberately outside the gitignored transient 
 |---|---|
 | `temp_local/state/` | pipeline state (JSON) — see below |
 | `temp_local/audit/ledger.jsonl` | the append-only audit ledger |
-| `temp_local/memory/memory.db` | SQLite memory backend (and `memory/vault/` for Obsidian) |
+| `temp_local/memory/memory.db` | SQLite memory backend |
 
 State files include `approved_approach__<run_id>.json` (brainstorm handoff), `emitted_spec__<run_id>.json`,
 `memory_stats.json`, `knowledge_index.json`, `story_analysis__<id>.json`, `undo_log.json`,
 and `pipeline_run__<id>.json` (resume checkpoints). They're runtime artifacts, not config —
-hence `temp_local/`. (A user-set `tools.<id>.config.path`/`config.vault` can point a backend
+hence `temp_local/`. (A user-set `tools.<id>.config.path` can point a backend
 elsewhere; that's the user's explicit choice, overriding the default location.)
 
 > **Harness wiring is *not* mokata data.** `mokata setup claude` writes `.claude/commands/`,
@@ -67,7 +67,7 @@ elsewhere; that's the user's explicit choice, overriding the default location.)
     "memory_store": {
       "description": "…",
       "layer": "memory",
-      "fallback": ["native-memory", "obsidian", "sqlite"]
+      "fallback": ["sqlite"]
     }
   },
   "tools": {
@@ -109,16 +109,15 @@ elsewhere; that's the user's explicit choice, overriding the default location.)
   network-capable kinds for local-first accounting.)
 - `enabled` — per-tool toggle (default `true`); a disabled tool is treated as absent and
   the router degrades to the next provider (K1).
-- `detect` — `{ "type": "command"|"python_module"|"path"|"obsidian"|"always", "name": "…" }`
-  (`name` required for `command`/`python_module`/`path`; not used by `obsidian`/`always`).
-  The `obsidian` strategy detects a real Obsidian config dir (macOS
-  `~/Library/Application Support/obsidian`, Linux `~/.config/obsidian` + Flatpak, Windows
-  `%APPDATA%\obsidian`) or a configured `config.vault` that exists.
+- `detect` — `{ "type": "command"|"python_module"|"path"|"python_files"|"always", "name": "…" }`
+  (`name` required for `command`/`python_module`/`path`; not used by `python_files`/`always`).
+  ⚠ The `obsidian` strategy was **removed in 0.0.18** with the backend it detected. A manifest
+  written by an older mokata may still declare it; such a manifest **still parses** (so the
+  repair commands stay runnable) and the strategy simply detects nothing.
 - `config` — optional per-tool block read by the backend builders (Stage 24A). Defaults are
   unchanged when it's absent:
   | Tool | Key | Effect |
   |---|---|---|
-  | `obsidian` | `config.vault` | point the Obsidian backend at an external vault directory |
   | `sqlite` | `config.path` | custom SQLite database path (`~` is expanded) |
   | `postgres` | `config.dsn_env` | **name of an env var** holding the DSN for the hosted Postgres backend |
   | `pgvector` | `config.dsn_env`, `config.embedder` | the vector-backed Postgres store: the env-var **name** for the DSN, plus the embedder to index with (default `auto` — `model2vec` when the `mokata[embeddings]` extra is present, else the hashing floor) |
@@ -139,6 +138,9 @@ elsewhere; that's the user's explicit choice, overriding the default location.)
 | `ux.progress` | `"terminal"`/`"dashboard"`/`"both"` | `terminal` | run-observability tier (Stage 40) |
 | `ux.statusline` | bool | `true` | the always-on pipeline-stage badge (Stage 54b) — opt-out |
 | `ux.badge_verbosity` | `"full"`/`"minimal"` | `full` | badge detail: `full` (everything on) or `minimal` (just the current stage) — opt-DOWN; any other value reads as `full` |
+| `ux.notify` | bool | `true` | notify you when it is YOUR move (a gated write or a CLI prompt) — opt-out |
+| `ux.notify_audio` | bool | `true` | play a sound with the notification; `false` keeps the notification, silent — opt-out |
+| `ux.notify_level` | `"harness-silent"`/`"all-waits"`/`"all-prompts"` | `all-prompts` | what notifies: only waits the harness leaves silent, every wait, or waits + prompts; any other value reads as `all-prompts` |
 | `review.independent` | `"on"`/`"off"` | `on` | run the closing `/review` as a fresh-context subagent (`on`) or the inline two-pass (`off`); any other value reads as `on` |
 | `review.verdict_max_age_hours` | hours, or `0`/`"off"` | `24` | how old a recorded review PASS may be and still satisfy the ship gate. Past the bound it blocks as stale and names when it was recorded. `0`/`"off"` disables the bound; an unreadable or nonsense value falls back to the default, so a broken setting can never silently switch the freshness check off |
 | `brainstorm.auto` | `"on"`/`"off"`/`"ask"` | `on` | auto-engage brainstorm when exploring: `on` (dive in), `ask` (offer first), `off` (never) |
@@ -197,7 +199,7 @@ edit them directly.
 |---|---|---|---|---|
 | `minimal` | engine, governance | — | — | **zero egress** |
 | `standard` *(default)* | all | ast → ripgrep → grep | sqlite | local-only |
-| `full` | all | code-review-graph → serena → ast → ripgrep → grep | native-memory → obsidian → sqlite | only present tools, all gated |
+| `full` | all | code-review-graph → serena → ast → ripgrep → grep | sqlite | only present tools, all gated |
 | `custom` | all | full chains (hand-tune) | full chains (hand-tune) | — |
 
 grep is the universal floor for `code_graph` — with the embedded stdlib-**AST** backend one step

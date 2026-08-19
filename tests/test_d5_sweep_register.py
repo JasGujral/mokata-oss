@@ -18,8 +18,9 @@ Every one is registered as exactly one of:
                         secret. These are the stage's targets, and the per-subsystem tests in
                         test_d5_notices.py force each one to fail and assert the notice.
   (iii) NARROW_IS_HONEST  the broad catch cannot be narrowed because the real exception class is
-                        not nameable at module scope (an optional dependency — psycopg, neo4j,
-                        jsonschema — whose import is lazy by design). Narrowing would mean importing
+                        not nameable at module scope (an optional dependency — psycopg,
+                        jsonschema — whose import is lazy by design; `neo4j` was a member until
+                        0.0.18 stage 14 removed the backend). Narrowing would mean importing
                         the optional dep to catch it, which is the bug the lazy import prevents.
   (iv)  SUPPRESS_OK     silence IS correct: cleanup on the way out (unlink-tmp-then-re-raise), a
                         best-effort cosmetic, or a guard around a callee whose own docstring
@@ -469,6 +470,14 @@ _register("progress.py", {
         "three OSes, and `mokata progress` / the `progress` MCP tool must never die rendering a "
         "footnote."),
     "build_stage_badge": (SUPPRESS_OK, "Guards `_badge_state` + `badge_verbosity`; falls back to no badge / BADGE_FULL."),
+    "_wait_segment": (SUPPRESS_OK,
+        "Lane F. The awaiting segment composed into the statusline badge. Broad because the callee "
+        "reaches the approval store on disk across three OSes, and the rule it must obey is the "
+        "one that governs the whole badge: a statusline is re-rendered on every state change, so a "
+        "notice from here would be the noisiest line in mokata. Fails to '' — the badge still "
+        "renders its mode and stage, and the SAME wait is still loud in the tool result (the "
+        "`awaiting` head) and in `mokata doctor`. This is the LEAST authoritative of the three "
+        "channels carrying that wait, which is what makes silence here affordable."),
     "active_skill_surface": (SUPPRESS_OK, "Guards `_badge_state`; no skill surface rendered."),
     "build_todo_items": (SUPPRESS_OK, "An unreadable checkpoint → an empty todo list, not a crashed surface."),
     "_logged_user_stage": (SUPPRESS_OK, "An unreadable progress log → None; the checkpoint still derives the stage."),
@@ -1040,6 +1049,36 @@ _register("deprecation.py", {
         "ledger row is a redundant audit trail of a visible event; a failure to write it must not "
         "crash the read hot path (this runs from `build_backend`) nor undo the warn the user "
         "already got. Silence is correct — nothing is hidden that was not already shown."),
+    "warn_removed": (SUPPRESS_OK,
+        "SIMP.S3 (0.0.18 stage 10) — `warn_deprecated`'s handler verbatim, one notice over, and "
+        "for the same reason: the broad catch wraps ONLY the best-effort `ledger.record("
+        "removal_notice)` AFTER the removal notice has already printed to stderr. ⚠ Note what "
+        "this is NOT: the REFUSAL path (a repo that holds data in a removed channel) raises "
+        "`RemovedChannelError` and is never routed through here — this handler only ever guards "
+        "the audit row of a notice the user has already seen."),
+})
+
+_register("notify.py", {
+    "notify": (SUPPRESS_OK,
+        "Lane F — THE seam, and the single most load-bearing broad handler added this release. The "
+        "module's whole contract is that a notification may never block, delay or fail the wait it "
+        "announces: it rides `prompt.read_yes_no` (24 call sites) and `mcp.consent._propose` (20), "
+        "and a notifier that could raise would convert every human gate in mokata into something "
+        "that can die announcing itself. Broad ON PURPOSE and NOT narrowable — the callee spans "
+        "`osascript`/`notify-send`/`afplay` across three OSes, a manifest read, an O_EXCL marker "
+        "and a stamp file, and the failure classes of an arbitrary OS binary are not mokata's to "
+        "enumerate. Silence is correct at the OUTER edge only: the OS-call failures INSIDE it are "
+        "each named through `note_degraded` (`notify` / `notify-windows`), so a notifier that "
+        "cannot notify says so once — this handler exists for the residue, not for the known "
+        "failures. And nothing is hidden that matters: the wait itself is still loud in the tool "
+        "result, on the statusline, and in `mokata doctor`. THIS channel is the redundant one."),
+    "load_settings": (SUPPRESS_OK,
+        "Lane F — reads three manifest scalars. Documented to degrade to the DOCUMENTED DEFAULTS "
+        "(enabled, audio on, widest level) rather than to silence, which is the direction that "
+        "matters: an unreadable manifest must not quietly cost a user the opt-OUT behaviour they "
+        "never opted out of. Mirrors `progress.statusline_enabled`, whose broad handler makes the "
+        "identical trade one setting over. Nothing is hidden — a manifest this cannot parse is "
+        "already loud everywhere else in mokata."),
 })
 
 _register("knowledge/graph_adopt.py", {
@@ -1058,20 +1097,6 @@ _register("knowledge/crg_client.py", {
         "It answers True/False; a broad failure IS unhealthy (False). Silence is correct HERE "
         "because the CALLER (the keep-functional machinery) is what announces the degrade LOUDLY "
         "and degrades to the AST floor — health() is only the cheap signal, never the enforcement."),
-})
-
-_register("knowledge/neo4j_backend.py", {
-    "Neo4jGraphClient.__init__": (NARROW_IS_HONEST,
-        "`driver.verify_connectivity()` fails in the neo4j DRIVER's own classes "
-        "(`ServiceUnavailable`/`AuthError`), which are only reachable through the optional, lazily "
-        "imported extra — and the driver may itself be an injected double. Nothing is swallowed: it "
-        "re-raises the typed `Neo4jUnavailable`, which `select_backends` now reports LOUDLY."),
-    "connect_neo4j_client": (NARROW_IS_HONEST,
-        "`neo4j.GraphDatabase.driver()` raises the driver's own `ConfigurationError` for a bad URI. "
-        "Same lazy-import argument; same conversion to the typed `Neo4jUnavailable`."),
-    "Neo4jGraphClient.close": (SUPPRESS_OK,
-        "Cleanup on the way out. The client is being discarded — there is nothing left to degrade "
-        "and no read depends on it."),
 })
 
 _register("dashboard.py", {
@@ -1229,6 +1254,9 @@ def broad_handlers():
     AST, not grep: a `# except Exception` in a docstring or a comment must not count, and a handler
     nested three functions deep must not be attributed to the module."""
     found = {}
+    # CORPUS: THE WORKING TREE. This asks what mokata SHIPS, and `sync-public.sh` mirrors
+    # with `rsync`, which copies the working tree — an untracked `.py` under `src/` really is
+    # published. The index would be blind to exactly the file most likely to break the rule.
     for root, _dirs, files in os.walk(SRC):
         for name in sorted(files):
             if not name.endswith(".py"):
@@ -1238,7 +1266,7 @@ def broad_handlers():
             # hands back `cli_commands\collab.py` on Windows — which matches no key, so every
             # handler reads as unregistered AND every entry reads as stale. Normalise here, at the
             # comparison boundary (the same `.replace(os.sep, "/")` the D1/D2 and SI.6 sweeps use).
-            rel = os.path.relpath(path, SRC).replace(os.sep, "/")
+            rel = _support.posix_rel(path, SRC).replace(os.sep, "/")
             with open(path, encoding="utf-8") as fh:
                 tree = ast.parse(fh.read(), filename=path)
             _walk(tree, rel, [], found)
@@ -1585,8 +1613,16 @@ _register("prior_art.py", {
         "a silent wrong answer."),
 })
 _register("branch_protection.py", {
-    "check_branch_protection": (DEGRADE_CLEAN,
-        "Fail-CLOSED FAIL verdict naming the error; the release refuses."),
+    "_read_json": (DEGRADE_CLEAN,
+        "Moved here from `check_branch_protection` when the module was rebuilt into THREE states "
+        "(0.0.18, 2026-08-17). Broad because it spans everything `gh` invocation can raise before a "
+        "status exists. It swallows NOTHING: it returns `(read_ok=False, None, <the error>)`, and "
+        "read_ok=False is the module's LOAD-BEARING signal, not a fallback — it is what routes the "
+        "protection read into state 3, and what makes a failed CORROBORATING read a refusal. The "
+        "error text is carried into the verdict and printed. ⚠ The reason this is (i) and not (ii) "
+        "is exactly the reason the module was rebuilt: the old code turned this handler's result "
+        "into `NOT safely protected`, i.e. it re-labelled an unreadable document as a read one. It "
+        "now says 'unreadable' and the caller decides — never the other way round."),
 })
 _register("cli_commands/runviews.py", {
     "cmd_progress_mark": (SUPPRESS_OK,

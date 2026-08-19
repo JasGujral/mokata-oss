@@ -298,9 +298,9 @@ def _snapshot(root):
             ab = os.path.join(dirpath, fn)
             try:
                 with open(ab, "rb") as fh:
-                    out[os.path.relpath(ab, root)] = fh.read()
+                    out[_support.posix_rel(ab, root)] = fh.read()
             except OSError:
-                out[os.path.relpath(ab, root)] = b"<unreadable>"
+                out[_support.posix_rel(ab, root)] = b"<unreadable>"
     return out
 
 

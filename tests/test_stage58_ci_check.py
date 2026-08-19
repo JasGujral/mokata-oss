@@ -29,14 +29,13 @@ from mokata import ci_check as CI
 from mokata.config import Surface
 from mokata.engine.spec import AcceptanceCriterion, Spec
 
-# PyYAML is NOT a mokata dependency (the core stays dependency-free). When it's present we
-# parse the workflow YAML for a precise structural assertion; when it's absent we fall back
-# to a text assertion of the same security-relevant keys — so the guard always runs in CI.
-try:
-    import yaml
-    _HAVE_YAML = True
-except ImportError:
-    _HAVE_YAML = False
+# PyYAML is NOT a mokata dependency (the core stays dependency-free) but it IS a required TEST
+# dependency (requirements/ci.txt). The "fall back to a text assertion" arrangement that used to
+# live here reported a PASS under the same test name for a check it had not performed — a
+# substring cannot tell `contents: read` in a permissions block from `contents: read` in a
+# comment. `safe_load` raises instead (PYYAML-SKIP-CLUSTER, 0.0.18 stage 2).
+from _workflow_pins import safe_load
+
 from mokata.engine.spec_gate import SPEC_STATE_KEY
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -234,14 +233,10 @@ class TestAction(unittest.TestCase):
         self.assertTrue(os.path.exists(path), "action.yml missing")
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
-        if _HAVE_YAML:
-            data = yaml.safe_load(text)
-            self.assertEqual(data["runs"]["using"], "composite")
-            self.assertIn("inputs", data)
-            self.assertIn("base", data["inputs"])
-        else:
-            self.assertIn("composite", text)     # runs.using (quote-agnostic fallback)
-            self.assertIn("base:", text)          # the documented input
+        data = safe_load(text, "verify action.yml is a valid composite action")
+        self.assertEqual(data["runs"]["using"], "composite")
+        self.assertIn("inputs", data)
+        self.assertIn("base", data["inputs"])
 
     def test_example_workflow_is_least_privilege(self):
         path = os.path.join(ROOT, ".github", "actions", "mokata-check", "example-pr-check.yml")
@@ -249,13 +244,9 @@ class TestAction(unittest.TestCase):
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
         self.assertNotIn("write-all", text)
-        if _HAVE_YAML:
-            perms = yaml.safe_load(text)["permissions"]
-            self.assertEqual(perms.get("contents"), "read")
-            self.assertEqual(perms.get("pull-requests"), "write")     # to post the comment
-        else:
-            self.assertIn("contents: read", text)
-            self.assertIn("pull-requests: write", text)
+        perms = safe_load(text, "verify the example workflow is least-privilege")["permissions"]
+        self.assertEqual(perms.get("contents"), "read")
+        self.assertEqual(perms.get("pull-requests"), "write")     # to post the comment
 
 
 # ============================================================ parity

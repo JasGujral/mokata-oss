@@ -18,8 +18,11 @@ actually raises; no class here exists without a raiser. Two axes:
                          TypeError) that a broad catch would have swallowed identically.
 
   DegradedCapability     the fail-open family — a capability could not be built, and the caller
-                         degrades to a documented floor (Postgres → the SQLite floor; Neo4j → the
-                         grep floor; a subagent → sequential). These are NOT bugs; they are the
+                         degrades to a documented floor (Postgres → the SQLite floor; an adopted
+                         code graph → the AST/grep floor; a subagent → sequential). These are the
+                         live members, re-pointed at 0.0.18 stage 14 when `Neo4jUnavailable` left
+                         with its backend — an example naming a class that no longer exists is a
+                         claim that reads as a taxonomy. These are NOT bugs; they are the
                          designed degrade paths, and every one carries the `failure_class` that
                          tells a surface WHICH remediation is the true one.
 

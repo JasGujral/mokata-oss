@@ -421,46 +421,62 @@ class _CountingConn:
         return getattr(self._conn, attr)
 
 
-# ================================================================ 6 · non-SQL backends hold
+# ============================================ 6 · the uniform contract, after the non-SQL backends
 class NonSqlBackendsUnchangedTest(unittest.TestCase):
-    """Obsidian and native-memory are not queryable stores — they keep the Python filter. The
-    CONTRACT (including `limit`) stays uniform so no caller branches on backend."""
+    """DB.S2a's point was that the FILTER CONTRACT is uniform, so no caller branches on backend —
+    the SQL backends push `mtype`/`statuses`/`limit` into a WHERE, everything else filters in
+    Python, and both answer identically.
 
-    def test_db_s2a_obsidian_filter_and_limit_still_correct(self):
-        from mokata.memory.backends import ObsidianBackend
-        with tempfile.TemporaryDirectory() as vault:
-            backend = ObsidianBackend(vault)
-            for it in _corpus():
-                backend.put(it)
-            got = backend.all(mtype=PERSISTENT, statuses=(ACTIVE,))
-            self.assertEqual({i.id for i in got}, {"alpha", "delta", "hotel"})
-            self.assertEqual(len(backend.all(limit=2)), 2)
+    ⚠ 0.0.18 stage 10 removed the two backends that stood for "everything else" (Obsidian's files
+    and the injected native client). The property is not theirs, though — it is the ABC's, and the
+    ABC still promises `mtype`/`statuses`/`limit` to any adapter. So the two tests here were
+    re-pointed at a MINIMAL in-Python `MemoryBackend` rather than deleted: an adapter with no SQL
+    under it is exactly what DB.S2a had to keep working, and a third-party one is precisely the
+    case that survives the removal."""
 
-    def test_db_s2a_native_filter_and_limit_still_correct(self):
-        from mokata.memory.backends import NativeMemoryBackend
+    def _in_python_backend(self):
+        from mokata.memory.backends import MemoryBackend
 
-        class _Client:
+        class _Adapter(MemoryBackend):
+            """The smallest honest non-SQL adapter — the shape the removed two shared: no WHERE
+            to push into, `supports_scope_pushdown` False, filtering in Python."""
+
+            name = "in-python"
+
             def __init__(self):
                 self.docs = {}
 
-            def put(self, doc):
-                self.docs[doc["id"]] = doc
+            def put(self, item):
+                self.docs[item.id] = item
 
             def get(self, item_id):
                 return self.docs.get(item_id)
 
-            def all(self):
-                return list(self.docs.values())
+            def all(self, mtype=None, statuses=None, limit=None, scope_path=None):
+                items = sorted(self.docs.values(), key=lambda i: (i.created_at, i.id))
+                if mtype is not None:
+                    items = [i for i in items if i.mtype == mtype]
+                if statuses is not None:
+                    items = [i for i in items if i.status in statuses]
+                return items[:limit] if limit is not None else items
 
             def delete(self, item_id):
                 return self.docs.pop(item_id, None) is not None
 
-        backend = NativeMemoryBackend(_Client())
+        return _Adapter()
+
+    def test_db_s2a_in_python_filter_and_limit_still_correct(self):
+        backend = self._in_python_backend()
         for it in _corpus():
             backend.put(it)
         self.assertEqual({i.id for i in backend.all(mtype=PERSISTENT, statuses=(ACTIVE,))},
                          {"alpha", "delta", "hotel"})
         self.assertEqual(len(backend.all(limit=3)), 3)
+
+    def test_db_s2a_a_non_sql_adapter_does_not_advertise_scope_pushdown(self):
+        # The default is the SAFE one, and it is the ABC's, not each adapter's: a wrongly-True
+        # here is another tenant's rows going missing.
+        self.assertFalse(self._in_python_backend().supports_scope_pushdown)
 
 
 # ==================================================== 7 · scope columns deliberately untouched

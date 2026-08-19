@@ -50,17 +50,20 @@ class TestDeterministicEnabledSets(unittest.TestCase):
         self.assertEqual(
             s["layers"], ("engine", "knowledge", "memory", "governance")
         )
+        # 0.0.18 stage 10: `full`'s memory chain lost `native-memory` and `obsidian` with the
+        # backends themselves. What is left is the floor — and that is the DESIGN, not a gap:
+        # postgres/pgvector are deliberately not wired by any profile (ADR-54 keeps a DSN and
+        # `CREATE EXTENSION` an explicit opt-in, never a detection).
         self.assertEqual(
             s["capabilities"],
             {
                 "code_graph": ["code-review-graph", "serena", "ast", "ripgrep", "grep"],
-                "memory_store": ["native-memory", "obsidian", "sqlite"],
+                "memory_store": ["sqlite"],
             },
         )
         self.assertEqual(
             s["tools"],
-            ("ast", "code-review-graph", "grep", "native-memory", "obsidian",
-             "ripgrep", "serena", "sqlite"),
+            ("ast", "code-review-graph", "grep", "ripgrep", "serena", "sqlite"),
         )
 
     def test_full_is_a_proper_superset_of_standard(self):

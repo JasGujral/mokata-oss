@@ -10,7 +10,7 @@ Each profile yields a **deterministic enabled set** — same profile in, same st
 |---|---|---|---|---|
 | `minimal` | engine, governance | — (none) | — (none) | **zero** |
 | `standard` **(default)** | engine, knowledge, memory, governance | ast → ripgrep → grep | sqlite | local-only |
-| `full` | engine, knowledge, memory, governance | code-review-graph → serena → ast → ripgrep → grep | native-memory → obsidian → sqlite | only present tools, all gated |
+| `full` | engine, knowledge, memory, governance | code-review-graph → serena → ast → ripgrep → grep | sqlite | only present tools, all gated |
 | `custom` | all (starting point) | full chains (hand-tune) | full chains (hand-tune) | — |
 
 ## How toggling works

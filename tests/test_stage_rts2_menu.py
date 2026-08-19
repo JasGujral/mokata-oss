@@ -25,10 +25,16 @@ ESC = "\x1b["
 
 
 def _command_stems():
+    # CORPUS: THE WORKING TREE. These files are shipped assets — `rsync` copies whatever is on
+    # disk, so a stray untracked one is published and belongs in this check. An extra file makes
+    # the assertion STRICTER, never more likely to pass, so the walk cannot hide a violation.
     return sorted(os.path.splitext(f)[0] for f in os.listdir(CMDS_DIR) if f.endswith(".md"))
 
 
 def _skill_names():
+    # CORPUS: THE WORKING TREE. These files are shipped assets — `rsync` copies whatever is on
+    # disk, so a stray untracked one is published and belongs in this check. An extra file makes
+    # the assertion STRICTER, never more likely to pass, so the walk cannot hide a violation.
     return sorted(d for d in os.listdir(SKILLS_DIR)
                   if os.path.isfile(os.path.join(SKILLS_DIR, d, "SKILL.md")))
 
@@ -60,6 +66,9 @@ class TestSingleSourceEnumeration(unittest.TestCase):
 class TestGateMarker(unittest.TestCase):
     def test_gated_commands_are_flagged_and_ungated_are_not(self):
         expected = {os.path.splitext(f)[0]: _has_gate(os.path.join(CMDS_DIR, f))
+                    # CORPUS: THE WORKING TREE. These files are shipped assets — `rsync` copies whatever is on
+                    # disk, so a stray untracked one is published and belongs in this check. An extra file makes
+                    # the assertion STRICTER, never more likely to pass, so the walk cannot hide a violation.
                     for f in os.listdir(CMDS_DIR) if f.endswith(".md")}
         got = {e.name: e.gated for e in menu.list_commands()}
         self.assertEqual(got, expected)

@@ -466,15 +466,25 @@ def dirty_track_main(argv: Optional[List[str]] = None) -> int:
 
         from .config import find_project_root
         from .knowledge.freshness import mark_dirty
+        from .repo_paths import name_of
         root = find_project_root(cwd)
+        # The dirty set is a serialized list of NAMES: `freshness`'s cold walk fills the same
+        # channel with `name_of(...)` and the two are matched against each other and against the
+        # knowledge index's keys. This loop built them with a bare `relpath` until the invariant
+        # landed, so on Windows the hook wrote `src\a.py` into a set the walker wrote `src/a.py`
+        # into — the same half-moved pair as the eleven, in a lane too quiet to fail loudly.
         rels = []
         for p in paths:
             ab = p if os.path.isabs(p) else os.path.join(cwd, p)
             try:
-                rel = os.path.relpath(ab, root)
+                rels.append(name_of(ab, root))
             except (ValueError, OSError):
-                rel = p
-            rels.append(rel)
+                # DROPPED, not passed through raw. A path that cannot be expressed relative to
+                # the root (a different drive on Windows) has no NAME, and the old fallback put
+                # the caller's own string — an absolute native path — into a set of names, where
+                # it could never match anything and would be re-serialized as one. Nothing is
+                # lost that could have been used; the async lane stays silent either way.
+                continue
         mark_dirty(root, rels, session_id=session_id)
         return 0
     except Exception:  # noqa: BLE001 — the async lane NEVER fails a tool call
@@ -875,36 +885,54 @@ def _mokata_segment(cwd: str, session_name: Optional[str],
         # TM.S1 — the statusline segment prefixes the run mode (local|team) so a session is
         # never ambiguous about which mode it's in, then the pipeline-stage badge. B-BADGE — the
         # payload's `session_id` scopes the stage strip to THIS session (see `run_resolver`).
-        badge = statusline_badge(surface, session_name=session_name, session_id=session_id)
-        # MCP-R.D2 (UX-NOTIFY) — the mokata-OWNED wait signal, for the waits that raise no harness
-        # notification. A gated write returning a proposal does NOT trigger a permission prompt
-        # (the `mcp__mokata__*` allow-grant is what stops it prompting), so Claude Code's
-        # Notification event never fires and the wait is invisible until someone notices silence.
-        # This is the channel mokata owns, and it costs nothing: the pending set is already on
-        # disk, so it renders on the statusline tick the harness was going to run anyway — no
-        # daemon, no watcher, no new dependency.
         #
-        # Appended, never substituted: a session with nothing pending gets a byte-identical badge.
-        from .awaiting import statusline_segment
-        wait = statusline_segment(root)
-        return f"{badge}  {wait}" if wait else badge
+        # MCP-R.D2's wait segment (UX-NOTIFY) used to be appended HERE, one call below. Lane F
+        # moved the composition into `statusline_badge` and put the wait FIRST — see that
+        # function for why order is the deliverable and why composing it here left it unpinned.
+        # Nothing is lost: this is `statusline_badge`'s only production caller, so the shipped
+        # line gains the ordering and loses nothing it rendered before.
+        return statusline_badge(surface, session_name=session_name, session_id=session_id)
     except Exception:
         return ""
 
 
 def _run_wrapped(command: str, raw: str) -> str:
-    """Run a pre-existing user statusLine command (merge-safe composition), feeding it the
-    SAME payload, and return its first stdout line. Best-effort + bounded: any failure /
-    timeout degrades to "" so mokata's badge still renders and the harness never blocks."""
+    """Run the statusLine command that was already in this settings.json (merge-safe
+    composition), feeding it the SAME payload, and return its first stdout line. Best-effort +
+    bounded: any failure / timeout degrades to "" so mokata's badge still renders and the
+    harness never blocks.
+
+    "already in this settings.json" is deliberate and is NOT "the user's own" — see the
+    B602 justification below."""
     if not command:
         return ""
     try:
         import subprocess
-        # Justification for the B602 suppression: `command` is the user's OWN pre-existing
-        # statusLine command (from their Claude Code settings), composed here so mokata's badge
-        # doesn't clobber it. It must run through a shell to match how the harness itself runs a
-        # statusLine (pipes, $VARS); a shlex.split arg-list would silently break those — a
-        # behaviour change. Not attacker input; bounded by `timeout`, best-effort (failure → "").
+        # Justification for the B602 suppression (F10, rewritten — the previous one asserted
+        # this string was never under an attacker's control, which is FALSE at the default
+        # scope and had been for four releases):
+        #
+        #   `command` reaches here from ONE writer — `harness_setup._statusline_command`, the
+        #   only thing in the package that spells this flag — which composes it from a
+        #   `harness_setup.WrapOrigin`: a statusLine command STAMPED WITH THE settings.json IT
+        #   WAS READ FROM. That function REFUSES a WrapOrigin whose origin is not the file
+        #   being written, so mokata never carries a statusLine command between files or
+        #   across scopes. The string that lands here is therefore always one the harness
+        #   itself already runs through a shell out of that same file — mokata adds no
+        #   execution path, and the human was shown the exact line before approving setup.
+        #
+        #   NOT "the user's own": at the default `project` scope the file is
+        #   `<root>/.claude/settings.json`, Claude Code's checked-in, shareable project
+        #   settings — a clone can carry one nobody here wrote. The no-added-privilege
+        #   argument above does not depend on who authored it, which is why it is the one
+        #   stated. The caller graph it rests on is DERIVED in
+        #   `tests/test_stage5_statusline_wrap_origin.py`, so a second writer, a second merge
+        #   site, or a `_merge_statusline` that read one file and wrote another goes RED here
+        #   rather than quietly turning this comment into a lie.
+        #
+        # `shell=True` STAYS: it must match how the harness itself runs a statusLine (pipes,
+        # $VARS); a shlex.split arg-list would silently break a user's existing line — a
+        # behaviour change. Bounded by `timeout`, best-effort (failure → "").
         proc = subprocess.run(command, shell=True, input=raw,  # nosec B602
                               capture_output=True, text=True, timeout=_WRAP_TIMEOUT_SECS)
         first = (proc.stdout or "").splitlines()

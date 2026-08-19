@@ -53,7 +53,7 @@ override <gate> --reason "<why>"` — ledgered, session-scoped, and a human's ca
 
 ## Team mode (shared memory over one Postgres)
 
-The golden path is "bring one Postgres" — one vanilla Postgres >= 14, no extensions. mokata hosts
+The golden path is "bring one Postgres" — one vanilla Postgres >= 15, no extensions. mokata hosts
 nothing and never stores your DSN; it reads `$MOKATA_PG_DSN` from the environment at run time.
 
 - Managed DB (recommended): create a Postgres (Supabase / Neon / RDS free tiers all work),

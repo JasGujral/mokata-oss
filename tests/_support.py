@@ -1,10 +1,81 @@
 """Shared test support: put `src/` on the import path and build sample manifests."""
 
 import os
+import shutil
 import sqlite3
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+
+# --- WINDOWS PORTABILITY: THE TWO THINGS A POSIX-ONLY AUTHOR GETS WRONG -------------------
+# Both of these were found the expensive way — 19 of the 20 tests that reded on all three Windows
+# legs of the 0.0.18 cut were one or the other of them, and NOT nineteen separate defects. They
+# live here, together, because the repair has to be one place or the class comes straight back.
+#
+# ⚠ 1. `bash` IS NOT THE `bash` PATH NAMES. `subprocess.run(["bash", ...])` on Windows reaches
+#    CreateProcess with a bare name, and CreateProcess searches **System32 BEFORE PATH**. On a
+#    GitHub `windows-latest` runner `C:\Windows\System32\bash.exe` is the **WSL launcher**, so a
+#    bare "bash" argv runs WSL — which has no distribution installed, prints
+#    *"Windows Subsystem for Linux has no installed distributions."* in UTF-16, and exits 1.
+#    Every assertion downstream then grades that message instead of the script.
+#
+#    `shutil.which` searches PATH in PATH's order and finds the Git Bash the runner actually
+#    installs, which is why `tests/test_floor_provisioner.py` — the one file that already resolved
+#    it this way — ran its script correctly on the same three legs that failed everywhere else.
+#    That contrast is the evidence, and `BASH` below makes it the tree's single answer.
+#
+# ⚠ 2. `os.sep` LEAKS INTO TEXT THAT IS SPELLED WITH `/`. A repo-relative path built by
+#    `os.path.join` / `os.path.relpath` is `mokata\deprecation.py` on Windows, and every
+#    declaration it is compared against — a corpus key, an exemption table, the command a doc
+#    tells a contributor to run — is spelled `mokata/deprecation.py` by a human. The comparison is
+#    then false on exactly one platform, which is the platform nobody develops on.
+#
+#    A repo-relative path used as an IDENTITY is not a filesystem path: it is a name, and the name
+#    is POSIX-spelled. `as_posix` / `posix_rel` are where that conversion happens, and
+#    `mokata.repo_walk.posix_name` is the product-side twin (deliberately two: a test cannot import
+#    product code to run a check ABOUT product code).
+#
+# ⚠ 3. A SHELL SUBPROCESS MUST SAY WHAT ITS STDIN IS — added in round 2, because fixing (1)
+#    CAUSED it. While `bash` resolved to WSL every such call died in milliseconds having read
+#    nothing; once it resolved to real Git Bash the subprocess actually ran, and on run
+#    32094654167 the `windows · py3.12 · jsonschema=absent` unit step sat at 54m27s against ~25m
+#    beside it. Pass `stdin=subprocess.DEVNULL`. `release.sh`'s `run_test_preflight` had the
+#    precedent (`< /dev/null`) and the comment explaining it; nothing else in the tree did.
+#
+# ⚠ THE SWEEP THAT ENFORCES ALL THREE IS `tests/_windows_portability.py`, over a WALKED corpus.
+#    The first version of it read `os.listdir(tests/)` and two named corpus builders, and two
+#    cause-B sites reached the mirror through the gap. A guard's corpus is a claim.
+
+#: The bash the *shell* would run, or None. Never pass a bare "bash" as argv[0] — see above.
+BASH = shutil.which("bash")
+
+#: The reason a bash-driven check did not run. An UN-RUN check, never a passing one (doc 85 §7g).
+NO_BASH = ("no bash on PATH — this check drives a shell script and cannot be RUN here. That is an "
+           "un-run check, not a passing one (doc 85 §7g).")
+
+
+def bash_argv(*args):
+    """argv for running bash, resolved through PATH rather than left to CreateProcess.
+
+    Raises rather than falling back to a bare "bash": a fallback would silently restore the exact
+    defect this exists for, on the one platform where it is invisible to the author."""
+    if not BASH:
+        raise RuntimeError(NO_BASH)
+    return [BASH, *[str(a) for a in args]]
+
+
+def as_posix(path, *, sep=os.sep):
+    """A path spelled the way the repo spells it — `/`, on every platform.
+
+    `sep` is a parameter so the Windows branch is DRIVEN on a POSIX host rather than being a line
+    that only ever executes where nobody is looking (§7i)."""
+    return path.replace(sep, "/") if sep != "/" else path
+
+
+def posix_rel(path, start):
+    """`os.path.relpath`, spelled as a repo-relative NAME rather than as a filesystem path."""
+    return as_posix(os.path.relpath(path, start))
 
 
 # --- SI.3 (0.0.13): driving a human-gated MCP write from a test --------------------------
@@ -142,8 +213,8 @@ def sqlite_disk_ok():
 from mokata.repo_walk import is_checkout_boundary  # noqa: E402  (after the sys.path fix above)
 
 
-def iter_repo_files(root, skip_dirs=()):
-    """Yield `(rel_posix_path, abs_path)` for every file under `root`, skipping nested
+def iter_worktree_files(root, skip_dirs=()):
+    """Yield `(rel_posix_path, abs_path)` for every file ON DISK under `root`, skipping nested
     checkouts and `skip_dirs`.
 
     `skip_dirs` entries match either a bare directory name (`node_modules`) or a
@@ -151,12 +222,25 @@ def iter_repo_files(root, skip_dirs=()):
     marker it is. Use this for any sweep rooted at the REPO ROOT so the nested-checkout
     property is a fact about the repo rather than a habit each author has to remember.
 
+    ⚠ THIS IS THE WORKING TREE, NOT THE INDEX. It yields untracked and gitignored files —
+    every `.mokata/temp_local/*.json` a suite run left behind, every editor artefact, every
+    build output. That is CORRECT for one question and WRONG for the other, and the name now
+    says which it answers:
+
+        "what will `sync-public.sh` rsync into the mirror?"  -> iter_worktree_files  (disk is truth)
+        "what does this repo actually track?"                -> iter_tracked_files   (index is truth)
+
+    A sweep that asks the second question and calls this function is `CORPUS-IS-A-FILESYSTEM-
+    WALK-NOT-THE-INDEX`: it passes today only because no untracked file happens to match its
+    pattern yet. (It was called `iter_repo_files` until stage 3 — a name that named the root
+    and not the corpus, so neither caller could be wrong out loud.)
+
     Deliberately NOT `repo_walk.prune_source_dirs`: that prunes every hidden directory, and a
     sweep over this repo must still reach `.github/workflows` (where the action pins live).
     The BOUNDARY rule is shared; the dot policy is each walker's own."""
     skip = set(skip_dirs)
     for dirpath, dirnames, filenames in os.walk(root):
-        rel_dir = os.path.relpath(dirpath, root)
+        rel_dir = posix_rel(dirpath, root)
         rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
         dirnames[:] = sorted(
             d for d in dirnames
@@ -167,6 +251,73 @@ def iter_repo_files(root, skip_dirs=()):
         )
         for name in sorted(filenames):
             yield (f"{rel_dir}/{name}".lstrip("/"), os.path.join(dirpath, name))
+
+
+class NotACheckout(Exception):
+    """`iter_tracked_files` was pointed at a directory git does not track.
+
+    Raised rather than degraded to a walk ON PURPOSE. A silent fallback from "ask the index"
+    to "walk the disk" is the exact false green this stage exists to remove: the caller would
+    keep getting an answer, the answer would quietly change corpus, and nothing would go red.
+    A sweep that cannot reach the index has not performed its check and must say so."""
+
+
+def iter_tracked_files(root, skip_dirs=()):
+    """Yield `(rel_posix_path, abs_path)` for every file GIT TRACKS under `root`.
+
+    The index-reading sibling of `iter_worktree_files`, for the question *"what does this repo
+    actually track?"* — the one a walk answers only by luck. `skip_dirs` matches exactly as it
+    does there, so a caller swaps one for the other without rewriting its exclusions.
+
+    Three properties, none of them maintained by hand:
+
+    * **Untracked and gitignored files are absent BY CONSTRUCTION**, not by a pruner. This
+      repo's walk-based sweeps carry a `.mokata` entry, an `__pycache__` entry, an
+      `.egg-info` suffix test — each added by an author who was bitten once. The index needs
+      none of them: measured 2026-08-12, `iter_worktree_files(REPO)` yields 33,861 paths of
+      which 32,757 are untracked, and this function yields the 1,104 that are.
+    * **A nested checkout is excluded FOR FREE.** `git ls-files` never reports another
+      checkout's files, so the boundary `is_checkout_boundary` maintains structurally is a
+      property of the index rather than a rule. That is why the row calls this the principled
+      fix and not merely a faster one.
+    * **A linked worktree works**, because git resolves the `gitdir:` pointer itself. Verified
+      against a real `git worktree add`, not assumed — `SYNC-PUBLIC-GIT-EXCLUDE-IS-DIRECTORY-
+      ONLY` (doc 84) is this repo's standing reminder that naive `.git` handling breaks there.
+
+    Deleted-but-still-tracked paths are dropped: the index lists them, the disk does not have
+    them, and every caller here is about to open what it is handed.
+    """
+    import subprocess
+
+    root = os.path.abspath(root)
+    try:
+        proc = subprocess.run(
+            ["git", "-C", root, "ls-files", "-z", "--cached", "--exclude-standard"],
+            capture_output=True,
+        )
+    except OSError as exc:                        # no git binary at all
+        raise NotACheckout("cannot run git at %s: %s" % (root, exc))
+    if proc.returncode != 0:
+        raise NotACheckout(
+            "not a git checkout: %s (git ls-files exit %d: %s)"
+            % (root, proc.returncode, proc.stderr.decode("utf-8", "replace").strip())
+        )
+
+    skip = set(skip_dirs)
+    for rel in sorted(proc.stdout.decode("utf-8", "surrogateescape").split("\0")):
+        if not rel:
+            continue
+        parts = rel.split("/")
+        # Same two-form match as the walker: a bare directory name anywhere in the path, or a
+        # repo-relative directory prefix.
+        if any(p in skip for p in parts[:-1]):
+            continue
+        if any("/".join(parts[:i]) in skip for i in range(1, len(parts))):
+            continue
+        ab = os.path.join(root, *parts)
+        if not os.path.isfile(ab):
+            continue                              # tracked but deleted from the worktree
+        yield (rel, ab)
 
 
 # --- H-1a: the BEHAVIOURAL read-only pin ------------------------------------------------
@@ -190,7 +341,7 @@ def tree_snapshot(root):
                     data = fh.read()
             except OSError:
                 continue
-            snap[os.path.relpath(ab, root)] = (len(data), hashlib.sha256(data).hexdigest())
+            snap[posix_rel(ab, root)] = (len(data), hashlib.sha256(data).hexdigest())
     return snap
 
 

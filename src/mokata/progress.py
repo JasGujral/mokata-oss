@@ -511,6 +511,19 @@ def statusline_enabled(surface: Any) -> bool:
 # lost — the user must deliberately choose `minimal`.
 BADGE_FULL, BADGE_MINIMAL = "full", "minimal"
 
+# §7g — the two answers `build_stage_badge` can give WITHOUT a stage strip, which used to be one
+# string. `BADGE_NO_RUN` is a REAL answer and is kept byte-identical to what shipped: this session
+# is bound to no run, everything is healthy, there is simply nothing to show. `BADGE_UNRESOLVED` is
+# an ABSENT answer: the surface could not be read, so mokata does not KNOW what stage this is, and
+# saying "mokata" there was an absent answer wearing a pass.
+#
+# It has to be legible in the width a statusline actually has, so it is a glyph and two words
+# rather than a sentence — but it must say WHAT it could not do, not merely differ (§7g's closing
+# rule: an answer that carries its own provenance cannot be mistaken for a different answer).
+BADGE_NO_RUN = "mokata"
+BADGE_UNRESOLVED = "mokata ▸ ⚠ unreadable"
+BADGE_UNRESOLVED_ASCII = "mokata > [!] unreadable"
+
 
 def badge_verbosity(surface: Any) -> str:
     """settings.ux.badge_verbosity — `full` (default, everything on) | `minimal` (active cell
@@ -622,9 +635,13 @@ def build_stage_badge(surface: Any, *, session_name: Optional[str] = None,
         else:
             active, counter = _badge_state(surface)
     except Exception:
-        active, counter = None, ""
+        # §7g — THIS is where the two states used to merge. `mokata` was returned both here, where
+        # the surface could not be READ, and below, where it was read fine and named no run. One
+        # string, two meanings, and the safe-looking meaning ("all quiet") always won: a badge that
+        # says nothing when it does not know is the same lie as a green test that ran nothing.
+        return BADGE_UNRESOLVED_ASCII if ascii_only else BADGE_UNRESOLVED
     if active is None:
-        return "mokata"
+        return BADGE_NO_RUN                  # a REAL answer: this session is bound to no run
     lo, hi = (">", "<") if ascii_only else ("›", "‹")
     arrow = ">" if ascii_only else "▸"
     name = f"{session_name} · " if session_name else ""
@@ -675,7 +692,23 @@ def statusline_badge(surface: Any, *, session_name: Optional[str] = None,
     a broken surface reads as `local`, never an error.
 
     B-BADGE — `session_id` (Claude Code's session id off the statusLine payload) is threaded to
-    `build_stage_badge` so the stage strip is resolved for THIS session; absent it, unchanged."""
+    `build_stage_badge` so the stage strip is resolved for THIS session; absent it, unchanged.
+
+    ⭐ LANE F — THE WAIT LEADS. `awaiting.statusline_segment` was composed into the shipped
+    statusline (in `hook_cli._mokata_segment`) and NOT into this function, which is the one named
+    "the full statusline segment" and the one anything reusing mokata's statusline calls. Two
+    things followed, and the second is the one that mattered:
+
+      * the composition was pinned NOWHERE — every existing test drives `statusline_segment` in
+        isolation, and each would have passed on a build where nothing composed it at all; and
+      * it was APPENDED, so the single most urgent segment mokata renders sat at the far right of
+        `local · mokata ▸ [✓brainstorm · ✓spec · ›develop‹ · review · ship] · 3/5 · ⇶2` — behind a
+        strip that grows, after a user statusLine that `--wrap` prepends, on a line every terminal
+        truncates from the RIGHT.
+
+    A wait outranks both the mode and the stage: those describe where the work is, and this one
+    says the work has STOPPED and is waiting on the reader. So it leads, and it is composed here,
+    where the composition can be graded."""
     from .run_mode import mode_badge
     try:
         mode = mode_badge(surface, ascii_only=ascii_only)
@@ -684,7 +717,22 @@ def statusline_badge(surface: Any, *, session_name: Optional[str] = None,
         mode = LOCAL
     stage = build_stage_badge(surface, session_name=session_name, session_id=session_id,
                               ascii_only=ascii_only)
-    return f"{mode} · {stage}"
+    line = f"{mode} · {stage}"
+    wait = _wait_segment(surface)
+    return f"{wait}  {line}" if wait else line
+
+
+def _wait_segment(surface: Any) -> str:
+    """`awaiting.statusline_segment` for this surface's root — "" for a healthy session, so the
+    badge stays BYTE-IDENTICAL when nothing is pending.
+
+    Read through the module rather than imported by name so the seam is patchable at one place, and
+    guarded so that the wait signal can never be the thing that breaks the badge carrying it."""
+    try:
+        from . import awaiting
+        return awaiting.statusline_segment(getattr(surface, "root", "."))
+    except Exception:
+        return ""
 
 
 def active_banner(label: str, running: bool = True,

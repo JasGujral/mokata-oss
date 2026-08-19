@@ -33,6 +33,7 @@ import unittest
 from unittest import mock
 
 import _support  # noqa: F401 - puts src/ on the path
+import _mcp_sdk  # noqa: E402 - the MCP SDK disposition gate
 
 from mokata import baseline as B                       # noqa: E402
 from mokata import degrade as D                         # noqa: E402
@@ -231,7 +232,7 @@ class TestSchemaParity(_Base):
         for spec in sample_specs:
             self.assertIs(MS._serve(spec.fn, name=spec.name, kind=spec.kind).__wrapped__, spec.fn)
 
-    @unittest.skipUnless(MS.mcp_available(), "optional MCP SDK not installed")
+    @_mcp_sdk.requires_mcp_sdk
     def test_mcp_r_d0_schema_unchanged_via_fastmcp(self):
         import asyncio
 

@@ -4,7 +4,8 @@ Domain split out of `mcp/tools_write.py` (PRE-SIMP, release 0.0.15). These are t
 that STAY through SIMP — the CORE writers (`remember`, `apply_proposal`) AND the memory BACKUP
 surface (`memory_export` = backup, `memory_import` = restore), re-homed here at 35b from
 `tools_share.py`. The backup surface survives SIMP as the ONE gated backup-and-restore command; only
-`vault_push` (a genuine deprecated sharing channel) stays in `tools_share.py` for the SIMP.S3
+`vault_push` (the design-artifact vault's gated write — NOT deprecated; the removed `vault`
+channel was the session-transport kind) stays in `tools_share.py`, formerly filed for the SIMP.S3
 deletion. Registration order + tool names are preserved by the `tools_write.py` aggregator; every
 tool routes through the one consent boundary in `mcp/consent.py`.
 
@@ -175,7 +176,8 @@ def consolidate(path: str = ".", session: str = "", value: str = "",
 
 # ======================================================================================
 # the memory BACKUP surface (35b) — export = backup, import = restore. Re-homed from
-# `tools_share.py` (it SURVIVES SIMP.S3; only `vault_push` dies there). Backup = store → an
+# `tools_share.py` (both survive SIMP.S3 — see that module's docstring for why the earlier claim
+# that `vault_push` dies there was wrong). Backup = store → an
 # explicit human-owned FILE (gated egress); restore = file → store via the WriteGate, provenance-
 # stamped. It is a BACKUP surface, NOT a sharing channel — team sharing is the Postgres DSN alone.
 # ======================================================================================
@@ -185,13 +187,10 @@ def memory_export(path: str = ".", file: str = "", approve: bool = False,
     """Back up local memory (active items + provenance) to a human-owned JSON FILE. READ-ONLY on the
     store. HUMAN-GATED (SI.3): PROPOSE-ONLY — it reports how many items WOULD be written and writes
     no file. A human mints the approval with `mokata approve <id>`; re-call with that `proposal_id`
-    to write the backup. The DEFAULT dest is a timestamped `.mokata/backups/memory-<UTC>.json` (35b —
-    the deprecated `memory-share.json` channel is no longer a default; writing to it still works but
-    warns). Every value is secret-scanned at EGRESS strength (SI.6): a hit HARD-BLOCKS that item — it
+    to write the backup. The DEFAULT dest is a timestamped `.mokata/backups/memory-<UTC>.json`.
+    Every value is secret-scanned at EGRESS strength (SI.6): a hit HARD-BLOCKS that item — it
     is named in `blocked` and left out of the backup entirely."""
-    from .. import deprecation
-    from ..memory import (default_backup_path, export_memory, export_payload,
-                          is_legacy_share_dest)
+    from ..memory import default_backup_path, export_memory, export_payload
     surface = _surface(path)
     store = MemoryStore.from_surface(surface)
     data = export_memory(store)             # read-only; scans + computes the items without writing
@@ -207,9 +206,9 @@ def memory_export(path: str = ".", file: str = "", approve: bool = False,
     if not dest:
         dest = default_backup_path(path)
     blocked = data["blocked"]
-    # legacy channel → warn ONCE per repo (SIMP.S2 machinery, no new warn system); still writes.
-    if is_legacy_share_dest(dest):
-        deprecation.warn_deprecated("memory-share", surface.mokata_dir)
+    # SIMP.S3 (0.0.18, lane D slice 2): the legacy-channel warn that stood here is gone with the
+    # channel. `file=".mokata/memory-share.json"` is now an ordinary destination — a backup is
+    # written and nothing is announced, because there is no longer a channel to announce.
 
     args = {"path": path, "dest": dest, "items": len(data["items"])}
     gate = _consent(path, "memory_export", args, proposal_id, surface=surface)

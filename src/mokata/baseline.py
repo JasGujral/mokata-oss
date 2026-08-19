@@ -85,8 +85,14 @@ def baseline_status(command: Optional[str], cwd: Optional[str] = None,
         # `settings.baseline` config / CLI arg), run in their own shell exactly as they'd run it;
         # not attacker-controlled input. A shell is required so a normal test one-liner
         # (`pytest -q && ruff .`, pipes, globs) works. Bounded by `timeout`; degrade-clean.
+        # `stdin=DEVNULL`, not inherited. A test command is a BATCH command: if it asks a
+        # question it must get EOF and decide, never sit on a fd nobody is going to write to.
+        # Inheriting mokata's stdin makes the bound above a lie — `timeout` bounds the wait, but
+        # only after the caller has already lost `timeout` seconds to a prompt no one can see.
+        # (0.0.18 round 2: an inherited stdin on a shell subprocess is what wedged the Windows
+        # unit leg for 54 minutes; the class is swept in `tests/_windows_portability.py`.)
         proc = subprocess.run(command, shell=True, cwd=cwd, capture_output=True,  # nosec B602
-                              text=True, timeout=timeout)
+                              stdin=subprocess.DEVNULL, text=True, timeout=timeout)
     except Exception as exc:  # missing binary, timeout, etc. — report, don't crash
         return BaselineResult(state=RED, command=command,
                               detail=f"could not run test command: {exc}")

@@ -16,6 +16,16 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
+# ⚠ THIS MODULE NO LONGER IMPORTS `deprecation.REMOVAL_RELEASE`, AND THAT IS THE END OF STAGE 9's
+# FINDING RATHER THAN A REGRESSION OF IT. The release was stated ONCE, here, because this catalog
+# is copied verbatim into every repo's `.mokata/manifest.json` and a literal would have been the
+# same false claim on the most durable surface mokata has (`REMOVAL-RELEASE-ALREADY-PASSED`, 0.0.18
+# stage 9). The only consumer was `neo4j`'s `"deprecated": REMOVAL_RELEASE` marker, and stage 14
+# removed that entry, so there is no longer a release to state. The deprecation vocabulary stays in
+# this comment ON PURPOSE: `_deprecation_removal.src_release_pins` selects its corpus by that
+# vocabulary, so a file that stopped mentioning deprecation would fall OUT of the guard that exists
+# to stop a release literal reappearing here (doc 85 §7j — the axis nobody ranges over).
+
 # Every tool the spine can detect and route to. `provides` ties a tool to a capability;
 # `detect` is consumed by detect.Detector. Versions are informational only here.
 TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
@@ -49,18 +59,23 @@ TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
         "version": None,
         "detect": {"type": "python_files"},
     },
-    "neo4j": {
-        # Opt-in external graph DB (Stage 35f). NOT wired by any default profile (P8): a user
-        # adds it to the code_graph chain + sets NEO4J_* env. Degrades to the grep floor when
-        # the driver/env/DB is absent. URI + credentials via env var only (never inline).
-        # SIMP.S2 (0.0.15): DEPRECATED — a 3rd DB contradicts the two-modes-one-shape model; the
-        # canonical graph is the embedded AST floor / adopted CRG. WARN-only here; removed 0.0.17.
-        "provides": "code_graph",
-        "kind": "external",
-        "version": None,
-        "detect": {"type": "python_module", "name": "neo4j"},
-        "deprecated": "0.0.17",
-    },
+    #
+    # SIMP.S3 (0.0.18, lane D stage 14): `neo4j` is REMOVED from this catalog. It was the one
+    # `code_graph` provider marked DEPRECATED here, and — as with the two memory backends below —
+    # the deletion is a write to every FUTURE user's disk rather than a source edit, because
+    # `init_repo` copies this dict into `.mokata/manifest.json`.
+    #
+    # ⚠ AND UNLIKE SLICE 1's, THIS ONE COULD NOT INVALIDATE AN EXISTING MANIFEST, WHICH IS WHY
+    # `schema.REMOVED_DETECT_TYPES` DID NOT GROW. Slice 1 removed the `obsidian` DETECT STRATEGY
+    # with its backend, and every manifest naming it stopped parsing — so `Surface.load` failed
+    # before the command the removal notice told the user to run. `neo4j` detected by
+    # `{"type": "python_module", "name": "neo4j"}`, and `python_module` is SHARED with postgres,
+    # pgvector and sqlite: it survives untouched, so nothing about a committed manifest becomes
+    # unparseable. The exposure here is a catalog KEY inside a `code_graph` chain, not a detect
+    # type, and the schema's referential-integrity rule already makes such a manifest
+    # self-contained — a `capabilities.code_graph.fallback` entry must name a tool declared in the
+    # SAME FILE, so nothing at load time consults this dict at all. Reusing slice 1's mechanism
+    # here would have added a member to `REMOVED_DETECT_TYPES` that nothing could ever read.
     "grep": {
         "provides": "code_graph",
         "kind": "builtin",
@@ -70,26 +85,14 @@ TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
         "detect": {"type": "always"},
     },
     # --- memory_store providers (storage only; the memory logic is mokata's own) ---
-    "native-memory": {
-        # SIMP.S2 (0.0.15): DEPRECATED — the canonical store is SQLite / one Postgres DSN
-        # (two-modes-one-shape). Kept + warned this release (`mokata migrate native-memory`);
-        # removed 0.0.17. It stays listed here so a committed manifest never silently loses it.
-        "provides": "memory_store",
-        "kind": "external",
-        "version": None,
-        "detect": {"type": "command", "name": "claude"},
-        "deprecated": "0.0.17",
-    },
-    "obsidian": {
-        # SIMP.S2 (0.0.15): DEPRECATED — as native-memory (`mokata migrate obsidian`); removed 0.0.17.
-        "provides": "memory_store",
-        "kind": "external",
-        "version": None,
-        # Stage 24A: detect the real per-OS Obsidian config dirs (and a configured
-        # `config.vault`), not the bare ~/.obsidian that usually doesn't exist.
-        "detect": {"type": "obsidian"},
-        "deprecated": "0.0.17",
-    },
+    #
+    # SIMP.S3 (0.0.18, lane D slice 1): `native-memory` and `obsidian` are REMOVED from this
+    # catalog. ⚠ THAT IS A WRITE TO EVERY FUTURE USER'S DISK, not a source edit: `init_repo`
+    # copies TOOL_CATALOG into `.mokata/manifest.json`, so an entry left here would go on
+    # advertising a backend that no longer exists — which is stage 9's finding (a value in this
+    # dict reaching the most durable surface mokata has) arriving one release later as a whole
+    # tool. Manifests ALREADY on disk still carry the two entries; what happens to those repos is
+    # `memory.selection._refuse_removed_memory_chain`, not a migration written here.
     "postgres": {
         # Opt-in hosted/remote memory backend. NOT wired by any default profile (P8
         # local-first): a user adds it explicitly via `mokata config set`. The DSN comes
@@ -132,7 +135,7 @@ CAPABILITY_FALLBACKS: Dict[str, Dict[str, Any]] = {
     "memory_store": {
         "description": "Where persistent/decision memory is stored; SQLite is the "
         "guaranteed default backend.",
-        "fallback": ["native-memory", "obsidian", "sqlite"],
+        "fallback": ["sqlite"],
     },
 }
 
@@ -153,6 +156,11 @@ CAPABILITY_LAYERS: Dict[str, str] = {
 # wire (a subset of CAPABILITY_FALLBACKS, most-preferred first). `standard` wires lean,
 # local defaults; `full`/`custom` wire every known provider. This is what makes each
 # profile's enabled set deterministic (K2).
+#
+# ⚠ SIMP.S3 (0.0.18): every profile now wires the SAME `memory_store` chain, and that is not an
+# oversight to be "fixed" by inventing a longer one. The two backends `full` had over `standard`
+# were the removed ones; what is left — postgres / pgvector — is DELIBERATELY not wired by any
+# profile (ADR-54: a DSN and `CREATE EXTENSION` are an explicit opt-in, never a detection).
 PROFILES: Dict[str, Dict[str, Any]] = {
     "minimal": {
         "description": "Just the spec-driven TDD engine. No external capabilities, "
@@ -164,7 +172,7 @@ PROFILES: Dict[str, Dict[str, Any]] = {
     "standard": {
         "description": "The default. Engine + codebase graph + decision memory on lean, "
         "local, dependency-free defaults (grep + SQLite). Switch with "
-        "`mokata init --profile full` for every graph/memory provider.",
+        "`mokata init --profile full` for every graph provider.",
         "layers": {"engine": True, "knowledge": True, "memory": True,
                    "governance": True},
         "capabilities": {
@@ -176,13 +184,15 @@ PROFILES: Dict[str, Dict[str, Any]] = {
         },
     },
     "full": {
-        "description": "Everything the spine can wire: every known graph and memory "
-        "provider (each degrades to its floor if absent). Opt in: `mokata init --profile full`.",
+        "description": "Everything the spine can wire: every known graph provider (each "
+        "degrades to its floor if absent). Memory is the SQLite floor here as everywhere — a "
+        "shared Postgres is an explicit opt-in, never a profile. "
+        "Opt in: `mokata init --profile full`.",
         "layers": {"engine": True, "knowledge": True, "memory": True,
                    "governance": True},
         "capabilities": {
             "code_graph": ["code-review-graph", "serena", "ast", "ripgrep", "grep"],
-            "memory_store": ["native-memory", "obsidian", "sqlite"],
+            "memory_store": ["sqlite"],
         },
     },
     "custom": {
@@ -192,7 +202,7 @@ PROFILES: Dict[str, Dict[str, Any]] = {
                    "governance": True},
         "capabilities": {
             "code_graph": ["code-review-graph", "serena", "ast", "ripgrep", "grep"],
-            "memory_store": ["native-memory", "obsidian", "sqlite"],
+            "memory_store": ["sqlite"],
         },
     },
 }

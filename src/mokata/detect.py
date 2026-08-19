@@ -8,7 +8,6 @@ Detection strategies (from a tool's `detect` block in the manifest):
   - command       : the named executable is on PATH            (shutil.which)
   - python_module : the named module can be imported           (find_spec)
   - path          : the named filesystem path exists           (~ expanded)
-  - obsidian      : an Obsidian config dir or a configured vault exists (Stage 24A)
   - always        : conceptually always available              (pure fallbacks)
   - python_files  : the REPO holds at least one `.py` file     (GR.S2: gates the `ast`
                     provider so it routes only where it can answer). This is the one
@@ -28,36 +27,6 @@ import shutil
 from typing import Dict, Optional
 
 from .repo_walk import prune_source_dirs
-
-
-def _obsidian_config_dirs() -> "list[str]":
-    """The real per-OS locations Obsidian keeps its config under. The bare `~/.obsidian`
-    the old detection checked usually doesn't exist (esp. macOS), so Obsidian was never
-    detected (Stage 24A). Broadened to the actual macOS / Linux / Windows locations."""
-    home = os.path.expanduser("~")
-    dirs = [
-        # macOS
-        os.path.join(home, "Library", "Application Support", "obsidian"),
-        # Linux (XDG) + Flatpak
-        os.path.join(home, ".config", "obsidian"),
-        os.path.join(home, ".var", "app", "md.obsidian.Obsidian", "config", "obsidian"),
-        # legacy location some setups still use
-        os.path.join(home, ".obsidian"),
-    ]
-    appdata = os.environ.get("APPDATA")
-    if appdata:  # Windows
-        dirs.append(os.path.join(appdata, "obsidian"))
-    return dirs
-
-
-def _obsidian_present(tool_def: Dict) -> bool:
-    """Obsidian is 'present' if a configured vault path exists, or any real Obsidian
-    config dir does. Honors `config.vault` so pointing at an external vault counts."""
-    config = (tool_def or {}).get("config") or {}
-    vault = config.get("vault")
-    if vault and os.path.isdir(os.path.expanduser(vault)):
-        return True
-    return any(os.path.isdir(d) for d in _obsidian_config_dirs())
 
 
 class Detector:
@@ -113,8 +82,13 @@ class Detector:
                 return False
         if dtype == "path":
             return bool(name) and os.path.exists(os.path.expanduser(name))
-        if dtype == "obsidian":
-            return _obsidian_present(tool_def)
+        # SIMP.S3 (0.0.18, lane D slice 1): the `obsidian` strategy is REMOVED with the backend
+        # it detected. An old manifest that still declares it lands on the line below and reads as
+        # ABSENT — which is correct for DETECTION and is NOT the whole answer for the user, because
+        # "absent" would let the router degrade past their vault in silence. The refusal that makes
+        # it loud is `memory.selection._refuse_removed_memory_chain`; this function's contract is
+        # unchanged (total, never throws, absence is a value).
+        #
         # Unknown strategy -> treat as absent (the manifest validator rejects these,
         # but detection must still be total and never throw).
         return False
