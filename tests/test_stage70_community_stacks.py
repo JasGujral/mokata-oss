@@ -309,28 +309,45 @@ class TestHonestyAndParity(unittest.TestCase):
         with open(os.path.join(COMMANDS_DIR, "stacks.md"), encoding="utf-8") as fh:
             self.assertIn("no hosted marketplace", fh.read().lower())
 
-    def test_install_docs_do_not_claim_unpublished_artifacts_as_live(self):
+    def test_install_docs_state_each_route_publication_status_truthfully(self):
+        # This gate is BIDIRECTIONAL and both directions are dishonesty of the same kind.
+        # Until 0.0.18 it asserted Homebrew was marked "pending publication", because it was.
+        # The tap JasGujral/homebrew-mokata went live 2026-08-19 at the 0.0.18 close, so the
+        # false claim available today is the OPPOSITE one: a doc still calling a live route
+        # pending sends users to pip for a route that works.
         with open(os.path.join(DOCS, "how-to", "install-mokata.md"), encoding="utf-8") as fh:
             text = fh.read()
         low = text.lower()
         # pipx/pip ARE live (mokata is on PyPI) — present them
         self.assertIn("pipx install mokata", low)
-        # Homebrew is NOT published — the doc must say so, and must NOT mark it Live
+        # Homebrew IS live, from mokata's own tap — the doc must say so and must not hedge
         self.assertIn("homebrew", low)
-        self.assertIn("pending publication", low)
-        self.assertRegex(text, r"(?i)homebrew[^\n|]*\|[^\n]*pending")
+        self.assertNotIn("pending publication", low,
+                         "the tap is live — calling it pending is the same dishonesty inverted")
+        self.assertRegex(text, r"(?i)homebrew[^\n|]*\|[^\n]*live")
+        # mokata is NOT in homebrew-core, so the AT-A-GLANCE command must be TAP-QUALIFIED.
+        # A bare `brew install mokata` offered as THE route is a dead install path.
+        self.assertRegex(text, r"(?i)\|\s*homebrew\s*\|\s*`brew install jasgujral/mokata/mokata`")
+        self.assertIn("not in homebrew-core", low,
+                      "the doc must say why the bare name does not resolve")
         # there is no npm package — the doc must be explicit, not imply npx works
         self.assertIn("not applicable", low)
 
-    def test_homebrew_formula_is_present_and_marked_pending(self):
+    def test_homebrew_formula_here_stays_template_while_the_tap_carries_the_fill(self):
         formula = os.path.join(ROOT, "packaging", "homebrew", "mokata.rb")
         self.assertTrue(os.path.exists(formula))
         with open(formula, encoding="utf-8") as fh:
             text = fh.read()
-        self.assertIn("NOT YET PUBLISHED", text)
-        # it must NOT carry a real 64-hex checksum (that would imply a published artifact)
+        # the header states the CURRENT publication truth and names the tap
+        self.assertIn("STATUS: PUBLISHED", text)
+        self.assertIn("JasGujral/homebrew-mokata", text)
+        self.assertNotIn("NOT YET PUBLISHED", text)
+        # …and this copy must STILL carry no real 64-hex checksum. That assertion did not change
+        # meaning when the tap went live — it got MORE load-bearing: the filled formula lives in
+        # the tap, so a real checksum appearing here is the dev copy drifting to a stale fill,
+        # which is exactly the 0.0.5-era drift `fill_homebrew_formula.py` exists to prevent.
         self.assertIsNone(re.search(r'sha256 "[0-9a-f]{64}"', text),
-                          "the pending formula must not claim a real sdist checksum")
+                          "the dev-repo formula is the TEMPLATE — the fill belongs to the tap")
 
     def test_stacks_in_surface_matrix_and_parity_green(self):
         self.assertIn("stacks", parity.SURFACE_MATRIX)

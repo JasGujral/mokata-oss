@@ -9,13 +9,16 @@ under that budget on a realistic fixture.
 
 ## The budget table
 
-Per-operation **wall-clock ceilings** (milliseconds). These are deliberately generous — typical
-timings are **sub-millisecond**, so each budget carries ≥100× headroom and asserts a real upper
-bound without flaking on a slow runner.
+Per-operation **wall-clock ceilings** (milliseconds). These are deliberately generous: they assert
+a real upper bound without flaking on a slow runner. **Measured medians vary by machine, repo size
+and store state** — most ops come in well under a millisecond, but the SessionStart `briefing` reads
+real state and is the slowest of the six (measured at **2.6 ms** on a freshly initialized repo,
+still ~57× inside its 150 ms ceiling). Run `mokata bench` to see your own numbers rather than
+trusting a figure from someone else's laptop.
 
 | Operation | Budget | What it is | Runs |
 |---|---:|---|---|
-| `statusline` | 50 ms | the stage badge (`build_stage_badge`) | every statusline refresh |
+| `statusline` | 50 ms | the **composed** statusline (`progress.statusline_badge`) — the whole line the harness renders, not just the stage badge component it contains, so the ceiling covers the awaiting segment's on-disk read too | every statusline refresh |
 | `briefing` | 150 ms | the SessionStart briefing (`build_bootstrap`) | every session start |
 | `secret_scan` | 100 ms | the secret scan (`govern/secrets.scan`) | every PreToolUse tool call |
 | `grep_query` | 150 ms | the grep-floor structural query | every `mokata query` without a graph |
@@ -60,5 +63,5 @@ spike), **generous ceilings**, and two relax controls so a noisy CI runner never
 
 If a path ever exceeds its budget, fix it with a small, targeted change that keeps behaviour
 **identical** (the hot ops are covered by behaviour-stability regression tests, so an optimization
-can't silently change output). At this stage every hot path measured **well under** budget, so
-nothing needed optimizing — the rule is *don't micro-optimize what's already fast*.
+can't silently change output). Every hot path currently measures **well under** budget, so
+nothing needs optimizing — the rule is *don't micro-optimize what's already fast*.

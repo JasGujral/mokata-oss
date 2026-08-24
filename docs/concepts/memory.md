@@ -52,7 +52,7 @@ mokata's own. When a richer backend isn't reachable, selection degrades to the S
 > **refuses loudly** where there is data behind it (naming the vault and the remedy) rather than
 > serving an empty store, and says so once per repo where there is not. To bring the items
 > across, run the migration under the last release that shipped it —
-> `pip install 'mokata==0.0.17'`, `mokata migrate obsidian`, then upgrade again — or drop it with
+> `pip install 'mokata==0.0.18'`, `mokata migrate obsidian`, then upgrade again — or drop it with
 > `mokata config set memory_store sqlite`. See
 > [configure storage backends](../how-to/configure-storage-backends.md#obsidian-and-native-memory-removed-in-0018).
 
@@ -126,6 +126,18 @@ by fusing up to three tiers into one ranked, top-k result with a deterministic o
    without FTS5), it **degrades honestly** to **Jaccard** keyword overlap — the always-present
    zero-dep floor — and says so. `mokata doctor` prints which engine is actually ranking you
    (`fts5` / `tsvector` / `jaccard`), so the tier is never a mystery.
+
+> 🔴 **Known limitation — the SQLite FTS5/BM25 tier currently ranks *worse* than the Jaccard
+> floor it replaced on a large store, and it still does in this release.** `normalize_lexical_scores`
+> scales each engine's scores against the best score *in its own result set*, which flattens exactly
+> the gap that would have ranked a mid-pack answer. Measured on a 100,000-item benchmark against the
+> Jaccard floor — same probes, same code, only the corpus size differs — the FTS tier is
+> **−5.6pp recall (0.5000 → 0.4444)** and **−10.8pp MRR@10 (0.8334 → 0.7258)**. At 5,000 items the
+> same comparison loses **no** recall and only −3.3pp MRR, so a small store hides more than half of
+> it. First disclosed in the **0.0.16** notes and still unfixed: 0.0.17 and 0.0.18 each shipped no
+> ranking work, and neither does the release you are reading. The repair is rank-preserving
+> normalization rather than a constant to tune. **If you run a large
+> store and your lexical results look mis-ordered, this is why.**
 2. **graph-proximity** — a code-graph-keyed boost that is **live by default**: when a memory
    store is built from a repo, it auto-wires the [knowledge layer](knowledge.md), so an item
    referencing a symbol the **code graph confirms** is real and related to the query is lifted.

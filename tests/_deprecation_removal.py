@@ -384,11 +384,31 @@ SRC_RELEASE_EXEMPT = {
     "mokata/parity.py": frozenset({"FR-WT-2/3 (`clean`/`remove`, 0.0.17)"}),
 }
 
-# The module `version_literals` owns, and it grades it STRICTLY MORE than this function could:
-# not "no hand-typed release" but "exactly one release literal, and it is the declaration". Two
-# guards over one file would be doc 85 §7f — each covering for the other, neither gradable — so
-# the split is declared here instead: `deprecation.py` is `version_literals`', everything else in
-# `src/` is this function's, and no module is in both.
+# The modules this function does NOT own, each because something else grades it STRICTLY MORE than
+# this one could. Two guards over one file would be doc 85 §7f — each covering for the other,
+# neither gradable — so the split is DECLARED here, with the owner named, and no module is in both.
+#
+#   mokata/deprecation.py  `version_literals` — not "no hand-typed release" but "exactly one
+#                          release literal, and it is the declaration".
+#
+#   mokata/disclosure.py   `test_b5_disclosure_must_resolve` — added 0.0.19 stage 06. ⭐ THIS
+#                          MODULE IS A TABLE OF RELEASE LITERALS AND THAT IS ITS ENTIRE JOB:
+#                          `PUBLISHED_COMMITMENTS` records what each already-published commitment
+#                          promised and where it now lands, so a pair of releases per entry is the
+#                          content, not a hand-typing of one. It came into scope only because its
+#                          docstring cites THIS file as precedent, and the vocabulary rule below
+#                          keys on the word. Answering that with thirty-one `SRC_RELEASE_EXEMPT`
+#                          fragments would be the "exemptions arguing that paths are paths" shape.
+#                          ⚠ AND IT IS NOT UNGRADED, which is the whole condition of this split:
+#                          every entry must describe a LIVE claim (`stale_accounts`, both
+#                          directions), a DISCLOSED entry must actually have moved and a HELD one
+#                          must not, and every unaccounted schedule in a shipped file must RESOLVE
+#                          against the plan owning the release it names. That is strictly more than
+#                          "no hand-typed release" — it is "every release named here is true".
+_DECLARATION_MODULES = {
+    "mokata/deprecation.py": "version_literals",
+    "mokata/disclosure.py": "test_b5_disclosure_must_resolve",
+}
 _DECLARATION_MODULE = "mokata/deprecation.py"
 
 
@@ -421,7 +441,7 @@ def src_release_pins(sources, exempt=None):
     exempt = SRC_RELEASE_EXEMPT if exempt is None else exempt
     found = []
     for path in sorted(sources):
-        if path == _DECLARATION_MODULE:
+        if path in _DECLARATION_MODULES:
             continue
         exempt_here = exempt.get(path, frozenset())
         text = sources[path] or ""

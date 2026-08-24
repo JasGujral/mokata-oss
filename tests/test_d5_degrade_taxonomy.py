@@ -39,8 +39,8 @@ import _support  # noqa: F401  (puts src/ on the path)
 
 from mokata import degrade
 from mokata.degrade import (FAILURE_CORRUPT, FAILURE_DOC_SCHEMA, FAILURE_ENGINE, FAILURE_LOCAL_IO,
-                            FAILURE_SCHEMA, FAILURE_UNREACHABLE, FAILURE_UNSET, FAILURE_WAL,
-                            CapabilityDegradeNotice, emitted_notices, note_degraded,
+                            FAILURE_SCHEMA, FAILURE_TIMEOUT, FAILURE_UNREACHABLE, FAILURE_UNSET,
+                            FAILURE_WAL, CapabilityDegradeNotice, emitted_notices, note_degraded,
                             reset_degrade_notices)
 from mokata.errors import ControlSignal, DegradedCapability, MokataError, failure_class_of
 
@@ -65,6 +65,11 @@ DEGRADE_FAMILY = {
     "SubagentUnavailable": FAILURE_UNREACHABLE,     # → sequential flow
     "BackendError": FAILURE_UNREACHABLE,            # knowledge query → the grep floor
     "CrgUnavailable": FAILURE_UNREACHABLE,          # code-review-graph down → the AST floor
+    # A1 (0.0.19) — the SIBLING, and the pairing is the point. `CrgUnavailable` says the tool
+    # COULD NOT answer; this says it DID NOT — it is running, its pipe is open, and nothing came
+    # back inside the bound. Two facts, two classes, two remedies (doc 85 §7g). It is deliberately
+    # NOT a subclass: `except CrgUnavailable` would absorb it and the split would leave no mark.
+    "CrgTimeout": FAILURE_TIMEOUT,                  # CRG alive and mute → the AST floor, LOUDLY
     "CrgVersionSkew": FAILURE_UNREACHABLE,          # CRG version out of range → the AST floor
     "_ProbeUnavailable": FAILURE_UNREACHABLE,       # teamdb's internal probe failure
     "_JournalUnavailable": FAILURE_UNREACHABLE,     # team_journal's connect failure

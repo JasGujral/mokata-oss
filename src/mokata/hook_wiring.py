@@ -594,3 +594,62 @@ def wiring_drift_line(drift: WiringDrift, *, ascii_only: bool = False) -> Option
 def _version() -> str:
     from . import __version__
     return __version__
+
+
+# --------------------------------------------------------------------------------------
+# A2/F8.3 — "IS THE SEATBELT ON?"  The one question an init that wired nothing must answer.
+# --------------------------------------------------------------------------------------
+# #28 reports "the phase gate is opt-in by default". The accurate statement is narrower and
+# worse: a user cannot TELL. `mokata init` writes `.mokata/` and stops; the run-state gates run
+# as HARNESS HOOKS, so a repo with a manifest and no wiring records runs and polices nothing —
+# and until this, every non-wiring init path exited silently, which reads exactly like success.
+#
+# THREE STATES, NEVER TWO (doc 85 §7g). "the gate is not wired" and "we could not find out" are
+# different facts: `hook_wiring_report` carries `unverifiable` precisely so an empty report is
+# not mistaken for a clean bill of health, and collapsing them here would throw that away one
+# layer up — an unreadable settings.json would print "not enforcing" as if it were measured.
+#
+# The predicate is the WHOLE report, not `.claude/settings.json`'s existence: a plugin-route user
+# has gate-guard wired by the packaged `hooks.json` and no settings.json at all, and telling them
+# their gate is off would be `DISCLOSURE-PRESENCE-IS-NOT-DISCLOSURE-TRUTH` pointed the other way.
+GATE_GUARD_SUBCOMMAND = "gate-guard"
+
+GATE_ENFORCING = "enforcing"          # a gate-guard hook is wired somewhere and its program resolves
+GATE_NOT_WIRED = "not-wired"          # measured: nothing here would run the gate
+GATE_UNVERIFIABLE = "unverifiable"    # the surfaces could not be read — NOT a verdict either way
+
+
+def gate_enforcement_state(root: str = ".", home: Optional[str] = None) -> str:
+    """Is mokata's run-state gate actually wired to fire in `root`? One of the three above.
+
+    Read-only and never raises (`hook_wiring_report` owns both properties). A wired gate-guard
+    whose program does NOT resolve is `GATE_NOT_WIRED`, not `GATE_ENFORCING`: a hook Claude Code
+    drops for an unresolvable command is a gate that never runs, which is this module's founding
+    observation."""
+    report = hook_wiring_report(root, home)
+    if report.unverifiable:
+        return GATE_UNVERIFIABLE
+    for hook in report.hooks:
+        if _wired_subcommand(hook) == GATE_GUARD_SUBCOMMAND and hook.resolves:
+            return GATE_ENFORCING
+    return GATE_NOT_WIRED
+
+
+def render_gate_enforcement(state: str, *, ascii_only: bool = False) -> Optional[str]:
+    """What the user is owed about `state`, or None when the gate IS enforcing.
+
+    ONE renderer, for `wiring_drift_line`'s reason: the CLI init, the mode init and the MCP
+    `init` tool must not describe the same unwired repo three different ways. Pure — renders a
+    string, reads no file, writes nothing (doc 85 §3 `render_*`)."""
+    if state == GATE_ENFORCING:
+        return None
+    glyph = "[!]" if ascii_only else "⚠"
+    if state == GATE_UNVERIFIABLE:
+        return (f"{glyph} mokata could not verify whether the run-state gate is wired here, so "
+                f"treat it as NOT enforcing until you have checked.\n"
+                f"   Check with `mokata doctor --wiring`; wire it with `{SETUP_REMEDY}` "
+                f"(then restart Claude Code).")
+    return (f"{glyph} the run-state gate is NOT enforcing yet. `.mokata/` records your runs; the "
+            f"gate itself runs as a harness hook, and nothing here wires one — so native "
+            f"Write/Edit is not being policed.\n"
+            f"   Turn it on with `{SETUP_REMEDY}` (then restart Claude Code).")

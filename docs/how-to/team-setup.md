@@ -51,6 +51,32 @@ mokata team init                      # guided: provision → pin identity → l
    clients agree on the same shared namespace instead of splitting by local path-hash;
 5. runs the **live CONNECTED test** (the same probe activation uses) and reports green.
 
+#### The PostgreSQL floor (enforced from this release)
+
+mokata's supported floor is **PostgreSQL 15** (it targets 17). Until 0.0.19 the floor was
+*declared* and nothing acted on it. It is now **enforced on the connect path**, and the enforcement
+is dated rather than immediate, because the date is not mokata's to choose:
+
+| Server | Before **2026-11-12** | On/after **2026-11-12** |
+|---|---|---|
+| ≥ 15 | connects normally | connects normally |
+| < 15 | **connects, and warns.** The health verdict stays `HEALTHY` — nothing has degraded — and carries a notice naming your major version, the floor, the date, and the fix. It is printed by the in-chat session briefing, `mokata mode`, `mokata sync` and `mokata doctor` | **refuses to connect.** The verdict is `DEGRADED`, mokata serves from the **local store** (writes are journaled, nothing is lost), and the degrade is classed `pg-below-floor` with its own remedy |
+| version unreadable | treated as **not judged** — neither "too old" nor "at floor". Behaviour is exactly what shipped before the floor existed | same |
+
+**Why that date:** PostgreSQL 14 reaches **upstream end-of-life on 2026-11-12**. Before then, PG14
+runs mokata's schema correctly and is still upstream-supported, so refusing it would break working
+installs; after then it is an unsupported dependency. If you run PostgreSQL 14, plan the upgrade
+against that date rather than against mokata.
+
+The only fix is a server upgrade — `mokata sync` and `mokata team init` do not move a major version.
+
+> **How this was checked.** The verdict logic, the date boundary, the four outcomes and the
+> refusal path are covered by the offline suite, and the drift guard pins the floor to its single
+> constant. The **live** legs were run against real PostgreSQL servers **by hand** — CI has no
+> Postgres — and no live server *below* the floor was used: the boundary was exercised by moving
+> the floor, not by standing up an old server. So the floor is **enforced**, and one dimension of
+> its evidence is **manual**.
+
 Then activate team mode for yourself:
 
 ```bash
@@ -272,7 +298,8 @@ surface. The guarantees:
   detected secret is a **hard block** that approval cannot override. Passing an inline DSN where a
   name is expected is refused.
 - **No extensions on the golden path.** The shared schema is plain Postgres ≥15 — no `CREATE
-  EXTENSION`, no pgvector required. Fewer moving parts, less to trust.
+  EXTENSION`, no pgvector required. Fewer moving parts, less to trust. The **≥15 floor is now
+  enforced** — see [the PostgreSQL floor](#the-postgresql-floor-enforced-from-this-release).
 - **The runtime role needs no DDL rights at all.** Everyday runtime connections run **zero DDL** —
   schema checking is a cached, SELECT-only probe, and *all* DDL belongs to `mokata team init` alone.
   So a **DML-only runtime role is sufficient**, not a downgrade: see

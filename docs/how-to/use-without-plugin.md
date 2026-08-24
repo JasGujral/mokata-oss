@@ -35,6 +35,7 @@ After installing the CLI, a single command wires all three pieces into Claude Co
 ```bash
 # 1. install the CLI once (puts `mokata` + `mokata-mcp` on PATH)
 pip install mokata               # on Python ≥ 3.10 the MCP SDK comes with it (default dep)
+# or, on macOS/Linux: brew install JasGujral/mokata/mokata
 
 # 2. in the project you want to use mokata on:
 cd /path/to/your/project

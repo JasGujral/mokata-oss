@@ -254,6 +254,78 @@ def stale_exemptions(corpus):
     return stale
 
 
+# ---- the ACCOUNTING half: for a corpus that legitimately quotes SUPERSEDED floors -------------
+#
+# C1 (0.0.19), closing `PG-FLOOR-INTERNAL-LEDGER-UNGUARDED`. The sweep above answers "does this
+# surface state the wrong floor?" and denies `docs/build/` wholesale, which is a real hole: doc 85
+# §1's headline and doc 84's FINALIZED ledger cell each stated a superseded floor for thirteen days,
+# and both were documents a stage is told to treat as standing truth.
+#
+# ⚠ WHY THE OBVIOUS FIX IS THE WRONG ONE, and it was MEASURED rather than reasoned. Pointing the
+# sweep above at the living build docs convicts TEN lines, and every one of them is CORRECT: doc 02
+# is append-only history, docs 96/101 are DATED ADR re-checks whose whole subject is the floor as it
+# stood on the day they were written, and two doc 84 rows are ABOUT the superseded major by name. A
+# gate that reds on ten correct sentences and zero defects is one a reader learns to route around —
+# `SECRET-GUARD-FIRES-ON-BACKLOG-ROW-IDENTIFIERS` (doc 84) arriving through a different door.
+#
+# ⚠ AND WHY A PATH DENY-LIST CANNOT EXPRESS IT EITHER. The two REAL failures were in doc 84 and doc
+# 85 — the same two files that also hold legitimate quotations. Denying those paths would swallow
+# both instances the gate exists to catch. The distinction is not per-FILE, it is per-LINE: a live
+# claim about the CURRENT floor versus a dated quotation of a past one, and nothing marks which is
+# which (that is `DOC-85-FLOOR-PROVENANCE-UNMARKED`, an open row with a ruling owed).
+#
+# So the accounting is per-CLAIM and the key is a DISTINCTIVE FRAGMENT of the line, following
+# `_deprecation_removal.SRC_RELEASE_EXEMPT` rather than re-deriving it — never a line number, which
+# four files have drifted under four consecutive stages. A NEW stale sentence is unaccounted and
+# reds; a reworded quotation goes stale LOUDLY instead of keeping its pass.
+#
+# Both functions are PURE over a supplied corpus AND a supplied register (§7i + §7j): the register
+# describes an INTERNAL tree, so it lives with the internal caller, and this module — which SHIPS —
+# never learns the name of a path the public mirror does not have.
+
+
+def unaccounted_claims(corpus, low, register):
+    """`(rel, line_no, major, line)` for every claim stating a major OTHER than `low` that no
+    entry in `register` accounts for.
+
+    `register` is `{rel: {fragment: reason}}`. `corpus` is `{rel: abs}`; the caller has already
+    applied whatever scope it wants, because scope is the caller's question and not this module's
+    (the same contract `scan` keeps)."""
+    found = []
+    for rel in sorted(corpus):
+        text = _read(corpus[rel])
+        if text is None:
+            continue
+        fragments = tuple(register.get(rel, {}))
+        for line_no, major, line in claims(text):
+            if major == low:
+                continue
+            if any(fragment in line for fragment in fragments):
+                continue
+            found.append((rel, line_no, major, line))
+    return tuple(found)
+
+
+def stale_accounts(corpus, low, register):
+    """`(rel, fragment, basis)` for every register entry that no longer earns its place.
+
+    An accounting entry outlives its subject silently — the file is renamed, or the quotation is
+    reworded — and a permanent per-line hole stays behind with a reason that describes nothing.
+    The two bases are kept apart for §7g's reason: a path that is GONE and a path that is still
+    here and no longer carries the claim are different findings with different remedies."""
+    stale = []
+    for rel in sorted(register):
+        if rel not in corpus:
+            stale.append((rel, None, ABSENT))
+            continue
+        text = _read(corpus[rel]) or ""
+        drifting = [line for _n, major, line in claims(text) if major != low]
+        for fragment in sorted(register[rel]):
+            if not any(fragment in line for line in drifting):
+                stale.append((rel, fragment, INERT))
+    return tuple(stale)
+
+
 def internal_entries():
     """The exemptions the public mirror is EXPECTED not to have."""
     return {e for e, (_r, ships) in list(HISTORY_FILES.items()) + list(HISTORY_PREFIXES.items())

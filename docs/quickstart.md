@@ -17,10 +17,13 @@ sign-in — **no API key**:
 pip install mokata               # MCP server works out of the box on Python ≥ 3.10 (SDK is a default dep)
 mokata setup claude              # --profile / --scope options; reverse with `mokata unsetup claude`
 # restart Claude Code, then:
-mokata mcp status                # expect: mokata-mcp: CONNECTED ✓
+mokata mcp status                # expect: mokata-mcp: REGISTERED ✓ … connected ✓
 ```
 
 > Requires **Python ≥ 3.10**.
+>
+> Homebrew works too — `brew install JasGujral/mokata/mokata` — then continue from
+> `mokata setup claude`. Every route: [Install mokata](how-to/install-mokata.md).
 
 You now have the workflow commands — `/brainstorm`, `/refine`, `/spec`,
 `/test`, `/develop`, `/review`, `/debug`, `/optimize`, `/bug` — plus the SessionStart briefing
@@ -56,7 +59,8 @@ inspection, and wiring into other harnesses rather than writing code on its own.
 > [How mokata uses an LLM: harness vs CLI](concepts/execution-model.md).
 >
 > `mokata init` configures **this repo** (`.mokata/`); `mokata setup claude` wires **your agent**
-> (`.claude/`, and it runs `init` for you). Side-by-side, plus the upgrade runbook:
+> (`.claude/`, and it runs `init` for you). ⚠ Since 0.0.19 the non-interactive
+> **`mokata init --yes`** does both — it wires the harness too. Side-by-side, plus the upgrade runbook:
 > [Which setup command do I need?](how-to/which-setup-command.md).
 
 <!-- mokata:directory-listing:start -->

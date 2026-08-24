@@ -116,6 +116,38 @@ FAILURE_PARTIAL_APPLY = "partial-apply"
 # keep yours or theirs), not a repair.
 FAILURE_CONFLICTED_WRITE = "write-conflicted"
 
+# A1 (0.0.19) — an adopted external tool is ALIVE and DID NOT ANSWER inside its bound. Coined on
+# exactly the rule the classes above were coined on, and this one is the sharpest case of it:
+# FAILURE_UNREACHABLE means *set, but unreachable*, and a hang is neither set-and-unreachable nor
+# unset. Reusing `unreachable` for it would commit doc 85 §7g — an absent answer and a real answer
+# sharing a representation — INSIDE THE TAXONOMY THAT EXISTS TO PREVENT §7g, and it would send the
+# reader to check a connection that is provably fine: the process started, the pipe is open, the
+# tool is running. Its remediation is different too, and that is the test a new class has to pass
+# here: `unreachable` says re-adopt or reconnect; a timeout says the tool needs looking at (its
+# index, its logs) or the bound needs raising. Its raiser is `knowledge/crg_client.CrgTimeout`.
+FAILURE_TIMEOUT = "timeout"
+
+# C1 (0.0.19) — the shared PostgreSQL server is OLDER than mokata's declared floor. Coined on the
+# same rule as every class above it, and it passes that rule on both halves rather than one:
+#
+#   EVERY EXISTING CLASS RENDERS A FALSE SENTENCE. `unreachable` says "shared database
+#   unreachable", and the database is not merely reachable — mokata connected to it and READ its
+#   version off the connection, so that word sends the reader to check a connection that is
+#   provably fine. `schema` says "not provisioned / incompatible", and every part of that is wrong
+#   too: the schema may be perfectly provisioned and exactly in range. Its remediation would be
+#   actively harmful, telling the user to `mokata team init` a database mokata will not connect to.
+#
+#   AND THE REMEDIATION IS DIFFERENT, which is the test a new class actually has to pass here.
+#   `unreachable` says reconnect and the writes are waiting; `schema` says re-run `team init`.
+#   Neither ever fixes a major version. The only thing that does is a server upgrade, and that is
+#   a fact about the DEPLOYMENT rather than about mokata's state — no other class points there.
+#
+# Its raiser is `teamdb.ensure_schema`, on the connect path, and only on/after
+# `teamdb.PG_FLOOR_ENFORCED_FROM`. Before that date the same server produces no notice at all: it
+# CONNECTS, and the warning rides the health verdict instead, because nothing has degraded yet and
+# a loud "DEGRADED" over a working connection is precisely the untrue-message bug D5 exists to kill.
+FAILURE_PG_FLOOR = "pg-below-floor"
+
 _CLASS_LABEL = {
     FAILURE_UNSET: "env var not set",
     FAILURE_UNREACHABLE: "shared database unreachable",
@@ -130,6 +162,8 @@ _CLASS_LABEL = {
                             "inconsistent for that decision"),
     FAILURE_CONFLICTED_WRITE: ("an approved write is NOT in memory — it conflicted with another "
                                "writer and is waiting on your decision"),
+    FAILURE_TIMEOUT: "the tool is running and did not answer in time",
+    FAILURE_PG_FLOOR: "the shared PostgreSQL is older than mokata's supported floor",
 }
 
 
@@ -142,6 +176,15 @@ _CLASS_LABEL = {
 _JOURNALED = "Writes are journaled and NOT lost; "
 _DEFAULT_FIX = _JOURNALED + "run `mokata sync` once the connection is healthy."
 _SCHEMA_FIX = _JOURNALED + "run `mokata team init` to provision/upgrade the shared schema."
+# C1 — and it is here for D1's reason exactly. The DEFAULT advice assumes the connection is the
+# problem, so the writes simply wait for it; on a below-floor server the connection is healthy and
+# they would wait forever. `teamdb.floor_fix` is the one spelling of the real remedy, imported
+# lazily so this module keeps its no-import-cost contract with the hot path.
+def _pg_floor_fix() -> str:
+    from .teamdb import floor_fix
+    return _JOURNALED + floor_fix().rstrip(".") + "."
+
+
 _CLASS_FIX = {FAILURE_SCHEMA: _SCHEMA_FIX}
 
 
@@ -167,6 +210,8 @@ class DegradeNotice:
         `mokata sync` — the connection is healthy; the schema is the problem (D1/D2)."""
         if self.fix:
             return f"{_JOURNALED}{self.fix.rstrip('.')}."
+        if self.failure_class == FAILURE_PG_FLOOR:
+            return _pg_floor_fix()
         return _CLASS_FIX.get(self.failure_class, _DEFAULT_FIX)
 
     def render(self, *, ascii_only: bool = False) -> str:
@@ -367,6 +412,9 @@ _CAPABILITY_LABEL = {
     FAILURE_UNSET: "not configured",
     FAILURE_SCHEMA: "schema not provisioned / incompatible",
 }
+# A1's label needs no re-wording: "the tool is running and did not answer in time" is already
+# team-neutral and reads true for a code graph, so it is deliberately NOT listed above — adding a
+# second spelling of one true sentence is how two surfaces start disagreeing about what happened.
 
 # The class-default remediation for a capability degrade (used only when a site names no exact
 # `fix`). Every D5 site SHOULD name its own — these are the honest floor, not an excuse.
@@ -376,6 +424,9 @@ _CAPABILITY_FIX = {
     FAILURE_ENGINE: "Reinstall mokata (`pip install -U mokata`), then run `mokata doctor`.",
     # D6 — the ONLY remediation: this build cannot be taught to read a doc it predates.
     FAILURE_DOC_SCHEMA: "Upgrade mokata (`pip install -U mokata`) to write it.",
+    # A1 — the honest FLOOR only. A timeout's real remedy names the tool that went quiet, which
+    # only the degrade site knows, so every A1 site passes its own `fix`.
+    FAILURE_TIMEOUT: "Check the tool is answering, then run `mokata doctor`.",
 }
 
 

@@ -682,6 +682,74 @@ def guard_of(classdef):
     return GUARD_NONE
 
 
+def anchored_constants(tree):
+    """{module-level NAME -> repo-relative path} for `NAME = os.path.join(ROOT, "a", "b")`.
+
+    The one place that resolution lives. `guard_subjects` needs it to say what a decorator is keyed
+    on and `_internal_subject.runtime_boundary_skips` needs it to say what a run-time skip is keyed
+    on; two copies of this three-line walk would be two things that can disagree about the same
+    file. Unlike `module_taint` it does not restrict itself to EXCLUDED paths — the caller decides
+    which side of the boundary it cares about.
+    """
+    roots = _root_names(tree)
+    constants = {}
+    for stmt in tree.body:
+        if not isinstance(stmt, ast.Assign):
+            continue
+        tail = _join_tail(stmt.value)
+        if tail is None or tail[0] not in roots:
+            continue
+        for target in stmt.targets:
+            if isinstance(target, ast.Name):
+                constants[target.id] = tail[1]
+    return constants
+
+
+def guard_subjects(classdef, tree):
+    """The repo-relative paths a class's ACCEPTED guard is keyed on, in the module `tree`.
+
+    Added at 0.0.19 stage 05 (row B1). `guard_of` answers *whether* a class is guarded; nothing
+    answered *on what*, so nothing could pair a skipped class with the reason it skipped — and a
+    skip that cannot name its subject is indistinguishable from a class that grades nothing
+    (§7g, `_internal_subject`). It lives HERE, beside the guard reader it shares every helper
+    with, because a second decorator parser next to this one is the `badge_run`/`find_active_run`
+    mistake and this module's own header refuses it.
+
+    Both shapes the corpus actually uses are resolved, and only those:
+
+        @unittest.skipUnless(os.path.exists(RELEASE_SH), ...)          module-level constant
+        @unittest.skipUnless(os.path.exists(os.path.join(ROOT, ...)))  joined in place
+
+    A name resolved to no anchored path contributes NOTHING rather than a guess — the caller reads
+    an empty result as UNDECIDABLE, never as "guarded on nothing, so fine". Unresolvable shapes
+    (an f-string, a variable segment) are `_shipped_reads`' declared blind spot 1 and are silently
+    absent here for exactly the same reason and with the same consequence.
+    """
+    roots = _root_names(tree)
+    constants = anchored_constants(tree)
+
+    subjects = set()
+    for dec in classdef.decorator_list:
+        if not isinstance(dec, ast.Call) or not dec.args:
+            continue
+        if _dotted(dec.func) not in _SKIP_UNLESS_NAMES:
+            continue
+        if not _is_existence_condition(dec.args[0]):
+            continue
+        for child in ast.walk(dec.args[0]):
+            if not isinstance(child, ast.Call) or _dotted(child.func) not in _EXISTS_NAMES:
+                continue
+            for arg in child.args:
+                if isinstance(arg, ast.Name):
+                    if arg.id in constants:
+                        subjects.add(constants[arg.id])
+                    continue
+                tail = _join_tail(arg)
+                if tail is not None and tail[0] in roots:
+                    subjects.add(tail[1])
+    return frozenset(subjects)
+
+
 def guard_of_source(source):
     """The guard shape of the FIRST class in `source` — the fixture-sized form of `guard_of`."""
     for stmt in ast.parse(source).body:

@@ -100,10 +100,28 @@ _GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull,
             "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
 
 
-@unittest.skipUnless(os.path.exists(SYNC_SH),
-                     "sync-public.sh is dev-only, excluded from the public mirror")
-@unittest.skipIf(_MISSING, f"needs {', '.join(_MISSING)} on PATH")
-class TestNestedCheckoutNeverReachesTheMirror(unittest.TestCase):
+class _RealScriptHarness:
+    """The synthetic source + destination + a run of the REAL script.
+
+    A MIXIN rather than a base TestCase: `unittest` collects tests from subclasses, so a base
+    class holding tests would re-run the whole nested-checkout suite under every class that
+    wanted the fixtures. `TestTheSourcesOwnGitEntry` below needs the same three fixtures and
+    none of the assertions.
+
+    ⚠ IT NAMES `SYNC_SH` NOWHERE, and that is forced by two sweeps that disagree about the same
+    class — `test_b2_release_retry._Harness` carries the identical note for the identical reason,
+    and this is that shape reused rather than re-derived. Name the constant here and
+    `test_s28_shipped_reads_guarded` charges the file with an unguarded read of a path the mirror
+    does not carry; add the class decorator to answer it and the AST census in
+    `test_b1_internal_tests_meet_their_subject` reads a guarded-and-ungraded class while `unittest`
+    reports no skip for it, because a mixin collects nothing. Both are satisfied by the path
+    arriving as `sync_script`, set by the concrete classes below — which carry the guards, do the
+    naming, and are collected, so the two derivations see the same thing.
+    """
+
+    # ⚠ NOT named `SYNC_SH`: the sweep matches the CONSTANT'S NAME wherever it appears, `self.`
+    # included. Never defaulted to a real path, or this becomes the unguarded reader again.
+    sync_script = None
 
     # --- fixtures ------------------------------------------------------------
     def tmp(self):
@@ -127,7 +145,7 @@ class TestNestedCheckoutNeverReachesTheMirror(unittest.TestCase):
         placing the script at `<tree>/scripts/sync-public.sh` makes `<tree>` the source."""
         src = self.tmp()
         os.makedirs(os.path.join(src, "scripts"))
-        shutil.copy2(SYNC_SH, os.path.join(src, "scripts", "sync-public.sh"))
+        shutil.copy2(self.sync_script, os.path.join(src, "scripts", "sync-public.sh"))
         self._write(os.path.join(src, "pyproject.toml"), 'version = "9.9.9"\n')
         self._write(os.path.join(src, "README.md"), "shippable\n")
         self._write(os.path.join(src, "src", "pkg", "mod.py"), "def widget():\n    return 1\n")
@@ -161,6 +179,14 @@ class TestNestedCheckoutNeverReachesTheMirror(unittest.TestCase):
                          f"sync-public.sh rc={proc.returncode}\n"
                          f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}")
         return proc
+
+
+@unittest.skipUnless(os.path.exists(SYNC_SH),
+                     "sync-public.sh is dev-only, excluded from the public mirror")
+@unittest.skipIf(_MISSING, f"needs {', '.join(_MISSING)} on PATH")
+class TestNestedCheckoutNeverReachesTheMirror(_RealScriptHarness, unittest.TestCase):
+
+    sync_script = SYNC_SH
 
     # --- the mirror ----------------------------------------------------------
     def test_the_shippable_tree_still_arrives(self):
@@ -231,6 +257,79 @@ class TestNestedCheckoutNeverReachesTheMirror(unittest.TestCase):
         src, dest = self._src(), self._dest()
         self._sync(src, dest)
         self.assertTrue(os.path.isdir(os.path.join(dest, CHECKOUT_MARKER)))
+
+
+#: What `git worktree add` writes in place of a `.git` DIRECTORY: a one-line pointer at the real
+#: object store, which is an ABSOLUTE PATH INTO THE MAINTAINER'S PRIVATE TREE.
+_GITDIR_POINTER = "gitdir: /Users/nobody/private/mokata/.git/worktrees/stage-12\n"
+
+
+@unittest.skipUnless(os.path.exists(SYNC_SH),
+                     "sync-public.sh is dev-only, excluded from the public mirror")
+@unittest.skipIf(_MISSING, f"needs {', '.join(_MISSING)} on PATH")
+class TestTheSourcesOwnGitEntry(_RealScriptHarness, unittest.TestCase):
+    """The SOURCE's own `.git` — the entry the exclude list names and, until 0.0.19 stage 12,
+    did not exclude in the shape every stage of this release was built in.
+
+    `--exclude='.git/'` has a TRAILING SLASH, and rsync reads that as *directories only*. In a
+    linked worktree `.git` is a regular FILE holding a `gitdir:` pointer, so the ONE control
+    `CLAUDE.md` calls the public/OSS boundary matched nothing at all: the file was copied over
+    the mirror's own `.git` DIRECTORY, replacing a checkout's object store with a pointer into a
+    private path — and neither the `INTERNAL_PATHS` backstop (which names no `.git`) nor the
+    nested-checkout guard (which prunes `./.git` by construction) could see it.
+
+    ⛔ A test that only exercises the main checkout's shape re-ships the defect: `.git` as a
+    DIRECTORY is exactly the case the buggy pattern already covered. The worktree shape is the
+    test, and `test_the_directory_shape_is_the_case_that_already_worked` is here to prove the
+    other one is not vacuously green.
+    """
+
+    sync_script = SYNC_SH
+
+    def _src_worktree(self):
+        """A source tree that is a LINKED WORKTREE: `.git` is a FILE, not a directory."""
+        src = self._src()
+        with open(os.path.join(src, CHECKOUT_MARKER), "w", encoding="utf-8") as fh:
+            fh.write(_GITDIR_POINTER)
+        return src
+
+    @staticmethod
+    def _walk(dest):
+        """Every file in the mirror EXCEPT its own git store, pruned by name rather than by a
+        relative path — a repo-relative name built with the OS separator stops matching a
+        `/`-spelled one on Windows (`OS-SEP-LEAKS-INTO-A-NAME`), and the invariant sweep is right
+        to red on it. `os.walk`'s `dirs` list is the prune the walk already offers."""
+        for root, dirs, files in os.walk(dest):
+            if CHECKOUT_MARKER in dirs:
+                dirs.remove(CHECKOUT_MARKER)
+            for name in files:
+                yield os.path.join(root, name)
+
+    def test_a_worktrees_dot_git_FILE_never_reaches_the_mirror(self):
+        src, dest = self._src_worktree(), self._dest()
+        self._sync(src, dest)
+        marker = os.path.join(dest, CHECKOUT_MARKER)
+        self.assertTrue(os.path.isdir(marker),
+                        "the mirror's own .git was replaced by the source's gitdir pointer — "
+                        "the public checkout's object store is gone")
+        for path in self._walk(dest):
+            with open(path, "rb") as fh:
+                self.assertNotIn(b"gitdir:", fh.read(),
+                                 f"{path} carries the source worktree's gitdir pointer")
+
+    def test_the_directory_shape_is_the_case_that_already_worked(self):
+        # The control. Without it, "the .git entry did not ship" would also be true of a test
+        # that never put one in the source.
+        src, dest = self._src(), self._dest()
+        os.makedirs(os.path.join(src, CHECKOUT_MARKER))
+        # A name the DESTINATION's own `.git` cannot supply. `HEAD` would be present either way —
+        # the mirror is a checkout — so it can only ever say "a .git exists here", never "the
+        # source's .git arrived", and a control that cannot fail is not a control.
+        self._write(os.path.join(src, CHECKOUT_MARKER, "LEAKED-FROM-SOURCE"), "internal\n")
+        self._sync(src, dest)
+        self.assertFalse(
+            os.path.exists(os.path.join(dest, CHECKOUT_MARKER, "LEAKED-FROM-SOURCE")),
+            "the source's .git DIRECTORY was mirrored into the public checkout")
 
 
 @unittest.skipUnless(os.path.exists(SYNC_SH), "sync-public.sh is dev-only")

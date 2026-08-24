@@ -724,6 +724,16 @@ EXEMPT = {
         "them and a `/` would match nothing on Windows. The module posix-wraps ELSEWHERE (for "
         "the anchor NAMES it compares against declarations), which is the scope this detector "
         "uses and the reason it looked here at all; paths and names sit side by side in it.",
+    ("native_sep_comparison", "src/mokata/packaging.py"):
+        "`_within(child, parent)` compares two RESOLVED CHECKOUT ROOTS — `/…/mokata` against "
+        "`/…/mokata-oss`, the two trees the provenance check exists to keep apart — so `os.sep` is "
+        "the correct separator between them and a `/` would match nothing on Windows. This "
+        "detector's own docstring names `packaging.py` among the modules that are RIGHT to do "
+        "this. It came into scope at 0.0.19 stage 06, when `shipped_claim_sources` began producing "
+        "repo-relative NAMES through `repo_paths.name_of` — which is the correct producer for "
+        "names and is precisely what makes the module posix-wrap. Paths and names now sit side by "
+        "side in it, exactly as they do in `test_h6_anchor_fingerprints.py` below, and for the "
+        "same reason: the fix is to route the producer, never to normalise at the comparison.",
     ("shell_stdin", "tests/hook_execution_check.py"):
         "reported `**kwargs (undecidable)`: the AST cannot see inside the spread. Read at the "
         "call site — `kwargs = dict(input=payload, ...)` — so stdin IS stated, as a pipe carrying "

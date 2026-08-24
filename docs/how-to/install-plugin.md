@@ -64,6 +64,8 @@ Want just the terminal CLI? `pip install mokata` puts the `mokata` command on yo
 
 ```bash
 pip install mokata
+# or, on macOS/Linux:
+brew install JasGujral/mokata/mokata
 ```
 
 > **Heads up:** `pip install` alone gives you the `mokata` command **in your terminal only** —

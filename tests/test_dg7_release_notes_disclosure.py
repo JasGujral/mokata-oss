@@ -269,14 +269,27 @@ class TestTheCutCannotSkipIt(unittest.TestCase):
         self.assertIn("release-notes-check", self.sh)
 
     def test_it_runs_before_the_first_push_not_after_the_tag(self):
-        preflight = self.sh.find('verify_release_notes "." ')
-        first_push = self.sh.find("git push origin master")
-        real_tag = self.sh.find('git tag -a "$TAG"')
+        # The tag step is located by `tag_step_lines`, not by the literal `git tag -a "$TAG"` this
+        # used to search for — see the note in test_stage61b_release_process. The literal moved
+        # into `ensure_tag` at 0.0.19 stage 07 and this pin went red while still being true.
+        from _release_retry import tag_step_lines
+        text_lines = self.sh.splitlines()
+
+        def line_of(needle):
+            for number, line in enumerate(text_lines, start=1):
+                if needle in line and not line.strip().startswith(("#", "echo")):
+                    return number
+            return -1
+
+        preflight = line_of('verify_release_notes "." ')
+        first_push = line_of("git push origin master")
+        tags = tag_step_lines(self.sh)
         self.assertNotEqual(preflight, -1, "the dev-checkout disclosure preflight is gone")
         self.assertNotEqual(first_push, -1)
+        self.assertTrue(tags, "release.sh no longer tags")
         self.assertLess(preflight, first_push,
                         "the disclosure must be checked while nothing has left this machine")
-        self.assertLess(preflight, real_tag)
+        self.assertLess(preflight, min(tags))
 
     def test_it_also_verifies_the_merged_mirror_commit(self):
         self.assertRegex(self.sh, r'verify_release_notes\s+"\$PUB_CHECKOUT"',

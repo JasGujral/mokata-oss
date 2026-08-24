@@ -58,6 +58,12 @@ class HealthVerdict:
     elapsed_ms: float = 0.0
     schema_version: Optional[int] = None
     checked_at: float = 0.0
+    # C1 — the shared server's MAJOR version, or None when it was not read. It rides the CACHE on
+    # purpose: `doctor` and the badge must be able to say which PostgreSQL a user is on WITHOUT
+    # probing, and the hot-path contract (`cached_or_neutral`) is that they never do. None here
+    # means "not observed", never "old" (doc 85 §7g) — including for every verdict written before
+    # this field existed, which `from_dict` reads back as None rather than as 0.
+    server_major: Optional[int] = None
 
     @property
     def ok(self) -> bool:
@@ -80,24 +86,38 @@ class HealthVerdict:
 
     def to_dict(self) -> dict:
         return {"state": self.state, "detail": self.detail, "elapsed_ms": self.elapsed_ms,
-                "schema_version": self.schema_version, "checked_at": self.checked_at}
+                "schema_version": self.schema_version, "checked_at": self.checked_at,
+                "server_major": self.server_major}
 
     @classmethod
     def from_dict(cls, d: dict) -> "HealthVerdict":
         return cls(state=str(d.get("state", UNKNOWN)), detail=str(d.get("detail", "")),
                    elapsed_ms=float(d.get("elapsed_ms", 0.0) or 0.0),
                    schema_version=d.get("schema_version"),
-                   checked_at=float(d.get("checked_at", 0.0) or 0.0))
+                   checked_at=float(d.get("checked_at", 0.0) or 0.0),
+                   server_major=d.get("server_major"))
 
 
 # --------------------------------------------------------------------------- classification
 def classify(res: Any) -> "tuple[str, str]":
     """Map one TM.S2 `ProbeResult` to (state, detail). Fail-closed: anything short of
-    reachable-AND-compatible is TROUBLE (never silently treated as OK)."""
+    reachable-AND-compatible is TROUBLE (never silently treated as OK).
+
+    C1 — IT ALSO READS THE POSTGRESQL FLOOR, in the same order `teamdb.ensure_schema` reads it, and
+    the ordering is the point rather than a detail. `degrade.py`'s stated invariant is that the
+    verdict which says CONNECTED is the same input that routes the read, so the two cannot diverge;
+    a health surface still rendering HEALTHY while the connect path refuses would put exactly that
+    divergence back, and it would be the kind that reads as reassurance."""
     if not getattr(res, "driver_present", True):
         return OFFLINE, getattr(res, "detail", "") or "the Postgres driver (psycopg) is not installed"
     if not getattr(res, "reachable", False):
         return OFFLINE, getattr(res, "detail", "") or "unreachable — could not connect / round-trip"
+    from . import teamdb as _teamdb
+    floor = _teamdb.floor_verdict(getattr(res, "server_major", None))
+    if floor == _teamdb.FLOOR_REFUSE:
+        # Reachable, and mokata will not use it. DEGRADED rather than OFFLINE: "offline" means the
+        # connection failed, and this one succeeded — we read the server's version over it.
+        return DEGRADED, _teamdb.floor_notice(getattr(res, "server_major", None), floor)
     if not getattr(res, "schema_present", False) or getattr(res, "schema_version", None) is None:
         return DEGRADED, getattr(res, "detail", "") or "reachable, but the shared schema is not provisioned"
     if not getattr(res, "compatible", False):
@@ -108,6 +128,16 @@ def classify(res: Any) -> "tuple[str, str]":
     # carries the upgrade advice, so "working" and "you should upgrade" are both visible at once.
     detail = getattr(res, "detail", "") or f"reachable ({getattr(res, 'elapsed_ms', 0.0):.0f}ms)"
     warning = getattr(res, "warning", "")
+    # C1 — THE WARN HALF, and it rides the channel D2 already built for exactly this sentence:
+    # "working, and you should upgrade", both visible at once. It is deliberately NOT a
+    # `degrade.note_degraded` — nothing has degraded, mokata is connected and serving from the
+    # shared store, and a loud notice reading "DEGRADED" over a healthy connection is the untrue-
+    # message bug D5 exists to kill. This detail is printed by the in-chat briefing EVERY team-mode
+    # session (`bootstrap`), by `mokata mode`, by `sync` and by `doctor`, which is louder than a
+    # stderr line a read has to happen to trigger.
+    if floor == _teamdb.FLOOR_WARN:
+        notice = _teamdb.floor_notice(getattr(res, "server_major", None), floor)
+        warning = f"{warning} — {notice}" if warning else notice
     return HEALTHY, f"{detail} — {warning}" if warning else detail
 
 
@@ -214,7 +244,8 @@ def check(surface: Any, *, environ: Optional[dict] = None,
 
     state, detail = classify(res)
     v = HealthVerdict(state, detail, elapsed_ms=float(getattr(res, "elapsed_ms", 0.0) or 0.0),
-                      schema_version=getattr(res, "schema_version", None), checked_at=t)
+                      schema_version=getattr(res, "schema_version", None), checked_at=t,
+                      server_major=getattr(res, "server_major", None))
     store(surface, v)
     return v
 

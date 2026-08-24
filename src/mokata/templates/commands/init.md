@@ -42,16 +42,22 @@ the user which they want, briefly explaining the trade-off:
 
 ## 3. Preview (no write)
 
-Run the dry-run and show the user the output **verbatim**:
+Preview **the run you are about to make** — the same command as step 5 with `--preview` added.
+Show the user the output **verbatim**:
 
 ```bash
-eval "$ENGINE init --profile <profile> --preview --path ."
+eval "$ENGINE init --profile <profile> --yes --preview --path ."
 ```
 
-It prints the detected tools, the capability chains this profile wires, and exactly which
-files it would write — and writes nothing. If `.mokata/manifest.json` already exists, tell
-the user this will **overwrite** it (a profile switch, e.g. `standard → full`) and that the
-constitution is preserved.
+⚠ The `--yes` is not a typo and must not be dropped. `--preview` describes the run it is
+handed: without `--yes` it previews an init that wires nothing, and step 5 runs `--yes`, which
+also writes the Claude Code commands, the Agent Skills, `.mcp.json` and `settings.json`. A
+preview missing that flag shows the user a fraction of what they are approving.
+
+It prints the detected tools, the capability chains this profile wires, every file it would
+write — `.mokata/` **and** the harness wiring — and writes nothing. If `.mokata/manifest.json`
+already exists, tell the user this will **overwrite** it (a profile switch, e.g.
+`standard → full`) and that the constitution is preserved.
 
 ## 4. Human gate
 
@@ -64,9 +70,11 @@ Only after approval:
 
 ```bash
 eval "$ENGINE init --profile <profile> --yes --path ."
-# add --force ONLY if a manifest already existed and the user confirmed the overwrite:
-# eval "$ENGINE init --profile <profile> --yes --force --path ."
 ```
+
+⚠ If a manifest already existed and the user confirmed the overwrite, add `--force` — **to the
+step 3 preview as well, then re-show it**. Any flag that reaches this command and not that one
+means the user approved a plan for a different run.
 
 ## 6. Verify + report
 

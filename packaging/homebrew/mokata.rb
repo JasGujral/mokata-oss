@@ -1,9 +1,13 @@
 # Homebrew formula for mokata.
 #
-# STATUS: NOT YET PUBLISHED. This formula is provided so a Homebrew tap can be stood up, but
-# mokata is not in homebrew-core and no official tap is published yet. Until it is:
-#   * install via pipx/pip/uvx (see docs/how-to/install-mokata.md) — those are live today, or
-#   * self-tap this file (also in docs/how-to/install-mokata.md).
+# STATUS: PUBLISHED from mokata's own tap, JasGujral/homebrew-mokata (live since 0.0.18,
+# 2026-08-19). Users install with `brew install JasGujral/mokata/mokata`; mokata is NOT in
+# homebrew-core, so the bare name does not resolve. pipx/pip/uv/uvx remain live in parallel —
+# see docs/how-to/install-mokata.md for every route.
+#
+# THIS COPY STAYS IN TEMPLATE STATE (FILL-ME url/sha256). The FILLED formula lives in the tap
+# repo, filled post-tag from the published PyPI sdist; `tests/test_brew_formula_fill.py::
+# test_formula_is_in_template_state_until_the_tap_push` pins that separation.
 #
 # GENERATED, NEVER HAND-EDITED. Three regions belong to
 # `scripts/fill_homebrew_formula.py` — the top-level `url`, the top-level `sha256`, and

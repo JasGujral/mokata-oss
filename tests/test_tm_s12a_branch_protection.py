@@ -13,6 +13,7 @@ deterministically. Pure/dependency-free.
 
 import io
 import os
+import re
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
@@ -389,7 +390,17 @@ class TheDegradedNoticeIsLoudDatedAndTemporary(unittest.TestCase):
 
     def test_it_names_the_row_that_expires_it(self):
         self.assertIn(RESTORE_ROW, self.text)
-        self.assertIn("0.0.19", self.text)
+        # ⚠ DERIVED, NOT RE-TYPED — and this line is why. It used to hand-type "0.0.19" beside the
+        # constant that already carries it: a SECOND COPY of a mutable promise, in an assertion.
+        # When the promise turned out to be false the suite certified it, green, which is
+        # `test_removal_release_is_0_0_17`'s defect one file over (0.0.19 row B5, decided
+        # 2026-08-20 — the restore is owed at 0.0.20, not 0.0.19). The property is that the notice
+        # names A RELEASE and that it is the CONSTANT's, so the pin cannot outlive a correction and
+        # an expiry row naming no release at all still reds.
+        release = re.search(r"\d+\.\d+\.\d+", RESTORE_ROW)
+        self.assertIsNotNone(release, "the expiry row names no release — an exemption with no "
+                                      "expiry is RELEASE-SH-DEV-CI-WAIVER-OUTLIVED-ITS-SCOPE")
+        self.assertIn(release.group(0), self.text)
 
     def test_it_is_not_silent(self):
         """A degraded pass whose render is indistinguishable from the PASS line is a silent

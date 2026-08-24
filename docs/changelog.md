@@ -1,12 +1,119 @@
 # Changelog
 
-The full, versioned changelog lives in the repository's
+A condensed release summary. The full, versioned changelog — every entry, with its
+`### Known limitations` in full — lives in the repository's
 [`CHANGELOG.md`](https://github.com/JasGujral/mokata-oss/blob/main/CHANGELOG.md)
-(Keep a Changelog format).
+(Keep a Changelog format). Read that one before upgrading; this page is the tour.
 
 > **Re-baselined at 0.0.1** — mokata's inaugural public release. Earlier internal iterations were
 > a stabilizing phase and are collapsed into this entry; 0.0.1 is the honest starting point for an
 > early, fast-moving project.
+
+## 0.0.19
+
+> ⚠ **If you script `mokata init`, read this first.** `mokata init --yes` now **wires your Claude
+> Code harness**: it writes `.claude/commands/`, `.claude/skills/`, **`.claude/settings.json`** and
+> **`.mcp.json`**, and spawns a `mokata-mcp --version` subprocess for the handshake and
+> version-parity probe. If you run it in CI, in a sandbox, or under a timeout, that is new work
+> inside a command you may have measured before. A plain `mokata init` still wires nothing — and now
+> **says so**. Undo with `mokata unsetup claude --scope project`; preview with
+> `mokata init --preview --yes`.
+
+**"The release that grades its own promises."** v0.0.18 shipped five commitments against a release
+whose scope had been replaced, green, because every check asked whether a promise was still
+*printed* and none asked whether it was still *true*. `mokata release-notes-check` now grades
+whether a published schedule still **resolves**, with three answers rather than two — the third
+being *not checkable from here*, which the shipped package returns honestly and nothing treats as a
+pass. The **PostgreSQL ≥ 15 floor is now enforced** (warn before **2026-11-12**, refuse after —
+PostgreSQL 14's upstream end-of-life), the two repositories' **tag sets are checked against each
+other** before a cut can start, **`release.sh` can be run twice**, and three decisions mokata used
+to make in silence now say what they are: an init that wired nothing, a phase gate that let an
+unregistered run through, and a code-review-graph read that could hang forever without raising.
+
+**Re-scheduled at 0.0.19** — two commitments the v0.0.18 notes named for this release are not in
+it, and both are named rather than renumbered: the **FTS/BM25 rank-preserving repair** and the
+**sub-10-minute PR gate**, both now 0.0.20. ⛔ The PostgreSQL floor is *not* among them: it was
+published against an external date and it shipped.
+
+**Known limitations at 0.0.19** — the **SQLite FTS5/BM25 lexical tier still ranks worse than the
+keyword floor it replaced**, for the fourth release running (−5.6pp recall, −10.8pp MRR@10 at
+100,000 items); the **PostgreSQL floor is enforced and one dimension of its evidence is manual**
+(CI has no PostgreSQL, so the live legs were run by hand and a genuinely below-floor server was
+never used — do not read it as "enforced and verified"); the **Windows notification sound is called,
+not verified** (no human has heard it, and the visual toast does not exist); **Linux audio** still
+needs a sound stack; and the **PR gate still takes 26–31 minutes** against a target of under 10,
+unmeasured again this release.
+
+## 0.0.18
+
+> 🔴 **If you use mokata's MCP server, read this first.** Every `pip install mokata` from
+> **2026-07-28** onward — **including v0.0.17** — produced an MCP server that **cannot start**, so
+> all 61 tools were absent from Claude Code. mokata declared `mcp>=1.2` with no upper bound; `mcp`
+> **2.0.0** removed `mcp.server.fastmcp`, the module the server is built on. The **CLI was
+> unaffected.** The direct fix, which works without upgrading mokata, is
+> `pip install 'mcp<2'` (resolves to 1.29.0). 0.0.18 pins `mcp>=1.2,<2`, so upgrading fixes it too —
+> but a pin only ever reaches people who install *after* it ships, which is why this notice exists.
+> It went unnoticed for fifteen days because every MCP test was gated behind `skipUnless(<the SDK
+> imports>)`: a server that could not start reported as `OK (skipped=…)` and CI was green throughout.
+
+**"The removal release."** Dead compatibility paths, deprecated providers and unexercised second
+code paths are deleted rather than carried; the MCP surface is bounded and honest about an
+incompatible SDK versus a missing one; supply-chain and release plumbing get their own gates
+(reproducible builds, an SBOM, Sigstore provenance, a fail-closed branch-protection check with
+three exit codes, and a release-notes disclosure gate). Windows is exercised on the declared
+**Python 3.10 floor** for the first time. Homebrew ships from mokata's own tap,
+`JasGujral/mokata`.
+
+**Known limitations at 0.0.18** — the **PostgreSQL ≥15 floor was declared but not enforced**
+(enforcement scheduled for 0.0.19, dated to PostgreSQL 14's upstream end-of-life, **2026-11-12**);
+the **PR gate takes 26–31 minutes** against a target of under 10 (contributor-facing only); on
+**Linux the notification's sound** needs a sound stack and degrades to the terminal bell or names
+the missing package; and the **SQLite FTS5/BM25 lexical tier still ranks worse than the keyword
+floor it replaced** on a large store (−5.6pp recall, −10.8pp MRR@10 at 100,000 items).
+
+## 0.0.17
+
+**"Trustworthy evidence."** Mostly about the instruments that decide whether mokata's own claims
+are true — but four of the things those instruments found were being felt daily. **Fixed:** the
+`UserPromptSubmit` hook no longer times out at 30s; **run ids no longer drift** across a session,
+and an unresolvable run says so instead of picking one; a **worktree no longer forks your memory
+and audit ledger**; an approval you already gave stops being asked for again; `spec amend`'s second
+step is finally advertised; code navigation stops answering from a vendored copy inside a nested
+checkout; a blast-radius verdict is no longer poisoned by one leaf symbol; three Windows pages stop
+asserting a premise that had been falsified. **Also:** one publisher owns a GitHub Release;
+`--run`/`--id` name the run explicitly; `mokata index` reports skipped nested checkouts;
+destructive and data-moving paths always leave an audit record; the **ship-readiness gate is
+advisory rather than enforcing, and says so**. The FTS5/BM25 ranking regression disclosed at 0.0.16
+was **not** fixed here and stayed disclosed.
+
+## 0.0.16
+
+**"Memory intelligence at scale."** Memory that ages, summarizes itself, heals across writers and
+carries typed edges — **proven at 100,000 items on live Postgres** rather than asserted — plus an
+upgrade path that finishes the job and gates that hold on Windows. `mokata upgrade` does the
+package install **and** refreshes the harness wiring (a bare `pip install -U` leaves the old wiring
+in place); **stale wiring is now visible** where you already are, and `mokata doctor --wiring` is
+the wiring-only check. Memory **summaries are written, not templated**; items carry usage signals
+and bi-temporal validity windows; scope filtering moves **into the database**; two teammates
+writing the same fact produce a **proposal, not a lost fact**. Pipelines can run in their own
+**worktree** (`mokata worktree list`), navigation routes through the **graph**, and `spec_show`
+ships. **New failure mode:** `spec emit` can now refuse on a prior-art bound step.
+**Disclosed here first:** the SQLite FTS5/BM25 lexical tier **ranks worse than the keyword floor it
+replaced** at scale.
+
+## 0.0.15
+
+**Simplification & retrieval foundation.** One storage shape, real retrieval tiers, consented
+embeddings, a robust MCP surface, and graduated adoption. No breaking changes; no schema-version
+bump; local stays the zero-config default. Requires **Python ≥ 3.10**. Memory recall's **lexical
+tier now ranks in the database** (SQLite FTS5 + bm25, Postgres tsvector + ts_rank), with a
+**consented semantic tier** as the `mokata[embeddings]` extra — never installed silently.
+`mokata team connect` **inspects** the DSN and catches the classic traps before you commit to it.
+Every MCP tool call is **bounded**. `mokata init --mode seatbelt|memory|full` lands **graduated
+adoption** — three named on-ramps, each finishing with the one command that proves it. Also:
+one-time gated `mokata migrate <channel>`; `memory export`/`import` as the single backup path;
+`mokata approve --list`; a live prior-art gate on spec emit; and the Homebrew formula becomes
+**generated, never hand-edited**. **Honest boundary:** scope filtering was not yet pushed into SQL.
 
 ## 0.0.14
 

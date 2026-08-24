@@ -26,6 +26,7 @@ from contextlib import redirect_stderr, redirect_stdout
 
 from _support import sample_manifest_data  # noqa: F401  (path-fix side-effect)
 from _release_repo_guards import call_arguments, live_calls
+from _release_retry import tag_step_lines
 from _workflow_pins import safe_load
 
 from mokata import __version__
@@ -217,21 +218,37 @@ class TestReleaseShHardening(unittest.TestCase):
         self.assertRegex(self.sh, r'verify_versions\s+"\$PUB_CHECKOUT"',
                          "the public mirror checkout must be version-verified before tagging")
 
+    # ⚠ THE TAG STEP IS LOCATED BY `tag_step_lines`, NOT BY SEARCHING FOR `git tag -a "$TAG"`.
+    # The literal used to be searched for here, in test_stage68_supply_chain and in
+    # test_dg7_release_notes_disclosure — one fact, three copies. Routing both tag calls through
+    # `ensure_tag` (0.0.19 stage 07) moved the literal off the call site and reddened all three
+    # while every assertion they make stayed TRUE. `tag_step_lines` reads the step at its CALL
+    # SITE and understands both shapes; searching the raw text now finds `ensure_tag`'s definition
+    # ~200 lines ABOVE the sync, which is the definition-not-call-site misreading that produced
+    # `RELEASE-SH-DEV-CI-WAIVER-OUTLIVED-ITS-SCOPE`.
+    def _first_tag_line(self):
+        lines = tag_step_lines(self.sh)
+        self.assertTrue(lines, "release.sh no longer tags")
+        return min(lines)
+
+    def _line_of(self, needle):
+        for number, line in enumerate(self.sh.splitlines(), start=1):
+            if needle in line and not line.strip().startswith(("#", "echo")):
+                return number
+        return -1
+
     def test_tag_is_created_only_after_the_public_sync(self):
         # The 0.0.4 lesson: a tag must NEVER precede the version bump landing on the mirror.
         # Check the REAL executed calls (not the echoed manual-runbook lines).
-        real_sync = self.sh.find('sync-public.sh "$PUB_CHECKOUT"')
-        real_tag = self.sh.find('git tag -a "$TAG"')
+        real_sync = self._line_of('sync-public.sh "$PUB_CHECKOUT"')
         self.assertNotEqual(real_sync, -1, "release.sh no longer syncs the public mirror")
-        self.assertNotEqual(real_tag, -1, "release.sh no longer tags")
-        self.assertLess(real_sync, real_tag,
-                        "git tag -a must come AFTER the public mirror sync")
+        self.assertLess(real_sync, self._first_tag_line(),
+                        "the tag step must come AFTER the public mirror sync")
 
     def test_release_check_runs_before_any_tag(self):
-        check_pos = self.sh.find("release-check")
-        real_tag = self.sh.find('git tag -a "$TAG"')
+        check_pos = self._line_of("release-check")
         self.assertNotEqual(check_pos, -1)
-        self.assertLess(check_pos, real_tag,
+        self.assertLess(check_pos, self._first_tag_line(),
                         "the version-consistency check must run BEFORE tagging")
 
     # --- Stage 2 (0.0.9): the release must be unreachable while any test is red ----------
@@ -315,9 +332,7 @@ class TestReleaseShHardening(unittest.TestCase):
                          "the mirror's CI must be waited on twice (PR branch, merged main) and "
                          "nothing else may be waited on: found %s" % repos)
         # Both waits are positioned BEFORE the real tag step (a red CI can't reach a tag).
-        real_tag_line = next(
-            number for number, line in enumerate(self.sh.splitlines(), start=1)
-            if 'git tag -a "$TAG"' in line)
+        real_tag_line = self._first_tag_line()
         for line, _arguments in calls:
             self.assertLess(line, real_tag_line,
                             "a mirror CI-green wait sits after the tag step")

@@ -10,6 +10,166 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.19] — 2026-08-23
+
+**The release that grades its own promises.** 0.0.18 went to PyPI carrying five commitments
+against a release whose scope had been replaced, and every check in the repo was green — because
+every check asked whether a promise was still *printed*, never whether it was still *true*. This
+release builds the check that asks the second question, keeps the one commitment that had a real
+date attached to it, and publishes a **Re-scheduled** section for the two that moved. It also
+gives three silent decisions a voice: an init that wired nothing, a gate that allowed an
+unregistered run, and a transport read that could hang forever without raising anything.
+
+⚠ **`mokata init --yes` now writes to your harness.** See *Changed* — if you script it, read that
+entry before upgrading.
+
+### Added
+
+- **The PostgreSQL ≥ 15 floor is enforced, at the slot it was published against.** mokata now
+  reads the server's major version off the connection it already opens (`PQserverVersion`, a
+  memory read rather than a round trip) and **WARNs before 2026-11-12 and REFUSEs after it** —
+  PostgreSQL 14's own upstream end-of-life. The two halves differ in **connectedness**, not in
+  volume: WARN connects and carries the notice; REFUSE does not connect, degrades to the local
+  SQLite store, and says so. There are **four** outcomes and not two — below-floor, at-floor and
+  version-*unknown* are different facts, and an unreadable version is neutral on every date. A new
+  failure class, `FAILURE_PG_FLOOR`, carries a remedy no other class points at: upgrade the
+  server. The check rides `ensure_schema`, the one seam every runtime Postgres consumer connects
+  through, so no local-only command opens a connection to find out.
+- **A release promise must still RESOLVE, not merely still appear.** `mokata release-notes-check`
+  now grades every published schedule in a shipped file against the plan that owns the release it
+  names. Three exit codes, because there are three answers: **0** the notes are right and every
+  schedule resolved, **1** a promise no longer resolves, **2** *not checkable from here* — the
+  honest answer for the shipped package, whose reader cannot see the maintainers' planning tree.
+  **2 is not a pass**, and nothing treats it as one.
+- **The two repositories' tag sets are checked against each other before a cut can proceed.** The
+  dev tag `v0.0.18` was never created: PyPI had the release, the mirror had its tag, the GitHub
+  Release had its signed assets, and this repository's tags stopped one short — for four weeks,
+  green. The check runs in the *next* cut's preflight, whatever the last run did, and again after
+  the tag step. Its first run found `v0.0.4` — absent here and published by the mirror for
+  fifteen releases, unnoticed — and stopped the cut until it was reconciled. There is no
+  waiver.
+- **`release.sh` can be run twice.** A failed cut is retried, not hand-finished. Seven steps were
+  non-idempotent and the decisive one was never the push — the preflight tag guard refused at step
+  zero, so any run that had ever tagged made every later run impossible. The release branch is now
+  **reused**, and no force appears anywhere in either script: forcing republishes a byte-identical
+  tree under a new SHA and throws away the CI result the merge is gated on.
+- **`mokata init --preview` previews the write it precedes.** The dry run described three files of
+  the eighty-five a `--yes` run writes. It now renders the harness plan through the same renderer
+  the wiring itself uses, and a test runs the real init into one tree and the dry run into another
+  and grades the rendered text against the files that actually landed.
+- **Windows gets a notification sound** — `winsound.MessageBeep`, standard library, no dependency.
+  See *Known limitations*: the call is made and graded; nobody has heard it.
+- **Every CI job has a ceiling, and every ceiling is derived.** Thirteen of nineteen jobs across
+  ten workflows had no `timeout-minutes` — including every job in `release.yml`, where a wedge
+  holds the logs of the build that is publishing the artefact. Four dispositions, not two: a
+  reusable-workflow call *cannot* carry the key, and a ceiling that cuts nothing is INEFFECTIVE
+  rather than covered.
+
+### Changed
+
+- **`mokata init --yes` wires your harness, and that is a behaviour change for scripted callers.**
+  It writes `.claude/commands/`, `.claude/skills/`, **`.claude/settings.json`** and **`.mcp.json`**,
+  and it **spawns a `mokata-mcp --version` subprocess** for the handshake and version-parity probe.
+  If you time, sandbox or network-isolate a scripted `init`, this is new work inside it. Reversal
+  is `mokata unsetup claude --scope project`. The rule the change enforces is that an init either
+  wires the harness **or says the gate is not enforcing** — never neither, and the state is
+  measured rather than assumed, in three renderings (enforcing / not wired / unverifiable).
+- **An unregistered run no longer passes the gate in silence.** It is still *allowed* — that floor
+  is an argued design decision and it did not move; not one of the twenty decision-table verdicts
+  changed. What changed is that you are told once per session that the seatbelt is off. mokata also
+  refuses to state its own condition as a fact it does not have: a checkpoint it merely could not
+  read is reported as unverifiable, not as absent.
+- **Seventeen documentation files were corrected against the code.** `docs/changelog.md`, in the
+  published navigation, had **0.0.14** as its newest entry while 0.0.18 shipped — four releases
+  missing, including 0.0.18's "your MCP server cannot start" notice. Nine sentences across seven
+  files still said `mokata init` does not touch Claude Code, which `--yes` has done since this
+  release, and the canonical install path told you to expect a line from the wrong command.
+
+### Fixed
+
+- **A code-review-graph server that goes quiet no longer wedges the MCP server** (#45, #46, and the
+  hang half of #53). The stdio transport wrote a request and then read with nothing bounding it.
+  The bounded read now has one implementation used by both stdio clients, with four named outcomes
+  (answered / timeout / closed / error), and a timed-out session is **terminated, reaped and
+  dropped** — the request was written and the reply never read, so the process is desynchronised
+  and must not be reused. `CrgTimeout` is a *sibling* of `CrgUnavailable`, never a subclass, so
+  "it broke" and "it is hanging" cannot re-collapse into one fact.
+- **A TTY-less decline leaves something to approve** (#53, second half). `read_yes_no` returned
+  `False` for two facts with opposite remedies — *a human was asked and said no*, and *no human was
+  ever asked*. Off a TTY, `mokata spec emit` declined, staged nothing, and parked the run with
+  nothing for `mokata approve` to redeem. The two answers are now distinguishable and the refusal
+  says which one it is.
+- **The 105 internal-only tests execute on a runner that has their subjects.** `skipUnless(exists(X))`
+  gave "X is correctly absent" and "this graded nothing" the same colour, and a development tree
+  that had *lost* a file had no representation at all. Three states now: GRADED /
+  ABSENT_BY_DESIGN / UNDECIDABLE, paired with whether the tree is DEV, MIRROR or INCOHERENT.
+- **A worktree's `.git` was not excluded from the public mirror at all.** The one control on the
+  public/OSS boundary read `--exclude='.git/'`, and rsync reads a trailing slash as *directories
+  only* — while in a linked worktree `.git` is a regular **file** holding an absolute path into the
+  maintainer's own tree. Every stage of this release was built in a worktree.
+
+### Re-scheduled
+
+Two commitments published in the v0.0.18 notes named **0.0.19** and are not in it. Both are named
+here with what they were promised for, where they land, and why.
+
+- **The FTS/BM25 ranking repair.** Disclosed at **0.0.16** and scheduled for **0.0.17**; absent
+  from 0.0.17, 0.0.18 and 0.0.19 alike.
+  **The rank-preserving repair is re-scheduled to 0.0.20.**
+  Why: 0.0.19's scope was replaced wholesale on 2026-08-19 by the release-tooling and
+  gate-visibility work above, and the correct repair is rank-preserving normalization rather than a
+  constant to tune — it is a ranking stage, not a patch. The measurement is unchanged and restated
+  under *Known limitations*.
+- **The sub-10-minute PR gate.** Promised for **0.0.18**, re-homed there to **0.0.19**, and not
+  built in it: **the sub-10-minute PR gate is re-scheduled to 0.0.20**. Why: the target was
+  unmeetable as written — one step, the unit suite, is 91% of the binding leg, so only cutting
+  inside the suite can move the number, and this release added tests rather than removing them.
+  Contributor-facing; it does not affect the published package.
+
+⛔ **The PostgreSQL floor is deliberately not in this section.** It was published against
+**2026-11-12**, a date that is PostgreSQL 14's upstream end-of-life and therefore not ours to move,
+and it shipped in this release. A slot is ours; a deadline is not.
+
+### Known limitations
+
+- **The SQLite FTS5/BM25 lexical tier still ranks *worse* than the keyword floor it replaced — the
+  fourth release running.** **0.0.16** disclosed it and scheduled the repair for **0.0.17**;
+  0.0.17, 0.0.18 and 0.0.19 each shipped none, so the measurement and the defect both stand.
+  `normalize_lexical_scores` scales each engine's scores against the best score *in its own result
+  set*, flattening exactly the gap that would have ranked a mid-pack answer. On the **100,000**-item
+  benchmark, against the Jaccard keyword floor on the same probes and the same code — only the
+  corpus size differs — the FTS tier measures **−5.6pp recall (0.5000 → 0.4444)** and **−10.8pp
+  MRR@10 (0.8334 → 0.7258)**. At **5,000** items the same comparison loses no recall at all and
+  only **−3.3pp** MRR, so a small corpus hides more than half of it. See *Re-scheduled*. If you run
+  a large store and your lexical results look mis-ordered, this is why.
+- **The PostgreSQL floor is ENFORCED, and one dimension of its evidence is manual.** The WARN and
+  REFUSE arms, the date arithmetic and the version detection are covered by the automated suite and
+  by fifteen mutants. What CI cannot do is run them against a server: **the hosted runners have no
+  PostgreSQL**, so the live legs were executed by hand against **PostgreSQL 16.14**, and a
+  genuinely below-floor server — a real PostgreSQL 14 — was never used. The below-floor arm is
+  therefore proven against a simulated version report and not against the database it describes.
+  ⛔ Nothing here should be read as "enforced and verified".
+- **The Windows notification sound is CALLED, not verified.** CI grades that
+  `winsound.MessageBeep` is invoked with the right flag on Windows. No human has heard the result,
+  and no headless runner can. The visual toast on Windows does not exist at all. Treat the arm as
+  wired and unproven.
+- **On Linux, the notification's *sound* needs a sound stack — and if there is none, and no
+  terminal to ring, you get the banner and no audio.** mokata tries `canberra-gtk-play`
+  (`libcanberra-gtk3-bin`), then `paplay` (`pulseaudio-utils`); on a terminal it falls back to the
+  bell, which needs nothing. The uncovered case is an **MCP gated write on a box with no audio
+  player**: an MCP server has no TTY, so there is no bell to fall back to. mokata raises the
+  banner, names the degrade once, and tells you which package to install — it does not pretend to
+  have made a sound. `settings.ux.notify_audio false` stops it asking. macOS is unaffected.
+- **The PR gate still takes 26–31 minutes against a target of under 10, and this release did not
+  measure it again.** The figures stand from the 0.0.18 cut: **1556 s**, **1791 s** and **1872 s**
+  wall clock over three mirror runs, with a single step — the unit suite — at **91%** of the
+  binding leg. This release added tests, so the number has not fallen. Contributor-facing only.
+  See *Re-scheduled*.
+- **#28 closes on "you can tell", not on "the gate blocks".** An unregistered run is still allowed
+  through the phase gate. What this release fixes is that the allow no longer reads as an approval:
+  you are told, once per session, that the gate is not enforcing. If you need it to refuse, wire the
+  hook — `mokata init --yes` now does that for you, and `mokata doctor` reports the state.
+
 ## [0.0.18] — 2026-08-17
 
 > 🔴 **READ THIS FIRST IF YOU USE THE MCP SERVER — 0.0.17 AND EVERY INSTALL SINCE 2026-07-28 SHIPS

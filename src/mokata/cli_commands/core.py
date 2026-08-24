@@ -79,12 +79,31 @@ def cmd_release_notes_check(args: argparse.Namespace) -> int:
     """DG-7 — PURE/OFFLINE: assert RELEASE_NOTES.md announces the intended tag AND discloses
     every `### Known limitations` fact the CHANGELOG records for it. Exit 1 (fail-closed)
     naming each undisclosed fact, so `release.sh` REFUSES to tag notes that quietly dropped a
-    limitation the project decided to ship."""
+    limitation the project decided to ship.
+
+    B5 (0.0.19) — A SECOND AXIS AND A THIRD EXIT CODE. DG-7 above grades whether a limitation is
+    still PRINTED. It never graded whether a PROMISE is still TRUE, and that is how five published
+    commitments went to PyPI against a release whose scope had been replaced, with every check
+    green. So this command now also grades whether every published schedule still RESOLVES:
+
+        0  the notes are right AND every schedule resolved (or was accounted for, or is spent)
+        1  the notes are wrong, OR a published schedule no longer resolves
+        2  NOT CHECKABLE HERE — a schedule could not be resolved from this artefact at all
+
+    ⭐ 2 IS NEITHER A PASS NOR A FAILURE, and it is non-zero for `branch_protection`'s reason: a
+    caller that has not been taught what it means reads it as a refusal, which is the safe way
+    round. It is the honest answer for a SHIPPED checker, because the planning documents it would
+    have to resolve against are dropped by both mirror controls — a shipped reader of them is
+    `SHIPPED-TEST-READS-INTERNAL-FILE`, filed four times. `release.sh` handles 2 explicitly and
+    then requires the internal resolving gate to have answered; CI on the mirror handles 2
+    explicitly and says which gate owns the verdict. Nothing treats it as green."""
     from ..packaging import check_release_notes
     target = args.version or __version__
     res = check_release_notes(target, root=args.root)
     print(res.render())
-    return 0 if res.ok else 1
+    if not res.ok or res.claims_failed:
+        return 1
+    return 2 if res.claims_undecided else 0
 
 
 def cmd_branch_protection_check(args: argparse.Namespace) -> int:
@@ -252,8 +271,9 @@ def register(sub, common):
 
     p_notes = sub.add_parser(
         "release-notes-check",
-        help="verify RELEASE_NOTES.md announces the tag and discloses the CHANGELOG's known "
-             "limitations (pure/offline; exit 1 on any gap)",
+        help="verify RELEASE_NOTES.md announces the tag, discloses the CHANGELOG's known "
+             "limitations, and that every published schedule still resolves (pure/offline; "
+             "exit 1 on a gap or a broken promise, 2 when a schedule is NOT CHECKABLE here)",
     )
     p_notes.add_argument(
         "version", nargs="?", default=None,

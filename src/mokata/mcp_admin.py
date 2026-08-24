@@ -24,12 +24,12 @@ import re
 import shutil
 import subprocess
 import sys
-import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 from . import __version__
+from .bounded_io import read_bounded, read_line_bounded
 from .harness_paths import (MCP_APPROVE_TOOL_ASK, MCP_SERVER_NAME,
                             MCP_TOOL_PERMISSION, claude_mcp_config_path,
                             claude_settings_path)
@@ -139,32 +139,27 @@ def handshake(command: str, args: Optional[List[str]] = None,
             False, "error", f"could not launch '{command}': {exc}",
             "check the registered command in your .mcp.json (`mokata mcp install` to repair)")
 
-    holder: dict = {}
-
-    def _reader() -> None:
-        try:
-            holder["line"] = proc.stdout.readline()
-        except Exception as exc:            # pragma: no cover - stream torn down mid-read
-            holder["exc"] = exc
-
     try:
         proc.stdin.write(json.dumps(_INIT_REQUEST) + "\n")
         proc.stdin.flush()
     except (BrokenPipeError, OSError):
         pass                                 # server already gone; classified below
 
-    reader = threading.Thread(target=_reader, daemon=True)
-    reader.start()
-    reader.join(timeout)
-
-    if reader.is_alive():
+    # A1 (0.0.19) — the bounded reader that used to be written out here in full now lives in
+    # `bounded_io`, because it was the ONLY bound in `src/` and the CRG stdio transport had none:
+    # one unbounded `readline()` there wedged the whole MCP server (#45, #46, #53). Extracting it
+    # is what let both clients share one Windows-proven shape instead of growing a third.
+    # BEHAVIOUR IS UNCHANGED HERE: a read that ERRORS or reaches EOF yields empty text and falls
+    # into the same death-classification block below that `holder.get("line") or ""` fed before.
+    read = read_line_bounded(proc.stdout, timeout)
+    if read.timed_out:
         _terminate(proc)
         return HandshakeResult(
             False, "timeout",
             f"no MCP initialize response within {timeout:.0f}s",
             "the server launched but isn't answering — run `mokata mcp start` to see why")
 
-    line = holder.get("line") or ""
+    line = read.text
     if not line.strip():
         # stdout closed with no response: the server died. Classify from its stderr —
         # read it BEFORE terminating (terminate closes the pipe).
@@ -172,10 +167,13 @@ def handshake(command: str, args: Optional[List[str]] = None,
             proc.wait(timeout=2)
         except Exception:
             pass
-        try:
-            err = (proc.stderr.read() or "").strip()
-        except Exception:
-            err = ""
+        # A1 (0.0.19) — BOUNDED, for the same reason the read above is. `wait(timeout=2)` is
+        # best-effort: when it expires the process is still alive and still holding stderr open,
+        # so `stderr.read()` — which returns only at EOF — was the SECOND unbounded pipe read in
+        # this function. It could only fire on the path where the server is already misbehaving,
+        # which is precisely when a hang is least welcome. Non-hanging behaviour is unchanged:
+        # a dead process EOFs immediately and yields exactly the same text.
+        err = (read_bounded(proc.stderr.read, 2.0).text or "").strip()
         _terminate(proc)
         if "No module named 'mcp'" in err or "MCP SDK is not installed" in err:
             return HandshakeResult(

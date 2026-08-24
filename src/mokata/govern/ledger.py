@@ -171,8 +171,16 @@ class AuditLedger:
         if parent:
             os.makedirs(parent, exist_ok=True)
 
-    @classmethod
-    def from_mokata_dir(cls, mokata_dir: str) -> "AuditLedger":
+    @staticmethod
+    def path_for(mokata_dir: str) -> str:
+        """WHERE this `.mokata/`'s ledger lives — resolved, and WITHOUT bringing it into being.
+
+        F8a: `__init__` creates the parent directory, which is correct for a writer and wrong for
+        a PLAN. `mokata init --preview` has to name the ledger among the files it would write, and
+        a dry-run that leaves a directory behind is the very thing a dry-run promises not to do.
+        `from_mokata_dir` routes through here, so the location a preview shows and the location a
+        write uses are one expression rather than two.
+        """
         # The ledger is transient runtime data (Stage 24D): under .mokata/temp_local/.
         #
         # WT-ROOT — and it is REPO-scoped, so it resolves to the MAIN checkout (Jas, 2026-08-04:
@@ -181,8 +189,12 @@ class AuditLedger:
         # sites — an audit trail that splits per worktree is not a trail, and no caller should be
         # able to opt out of that by construction. Identity for a main checkout / non-git dir.
         from ..repo_identity import canonical_mokata_dir
-        return cls(os.path.join(canonical_mokata_dir(mokata_dir), TEMP_LOCAL_DIRNAME, AUDIT_DIRNAME,
-                                LEDGER_FILENAME))
+        return os.path.join(canonical_mokata_dir(mokata_dir), TEMP_LOCAL_DIRNAME, AUDIT_DIRNAME,
+                            LEDGER_FILENAME)
+
+    @classmethod
+    def from_mokata_dir(cls, mokata_dir: str) -> "AuditLedger":
+        return cls(cls.path_for(mokata_dir))
 
     # --- cross-process locking (reentrant in-process) -----------------------------------------
     def _lock_path(self) -> str:
