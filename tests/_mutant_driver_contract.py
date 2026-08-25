@@ -501,6 +501,25 @@ DECLARED_INTERNAL_DRIVERS = {
     "docs/build/handoff/03a-mutants.sh": "stage 3a batch, filed beside its report (0.0.18)",
     "docs/build/handoff/04-mutants.sh": "stage 4 batch, filed beside its report (0.0.18)",
     "docs/build/handoff/05-mutants.sh": "stage 5 batch, filed beside its report (0.0.18)",
+    "docs/build/handoff/03a-second-silent-allow-mutants.sh":
+        "stage 03a batch, filed beside its report (0.0.19). ⚠ NOT `03a-mutants.sh` — the stage "
+        "NUMBER repeats across releases and that name is 0.0.18's. Unlike the three above it "
+        "CONFORMS, so it appears here and NOT in DECLARED_NONCONFORMING.",
+    "docs/build/handoff/07-mutants.sh":
+        "stage 07 batch (0.0.19), filed beside its report. CONFORMS — it is in this table for its "
+        "LOCATION only, and NOT in DECLARED_NONCONFORMING.",
+    "docs/build/handoff/07-assertion-weight.sh":
+        "stage 07 (0.0.19). ⚠ NOT A MUTANT DRIVER, and declared rather than hidden. It is "
+        "discovered because it NAMES `scripts/mutate.sh` in a comment explaining why it "
+        "deliberately does not use it: showing that an assertion carries the weight needs TWO "
+        "simultaneous mutations, and mutate.sh applies exactly one by contract. `discover_drivers` "
+        "matches the mutator's path anywhere in the text, so a file that says 'not this' reads the "
+        "same as one that calls it — the mention-versus-call distinction `disabled_calls` draws in "
+        "_release_repo_guards. Rewording the comment to dodge the sweep would be hiding from it; "
+        "it is declared here and, being no driver at all, in DECLARED_NONCONFORMING entire.",
+    "docs/build/handoff/09a-mutants.sh":
+        "stage 09a batch (0.0.19, F13 — the Windows audio arm), filed beside its report. "
+        "CONFORMS — it is in this table for its LOCATION only, and NOT in DECLARED_NONCONFORMING.",
 }
 
 
@@ -531,4 +550,13 @@ DECLARED_NONCONFORMING = {
         RUN_COUNTED, VERDICT_COUNTED, NO_VERDICT_ABORTS, TOTAL_DECLARED}),
     "docs/build/handoff/05-mutants.sh": frozenset({
         RUN_COUNTED, VERDICT_COUNTED, NO_VERDICT_ABORTS, TOTAL_DECLARED}),
+    # Not a driver — see its entry in DECLARED_INTERNAL_DRIVERS. It implements NO element of the
+    # contract because it invokes no mutator, so the whole contract is listed. If it ever grows
+    # real accounting this set reds in the other direction and must be cut back, which is the
+    # property that keeps this table from becoming a place to park things.
+    # Every element EXCEPT `total-equals-call-sites`, which `missing_elements` reports
+    # conditionally: with no TOTAL declared there is nothing for the call-site count to disagree
+    # with, so charging both would make one absence read as two (§7f).
+    "docs/build/handoff/07-assertion-weight.sh":
+        frozenset(set(CONTRACT) - {TOTAL_MATCHES_CALL_SITES}),
 }

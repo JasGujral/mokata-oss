@@ -33,6 +33,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
+import datetime as _dt
 import threading
 import time
 from dataclasses import dataclass
@@ -61,6 +62,117 @@ from .memory import lifecycle as _lifecycle
 # why it is not this stage's to build: it needs the live-DB legs, not a docs sweep.
 MIN_PG_MAJOR = 15
 TARGET_PG_MAJOR = 17
+
+# ====================================================== C1 (0.0.19) · the floor is now ENFORCED
+# The paragraph above ended "THIS IS A DECLARATION, NOT YET AN ENFORCEMENT" for one release. This
+# block is the enforcement, and the date below is the whole reason the row could not slip:
+# `CHANGELOG.md` and `RELEASE_NOTES.md` shipped to PyPI at v0.0.18 saying "WARN before 2026-11-12,
+# REFUSE after it, and the date is PostgreSQL 14's upstream end-of-life". A slot is ours to move; a
+# published commitment measured against someone else's calendar is not.
+#
+# WHY A DATE AND NOT A POLICY. PostgreSQL 14 runs mokata's schema correctly today, so refusing it
+# now would break working installs on a version still under upstream support. After that date the
+# same connection is an unsupported dependency and refusing is the honest answer. This is
+# kill-criterion #6's 12-month-horizon logic applied at runtime rather than at review time.
+#
+# ⚠ THE DATE LIVES HERE AND NOWHERE ELSE, beside the floor it enforces, for the reason the floor
+# itself was made a constant: nine surfaces once each remembered the floor separately and nine went
+# stale. A second copy of this date would be the same failure with a shorter fuse, because unlike a
+# floor a date changes behaviour on its own.
+PG_FLOOR_ENFORCED_FROM = _dt.date(2026, 11, 12)
+
+# FOUR OUTCOMES, NOT TWO (doc 85 §7g). "below the floor" and "we could not read the version" are
+# different facts and must not share a representation: an unreadable version rendered as below-floor
+# refuses a database nobody has shown to be old, and rendered as at-floor lets the enforcement lapse
+# silently the day `conn.info` changes shape. UNKNOWN is therefore its own answer, and it is NEUTRAL
+# — it degrades to exactly the behaviour that shipped before this stage.
+FLOOR_OK = "floor-ok"            # at or above MIN_PG_MAJOR — untouched, on every date
+FLOOR_WARN = "floor-warn"        # below the floor, BEFORE the date — connect, and say so
+FLOOR_REFUSE = "floor-refuse"    # below the floor, ON/AFTER the date — do not connect
+FLOOR_UNKNOWN = "floor-unknown"  # the major could not be read — neutral, never "too old"
+
+
+def _today() -> "_dt.date":
+    """THE clock the floor verdict reads, as a function so it can be replaced.
+
+    This ships a behaviour that changes on a date with NO CODE CHANGE, which means the REFUSE half
+    is a promise about a day nobody has executed. A `date.today()` read inline would make that half
+    untestable and unreviewable — so the calendar enters through exactly one seam, and both sides of
+    the boundary are exercised (`tests/test_c1_pg_floor_enforcement.py`)."""
+    return _dt.date.today()
+
+
+def floor_verdict(server_major: Optional[int], *, today: "Optional[_dt.date]" = None) -> str:
+    """What mokata does about a server reporting `server_major`, as of `today`.
+
+    PURE, and the one place the comparison happens. `MIN_PG_MAJOR` is READ here rather than
+    re-typed, so moving the declaration moves every verdict with it — `None` in means UNKNOWN out,
+    on every date, because a version we could not read is not a version we have judged."""
+    if server_major is None:
+        return FLOOR_UNKNOWN
+    if server_major >= MIN_PG_MAJOR:
+        return FLOOR_OK
+    return FLOOR_REFUSE if (today or _today()) >= PG_FLOOR_ENFORCED_FROM else FLOOR_WARN
+
+
+def floor_fix() -> str:
+    """The ONE remediation, and it is not `mokata sync`.
+
+    D1 already paid for this distinction on the schema axis: the default degrade advice assumes the
+    CONNECTION is the problem, so the writes simply wait for it. Here the connection is perfectly
+    healthy and waiting accomplishes nothing, forever. The only thing that fixes a major version is
+    a major-version upgrade."""
+    return (f"upgrade the shared PostgreSQL server to {MIN_PG_MAJOR} or newer "
+            f"(mokata targets {TARGET_PG_MAJOR}), then re-run `mokata team init`")
+
+
+def floor_notice(server_major: Optional[int], verdict: str) -> str:
+    """The ONE user-facing sentence about the floor — empty for OK and UNKNOWN.
+
+    Every surface renders THIS: the health detail every session prints, `mokata doctor`, and the
+    refusal itself. One spelling, or the surfaces start disagreeing about what happens and when.
+
+    ⚠ IT CARRIES A NUMBER AND NOTHING ELSE. This sits on a path that holds a DSN; the server major
+    is a fact about the software, while the host, user, database name and password are the user's
+    secrets. Nothing but the number is interpolated here, which is the property
+    `TestNothingButTheNumberTravels` grades rather than assumes."""
+    if verdict == FLOOR_WARN:
+        return (f"PostgreSQL {server_major} is below mokata's supported floor of "
+                f"{MIN_PG_MAJOR} — on {PG_FLOOR_ENFORCED_FROM.isoformat()} it reaches upstream "
+                f"end-of-life and mokata will stop connecting to it, falling back to the local "
+                f"store. {floor_fix()}")
+    if verdict == FLOOR_REFUSE:
+        return (f"PostgreSQL {server_major} is below mokata's supported floor of "
+                f"{MIN_PG_MAJOR} and has been past upstream end-of-life since "
+                f"{PG_FLOOR_ENFORCED_FROM.isoformat()} — mokata is serving from the local store "
+                f"instead. Nothing is lost. {floor_fix()}")
+    return ""
+
+
+def _server_major(conn: Any) -> Optional[int]:
+    """The server's MAJOR version, read off a connection that is ALREADY OPEN. NO round trip.
+
+    `conn.info.server_version` is libpq's `PQserverVersion()` — an integer the client already holds
+    from the startup handshake, so this costs nothing on the connect path. That is what makes the
+    check legal here at all: the location ruling forbids a fresh probe per connect (a round trip
+    plus a new failure mode on a hot path), and this is a memory read.
+
+    ANY unreadable shape answers None, never a number. A third-party attribute that raises, is
+    absent, is a string, or is zero all mean ONE thing — we do not know — and §7g is that the thing
+    we do not know must never arrive downstream wearing a value a comparison can act on. The
+    encoding is `major * 10000 + minor` for modern servers and `9_0624`-style for the 9.x era;
+    integer division answers 9 for the latter, which is below the floor and therefore correct in the
+    only direction that matters."""
+    try:
+        raw = int(conn.info.server_version)
+    except Exception:
+        # D5 — deliberately BROAD with no narrow class to name, on `_pg._is_live`'s stated reason:
+        # `conn.info` is a THIRD-PARTY (psycopg) property whose getter may raise a driver class
+        # mokata cannot import without a hard dependency on the optional extra. It is also not a
+        # silent degrade — the None it returns is a DECLARED outcome (`FLOOR_UNKNOWN`) that every
+        # consumer renders as "not judged", never as "too old".
+        return None
+    return raw // 10000 if raw > 0 else None
 
 # The shared-schema version this build of mokata speaks. `team init` (TM.S3) writes/migrates
 # the row in `mokata_schema_version`; the probe reads it and refuses on a mismatch. Bump this
@@ -379,6 +491,11 @@ class ProbeResult:
     # Set only when the connection did NOT complete a reachable round-trip; `""` on a reachable
     # probe. Lets `doctor` name auth vs network vs driver-absent vs timeout without string-sniffing.
     conn_reason: str = ""
+    # C1 — the server's MAJOR version, or None when it could not be read. A FACT, deliberately not
+    # a verdict: the verdict depends on the CALENDAR, and this result is cached per-process, so
+    # storing "refuse" here would freeze a judgment that is supposed to change on a date. Consumers
+    # call `floor_verdict(server_major)` and get an answer that is correct when they ask it.
+    server_major: Optional[int] = None
 
     @property
     def fix(self) -> str:
@@ -479,6 +596,10 @@ def probe(dsn: str, *, budget_ms: int = PROBE_BUDGET_MS) -> ProbeResult:
             conn = _pg.open_unmanaged(dsn, _ProbeUnavailable)
             conn.execute("SELECT 1").fetchone()          # reachability round-trip
             box["reachable"] = True
+            # C1 — off the connection that is already open, before anything can fail: a memory
+            # read, no statement, no round trip. It sits INSIDE the worker so it is bounded by the
+            # same ≤500ms budget as everything else here rather than beside it.
+            box["server_major"] = _server_major(conn)
             present, version, min_supported = _read_schema_version(conn)
             box["schema_present"] = present
             box["schema_version"] = version
@@ -530,14 +651,21 @@ def probe(dsn: str, *, budget_ms: int = PROBE_BUDGET_MS) -> ProbeResult:
     present = bool(box.get("schema_present"))
     version = box.get("schema_version")
     min_supported = box.get("schema_min_supported")
+    # C1 — carried on EVERY reachable result, including the two schema-failure shapes below. A
+    # below-floor server whose schema is also unprovisioned must still be able to hear about the
+    # floor; dropping the major on those branches would make the answer depend on which problem the
+    # database had first.
+    major = box.get("server_major")
     if not present:
         return ProbeResult(reachable=True, schema_present=False, compatible=False,
                            reason=REASON_SCHEMA_ABSENT, elapsed_ms=elapsed_ms,
+                           server_major=major,
                            detail=f"reachable, but the shared schema is not provisioned "
                                   f"(no {SCHEMA_VERSION_TABLE})")
     if version is None:
         return ProbeResult(reachable=True, schema_present=True, schema_version=None,
                            compatible=False, reason=REASON_SCHEMA_ABSENT, elapsed_ms=elapsed_ms,
+                           server_major=major,
                            detail=f"reachable, but {SCHEMA_VERSION_TABLE} has no version row")
 
     # D2 — a RANGE check, never an equality one. In-range works (with a warning when the versions
@@ -547,7 +675,7 @@ def probe(dsn: str, *, budget_ms: int = PROBE_BUDGET_MS) -> ProbeResult:
     return ProbeResult(reachable=True, schema_present=True, schema_version=version,
                        schema_min_supported=effective_min(version, min_supported),
                        compatible=v.compatible, reason=v.reason, warning=v.warning,
-                       elapsed_ms=elapsed_ms, detail=detail)
+                       elapsed_ms=elapsed_ms, detail=detail, server_major=major)
 
 
 # ==================================================== D1 · the runtime VERIFY seam (zero DDL)
@@ -595,20 +723,43 @@ def table_present(dsn: str, table: str, unavailable: Type[Exception]) -> bool:
 
 
 def ensure_schema(dsn: str, unavailable: Type[Exception], *,
-                  require_tables: Iterable[str] = ()) -> ProbeResult:
+                  require_tables: Iterable[str] = (),
+                  today: "Optional[_dt.date]" = None) -> ProbeResult:
     """VERIFY that the shared schema this runtime path depends on is provisioned and IN RANGE —
     and raise `unavailable` LOUDLY, naming the exact remediation, when it is not (D1: never a
     silent degrade to the local floor; D2: in-range is fine, out-of-range says which way).
 
     The raised exception carries `failure_class` (the CM.S2 vocabulary — `degrade.FAILURE_SCHEMA`
-    / `FAILURE_UNREACHABLE`) and `fix`, so the caller can class the degrade honestly instead of
-    calling every failure "unreachable"."""
-    from .degrade import FAILURE_SCHEMA, FAILURE_UNREACHABLE
+    / `FAILURE_UNREACHABLE` / `FAILURE_PG_FLOOR`) and `fix`, so the caller can class the degrade
+    honestly instead of calling every failure "unreachable".
+
+    C1 — THIS IS WHERE THE POSTGRESQL FLOOR IS ENFORCED, and the choice of seam is the ruling
+    rather than a preference. `_pg.connect_psycopg` calls this on EVERY runtime Postgres connect,
+    reading a verdict that is already cached per-process per-DSN, so the check rides a probe that
+    happens anyway. The three rejected alternatives each fail differently: `team init` misses every
+    install that already exists, doctor-only misses everyone who never runs it, and a fresh probe
+    per connect buys a round trip and a new failure mode on a hot path. ⭐ And the shape matters
+    more than the reasons: DB.S7c2 shipped INERT because its wiring needed a store opened on a
+    command that touched only local state. Nothing had to be opened for this — the connect path was
+    already here."""
+    from .degrade import FAILURE_PG_FLOOR, FAILURE_SCHEMA, FAILURE_UNREACHABLE
     res = verify_schema(dsn)
     if not res.reachable:
         exc = unavailable(f"database unavailable: {res.detail or res.error}")
         exc.failure_class = FAILURE_UNREACHABLE          # type: ignore[attr-defined]
         exc.fix = ""                                     # type: ignore[attr-defined]
+        raise exc
+    # THE FLOOR IS JUDGED BEFORE THE SCHEMA, deliberately. A below-floor server whose schema is
+    # also unprovisioned would otherwise be told to run `mokata team init` — a true sentence
+    # pointed at the wrong problem, sending the user to provision a database mokata is about to
+    # stop connecting to. WARN falls through to the checks below and CONNECTS; only REFUSE stops
+    # here, and that difference — not the wording — is what makes the two halves different
+    # behaviours (F10, doc 104 §11).
+    if floor_verdict(res.server_major, today=today) == FLOOR_REFUSE:
+        fix = floor_fix()
+        exc = unavailable(floor_notice(res.server_major, FLOOR_REFUSE))
+        exc.failure_class = FAILURE_PG_FLOOR             # type: ignore[attr-defined]
+        exc.fix = fix                                    # type: ignore[attr-defined]
         raise exc
     if not res.compatible:
         exc = unavailable(f"the shared schema is unusable: {res.detail} — {res.fix}")

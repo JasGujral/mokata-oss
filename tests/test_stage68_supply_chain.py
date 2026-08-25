@@ -362,13 +362,30 @@ class TestReleaseOrderIntact(unittest.TestCase):
         self.assertIn("release-check", self.sh)
 
     def test_tag_only_after_sync_and_check(self):
-        sync = self.sh.find("scripts/sync-public.sh")
-        check = self.sh.find("release-check")
-        tag = self.sh.find('git tag -a "$TAG"')
-        self.assertNotEqual(tag, -1)
+        # The tag step is located by `tag_step_lines`, not by the literal `git tag -a "$TAG"` this
+        # used to search for — see the note in test_stage61b_release_process. The literal moved
+        # into `ensure_tag` at 0.0.19 stage 07 and this pin went red while still being true.
+        from _release_retry import tag_step_lines
+        text_lines = self.sh.splitlines()
+
+        def line_of(needle):
+            for number, line in enumerate(text_lines, start=1):
+                if needle in line and not line.strip().startswith(("#", "echo")):
+                    return number
+            return -1
+
+        tags = tag_step_lines(self.sh)
+        self.assertTrue(tags, "release.sh no longer tags")
+        # ⚠ THE NEEDLE IS THE CALL SITE, not the script's name. `line_of("scripts/sync-public.sh")`
+        # stood here and matched line ~293 — the DIFFERENT sync inside `run_public_subset_preflight`,
+        # 300 lines before the release step — so "the tag comes after the sync" was measured against
+        # a preflight. A planted tag at step 0 survived this pin while test_stage61b caught it
+        # (0.0.19 stage 07). Same class as `RELEASE-SH-DEV-CI-WAIVER-OUTLIVED-ITS-SCOPE`: the first
+        # textual match is not the step.
+        sync, check = line_of('sync-public.sh "$PUB_CHECKOUT"'), line_of("release-check")
         self.assertNotEqual(sync, -1)
-        self.assertLess(sync, tag, "tagging must come AFTER the public mirror sync")
-        self.assertLess(check, tag, "the version-consistency check must run BEFORE tagging")
+        self.assertLess(sync, min(tags), "tagging must come AFTER the public mirror sync")
+        self.assertLess(check, min(tags), "the version-consistency check must run BEFORE tagging")
 
     def test_release_yml_still_has_the_version_validate_gate(self):
         text = _read(RELEASE_YML)

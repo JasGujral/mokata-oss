@@ -39,7 +39,7 @@ runtime dependency, so the MCP server works out of the box. It is Apache-2.0 und
 
 **Start here → [Getting started](getting-started.md).** The canonical, pip-first path:
 `pip install mokata` → `mokata setup claude` → restart Claude Code → `mokata mcp status`
-(CONNECTED ✓). That one command wires the full workflow (slash commands + Agent Skills + MCP
+(`REGISTERED ✓` with `connected ✓` under it). That one command wires the full workflow (slash commands + Agent Skills + MCP
 server + status line) into Claude Code. Prefer the terminal or another AI tool? The same
 `pip install mokata` gives you the **CLI** (Gemini, Codex, scripts, CI). A one-click Claude
 Code **plugin** is planned but not yet available.

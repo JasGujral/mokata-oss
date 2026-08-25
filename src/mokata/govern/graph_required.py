@@ -245,7 +245,8 @@ def brainstorm_impact_gate(session: Any, approach_name: str, *, surface: Any, ru
     shipped product — `GATE-UNREACHABLE-BRAINSTORM`, doc 84. The GR.S3 refusal that DOES fire is
     the emit-path one in `mcp/tools_spec.py`, which reaches the same verdict through
     `check_graph_required` without going through this function. Wiring this one into the approve
-    path is deferred to 0.0.19 by ruling D14, alongside the JS/TS floor."""
+    path is deferred to 0.0.20 by ruling F2(b), which supersedes D14, alongside the JS/TS
+    floor."""
     imp = (getattr(session, "impacts", {}) or {}).get(approach_name)
     degraded = bool(getattr(imp, "graph_degraded", False))
     required = graph_required_enabled(surface)

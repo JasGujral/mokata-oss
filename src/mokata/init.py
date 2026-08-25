@@ -89,6 +89,13 @@ class InitPlan:
     constitution_path: str
     gitignore_path: str
     overwrites: List[str] = field(default_factory=list)
+    # F8a — the fourth durable write. `_record_bootstrap` creates the audit ledger (plus its lock
+    # and count sidecars) as init's FIRST record, and no plan named it, so the human approved
+    # three files and got four paths. Derived from `AuditLedger.from_mokata_dir` — the same
+    # factory the write goes through, never a re-spelled path — so a redirect (WT-ROOT sends a
+    # worktree's ledger to the main checkout) is shown rather than guessed. Empty when the
+    # location cannot be resolved: an unknown location is its own state, not a silent omission.
+    audit_dir: str = ""
 
     def write_files(self) -> List[str]:
         os.makedirs(os.path.join(self.root, MOKATA_DIR), exist_ok=True)
@@ -173,6 +180,20 @@ def plan_init(
 
     overwrites = [p for p in (manifest_path, constitution_path) if os.path.exists(p)]
 
+    # F8a — where the bootstrap record lands, asked of the factory that lands it. Degrade-clean:
+    # a ledger that cannot be located never blocks a plan, and `render_plan` says so instead of
+    # printing a path it does not have.
+    try:
+        from .govern.ledger import AuditLedger
+        # `path_for`, never `from_mokata_dir` — the constructor MAKES the directory, and a plan
+        # that brings its own subject into being is not a plan.
+        audit_dir = os.path.dirname(AuditLedger.path_for(mdir))
+    except OSError:
+        # `canonical_mokata_dir` is itself degrade-clean, so only a filesystem failure under it
+        # reaches here. NARROW on purpose (D5): a typo in this block must crash the plan, not
+        # quietly cost the human the one line naming a write.
+        audit_dir = ""
+
     return InitPlan(
         root=root,
         profile=profile,
@@ -182,6 +203,7 @@ def plan_init(
         constitution_path=constitution_path,
         gitignore_path=gitignore_path,
         overwrites=overwrites,
+        audit_dir=audit_dir,
     )
 
 
@@ -213,6 +235,14 @@ def render_plan(plan: InitPlan) -> str:
         lines.append(f"  {plan.constitution_path}")
     if not os.path.exists(plan.gitignore_path):
         lines.append(f"  {plan.gitignore_path}  (ignores temp_local/)")
+    # F8a — init's own bootstrap record. It is a durable write like the three above and belongs
+    # in the same list; "(ignores temp_local/)" on the line before was a hint, not a disclosure.
+    if plan.audit_dir:
+        lines.append(f"  {plan.audit_dir}/  (the audit ledger — init's write is its first "
+                     f"record)")
+    else:
+        lines.append("  (the audit ledger's location could not be resolved here — init will "
+                     "still record its own write)")
     if plan.overwrites:
         lines.append("")
         lines.append("WARNING — these already exist and will be overwritten:")

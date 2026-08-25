@@ -48,13 +48,26 @@ results** rather than letting two installs both say "memory: ok":
 
 | Tier | What runs | Notes |
 |---|---|---|
-| **lexical** (always on) | `fts5` (SQLite FTS5 + bm25) or `tsvector` (Postgres tsvector + ts_rank) — ranked **in the database** | degrades honestly to `jaccard`, a Python keyword-overlap floor, when FTS5 is absent |
+| **lexical** (always on) | `fts5` (SQLite FTS5 + bm25) or `tsvector` (Postgres tsvector + ts_rank) — ranked **in the database** | degrades honestly to `jaccard`, a Python keyword-overlap floor, when FTS5 is absent. ⚠ **On a large store `fts5` currently ranks *worse* than that floor** — see the note below |
 | **graph-proximity** (optional) | a code-graph-keyed boost | off unless a graph is wired |
 | **semantic** (opt-in) | embedding cosine over the vector index | `off` by default; `hashing` is the zero-dep floor and is **honestly labelled "token-hash overlap, NOT meaning"** |
 
 `mokata doctor` prints the live retrieval-stack line, so you never have to guess. It is
 **informational** — `hashing` + `jaccard` is a legitimate, working zero-dependency install, not a
 failure, and it never affects doctor's exit code.
+
+> 🔴 **Known limitation — the SQLite FTS5/BM25 tier currently ranks *worse* than the Jaccard
+> floor it replaced on a large store, and it still does in this release.** `normalize_lexical_scores`
+> scales each engine's scores against the best score *in its own result set*, which flattens exactly
+> the gap that would have ranked a mid-pack answer. Measured on a 100,000-item benchmark against the
+> Jaccard floor — same probes, same code, only the corpus size differs — the FTS tier is
+> **−5.6pp recall (0.5000 → 0.4444)** and **−10.8pp MRR@10 (0.8334 → 0.7258)**. At 5,000 items the
+> same comparison loses **no** recall and only −3.3pp MRR, so a small store hides more than half of
+> it. First disclosed in the **0.0.16** notes and still unfixed: 0.0.17 and 0.0.18 each shipped no
+> ranking work, and neither does the release you are reading. The repair is rank-preserving
+> normalization rather than a constant to tune. **If you run a large
+> store and your lexical results look mis-ordered, this is why.**
+
 
 ### Turning on real semantics (consented, not default-on)
 

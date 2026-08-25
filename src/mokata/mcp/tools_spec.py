@@ -238,11 +238,10 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
     # place that refusal fires today: `BrainstormSession.approve` takes a `graph_gate=` and would
     # refuse at phase 1, but NO production path anywhere in `src/` originates a `graph_gate` value,
     # so the approve-path twin is inert (`GATE-UNREACHABLE-BRAINSTORM`, doc 84). Wiring it is
-    # deferred to 0.0.19 by ruling D14 — it may only land once a TypeScript repo can get a
-    # non-degraded graph, or it moves the refusal earlier for users who have no floor that can
-    # answer it. Until then the refusal lands HERE, at emit (phase 7), and nowhere earlier.
-    # Read the persisted brainstorm's
-    # chosen-approach radius; degrade-clean — no persisted brainstorm / no chosen impact → skip (we
+    # deferred to 0.0.20 by ruling F2(b), which supersedes D14 — it may only land once a
+    # TypeScript repo can get a non-degraded graph, or it moves the refusal earlier for users who
+    # have no floor that can answer it. Until then the refusal lands HERE, at emit (phase 7), and
+    # nowhere earlier. Read the persisted brainstorm's chosen-approach radius; degrade-clean — no persisted brainstorm / no chosen impact → skip (we
     # only refuse when we can positively see a degraded radius). The escape is the session-scoped
     # `--allow-degraded` override the same human-consent flow writes.
     grr = _graph_required_emit_refusal(surface, store, run_id, approach)

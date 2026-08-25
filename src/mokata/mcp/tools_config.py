@@ -156,7 +156,17 @@ def init(path: str = ".", profile: str = "standard", approve: bool = False,
         res = init_repo(root=path, profile=profile, assume_yes=True, force=force,
                         out=lambda *_a: None)
         box["init"] = res
-        return {"written": res.written, "aborted": res.aborted, "profile": profile}
+        # A2/F8.3 (0.0.19) — this tool is an init path that never reaches the wizard and wires
+        # NOTHING, so it owed the same disclosure the CLI routes now make: `.mokata/` on disk with
+        # no harness hook is a repo that records runs and polices none. MEASURED after the write
+        # (a plugin-route repo is already enforcing and must not be told otherwise), carried as
+        # its own field rather than folded into `written` — three states, never two (doc 85 §7g),
+        # so `gate_enforcement` names which of the three it is and `gate_notice` is None only
+        # when the gate really is on.
+        from ..hook_wiring import gate_enforcement_state, render_gate_enforcement
+        state = gate_enforcement_state(path)
+        return {"written": res.written, "aborted": res.aborted, "profile": profile,
+                "gate_enforcement": state, "gate_notice": render_gate_enforcement(state)}
 
     return _gated_write(_mokata_dir(path), "config", _mokata_dir(path), "", _do_init, gate,
                         _policy(path, "init", human_approved=True))

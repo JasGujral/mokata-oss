@@ -18,8 +18,29 @@ from __future__ import annotations
 import warnings
 from typing import Any, Dict, List, Optional, Protocol
 
+from ..errors import failure_class_of
 from .query import (BASIS_LEXICAL, BASIS_STRUCTURAL, QUERY_KINDS, BackendError,
                     GraphBackend, QueryResult, Reference)
+
+
+def _backend_error(message: str, cause: BaseException) -> BackendError:
+    """Wrap a client failure in the typed `BackendError` **carrying the cause's own failure
+    class**.
+
+    A1 (0.0.19) — the wrap used to be lossy. Every degrade site here catches broadly (that is
+    deliberate: the client is a bring-your-own-tool boundary and its exception classes are the
+    adopted tool's, not mokata's), so *"the tool died"* and *"the tool is alive and mute"* both
+    arrived at `KnowledgeLayer._run` as one indistinguishable `BackendError` and were announced
+    with one class. Stamping the class per instance — the pattern `errors.py` documents and
+    `teamdb` already uses — carries the distinction across the boundary WITHOUT teaching this
+    adapter the name of any one adopted tool's exceptions. An unclassed cause (a plain
+    `RuntimeError` from an injected double) yields the inherited `unreachable`, so nothing that
+    worked before changes."""
+    err = BackendError(message)
+    cls = failure_class_of(cause)
+    if cls:
+        err.failure_class = cls
+    return err
 
 
 class GraphQueryClient(Protocol):
@@ -90,8 +111,8 @@ class CodeReviewGraphBackend(GraphBackend):
         try:
             rows = self.client.query(kind, target, root=self.root, depth=depth)
         except Exception as exc:  # any client/process failure -> degrade upstream
-            raise BackendError(
-                f"graph backend '{self.name}' failed on {kind}({target}): {exc}"
+            raise _backend_error(
+                f"graph backend '{self.name}' failed on {kind}({target}): {exc}", exc
             ) from exc
         refs = [Reference.from_dict(r) for r in rows]
         return QueryResult(
@@ -176,8 +197,8 @@ class CodeReviewGraphBackend(GraphBackend):
         try:
             rows = self.client.semantic(query, root=self.root, kind=kind, limit=limit)
         except Exception as exc:
-            raise BackendError(
-                f"graph backend '{self.name}' semantic search failed: {exc}") from exc
+            raise _backend_error(
+                f"graph backend '{self.name}' semantic search failed: {exc}", exc) from exc
         refs = [Reference.from_dict(r) for r in rows]
         return QueryResult(
             kind="semantic", target=query, references=refs, backend=self.name,

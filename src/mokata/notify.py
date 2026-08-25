@@ -358,6 +358,20 @@ def _human_present(kind: str, *, is_tty: bool, env: Dict[str, str], platform: st
         return True
     if platform.startswith("linux"):
         return bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"))
+    if platform.startswith("win"):
+        # ⚠ THIS LINE WAS THE REAL FIRST SEAM, and it was invisible while Windows shipped no
+        # arm: it agreed with the bypass further down for a DIFFERENT reason, so being wrong here
+        # cost nothing and looked like nothing. It is not free now. `KIND_WAIT` is the MCP gated
+        # write — the case this entire module exists for, per the docstring — and a presence test
+        # that answers "no human on Windows" leaves the sound arm below alive for CLI prompts and
+        # DEAD for exactly the wait it was built to announce.
+        #
+        # The answer is darwin's, and for darwin's reason: an interactive Windows session always
+        # has a desktop. There is no `DISPLAY` to consult and no equivalent of one, so there is no
+        # narrower question to ask. A non-interactive session (a service, a job) makes this a
+        # silent no-op rather than a wrong notification — `MessageBeep` reaches no endpoint and
+        # `_notification_argv` still returns None there.
+        return True
     return False
 
 
@@ -393,12 +407,15 @@ def _run_argv(argv: List[str], timeout: float = NOTIFY_TIMEOUT_SECONDS) -> bool:
 def _notification_argv(platform: str, body: str) -> Optional[List[str]]:
     """The desktop-notification argv for `platform`, or None when this platform ships no arm.
 
-    ⚠ WINDOWS SHIPS NO ARM, and the reason is stronger than "there is no Windows host to verify it
-    on" (there isn't — OSS #46/#45/#28 are blocked on exactly that, and stage 17 carries the floor
-    gap). It is that Windows has **no argv-only notification binary**: a toast requires handing
-    PowerShell a SCRIPT STRING, which is rule 1's forbidden shape — an f-string becoming a command —
-    and no amount of quoting makes that the same kind of call as `notify-send TITLE BODY`. Shipping
-    it would trade the one guarantee this module is built on for an arm nobody could verify."""
+    ⚠ WINDOWS SHIPS NO **VISUAL** ARM — and since 0.0.19 F13 that qualifier is load-bearing, because
+    Windows does ship a SOUND (`_windows_sound`). The reason the visual half is absent is stronger
+    than "there is no Windows host to verify it on": it is that Windows has **no argv-only
+    notification binary**. A toast requires handing PowerShell a SCRIPT STRING, which is rule 1's
+    forbidden shape — an f-string becoming a command — and no amount of quoting makes that the same
+    kind of call as `notify-send TITLE BODY`; the alternative is a third-party module, which doc 00
+    will not let this feature require. Shipping either would trade the one guarantee this module is
+    built on for an arm nobody could verify. That is a fact about the platform and the dependency
+    rule, so — unlike the string this docstring used to sit above — it names no release."""
     if not _require_fixed(body):
         return None
     if platform == "darwin":
@@ -430,6 +447,64 @@ def _audio_argv(platform: str) -> Optional[List[str]]:
         if shutil.which("paplay") and os.path.exists(_FREEDESKTOP_SOUND):
             return ["paplay", _FREEDESKTOP_SOUND]
     return None
+
+
+def _windows_sound() -> bool:
+    """Play the Windows notification sound. True means THE CALL WAS MADE — see the last paragraph.
+
+    ⚠ `winsound` IS STDLIB, on Windows and nowhere else: it is a C extension built into CPython
+    for that platform alone and absent from every other build. So the import is LAZY and lives
+    INSIDE this arm, never at module scope, and its absence is a STATE rather than an ImportError
+    at `import mokata.notify`. ⛔ It is also why the sound arm adds NO DEPENDENCY, which the
+    visual channel could not have said: a real Windows toast needs PowerShell handed a script
+    string (rule 1's forbidden shape) or a third-party module, and doc 00 requires an external
+    dependency to be optional with a fallback. Sound clears that bar; a toast does not.
+
+    `MessageBeep` and not `PlaySound`, for two reasons that are this module's existing rules
+    rather than preferences. It takes an IN-CODE FLAG — no path, no alias string, nothing
+    variable reaching an OS call — so rule 2 holds here by construction exactly as it does for
+    `_audio_argv`. And it RETURNS IMMEDIATELY, queueing the sound with the OS instead of blocking
+    on it, which is rule 3 met in its stronger form: there is no call to bound, so there is
+    nothing that can hang the wait it announces. `MB_ICONASTERISK` is the user's own configured
+    "something wants you" sound — the Windows analogue of `_CANBERRA_SOUND_ID`, chosen the same
+    way and for the same reason.
+
+    🔴 TRUE HERE MEANS "THE CALL WAS MADE", NOT "A HUMAN HEARD IT", and the difference is not
+    pedantry — it is the entire verification limit of this arm. `MessageBeep` reports nothing
+    about a muted device, an absent audio endpoint or a session with no mixer, and no headless
+    runner can grade audibility at all. What CI can grade is that this function is reached and
+    calls what it says it calls; whether a sound comes out of a real Windows machine is a MANUAL
+    check, and the arm is not described as verified until a human has made it.
+    """
+    try:
+        import winsound
+    except ImportError:
+        return False        # not Windows, or a build without it — a state, not a failure
+    try:
+        winsound.MessageBeep(winsound.MB_ICONASTERISK)
+        return True
+    except (OSError, RuntimeError, ValueError):
+        return False        # the call itself refused — still "no sound was made"
+
+
+def _no_audio_notice(platform: str) -> Tuple[str, str]:
+    """The `(fallback, fix)` for `DEGRADE_AUDIO`, DERIVED FROM THE PLATFORM.
+
+    ⚠ It is derived because the POSIX advice is not merely unhelpful on Windows, it is FALSE
+    there: telling a Windows user to install `libcanberra-gtk3-bin` names a package their OS does
+    not have, and a degrade notice whose fix cannot be followed is a notice that degrades. The
+    POSIX branch is the string this module has always emitted, byte for byte — the Windows arm
+    added a fork in front of it, not a rewrite of it.
+    """
+    if platform.startswith("win"):
+        return ("audio is on, but this Python has no `winsound` — it is stdlib on Windows, so a "
+                "build without it cannot make a sound, and there is no terminal here to ring",
+                "Use a CPython build that ships `winsound`, or set "
+                "`settings.ux.notify_audio false` to stop asking for it")
+    return ("the notification was raised, but this machine offers no way to "
+            "make a sound (no audio player found, and no terminal to ring)",
+            "Install `libcanberra-gtk3-bin` or `pulseaudio-utils`, or set "
+            "`settings.ux.notify_audio false` to stop asking for it")
 
 
 def _bell(out: Callable[[str], None]) -> bool:
@@ -503,14 +578,6 @@ def _notify(kind: str, *, root: str, settings: Optional[NotifySettings],
     if not _human_present(kind, is_tty=is_tty, env=env, platform=platform):
         return False
 
-    if platform.startswith("win"):
-        # Named, not silent — a green suite must not be allowed to imply Windows coverage.
-        _degrade(DEGRADE_WINDOWS, "unverifiable-platform", out,
-                 fallback=("no desktop notification and no sound on Windows this release "
-                           "(no argv-only notifier exists there, and no Windows host verifies one)"),
-                 fix="Watch mokata's statusline segment, which carries the same wait")
-        return False
-
     # LAST of the suppressions, and deliberately so: the rate limit is charged only against a
     # notification that would OTHERWISE have fired. Charging it earlier would let a wait suppressed
     # for being off-TTY reset the clock and silence the next real one.
@@ -519,6 +586,31 @@ def _notify(kind: str, *, root: str, settings: Optional[NotifySettings],
 
     body = body_for(kind, first_time=claim_first_notice(root))
     fired = False
+
+    if platform.startswith("win"):
+        # ⚠ AN ARM, NOT A BYPASS — and a PARTIAL one, which is why it is still named out loud.
+        # Windows gets the SOUND (`_windows_sound`, below) and no visual notification, and the
+        # notice states exactly that: `_notification_argv` already returns None here, because a
+        # toast means handing PowerShell a script string — rule 1's forbidden shape — or taking a
+        # dependency doc 00 will not let this module require.
+        #
+        # ⛔ THE STRING IS WORDED ABOUT THE CHANNEL, NOT ABOUT THE EVENT, and that is deliberate
+        # in both directions. "A sound plays" would be false whenever `ux.notify_audio` is off,
+        # so it is not claimed here — the audio subsystem below owns that fact and has its own
+        # notice for it. And no release is named: the version this arm previously promised
+        # ("...on Windows this release") was a scheduling claim inside a shipped runtime constant,
+        # the `branch_protection.RESTORE_ROW` class, and the fix for that class is not to point
+        # the promise at a newer version — it is to stop making one. The visual channel is absent
+        # because of a dependency rule and a platform, and those are facts about neither release.
+        #
+        # THREE STATES, STILL THREE (§7g): this is "one channel of two"; `DEGRADE_SUBSYSTEM` is
+        # "the arm ran and failed"; `DEGRADE_AUDIO` is "this machine can make no sound". None of
+        # the three may be read as either of the others.
+        _degrade(DEGRADE_WINDOWS, "no-visual-notifier", out,
+                 fallback=("no desktop notification is raised on Windows — mokata's Windows arm "
+                           "is sound-only (there is no argv-only notifier there, and a toast "
+                           "needs a dependency mokata does not require)"),
+                 fix="Watch mokata's statusline segment, which carries the same wait")
 
     argv = _notification_argv(platform, body)
     if argv is not None and not _over_ssh(env):
@@ -533,6 +625,13 @@ def _notify(kind: str, *, root: str, settings: Optional[NotifySettings],
         sound = _audio_argv(platform)
         if sound is not None:
             fired = runner(sound, NOTIFY_TIMEOUT_SECONDS) or fired
+        elif platform.startswith("win") and _windows_sound():
+            # THE WINDOWS SOUND ARM. It sits between the argv arm and the bell because it is
+            # neither: `winsound` is an in-process stdlib call, so it reaches no `runner` and
+            # spawns no subprocess — and the ordering is what keeps the two legs below reachable.
+            # A build with no `winsound` falls through to the bell and then to DEGRADE_AUDIO,
+            # which is the same three-state ladder every other platform walks.
+            fired = True
         elif is_tty:
             fired = _bell(out) or fired
         else:
@@ -542,11 +641,8 @@ def _notify(kind: str, *, root: str, settings: Optional[NotifySettings],
             # and is getting none. That is a fact about their box, and a fact they can act on, so
             # it must not read the same as "audio is off". The MCP wait is precisely where this
             # lands — an MCP server has no TTY, so the bell floor does not exist there.
-            _degrade(DEGRADE_AUDIO, "no-audio-channel", out,
-                     fallback="the notification was raised, but this machine offers no way to "
-                              "make a sound (no audio player found, and no terminal to ring)",
-                     fix="Install `libcanberra-gtk3-bin` or `pulseaudio-utils`, or set "
-                         "`settings.ux.notify_audio false` to stop asking for it")
+            fallback, fix = _no_audio_notice(platform)
+            _degrade(DEGRADE_AUDIO, "no-audio-channel", out, fallback=fallback, fix=fix)
 
     return fired
 

@@ -24,7 +24,8 @@ radius falls to the lexical floor with `degraded=True` (a genuine absence — no
 account for the symbol at all) — which `govern.graph_required` then refuses at `spec emit`
 (`mcp/tools_spec.py`, phase 7). ⚠ NOT at `BrainstormSession.approve(graph_gate=...)`, as this
 note said until 0.0.17: that parameter has no production caller and the approve-path refusal is
-inert (`GATE-UNREACHABLE-BRAINSTORM`, doc 84; wiring deferred to 0.0.19 by D14). The CONCLUSION
+inert (`GATE-UNREACHABLE-BRAINSTORM`, doc 84; wiring deferred to 0.0.20 by ruling F2(b), which
+supersedes D14 — the JS/TS floor it must land beside moved with it). The CONCLUSION
 below is unchanged — the refusal still lands, just later in the pipeline — so a `seatbelt` mode
 on `minimal` would still ship a mode whose headline command dead-ends on default settings, and
 the dead-end is WORSE for arriving at phase 7 than it would be at phase 1. The gates consume

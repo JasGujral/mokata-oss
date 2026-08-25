@@ -204,6 +204,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
+    # CI-JOBS-WITHOUT-A-TIMEOUT (0.0.19 stage 09). DERIVED, not typed, the same way `test`'s 44
+    # above was: the slowest leg that has ever COMPLETED x 1.5. Across 148 completed leg-runs
+    # the slowest is 83s (`windows · git bash`, run 30801432820); 1.5 x 83s = 124.5s -> **3**.
+    # Until this stage it had none, so a wedged hook execution ran to GitHub's default 360 —
+    # and an unfinished job blocks log download for EVERY other job in the run, so one wedge
+    # costs the evidence from all twelve.
+    timeout-minutes: 3
     strategy:
       fail-fast: false
       matrix:
@@ -238,6 +245,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # CI-JOBS-WITHOUT-A-TIMEOUT (0.0.19 stage 09). Slowest ever COMPLETED x 1.5: 138s (run
+    # 30801100461) -> 207s -> **4**. ⚠ That 138s is from this job's FORMER shape, when it also
+    # started a neo4j service (`live-db (postgres + pgvector + neo4j)`, n=103); the pgvector-only
+    # shape's slowest is 35s over n=10. The larger is taken deliberately — 'has ever completed'
+    # reads the job id's whole history, and a ceiling derived from ten runs of a three-week-old
+    # shape would be the tighter number for the weaker reason.
+    timeout-minutes: 4
     # SCHEMA: the postgres service starts UNPROVISIONED (a bare `mokata_test`), and since D1 a
     # runtime connect VERIFIES the schema and never creates it — so nothing here conjures tables
     # on first use. The test module provisions once in `setUpModule` through the real admin path

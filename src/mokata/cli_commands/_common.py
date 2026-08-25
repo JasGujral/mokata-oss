@@ -64,6 +64,8 @@ from ..harness_setup import (
     HARNESSES,
     SCOPES,
     SetupError,
+    plan_setup,
+    render_setup_plan,
     setup_harness,
     unsetup_harness,
 )
@@ -233,6 +235,8 @@ __all__ = [
     "HARNESSES",
     "SCOPES",
     "SetupError",
+    "plan_setup",
+    "render_setup_plan",
     "setup_harness",
     "unsetup_harness",
     "_load_surface",

@@ -67,6 +67,15 @@ AMEND_TOOL_NAME = "spec_amend"
 # thing that was wrong, not the CLI.
 AMEND_FINISH_CMD = "mokata spec amend --file <your-spec.json>"
 
+# A3 (0.0.19) — the EMIT path's finish step, and it is here for exactly the reasons above it. A
+# TTY-less `mokata spec emit` now stages a proposal instead of dead-ending, and approving that
+# proposal does not land the spec either: the command has to be re-run to redeem the approval
+# (`approval.redeem` re-derives the content hash from the args the CALLER supplies, which is what
+# makes consent content-bound — the approved proposal cannot carry the spec home). Same placeholder
+# discipline as the amend spelling: rendered WITH its required argument, because a refusal that
+# names a remedy must name one that works at a shell (§7g's closing rule).
+EMIT_FINISH_CMD = "mokata spec emit --file <your-spec.json>"
+
 # What is TRUE and was never said: the human has done everything asked of them and the amendment is
 # still not in. Said in the human's terms, not the model's — "re-call the tool with proposal_id" is
 # the model's instruction and it is why this looked like a server problem rather than a missing step.
@@ -139,6 +148,33 @@ def awaiting_block(proposal_id: str, tool: str, *, blocked_note: str = "",
         block["awaiting_also_pending_approve_commands"] = [
             APPROVE_CMD.format(proposal_id=p) for p in others]
     return block
+
+
+def awaiting_cli_lines(proposal_id: str, *, tool: str,
+                       finish: str = EMIT_FINISH_CMD) -> List[str]:
+    """A3 (0.0.19) — the FOURTH view: the same one wait state, printed at a human's own terminal.
+
+    `awaiting_block` is a dict a model reads; a CLI command prints lines. Building the CLI spelling
+    HERE rather than inside the command is the whole reason this module exists (`awaiting.py:9-14`):
+    a surface that words its own version of "mokata is waiting on you" is a surface that drifts from
+    the other three. So the head, the approve command and the list command all come from the same
+    constants the MCP head is built from, and a grep for `AWAITING` still finds every wait.
+
+    ⚠ IT NAMES THE FINISH STEP, and that is not decoration. `mokata approve <id>` mints the
+    approval; it does NOT land the write. Leaving that unsaid is `AMEND-STEP-2-IS-UNADVERTISED`
+    exactly — a flow whose advertised exit stops one move short of done.
+
+    SECRET-SAFETY (see the module docstring): ids, the tool name, and commands. Never `summary`,
+    never `preview`, never `target`. The write is one command away, at the human's own terminal,
+    where it belongs — which is precisely the trade this view makes."""
+    return [
+        f"{AWAITING}: mokata is WAITING ON A HUMAN — this is not an error and nothing is stuck. "
+        f"NOTHING was written.",
+        f"  proposal:   {proposal_id}  ({tool})",
+        f"  approve it: {APPROVE_CMD.format(proposal_id=proposal_id)}",
+        f"  lost the id: {LIST_CMD}",
+        f"  then re-run to land it: {finish}",
+    ]
 
 
 # ======================================================================================
@@ -383,5 +419,6 @@ def _statusline_wired(root: str) -> bool:
 
 __all__ = ["AMEND_ABORT_CMD", "AMEND_FINISH_CMD", "AMEND_FINISH_NOTE",
            "AMEND_REGRESSED_NOTE", "AMEND_TOOL_NAME", "APPROVE_CMD",
-           "AWAITING", "HARNESS_NOTIFICATION", "LIST_CMD", "STATUSLINE", "TOOL_RESULT",
-           "awaiting_block", "by_decision", "pending_lines", "signal_wait", "statusline_segment"]
+           "AWAITING", "EMIT_FINISH_CMD", "HARNESS_NOTIFICATION", "LIST_CMD", "STATUSLINE",
+           "TOOL_RESULT", "awaiting_block", "awaiting_cli_lines", "by_decision", "pending_lines",
+           "signal_wait", "statusline_segment"]

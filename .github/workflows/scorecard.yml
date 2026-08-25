@@ -28,6 +28,9 @@ jobs:
                                # the top-level read-all, so it must be re-declared explicitly)
       security-events: write   # upload the SARIF results
       id-token: write          # publish results to the OpenSSF API
+    # CI-JOBS-WITHOUT-A-TIMEOUT (0.0.19 stage 09). Slowest ever COMPLETED x 1.5: 42s (run
+    # 28883587914, n=30) -> 63s -> **2**.
+    timeout-minutes: 2
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
