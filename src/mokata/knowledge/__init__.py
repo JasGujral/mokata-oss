@@ -26,6 +26,7 @@ from .ast_backend import AstBackend, FileEdges, extract_edges, parse_source
 from .crg_client import (
     CRG_COMMAND,
     CodeReviewGraphClient,
+    CrgTimeout,
     CrgUnavailable,
     CrgVersionSkew,
     parse_crg_version,
@@ -76,6 +77,7 @@ __all__ = [
     "GraphQueryClient",
     "SubprocessGraphClient",
     "CodeReviewGraphClient",
+    "CrgTimeout",
     "CrgUnavailable",
     "CrgVersionSkew",
     "parse_crg_version",

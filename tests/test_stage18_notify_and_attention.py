@@ -186,8 +186,12 @@ class _Which:
     have?"*. On the maintainer's Mac that is `afplay` and `/System/…/Ping.aiff`, so both passed.
     On the ubuntu runners `canberra-gtk-play` is absent, so the audio arm fell through to the
     terminal bell — which is not a subprocess and not a spy call — and both reded on 4 of the 7
-    unit legs. On Windows the emitter returns before the runner at all, so both would have reded
-    there too, for a third reason.
+    unit legs. On Windows the emitter returned before the runner at all, so both would have reded
+    there too, for a third reason. ⚠ THAT LAST SENTENCE IS PAST TENSE AS OF 0.0.19 AND THE TENSE
+    IS THE POINT: stage 09a gave Windows a sound arm that fires WITHOUT the runner
+    (`notify.py:628`), so "the emitter returns before the runner" is no longer true there. A
+    premise recorded once and never re-derived is doc 85 §7h, and this docstring was the live
+    example — it went on asserting the old shape inside the very file 09a reded.
 
     A test that grades a CHANNEL must state the platform and state the binaries; whether THIS box
     can make a noise is a different question, and `TestTheAudioArms` asks it separately."""
@@ -331,9 +335,25 @@ class TestNeverBlocks(unittest.TestCase):
                 with self.subTest(level=level, kind=kind):
                     raiser = _Raiser()
                     out: List[str] = []
-                    fired = _fire(kind, settings=_settings(level=level),
-                                     harness_notified=False, runner=raiser,
-                                     is_tty=True, env=_desktop_env(), out=out.append)
+                    # ⚠ TWO EMISSION PATHS, SO THE INSTRUMENT MUST COVER TWO. `_Raiser` reaches
+                    # every argv arm, and before 0.0.19 that was all of them. Stage 09a added the
+                    # Windows sound arm (`notify.py:628`), which its own comment describes as
+                    # "an in-process stdlib call, so it reaches no `runner`" — so on Windows the
+                    # emitter fired truthfully through a channel this instrument could not see,
+                    # and the pin reded on all three Windows legs at the 0.0.19 cut while staying
+                    # green on every POSIX leg (the arm is `platform.startswith("win")`-gated, so
+                    # ubuntu short-circuits past it). ⛔ THE WEAK FIX IS FORBIDDEN: relaxing the
+                    # assertion, or stubbing the arm to return False, buys green by making the
+                    # instrument fail open on the one platform it just failed to grade — §7e.
+                    # Making it EXPLODE like the runner is what keeps the bar a bar: the raise
+                    # must die in `notify`'s single swallow seam (`notify.py:545`) and reach no
+                    # caller. On POSIX the patch is inert, so those legs grade what they always
+                    # graded.
+                    with mock.patch.object(N, "_windows_sound",
+                                           side_effect=RuntimeError("the sound arm exploded")):
+                        fired = _fire(kind, settings=_settings(level=level),
+                                      harness_notified=False, runner=raiser,
+                                      is_tty=True, env=_desktop_env(), out=out.append)
                     self.assertFalse(fired, "a notifier that raised did not notify")
 
     def test_the_announce_seams_themselves_raise_nothing(self):
@@ -775,18 +795,29 @@ class TestDiscoverabilityAndWindows(unittest.TestCase):
             self.assertIn("settings.ux.notify", N.OFF_SWITCH,
                           "the off switch must name the key that actually turns it off")
 
-    def test_windows_ships_no_unverifiable_arm_and_says_so(self):
-        """⚠ There is no Windows host this release (OSS #46/#45/#28 are blocked on exactly that),
-        so the Windows arm is DEGRADED rather than shipped unverified — and the degrade is named
-        out loud rather than left for a green suite to imply coverage of."""
+    def test_windows_ships_the_sound_arm_and_names_the_channel_it_does_not(self):
+        """⚠ REWRITTEN AT 0.0.19 F13, and the old assertion is worth stating because it is what
+        changed: this test used to assert `assertFalse(fired)` and *"no unverifiable OS call may
+        ship"*, against a Windows path that returned before anything ran. Windows now ships the
+        AUDIO half — `winsound`, stdlib, in-process — so the surviving invariants here are the two
+        that did NOT change: no SUBPROCESS is spawned on Windows (there is still no argv-only
+        notifier there), and the missing VISUAL channel is still named out loud rather than left
+        for a green suite to imply coverage of.
+
+        The arm itself, its flag, its three states and its manual dimension are graded in
+        `test_f13_windows_audio_arm.py`, which declares a `winsound` rather than inheriting the
+        host's — this file has no fake, so `_windows_sound` here correctly finds nothing and the
+        bell floor answers instead."""
         spy = _Spy()
         notices: List[str] = []
         fired = _fire(N.KIND_PROMPT, settings=_settings(), runner=spy, is_tty=True,
                          env=_desktop_env(), platform="win32", out=notices.append)
-        self.assertFalse(fired)
-        self.assertEqual(spy.calls, [], "no unverifiable OS call may ship")
-        self.assertTrue(any("windows" in n.lower() for n in notices),
-                        f"the Windows degrade must be NAMED; got {notices}")
+        self.assertTrue(fired, "a terminal is present, so the bell floor is reached")
+        self.assertEqual(spy.calls, [], "Windows still spawns NO subprocess: no argv-only notifier")
+        windows = [n for n in notices if "windows" in n.lower()]
+        self.assertTrue(windows, f"the missing visual channel must be NAMED; got {notices}")
+        self.assertNotIn("this release", " ".join(windows),
+                         "a shipped notice may not carry a scheduling claim (the RESTORE_ROW class)")
 
     def test_over_ssh_the_desktop_notification_is_suppressed(self):
         """A desktop notification raised from an SSH session lands on the REMOTE machine's console,

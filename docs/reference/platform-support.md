@@ -59,8 +59,17 @@ PATH — see [running the tests](../developer-guide.md#running-the-tests-both-js
 ## Manual-verification leg
 
 Like the [live-DB integration leg](../how-to/configure-storage-backends.md), behaviour that
-requires a *real* Windows process (e.g. an interactive Claude Code session launching a hook on
-Windows) is **proven by the Windows CI matrix leg**, not on a contributor's local box. Local
+requires a *real* Windows **process** — e.g. an interactive Claude Code session launching a hook
+on Windows — is **proven by the Windows CI matrix leg**, not on a contributor's local box. Local
 test runs assert the same behaviour OS-agnostically (path joins, separator-agnostic basename,
 the machine-path-free bundle on Windows-style paths, the `mokata-hook` command shape) so the
 suite is green on whatever OS you develop on, and the matrix confirms the real Windows run.
+
+⚠ **A CI runner is not a desktop, and one Windows behaviour is outside what that leg can prove.**
+mokata's attention channel plays a sound on Windows through `winsound.MessageBeep`. CI can prove
+the arm is reached and calls what it says it calls; it cannot prove a sound came out. `MessageBeep`
+reports nothing about a muted device, an absent audio endpoint or a session with no mixer, and no
+headless runner has any of those to begin with. **The Windows sound arm is therefore *called*, not
+*verified*** — no human has yet heard it on a real Windows machine, and this page will say so until
+one has. Windows ships **no visual notification** at all; see
+[`ux.notify`](manifest.md#settings-the-generic-toggle-store).

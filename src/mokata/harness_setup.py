@@ -244,6 +244,11 @@ class SetupPlan:
     grant: bool = False               # grant CC permission for mokata's MCP tools (claude)
     unsupported: List[str] = field(default_factory=list)  # capabilities this harness lacks
     skill_names: List[str] = field(default_factory=list)  # Agent Skills to install (claude)
+    # F8a — the hand-authored DOMAIN skills `apply_setup` COPIES alongside the rendered ones.
+    # They were written by the apply and named by no plan, so `render_setup_plan` under-reported
+    # the write by the whole domain set. The plan now carries them and the apply installs THIS
+    # list, so what the human is shown and what lands are one declaration, not two.
+    domain_skill_names: List[str] = field(default_factory=list)
     skill_orphans: List[str] = field(default_factory=list)  # stale mokata skills to PRUNE (sync)
     # The home override the targets were resolved under. Carried on the plan because
     # `render_setup_plan` has to re-read the SAME settings.json to disclose what mokata would
@@ -564,6 +569,11 @@ def plan_setup(
     # command template to render from).
     skill_names = list(CURATED_SKILLS) if targets.skills_dir is not None else []
     keep_names = list(installed_skill_names()) if targets.skills_dir is not None else []
+    # F8a — the COPIED half of the same surface, on the plan for the same reason the rendered
+    # half is: a durable write the plan does not name is a durable write the human never saw.
+    from .domains import shipped_domain_skills
+    domain_skill_names = (list(shipped_domain_skills())
+                          if targets.skills_dir is not None else [])
 
     # Stage 5 — SYNC: after (re)writing the current set, setup PRUNES any mokata-authored skill
     # DROPPED from it, so `.claude/skills/` matches the current set exactly and users stop seeing
@@ -587,6 +597,7 @@ def plan_setup(
         grant=grant,
         unsupported=unsupported,
         skill_names=skill_names,
+        domain_skill_names=domain_skill_names,
         skill_orphans=skill_orphans,
         home=home,
     )
@@ -608,11 +619,16 @@ def render_setup_plan(plan: SetupPlan) -> str:
     lines.append("  /" + "  /".join(Path(f).stem for f in plan.command_files))
     lines.append(f"  (native surface: {_HARNESS_NATIVE_NOTE[plan.harness]})")
     lines.append("")
-    if plan.skill_names and t.skills_dir is not None:
-        lines.append(f"Will write {len(plan.skill_names)} Agent Skills -> {t.skills_dir}"
+    all_skills = list(plan.skill_names) + list(plan.domain_skill_names)
+    if all_skills and t.skills_dir is not None:
+        # F8a — BOTH halves, counted from the plan the apply installs. The rendered pipeline
+        # skills and the copied domain skills land in the same directory and are the same durable
+        # write to the human reading this; naming only the first understated it by the second.
+        lines.append(f"Will write {len(all_skills)} Agent Skills -> {t.skills_dir}"
                      f"/<name>/SKILL.md:")
-        lines.append("  " + "  ".join(plan.skill_names))
-        lines.append("  (model-invocable twin of the commands; Claude may auto-engage these)")
+        lines.append("  " + "  ".join(all_skills))
+        lines.append("  (model-invocable twin of the commands; Claude may auto-engage these. "
+                     "Each brings its SKILL.md and any references/ detail files.)")
         lines.append("")
     if plan.skill_orphans and t.skills_dir is not None:
         # A durable delete → it MUST be visible before approval (P2). Only mokata-authored
@@ -1126,8 +1142,12 @@ def apply_setup(plan: SetupPlan, *, assume_yes: bool = False, force: bool = Fals
         # DK.S1 — deliver the hand-authored DOMAIN skills (api/security/…) verbatim alongside the
         # pipeline skills: static SKILL.md + references, copied (not template-rendered), so they
         # auto-engage exactly like a native skill.
+        # F8a — installs the PLAN's list, not its own default. Same set, one declaration: a
+        # domain skill added to the shipped tree now reaches the preview and the apply together
+        # or neither, instead of landing on disk unannounced.
         from .agent_skills import install_domain_skills
-        for p in install_domain_skills(src_skills, t.skills_dir):
+        for p in install_domain_skills(src_skills, t.skills_dir,
+                                       names=tuple(plan.domain_skill_names)):
             touched.append(str(p))
 
     # 2c. SYNC (Stage 5) — after writing the current set, PRUNE any mokata-authored skill dropped
@@ -1225,9 +1245,12 @@ def setup_harness(
     emit("")
     emit(f"mokata is wired into {harness} ({scope} scope).")
     if harness == "claude":
-        if plan.skill_names:
-            emit(f"Installed {len(plan.skill_names)} Agent Skills "
-                 f"({', '.join(plan.skill_names)}) alongside the /commands — Claude can now "
+        installed = list(plan.skill_names) + list(plan.domain_skill_names)
+        if installed:
+            # F8a — the same set the plan showed. A summary that counts one half of what landed
+            # is the preview's under-report arriving after the fact.
+            emit(f"Installed {len(installed)} Agent Skills "
+                 f"({', '.join(installed)}) alongside the /commands — Claude can now "
                  f"auto-engage them, and they show in the Agent Skills list.")
         if plan.grant:
             emit("✓ Granted Claude Code permission for mokata's MCP tools + enabled the "

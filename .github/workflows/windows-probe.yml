@@ -57,7 +57,7 @@ env:
   #
   # Currently: the two modules holding all 11 failures on mirror run 32144708930's three Windows
   # legs (identical failure set on `py3.12 absent`, `py3.12 present` and `py3.10 present`).
-  PROBE_MODULES: "test_crg_nav test_nested_checkout_walkers"
+  PROBE_MODULES: "test_stage18_notify_and_attention"
 
 jobs:
   probe:

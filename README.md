@@ -89,10 +89,14 @@ sign-in — no API key:
 pip install mokata               # MCP server works out of the box (the SDK is a default dep)
 mokata setup claude              # wires commands + skills + MCP + statusline — human-gated
 # restart Claude Code, then:
-mokata mcp status                # expect: mokata-mcp: CONNECTED ✓
+mokata mcp status                # expect: mokata-mcp: REGISTERED ✓ … connected ✓
 ```
 
 > Requires **Python ≥ 3.10**.
+>
+> On macOS/Linux you can install with Homebrew instead — `brew install JasGujral/mokata/mokata` — then
+> continue from `mokata setup claude`. Every route is listed in
+> [Install mokata](docs/how-to/install-mokata.md).
 
 **As a CLI, with any AI tool** — harness-agnostic (Gemini, Codex, scripts, CI). The CLI is the
 engine's mechanics (no LLM of its own); wire it into any shell- or MCP-capable assistant:
@@ -150,7 +154,8 @@ axis. See [Getting started](docs/getting-started.md).
 > `mokata setup claude`. ([Why two ways](https://mokata.ai/concepts/execution-model/).)
 >
 > `mokata init` = **your repo** (`.mokata/`). `mokata setup claude` = **your agent** (`.claude/`,
-> and it runs `init` for you). Upgrading? `mokata upgrade` does the pip install *and* refreshes
+> and it runs `init` for you). ⚠ Since 0.0.19 the non-interactive **`mokata init --yes`** does
+> both — it wires the harness too, which matters if you call it from CI. Upgrading? `mokata upgrade` does the pip install *and* refreshes
 > the harness wiring, both human-gated — a bare `pip install -U` leaves the old wiring in place.
 > Decision table + upgrade runbook:
 > [Which setup command do I need?](https://mokata.ai/how-to/which-setup-command/)

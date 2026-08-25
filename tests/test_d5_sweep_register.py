@@ -697,6 +697,20 @@ _register("cli_commands/spec.py", {
         "`_prior_art_emit_refusal` / CLI pair); what must be shared is the VERDICT, and that is "
         "`handoff_code_anchor_gate`, which both call."),
 })
+_register("gate_hook.py", {
+    "_pending_emit_proposals": (SUPPRESS_OK,
+        "A3 (0.0.19) — the ids of spec emits already awaiting this human, read ONLY to decide "
+        "whether the `spec-persisted` refusal names `mokata approve <id>` before it names the "
+        "override. It is reached exclusively on the branch that has ALREADY decided to refuse, so "
+        "it cannot reach a verdict at all (doc 85 §4: change the message, never the verdict) — a "
+        "swallowed failure names no proposals and the block reverts to the exact sentence it "
+        "printed before this row, which is a message that was correct for four releases. There is "
+        "no fallback to announce, and a `note_degraded` here would fire inside a PreToolUse hook "
+        "on a user's blocked edit, which is a notice shouted into a rendering context (the "
+        "`badge_segment` reasoning above). Broad because it spans the approval store's IO, its "
+        "JSON decode and the lazy import; the store's own reads announce themselves at their "
+        "owner."),
+})
 _register("mcp/consent.py", {
     # RE-ENTRY — the two new reads at the consent boundary. NEITHER can reach a commit: one picks
     # the KEY a proposal is filed under, the other only formats a surfacing line.
@@ -1091,7 +1105,33 @@ _register("knowledge/graph_adopt.py", {
         "committed manifest write."),
 })
 
+# A1 (0.0.19) — THE ONE BOUNDED READ. `mcp_admin.handshake._reader` used to be registered here;
+# it is gone from that file because it was EXTRACTED into `bounded_io`, which both stdio clients
+# now share. Same handler, one copy, and the classification travelled with it.
+_register("bounded_io.py", {
+    "read_bounded._pump": (DEGRADE_CLEAN,
+        "The bounded reader's thread body. It swallows NOTHING: the exception is CARRIED out in "
+        "`BoundedReadResult(READ_ERROR, error=exc)` and every caller turns that into its own loud "
+        "failure (`CrgUnavailable` for the CRG transport, a loud `error` HandshakeResult for the "
+        "MCP status check). Broad because it runs a caller-supplied read on a stream that can be "
+        "torn down mid-read by a process dying underneath it — the class is the OS's, not "
+        "mokata's — and because a reader thread that raised UNCAUGHT would print a traceback to "
+        "stderr and then look, to the joining thread, exactly like a timeout (§7g)."),
+    "BoundedStderrTail._drain": (SUPPRESS_OK,
+        "Draining a DOOMED subprocess's stderr for a diagnostic tail. The stream is closed under "
+        "this thread every time the peer is killed — that is the NORMAL end of the drain, not a "
+        "failure — and there is nothing to tell anyone: the caller is already raising the timeout "
+        "that the tail merely decorates. Losing the tail costs a hint on a failure that is being "
+        "reported loudly anyway."),
+})
+
 _register("knowledge/crg_client.py", {
+    "_McpStdioSession._stderr_tail": (SUPPRESS_OK,
+        "A1 — guards ONLY the lazy `from ..govern.secrets import scan` used to check the "
+        "subprocess's own stderr before it is shown. It fails CLOSED: an unimportable scanner "
+        "returns `(withheld: ...)` and the tail is dropped, so the swallow can only ever cost a "
+        "diagnostic hint, never leak one. Broad because the failure of a lazy import spans "
+        "ImportError and whatever a half-installed package raises on the way up."),
     "CodeReviewGraphClient.health": (SUPPRESS_OK,
         "GR.S2 liveness pre-check — a TOTAL probe that must never raise (like a statusline read). "
         "It answers True/False; a broad failure IS unhealthy (False). Silence is correct HERE "
@@ -1400,9 +1440,6 @@ _register("mcp_admin.py", {
     "handshake": (SUPPRESS_OK,
         "A best-effort `wait(timeout=2)` reap before reading stderr. Failing to reap loses nothing — "
         "the handshake verdict is decided by what was (or was not) read, not by the reap."),
-    "handshake._reader": (DEGRADE_CLEAN,
-        "A stream torn down mid-read yields an empty line, which fails CLOSED to a loud `error` "
-        "HandshakeResult. The failure surfaces as the verdict; it is not swallowed."),
     "status_lines": (DEGRADE_CLEAN,
         "Returns `(False, ['mokata-mcp: status check skipped ({exc})'])` — not-connected AND the "
         "cause, printed."),
@@ -1518,6 +1555,22 @@ _register("teamdb.py", {
     "probe": (SUPPRESS_OK,
         "An `importlib.util.find_spec` guard; falling through still yields the fail-closed probe "
         "verdict below."),
+    "_server_major": (DEGRADE_CLEAN,
+        "C1 — the PostgreSQL-floor CAPABILITY PROBE, and the handler IS the answer, in the "
+        "`SQLiteBackend.fts5_available` sense: the question being asked is literally 'can this "
+        "connection tell me its server version?', so every way it can fail gives the same true "
+        "answer — no. What makes it CLEAN rather than a swallow is that the answer is a DECLARED "
+        "outcome and not a hole: `None` is `teamdb.FLOOR_UNKNOWN`, one of FOUR named verdicts, and "
+        "both consumers branch on it explicitly (`ensure_schema` does not refuse, `classify` "
+        "renders nothing). It cannot be mistaken for a low version, which is the §7g failure that "
+        "would matter — an unreadable version treated as below-floor would refuse a database "
+        "nobody has shown to be old. Broad with no narrow class to name, for `_pg._is_live`'s "
+        "reason verbatim: `conn.info` is a THIRD-PARTY (psycopg) property whose getter may raise a "
+        "driver class mokata cannot import without a hard dependency on the optional extra. "
+        "⚠ THE RESIDUAL, STATED RATHER THAN ARGUED AWAY: UNKNOWN is deliberately SILENT (the "
+        "ruling is that it degrades to exactly the pre-C1 behaviour), so if `conn.info."
+        "server_version` ever changes shape the floor enforcement lapses and no surface says so. "
+        "That is a known gap in the C1 stage report, not an oversight here."),
     "probe._work": (DEGRADE_CLEAN,
         "Records `box['error'] = str(exc)`, which becomes `ProbeResult(reachable=False, error=…)` → "
         "`team_health.classify` → OFFLINE → the ⚠ badge. The model citizen of the codebase: the "

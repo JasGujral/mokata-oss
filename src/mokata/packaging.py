@@ -16,6 +16,9 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import repo_paths
+from .disclosure import DisclosureReport, check_disclosure_resolves
+
 PLUGIN_MANIFEST_PATH = ".claude-plugin/plugin.json"
 MARKETPLACE_PATH = ".claude-plugin/marketplace.json"
 PYPROJECT_PATH = "pyproject.toml"
@@ -482,6 +485,11 @@ class ReleaseNotesCheck:
     limitation_count: int = 0
     missing_tokens: List[Tuple[int, str]] = field(default_factory=list)   # (entry #, fact)
     framing_missing: bool = False
+    #: B5 (0.0.19) — whether every published SCHEDULE still resolves. A SEPARATE axis from
+    #: `disclosure_ok` on purpose: that one asks whether a limitation is still PRINTED, this one
+    #: whether a promise is still TRUE, and the row exists because the first passed while the second
+    #: was false. `ok` below is untouched, so no verdict on anything that is not a schedule moves.
+    claims: Optional["DisclosureReport"] = None
 
     @property
     def version_ok(self) -> bool:
@@ -494,6 +502,16 @@ class ReleaseNotesCheck:
     @property
     def ok(self) -> bool:
         return self.version_ok and self.disclosure_ok
+
+    @property
+    def claims_failed(self) -> bool:
+        """A published schedule no longer resolves. Red, and it fails the cut."""
+        return bool(self.claims is not None and self.claims.failed)
+
+    @property
+    def claims_undecided(self) -> bool:
+        """A schedule this leg could NOT check — the third state. Not red, and NOT a pass."""
+        return bool(self.claims is not None and self.claims.undecided)
 
     def render(self) -> str:
         head = ("release-notes-check PASS" if self.ok else "release-notes-check FAIL")
@@ -516,7 +534,48 @@ class ReleaseNotesCheck:
             lines.append("  remedy: rewrite RELEASE_NOTES.md for this version carrying every fact "
                          "above. DG-7 exists because an auditor must not be the one who discovers "
                          "a measured regression.")
+        if self.claims is not None:
+            lines.append(self.claims.render())
         return "\n".join(lines)
+
+
+#: The tagged prose a release promise can be published in. `README.md` is here because it ships and
+#: is read more than either of the other two; it carries no claims today and the population says so
+#: rather than the corpus quietly not asking.
+CLAIM_PROSE = ("CHANGELOG.md", "RELEASE_NOTES.md", "README.md")
+
+
+def shipped_claim_sources(root: str = ".") -> Dict[str, Optional[str]]:
+    """`{repo-relative POSIX name: text}` for every shipped surface a schedule can be PRINTED from.
+
+    Scope, declared rather than discovered (doc 85 §7j): the tagged prose above plus every shipped
+    `src/**/*.py`. `tests/` is deliberately absent — a promise is something said to a user, and a
+    string planted in a test fixture is by construction not one; including it convicts three files
+    whose strings are mutant sources and DG-7 fixtures. `scripts/` carries no printable constant and
+    is not shipped uniformly, so it is out too. `disclosure.DECLARATION_MODULE` is skipped by the
+    grader, not here, so this builder stays a plain statement of what ships.
+
+    Missing files come back as None rather than raising, which is what lets the mirror and a partial
+    checkout be graded at all — `unparseable` then reports them instead of a clean sweep hiding them.
+    """
+    sources: Dict[str, Optional[str]] = {}
+    for rel in CLAIM_PROSE:
+        sources[rel] = _read_text(root, rel)
+    src_root = os.path.join(root, "src")
+    for dirpath, _dirs, files in os.walk(src_root):
+        if "__pycache__" in dirpath:
+            continue
+        for name in sorted(files):
+            if not name.endswith(".py"):
+                continue
+            # ⚠ `name_of`, NOT a bare `relpath`. These keys are NAMES — they are compared against
+            # `disclosure.DECLARATION_MODULE` and against declarations a human spelled with `/`, so
+            # an OS-separated key stops matching every one of them on Windows and only on Windows.
+            # The static sweep in `test_repo_paths_invariant` convicts the bare form, and the
+            # choke point is the reason "relativised but not yet spelled" is not a state.
+            rel = str(repo_paths.name_of(os.path.join(dirpath, name), root))
+            sources[rel] = _read_text(root, rel)
+    return sources
 
 
 def check_release_notes(target: str, root: str = ".") -> ReleaseNotesCheck:
@@ -542,4 +601,10 @@ def check_release_notes(target: str, root: str = ".") -> ReleaseNotesCheck:
         limitation_count=len(entries),
         missing_tokens=missing,
         framing_missing=bool(entries) and "known limitation" not in haystack,
+        # ⭐ `plan_sources` IS NOT PASSED, AND THAT IS THE BOUNDARY, NOT AN OVERSIGHT. This leg
+        # SHIPS; the planning documents do not. So every keyed claim comes back NOT_CHECKABLE here
+        # — honestly, in every tree — and the resolving verdict is made by the internal gate that
+        # has the documents. Passing `{}` instead would say "consulted, found nothing", which reds
+        # the mirror on every claim; passing a path would be SHIPPED-TEST-READS-INTERNAL-FILE.
+        claims=check_disclosure_resolves(shipped_claim_sources(root), None, cutting=norm or None),
     )

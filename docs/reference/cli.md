@@ -32,8 +32,23 @@ integrations (graph backend, memory backend, Postgres / vector), **asks which to
 wire**, then **wires them with your approval** (orchestrating `init` + `config` + `setup`).
 mokata **detects → recommends → runs with approval** — it **never silently installs** a
 third-party tool (an absent one is recommended, not installed). It finishes with a 30-second
-"here's what I just did" recap + the next step. The non-interactive `--yes`/`--profile` path is
-unchanged for CI.
+"here's what I just did" recap + the next step.
+
+🔴 **`--yes` also wires the harness (changed in 0.0.19) — a behaviour change for scripted
+callers.** A non-interactive `init` now runs `setup claude` at **project** scope as part of the
+init: `--yes` is consent to the whole init plan and wiring the run-state gate is part of it. It
+writes `.claude/commands/`, `.claude/skills/`, `.claude/settings.json` (briefing hook,
+`secret-guard`, `gate-guard`, the MCP permission grant, the status line) and `.mcp.json`, and it
+**spawns a short-lived `mokata-mcp` subprocess** to verify the server answers and serves the
+same version as the CLI. Existing JSON is merged, not overwritten; reverse with
+`mokata unsetup claude --scope project`. A wiring failure never fails an init that already
+succeeded. **If you time, sandbox or diff a scripted `mokata init`, expect those files and that
+subprocess.**
+
+Every init that does **not** wire prints one line saying whether the run-state gate is
+enforcing here — in three states: enforcing, **not wired**, or **could not be verified** (which
+is not a verdict either way; treat it as not enforcing until you have checked with
+`mokata doctor --wiring`).
 
 | Flag | Meaning |
 |---|---|
@@ -60,7 +75,11 @@ never offers the embeddings model; `memory` and `full` offer it through the same
 interactive-only flow as setup (a `--yes` or non-TTY init never asks and never installs).
 
 `--preview` is the side-effect-free dry-run the `/mokata:init` plugin command runs before
-asking you to approve the real write.
+asking you to approve the real write, and it covers **the whole write**. Alone it renders the
+`.mokata/` plan and states that harness wiring is not part of that run; with `--yes` it also
+renders the harness plan — the commands, the Agent Skills, `.mcp.json` and
+`.claude/settings.json` — through the same renderer the wiring itself uses. A harness half that
+cannot be planned says so and names the reason rather than being omitted.
 
 ### `mokata tour`
 A 60-second, **read-only** demo of mokata on a tiny sample — a structural **graph query**, a
@@ -172,11 +191,32 @@ Release plumbing (pure/offline). The disclosure half of `release-check`: assert 
 records under `### Known limitations` for that version — the measurements, the code
 identifiers and the versions it names. The wording is deliberately **not** matched, so the
 notes can be written in their own voice; what may not happen is a number quietly going
-missing. Exits non-zero **naming each undisclosed fact**. Run it before you tag:
+missing. Run it before you tag:
 
 ```bash
 mokata release-notes-check 0.0.16
 ```
+
+**Since 0.0.19 it grades a second axis: does every published schedule still *resolve*?** A
+disclosure that says *"scheduled for 0.0.19"* can go on being printed long after 0.0.19 stopped
+containing it — presence is not truth — so each scheduling claim in the shipped surfaces is
+looked up against the planning corpus and reported as resolving, unresolved, **spent** (the
+release it names is at or before the one being cut), or **accounted** (it slipped and the slip
+was published, or a ruling holds it where it is).
+
+**Three exit codes, and `2` is the one to read carefully:**
+
+| Exit | Meaning |
+|:--:|---|
+| `0` | the notes are right **and** every schedule resolved, was accounted for, or is spent |
+| `1` | the notes are wrong (a limitation went undisclosed), **or** a published schedule no longer resolves — each offender is named |
+| `2` | **NOT CHECKABLE HERE** — neither a pass nor a failure. A schedule could not be resolved from this artefact at all |
+
+Exit `2` is the **normal** answer when you run this command yourself: the planning corpus it
+would resolve against is maintainer-internal and does not ship, so the released package cannot
+read it. It is deliberately non-zero — a caller that has not been taught what it means reads it
+as a refusal, which is the safe way round — and nothing treats it as green. The resolving verdict
+is made by the release gate that runs where the planning corpus exists.
 
 ### `mokata branch-protection-check [--repo <owner/repo>] [--branch <name>]`
 Release plumbing (**fail-closed**). Verify the public mirror's default branch is protected —
@@ -462,7 +502,7 @@ against another embedder's vectors (the semantic tier simply turns off), and `re
 them. **Human-gated**, previewed with a count first; a decline writes nothing. It builds the
 vector store **non-degrading** (a silent fall to the SQLite floor would report a successful
 re-embed of a store with no vectors at all). See the `retrieval stack` lines in
-[`mokata doctor`](#mokata-doctor-matrix) for which tiers are actually ranking your recall.
+[`mokata doctor`](#mokata-doctor-wiring-matrix) for which tiers are actually ranking your recall.
 
 ### `mokata memory promote <id> --to advisory|soft|hard [--yes]`
 Change a **rule's enforcement binding** — the one gated moment that moves a remembered rule
@@ -764,7 +804,10 @@ recommended skills land in your manifest's `settings.stack` (reviewable). See
 (`--backend managed|compose|local`; managed DSN is the golden path), **fails closed** with a named
 fix when `$MOKATA_PG_DSN` is unset (writing nothing), runs **one idempotent provision pass** that
 creates the shared tables (`mokata_memory`, `mokata_session_bundle`, `mokata_audit_log`,
-`mokata_events`) + the `mokata_schema_version` row on **vanilla Postgres ≥15, no extensions**,
+`mokata_events`) + the `mokata_schema_version` row on **vanilla Postgres ≥15, no extensions**
+(the ≥15 floor is **enforced** from 0.0.19 — a below-floor server warns today and is **refused**
+from **2026-11-12**, PostgreSQL 14's upstream end-of-life, falling back to the local store; see
+[the PostgreSQL floor](../how-to/team-setup.md#the-postgresql-floor-enforced-from-this-release)),
 **pins** the team project identity (`settings.project.id`, human-gated) so clients don't split by
 path-hash, and runs the **live CONNECTED test** (the same probe `mode set team` uses). The DSN
 value is **never persisted** (env-var only, secret-scanned). Re-running is safe (idempotent). After

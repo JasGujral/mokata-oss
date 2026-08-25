@@ -179,6 +179,10 @@ pip install mokata                 # add "mokata[schema]" for richer manifest-va
 mokata --version                   # → prints the installed mokata version (confirms the console script is on PATH)
 ```
 
+> **Homebrew instead of pip.** On macOS/Linux, `brew install JasGujral/mokata/mokata` installs the
+> same CLI (and its own virtualenv with the MCP SDK), so §2.2's venv step is unnecessary on that
+> route. Every install route is listed in [Install mokata](../how-to/install-mokata.md).
+
 > **Contributors only:** to hack on mokata itself, clone and install editable instead — `git clone https://github.com/JasGujral/mokata-oss.git && cd mokata-oss && pip install -e ".[schema]"`. End users never need this.
 
 > **Checkpoint A.** `mokata --version` prints a version. You now have the engine. Everything below adds *providers* the engine can route to.
@@ -265,7 +269,7 @@ The CLI you just verified is the engine's mechanics. For day-to-day building you
 cd /path/to/your/project
 mokata setup claude          # --profile / --scope options; reverse with `mokata unsetup claude`
 # restart Claude Code, then:
-mokata mcp status            # expect: mokata-mcp: CONNECTED ✓
+mokata mcp status            # expect: mokata-mcp: REGISTERED ✓ … connected ✓
 ```
 
 `mokata setup claude` runs `init` if needed, copies the slash commands into `.claude/commands/`, installs the Agent Skills, registers the `mokata-mcp` server in `.mcp.json`, wires **three hooks** into `.claude/settings.json` — the SessionStart briefing, the **secret-guard** and the **gate-guard** (both `PreToolUse`) — and wires the status-line badge. JSON files are **merged, never clobbered**, and it's idempotent (re-running syncs and prunes old skills on update). `--scope user` installs into `~/.claude` for every project; `--no-hooks` wires only commands + MCP.
@@ -367,6 +371,10 @@ mokata init --profile full --preview # dry-run: print the plan, write NOTHING (e
 ```
 
 `init` detects your installed tools, picks a profile, and writes `.mokata/manifest.json` + `.mokata/constitution.md` (+ a committed `.mokata/.gitignore`). It's a **human-gated write**: it shows a preview of exactly what it will create and which tools it detected, then waits for confirmation.
+
+> 🔴 **`--yes` also wires the harness (changed in 0.0.19).** A non-interactive `init` runs `setup claude` at **project** scope as part of the init — `--yes` is consent to the whole init plan, and wiring the run-state gate is part of it. It writes `.claude/commands/`, `.claude/skills/`, `.claude/settings.json` (hooks, MCP permission grant, status line) and `.mcp.json`, and spawns a short-lived `mokata-mcp` subprocess to check the server answers. Reverse with `mokata unsetup claude --scope project`. An init that wires nothing prints whether the run-state gate is enforcing, in three states (enforcing / not wired / could not be verified).
+>
+> `--preview` covers the whole write. Alone it renders the `.mokata/` plan and says harness wiring is **not** part of that run; `--preview --yes` also renders the harness plan, through the same renderer the wiring uses. A harness half that cannot be planned names the reason rather than going missing.
 
 | Flag | Meaning |
 |---|---|
@@ -1387,7 +1395,7 @@ sessions (`mokata session`, `sessions`, `resume`), and the graph/docs tooling (`
 
 | Command | Purpose | Key flags |
 |---|---|---|
-| `mokata init` | scaffold `.mokata/` (human-gated) | `--profile`, `--yes`, `--force`, `--preview` |
+| `mokata init` | scaffold `.mokata/` (human-gated); **`--yes` also wires the harness** | `--profile`, `--mode`, `--yes`, `--force`, `--preview`, `--wizard`, `--setup-harness` |
 | `mokata setup <harness>` | wire mokata into a harness without the plugin | `--scope {project,user}`, `--profile`, `--no-hooks`, `--yes`, `--force` |
 | `mokata unsetup <harness>` | reverse `setup` (leaves `.mokata/` intact) | `--scope`, `--yes` |
 | `mokata detect` | tool-presence for the catalog (no manifest needed) | — |

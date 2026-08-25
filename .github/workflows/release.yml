@@ -47,6 +47,15 @@ jobs:
     if: github.repository != 'JasGujral/mokata-oss'
     runs-on: ubuntu-latest
     permissions: {}          # it reads nothing and writes nothing; it exists to fail
+    # CI-JOBS-WITHOUT-A-TIMEOUT (0.0.19 stage 09). ⚠ THIS JOB HAS NO COMPLETION HISTORY AT ALL,
+    # and that is structural rather than an oversight: it runs only where the repository is NOT
+    # JasGujral/mokata-oss, and mokata-oss is the only repository this workflow has ever run in.
+    # So there is nothing to derive from and the ceiling is defensible against a REFERENCE CLASS
+    # instead: this job checks nothing out, installs nothing and runs one `echo`/`exit` step,
+    # while `github-release` below downloads an artifact and calls the GitHub API and has never
+    # exceeded 14s (n=27). 1.5 x 14s = 21s -> **1**. If a job doing strictly less than that
+    # takes more than a minute, the runner itself is wedged — which is what the ceiling is for.
+    timeout-minutes: 1
     steps:
       # `$GITHUB_REPOSITORY`, not `${{ github.repository }}`, so this step is runnable OFFLINE:
       # the pin executes this exact text under bash with the variable set, rather than asserting
@@ -76,6 +85,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read        # checkout only (explicit least-privilege, not the inherited default)
+    # CI-JOBS-WITHOUT-A-TIMEOUT (0.0.19 stage 09). Slowest leg that has ever COMPLETED x 1.5:
+    # 865s (`test (3.10, absent)`, run 32210447005; n=248 completed leg-runs) -> 1297.5s -> **22**.
+    timeout-minutes: 22
     strategy:
       fail-fast: false
       matrix:
@@ -105,6 +117,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read        # checkout only (explicit least-privilege)
+    # CI-JOBS-WITHOUT-A-TIMEOUT (0.0.19 stage 09). Slowest ever COMPLETED x 1.5: 40s (run
+    # 30759930562, n=31) -> 60s -> **1**. ⚠ The tightest ceiling in the tree in ABSOLUTE terms
+    # (20s of headroom over the worst ever seen) — but that 40s is itself a 5x outlier over this
+    # job's median 8s, so the ceiling sits ~7x above a typical run.
+    timeout-minutes: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -149,9 +166,38 @@ jobs:
       # no PyPI artifact, no Sigstore attestation. A bare dangling tag would remain and can be
       # deleted. That is the control that matters, because RELEASE_NOTES.md is exactly the text
       # the GitHub Release and the mirror PR body are built from.
-      - name: Release-notes disclosure (notes == tag, and every known limitation disclosed)
+      #
+      # B5 (0.0.19) — THIS LEG RUNS ON THE MIRROR, AND THE MIRROR IS WHERE THE THIRD STATE IS REAL.
+      # `release-notes-check` now also grades whether every published schedule still RESOLVES: the
+      # plan owning the release a promise names must actually assign it the item named. Resolving
+      # that means reading the maintainers' planning tree, which is dropped by both mirror controls
+      # — a shipped reader of it is SHIPPED-TEST-READS-INTERNAL-FILE, filed four times — so from
+      # HERE the answer is genuinely NOT CHECKABLE, and the command says so with exit 2.
+      #
+      #     0  the notes are right and every schedule resolved      -> proceed
+      #     1  the notes are wrong, or a schedule no longer resolves -> BLOCK PUBLICATION
+      #     2  a schedule could not be resolved from this artefact   -> proceed, having SAID SO
+      #
+      # ⛔ 2 IS ACCEPTED HERE AND IT IS NOT RENAMED TO A PASS. The step prints the inventory it
+      # could not resolve, so the run's log carries the claims rather than a green tick standing in
+      # for them, and it names the gate that DID decide: `release.sh` refuses to tag until
+      # `check-tracker-tables.py --disclosure-only` resolves every one of them against the plans.
+      # Failing on 2 instead would red every cut of a repo that structurally cannot answer;
+      # swallowing it into 0 would make the whole check vacuous on precisely the tree that ships.
+      - name: Release-notes disclosure (notes == tag, limitations disclosed, schedules resolve)
         run: |
+          set +e
           PYTHONPATH=src python -m mokata release-notes-check "${GITHUB_REF_NAME}" --root .
+          rc=$?
+          set -e
+          case "$rc" in
+            0) echo "::notice::every published schedule resolved" ;;
+            2) echo "::notice::NOT CHECKABLE HERE — the schedules listed above could not be" \
+                    "resolved from the mirror, which carries no planning documents. This is not a" \
+                    "pass: release.sh refused to tag until check-tracker-tables.py --disclosure-only" \
+                    "resolved every one of them against the plans." ;;
+            *) exit "$rc" ;;
+          esac
 
   # Supply-chain trust (Stage 68): build a REPRODUCIBLE sdist+wheel, emit a CycloneDX SBOM,
   # and produce a Sigstore-backed BUILD-PROVENANCE attestation. All of this runs at TAG TIME
@@ -164,6 +210,9 @@ jobs:
       contents: read         # checkout only
       id-token: write        # Sigstore OIDC for the provenance attestation (scoped to THIS job)
       attestations: write    # store the build-provenance attestation
+    # CI-JOBS-WITHOUT-A-TIMEOUT (0.0.19 stage 09). Slowest ever COMPLETED x 1.5: 63s (run
+    # 32210447005, n=15) -> 94.5s -> **2**.
+    timeout-minutes: 2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -346,6 +395,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write        # publish the GitHub Release (scoped to THIS job)
+    # CI-JOBS-WITHOUT-A-TIMEOUT (0.0.19 stage 09). Slowest ever COMPLETED x 1.5: 14s (run
+    # 32210447005, n=27) -> 21s -> **1**. ⚠ A job-level ceiling CANCELS mid-step: this one
+    # creates a GitHub Release, so a cut here can leave a release half-made. It is still the
+    # right control — a wedge here blocks the whole run's logs — but it is not a safe abort
+    # point, and a red on this job means CHECK THE RELEASE, not RE-RUN BLINDLY.
+    timeout-minutes: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Download the built artifacts + SBOM
@@ -411,6 +466,11 @@ jobs:
     environment: pypi
     permissions:
       id-token: write     # OIDC trusted publishing (no token secret); scoped to THIS job only
+    # CI-JOBS-WITHOUT-A-TIMEOUT (0.0.19 stage 09). Slowest ever COMPLETED x 1.5: 26s (run
+    # 28920002025, n=11) -> 39s -> **1**. ⚠ Same caveat as `github-release`, one notch worse:
+    # this job UPLOADS TO PyPI, and a cancellation mid-upload is not a no-op. The ceiling bounds
+    # the clock; it does not make the abort clean.
+    timeout-minutes: 1
     steps:
       - name: Download the built distributions (the SAME artifact the release attached)
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

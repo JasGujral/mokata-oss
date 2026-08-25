@@ -275,27 +275,44 @@ class KnowledgeLayer:
             return floor
         try:
             result = self.primary.query(kind, target, depth=depth)
-        except BackendError:
+        except BackendError as first:
             # GR.S2(k): a real graph gets ONE bounded, operational recovery attempt (re-probe
             # -> index refresh/rebuild -> retry) before we degrade — kept functional
             # automatically, no durable write. Unrecoverable -> LOUD classed degrade to the
             # floor (never a silent wrong answer) + a doctor-visible notice.
+            failed = first
             result = None
             recover = getattr(self.primary, "recover", None)
             if callable(recover) and recover():
                 try:
                     result = self.primary.query(kind, target, depth=depth)
-                except BackendError:
+                except BackendError as again:
+                    failed = again
                     result = None
             if result is None:
                 if self.fallback is None:
                     raise
-                from ..degrade import FAILURE_UNREACHABLE, note_degraded
+                # A1 (0.0.19) — the notice says WHICH failure this was. It was hard-coded to
+                # FAILURE_UNREACHABLE, so a graph that was ALIVE AND MUTE told the user their
+                # backend was unreachable and sent them to re-adopt a tool that was running
+                # perfectly well. The class now comes from the error, which carries it up from
+                # whichever transport raised (doc 85 §7g).
+                from ..degrade import FAILURE_TIMEOUT, FAILURE_UNREACHABLE, note_degraded
+                from ..errors import failure_class_of
+                failure_class = failure_class_of(failed) or FAILURE_UNREACHABLE
+                if failure_class == FAILURE_TIMEOUT:
+                    said = "did not answer in time"
+                    fix = (f"'{self.primary.name}' is running but not answering — check its own "
+                           f"logs/index, or raise the client timeout; then run `mokata doctor`")
+                else:
+                    said = "could not answer"
+                    fix = ("run `mokata doctor`; re-adopt with `mokata graph adopt` if it "
+                           "persists")
                 note_degraded(
-                    "code-graph", FAILURE_UNREACHABLE,
+                    "code-graph", failure_class,
                     fallback=f"the code graph fell back to '{self.fallback.name}'",
-                    fix="run `mokata doctor`; re-adopt with `mokata graph adopt` if it persists",
-                    detail=f"graph backend '{self.primary.name}' could not answer "
+                    fix=fix,
+                    detail=f"graph backend '{self.primary.name}' {said} "
                            f"{kind}({target}) and did not recover")
                 result = self.fallback.query(kind, target, depth=depth)
                 # D2 — the ADOPTED graph is the backend the user configured, and it failed. What

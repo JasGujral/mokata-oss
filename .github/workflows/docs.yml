@@ -26,6 +26,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read        # checkout + build only; no write scopes for the build job
+    # CI-JOBS-WITHOUT-A-TIMEOUT (0.0.19 stage 09). Slowest ever COMPLETED x 1.5: 259s (run
+    # 32207774218, n=33) -> 388.5s -> **7**.
+    timeout-minutes: 7
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -77,6 +80,10 @@ jobs:
     permissions:
       pages: write          # deploy to GitHub Pages (scoped to THIS job only)
       id-token: write        # OIDC for the Pages deployment
+    # CI-JOBS-WITHOUT-A-TIMEOUT (0.0.19 stage 09). Slowest ever COMPLETED x 1.5: 165s (run
+    # 28521998804, n=23) -> 247.5s -> **5**. This job waits on GitHub Pages, an EXTERNAL
+    # service, which is exactly the shape that hangs.
+    timeout-minutes: 5
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}

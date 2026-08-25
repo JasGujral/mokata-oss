@@ -46,13 +46,22 @@ write went through a gate you approved.
 
 ### Non-interactive (CI / scripts)
 
-The flag path is unchanged and never prompts:
+The flag path never prompts:
 
 ```bash
 mokata init --profile standard --yes      # scaffold, no wizard, no prompts
 mokata init --mode seatbelt --yes         # or name an on-ramp instead of a profile
 mokata setup claude --yes                 # wire the harness non-interactively
 ```
+
+> 🔴 **Changed in 0.0.19 — `mokata init --yes` now wires the harness too.** `--yes` is read as
+> consent to the whole init plan, and wiring the run-state gate is part of that plan, so a
+> non-interactive init also runs `setup claude` at **project** scope: `.claude/commands/`,
+> `.claude/skills/`, `.claude/settings.json` (hooks, the MCP permission grant, the status line) and
+> `.mcp.json`, plus a short-lived `mokata-mcp` subprocess that checks the server answers. Existing
+> JSON is merged, never overwritten, and a wiring failure never fails an init that already
+> succeeded. **If your CI times, sandboxes or diffs `mokata init`, expect those writes and that
+> subprocess** — `mokata unsetup claude --scope project` reverses them.
 
 `--mode {seatbelt,memory,full}` is the graduated on-ramp (mutually exclusive with `--profile`):
 `seatbelt` = the gates + the AST code graph they need, `memory` = that plus typed persistent
@@ -68,7 +77,7 @@ mokata helps instead of just erroring:
 $ mokata statuss
 mokata: 'statuss' is not a mokata command.
 Did you mean 'status'?  (try `mokata status --help`)
-Next: run `mokata init` (or `/setup` inside Claude Code) to set up this repo …
+Next: run `mokata init` (or `/mokata:setup` inside Claude Code) to set up this repo …
 ```
 
 It suggests the closest real command (a `difflib` match over the command set) and the single most

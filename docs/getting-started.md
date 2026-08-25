@@ -13,10 +13,14 @@ mokata setup claude         # wires the commands, Agent Skills, MCP server, hook
 # restart Claude Code so it loads the newly registered MCP server
 ```
 
+> Prefer Homebrew? `brew install JasGujral/mokata/mokata` installs the same CLI on
+> macOS/Linux; carry on from `mokata setup claude`. All routes:
+> [Install mokata](how-to/install-mokata.md).
+
 Verify it worked:
 
 ```bash
-mokata mcp status           # expect: mokata-mcp: CONNECTED ✓
+mokata mcp status           # expect: mokata-mcp: REGISTERED ✓ … connected ✓
 ```
 
 Then, inside Claude Code, start with `/brainstorm` (a new problem) or `/refine`
@@ -58,8 +62,10 @@ named starting points, each of which **configures the engine** in this repo and 
 command that proves it.
 
 > `--mode` chooses *how much of the engine* to configure — it is a profile choice, not a wiring
-> choice. **No mode wires Claude Code**; that is `mokata setup claude` (Path A above), which you
-> only need once. See [Which setup command do I need?](how-to/which-setup-command.md).
+> choice. Interactively, **no mode wires Claude Code**; that is `mokata setup claude` (Path A
+> above), which you only need once. ⚠ **With `--yes` it is different:** since 0.0.19 a
+> non-interactive `init` (with or without `--mode`) *does* wire the harness — see the note
+> under Path B. See [Which setup command do I need?](how-to/which-setup-command.md).
 
 ```bash
 mokata init --mode seatbelt    # just the gates (and the code graph they need to be real)
@@ -94,10 +100,25 @@ mokata init                 # scaffold a governed config in THIS repo (.mokata/)
 mokata brainstorm           # or: mokata --help to see every command
 ```
 
-`mokata init` writes `.mokata/` and stops there: it does not add slash commands, Agent Skills,
-the MCP server, or the gate hooks to Claude Code. Path A's `mokata setup claude` is what does
-that (and runs `init` for you). Unsure which you need — or upgrading an existing install? See
+Run **interactively**, `mokata init` writes `.mokata/` and stops there: it does not add slash
+commands, Agent Skills, the MCP server, or the gate hooks to Claude Code. Path A's
+`mokata setup claude` is what does that (and runs `init` for you). Unsure which you need — or
+upgrading an existing install? See
 [Which setup command do I need?](how-to/which-setup-command.md).
+
+> 🔴 **`mokata init --yes` behaves differently, and this changed in 0.0.19.** `--yes` is read
+> as consent to the whole init plan, and wiring the run-state gate is now part of that plan —
+> so a non-interactive init **also runs `setup claude` at project scope**. It writes
+> `.claude/commands/`, `.claude/skills/`, `.claude/settings.json` (hooks, the MCP permission
+> grant and the status line) and `.mcp.json`, and it spawns a short-lived `mokata-mcp`
+> subprocess to verify the server answers. **If you call `mokata init --yes` from a script or
+> CI, expect those files and that subprocess.** An init that wires nothing instead prints a
+> line saying the gate is not enforcing, so either way you can tell.
+>
+> `--preview` previews the whole write. On its own it shows the `.mokata/` plan and says
+> plainly that harness wiring is **not** part of that run; with `--yes` it also shows the
+> harness plan the wiring itself renders — the commands, the Agent Skills, `.mcp.json` and
+> `.claude/settings.json`.
 
 ## Working as a team
 
@@ -124,6 +145,13 @@ python -m unittest discover -s tests -t tests
 ```bash
 pipx install mokata
 pipx upgrade mokata         # when a new version ships
+```
+
+Homebrew is isolated the same way — the formula builds mokata its own virtualenv:
+
+```bash
+brew install JasGujral/mokata/mokata
+brew upgrade mokata         # when a new version ships
 ```
 
 Zero-install runners also work: `uvx mokata --version`.

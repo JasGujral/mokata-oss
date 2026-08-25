@@ -58,6 +58,9 @@ jobs:
       actions: read
       contents: read
       security-events: write
+    # CI-JOBS-WITHOUT-A-TIMEOUT (0.0.19 stage 09). Slowest ever COMPLETED x 1.5: 189s (run
+    # 30243915903, n=72) -> 283.5s -> **5**.
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

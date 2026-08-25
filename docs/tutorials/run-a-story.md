@@ -14,6 +14,7 @@ approval, and the audit trail.
 
 ```bash
 pip install mokata               # from PyPI, no clone; MCP server included on Python ≥ 3.10
+                                 # (or on macOS/Linux: brew install JasGujral/mokata/mokata)
 mkdir demo && cd demo
 mokata init --profile standard --yes
 mokata status

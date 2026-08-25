@@ -15,10 +15,51 @@ from typing import Callable, Optional
 from .notify import announce_prompt
 
 
-def read_yes_no(prompt: str, question: str = "") -> bool:
-    """Show `prompt` (plus an optional tailored `question`), read a y/N answer, and return True
-    only on an explicit yes. Non-interactive / EOF / unreadable stdin / anything else → False
-    (never auto-approve).
+# A3 (0.0.19) — WHY the reader answered as it did. Doc 85 §7g at mokata's PRIMARY durable-write
+# gate: `False` used to mean BOTH "a human was asked and said no" AND "no human was ever asked,
+# because there was no TTY", and every caller got the same bool. The two facts have opposite
+# remedies — one is settled and must not be re-asked, the other is a wait that a human can still
+# redeem — so they get separate representations, not one shared one.
+#
+# THE MODEL IS `RunResolution` (§7g names it): an answer that carries its own provenance cannot be
+# mistaken for a different answer.
+ASKED = "asked"                          # a human was asked and answered (yes OR no)
+NO_TTY = "no-tty"                        # never asked — stdin is not a terminal
+UNREADABLE_STDIN = "unreadable-stdin"    # asked, but stdin died before a human answered
+
+
+@dataclass(frozen=True)
+class ConsentDecision:
+    """THE answer of a y/N human gate, with the basis it was reached on (doc 85 §3: a `*Decision`
+    is a recorded human/router choice).
+
+    ⭐ IT IS TRUTHY EXACTLY WHEN APPROVED, and that is what makes a PARTIAL conversion possible
+    without the compatibility shim §7d forbids. There is ONE reader, ONE return type and ONE code
+    path: a call site that only ever asked "may I write?" keeps asking it in a boolean context and
+    is byte-identical in behaviour; a call site that must tell the two nos apart reads `basis`.
+    Nothing branches on a version, nothing is deprecated, and there is no second entry point kept
+    alive beside this one.
+
+    FAIL-CLOSED is unchanged (P2): `approved` is True only on an explicit yes."""
+
+    approved: bool
+    basis: str
+
+    def __bool__(self) -> bool:
+        return self.approved
+
+    @property
+    def answered_by_human(self) -> bool:
+        """True only when a human was actually asked and gave this answer. An unreadable stdin is
+        NOT a human answer — the read was attempted, but nobody answered it — so it groups with
+        `NO_TTY` here even though it keeps its own basis for anyone who needs to say WHICH."""
+        return self.basis == ASKED
+
+
+def read_yes_no(prompt: str, question: str = "") -> ConsentDecision:
+    """Show `prompt` (plus an optional tailored `question`), read a y/N answer, and approve only on
+    an explicit yes. Non-interactive / EOF / unreadable stdin / anything else → declined
+    (never auto-approve), with the `basis` saying WHICH of those it was.
 
     Fail-closed (P2): this is mokata's primary durable-write gate, and its primary runtime is an
     agent harness — which often leaves stdin CONNECTED but silent (never writes, never closes).
@@ -30,7 +71,7 @@ def read_yes_no(prompt: str, question: str = "") -> bool:
     if not _stdin_is_tty():
         print("mokata: stdin is not a TTY — defaulting to No without prompting "
               "(approve non-interactively with --yes / assume_yes).", file=sys.stderr)
-        return False
+        return ConsentDecision(False, NO_TTY)
     full = prompt + (f"\n{question} [y/N] " if question else "")
     # Lane F — mokata's own attention channel, raised HERE and not at the twenty-four call sites
     # that reach this reader, for the same reason `awaiting_block` builds the loud head once: a
@@ -40,12 +81,12 @@ def read_yes_no(prompt: str, question: str = "") -> bool:
     # exactly as reliable as it was before this line existed.
     announce_prompt()
     try:
-        return input(full).strip().lower() in ("y", "yes")
+        return ConsentDecision(input(full).strip().lower() in ("y", "yes"), ASKED)
     except (EOFError, OSError) as exc:
         # Don't swallow it silently: a durable action was declined because stdin was unreadable.
         print(f"mokata: unreadable stdin ({exc.__class__.__name__}) — defaulting to No",
               file=sys.stderr)
-        return False
+        return ConsentDecision(False, UNREADABLE_STDIN)
 
 
 def _stdin_is_tty() -> bool:

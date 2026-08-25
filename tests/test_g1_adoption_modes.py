@@ -24,7 +24,7 @@ from unittest import mock
 
 import _support  # noqa: F401  — puts src/ on the path
 
-from mokata import adoption_modes, extras_install
+from mokata import adoption_modes, extras_install, harness_setup
 from mokata.cli_commands import setup as setup_cmd
 from mokata.init import init_repo
 
@@ -227,7 +227,21 @@ class TestG1Consent(unittest.TestCase):
                 os.path.join(home, ".mokata", "extra_declines.json")))
 
     def test_g1_yes_never_reaches_pip(self):
-        """--yes / non-TTY init in ANY mode: zero pip, zero ask (the DB.S4 posture holds)."""
+        """--yes / non-TTY init in ANY mode: zero pip, zero ask (the DB.S4 posture holds).
+
+        ⚠ THE ASSERTION CHANGED AT 0.0.19 A2/F8.1; THE PROPERTY DID NOT. This used to read
+        `sp.assert_not_called()` — "no subprocess at all" — which was a sound over-approximation
+        of "never reaches pip" only while a scripted init spawned nothing whatsoever. `mokata
+        init --yes` now WIRES THE HARNESS (F8.1: `--yes` is consent to the whole init plan, and
+        the run-state gate is part of that plan), and `setup_harness` ends with its own CONNECTED
+        check — `mokata-mcp --version`. That is a version probe, not an install.
+
+        Keeping `assert_not_called` would have been doc 85 §7h: a pin encoding a premise the
+        product no longer holds. Loosening it to "some subprocess is fine" would have been worse
+        — the pin would stop grading the thing it is named for. So the property is asserted
+        DIRECTLY (no argv mentions pip, and the install/ask primitives are still never reached)
+        and the ONE permitted program is NAMED, read from `harness_setup.MCP_COMMAND` rather than
+        retyped, so a SECOND subprocess appearing on this path still reds."""
         for mode in adoption_modes.mode_names():
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as d:
                 with mock.patch("subprocess.run") as sp, \
@@ -236,10 +250,19 @@ class TestG1Consent(unittest.TestCase):
                      mock.patch("mokata.prompt.read_yes_no") as ask:
                     rc, _ = _run_init(d, mode=mode, yes=True)
                 self.assertEqual(rc, 0)
-                sp.assert_not_called()
                 ie.assert_not_called()
                 oe.assert_not_called()
                 ask.assert_not_called()
+                spawned = [list(call.args[0]) if call.args else []
+                           for call in sp.call_args_list]
+                self.assertEqual([a for a in spawned if any("pip" in str(t) for t in a)], [],
+                                 f"a --yes init reached pip: {spawned}")
+                stray = [a for a in spawned
+                         if not os.path.basename(str(a[0] if a else "")).startswith(
+                             harness_setup.MCP_COMMAND)]
+                self.assertEqual(stray, [],
+                                 f"a --yes init spawned something other than the "
+                                 f"`{harness_setup.MCP_COMMAND}` probe: {stray}")
 
     def test_g1_non_interactive_flag_skips_offers_structurally(self):
         with tempfile.TemporaryDirectory() as d:

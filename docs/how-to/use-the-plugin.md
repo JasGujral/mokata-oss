@@ -22,9 +22,10 @@ mechanics for scripting and inspection outside any harness, not the primary way 
 
 ```bash
 pip install mokata               # MCP server works out of the box on Python ≥ 3.10
+                                 # (or on macOS/Linux: brew install JasGujral/mokata/mokata)
 mokata setup claude              # wires commands + skills + MCP + statusline — human-gated
 # restart Claude Code, then:
-mokata mcp status                # expect: mokata-mcp: CONNECTED ✓
+mokata mcp status                # expect: mokata-mcp: REGISTERED ✓ … connected ✓
 ```
 
 This wires the *same* slash commands, Agent Skills, MCP tools, and hooks the plugin would. Full

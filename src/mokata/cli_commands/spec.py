@@ -46,6 +46,25 @@ NO_SPEC_RECOVERY = (
     "no spec is emitted for this run — draft one and emit it (/mokata:spec, or "
     "`mokata spec emit --file <spec.json>`).")
 
+# A3 (0.0.19) — the exit code for a STAGED, REDEEMABLE WAIT, chosen and not inherited.
+#
+# NOT 1. `1` is this repo's "the operation failed" code and it is what a genuine refusal still
+# returns — a human answered No, or a gate blocked, and the road ended. A wait is a different
+# outcome with a different next move, and "nothing was written" must not be indistinguishable to a
+# SCRIPT from "nothing was written and here is exactly how to write it". That indistinguishability
+# is the whole shape of this row (doc 85 §7g), and returning 1 for both would fix the human-facing
+# half while leaving the machine-facing half broken.
+#
+# NOT 0. Nothing was written. A caller that reads 0 as "the spec is emitted" would be wrong, and a
+# CI step that proceeds on it would build against a spec that does not exist.
+#
+# NOT 2 — argparse owns 2 for usage errors (the same reasoning `RECORD_REVIEW_FAILED_EXIT` gives).
+#
+# So 3, deliberately non-zero, on the precedent `cmd_branch_protection_check` set at 0.0.18: only a
+# caller taught what it means may proceed on it, and every caller that has not been taught reads it
+# as a refusal — which is the safe direction for a gate.
+EMIT_AWAITING_EXIT = 3
+
 
 def _run_scoped_store(surface, run_id: "str | None" = None):
     """The state store scoped to the run the HOOK would enforce — not to this shell's own session.
@@ -114,9 +133,58 @@ def _emit_knowledge_layer(surface):
         return None
 
 
+def _await_a_human(surface, spec, store, run_id: "str | None", emit_args: dict) -> int:
+    """A3 — the TTY-less decline, turned from a DEAD END into a redeemable WAIT.
+
+    The refusal itself was always correct and is unchanged: a non-interactive shell must never emit
+    by accident, and a piped `y` is not consent (P2). What was wrong was the SHAPE OF THE WAY OUT.
+    Nothing was staged, so there was no `proposal_id`, so `mokata approve <id>` had nothing to
+    redeem and `mokata approve --list` showed nothing — and every subsequent implementation write
+    then hit `spec-persisted`, whose exits were *emit again* (needing the TTY that was absent) or
+    `mokata gate override spec-persisted`. **The only exit reachable without a TTY was the one that
+    turns the gate off**, which does not fail closed in practice: it trains users to override.
+
+    So the never-asked path now stages through `approval.propose` — the SAME call
+    `mcp/consent.py:_propose` makes, not a second staging path — and the MCP twin's behaviour
+    becomes the CLI's. The gate is redeemed, not disabled.
+
+    NO RUN, NO PROPOSAL, AND IT SAYS SO. An approval is bound to one run; with no pipeline run
+    resolved the spec is going to this shell's OWN session's key, and a proposal keyed to that
+    could never be redeemed by the next process — the human would be walked to a terminal to
+    approve something structurally unredeemable, which is worse than the honest refusal. Nothing is
+    stranded there either: with no run holding state, `spec-persisted` is not blocking anything
+    (`gate_hook.check_write` allows outright). Distinct message, distinct code — §7g holds on this
+    branch too."""
+    from .. import approval
+    from ..awaiting import awaiting_cli_lines
+    from ..engine.emit import EMIT_TOOL, preview_content
+
+    if not run_id:
+        print("emit declined at the write gate — nothing was written (no human was asked: stdin "
+              "is not a TTY).")
+        print("  There is no tracked pipeline run here to attach a proposal to, so there would be "
+              "nothing for `mokata approve` to redeem.")
+        print("  Emit through the harness (/mokata:spec), pin the run with MOKATA_SESSION_ID, or "
+              "pass --yes if this is your own non-interactive flow.")
+        return 1
+
+    p = approval.propose(
+        surface.root, tool=EMIT_TOOL, args=emit_args, run_id=run_id,
+        target="state/emitted_spec.json",
+        summary=f"emit the spec '{spec.title}' ({len(spec.criteria)} AC(s), all mapped)",
+        preview=preview_content(store, spec))
+    # The wording is `awaiting.py`'s, not this command's — see `awaiting_cli_lines`. The summary
+    # and the preview above are stored for `mokata approve <id>` to show at the human's own
+    # terminal; NEITHER is printed here.
+    for line in awaiting_cli_lines(p.proposal_id, tool=EMIT_TOOL):
+        print(line)
+    return EMIT_AWAITING_EXIT
+
+
 def cmd_spec_emit(args: argparse.Namespace) -> int:
     """Emit the spec through the real gates — completeness, then the human write gate."""
-    from ..engine.emit import emit_spec, spec_from_payload
+    from .. import approval
+    from ..engine.emit import EMIT_TOOL, emit_spec, spec_from_payload
     from ..prompt import read_yes_no
 
     surface = _load_surface(args.path)
@@ -165,13 +233,52 @@ def cmd_spec_emit(args: argparse.Namespace) -> int:
             return 1
 
     ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+
+    # A3 — the CONSENT IDENTITY of this emit: the same tool name and the same argument shape the
+    # MCP `spec_emit` proposes under (`mcp/tools_spec.py`), so one spec on one run is one write
+    # whichever surface asked. `approval.propose` hashes it and `approval.redeem` re-derives that
+    # hash from these same bytes, which is what makes the approval content-bound — "approve X, then
+    # commit Y" stays arithmetically impossible across the CLI too.
+    #
+    # The proposal id is DERIVED from (run, content), so the re-run that redeems needs no new flag
+    # and no id to retype: running the same command against the same spec resolves to the same id.
+    emit_args = {"path": surface.root, "title": spec.title,
+                 "criteria": [{"id": c.id, "text": c.text} for c in spec.criteria],
+                 "tests": [{"name": t.name, "ac_ids": list(t.ac_ids)} for t in tests],
+                 "approach": spec.approach, "domains": list(spec.domains),
+                 "scope": payload.get("scope") or {}}
+    proposal_id = (approval.proposal_id_for(run_id, approval.content_hash(EMIT_TOOL, emit_args))
+                   if run_id else "")
+    decisions: list = []
+    redeemed: list = []
+
+    def _confirm(text: str) -> bool:
+        """The human gate for this emit — and the ONE place a human-minted approval is redeemed.
+
+        REDEEM FIRST, and WHERE this runs is the entire safety argument. `WriteGate.submit` calls
+        this only after self-protect (layer 0), the trust dial, the secret scan and governance
+        enforcement have all passed, and only immediately before the commit — so an approval is
+        BURNED at the moment the write actually lands, never by a run that a later layer then
+        refuses. It is the CLI's spelling of what `mcp/consent.py:_gated_write` states as
+        `human_approved=True`: not a bypass, a statement of fact about a decision a human already
+        made, out-of-band, in a process the model was not driving.
+
+        No approval on disk → the ordinary terminal question, byte-identical to before."""
+        if proposal_id:
+            granted = approval.redeem(surface.root, proposal_id, tool=EMIT_TOOL, args=emit_args,
+                                      run_id=run_id)
+            if granted.granted:
+                redeemed.append(granted.proposal)
+                return True
+        decision = read_yes_no(text, f"Emit the spec '{spec.title}'?")
+        decisions.append(decision)
+        return bool(decision)
+
     # The human sees the whole spec — every AC and the test that covers it — before the question.
     # Off a TTY `read_yes_no` fails CLOSED (P2): a non-interactive shell cannot emit by accident;
     # a genuinely non-interactive HUMAN flow passes `--yes`.
     out = emit_spec(surface, spec, tests, ledger=ledger, store=store, run_id=run_id or "",
-                    assume_yes=args.yes,
-                    confirm=None if args.yes
-                    else (lambda text: read_yes_no(text, f"Emit the spec '{spec.title}'?")))
+                    assume_yes=args.yes, confirm=None if args.yes else _confirm)
 
     if out.blocked_by_completeness:
         print(f"[BLOCK] completeness — {out.reason}")
@@ -189,8 +296,24 @@ def cmd_spec_emit(args: argparse.Namespace) -> int:
               "change through the gates a live spec is owed. Nothing was written.")
         return 1
     if not out.committed:
+        # A3 — WHY the gate answered no now decides what happens next, and until this row nothing
+        # downstream could tell. A human who said No has answered: that is settled, and converting
+        # it into a pending proposal would re-ask a question already decided. A human who was never
+        # ASKED has settled nothing, and leaving them with no proposal is the strand this row
+        # closes. A refusal from any OTHER layer (a secret, a read-only dial, self-protect) never
+        # reaches the reader at all, so `decisions` is empty and it falls through to the message
+        # below — a blocked write is not a write awaiting permission (§7e).
+        decision = decisions[-1] if decisions else None
+        if decision is not None and not decision.answered_by_human:
+            return _await_a_human(surface, spec, store, run_id, emit_args)
         print(f"emit declined at the write gate — nothing was written ({out.reason}).")
         return 1
+
+    if redeemed:
+        # Close the audit chain the same way `mcp/consent.py:_record` does: proposal-hash → who
+        # approved → what landed. Without it the approval and the `write_gate` entry it licensed
+        # sit on the ledger unlinked, and `mokata audit` cannot walk from one to the other.
+        approval.record_redemption(ledger, redeemed[-1], committed=True)
 
     where = f" (run {run_id[:8]})" if run_id else ""
     print(f"spec emitted: '{spec.title}' — {out.ac_count} acceptance criteria, all mapped to "

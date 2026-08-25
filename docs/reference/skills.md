@@ -8,7 +8,7 @@ and the CLI never drift.
 
 **The count: 26 skills** — the **16** curated skills below plus **10** domain-knowledge skills.
 That is what `mokata setup claude` writes into `.claude/skills/`, and what
-[`mokata doctor`](cli.md#mokata-doctor-matrix) checks for when it tells you whether your skills
+[`mokata doctor`](cli.md#mokata-doctor-wiring-matrix) checks for when it tells you whether your skills
 are visible in this root.
 
 ## The skills

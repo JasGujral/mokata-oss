@@ -26,7 +26,8 @@ npx vsce package         # produces mokata-vscode-*.vsix
 
 Then in VS Code: **Extensions ▸ … ▸ Install from VSIX…** and pick the `.vsix`. (For
 development, open `editors/vscode` in VS Code and press **F5** for an Extension Development
-Host.) You need the mokata CLI installed too — `pipx install mokata` (or `pip install mokata`).
+Host.) You need the mokata CLI installed too — `pipx install mokata`, `pip install mokata`, or
+`brew install JasGujral/mokata/mokata`.
 
 ## What it shows
 

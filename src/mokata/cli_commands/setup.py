@@ -14,7 +14,9 @@ from ._common import (
     Surface,
     init_repo,
     plan_init,
+    plan_setup,
     render_plan,
+    render_setup_plan,
     DEFAULT_PROFILE,
     profile_names,
     HARNESSES,
@@ -23,6 +25,91 @@ from ._common import (
     setup_harness,
     unsetup_harness,
 )
+
+
+# A2/F8 (0.0.19) — the default an init wires under. `mokata init` takes no `--harness`/`--scope`
+# (there is one gate-bearing route and it is the project one), and this is the SAME default
+# `onboarding.run_wizard` and `harness_setup.resolve_targets` already carry, so the wizard route
+# and the scripted route wire the identical target rather than two spellings of it.
+INIT_HARNESS = "claude"
+INIT_SCOPE = "project"
+
+
+# ======================================================================================
+# F8a (0.0.19 stage 10a) — THE PREVIEW COVERS THE WRITE, AND ONE DECLARATION KEEPS IT THERE.
+#
+# `--preview` rendered the `.mokata/` manifest plan and returned BEFORE `_wire_or_disclose`,
+# so a human approving `/mokata:init`'s preview approved three files and got the harness too:
+# 37 commands, 26 Agent Skills, `settings.json`, `.mcp.json`. That is a P2 violation — every
+# durable write is human-gated — and F8 introduced it in THIS release by teaching `--yes` to
+# wire without teaching the preview to say so.
+#
+# The patch is one branch. The GUARD is these two functions: the preview and the executor ask
+# the SAME pair of questions — *will this run wire?* and *with what?* — so the next flag added
+# to the wiring reaches both surfaces in one edit or neither. Two spellings of "what an init
+# does" is how this defect was born, and re-spelling it here would only reschedule it.
+# ======================================================================================
+
+def init_wires_harness(args: argparse.Namespace) -> bool:
+    """Does THIS init wire the harness? Asked by the preview and by the executor.
+
+    F8.1 — `--yes` is consent to the whole init plan, so `--yes` wires and nothing else on this
+    route does: the wizard's own offer (F8.2) is a different consent path and is not this run.
+    A preview that answered this question its own way would be free to describe a run that never
+    happens, in either direction — the omission this stage closes, or a promise of wiring a
+    non-`--yes` init would never perform."""
+    return bool(getattr(args, "yes", False))
+
+
+def init_wiring_kwargs(args: argparse.Namespace, profile: str) -> dict:
+    """The ONE argument set an init wires the harness with.
+
+    `_wire_or_disclose` hands it to `setup_harness` (which applies it); the preview hands it to
+    `plan_setup` (which renders it). They are the same keywords by construction, so a target,
+    scope or profile that moves moves on both surfaces at once. Apply-only arguments —
+    `assume_yes`, `force` — are NOT here: they say how the write proceeds, not what it is, and
+    `plan_setup` does not accept them."""
+    return {"harness": INIT_HARNESS, "root": args.path, "scope": INIT_SCOPE, "profile": profile}
+
+
+def render_init_preview(args: argparse.Namespace, profile: str) -> str:
+    """The whole dry-run: the `.mokata/` plan, and then what the harness wiring would write.
+
+    THREE CASES, THREE FACTS — the preview describes the run it was handed, never a generic one:
+
+      * `--preview` alone previews an init that wires nothing here, and SAYS so. Showing the
+        harness plan would be the same lie pointing the other way.
+      * `--preview --yes` previews the consented run, so it renders the harness plan too — the
+        `--yes` half that `/mokata:init` actually executes.
+      * `--preview --mode <m>` previews the mode's resolved profile (a mode IS a profile plus a
+        quickstart), and wires on exactly the same `--yes` condition.
+
+    Degrade-clean: a harness plan that cannot be built (no command templates — the pip-without-
+    clone case) is REPORTED as unplannable, never dropped. An absent section reads as "nothing
+    happens here", which is the failure this function exists to prevent."""
+    parts = [render_plan(plan_init(args.path, profile))]
+
+    if not init_wires_harness(args):
+        parts.append(
+            "Harness wiring: NOT part of this run.\n"
+            f"  Without `--yes` this init writes the files above and nothing else — no "
+            f"{INIT_HARNESS} commands,\n"
+            "  no Agent Skills, no MCP registration, no hooks. The interactive first-run wizard\n"
+            "  asks separately, and `mokata setup claude` wires it later.\n"
+            "  Add `--yes` to this preview to see exactly what that wiring would write.")
+        return "\n\n".join(parts)
+
+    parts.append(
+        "`--yes` is consent to the whole init plan, and the harness wiring is part of it.\n"
+        "This is that half of the write — the same plan the wiring itself renders:")
+    try:
+        parts.append(render_setup_plan(plan_setup(**init_wiring_kwargs(args, profile))))
+    except (SetupError, ValueError) as exc:
+        parts.append(
+            f"Harness wiring: mokata could NOT plan it here ({exc}).\n"
+            "  `--yes` would attempt the wiring and degrade cleanly if it fails, so this preview\n"
+            "  cannot show you that half. Do not read this as 'nothing would be written'.")
+    return "\n\n".join(parts)
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -35,7 +122,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     if getattr(args, "preview", False):
         # Dry-run for the human gate (Stage 23): print the plan, write nothing, exit 0.
         # Used by /mokata:init to preview before the user approves the real write.
-        print(render_plan(plan_init(args.path, profile)))
+        print(render_init_preview(args, profile))
         return 0
 
     if mode:
@@ -63,7 +150,53 @@ def cmd_init(args: argparse.Namespace) -> int:
     if result.aborted:
         print(f"\n{result.message}", file=sys.stderr)
         return 1
+    _wire_or_disclose(args, args.profile)
     return 0
+
+
+def _wire_or_disclose(args: argparse.Namespace, profile: str) -> None:
+    """A2/F8 — an init either WIRES the harness or SAYS the gate is not enforcing. Never neither.
+
+    #28's harm is the silence, not the default: `init_repo` writes `.mokata/` and the run-state
+    gates run as HARNESS HOOKS, so every scripted init produced a repo that records runs, polices
+    nothing, and said nothing about it. Two halves, one principle — *a user can always tell
+    whether the seatbelt is on*:
+
+      * **F8.1 — `--yes` wires.** `--yes` is consent to the whole init plan, and wiring the gate
+        is part of that plan, so it is consent ALREADY GIVEN, never consent assumed (P2). Without
+        `--yes` nothing is wired here: the interactive wizard's own offer is the consent path and
+        it stays exactly as it was (F8.2).
+      * **F8.3 — everything else DISCLOSES.** The state is MEASURED, not inferred from what this
+        function just did: a plugin-route repo is already enforcing with no `.claude/settings.json`
+        anywhere, and telling that user the gate is off would be the disclosure lying in the other
+        direction. Three states, never two (doc 85 §7g) — `hook_wiring` carries `unverifiable`
+        separately and this prints it as its own sentence.
+
+    Degrade-clean: a `SetupError` from the wiring never fails an init that has already succeeded.
+    The manifest is on disk either way; the user simply falls through to the disclosure, which is
+    then TRUE — nothing wired the gate."""
+    from ..hook_wiring import gate_enforcement_state, render_gate_enforcement
+
+    if init_wires_harness(args):
+        try:
+            # F8a — the SAME keywords the preview rendered (`init_wiring_kwargs`), plus the two
+            # apply-only ones. Spelling the targets out again here is what let `--preview` and
+            # `--yes` describe different runs.
+            sres = setup_harness(
+                **init_wiring_kwargs(args, profile),
+                assume_yes=True, force=args.force,
+            )
+            if not sres.aborted:
+                print(f"\n✓ wired the run-state gate into {INIT_HARNESS} ({INIT_SCOPE} scope) — "
+                      f"`--yes` is consent to the whole init plan, and the gate is part of it.")
+        except SetupError as exc:
+            # The init SUCCEEDED; only the wiring failed. Say which, then fall through to the
+            # disclosure below — which now measures the truth rather than repeating the attempt.
+            print(f"\nnote: the harness wiring was skipped ({exc}).", file=sys.stderr)
+
+    line = render_gate_enforcement(gate_enforcement_state(args.path))
+    if line:
+        print("\n" + line)
 
 
 def _init_with_mode(args: argparse.Namespace, mode: str, profile: str) -> int:
@@ -86,6 +219,11 @@ def _init_with_mode(args: argparse.Namespace, mode: str, profile: str) -> int:
 
     interactive = sys.stdin.isatty() and not args.yes
     offer_mode_extras(args.path, mode, interactive=interactive)
+    # A2/F8 — `--mode` NEVER routes through the wizard (see this function's docstring), so it is
+    # one of the paths that reached `init_repo` and wired nothing. It owes the same two halves as
+    # the plain route, and it owes them BEFORE the quickstart: a quickstart that tells you to run
+    # the pipeline, printed under a repo whose gate is off, is the seatbelt claim #28 is about.
+    _wire_or_disclose(args, profile)
     print(render_quickstart(mode))
     return 0
 
@@ -274,6 +412,9 @@ def register(sub, common):
 
 __all__ = [
     "cmd_init",
+    "init_wires_harness",
+    "init_wiring_kwargs",
+    "render_init_preview",
     "cmd_tour",
     "cmd_reconfigure",
     "cmd_setup",

@@ -114,6 +114,11 @@ class WizardResult:
     aborted: bool = False
     message: str = ""
     next_step: Optional[str] = None
+    # A2/F8.3 (0.0.19) — the "is the seatbelt on?" line, MEASURED by `run_wizard` (which has the
+    # root and the home) and carried here so `render_did_summary` stays pure. None means the
+    # gate IS enforcing and there is nothing to say; it is never "we did not look" — that case
+    # renders its own sentence (doc 85 §7g: three states, never two).
+    gate_notice: Optional[str] = None
 
 
 def _default_ask(prompt: str, choices: Any, default: str) -> str:
@@ -661,9 +666,16 @@ def run_wizard(root: str = ".", *, ask: Optional[Callable] = None,
                  f"mokata's built-in hashing tier is active.")
 
     next_step = _wizard_next_step()
+    # A2/F8.3 — the DECLINED offer used to be silent, and that silence is #28's actual harm: a
+    # user who said "no" to wiring (or whose wiring failed) walked away with `.mokata/` on disk
+    # believing the gate was on. MEASURED from the tree, never inferred from `harness_wired`: a
+    # plugin-route repo is already enforcing without anything this wizard wrote, and the offer
+    # itself is untouched (F8.2 — removing a consented durable write would trade P2 for tidiness).
+    from .hook_wiring import gate_enforcement_state, render_gate_enforcement
+    gate_notice = render_gate_enforcement(gate_enforcement_state(root, home))
     result = WizardResult(profile=profile, detected=detected, wired=wired,
                           recommended=recommended, harness_wired=harness_wired, message="ok",
-                          next_step=next_step)
+                          next_step=next_step, gate_notice=gate_notice)
     emit(render_did_summary(result))
     return result
 
@@ -691,6 +703,11 @@ def render_did_summary(result: WizardResult) -> str:
         lines.append("  • recommended (NOT installed — your call):")
         for r in result.recommended:
             lines.append(f"      {r}")
+    if result.gate_notice:
+        # BEFORE the next step, deliberately. "Next: /mokata:brainstorm" under a repo whose gate
+        # is off reads as a working seatbelt; the disclosure has to arrive first to be read at all.
+        lines.append("")
+        lines.append("  " + result.gate_notice.replace("\n", "\n  "))
     if result.next_step:
         lines.append(f"\n  Next: `{result.next_step}` — start your first governed change. "
                      f"(`mokata tour` for a 60-sec demo.)")

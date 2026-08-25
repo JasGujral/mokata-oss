@@ -89,7 +89,19 @@ UNOBTAINED_ASSURANCES = (
 # because it greps the file rather than the strings. The doc-NUMBER form it cannot see at all,
 # which is why this paragraph exists rather than a one-word note. The maintainer-facing version of
 # this text — which DOES name the exact files to update — lives in `release.sh`, which never ships.
-RESTORE_ROW = "BRANCH-PROTECTION-DEGRADED-PASS — filed 2026-08-17, restore full verification in 0.0.19"
+#
+# ⚠ IT SAID 0.0.19 AND THAT WAS FALSE, NOT STALE (0.0.19 row B5, decided by reading 2026-08-20).
+# The two readings were not equally available: STALE would mean the restore had already happened and
+# the sentence merely outlived it, and FALSE means it is still owed and named the wrong release. The
+# 0.0.18 cut recorded `branch-protection-check` as a TRUE pass once the GitHub 503 cleared, which is
+# what makes stale look plausible — but that pass says the exemption was never SPENT, not that full
+# verification was RESTORED. The degrade path is still here, the four `UNOBTAINED_ASSURANCES` are
+# still unobtainable when the endpoint 503s, and the row that owns the work is OPEN and assigns it to
+# 0.0.20 with two candidate mechanisms and neither chosen. 0.0.19's scope carries none of it. So the
+# promise was live and pointed at a release that would not keep it — which is exactly the defect B5
+# exists to catch, in `src/` rather than in the notes, and it is now the row's own regression test:
+# `mokata release-notes-check` reds on this constant if the release it names stops owning the item.
+RESTORE_ROW = "BRANCH-PROTECTION-DEGRADED-PASS — filed 2026-08-17, restore full verification in 0.0.20"
 
 # A gh runner is (api_path) -> (returncode, stdout, stderr). Injected in tests; the default below
 # shells out to `gh api`. It takes a PATH rather than (repo, branch) because state 3 has to read

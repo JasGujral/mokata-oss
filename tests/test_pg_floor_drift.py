@@ -141,6 +141,115 @@ class TestNoSurfaceStatesAnotherFloor(unittest.TestCase):
                              % (backend, rendered))
 
 
+    def test_the_floor_notice_renders_the_declared_floor(self):
+        """C1's user-facing floor sentences interpolate the constant, so — exactly like the backend
+        guidance above, and for the same reason — they carry NO digit for the text sweep to grade
+        and are INVISIBLE to it. They are therefore graded HERE, at the seam. These are the only
+        sentences in the product that tell a user their database is about to stop being supported;
+        the one surface a stage makes user-facing must not be the one surface nothing covers."""
+        from mokata import teamdb
+        low = teamdb.MIN_PG_MAJOR
+        fix = teamdb.floor_fix()
+        self.assertTrue(fix.strip(), "the remediation renders empty")
+        self.assertIn(str(low), fix, "the remediation no longer names the declared floor: %s" % fix)
+
+        # ⚠ EACH SENTENCE IS GRADED WITH THE REMEDY REMOVED, and this is doc 85 §7f's refinement
+        # rather than fussiness — it was MEASURED. Grading the whole rendered string let a mutant
+        # that stripped the floor from the WARN sentence SURVIVE, because `floor_fix()` is appended
+        # to it and names the floor too. Two defences covering for each other, neither gradable.
+        # The remedy is now graded above on its own, and the notice below is graded on what is left
+        # once the remedy is taken away, so each half has an offender only it can see.
+        for verdict in (teamdb.FLOOR_WARN, teamdb.FLOOR_REFUSE):
+            text = teamdb.floor_notice(_STALE_MAJOR, verdict)
+            self.assertTrue(text.strip(), "the %s sentence renders empty" % verdict)
+            lead = text.replace(fix, "")
+            self.assertIn(str(low), lead,
+                          "the %s sentence names the declared floor only via the remedy appended "
+                          "to it — strip the remedy and it tells the user nothing about which "
+                          "version they need: %s" % (verdict, lead))
+            self.assertIn(str(_STALE_MAJOR), lead,
+                          "the %s sentence does not name the server the user is actually on: %s"
+                          % (verdict, lead))
+            self.assertIn(teamdb.PG_FLOOR_ENFORCED_FROM.isoformat(), lead,
+                          "the %s sentence does not name the date: %s" % (verdict, lead))
+
+    def test_the_floor_notice_is_silent_where_it_must_be(self):
+        """§7g at the rendering layer: OK and UNKNOWN produce NO sentence. A notice that rendered
+        something for UNKNOWN would put a claim about the user's server into every surface on the
+        strength of a version nobody managed to read."""
+        from mokata import teamdb
+        for verdict in (teamdb.FLOOR_OK, teamdb.FLOOR_UNKNOWN):
+            self.assertEqual("", teamdb.floor_notice(None, verdict))
+            self.assertEqual("", teamdb.floor_notice(teamdb.TARGET_PG_MAJOR, verdict))
+
+    def test_the_enforcement_date_is_declared_once(self):
+        """The date changes BEHAVIOUR on its own, which makes a second copy worse than a second
+        copy of the floor: nobody has to touch the code for the duplicate to start mattering. The
+        shipped tree may state it in prose; it may not DECLARE it twice."""
+        import ast
+        from mokata import teamdb
+        with open(os.path.join(REPO, "src", "mokata", "teamdb.py"), encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        stamped = [node for node in ast.walk(tree)
+                   if isinstance(node, ast.Call)
+                   and isinstance(node.func, ast.Attribute)
+                   and node.func.attr == "date"]
+        self.assertEqual(1, len(stamped),
+                         "teamdb constructs %d date literals — the enforcement date is supposed "
+                         "to be the only one" % len(stamped))
+        self.assertEqual(2026, teamdb.PG_FLOOR_ENFORCED_FROM.year)
+
+
+class TestTheAccountingIsNotVacuous(unittest.TestCase):
+    """C1 — the INTERNAL ledger's mechanism (`PG-FLOOR-INTERNAL-LEDGER-UNGUARDED`). The register it
+    serves describes `docs/build/`, which this file may NOT read (it SHIPS), so what is graded here
+    is the PURE FUNCTION against synthetic offenders — §7i's rule, and the only shape that can be
+    graded from inside the mirror at all."""
+
+    def test_a_drifting_claim_with_no_entry_is_unaccounted(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "doc.md")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("the floor is vanilla Postgres >= %d\n" % _STALE_MAJOR)
+            got = floor.unaccounted_claims({"internal/doc.md": path}, 15, {})
+            self.assertEqual((("internal/doc.md", 1, _STALE_MAJOR,
+                               "the floor is vanilla Postgres >= %d" % _STALE_MAJOR),), got)
+
+    def test_an_accounted_claim_is_forgiven_and_a_correct_one_never_reported(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "doc.md")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("QUOTED-ROW: the old floor was Postgres >= %d\n" % _STALE_MAJOR)
+                fh.write("the floor is vanilla Postgres >= 15\n")
+            register = {"internal/doc.md": {"QUOTED-ROW": "a dated quotation"}}
+            self.assertEqual((), floor.unaccounted_claims({"internal/doc.md": path}, 15, register))
+            self.assertEqual((), floor.stale_accounts({"internal/doc.md": path}, 15, register))
+
+    def test_an_entry_whose_line_was_reworded_goes_stale_rather_than_keeping_its_pass(self):
+        """The half that makes the register maintainable: a per-line hole must not outlive the
+        line it was written for. A fragment is used rather than a line number for exactly this —
+        a rewording that changes what is CLAIMED goes stale LOUDLY."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "doc.md")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("REWORDED: the old floor was Postgres >= %d\n" % _STALE_MAJOR)
+            register = {"internal/doc.md": {"QUOTED-ROW": "a dated quotation"}}
+            self.assertEqual((("internal/doc.md", "QUOTED-ROW", floor.INERT),),
+                             floor.stale_accounts({"internal/doc.md": path}, 15, register))
+
+    def test_a_file_that_is_gone_is_ABSENT_and_not_INERT(self):
+        """§7g — 'the document went away' and 'the document is here and the quotation is not' are
+        different findings with different remedies, and only the caller knows whether it swept the
+        whole corpus or three files someone named."""
+        register = {"internal/gone.md": {"FRAGMENT": "why"}}
+        self.assertEqual((("internal/gone.md", None, floor.ABSENT),),
+                         floor.stale_accounts({}, 15, register))
+        self.assertNotEqual(floor.ABSENT, floor.INERT)
+
+
 class TestTheDenyListCannotRotQuietly(unittest.TestCase):
     """An exemption is a permanent hole in the corpus. It has to keep earning its place."""
 

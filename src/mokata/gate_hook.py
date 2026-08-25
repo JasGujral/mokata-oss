@@ -28,6 +28,10 @@ The decision for a native write to an IMPLEMENTATION file (a test file is ALWAYS
 be able to write the failing test, and a gate that blocks the test blocks the fix):
 
     approach absent AND spec absent    -> ALLOW   no active mokata run; not our business
+                                                 (A2a/0.0.19: the allow is no longer SILENT —
+                                                 it carries the once-per-window notice, in
+                                                 three states: registered / absent /
+                                                 could-not-read. The VERDICT is unchanged.)
     approach present, spec absent      -> BLOCK   `spec-persisted`  (coding before the spec)
     spec present, red-set EMPTY        -> BLOCK   `no-code-without-failing-test`
     spec present, red-set NON-EMPTY    -> ALLOW   a failing test is on record
@@ -392,6 +396,34 @@ def _run_registered(store: StateStore, run_id: str) -> bool:
     return _exists(store, CHECKPOINT_PREFIX, run_id)
 
 
+def _checkpoint_unverifiable(store: StateStore, run_id: str) -> Optional[str]:
+    """WHY `_run_registered` said no, in the ONE case its answer is not a fact — or None when the
+    honest answer is simply "the checkpoint is not there".
+
+    `_run_registered` is degrade-clean and STAYS that way: an unreadable checkpoint and an absent
+    one both read as NOT-registered, because a broken checkpoint must never manufacture a block.
+    That is the right VERDICT and the wrong SENTENCE. The two are different facts, and doc 85 §7g
+    forbids them sharing a representation on the way to a human — a notice asserting "no run is
+    registered" while the truth is "mokata could not look" is mokata stating its own state as fact
+    when it does not know it, which is the harm OSS #28 is about.
+
+    So this asks the one question nothing else asks: could the path be looked at at all? An
+    `OSError` that is not `FileNotFoundError` means the answer is UNKNOWN, and its `strerror` is
+    the errno's own words ("Permission denied") — no path, no key, no run id, nothing a retained
+    transcript should not carry. `hook_wiring.HookWiringReport.unverifiable` is the same shape,
+    built one stage earlier for the same reason.
+
+    ⛔ READ-ONLY, never raises, and it DOES NOT FEED THE DECISION. `allowed` is already True on
+    both states by the time this is called (the SI.1 floor at `:17-19`); this feeds the wording."""
+    try:
+        os.stat(store.path(CHECKPOINT_PREFIX + run_id))
+    except FileNotFoundError:
+        return None                       # plainly absent — the notice may say so as a fact
+    except OSError as exc:
+        return exc.strerror or exc.__class__.__name__
+    return None                           # it is there after all (a race); degrade to "absent"
+
+
 def _red_set(store: StateStore, run_id: str) -> Optional[Set[str]]:
     """This run's RED test ids — or **None when the state cannot be trusted**, and None must ALLOW.
 
@@ -438,6 +470,30 @@ def _red_set_empty(store: StateStore, run_id: str) -> Optional[bool]:
     return None if red is None else not red
 
 
+def _pending_emit_proposals(root: str, run_id: str) -> list:
+    """A3 — the ids of spec emits already awaiting THIS human, for THIS run. Newest first.
+
+    Read-only and DEGRADE-CLEAN: an unreadable approval store names no proposals, which returns the
+    block to exactly the sentence it printed before this row existed. It can never change the
+    verdict — the caller has already decided to refuse (§4).
+
+    IDS ONLY. A proposal carries a `summary` and a `preview` of the spec it would write, and this
+    string is rendered into a hook refusal that a transcript may retain — so it obeys the
+    `awaiting` module's secret-safety rule verbatim: the id, and nothing else.
+
+    Both imports are LAZY and on the refusal branch only, so the hook's hot allow path is unchanged
+    and the tool name is READ from its declaring site rather than retyped here (a second spelling of
+    `spec_emit` is a second thing to keep in step)."""
+    try:
+        from . import approval
+        from .engine.emit import EMIT_TOOL
+        return [p.proposal_id for p in approval.pending(root)
+                if p.run_id == run_id and p.tool == EMIT_TOOL
+                and not getattr(p, "approved", False)]
+    except Exception:                    # noqa: BLE001 — a surfacing read never changes a verdict
+        return []
+
+
 def check_write(root: str, path: str, run_id: Optional[str] = None,
                 content: str = "") -> GateOutcome:
     """THE decision: may this native write to `path` proceed? See the module docstring's table.
@@ -469,7 +525,23 @@ def check_write(root: str, path: str, run_id: Optional[str] = None,
                 "window's state). Pin one with MOKATA_SESSION_ID to re-enable enforcement."),
         )
     if run.run_id is None:
-        return GateOutcome(True, "no mokata run has state in this repo")
+        # A2/F7 (0.0.19) — MESSAGE ONLY. The verdict is the SI.1 floor above (`:17-19`) and it
+        # does not move: no run has state here, so no run is driving this edit, so this is not
+        # our business and `allowed` stays True. What was missing is that the allow said NOTHING,
+        # and a user watching mokata not block reads that silence as approval — #28's actual harm
+        # is not "the gate is opt-in", it is "you cannot tell whether you have one". So the allow
+        # now carries the same once-per-session NOTICE the ambiguous branch above already pairs
+        # with its allow: one line per window, on the first implementation write, naming how to
+        # turn enforcement ON. It is deliberately not a block — a gate that makes the editor
+        # noisy is a gate that gets uninstalled, which is `:19` costing us everything.
+        return GateOutcome(
+            True, "no mokata run has state in this repo",
+            notice=(
+                "mokata: run-state gates are OFF for this window — no mokata run has state in "
+                "this repo, so mokata is not policing these edits (hand-editing outside a run "
+                "is never blocked, by design). Start a tracked run with /mokata:brainstorm to "
+                "turn enforcement on."),
+        )
 
     store = StateStore(state_dir(root))
     has_approach = _exists(store, APPROACH_PREFIX, run.run_id)
@@ -485,7 +557,32 @@ def check_write(root: str, path: str, run_id: Optional[str] = None,
     #     fail-open floor, byte-identical (and it stays cheap: the override read is skipped here).
     if not has_approach and not has_spec:
         if not _run_registered(store, run.run_id):
-            return GateOutcome(True, "no active mokata run — not policed")
+            # A2a/F9 (0.0.19) — MESSAGE ONLY. The verdict is the SI.1 floor above (`:17-19`) and it
+            # does not move: no registered run is driving this edit, so this is not our business
+            # and `allowed` stays True. Stage 03 gave the `run.run_id is None` allow a voice; THIS
+            # is the other silent one, and the worse of the two — a run whose id RESOLVES and is
+            # then not policed reads as approval far more strongly than a repo holding no run at
+            # all. Same `notice_once` marker, so a window is told once across BOTH branches.
+            #
+            # ⛔ THREE STATES, NEVER TWO (doc 85 §7g). `_run_registered` degrades an UNREADABLE
+            # checkpoint to the same False as an ABSENT one — correct for the verdict, a LIE in a
+            # sentence — so the wording asks `_checkpoint_unverifiable` which of the two this is.
+            # The VERDICT is identical for both; only the sentence differs.
+            why = _checkpoint_unverifiable(store, run.run_id)
+            if why:
+                notice = (
+                    "mokata: run-state gates are OFF for this window — mokata could not read "
+                    f"this run's checkpoint ({why}), so whether a mokata run is under way is "
+                    "UNKNOWN and mokata will not block on state it could not read (this is not "
+                    "the same as there being no run). Make mokata's state directory readable, "
+                    "then re-check with mokata doctor.")
+            else:
+                notice = (
+                    "mokata: run-state gates are OFF for this window — this run has no REGISTERED "
+                    "mokata pipeline, so mokata is not policing these edits (an unregistered run "
+                    "is never blocked, by design). Register one with /mokata:brainstorm to turn "
+                    "enforcement on.")
+            return GateOutcome(True, "no active mokata run — not policed", notice=notice)
         if GATE_PHASE in read_override(root, run.run_id):
             return GateOutcome(True, f"{GATE_PHASE}: overridden for this session",
                                gate=GATE_PHASE, overridden=True)
@@ -506,6 +603,23 @@ def check_write(root: str, path: str, run_id: Optional[str] = None,
         if GATE_SPEC in overrides:
             return GateOutcome(True, f"{GATE_SPEC}: overridden for this session",
                                gate=GATE_SPEC, overridden=True)
+        # A3 (0.0.19) — MESSAGE ONLY, never the verdict (doc 85 §4). The block below is the same
+        # block, on the same condition, returning the same `allowed=False` and the same gate id;
+        # what changes is that when a spec emit is ALREADY WAITING ON THIS HUMAN, the exit that
+        # REDEEMS the gate is named before the one that DISABLES it. Naming only `override` while
+        # an approvable proposal sat on disk is what trained users to reach for the off-switch.
+        awaiting_ids = _pending_emit_proposals(root, run.run_id)
+        if awaiting_ids:
+            from .awaiting import APPROVE_CMD, EMIT_FINISH_CMD
+            approve = "  ".join(APPROVE_CMD.format(proposal_id=p) for p in awaiting_ids)
+            return GateOutcome(
+                False,
+                f"{GATE_SPEC}: a spec emit is ALREADY WAITING ON YOU — approve it and this gate "
+                f"opens. {os.path.basename(path)} is implementation. Run: {approve} — then re-run "
+                f"`{EMIT_FINISH_CMD}` to land it. (Or emit afresh (/mokata:spec), or override: "
+                f"mokata gate override {GATE_SPEC} --reason \"<why>\")",
+                gate=GATE_SPEC,
+            )
         return GateOutcome(
             False,
             f"{GATE_SPEC}: an approach is approved for this run but no spec is emitted — "

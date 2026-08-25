@@ -24,6 +24,16 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # CI-JOBS-WITHOUT-A-TIMEOUT (0.0.19 stage 09). ⚠ THIS JOB HAS NEVER COMPLETED SUCCESSFULLY,
+    # and the ceiling is named rather than guessed. Its ONE run (31951931766, 2026-08-16) failed
+    # at step 9 of 10 after 27s, so 27s is a LOWER BOUND on a green run, not the basis for one.
+    # What it is defensible against: the 27s that did complete, plus a strict upper bound on the
+    # single unrun step — that step is `unittest discover -p test_gr_s2_*.py`, and the slowest
+    # ever completed run of an UNFILTERED `unittest discover` on ubuntu in this repo is 865s
+    # (release.yml `test (3.10, absent)`, run 32210447005). (27s + 865s) x 1.5 = 1338s -> **23**.
+    # Generous by design: with no green run to derive from, the ceiling errs toward not cutting
+    # the first one — and 23 is still 15x below the 360 it replaces.
+    timeout-minutes: 23
     defaults:
       run:
         shell: bash

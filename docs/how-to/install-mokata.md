@@ -17,13 +17,13 @@ path (`pip install mokata` → [`mokata setup claude`](use-without-plugin.md)).
 | uv (pip) | `uv pip install mokata` | **Live** (on PyPI) | uv-managed environments |
 | uvx (zero-install run) | `uvx mokata --version` | **Live** (on PyPI) | Running mokata once without installing |
 | pipx run (zero-install) | `pipx run mokata --version` | **Live** (on PyPI) | The pipx equivalent of `uvx` |
-| Homebrew | `brew install mokata` | **Pending publication** — not in homebrew-core / no official tap yet | macOS/Linux users once a tap is published |
+| Homebrew | `brew install JasGujral/mokata/mokata` | **Live** (tap `JasGujral/mokata`) | macOS/Linux users who manage tools with brew |
 | npm / npx | — | **Not applicable** — mokata is a Python package, not an npm one | (use `uvx`/`pipx run` for zero-install) |
 
-> **Honest status.** pip/pipx/uv/uvx are live because mokata is published on PyPI. Homebrew is
-> **not yet published** — the formula exists in the repo (`packaging/homebrew/mokata.rb`) but is
-> not in homebrew-core and no official tap is live; the "self-tap" steps below work today. There
-> is **no npm package**, so `npx mokata` does not apply — use `uvx`/`pipx run` for a
+> **Honest status.** pip/pipx/uv/uvx are live because mokata is published on PyPI, and Homebrew
+> is live from mokata's own tap, `JasGujral/mokata` — **not** homebrew-core, so the formula must
+> be reached through the tap (`brew install JasGujral/mokata/mokata`) rather than by the bare
+> name. There is **no npm package**, so `npx mokata` does not apply — use `uvx`/`pipx run` for a
 > zero-install runner.
 
 ## pipx (recommended)
@@ -65,20 +65,33 @@ uvx mokata --version           # uv's runner
 pipx run mokata stacks list    # pipx's runner
 ```
 
-## Homebrew (pending publication)
+## Homebrew
 
-mokata is **not yet in homebrew-core and has no published tap** — `brew install mokata` does not
-work yet. The formula lives in the repo at `packaging/homebrew/mokata.rb`. Until a tap is
-published you can self-tap it:
+mokata ships from its own tap, **`JasGujral/mokata`**. One command installs it — `brew` resolves
+the tap from the fully-qualified name, so no separate `brew tap` step is required:
 
 ```bash
-# 1) Prefer pipx/uv above. 2) Or, once a tap repo exists, e.g. JasGujral/homebrew-mokata:
-brew tap jasgujral/mokata
+brew install JasGujral/mokata/mokata
+mokata --version
+```
+
+Upgrade with `brew upgrade mokata`; uninstall with `brew uninstall mokata`.
+
+mokata is **not in homebrew-core**, so a bare `brew install mokata` does not resolve — use the
+fully-qualified name above, or tap first and then use the short name:
+
+```bash
+brew tap JasGujral/mokata
 brew install mokata
 ```
 
-When the tap is published this page and the status table will be updated to **Live**. Until then,
-treat Homebrew as pending and use pipx/uv.
+> On Homebrew 6.0.15 and newer, third-party taps must be trusted before a formula loads. If brew
+> reports *"Refusing to load formula … from untrusted tap"*, run `brew trust JasGujral/mokata`
+> once and re-run the install.
+
+Homebrew builds Python formulae from source with `--no-deps`, so the formula vendors mokata's
+whole dependency tree — including the MCP SDK — into its own virtualenv. `mokata-mcp` therefore
+works from a brew install exactly as it does from pip.
 
 ## Then what?
 

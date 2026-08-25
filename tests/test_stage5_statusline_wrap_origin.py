@@ -456,6 +456,13 @@ class TestEveryApprovalGateDiscloses(unittest.TestCase):
     }
     PASSTHROUGH = {
         "cmd_setup",         # argparse shim; the gate is setup_harness's own
+        # 0.0.19 A2/F8.1 — `mokata init --yes` now wires the harness, so `cmd_init`'s helper
+        # drives `setup_harness`. PASSTHROUGH, not GATED, and the argument is `cmd_setup`'s
+        # verbatim: it renders no preview of its own, and the plan the user sees is
+        # `render_setup_plan`, emitted by `setup_harness` before its own gate. The consent is
+        # the `--yes` the caller already typed — which is exactly what `cmd_setup` passes down
+        # too. It is reached from NO other path: without `--yes` this helper only discloses.
+        "_wire_or_disclose",
     }
 
     def test_the_set_of_setup_drivers_is_the_set_of_declared_ones(self):
