@@ -52,8 +52,8 @@ T10='test_stage10_removed_backends.py'
 T35='test_35b_backup_surface.py'
 TS2='test_simp_s2_deprecation.py'
 
-TOTAL=35
-ran=0; red=0; green=0; survivors=""
+TOTAL=31
+ran=0; red=0; green=0; survivors=""; equiv=0; unexpected=""
 
 # ---- step 0: the green baseline ---------------------------------------------------------------
 printf '================================================================================\n'
@@ -92,6 +92,27 @@ mutant() {
     esac
 }
 
+# The verdict INVERTED — the shape 0.0.17 stage 19c introduced. A declared-equivalent mutant is one
+# no test CAN kill, so GREEN is correct and a RED means the reasoning has stopped being true.
+equivalent() {
+    local label="$1" rc=0 out
+    ran=$((ran + 1))
+    shift
+    out="$("$M" "$label" "$@")" || rc=$?
+    if [ -n "$out" ]; then printf '%s\n' "$out"; fi
+    if [ "$rc" -ne 0 ]; then
+        printf '\nBATCH ABORTED — mutate.sh exited %s on mutant %s of %s\n' "$rc" "$ran" "$TOTAL"
+        printf '  mutant: %s\n' "$label"
+        exit "$rc"
+    fi
+    case "$out" in
+        GREEN*) equiv=$((equiv + 1)); printf '        ^ EQUIVALENT — surviving is the expected, correct result.\n' ;;
+        RED*)   unexpected="$unexpected  - $label"$'\n' ;;
+        *)      printf '\nBATCH ABORTED — exit 0 with no verdict on mutant %s of %s\n' "$ran" "$TOTAL"
+                exit 70 ;;
+    esac
+}
+
 # ==== A. the removal itself =====================================================================
 
 mutant "A01 ★★ the channel is ANNOUNCED as deprecated again — a notice promising a future
@@ -118,14 +139,33 @@ mutant "A04 ★ the deleted constant is re-exported through the package" "src/mo
 
 # ==== B. the answer at `mokata migrate` =========================================================
 
-mutant "B01 ★★★ THE DEFECT ITSELF — a removed channel falls through to the migrator, so the
+# ⚠ RE-AIMED at 0.0.20 stage 09. The intent is unchanged; the quotation is not. `cmd_migrate` was
+# rewritten when the last live channel left — the `if channel in REMOVED_CHANNELS:` dispatch is
+# gone because the command now answers unconditionally and always exits 1 — so this mutant's
+# `old` had stopped occurring and the batch was aborting here.
+# ⚠ DECLARED EQUIVALENT at 0.0.20 stage 09, ON EVIDENCE, not on reasoning alone: re-aimed and then
+# REPLAYED through the real mutator, where it SURVIVED under this batch's test pattern. It is
+# genuinely equivalent here — hardcoding the three names produces exactly today's registry, so no
+# behavioural test driven by `$T11` can tell the two spellings apart. It is NOT equivalent in
+# general, and it is not left ungraded: `_stage12_migrate_slice_mutants.sh` C01 applies the same
+# mutation under a pattern whose tests read the DERIVATION rather than the behaviour, and killed it
+# in the same replay. Two spellings, two vantages, one of which can see the difference (§7j).
+equivalent "B01 [EQUIVALENT] ★★★ THE DEFECT ITSELF — a removed channel falls through to the migrator, so the
        command the 0.0.17 notice told the user to run answers like it never existed" "$MIG" \
-  '    if channel in REMOVED_CHANNELS:' \
-  '    if False:' "$T11"
+  '    p.add_argument("channel", choices=_choices,' \
+  '    p.add_argument("channel", choices=("obsidian", "native-memory", "memory-share"),' "$T11"
 
+# ⚠ RE-AIMED at 0.0.20 stage 09. The intent is unchanged; the quotation is not. `cmd_migrate` was
+# rewritten when the last live channel left — the `if channel in REMOVED_CHANNELS:` dispatch is
+# gone because the command now answers unconditionally and always exits 1 — so this mutant's
+# `old` had stopped occurring and the batch was aborting here.
+# ⚠ RE-AIMED at 0.0.20 stage 11. Intent unchanged; the quotation follows the refactor that gave this
+# surface and `collab.py` ONE shared helper (`deprecation.answerable_choices`) instead of two
+# hand-written copies of the same rule. ⭐ The sweep found this pattern the moment the refactor
+# landed, which is the whole reason the sweep exists.
 mutant "B02 ★★★ argparse REFUSES the word — 'invalid choice', which is what it says about a
        TYPO. §7g on the one surface where the user is doing exactly what we asked" "$MIG" \
-  '    p.add_argument("channel", choices=tuple(CHANNELS) + tuple(REMOVED_CHANNELS),' \
+  '    p.add_argument("channel", choices=_choices,' \
   '    p.add_argument("channel", choices=tuple(CHANNELS),' "$T11"
 
 mutant "B03 ★★ the present/absent split COLLAPSES — one sentence for two facts, so a repo with
@@ -140,15 +180,22 @@ mutant "B04 ★★ the split collapses the OTHER way — a repo that HAS the fil
               else f"This repo has none at {path}, so there is nothing here to bring across.")' \
   '    detail = f"This repo has none at {path}, so there is nothing here to bring across."' "$T11"
 
-mutant "B05 ★★ the existence probe is INVERTED — every repo is told the opposite of the truth" \
-  "$MIG" \
-  '        print(deprecation.removed_file_report(channel, path, os.path.exists(path)),' \
-  '        print(deprecation.removed_file_report(channel, path, not os.path.exists(path)),' "$T11"
+# ⚠ RE-AIMED at 0.0.20 stage 09. The intent is unchanged; the quotation is not. `cmd_migrate` was
+# rewritten when the last live channel left — the `if channel in REMOVED_CHANNELS:` dispatch is
+# gone because the command now answers unconditionally and always exits 1 — so this mutant's
+# `old` had stopped occurring and the batch was aborting here.
+mutant "B05 ★★ the existence probe is INVERTED — every repo is told the opposite of the truth" "$MIG" \
+  '    return os.path.exists(path)' \
+  '    return not os.path.exists(path)' "$T11"
 
+# ⚠ RE-AIMED at 0.0.20 stage 09. The intent is unchanged; the quotation is not. `cmd_migrate` was
+# rewritten when the last live channel left — the `if channel in REMOVED_CHANNELS:` dispatch is
+# gone because the command now answers unconditionally and always exits 1 — so this mutant's
+# `old` had stopped occurring and the batch was aborting here.
 mutant "B06 ★★ the refusal EXITS 0 — a migration that did not happen reports success" "$MIG" \
-  '        print(deprecation.removed_notice(channel).render(), file=sys.stderr)
+  '    print(deprecation.removal_answer(channel, surface.root, present), file=sys.stderr)
     return 1' \
-  '        print(deprecation.removed_notice(channel).render(), file=sys.stderr)
+  '    print(deprecation.removal_answer(channel, surface.root, present), file=sys.stderr)
     return 0' "$T11"
 
 mutant "B07 ★★ the answer loses the REMEDY — the user is told what broke and not what to do" "$DEP" \
@@ -169,10 +216,10 @@ mutant "B09 ★ the notice stops naming the release it happened in" "$DEP" \
 
 # ==== C. the two record classes stay apart ======================================================
 
+# ⚠ RE-AIMED at 0.0.20 stage 09. Intent unchanged, quotation re-read from the file as it is now.
 mutant "C01 ★★★ removed_channels_in reverts to a MEMBERSHIP test — a manifest chain naming the
        file channel would announce a removed BACKEND about a file we can read" "$DEP" \
-  '    return tuple(tool for tool in (chain or ())
-                 if isinstance(REMOVED.get(tool), RemovedNotice))' \
+  '    return tuple(tool for tool in (chain or ()) if isinstance(REMOVED.get(tool), kind))' \
   '    return tuple(tool for tool in (chain or ()) if tool in REMOVED)' "$T11"
 
 mutant "C02 ★★ every removed channel becomes a FILE channel — obsidian loses its downgrade" "$DEP" \
@@ -183,19 +230,20 @@ mutant "C03 ★★ no removed channel is a file channel — memory-share gets th
   '    return isinstance(REMOVED.get(channel), RemovedFileNotice)' \
   '    return False' "$T11"
 
-mutant "C04 ★★ removed_notice stops REFUSING a file channel — the wrong shape renders happily" \
-  "$DEP" \
+# ⚠ RE-AIMED at 0.0.20 stage 09. Intent unchanged, quotation re-read from the file as it is now.
+mutant "C04 ★★ removed_notice stops REFUSING a file channel — the wrong shape renders happily" "$DEP" \
   '    notice = REMOVED[channel]
     if not isinstance(notice, RemovedNotice):
-        raise KeyError("%r is a removed FILE channel, not a removed backend — its answer is "
-                       "`removed_file_report`" % (channel,))
+        raise KeyError("%r is a removed %s channel, not a removed backend — its answer is "
+                       "`removal_answer`" % (channel, type(notice).__name__))
     return notice' \
   '    return REMOVED[channel]' "$T11"
 
+# ⚠ RE-AIMED at 0.0.20 stage 09. Intent unchanged, quotation re-read from the file as it is now.
 mutant "C05 ★★ removed_file_report stops REFUSING a backend — obsidian gets a file answer" "$DEP" \
   '    if not isinstance(notice, RemovedFileNotice):
-        raise KeyError("%r is a removed BACKEND, not a removed file channel — its answer is "
-                       "`removed_notice`" % (channel,))' \
+        raise KeyError("%r is a removed %s channel, not a removed file channel — its answer is "
+                       "`removal_answer`" % (channel, type(notice).__name__))' \
   '    if False:
         raise KeyError("x")' "$T11"
 
@@ -251,41 +299,58 @@ mutant "E03 ★★★ THE GATE OPENS EARLY — the verdict stops being overdue w
   '    return REMOVAL_OVERDUE if now >= due else REMOVAL_PENDING' \
   '    return REMOVAL_PENDING' "$T10"
 
-mutant "E04 ★★ a surviving channel quietly loses its deprecation notice — the lane goes silent
-       about something it has NOT removed" "$DEP" \
-  '    "neo4j": DeprecationNotice(' \
-  '    "_neo4j_disabled": DeprecationNotice(' "$T11"
+# ⛔ RETIRED — E04 ★★ a surviving channel quietly loses its deprecation notice — the lane goes silent about something it has NOT removed
+#    RETIRED at 0.0.20 stage 09 — §7h, THE PIN ENCODED A FALSE PREMISE.
+#    It graded "neo4j must NOT leave CHANNELS yet", i.e. that the channel was still deprecated-but-live
+#    and its early removal would make the lane gate read LANDED before stage 14 had run. Stage 14 DID
+#    run: neo4j left CHANNELS at 0.0.18 and now sits in REMOVED as a RemovedDerivedNotice. The premise
+#    this mutant asserts about the tree is no longer true, so re-quoting it would have carried a false
+#    premise across the refactor — the failure §7h names. What replaced the property is graded by TYPE,
+#    not by membership: removed_channels_in filters on the record CLASS (_stage11 C01) and
+#    _refuse_removed_kind on is_removed_file_channel (_stage13 A03).
 
 # ==== F. BACKCOMPAT-SWEEP (E2 — one pass reads one file) ========================================
 
+# ⚠ RE-AIMED at 0.0.20 stage 09. The intent is unchanged; the quotation is not. `cmd_migrate` was
+# rewritten when the last live channel left — the `if channel in REMOVED_CHANNELS:` dispatch is
+# gone because the command now answers unconditionally and always exits 1 — so this mutant's
+# `old` had stopped occurring and the batch was aborting here.
+# ⚠ RE-AIMED at 0.0.20 stage 11. Intent unchanged; the quotation follows the refactor that gave this
+# surface and `collab.py` ONE shared helper (`deprecation.answerable_choices`) instead of two
+# hand-written copies of the same rule. ⭐ The sweep found this pattern the moment the refactor
+# landed, which is the whole reason the sweep exists.
 mutant "F01 ★★ --file comes back — an option a user can pass that nothing can act on" "$MIG" \
-  '    p.add_argument("--yes", action="store_true",
-                   help="non-interactive (approve the gated migration)")' \
+  '    p.add_argument("channel", choices=_choices,' \
   '    p.add_argument("--file", default="", help="the file to read")
-    p.add_argument("--yes", action="store_true",
-                   help="non-interactive (approve the gated migration)")' "$T11"
+    p.add_argument("channel", choices=_choices,' "$T11"
 
-mutant "F02 ★★ the stranded parameter comes back on the library surface" "$MC" \
-  'def plan_channel_migration(surface: Any, channel: str) -> ChannelMigratePlan:' \
-  'def plan_channel_migration(surface: Any, channel: str, *, file: str = "") -> ChannelMigratePlan:' \
-  "$T11"
+# ⛔ RETIRED — F02 ★★ the stranded parameter comes back on the library surface
+#    RETIRED at 0.0.20 stage 09. Its target, src/mokata/migrate_channels.py, was DELETED at
+#    0.0.18 lane D slice 4 — the vault migrator was not a framework with channels plugged into it,
+#    it WAS the vault migrator, and it left with the channel. So mutate.sh exited 3 here and ABORTED
+#    THE BATCH, which means every mutant listed after it has been ungraded ever since, while this
+#    batch's score stayed in the record. Nothing is repairable: the behaviour, not the spelling,
+#    is gone.
 
-mutant "F03 ★ migrate reads a MEMORY chain again — a resolver for a caller that no longer exists" \
-  "$MC" \
-  '    target = "the canonical transport"' \
-  '    target = "the canonical transport"
-    _ = surface.router.manifest.fallback_order("memory_store")' "$T11"
+# ⛔ RETIRED — F03 ★ migrate reads a MEMORY chain again — a resolver for a caller that no longer exists
+#    RETIRED at 0.0.20 stage 09. Its target, src/mokata/migrate_channels.py, was DELETED at
+#    0.0.18 lane D slice 4 — the vault migrator was not a framework with channels plugged into it,
+#    it WAS the vault migrator, and it left with the channel. So mutate.sh exited 3 here and ABORTED
+#    THE BATCH, which means every mutant listed after it has been ungraded ever since, while this
+#    batch's score stayed in the record. Nothing is repairable: the behaviour, not the spelling,
+#    is gone.
 
 # ==== G. no hiding ==============================================================================
 
+# ⚠ RE-AIMED at 0.0.20 stage 09. Intent unchanged, quotation re-read from the file as it is now.
 mutant "G01 ★★★ THE RECORD BECOMES A LEGACY READER — the removal record starts OPENING the file
        it only ever named, which is the one thing slice 1 wrote 'must never happen'" "$DEP" \
-  'def removed_share_path(root: str) -> str:' \
+  'def removed_file_path(channel: str, root: str) -> str:' \
   'def _peek(p):
     return open(p, encoding="utf-8").read()
 
 
-def removed_share_path(root: str) -> str:' "$T11"
+def removed_file_path(channel: str, root: str) -> str:' "$T11"
 
 mutant "G02 ★★ the once-per-repo marker stops being WRITE-ONLY — the guard that lets an
        os.open through can no longer tell a marker mint from a read" "$DEP" \
@@ -310,16 +375,25 @@ mutant "G03 ★★★ A SECOND MODULE REGAINS THE FILENAME — the channel comes
   '        _legacy = "memory-share.json"
         dest = args.file or default_backup_path(args.path)' "$T11"
 
-mutant "G04 ★★ --help ADVERTISES the removed channels — help text selling a channel that is
-       gone, while the answer path exists to say it is gone" "$MIG" \
-  '                   metavar="{%s}" % ",".join(CHANNELS),' \
-  '                   metavar="{%s}" % ",".join(tuple(CHANNELS) + tuple(REMOVED_CHANNELS)),' "$T11"
+# ⛔ RETIRED — G04 ★★ --help ADVERTISES the removed channels — help text selling a channel that is gone, while the answer path exists to say it is gone
+#    RETIRED at 0.0.20 stage 09 — §7h, THE PIN ENCODED A FALSE PREMISE.
+#    It graded "--help must not advertise the removed channels". That was right while a LIVE set
+#    existed and the two lists differed. With the last live channel gone, `register()` derives BOTH
+#    `choices` and `metavar` from REMOVED_CHANNELS on purpose (`migrate.py:88-94`): the command exists
+#    precisely to answer for removed channels, so advertising them is now the CORRECT behaviour and
+#    this mutant asked for the defect. Re-quoting it would have carried the false premise across the
+#    refactor, which is the failure mode §7h names. The live property it leaves behind — metavar must
+#    advertise exactly what choices accepts — is graded by G04a in _stage12_migrate_slice_mutants.sh.
 
 # ==== verdict ==================================================================================
 
 printf '\n================================================================================\n'
 printf 'STAGE-11 MEMORY-SHARE-CHANNEL MUTANTS: %s ran of %s — %s RED, %s GREEN\n' \
     "$ran" "$TOTAL" "$red" "$green"
+if [ -n "$unexpected" ]; then
+    printf 'DECLARED-EQUIVALENT mutants that were CAUGHT — the reasoning is stale:\n%s' "$unexpected"
+    exit 1
+fi
 if [ "$green" -ne 0 ]; then
     printf 'SURVIVORS (each is a pin that does not grade):\n%s' "$survivors"
     printf '================================================================================\n'

@@ -228,9 +228,12 @@ mutant "M13 any body may be shelled out with" "$N" \
   '    return body in BODIES' \
   '    return True' "$T"
 
+# ⚠ RE-AIMED at 0.0.20 stage 09. Intent unchanged, quotation re-read from the file as it is now.
 mutant "M14 the unverifiable Windows arm ships" "$N" \
-  '    if platform.startswith("win"):' \
-  '    if False:' "$T"
+  '    if platform.startswith("win"):
+        # ⚠ AN ARM, NOT A BYPASS — and a PARTIAL one, which is why it is still named out loud.' \
+  '    if False:
+        # ⚠ AN ARM, NOT A BYPASS — and a PARTIAL one, which is why it is still named out loud.' "$T"
 
 # ---------------------------------------------------------------------------------------------
 # PART 2 — the statusline. Both halves of the defect: the segment reaching the badge at all, and

@@ -31,7 +31,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
-from .. import TEMP_LOCAL_DIRNAME
+from .. import MOKATA_DIR, TEMP_LOCAL_DIRNAME
 from ..manifest import ManifestError
 from .backends import MemoryBackend, SQLiteBackend, build_postgres_backend
 
@@ -350,6 +350,14 @@ def _refuse_removed_memory_chain(router: Any, root: str) -> None:
             raise deprecation.RemovedChannelError(
                 deprecation.removed_notice(tool).render(detail=detail))
         deprecation.warn_removed(tool, root)
+    # ⭐ AND THE FIRST HALF OF THE SAME PIPELINE, which had no caller at all until 0.0.20 stage 11
+    # (`WARN-DEPRECATED-HAS-NO-CALLERS`). A chain naming a channel that is DEPRECATED but not yet
+    # removed must say so once per repo — that announcement is the entire point of deprecating
+    # something rather than deleting it, and between 0.0.18 and here nothing made it.
+    # ⚠ Same surface, same chain, one line later: the removal arm and the deprecation arm read the
+    # same list, so a channel cannot be announced by one and invisible to the other.
+    for tool in deprecation.deprecated_channels_in(chain):
+        deprecation.warn_deprecated(tool, os.path.join(root, MOKATA_DIR))
 
 
 def select_memory_backend(router: Any, root: str,

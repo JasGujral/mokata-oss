@@ -1095,6 +1095,33 @@ _register("notify.py", {
         "already loud everywhere else in mokata."),
 })
 
+_register("knowledge/ts_edges.py", {
+    "available": (DEGRADE_CLEAN,
+        "0.0.20 stage 05. `[graph-ts]` is an OPTIONAL extra (doc 105 §9/G14), so 'can this process "
+        "parse TypeScript' is a QUESTION, and False is its answer rather than a swallowed error. "
+        "Broad because a partially-installed extra does not raise ImportError — a wheel built for "
+        "another CPython, a grammar whose shared object will not dlopen, and a clean absence all "
+        "mean the same thing to a caller: no parse here. ⭐ THE SIGNAL COMES OUT AT `mokata "
+        "doctor`, which announces the degraded corpus; the ruling's clause 3 is that the "
+        "degradation is announced up front rather than at emit, so this returning False is what "
+        "the announcement is derived FROM, not something it hides."),
+    "_grammar_for": (DEGRADE_CLEAN,
+        "Same probe, same reason, one layer down: it returns the `Language` or None, and None "
+        "propagates to `parse_source` returning None. ⛔ A caller must not read that as 'this file "
+        "has no edges' — `available()` is the predicate that separates 'the parser is absent' from "
+        "'this file did not parse', and a file with genuinely no symbols returns an EMPTY "
+        "`FileEdges`, which is a different object. `test_a22.TheAbsentParserIsItsOwnAnswer` grades "
+        "all three apart."),
+    "parse_source": (DEGRADE_CLEAN,
+        "A file that will not parse drops out of the graph rather than crashing the walk — the "
+        "SAME contract `ast_backend._parse_file` already carries for Python, where a SyntaxError "
+        "yields None and the indexing run continues. ⚠ Consistency with the existing walker is the "
+        "justification, and it is a real one: a half-written file mid-edit must not fail an index, "
+        "and a TS walker that raised where the Python walker returns None would make the graph's "
+        "behaviour depend on which language the broken file happened to be in. Broad because "
+        "tree-sitter's failure surface spans a decode error, a grammar load error and the parser "
+        "itself."),
+})
 _register("knowledge/graph_adopt.py", {
     "adopt_graph": (SUPPRESS_OK,
         "GR.S2(j) best-effort semantic PROVISIONING after a successful adopt (operational, not "
@@ -1346,6 +1373,18 @@ _register("engine/amend.py", {
         "FAILS CLOSED (`plan.ok = False`, gate `blast-radius`) — a gate that fails open silently "
         "must not fail open at all. Stays broad because the graph backend is a pluggable optional "
         "dep; broad + fail-CLOSED is safe, broad + fail-open was the bug."),
+    "_bounded_lens._run": (SUPPRESS_OK,
+        "⛔ IT SUPPRESSES NOTHING — it TRANSPORTS. A thread's exception dies with the thread, so "
+        "`_run` captures whatever the lens raised into the holder and `_bounded_lens` RE-RAISES it "
+        "in the caller's stack; `begin_amend`'s fault arm then handles it exactly as it did when "
+        "the call was synchronous. Nothing passes unannounced, which is the question this sweep "
+        "asks. ⚠ It is `BaseException`, not `Exception`, and that is deliberate: a worker thread "
+        "that swallowed a `KeyboardInterrupt` or a `SystemExit` and then reported a TIMEOUT would "
+        "tell the user their graph is slow when in fact they pressed Ctrl-C — the re-raise puts it "
+        "back where the caller can see it. ⭐ AND IT MUST NOT BECOME A DEGRADE: a `note_degraded` "
+        "here would announce a fault the caller is about to announce properly, and the timeout arm "
+        "would then be indistinguishable from it (§7g) — which is the whole distinction OSS "
+        "#66/#69/#70/#73 turned on. (0.0.20, the amend-lens clock.)"),
 })
 _register("engine/emit.py", {
     "mark_emitted": (DEGRADES_LOUD,
@@ -1386,11 +1425,55 @@ _register("execmode/decompose.py", {
         "'Graph-verified' must mean the graph was actually asked."),
 })
 _register("govern/graph_required.py", {
+    "derive_graph_degraded": (DEGRADE_CLEAN,
+        "0.0.20's G14 measurement. TWO broad handlers, one type, and the fail direction is the "
+        "whole justification: BOTH return `(UNDERIVABLE, True)` — a verdict that carries its own "
+        "reason to a caller whose only use for it is to REFUSE. Nothing is swallowed; the "
+        "exception becomes the answer. The signal comes out at "
+        "`mcp/tools_spec._graph_required_emit_refusal`, which renders `UNDERIVABLE` as its own "
+        "sentence rather than folding it into the degraded one (§7g — *mokata could not look at "
+        "all* is not *mokata looked and the graph is degraded*). "
+        "Broad on purpose, in both places: the inner one wraps `KnowledgeLayer.from_surface`, "
+        "which spans every adopted provider's own failure modes — an MCP transport error, a "
+        "malformed adoption record, an unreadable manifest — none nameable at module scope "
+        "without importing the providers this layer exists to stay lazy about. The outer one "
+        "wraps `compute_impact`, which walks whatever that layer returned. "
+        "⛔ A NARROWER CATCH HERE WOULD FAIL OPEN: an unnamed exception would propagate out of a "
+        "GATE, and a gate that raises is a gate that gets caught and skipped upstream. The "
+        "direction is fail-CLOSED — doubt refuses — which is the same posture "
+        "`govern/enforce.evaluate` carries one file over."),
     "graph_required_enabled": (SUPPRESS_OK,
         "An unreadable/absent manifest → the SAFE default (required-on). Mirrors "
         "`progress.statusline_enabled`: a config read that falls to its documented default, not a "
         "capability degrade. Broad because a malformed manifest can raise from any layer of the "
         "settings read."),
+})
+_register("govern/doctor.py", {
+    "ts_parser_verdict": (DEGRADE_CLEAN,
+        "0.0.20 stage 05, G14 clause 3. TWO broad handlers, one type, and neither swallows: each "
+        "RETURNS `TS_UNDECIDABLE`, which `ts_parser_findings` renders as an `info` finding saying "
+        "the check ran and answered nothing. ⛔ THE FAIL DIRECTION IS THE JUSTIFICATION: reporting "
+        "the ABSENCE of TypeScript you could not look for would be indistinguishable from a repo "
+        "that has none, and this check exists precisely so a user is not told 'fine' about a "
+        "question nobody asked. The first wraps an `os.walk` of a user-supplied tree, which spans "
+        "a permission error, a vanished directory and a decode error on a path — none of which may "
+        "crash a read-only diagnostic. The second wraps `ts_edges.available()`, whose whole job is "
+        "to survive a partially-installed optional extra."),
+    "graph_floor_verdict": (DEGRADE_CLEAN,
+        "0.0.20 stage 11c. TWO broad handlers, one type, and neither swallows: each RETURNS a "
+        "verdict — `FLOOR_UNDECIDABLE` — that `graph_floor_findings` renders as an `info` finding "
+        "saying the check ran and answered nothing. The signal comes out in doctor's own output, "
+        "in the same posture `diagnose` already takes for the rule tiers (`rules-unverifiable`: "
+        "*\"Could not check\" is a finding*). "
+        "The first wraps the manifest read — a malformed manifest can raise from any layer of the "
+        "schema/router stack, and `diagnose` ALREADY reports that as an ERROR through "
+        "`schema.validate_manifest`, so this returns UNDECIDABLE rather than adding a second voice "
+        "for one fault. The second wraps `Detector.is_present`, which spans every detect strategy "
+        "in the catalog — a filesystem walk, a PATH lookup, an importlib probe — whose failure "
+        "classes have nothing in common and none of which may crash a read-only diagnostic. "
+        "⛔ SKIPPING the failed probe was the first draft and it was wrong: it made an unaskable "
+        "question byte-identical to an answered one, so a user would read a clean doctor run as "
+        "*your chain is fine*."),
 })
 _register("govern/gate.py", {
     "WriteGate._carried_forward_seq": (SUPPRESS_OK,

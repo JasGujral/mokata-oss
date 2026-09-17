@@ -669,10 +669,6 @@ def native_sep_comparison_sites(sources):
 # would turn a fact a reader can check against Windows into 33 assertions they cannot.
 
 EXEMPT = {
-    ("one_sided_posix", "tests/test_db_s7a_edge_substrate.py"):
-        "both sides of the comparison are built with os.path.join — a self-consistent OS-spelled "
-        "comparison, not a mixed one. The defect is a `/` literal meeting a `\\` path; two `\\` "
-        "paths meet correctly on every platform.",
     ("one_sided_posix", "tests/test_h6_anchor_fingerprints.py"):
         "`AF.record_path()` returns a real filesystem path and the join is the PREFIX it is "
         "startswith-tested against — both OS-spelled, and prefixing a posix name onto a native "

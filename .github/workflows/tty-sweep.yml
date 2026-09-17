@@ -1,0 +1,136 @@
+name: tty-sweep (opt-in)
+
+# 0.0.20 stage 10 — WHICH TESTS HAND THEIR VERDICT TO WHOEVER IS WATCHING THE TERMINAL.
+#
+# Every consent gate in mokata is fail-closed off a TTY: `prompt.read_yes_no` and
+# `cli_commands/_common._cli_ask` both take the safe default WITHOUT calling `input()` when
+# `stdin.isatty()` is false. That is correct at runtime and a trap in a suite, because it means
+# THE MACHINE DECIDES WHICH ARM A TEST GRADES. Off a TTY the test reaches the fail-closed branch
+# and passes; at a real terminal the same test reaches `input()` — and if it also redirected
+# stdout, the prompt is swallowed and the run HANGS, silently, until a human types into the void.
+#
+# That is not hypothetical. It happened on the dev machine on 2026-08-26: a stray `yes` typed into
+# a blank screen was consumed, mokata approved, `rc` came back 0 instead of 1, and the failure read
+# for all the world like a regression. Filed as `SUITE-HANGS-AT-A-TTY-ON-THREE-TESTS` (doc 84).
+#
+# ⛔ CI CANNOT CATCH THIS BY RUNNING THE SUITE, because CI is never a TTY — it takes the SAME arm
+# the defective tests take, and reports green. The instrument forces the OTHER ambient value
+# (`isatty()` -> True) and makes `input()` fatal, so an offender names itself instead of hanging.
+#
+# ⭐ THE ONE DISTINCTION THAT MAKES THE READING USEFUL: a test that installs its OWN stdin double
+# and lets the real reader read it (`_support.stdin_is`, doc 85 §7e) owns its answer and can never
+# block a human. Those are CORRECT and must not be flagged. The sweep decides by the IDENTITY of
+# the stdin object, not by a guess — see `tests/_tty_prompt_sweep.py`.
+#
+# WHY OPT-IN rather than a job in ci.yml: this is a second full run of the unit suite, and the
+# PR gate's binding leg is already ~91% unit suite (`CI-SPEED` in doc 84). The defect it catches is
+# introduced by writing a new interactive test, not by an ordinary change, so a weekly cadence
+# catches it while it is still one test old. Dispatch when you have just written one.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Thursdays 04:37 UTC — off the hour, and a day clear of live-db-legs (Mon), embeddings-leg
+    # (Tue) and quality-at-scale (Wed) so the opt-in legs never contend for a runner.
+    - cron: "37 4 * * 4"
+
+permissions:
+  contents: read
+
+jobs:
+  tty-sweep:
+    name: no test may reach a prompt on the ambient stdin (opt-in)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install mokata (NOT editable, and that is deliberate)
+        # ⚠ `pip install .`, not `pip install -e .`. This job needs mokata's console scripts on
+        # PATH and nothing more — it never edits the tree under test — while an EDITABLE install
+        # would join a population `test_pinned_dependency_property` reconciles against an external
+        # Dependabot reading that only a human can re-take. A ninth editable site added here would
+        # falsify that row's finding ("eight sites, seven alerts, one blind spot") until somebody
+        # re-read the alert list, which is a real cost paid for an editability this job does not
+        # use. The guard caught it the moment the file landed.
+        run: pip install .
+
+      - name: Install test tooling (PyYAML — a test-only dep, not a mokata dep)
+        # Same reason as `embeddings-leg.yml`: without a parser the workflow-lint tests RAISE
+        # rather than skip (§7g), and a leg that cannot answer must not report OK.
+        run: pip install --require-hashes -r requirements/ci.txt
+
+      - name: "Preflight — THE INSTRUMENT MUST BE ARMED (a disarmed sweep reads GREEN)"
+        # ⛔ The failure this prevents is the whole family: `TTYSWEEP=1` unset, a renamed
+        # `sitecustomize.py`, a PYTHONPATH that does not reach it — every one of those produces a
+        # clean journal and a green job, which is indistinguishable from a clean tree. So the
+        # instrument is proved to FIRE, on a synthetic offender, before the suite is trusted.
+        env:
+          TTYSWEEP: "1"
+          PYTHONPATH: tests/_tty_sweep
+          TTYSWEEP_OUT: ${{ runner.temp }}/preflight.jsonl
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, sys
+          # The ambient stream is the forced-TTY proxy iff the instrument loaded.
+          import _tty_prompt_sweep as S
+          assert isinstance(sys.stdin, S._ForcedTtyStdin), "the instrument did not install"
+          try:
+              input("this must be fatal")
+          except S.TtyPromptReached:
+              pass
+          else:
+              raise SystemExit("input() was NOT fatal — the sweep is disarmed and would report clean")
+          assert os.path.getsize(os.environ["TTYSWEEP_OUT"]) > 0, "the journal was not written"
+          print("instrument armed: forced TTY installed, input() fatal, journal written")
+          PY
+
+      - name: Sweep the whole suite
+        working-directory: tests
+        env:
+          TTYSWEEP: "1"
+          PYTHONPATH: _tty_sweep
+          TTYSWEEP_OUT: ${{ runner.temp }}/ttysweep.jsonl
+        # ⚠ `|| true`: an offender is reported by the JOURNAL, not by the suite's exit code. Under
+        # the instrument a caught offender also fails its own test, and other tests change branch
+        # because `isatty()` now answers True — so this run's pass/fail is not the signal and must
+        # not be read as one. `ci.yml` is where the suite's verdict lives.
+        run: python -m unittest discover -s . -t . > "${{ runner.temp }}/sweep.log" 2>&1 || true
+
+      - name: "Verdict — the journal, and nothing else"
+        env:
+          TTYSWEEP_OUT: ${{ runner.temp }}/ttysweep.jsonl
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, sys
+          path = os.environ["TTYSWEEP_OUT"]
+          rows = []
+          if os.path.exists(path):
+              with open(path, encoding="utf-8") as fh:
+                  rows = [json.loads(line) for line in fh if line.strip()]
+          seen = {}
+          for row in rows:
+              seen.setdefault(row["test"], row)
+          if not seen:
+              print("no test reaches a prompt on the ambient stdin.")
+              raise SystemExit(0)
+          print("%d test(s) hand their verdict to whoever is watching the terminal:\n" % len(seen))
+          for name, row in sorted(seen.items()):
+              print("  %s" % name)
+              print("      prompt: %s" % row["prompt"][:120])
+              print("      via   : %s" % (row["stack"][-1] if row["stack"] else "?"))
+          print("\nFix: install the test's own stdin with `_support.stdin_is(...)` and let the real")
+          print("reader read it — see `test_a3_decline_strands_at_spec` and doc 85 s7e. Do NOT")
+          print("patch the reader, and do NOT assume the runner is never a terminal.")
+          raise SystemExit(1)
+          PY

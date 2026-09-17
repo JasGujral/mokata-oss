@@ -41,7 +41,7 @@
 #     a property of the code, and no mutation can grade a ranking.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-M="$ROOT/scripts/mutate.sh"
+M="${MUTATE_SH:-$ROOT/scripts/mutate.sh}"
 export PYTHON="${PYTHON:-python3}"
 
 S=tests/_pyyaml_sweep.py            # the sweep — the §7i-graded gate

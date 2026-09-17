@@ -69,9 +69,10 @@ mutant() {
 
 # ==== ★ A. THE DERIVATION — every check stays intact and only the DOMAIN moves =================
 
+# ⚠ RE-AIMED at 0.0.20 stage 09. Intent unchanged, quotation re-read from the file as it is now.
 mutant "D01 ★★ the domain shrinks to tests/ — the split directories vanish" "$S" \
-  '            rel = os.path.relpath(full, root).replace(os.sep, "/")' \
-  '            rel = os.path.relpath(full, root).replace(os.sep, "/")
+  '            rel = _support.posix_rel(full, root).replace(os.sep, "/")' \
+  '            rel = _support.posix_rel(full, root).replace(os.sep, "/")
             if not rel.startswith("tests/"):
                 continue' "$T"
 

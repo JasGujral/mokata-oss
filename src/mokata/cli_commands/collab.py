@@ -18,7 +18,7 @@ from ._common import (
     _backend_projects,
     _cli_ask,
 )
-from ..deprecation import REMOVED_CHANNELS, RemovedChannelError
+from ..deprecation import RemovedChannelError, answerable_choices
 from ..session_transport import TRANSPORT_KINDS as _LIVE_KINDS
 
 # The `--to/--from` choices are DERIVED, never re-typed. They were a hand-written
@@ -33,8 +33,12 @@ from ..session_transport import TRANSPORT_KINDS as _LIVE_KINDS
 # `MIGRATE-ANSWERS-A-REMOVED-CHANNEL-AS-A-TYPO` (stage 11) on a second surface, and the first draft
 # of this slice introduced it while removing it somewhere else. Accepted here and refused by
 # `make_transport` with the channel's own removal record; `metavar` advertises only what works.
-STX_KINDS = tuple(_LIVE_KINDS) + tuple(REMOVED_CHANNELS)
-STX_METAVAR = "{%s}" % ",".join(_LIVE_KINDS)
+#
+# ⚠ THE PAIR IS NOW BUILT BY ONE HELPER (0.0.20 stage 11). It was assembled by hand here and,
+# separately, by hand in `cli_commands/migrate.py` — two correct implementations of the same
+# non-obvious rule, which is one implementation away from a third that gets it wrong. The rule and
+# the reason live in `deprecation.answerable_choices`; these two lines are now a call.
+STX_KINDS, STX_METAVAR = answerable_choices(_LIVE_KINDS)
 
 
 def cmd_vault(args: argparse.Namespace) -> int:

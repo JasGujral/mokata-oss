@@ -1,0 +1,36 @@
+# Line endings are DECLARED here, not inherited from whoever checked the repo out.
+#
+# ⛔ WHY THIS FILE EXISTS. Until 0.0.20 there was no `.gitattributes` at all, so a Windows
+# checkout took Git for Windows' `core.autocrlf=true` default and every text file arrived with
+# CRLF. `bash` then reads `#!/usr/bin/env bash\r`, and a line-anchored `grep`/`sed` inside a
+# shell script stops matching the last field on every line. That is not a cosmetic difference:
+# it made mokata's own shell tooling fail on the platform, and the failures did not look like
+# line endings — they looked like the tools lying about the repo.
+#
+# MEASURED at the 0.0.20 cut, by converting a mirror checkout to CRLF on Linux and re-running:
+#   * `test_floor_provisioner` — `floor-python.sh` reported "pyproject.toml declares no
+#     `requires-python`" against a pyproject.toml that declares exactly that.
+#   * `test_a9_mutant_batches_are_swept` — the sweep reported "0 mutants swept", i.e. a corpus
+#     that reaches nothing reports "no stale patterns" for the same reason a working one does.
+# Both reproduce from CRLF alone, with no Windows involved, and both were red on the mirror's
+# windows-latest leg.
+#
+# ⭐ LF IS THE DECLARATION, and the two exceptions are declarations too. A `.cmd`/`.bat` is read
+# by cmd.exe, which is the one consumer here that genuinely wants CRLF, so it is named rather
+# than left to a default — the same rule the rest of this repo applies to pragmas and pins.
+* text=auto eol=lf
+
+# cmd.exe is the exception, and it is stated rather than inherited.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binaries: never touched, never diffed as text.
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.whl binary

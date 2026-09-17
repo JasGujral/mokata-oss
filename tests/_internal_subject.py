@@ -161,6 +161,23 @@ def tree_state(root):
     return TreeReport(TREE_INCOHERENT, internal_present)
 
 
+def _subject_present(root, rel, tree):
+    """Whether one subject is AVAILABLE in this tree.
+
+    ⚠ THERE ARE TWO KINDS OF SUBJECT AND THEY ARE NOT INTERCHANGEABLE. Almost every subject is a
+    repo-relative POSIX path and *present* means it exists on disk. `DEV_TREE_SUBJECT` is a
+    CONDITION — the second spelling of a boundary skip names no file at all — and for it *present*
+    means this tree IS a dev checkout.
+
+    ⛔ Reading the condition as a path is not a near-miss, it is a wrong answer in every tree: no
+    file is called `<the tree is a dev checkout>`, so the subject would read ABSENT at home too and
+    the census would predict a skip for a test that actually RUNS there.
+    """
+    if rel == DEV_TREE_SUBJECT:
+        return tree.kind == TREE_DEV
+    return os.path.exists(_at(root, rel))
+
+
 def subject_state(root, subjects, tree=None):
     """The state of one guarded class's subjects in `root`. `subjects` is repo-relative POSIX."""
     tree = tree if tree is not None else tree_state(root)
@@ -169,7 +186,7 @@ def subject_state(root, subjects, tree=None):
         # having asked nothing, and a vacuous GRADED is byte-identical to a real one. A class
         # whose guard the reader could not resolve is UNDECIDABLE, in either tree.
         return UNDECIDABLE
-    missing = tuple(rel for rel in subjects if not os.path.exists(_at(root, rel)))
+    missing = tuple(rel for rel in subjects if not _subject_present(root, rel, tree))
     if not missing:
         return GRADED
     if tree.kind == TREE_MIRROR:
@@ -280,6 +297,54 @@ def _negated_probe_subjects(node, constants):
     return subjects
 
 
+#: The subject a TREE-STATE probe is keyed on. ⚠ THE ANGLE BRACKETS ARE NOT DECORATION. Every other
+#: subject in this module is a repo-relative POSIX path, and a caller that joined this one onto a
+#: root would build a path that cannot exist. This subject is a CONDITION, not a file — which is
+#: exactly why the census could not see it before.
+DEV_TREE_SUBJECT = "<the tree is a dev checkout>"
+
+
+def _dev_tree_probe(node):
+    """True when `node` means *"this tree is NOT a dev checkout"* — the SECOND declared spelling.
+
+    ⛔ THE VOCABULARY WAS SHORT BY ONE AND A COUNT COMPARISON IS WHAT SAID SO. Until 0.0.20 this
+    module read exactly one shape, `if not os.path.exists(PATH): skipTest(...)`, and
+    `test_a15_docs_index_next_free_is_derived` had introduced a second:
+
+        if isub.tree_state(ROOT).kind != isub.TREE_DEV:
+            self.skipTest("not a dev checkout")
+
+    That skip fires on the mirror and nowhere else — it IS a boundary skip — and the census could
+    not see it, so the mirror reported **167** skips against a derivation of **166**. The one test
+    comparing two independent readings of the same boundary is the only thing that noticed, which is
+    the argument for the comparison rather than for a bigger number.
+
+    ⚠ THE OPERATOR IS LOAD-BEARING, exactly as the negation is one shape over. `!= TREE_DEV` skips
+    when the tree is NOT a dev checkout — the mirror. `== TREE_DEV` skips ON the dev tree, which is a
+    different test with the opposite meaning, and counting it would put a skip in the mirror column
+    that fires only at home.
+
+    ⚠ AND THE `.kind` MUST COME FROM `tree_state(…)`. A bare `x.kind != TREE_DEV` says nothing about
+    the tree this run is in, and a reader that accepted any attribute called `kind` would be matching
+    a NAME where it means a MECHANISM — this file's own SEAM_EXPANSION lesson, one module over.
+    """
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Compare) or len(child.ops) != 1:
+            continue
+        if not isinstance(child.ops[0], ast.NotEq):
+            continue
+        left = child.left
+        if not isinstance(left, ast.Attribute) or left.attr != "kind":
+            continue
+        if not isinstance(left.value, ast.Call):
+            continue
+        if not (sr._dotted(left.value.func) or "").endswith("tree_state"):
+            continue
+        if (sr._dotted(child.comparators[0]) or "").endswith("TREE_DEV"):
+            return True
+    return False
+
+
 def _calls_skiptest(node):
     for child in ast.walk(node):
         if isinstance(child, ast.Call) and (sr._dotted(child.func) or "").endswith("skipTest"):
@@ -299,9 +364,11 @@ def runtime_boundary_skips(corpus):
             tree = ast.parse(source)
         except SyntaxError:
             continue
+        # ⚠ NO `if not constants: continue` HERE. It used to skip the whole file, which was
+        # harmless while the only shape needed a constant to name — and became a blind spot the
+        # moment a second shape existed that names no path at all. A file whose only boundary skip
+        # is a tree-state probe carries no anchored constant and would have been passed over.
         constants = sr.anchored_constants(tree)
-        if not constants:
-            continue
         for cls in [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]:
             for method in cls.body:
                 if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -313,6 +380,8 @@ def runtime_boundary_skips(corpus):
                     if not isinstance(stmt, ast.If) or not _calls_skiptest(stmt):
                         continue
                     subjects |= _negated_probe_subjects(stmt.test, constants)
+                    if _dev_tree_probe(stmt.test):
+                        subjects.add(DEV_TREE_SUBJECT)
                 if subjects:
                     found.append(RuntimeSkip(filename, cls.name, method.name, subjects))
     return tuple(found)

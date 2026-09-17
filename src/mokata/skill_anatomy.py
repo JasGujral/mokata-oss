@@ -115,14 +115,28 @@ ANATOMY: Dict[str, Anatomy] = {
             _r("This test passes already — good enough.",
                "A test that never failed proves nothing; watch it FAIL (RED) before any code "
                "exists."),
+            # ⚠ THE ANSWER NAMES WHAT IS *NOT* SCOPE CREEP, and that clause is the fix for OSS
+            # #65. As written, this row read as "one case per AC and stop", and an agent obeying it
+            # skipped the zero value and the hostile key — then the reviewer re-ran that same suite
+            # and inherited the gap. A boundary value does not change what is REQUIRED; it is the
+            # approved AC evaluated over its whole input domain instead of one comfortable point.
             _r("I'll add a couple of extra cases I think matter.",
-               "Test only the approved ACs; unapproved coverage is scope creep — amend the "
-               "spec instead."),
+               "New BEHAVIOUR is scope creep — amend the spec. But the approved AC at its "
+               "CONSUMER, and at the boundary of its own inputs (empty, zero/falsy, absent vs "
+               "present-and-empty, a hostile key), is that same AC actually tested — not extra "
+               "scope, and not optional."),
+            _r("The transformer populates it — the AC is covered.",
+               "That is the PRODUCER. The AC is a promise to whoever READS the value: assert it "
+               "at the consumer, in the shape the consumer reads, or you have proven a field "
+               "nobody uses."),
         ),
         verification=(
             "every test maps 1:1 to an approved acceptance criterion",
             "each test was shown FAILING (RED) before any implementation",
             "real names/signatures are used — no invented interface",
+            "each AC is asserted at a CONSUMER of the value, not only where it is produced",
+            "each AC is fed the boundary of its input domain — empty, zero/falsy, absent vs "
+            "present-and-empty, a hostile key — or the gap is named",
             "NO implementation was written in this phase",
         )),
     "develop": Anatomy(
@@ -168,6 +182,13 @@ ANATOMY: Dict[str, Anatomy] = {
             _r("One quick pass covers it.",
                "Both passes run: against the approved spec, then quality across the five named "
                "axes."),
+            # ⚠ OSS #65: the reviewer *"re-ran my tests + read the diff, so it inherited the same
+            # blind spots."* A suite is the builder's artefact in executable form, and running it
+            # answers a question about the tests, never about the ACs.
+            _r("The tests pass, so the ACs are met.",
+               "The suite is the builder's claim, compiled. A green run says the tests agree "
+               "with the code — never that either matches the AC. Trace a CONSUMER and name an "
+               "input the tests never feed; those are the two things running them cannot do."),
         ),
         verification=(
             "pass 1 checked the diff against the approved spec/approach (divergence flagged)",
@@ -175,7 +196,11 @@ ANATOMY: Dict[str, Anatomy] = {
             "security · performance",
             "each finding carries a severity label (Blocking/Minor/Suggestion/Info) and "
             "names file:line",
-            "NO builder claims were used — the verdict was re-derived independently",
+            "NO builder claims were used — the verdict was re-derived independently, and the "
+            "test suite was JUDGED rather than trusted",
+            "for each changed contract, a real CONSUMER was opened and the AC checked as that "
+            "consumer reads it",
+            "for each AC, one input class the tests never feed was named (or its absence stated)",
             "the verdict was persisted (`record-review`) so ship can read it",
         ),
         references=(

@@ -39,6 +39,7 @@ import multiprocessing as mp
 import os
 import random
 import sqlite3
+import sys
 import tempfile
 import time
 import unittest
@@ -73,7 +74,30 @@ WORKERS = 2
 # 2-4x slower, so the job budget is < 30s. Tuned UP from a first cut of 60 ops/worker, which
 # finished in 0.16s — the two processes barely overlapped, and a storm that is over before the
 # windows meet is not a stress test. At 2000 both windows are genuinely in the locks together.
-MS_S7_BUDGET = "4000 ops; ~2.8s local, < 30s CI"
+MS_S7_BUDGET = "4000 ops; ~2.8s local, < 30s CI on a NON-DURABLE store"
+
+# ⛔ THAT BUDGET WAS MEASURED AGAINST A STORE THAT WAS NOT ACTUALLY DURABLE, and 0.0.20 made it
+# durable. `memory/_sqlite.py` now sets `PRAGMA synchronous=FULL` explicitly instead of inheriting
+# whatever the local libsqlite3 was compiled with, which is the difference between an fsync per
+# commit and no fsync until checkpoint. MEASURED, 2000 single-row commits on the dev VM:
+#
+#     synchronous=FULL     0.842 s   (0.421 ms/commit)
+#     synchronous=NORMAL   0.012 s   (0.006 ms/commit)     -> 70x per commit
+#
+# This storm is ~4000 commits, so the cost lands here and essentially nowhere a user can feel it:
+# real sessions write a handful of times, where 0.4 ms becomes 20 ms and nobody notices. On the
+# windows-latest runner `FlushFileBuffers` against the Azure temp disk is one to two orders of
+# magnitude slower than this VM's fsync, and the 0.0.20 cut's Windows leg duly spent >180 s here
+# and was killed by the step's own 5-minute cap.
+#
+# ⭐ THE BUDGET MOVES, THE PRAGMA DOES NOT. The op count is what makes the two windows genuinely
+# overlap in the locks (a first cut at 60 ops/worker finished in 0.16 s and they barely met), and
+# what this grades is CROSS-PROCESS LOCKING, not write throughput — so shrinking it to fit an fsync
+# bill would weaken the only thing it measures in order to hide a cost that is correct.
+# ⚠ And the exact Windows number is still UNMEASURED: nothing in this project runs that platform
+# outside CI, so `setUpClass` now PRINTS its wall clock. Re-state this budget from THAT number when
+# the next Windows leg reports one, not from this comment.
+WORKER_REPORT_TIMEOUT_S = int(os.environ.get("MOKATA_STRESS_REPORT_TIMEOUT", "600"))
 
 MEMORY_DIRNAME = "memory"        # mirrors memory.store.MEMORY_DIRNAME (import-cycle-free literal)
 BUNDLE_TAG = "stress-shared"     # the ONE name both windows race for
@@ -405,7 +429,21 @@ class TwoProcessStress(unittest.TestCase):
         for p in procs:
             p.start()
         go.set()
-        cls.reports = [q.get(timeout=180) for _ in range(WORKERS)]
+        # A DEADLOCK still has to fail FAST relative to the runner, so this bound stays inside the
+        # CI step's cap: a wedged run reports "no worker report, after N seconds" here, with a wall
+        # clock to read, instead of being killed by the runner with nothing to read.
+        _t0 = time.time()
+        try:
+            cls.reports = [q.get(timeout=WORKER_REPORT_TIMEOUT_S) for _ in range(WORKERS)]
+        except Exception:
+            print("\nMS.S7 storm: NO worker report after %.1fs (bound %ss, %s) — see MS_S7_BUDGET"
+                  % (time.time() - _t0, WORKER_REPORT_TIMEOUT_S, sys.platform), file=sys.stderr)
+            raise
+        cls.storm_seconds = time.time() - _t0
+        # THE NUMBER THIS PLATFORM HAS NEVER REPORTED. Printed unconditionally, green or red, so
+        # the Windows cost of `synchronous=FULL` stops being an inference from a Linux benchmark.
+        print("\nMS.S7 storm: %d workers x %d ops in %.1fs on %s (durable: synchronous=FULL)"
+              % (WORKERS, OPS_PER_WORKER, cls.storm_seconds, sys.platform), file=sys.stderr)
         for p in procs:
             p.join(timeout=60)
         cls.exitcodes = [p.exitcode for p in procs]
@@ -733,7 +771,7 @@ class WalSwitchUnderContention(unittest.TestCase):
             for p in procs:
                 p.start()
             go.set()
-            reps = [q.get(timeout=120) for _ in procs]
+            reps = [q.get(timeout=WORKER_REPORT_TIMEOUT_S) for _ in procs]
             for p in procs:
                 p.join(timeout=60)
 

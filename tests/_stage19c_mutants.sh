@@ -16,7 +16,7 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-M="$ROOT/scripts/mutate.sh"
+M="${MUTATE_SH:-$ROOT/scripts/mutate.sh}"
 export PYTHON="${PYTHON:-python3}"
 
 H=src/mokata/hook_cli.py

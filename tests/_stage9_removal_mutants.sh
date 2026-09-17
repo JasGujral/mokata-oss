@@ -39,11 +39,22 @@ GRAPH=docs/how-to/use-a-codebase-graph.md
 STORE=docs/how-to/configure-storage-backends.md
 SESS=docs/how-to/portable-sessions.md
 
+# ⛔ I01's TWO VERSION STRINGS ARE DERIVED, NOT TYPED — and the reason is a measured one, not a
+# preference. They were typed as `0.0.19` -> `0.0.20`, and the 0.0.20 cut turned I01 into
+# `0 occurrence(s) in src/mokata/__init__.py`: mutate.sh exits 3 on it, the driver ABORTS, and
+# every mutant after it in the list is silently ungraded — which is `MUTANT-BATCHES-RUN-BY-NOBODY`,
+# the exact row this batch's sweep exists to close, re-committed by the batch itself. A mutant that
+# means *"the NEXT cut"* must read the CURRENT version rather than name it, or it expires at every
+# cut and nobody remembers. Found by `test_a9_mutant_batches_are_swept` at the 0.0.20 release tail.
+CUR_V="$("$PY" -c 'import re,sys;print(re.search(r"__version__ = \"([^\"]+)\"", open(sys.argv[1],encoding="utf-8").read()).group(1))' src/mokata/__init__.py)"
+NEXT_V="$("$PY" -c 'import sys;a,b,c=sys.argv[1].split(".");print("%s.%s.%d" % (a,b,int(c)+1))' "$CUR_V")"
+
 T9='test_stage9_removal_release.py'
+TA12='test_a12_removal_drift_corpus_and_surfaces.py'
 TS2='test_simp_s2_deprecation.py'
 
-TOTAL=34
-ran=0; red=0; green=0; survivors=""
+TOTAL=32
+ran=0; red=0; green=0; survivors=""; equiv=0; unexpected=""
 
 # ---- step 0: the green baseline ---------------------------------------------------------------
 printf '================================================================================\n'
@@ -82,6 +93,29 @@ mutant() {
     esac
 }
 
+# Same contract as `mutant`, with the verdict INVERTED — the shape 0.0.17 stage 19c introduced. A
+# declared-equivalent mutant is one no test CAN kill, so a GREEN is the correct result and a RED
+# means the reasoning has stopped being true. ⭐ That inversion is the whole value: it turns "this
+# survives and we think that is fine" from a sentence in a report into a graded claim.
+equivalent() {
+    local label="$1" rc=0 out
+    ran=$((ran + 1))
+    shift
+    out="$("$M" "$label" "$@")" || rc=$?
+    if [ -n "$out" ]; then printf '%s\n' "$out"; fi
+    if [ "$rc" -ne 0 ]; then
+        printf '\nBATCH ABORTED — mutate.sh exited %s on mutant %s of %s\n' "$rc" "$ran" "$TOTAL"
+        printf '  mutant: %s\n' "$label"
+        exit "$rc"
+    fi
+    case "$out" in
+        GREEN*) equiv=$((equiv + 1)); printf '        ^ EQUIVALENT — surviving is the expected, correct result.\n' ;;
+        RED*)   unexpected="$unexpected  - $label"$'\n' ;;
+        *)      printf '\nBATCH ABORTED — exit 0 with no verdict on mutant %s of %s\n' "$ran" "$TOTAL"
+                exit 70 ;;
+    esac
+}
+
 # ==== A. the declaration and the constant ========================================================
 
 mutant "A01 ★★ the declaration points back at 0.0.17 — THE DEFECT, restored verbatim" "$DEP" \
@@ -103,11 +137,25 @@ mutant "A04 ★ prose with no declaration is parsed as one" "$DEP" \
   '    if False:
         return {}' "$T9"
 
+# ⚠ RE-POINTED at 0.0.20 stage 12. The mutation is unchanged; its GRADER is new. This survived
+# its first-ever real run (the batch used to abort seven mutants earlier), and it survived for the
+# reason a literal always does — today's literal equals today's derived value. No behavioural test
+# can separate them, so the property became a STRUCTURAL one, in the file that now owns this lane's
+# corpus work: the declaration module's assignment must be a CALL, not a constant.
 mutant "A05 ★★ the constant stops being derived — a second literal returns to the module" "$DEP" \
   'REMOVAL_RELEASE = removal_target(REMOVAL_DECLARATION)' \
-  'REMOVAL_RELEASE = "0.0.18"' "$T9"
+  'REMOVAL_RELEASE = "0.0.18"' "$TA12"
 
-mutant "A06 ★★ a notice carries its own release again — the reversed pin's own offender" "$DEP" \
+# ⚠ DECLARED EQUIVALENT **WHILE `CHANNELS` IS EMPTY**, on the same condition and the same evidence
+# as I01 below. `DeprecationNotice.removal` defaults to the derived constant; with no deprecated
+# channel left, no notice is constructed anywhere, so the default is never observed and no test can
+# reach the mutation. Replayed at 0.0.20 stage 12: SURVIVED.
+# ⭐ The GENERAL class — a dataclass default that no caller exercises, so a documented invariant is
+# enforced by nobody — is filed as `REMOVED-RECORD-RELEASE-FIELD-IS-REQUIRED-BY-NOBODY` (doc 84),
+# whose measured instance is the sibling field one class over. This entry is the second instance
+# and is declared rather than retired for I01's reason: the equivalence expires the day anything is
+# deprecated again, and the batch will say so.
+equivalent "A06 [EQUIVALENT while CHANNELS is empty] ★★ a notice carries its own release again — the reversed pin's own offender" "$DEP" \
   '    removal: str = REMOVAL_RELEASE' \
   '    removal: str = "0.0.17"' "$TS2"
 
@@ -187,36 +235,55 @@ mutant "D02 ★★ the two drift directions collapse into one (§7g)" "$DR" \
 
 # ==== E. the other four surfaces =================================================================
 
+# ⚠ RE-AIMED at 0.0.20 stage 12. Intent unchanged; the quotation is re-read from the page/guard
+# as it is now. The pre-fix text these mutants quoted was corrected when the 0.0.18 removal landed.
 mutant "E01 ★★ the WRAPPED quotation stops being seen — the sweep reads clean and is blind" "$DR" \
-  'r"REMOVED\s+in\s+mokata[\s>]*(\d+(?:\.\d+)+)"' \
-  'r"REMOVED\s+in\s+mokata (\d+(?:\.\d+)+)"' "$T9"
+  '_MENTION = re.compile(r"remov\w*(?:[^\d\n]|[\s>]*\n[\s>]*){0,40}?(\d+\.\d+(?:\.\d+)+)", re.I)' \
+  '_MENTION = re.compile(r"remov\w* (\d+\.\d+(?:\.\d+)+)", re.I)' "$T9"
 
-mutant "E02 ★★ the admonition-title form is dropped — three of the five pages go unread" "$DR" \
-  'r"|removal:\s*(\d+(?:\.\d+)+)", re.I)' \
-  'r"", re.I)' "$T9"
+# ⛔ RETIRED — E02 ★★ the admonition-title form is dropped — three of the five pages go unread
+#    RETIRED at 0.0.20 stage 12 — the alternation it removed no longer exists, and the property it
+#    graded is now graded by E01. 0.0.18 stage 10 folded the two remembered spellings (the rendered
+#    notice and the admonition title) into ONE window-based form, precisely because a matcher built from
+#    remembered spellings had already missed a third. There is no separate title branch left to delete,
+#    so this mutant has nothing to mutate; E01 deletes the window itself, which is the whole matcher.
 
 mutant "E03 ★★ drift compares nothing — every stated release is accepted" "$DR" \
   '    return tuple(m for m in removal_mentions(docs) if m[2] != removal)' \
   '    return ()' "$T9"
 
+# ⚠ RE-AIMED at 0.0.20 stage 12. Intent unchanged; the quotation is re-read from the page/guard
+# as it is now. The pre-fix text these mutants quoted was corrected when the 0.0.18 removal landed.
 mutant "E04 ★★ a published page reverts to 0.0.17 — the REAL offender, on the real tree" "$GRAPH" \
-  '!!! warning "The Neo4j backend is deprecated (removal: 0.0.18)"' \
-  '!!! warning "The Neo4j backend is deprecated (removal: 0.0.17)"' "$T9"
+  '## Wire an external graph database (Neo4j) — REMOVED in 0.0.18' \
+  '## Wire an external graph database (Neo4j) — REMOVED in 0.0.17' "$T9"
 
+# ⚠ RE-AIMED at 0.0.20 stage 12. Intent unchanged; the quotation is re-read from the page/guard
+# as it is now. The pre-fix text these mutants quoted was corrected when the 0.0.18 removal landed.
 mutant "E05 ★★ the WRAPPED quotation reverts on a real page — E01's offender, not synthetic" "$STORE" \
-  '    > 0.0.18. The canonical memory store is local SQLite' \
-  '    > 0.0.17. The canonical memory store is local SQLite' "$T9"
+  '    `obsidian` and `native-memory` were deprecated in 0.0.15 and **REMOVED in mokata 0.0.18**.' \
+  '    `obsidian` and `native-memory` were deprecated in 0.0.15 and **REMOVED in mokata 0.0.17**.' "$T9"
 
+# ⚠ RE-AIMED at 0.0.20 stage 12. Intent unchanged; the quotation is re-read from the page/guard
+# as it is now. The pre-fix text these mutants quoted was corrected when the 0.0.18 removal landed.
 mutant "E06 ★★ a THIRD page reverts — the corpus axis (§7j), not the two files this stage edited" "$SESS" \
-  '(removal: 0.0.18)' \
-  '(removal: 0.0.17)' "$T9"
+  '!!! warning "`--to vault` / `--from vault` was REMOVED in 0.0.18 — and your bundles are fine"' \
+  '!!! warning "`--to vault` / `--from vault` was REMOVED in 0.0.17 — and your bundles are fine"' "$T9"
 
 # ==== H. the class guard — the row said ONE pin and there were SIX =============================
 
+# ⚠ RE-AIMED at 0.0.20 stage 12. Intent unchanged; the quotation is re-read from the page/guard
+# as it is now. The pre-fix text these mutants quoted was corrected when the 0.0.18 removal landed.
 mutant "H01 ★★ the domain widens to every test — 31 synthetic fixtures convict, the guard is noise" "$DR" \
-  '        if _DEPRECATION_VOCABULARY not in text.lower():
+  '    found = []
+    for path in sorted(sources):
+        text = sources[path] or ""
+        if _DEPRECATION_VOCABULARY not in text.lower():
             continue' \
-  '        if False:
+  '    found = []
+    for path in sorted(sources):
+        text = sources[path] or ""
+        if False:
             continue' "$T9"
 
 mutant "H02 ★★ only the FIRST argument is read — assertEqual(catalog, \"0.0.17\") walks free" "$DR" \
@@ -227,17 +294,19 @@ mutant "H03 ★★ the method list loses assertEqual — the two manifest pins g
   'NOTICE_PIN_METHODS = ("assertIn", "assertNotIn", "assertEqual", "assertNotEqual")' \
   'NOTICE_PIN_METHODS = ("assertIn", "assertNotIn")' "$T9"
 
+# ⚠ RE-AIMED at 0.0.20 stage 12. Intent unchanged; the quotation is re-read from the page/guard
+# as it is now. The pre-fix text these mutants quoted was corrected when the 0.0.18 removal landed.
 mutant "H04 ★★ a partial version matches — every literal with two dots in it is an offender" "$DR" \
-  '_BARE_RELEASE = re.compile(r"^\d+\.\d+(?:\.\d+)+$")' \
+  '_BARE_RELEASE = re.compile(r"\d+\.\d+(?:\.\d+)+")' \
   '_BARE_RELEASE = re.compile(r"\d+\.\d+")' "$T9"
 
-mutant "H05 ★★ the second SRC copy returns — the value init writes into every manifest.json" "src/mokata/profiles.py" \
-  '        "deprecated": REMOVAL_RELEASE,
-    },
-    "grep": {' \
-  '        "deprecated": "0.0.17",
-    },
-    "grep": {' "test_simp_s2_shim_parity.py"
+# ⛔ RETIRED — H05 ★★ the second SRC copy returns — the value init writes into every manifest.json
+#    RETIRED at 0.0.20 stage 12 — §7h, the pin encodes a premise the tree no longer holds. It planted
+#    a SECOND copy of the release into src/mokata/profiles.py, which init_repo writes into every repo
+#    manifest.json. profiles.py:23 records that stage 14 removed the only consumer of that marker
+#    (neo4j) and the field with it, so there is no second copy to plant. The CLASS this mutant belonged
+#    to — a release literal outside the one declaration — is graded by the same batch over the DECLARED
+#    module set, which does not depend on any one field surviving.
 
 # ==== F. exactly one release string ==============================================================
 
@@ -251,14 +320,33 @@ mutant "F01 ★★ prose becomes a value — a docstring about the old release c
 
 # ==== I. the tripwire is wired to the REAL version ==============================================
 
-mutant "I01 ★★ THE 0.0.18 CUT, SIMULATED — bump __version__ to the promised release with the channels still here" "src/mokata/__init__.py" \
-  '__version__ = "0.0.17"' \
-  '__version__ = "0.0.18"' "$T9"
+# ⚠ RE-AIMED at 0.0.20 stage 12. Intent unchanged; the quotation is re-read from the page/guard
+# as it is now. The pre-fix text these mutants quoted was corrected when the 0.0.18 removal landed.
+# ⚠ DECLARED EQUIVALENT **WHILE `CHANNELS` IS EMPTY**, and the condition is the point.
+# The lane's verdict (PENDING / LANDED / OVERDUE) is a statement about deprecated channels that are
+# still implemented. `CHANNELS` has been empty since 0.0.18 stage 14, so every verdict is trivially
+# LANDED and no version bump can make it wrong: this mutant grades nothing TODAY. Replayed through
+# the real mutator at 0.0.20 stage 12 and it SURVIVED, which is the measurement behind this note
+# rather than the reasoning alone.
+# ⭐ Declared rather than retired BECAUSE the equivalence has an expiry: the day anything is
+# deprecated again this mutation becomes killable, the batch reports it under DECLARED-EQUIVALENT
+# ... CAUGHT, and the reasoning gets re-derived. A retirement would have to be REMEMBERED.
+equivalent "I01 [EQUIVALENT while CHANNELS is empty] ★★ THE NEXT CUT, SIMULATED — bump __version__ past the declared removal release and
+       see whether the lane's verdict still holds" "src/mokata/__init__.py" \
+  "__version__ = \"$CUR_V\"" \
+  "__version__ = \"$NEXT_V\"" "$T9"
 
 # ==== verdict ==================================================================================
 
 printf '\n================================================================================\n'
-printf 'STAGE-9 REMOVAL-PROMISE MUTANTS: %s ran of %s — %s RED, %s GREEN\n' "$ran" "$TOTAL" "$red" "$green"
+printf 'STAGE-9 REMOVAL-PROMISE MUTANTS: %s ran of %s — %s RED, %s GREEN, %s EQUIVALENT\n' \
+    "$ran" "$TOTAL" "$red" "$green" "$equiv"
+if [ -n "$unexpected" ]; then
+    printf 'DECLARED-EQUIVALENT mutants that were CAUGHT — the equivalence reasoning is stale and\n'
+    printf 'must be re-derived before this batch reads as a score:\n%s' "$unexpected"
+    printf '================================================================================\n'
+    exit 1
+fi
 if [ "$green" -ne 0 ]; then
     printf 'SURVIVORS (each is a pin that does not grade):\n%s' "$survivors"
     printf '================================================================================\n'

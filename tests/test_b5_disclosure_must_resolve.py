@@ -266,12 +266,28 @@ class TestTheDisclosedSlip(unittest.TestCase):
                           % verdict.render())
 
     def test_b5_a_disclosed_slip_names_where_and_when_it_was_published(self):
+        """⛔ THE DATE AND THE VENUE ARE DERIVED FROM THE ENTRY, NOT TYPED BESIDE IT.
+
+        The first draft asserted the literals `disclosed 2026-08-19` and `GitHub release body`,
+        which were true of the whole DISCLOSED population at the 0.0.19 cut because that population
+        had one publication date and one venue. The 0.0.20 cut added a second slip with a different
+        date and a different venue, and the pin went red for the RELEASE rather than for the
+        property — doc 85 §7h, a pin encoding a false premise. What the row actually requires is
+        that a disclosed slip carry BOTH facts, so that is what is asserted: the entry's own `on`
+        and `venue`, rendered. A `render()` that dropped either still reds.
+        """
         report = D.check_disclosure_resolves(_shipped(), None, cutting="0.0.18")
         disclosed = report.of(D.DISCLOSED)
         self.assertTrue(disclosed)
         for verdict in disclosed:
-            self.assertIn("disclosed 2026-08-19", verdict.detail)
-            self.assertIn("GitHub release body", verdict.detail)
+            entry = D.account_for(verdict.claim)
+            self.assertIsNotNone(entry, "a DISCLOSED verdict with no accounting entry behind it: %s"
+                                        % verdict.render())
+            self.assertRegex(entry.on, r"^\d{4}-\d{2}-\d{2}$",
+                             "%r carries no publication DATE" % entry.fragment)
+            self.assertTrue(entry.venue.strip(), "%r names no VENUE" % entry.fragment)
+            self.assertIn("disclosed %s" % entry.on, verdict.detail)
+            self.assertIn(entry.venue, verdict.detail)
 
     def test_b5_held_and_disclosed_are_different_states(self):
         """⭐ The PostgreSQL floor commitment did NOT slip — its date is PostgreSQL 14's upstream
@@ -457,11 +473,34 @@ class TestOffenderOneAgainstThePlans(unittest.TestCase):
         self.assertEqual(report.stale, ())
 
     def test_b5_the_offender_was_false_not_stale(self):
-        """The decision, held to the corpus that decided it: the row that OWNS the restore is open
-        and assigns it to 0.0.20. STALE would have meant already-done; the assignment says owed."""
+        """The decision — FALSE, not STALE — without a second copy of a mutable promise in it.
+
+        ⛔ The first draft asserted the literal `0.0.20`. At the 0.0.20 release tail the row MOVED
+        to 0.0.21, because 0.0.20 built neither candidate mechanism, and this pin went red for the
+        RELEASE rather than for the property. That is doc 84's own *no test hand-types the removal
+        release* rule arriving one release late, and doc 85 §7h — a pin encoding a false premise.
+
+        The property has two halves and neither names a version:
+
+          * the key is PRESENT in the plan, so the restore is still OWED — an ABSENT key would mean
+            already-done, which is what STALE would have meant and is the reading this row rejected;
+          * the release the plan assigns is the release the SHIPPED CONSTANT names. That is the whole
+            claim of the row: a promise printed in `src/` must point at the release that carries it.
+            Two independent artefacts, compared — which is what the literal was standing in for.
+        """
+        from mokata.branch_protection import RESTORE_ROW
         index = D.plan_assignments(_plans())
-        self.assertIn(OFFENDER_KEY, index)
-        self.assertEqual(sorted({a.release for a in index[OFFENDER_KEY]}), ["0.0.20"])
+        self.assertIn(OFFENDER_KEY, index,
+                      "%s is in no planning table, so the restore reads as DONE — the offender "
+                      "would be STALE rather than FALSE and this row decided the other way"
+                      % OFFENDER_KEY)
+        named = re.findall(r"\d+\.\d+\.\d+", RESTORE_ROW)
+        self.assertEqual(len(named), 1,
+                         "the shipped constant names %d releases, so 'the release it names' is not "
+                         "a single fact: %r" % (len(named), RESTORE_ROW))
+        self.assertEqual(sorted({a.release for a in index[OFFENDER_KEY]}), named,
+                         "the constant printed to users names %s; the plan assigns %s"
+                         % (named, sorted({a.release for a in index[OFFENDER_KEY]})))
 
 
 # ---- deliverable 5: wiring ------------------------------------------------------------------------

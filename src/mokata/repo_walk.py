@@ -73,15 +73,37 @@ def prune_source_dirs(dirpath: str, dirnames: List[str], *,
     """Prune `dirnames` IN PLACE (the `os.walk` contract) to this repo's own source.
 
     Dropped: hidden directories (`.git`, `.venv`, `.mokata`, `.mypy_cache` — config, state and
-    caches, never source) and nested checkouts (someone else's source, wherever it sits).
+    caches, never source), nested checkouts (someone else's source, wherever it sits), and
+    package-manager INSTALL DIRECTORIES (`languages.VENDOR_DIRS`).
+
+    🔴 THE THIRD CLAUSE IS NEW AT 0.0.20 AND IT CLOSES A LIVE DEFECT, not a hypothetical one.
+    "Someone else's source" was already this function's stated subject, but the only detector was
+    `.git` — and an npm package has no `.git`. So on any JavaScript or TypeScript repo the grep
+    code-graph floor walked straight into `node_modules`, whose files carry six of the extensions
+    `languages.SOURCE_EXTENSIONS` declares. Measured on a two-file fixture before the fix:
+
+        defs myOwnThing  -> src/app.ts  AND  node_modules/left-pad/index.ts
+        defs vendored    -> node_modules/left-pad/index.ts        (exists NOWHERE else)
+
+    ⛔ On a real Node repo `node_modules` holds tens of thousands of files, so this is not a
+    cosmetic duplicate — it is every `defs`/`callers`/blast-radius answer naming files the user
+    does not maintain, which is verbatim the harm the paragraph above says this function prevents.
+    The concept was right and the detector was too narrow.
+
+    ⚠ NOT RECORDED IN `skipped`, deliberately, and for the reason hidden directories are not: it
+    would fire on every walk of every JS repo and bury the one line that matters. A nested checkout
+    is news; an install directory is the standing rule.
 
     When `skipped` is given, the ABSOLUTE path of each pruned checkout is appended to it, so
     the caller can say how many it skipped and where instead of silently narrowing its own
     answer. Hidden directories are not recorded: they are the long-standing rule, and a walker
     reporting `.venv` every run would bury the one line that matters."""
+    from .languages import VENDOR_DIRS
     kept = []
     for name in dirnames:
         if name.startswith("."):
+            continue
+        if name in VENDOR_DIRS:
             continue
         full = os.path.join(dirpath, name)
         if is_checkout_boundary(full):

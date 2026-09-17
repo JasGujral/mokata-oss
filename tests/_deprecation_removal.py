@@ -76,7 +76,10 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 import ast
 import importlib
 import importlib.util
+import os
 import re
+
+import _support
 
 __all__ = [
     "IMPLEMENTATIONS", "REMOVAL_PENDING", "REMOVAL_LANDED", "REMOVAL_OVERDUE",
@@ -278,6 +281,192 @@ def removal_mentions(docs):
 def removal_drift(docs, removal):
     """Every mention naming a release OTHER than `removal` — the docs' half of the same defect."""
     return tuple(m for m in removal_mentions(docs) if m[2] != removal)
+
+
+# ---- the corpus is DERIVED, and every exclusion is DECLARED WITH A REASON (0.0.20 stage 12) ----
+#
+# `REMOVAL-DRIFT-CORPUS-EXCLUDES-INTERNAL-TREES` (doc 84): the sweep read an ALLOW-LIST of
+# directories somebody remembered, and a client-facing deck carrying a false removal release for
+# three releases sat outside it. ⭐ **"Internal" is a statement about the tree, not about the
+# audience** — a talk deck is the most externally-facing artifact in this repo and it was skipped
+# because of where it lived.
+#
+# So the corpus is now the WHOLE TREE minus a deny-list, and the deny-list is DATA WITH REASONS
+# that this module's tests grade in both directions: an entry naming a path that no longer exists
+# is a rule grading nothing, and a path excluded without a reason cannot be reviewed at all.
+#
+# ⚠ THE PATHS BELOW ARE MATCHED AS ANCHORED PREFIXES, NEVER AS BARE NAMES. A name-set drops
+# `build` at ANY depth and silently eats `docs/build` — which is `.gitignore:15`'s warning, and it
+# has now bitten this project three times, once inside the very measurement that produced the
+# numbers in these reasons.
+DENIED_FROM_RELEASE_CLAIMS = {
+    "docs/build": (
+        "The internal build log. It is a HISTORY: every superseded plan, every corrected number "
+        "and every retired ruling is kept rather than edited, which is the point of it. Measured "
+        "2026-08-26: 65 drifting mentions, and a reader-visible false claim is not among them. "
+        "⭐ This closes doc 105 §8's G11 by measurement rather than by taste — the question was "
+        "whether docs/build belongs in the corpus, and the answer is that including it costs 65 "
+        "false reds over correct history and buys nothing."),
+    "docs/launch": (
+        "Launch-campaign drafts, same history argument, and nothing here is served by mkdocs or "
+        "copied by sync-public.sh. Measured 2026-08-26: 0 drifting mentions, so this entry is "
+        "cheap insurance rather than a suppression."),
+    "docs/marketing": (
+        "Marketing source and assets; not published from this tree. Measured 2026-08-26: 0 "
+        "drifting mentions."),
+    "CHANGELOG.md": (
+        "A changelog IS the record of what each release said at the time. A release note that "
+        "named 0.0.17 must keep naming 0.0.17 — correcting it would be falsifying the history "
+        "this file exists to be."),
+    "RELEASE_NOTES.md": (
+        "Same argument as CHANGELOG.md, one file over: the notes for a shipped release are what "
+        "that release said at the time, and a sweep that corrected them would be editing the "
+        "record rather than grading it. ⚠ Written out rather than cross-referenced, because "
+        "`test_every_exclusion_carries_a_REASON` caught the one-line version of this entry — a "
+        "reason a reviewer has to follow a pointer to read is not one they will read."),
+    "src": (
+        "Graded by the OTHER axis, `user_facing_release_claims`, and it has to be: a prose matcher "
+        "over source finds only COMMENTS — measured 2026-08-26, all three hits in `src/` are "
+        "comments recording correct history, and none is reachable by a user. ⛔ This entry is a "
+        "POINTER, not a hole: source is not unswept, it is swept by the instrument that can tell a "
+        "printed string from a note to a maintainer."),
+    "tests": (
+        "Graded by a DIFFERENT instrument in this same module, and better: `notice_pins` reads "
+        "assertion ARGUMENTS in files whose vocabulary is deprecation, which is why it selected "
+        "the eight real offenders and left 31 synthetic version fixtures alone. Sweeping tests "
+        "with a prose matcher would re-introduce exactly the 31 false reds that domain filter was "
+        "written to remove. ⛔ This entry is a POINTER, not a hole: if `notice_pins` is ever "
+        "deleted, this exclusion becomes one."),
+}
+
+#: What counts as text-bearing. Extensions rather than a content sniff, because the question is
+#: which files a HUMAN reads a release claim out of, and a binary is not one of them.
+RELEASE_CLAIM_SUFFIXES = (".md", ".py", ".sh", ".yml", ".yaml", ".toml", ".txt", ".cfg",
+                          ".json", ".html", ".rst")
+
+#: Trees that are not the repo's content at all — a checkout artefact, a virtualenv, a build
+#: output. Anchored, for the reason above. These are NOT exclusions in the reviewable sense and so
+#: are kept apart from `DENIED_FROM_RELEASE_CLAIMS`: nothing here is tracked.
+_NOT_CONTENT = ("build", "site", "dist", "node_modules", "_to_delete",
+                ".git", ".venv", ".venv-test", ".pytest_cache", ".mypy_cache", ".mokata")
+
+
+def _denied(rel: str) -> bool:
+    """Is `rel` (a POSIX repo-relative path) covered by a DECLARED exclusion?"""
+    return any(rel == d or rel.startswith(d + "/") for d in DENIED_FROM_RELEASE_CLAIMS)
+
+
+def release_claim_corpus(root):
+    """`{rel: text}` — every text-bearing path in the tree except the declared exclusions.
+
+    THE WORKING TREE, not the index, for the reason `_docs_corpus` already gives: both publishing
+    paths copy the working tree, so an untracked page really is served and the index would be blind
+    to exactly the page most likely to carry a hand-typed release."""
+    corpus = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        # ⚠ `_support.posix_rel`, not `os.path.relpath(...).replace(os.sep, "/")`. The
+        # hand-spelled form is what `test_repo_paths_invariant` reds on: a relative path
+        # used as an IDENTITY has to go through the one converter, or two spellings of the
+        # same file compare unequal on Windows and the corpus quietly holds both.
+        rel_dir = _support.posix_rel(dirpath, root)
+        rel_dir = "" if rel_dir == "." else rel_dir
+        dirnames[:] = [d for d in dirnames
+                       if d != "__pycache__"
+                       and ("%s/%s" % (rel_dir, d) if rel_dir else d) not in _NOT_CONTENT]
+        for name in filenames:
+            if not name.endswith(RELEASE_CLAIM_SUFFIXES):
+                continue
+            rel = ("%s/%s" % (rel_dir, name)) if rel_dir else name
+            if _denied(rel):
+                continue
+            try:
+                with open(os.path.join(dirpath, name), encoding="utf-8",
+                          errors="replace") as handle:
+                    corpus[rel] = handle.read()
+            except OSError:
+                continue
+    return corpus
+
+
+# ---- and the second axis: a release claim a USER reads, not one a maintainer wrote ------------
+#
+# `REMOVAL-DRIFT-KEYS-ON-A-WORD` (doc 84): the sweep matched on a substring, so
+# `cli_commands/migrate.py`'s hand-typed `0.0.17` in `--help` text — live, user-visible and wrong —
+# was invisible to it, in a file the release had already audited for this exact class.
+#
+# ⭐ The row's own fix direction is SCOPE BY SURFACE, and the measurement says why nothing else
+# works: over the whole tree the prose matcher finds 108 drifting mentions and only three are in
+# `src/` at all — all three in COMMENTS, all three correct history. A guard that reds on those is
+# a guard someone turns off. What reaches a user is a STRING LITERAL that is not a docstring: help
+# text, a notice, an error message. That distinction is structural, so it is read from the AST
+# rather than guessed from indentation.
+
+
+#: Paths whose string constants are NOT a user surface, declared by path with a reason — which is
+#: this row's own prescription ("history-bearing files declared out of scope by PATH rather than
+#: escaped by vocabulary"), applied to the second axis.
+#:
+#: ⛔ AN EXCLUSION HERE IS NOT A WAY TO MAKE A FINDING GO AWAY. The one entry below was added
+#: because the scan's first live catch was a string that no user can reach; the STALE CLAIM inside
+#: that string is filed separately (doc 84) rather than absorbed by the guard that tripped over it.
+DENIED_FROM_USER_SURFACES = {
+    "src/mokata/parity.py": (
+        "Its string constants are `CommandSurface.note` values, and that field is declared at "
+        "`parity.py:41` as *\"why this surface choice (docs + reviewers)\"* — a rationale register "
+        "read by maintainers, never printed, never handed to argparse, never raised. The module "
+        "has no argparse parser and no output path at all, so there is nothing here for a user to "
+        "read. ⚠ Its first catch, `FR-WT-2/3 (`clean`/`remove`, 0.0.17)`, IS a stale claim — a "
+        "schedule naming a release that shipped two releases ago without the work — and it is "
+        "filed as its own row rather than silenced here."),
+}
+
+
+def _docstring_nodes(tree):
+    out = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = getattr(node, "body", None)
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
+                    and isinstance(body[0].value.value, str):
+                out.add(id(body[0].value))
+    return out
+
+
+def user_facing_release_claims(root, removal):
+    """`[(rel, line, version)]` — a release OTHER than `removal` stated inside a string a user can
+    read, anywhere under `src/`.
+
+    A comment cannot reach a user and a docstring reaches a reader of the source, so neither is an
+    offender; both are excluded by construction rather than by an allow-list of files."""
+    found = []
+    src = os.path.join(root, "src")
+    for dirpath, dirnames, filenames in os.walk(src):
+        dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+        for name in sorted(filenames):
+            if not name.endswith(".py"):
+                continue
+            path = os.path.join(dirpath, name)
+            rel = _support.posix_rel(path, root)
+            if rel in DENIED_FROM_USER_SURFACES:
+                continue
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    text = handle.read()
+                tree = ast.parse(text)
+            except (OSError, SyntaxError):
+                continue
+            skip = _docstring_nodes(tree)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                    continue
+                if id(node) in skip:
+                    continue
+                for match in _MENTION.finditer(node.value):
+                    if match.group(1) != removal:
+                        found.append((rel, getattr(node, "lineno", 0), match.group(1)))
+    return tuple(found)
+
+
 
 
 # ---- the pin was not one pin. It was SIX ------------------------------------------------------

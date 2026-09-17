@@ -116,6 +116,29 @@ def _announce_removed_graph_chain(router: Any, root: str) -> frozenset:
     return frozenset(removed)
 
 
+def _announce_deprecated_graph_chain(router: Any, root: str) -> tuple:
+    """The DEPRECATION arm of the same surface, and until 0.0.20 stage 11 nothing anywhere called
+    the announcer it uses (`WARN-DEPRECATED-HAS-NO-CALLERS`, doc 84).
+
+    ⚠ A SEPARATE FUNCTION, NOT A SECOND LOOP INSIDE THE ONE ABOVE, and the reason is that one
+    RAISES and this one MUST NOT. A removed provider labelling a floor is a refusal; a deprecated
+    provider still works — the announcement is the whole difference between deprecating a thing
+    and deleting it. Folding them would make the softer case inherit the harder one's control flow,
+    which is how a deprecation notice turns into an outage."""
+    import os as _os
+    from .. import MOKATA_DIR as _MD, deprecation as _dep
+    try:
+        chain = router.manifest.fallback_order("code_graph")
+    except (ManifestError, AttributeError):
+        return ()
+    deprecated = _dep.deprecated_channels_in(chain)
+    md = _os.path.join(root, _MD)
+    if deprecated and _os.path.isdir(md):
+        for channel in deprecated:
+            _dep.warn_deprecated(channel, md)
+    return deprecated
+
+
 def select_backends(
     router: Any,
     root: str,
@@ -155,6 +178,8 @@ def select_backends(
     # 0.0.18 lane D stage 14 — announce a removed provider the committed chain still names, BEFORE
     # anything resolves, and never let one label a backend (see `_announce_removed_graph_chain`).
     removed_here = _announce_removed_graph_chain(router, root)
+    # The softer arm, same chain, one line later — see `_announce_deprecated_graph_chain`.
+    _announce_deprecated_graph_chain(router, root)
     if res is not None and res.tool in removed_here:
         # The floor, named for what it IS. `_floor_backend` is the AST floor on a Python repo and
         # grep otherwise — the canonical graph the removal record points the user at, not the

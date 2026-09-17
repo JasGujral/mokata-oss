@@ -553,8 +553,20 @@ PUBLISHED_COMMITMENTS: Tuple[PublishedCommitment, ...] = (
     PublishedCommitment(
         fragment="the sub-10-minute PR gate is re-scheduled to 0.0.20",
         subject="PR gate",
-        promised_for="0.0.20", now_lands="0.0.20", status=ACCOUNT_HELD, on="2026-08-23",
-        venue='the v0.0.19 release notes and CHANGELOG, "Re-scheduled" section'),
+        promised_for="0.0.20", now_lands="0.0.21", status=ACCOUNT_DISCLOSED, on="2026-08-27",
+        venue='the v0.0.20 release notes and CHANGELOG, "Re-scheduled" section'),
+    # --- the one promise the v0.0.20 cut makes (0.0.20 release tail) ----------------------------
+    #: ⚠ THE THIRD MOVE OF THE SAME ITEM, AND IT IS DECLARED RATHER THAN RENUMBERED. The row above
+    #: records that the 0.0.20 slot did NOT hold it; this row is the new promise the 0.0.20 notes
+    #: PRINT, and without it that line is a live, unkeyed claim — UNRESOLVED and red, which is the
+    #: fail-closed behaviour this module exists for. It is `HELD` for the same reason the 0.0.19
+    #: pair were: `account_for` matches on `promised_for == claim.target`, and what this text names
+    #: is 0.0.21, which it has not yet moved from. §7g at the accounting layer, filed and unfixed.
+    PublishedCommitment(
+        fragment="the sub-10-minute PR gate is re-scheduled to 0.0.21",
+        subject="PR gate",
+        promised_for="0.0.21", now_lands="0.0.21", status=ACCOUNT_HELD, on="2026-08-27",
+        venue='the v0.0.20 release notes and CHANGELOG, "Re-scheduled" section'),
 )
 
 

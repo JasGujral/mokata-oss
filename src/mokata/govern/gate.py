@@ -8,7 +8,7 @@ never committed silently.
 
 from __future__ import annotations
 
-from ..prompt import read_yes_no
+from ..prompt import ASKED, decline_notice, read_yes_no
 
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
@@ -72,7 +72,28 @@ def content_hash_for(req: "WriteRequest") -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-def _default_confirm(text: str) -> bool:
+#: The ledger decision for a write nobody was ever asked about. ⛔ IT IS NOT `"declined"`, and the
+#: difference is not cosmetic — it is what the audit trail SAYS HAPPENED.
+#:
+#: `WriteGate` recorded `decision="declined", reason="human declined"` whenever the confirm callable
+#: returned falsey. On a run with no terminal that sentence is a FABRICATED HUMAN ACT: it names a
+#: person making a choice in a session where nobody was asked anything, and it is the artefact an
+#: auditor reads months later, long after the terminal output is gone. mokata's whole write story is
+#: that a durable action carries a human's decision; a row claiming one that never happened is the
+#: worst possible place for that claim to be wrong.
+#:
+#: ⚠ AND `govern/learning.py` READS THIS. Its `_DECLINED` tuple treats a `declined` row as *a human
+#: pushed back on this pattern* and feeds it into rule promotion. Filing "there was no terminal" as
+#: a rejection teaches the learner from an event that did not occur — so `unanswered` is
+#: deliberately NOT added to that tuple. The write still did not happen; nobody decided that it
+#: shouldn't.
+UNANSWERED = "unanswered"
+
+
+def _default_confirm(text: str) -> "Any":
+    """The default gate reader. Returns a `ConsentDecision`, NOT a bool — truthy exactly when
+    approved, so every existing boolean call site is byte-identical, while a caller that needs to
+    know WHICH no it was can read `.basis` (doc 85 §7g)."""
     return read_yes_no(text, "Approve this write?")
 
 
@@ -271,9 +292,19 @@ class WriteGate:
             gate = confirm or _default_confirm
             shown = prompt or (f"mokata · approve {req.kind} write to {req.target} "
                                f"({len(req.content)} chars)?")
-            if not gate(shown):
-                self._log(req, "declined", "human declined")
-                return WriteOutcome(False, True, "declined at the human gate", [])
+            answer = gate(shown)
+            if not answer:
+                # ⛔ WHICH NO IT WAS — the distinction the ledger used to erase. A caller-supplied
+                # `confirm` may still return a plain bool (nothing about that contract changes);
+                # only a `ConsentDecision` can say it was never asked, and absent that basis the
+                # honest reading of a bare `False` is still that a human declined.
+                basis = getattr(answer, "basis", ASKED)
+                if basis == ASKED:
+                    self._log(req, "declined", "human declined")
+                    return WriteOutcome(False, True, "declined at the human gate", [])
+                why = decline_notice(answer)
+                self._log(req, UNANSWERED, "no human was asked (%s)" % basis)
+                return WriteOutcome(False, True, "not approved — %s" % why, [])
 
         # Commit. The commit and the `approved` ledger record are held under ONE ledger-lock window
         # so a caller predicting the approval seq inside commit (the store's `len+1`) gets exactly

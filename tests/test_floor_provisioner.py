@@ -109,10 +109,68 @@ def _offset(floor: str, minors: int) -> str:
     return "%s.%d" % (major, int(minor) + minors)
 
 
-#: A PATH that certainly holds the shell's own utilities (`grep`, `sed`) and certainly holds
-#: neither `uv` nor a floor interpreter — the deterministic "this machine offers no route"
-#: fixture, on POSIX and inside Git Bash's msys tree alike.
-NO_ROUTE_PATH = "/usr/bin:/bin"
+#: The two names `scripts/floor-python.sh` probes for a route (`have_uv` / `have_python`, l.172-173).
+#: Everything sharing a prefix with them is excluded too, so a host that spells its interpreter
+#: `python3.10.14` or ships `uvx` cannot smuggle a route back in.
+_ROUTE_PREFIXES = ("uv", "python")
+
+_NO_ROUTE_DIR = None
+
+
+def no_route_path() -> str:
+    """A PATH that holds the shell's own utilities and **provably** holds neither route.
+
+    🔴 THE PREVIOUS FORM WAS A TYPED CONSTANT, `/usr/bin:/bin`, carrying a comment that ASSERTED
+    what it contained: *"certainly holds neither `uv` nor a floor interpreter"*. On a Linux host
+    whose distribution ships `python3.10` in `/usr/bin` — Debian and Ubuntu both do — that
+    assertion is simply **false**. The dry run then finds a real route, never reaches the routeless
+    branch this test exists to grade, and reds on a machine where **nothing is wrong with the
+    subject**. Measured 2026-08-26: the failure is `'<NO ROUTE>' not found`, with the output
+    reporting `route python : ... [python3.10: available]`.
+
+    That is `PROPERTY-PINNED-TO-A-HOST-NOT-A-MECHANISM` (doc 84) committed inside the fixture whose
+    entire purpose was to make the property host-independent — and it is the sharper half of the
+    row, because a pin that reds is at least audible. The same constant on a host that happens to
+    lack `python3.10` grades the branch correctly and **says nothing about the other host**.
+
+    So the directory is BUILT, not named:
+
+    * the utilities are **derived from the script's own text** — every word in
+      `scripts/floor-python.sh` that resolves to an executable on the ambient PATH is linked in, so
+      a script that starts using `awk` tomorrow does not need this fixture edited;
+    * the two route names are **excluded by prefix**;
+    * and the exclusion is **verified by an independent probe** before the fixture is handed out. A
+      fixture that silently stopped excluding would grade the opposite branch and report a pass —
+      the §7f shape, one layer down.
+    """
+    global _NO_ROUTE_DIR
+    if _NO_ROUTE_DIR is not None:
+        return _NO_ROUTE_DIR
+    import atexit
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="floor-no-route-")
+    atexit.register(shutil.rmtree, tmp, True)
+    linked = set()
+    for token in set(re.findall(r"[A-Za-z_][A-Za-z0-9_.\-]*", _read(SCRIPT))):
+        if token.startswith(_ROUTE_PREFIXES):
+            continue
+        resolved = shutil.which(token)
+        if not resolved or token in linked:
+            continue
+        try:
+            os.symlink(resolved, os.path.join(tmp, token))
+        except (OSError, NotImplementedError):      # Windows without developer mode
+            try:
+                shutil.copy2(resolved, os.path.join(tmp, token))
+            except OSError:
+                continue
+        linked.add(token)
+    floor = declared_floor()
+    for name in ("uv", "python%s" % floor):
+        assert shutil.which(name, path=tmp) is None, (
+            "the no-route fixture still offers %r — it would grade the WRONG branch" % name)
+    _NO_ROUTE_DIR = tmp
+    return tmp
 
 
 def run(*args, cwd=ROOT, env=None):
@@ -229,7 +287,7 @@ class TheFloorIsDerivedFromTheManifest(unittest.TestCase):
 
         Driven at a PATH that certainly has the shell's own tools and certainly has neither
         route — so this grades the routeless branch on a machine that HAS a route."""
-        got = run("--dry-run", env={"PATH": NO_ROUTE_PATH})
+        got = run("--dry-run", env={"PATH": no_route_path()})
         self.assertIn("<NO ROUTE>", got.stdout, got.stdout + got.stderr)
         self.assertEqual(EXIT_CANNOT_PROVISION, got.returncode, got.stdout + got.stderr)
         self.assertIn("CANNOT PROVISION", got.stderr,

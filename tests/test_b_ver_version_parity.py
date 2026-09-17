@@ -25,8 +25,10 @@ import json
 import os
 import stat
 import sys
+import sysconfig
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import _support  # noqa: F401  (path fix: puts src/ on sys.path)
@@ -431,17 +433,88 @@ class TestNoBehaviourChange(unittest.TestCase):
                              {"command": HS.resolved_mcp_command(), "args": []})
 
     def test_matching_version_setup_adds_no_parity_noise(self):
-        # A clean MATCH with no shadow/plugin is a quiet pass: parity_lines emits nothing, so
-        # setup output is unchanged. (Uses the real resolved mokata-mcp, which matches this CLI.)
+        """A clean MATCH with no shadow/plugin is a quiet pass: `parity_lines` emits nothing, so
+        setup output is unchanged.
+
+        ⛔ THE MATCH IS ARRANGED HERE, AND IT USED TO BE ASSUMED. The old body ran the real
+        `setup_harness` and carried this parenthetical:
+
+            # (Uses the real resolved mokata-mcp, which matches this CLI.)
+
+        That is a claim about the MACHINE written as a fact about the code, and it is false on any
+        machine with another mokata ahead of this one on PATH. `resolved_console_script` tries
+        `shutil.which` FIRST — by design, and correctly — so on a maintainer's box with a pyenv or
+        global install the registration points at THAT interpreter's `mokata-mcp`, the versions
+        genuinely differ, and `parity_lines` correctly prints MISMATCH. The test then fails for the
+        environment rather than for the property.
+
+        ⚠ AND IT FAILED EXACTLY WHERE IT MATTERS MOST. `release.sh`'s `run_test_preflight` builds a
+        throwaway venv, `pip install -e .` into it, and runs the suite with that venv's python
+        WITHOUT putting its bin on PATH — so `which` keeps finding the ambient install. The suite is
+        green in a container whose only mokata is the editable one and RED on the machine the cut is
+        run from, which is backwards for a release gate. Measured 2026-09-16 at the 0.0.20 cut:
+        registered 0.0.19 at `~/.pyenv/shims/mokata-mcp`, CLI 0.0.20 in the preflight venv. This is
+        doc 85 §7c — the reviewer's environment is not the repo — inside the gate that guards the
+        release.
+
+        The property is unchanged: a matching registration produces a quiet setup. What changed is
+        that the match is CONSTRUCTED from this interpreter rather than hoped for."""
+        # THE FIXTURE, asserted before it is used: the console script beside THIS interpreter is
+        # this CLI by construction (`pip install -e .` puts it there). If it is absent the
+        # arrangement is not available, and that is worth a named failure rather than a silent skip
+        # — every tree this gate runs in installs the package.
+        # ⚠ ASK sysconfig WHERE CONSOLE SCRIPTS GO — do NOT assume they sit beside the
+        # interpreter. They do on POSIX (`bin/python`, `bin/mokata-mcp`) and they do NOT on
+        # Windows, where `python.exe` is at the environment root and scripts land in `Scripts\`.
+        # The first cut of this fixture walked into exactly that and reded the whole Windows leg
+        # of the 0.0.20 cut — this is `_support`'s POSIX-author class, committed inside the test
+        # written to stop a test asserting facts about its machine.
+        scripts = Path(sysconfig.get_path("scripts"))
+        sibling = next((c for c in (scripts / HS.MCP_COMMAND,
+                                    scripts / (HS.MCP_COMMAND + ".exe"))
+                        if c.is_file()), None)
+        self.assertIsNotNone(
+            sibling,
+            "no %r in this environment's script directory (%s), so a MATCHING registration "
+            "cannot be arranged — install the package into the environment running the suite"
+            % (HS.MCP_COMMAND, scripts))
         with tempfile.TemporaryDirectory() as d:
             lines = []
-            HS.setup_harness("claude", root=d, scope="project", home=d,
-                             assume_yes=True, out=lines.append)
+            with mock.patch.object(HS, "resolved_mcp_command", return_value=str(sibling)):
+                HS.setup_harness("claude", root=d, scope="project", home=d,
+                                 assume_yes=True, out=lines.append)
             blob = "\n".join(lines)
-            self.assertNotIn("MISMATCH", blob.upper())
+            self.assertNotIn("MISMATCH", blob.upper(),
+                             "a registration pointing at THIS interpreter reported a version "
+                             "mismatch against THIS CLI:\n%s" % blob)
             self.assertNotIn("PROBE", blob.upper())
             # CONNECTED verification (prior stage) still present — not displaced by parity.
             self.assertTrue(any(ln.startswith("mokata-mcp:") for ln in lines))
+
+    @unittest.skipIf(sys.platform.startswith("win"), "exec-stub shebang is POSIX-only")
+    def test_the_MISMATCH_arm_still_fires_when_the_versions_really_differ(self):
+        """⛔ THE CONTROL FOR THE ARRANGEMENT ABOVE. Patching the resolved command is one edit away
+        from patching the reporter into silence, and then "no MISMATCH" would be true of a setup
+        that can no longer detect one at all. A registration pointing at a DIFFERENT version must
+        still say so.
+
+        ⚠ Skipped on Windows for the SAME reason as the four exec-stub tests above, and now via
+        the same decorator and `_exec_stub` rather than a hand-rolled one: a `#!` line is not an
+        executable to CreateProcess, so the probe never runs and the arm never fires. The first cut
+        of this test rolled its own `#!/bin/sh` stub and reded the Windows leg — the property it
+        grades is platform-independent, and it is graded on every POSIX leg."""
+        with tempfile.TemporaryDirectory() as d:
+            fake = _exec_stub(d, _EXEC_OK.format(v="9.9.9"), name="fake-mcp")
+            lines = []
+            with mock.patch.object(HS, "resolved_mcp_command", return_value=str(fake)):
+                HS.setup_harness("claude", root=d, scope="project", home=d,
+                                 assume_yes=True, out=lines.append)
+            blob = "\n".join(lines)
+            self.assertIn("MISMATCH", blob.upper(),
+                          "a registration on 9.9.9 did NOT report a mismatch against %s — the "
+                          "reporter is silent, so the quiet pass above grades nothing"
+                          % __version__)
+            self.assertIn("9.9.9", blob)
 
     def test_parity_lines_never_raises(self):
         # Even a garbage registration yields lines, never an exception (fail-open reporter).

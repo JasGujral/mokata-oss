@@ -86,6 +86,7 @@ import unittest
 from contextlib import closing
 from unittest import mock
 
+import _store_snapshot
 import _support  # noqa: F401  (puts src/ on the path)
 import _writegraph
 import test_si_6_writegate_side_doors as sweep
@@ -100,32 +101,39 @@ from mokata.memory.item import MemoryItem
 # ======================================================================================
 
 def _tree_snapshot(root):
-    """Every byte under `root` — the store, its WAL sidecars, the ledger, the manifest, artifacts.
+    """Whole-tree "nothing was written", from the ONE shared instrument (`_store_snapshot`).
 
-    Deliberately WHOLE-TREE rather than scoped to the file this pin's author had in mind: the write
-    that breaks a charter is by definition the one nobody anticipated. Bytes, not mtimes — a re-read
-    that rewrites identical content is not a write in the sense this pins.
+    ⛔ THIS USED TO BE WHOLE-TREE BYTES INCLUDING THE SIDECARS, and the comment defending that
+    choice is worth keeping, because it is the defect rather than a note about it:
 
-    KEPT BYTE-EXACT ON PURPOSE, and it was not obvious it could be. A SQLite store in WAL mode
-    rewrites its `-shm` shared-memory index on an ordinary SELECT, which would have forced either a
-    file-class exclusion (blinding the harness to every WAL-buffered write — the store's real writes
-    land in `-wal`) or a row-level content dump instead of bytes (a second notion of "durable" to
-    keep true). Neither was needed: `SQLiteBackend._connect` opens a connection PER OPERATION and
-    closes it, and the last connection to close checkpoints and removes `-wal`/`-shm`. At rest the
-    store is a single complete `m.db`, so P10's snapshot generalises verbatim. The bindings below
-    therefore open and close their own connections INSIDE the measured window, which makes the
-    window stricter than the charter (it measures connect+read+close), never weaker."""
-    snap = {}
-    for base, _dirs, files in os.walk(root):
-        for name in sorted(files):
-            path = os.path.join(base, name)
-            with open(path, "rb") as fh:
-                snap[_support.posix_rel(path, root)] = fh.read()
-    return snap
+        A SQLite store in WAL mode rewrites its `-shm` shared-memory index on an ordinary
+        SELECT, which would have forced either a file-class exclusion (blinding the harness to
+        every WAL-buffered write — the store's real writes land in `-wal`) or a row-level
+        content dump instead of bytes (a second notion of "durable" to keep true). NEITHER WAS
+        NEEDED: `SQLiteBackend._connect` opens a connection PER OPERATION and closes it, and the
+        last connection to close checkpoints and removes `-wal`/`-shm`.
+
+    It foresaw this failure exactly, enumerated both honest repairs and named the trap in each,
+    then declined both because *the library cleans up for us*. Whether a clean last-close unlinks
+    `-wal`/`-shm` is a property of the libsqlite3 BUILD: measured at the 0.0.20 cut, removed on
+    Debian sqlite 3.37 and PERSISTED on pyenv py3.13 / sqlite 3.51, same tree, same commit — which
+    reported NINE registered READ charters as writers on the second machine.
+
+    ⭐ `_store_snapshot` now takes the repair that comment rejected, and pays its price: sidecars
+    leave the byte set (their existence describes libsqlite3, never the subject) and each store
+    contributes an authoritative read of its COMMITTED CONTENT in their place — strictly stronger
+    than the bytes it replaces, since a write buffered in an un-checkpointed `-wal` moves the
+    content while leaving `m.db` byte-identical. The blinding the old comment feared is graded by
+    `test_a27_the_snapshot_instrument.test_a_write_buffered_in_the_WAL_is_still_caught`.
+
+    The bindings below still open and close their own connections INSIDE the measured window, which
+    keeps the window stricter than the charter (it measures connect+read+close), never weaker."""
+    return _store_snapshot.tree_snapshot(root)
 
 
 def _changed(before, after):
-    return sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
+    return _store_snapshot.changed(before, after)
+
 
 
 # ======================================================================================
@@ -500,9 +508,18 @@ class TestTheHarnessRefusesAVacuousBinding(unittest.TestCase):
             fx = _Fixture(d)
             before = _tree_snapshot(d)
             fx.backend.record_usage([fx.source.id], "2026-01-01T00:00:00+00:00")
-            self.assertEqual(["m.db"], _changed(before, _tree_snapshot(d)),
-                             "the snapshot did not see a REGISTERED durable write land in the "
-                             "store — every write-free pin in this file is now vacuous")
+            moved = _changed(before, _tree_snapshot(d))
+            # BOTH halves must fire. The bytes half proves the tree walk still reaches the store;
+            # the content half is the one that survives a build whose sidecars persist, and is the
+            # ONLY half that can see a write still buffered in an un-checkpointed `-wal`. Asserting
+            # just one of them would let the other rot unnoticed, which is how this file's previous
+            # instrument went two years without anybody discovering it read a platform property.
+            self.assertIn("m.db", moved,
+                          "the snapshot did not see a REGISTERED durable write land in the "
+                          "store — every write-free pin in this file is now vacuous")
+            self.assertIn("m.db (committed content)", moved,
+                          "the committed-content read did not see a REGISTERED durable write — "
+                          "on a build whose WAL sidecars persist this is the half that catches it")
 
 
 class TestEveryBindingsEvidenceIsFalsifiable(unittest.TestCase):

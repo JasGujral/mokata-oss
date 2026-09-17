@@ -14,7 +14,7 @@ when_to_use: Engage when a spec has been emitted and its acceptance criteria nee
 
 # mokata · /test
 
-Do NOT write tests until the spec is emitted and SAVED: FETCH this run's persisted, completeness-gate-passed spec with the `spec_show` tool (or `mokata spec show`) and work from what it returns; if there is none, STOP and produce + emit the spec first (`/mokata:spec`). Then write tests that express the desired behaviour and watch them FAIL first (RED). Do NOT write implementation here. One behaviour per test, clear names, real code over mocks. Reference the REAL names, signatures, and return types found in the code — never invent an interface; verify each symbol you call exists and has the shape you expect. Test ONLY the approved acceptance criteria — do not invent ACs or cover behaviour the approved spec doesn't state. If an AC is wrong, missing, or untestable, STOP and ask to amend the spec (so ACs and tests stay provable); never silently add or drop coverage.
+Do NOT write tests until the spec is emitted and SAVED: FETCH this run's persisted, completeness-gate-passed spec with the `spec_show` tool (or `mokata spec show`) and work from what it returns; if there is none, STOP and produce + emit the spec first (`/mokata:spec`). Then write tests that express the desired behaviour and watch them FAIL first (RED). Do NOT write implementation here. One behaviour per test, clear names, real code over mocks. Reference the REAL names, signatures, and return types found in the code — never invent an interface; verify each symbol you call exists and has the shape you expect. Test ONLY the approved acceptance criteria — do not invent ACs or cover behaviour the approved spec doesn't state. If an AC is wrong, missing, or untestable, STOP and ask to amend the spec (so ACs and tests stay provable); never silently add or drop coverage. COVER EACH AC AT ITS CONSUMER AND UNDER ITS ADVERSARIAL INPUTS — this is the SAME AC, not extra scope, and skipping it is the most common way a green suite ships a bug. (a) THE SEAM: an AC is about behaviour a CALLER depends on, so assert it where the value is READ, not only where it is produced — find the consumers with `mokata query callers|refs <symbol>` and write at least one assertion against the contract AS THE CONSUMER READS IT (its shape, its length, its truthiness). A unit test that proves the producer populates a field, while the consumer reads a different field of it, passes and proves nothing. (b) THE ADVERSARIAL VALUES: for each AC, name its input domain and feed the boundary of that domain, not one comfortable example — empty, zero and other FALSY-BUT-PRESENT values, absent versus present-and-empty, the maximum, and a hostile key or name. These are the approved AC evaluated honestly; a case that changes what is REQUIRED is a new AC and still needs an amendment. If you cannot reach a consumer or a boundary, SAY which and why.
 
 ## Gate (check)
 Tests must be shown to FAIL before any implementation exists. Writing implementation in this step is a gate violation.
@@ -37,7 +37,8 @@ At the START and END of this phase, show where the run is: print the mokata run-
 |---|---|
 | "I'll write the implementation while the test is fresh." | No implementation in this phase — the RED must be on record first. |
 | "This test passes already — good enough." | A test that never failed proves nothing; watch it FAIL (RED) before any code exists. |
-| "I'll add a couple of extra cases I think matter." | Test only the approved ACs; unapproved coverage is scope creep — amend the spec instead. |
+| "I'll add a couple of extra cases I think matter." | New BEHAVIOUR is scope creep — amend the spec. But the approved AC at its CONSUMER, and at the boundary of its own inputs (empty, zero/falsy, absent vs present-and-empty, a hostile key), is that same AC actually tested — not extra scope, and not optional. |
+| "The transformer populates it — the AC is covered." | That is the PRODUCER. The AC is a promise to whoever READS the value: assert it at the consumer, in the shape the consumer reads, or you have proven a field nobody uses. |
 
 ## Verification — confirm each before you claim this skill is done
 
@@ -46,6 +47,8 @@ Evidence, not "seems right" — check every box or say which is unmet and why:
 - [ ] every test maps 1:1 to an approved acceptance criterion
 - [ ] each test was shown FAILING (RED) before any implementation
 - [ ] real names/signatures are used — no invented interface
+- [ ] each AC is asserted at a CONSUMER of the value, not only where it is produced
+- [ ] each AC is fed the boundary of its input domain — empty, zero/falsy, absent vs present-and-empty, a hostile key — or the gap is named
 - [ ] NO implementation was written in this phase
 
 ## Contract

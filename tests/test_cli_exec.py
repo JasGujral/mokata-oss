@@ -5,6 +5,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
+import _support
 from _support import sample_manifest_data  # noqa: F401  (path fix side-effect)
 
 from mokata.cli import main
@@ -19,7 +20,16 @@ def run_cli(argv):
 
 class TestExecCLI(unittest.TestCase):
     def test_default_is_sequential(self):
-        rc, out = run_cli(["exec"])
+        """⚠ THE STDIN IS THIS TEST'S, NOT THE MACHINE'S (0.0.20 stage 10).
+
+        `mokata exec` asks a human which mode to run — `_cli_ask`, `cli_commands/_common.py:127` —
+        and only takes the default when stdin is not a terminal. Without the double this test
+        graded whichever arm the runner's terminal happened to select, and at a real one it reached
+        `input()` with stdout redirected two lines up: a silent hang. The sibling below already
+        forces a non-TTY explicitly and says why; this one inherited the ambient. Filed as
+        `SUITE-HANGS-AT-A-TTY-ON-THREE-TESTS`, found by `tests/_tty_prompt_sweep.py`."""
+        with _support.stdin_is(_support.NoTtyStdin()):
+            rc, out = run_cli(["exec"])
         self.assertEqual(rc, 0)
         self.assertIn("sequential", out.lower())
 

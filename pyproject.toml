@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mokata"
-version = "0.0.19"
+version = "0.0.20"
 description = "The memory + seatbelt for your AI coding agent. Spec-driven TDD for Claude Code — knowledge-aware, human-gated, local-first."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -58,6 +58,21 @@ postgres = ["psycopg>=3.1"]
 # only on explicit consent (P2) via the setup offer. Heavy families
 # (sentence-transformers / hosted APIs) stay documented-never-bundled.
 embeddings = ["model2vec>=0.3", "numpy>=1.24"]
+# 0.0.20 stage 05 (G14, doc 105 §9) — the TypeScript/TSX code-graph parser. Lazy-imported
+# and AUTO-DETECTED, exactly like `[embeddings]`: absent, TS files are simply not in the
+# graph corpus and `mokata doctor` says so; present, they are, with no flag and no config.
+# ⛔ AN EXTRA RATHER THAN A BASE DEPENDENCY, and the reason is not the size. Adding it to the
+# base install changes the dependency surface of EVERY existing user, including ones who
+# will never open a .ts file — and in an organisation that surface is a reviewed, pinned,
+# audited artifact, so an unrequested transitive is a lockfile re-review, an SBOM row and a
+# supply-chain gate entry. This project ships `--require-hashes` pins, provenance
+# attestation and a Scorecard delta for exactly that audience; "installed only on explicit
+# consent" (P2) is what makes mokata reviewable.
+# ⚠ MEASURED 2026-08-27, because the ruling was made from a figure that was wrong: TWO
+# packages, 5.1 MB installed — tree-sitter 2.0 MB (per-CPython wheel, NOT abi3) and
+# tree-sitter-typescript 3.1 MB (cp39-abi3). Both MIT, both wheels, no compiler. The costing
+# said "ONE MIT abi3 wheel, 2.41 MB", which was one wheel's DOWNLOAD size.
+graph-ts = ["tree-sitter>=0.23", "tree-sitter-typescript>=0.23"]
 
 [project.scripts]
 mokata = "mokata.cli:main"

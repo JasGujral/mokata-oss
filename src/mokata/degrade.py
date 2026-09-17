@@ -148,6 +148,32 @@ FAILURE_TIMEOUT = "timeout"
 # a loud "DEGRADED" over a working connection is precisely the untrue-message bug D5 exists to kill.
 FAILURE_PG_FLOOR = "pg-below-floor"
 
+# 0.0.20 (OSS #67/#68) — MOKATA'S OWN CODE RAISED inside a best-effort path that then swallowed it.
+# Coined on exactly the rule every class above was coined on, and it is the most expensive instance
+# of that rule found so far — because the FALSE sentence was not hypothetical, a user acted on it.
+#
+#   THE NEAREST CLASS RENDERS A FALSE SENTENCE, AND SOMEBODY SPENT A SESSION ON IT.
+#   `session_flow.checkpoint` caught `Exception` and printed *"retry a save once the disk/permissions
+#   recover"* — an assertion about a cause it had never measured. It fires identically for a
+#   `PermissionError` and for a `TypeError` in mokata's own checkpoint code. The reporter of OSS #67
+#   proved, at length, that the disk had 670 GB free, that the shell wrote to that exact directory,
+#   that the locks were clear, and that it survived a restart and an upgrade — and then concluded,
+#   correctly and unaided, *"this is a mokata internal defect ... beyond what I can repair from
+#   inside the session."* Every one of those hours was spent testing the hypothesis mokata printed.
+#
+#   AND THE REMEDIATION IS DIFFERENT, which is the test a new class has to pass here. FAILURE_LOCAL_IO
+#   says check permissions and disk, and that is the right advice when the FILESYSTEM refused. When
+#   mokata's own code raised there is nothing in the environment to check and no amount of checking
+#   will help: the only useful action is to report it, with the one fact that identifies it. So the
+#   class exists to carry the OPPOSITE of local-io's sentence — *this is not your machine* — which no
+#   existing class says and which is the whole content of the answer.
+#
+# ⚠ ITS DETAIL IS THE EXCEPTION'S TYPE, NEVER ITS TEXT. A raised message routinely carries a path,
+# and this module's secret rule (CM.S1) is that a notice may not leak a directory layout. A type name
+# plus, for OSError, its `errno`/`winerror` SYMBOL is bounded, non-user data and is already enough to
+# name the defect — which is the whole difference between #67 and a one-line bug report.
+FAILURE_INTERNAL = "internal-error"
+
 _CLASS_LABEL = {
     FAILURE_UNSET: "env var not set",
     FAILURE_UNREACHABLE: "shared database unreachable",
@@ -164,6 +190,7 @@ _CLASS_LABEL = {
                                "writer and is waiting on your decision"),
     FAILURE_TIMEOUT: "the tool is running and did not answer in time",
     FAILURE_PG_FLOOR: "the shared PostgreSQL is older than mokata's supported floor",
+    FAILURE_INTERNAL: "mokata's own code raised — this is a defect in mokata, NOT in your machine",
 }
 
 
@@ -398,6 +425,24 @@ class CapabilityDegradeNotice(DegradeNotice):
         return _CAPABILITY_FIX.get(self.failure_class, "Run `mokata doctor`.")
 
     def render(self, *, ascii_only: bool = False) -> str:
+        """⛔ `detail` IS DELIBERATELY NOT RENDERED HERE, AND THAT IS A DEFERRAL, NOT A DECISION.
+
+        38 of this tree's 54 `note_degraded` sites compute a `detail`; `to_dict` carries it and no
+        human-facing string shows it, which is a field every raiser populates and no reader sees.
+        Showing it was drafted at 0.0.20 for OSS #67 and then MEASURED before shipping: **twenty-odd
+        of those sites interpolate the raw exception** (`detail=str(exc)`, `detail=f"{type(exc).
+        __name__}: {exc}"`), and `team_journal`'s is a psycopg connection error, whose message
+        routinely carries the host, port, database and user. Rendering them all would have broken
+        this class's own promise — *names the failure class + the env-var NAME; never the DSN
+        VALUE* — in the notice that exists to be trustworthy.
+
+        ⭐ THE FIX IS AT THE PRODUCERS, NOT HERE (§7e: drive the boundary, never patch the reader).
+        Every site must bound its own detail the way `session_flow.describe_persist_error` does — a
+        type plus, for an `OSError`, its `errno` SYMBOL, never the text. That is a sweep across
+        twenty sites, so it is filed (`DEGRADE-DETAIL-IS-COMPUTED-BY-38-SITES-AND-SHOWN-BY-NONE`,
+        doc 84) rather than done under a release tail. Until then a site that NEEDS its cause on
+        screen puts a bounded summary in `fallback`, which is rendered — see `note_persist_failure`.
+        """
         glyph = "[!]" if ascii_only else "⚠"
         fell_back = f" — {self.fallback.rstrip('.')}" if self.fallback else ""
         return (f"{glyph} {self.subsystem}: DEGRADED{fell_back} "
@@ -420,6 +465,11 @@ _CAPABILITY_LABEL = {
 # `fix`). Every D5 site SHOULD name its own — these are the honest floor, not an excuse.
 _CAPABILITY_FIX = {
     FAILURE_LOCAL_IO: "Check permissions/disk under `.mokata/`, then run `mokata doctor`.",
+    # ⛔ IT MUST NOT SAY "CHECK PERMISSIONS/DISK". That is local-io's advice, it is the sentence OSS
+    # #67 acted on, and here it is false: the filesystem never refused anything. Nothing in the
+    # environment is worth checking, so the remediation is the only move that helps.
+    FAILURE_INTERNAL: ("Nothing on your machine needs fixing. Please report this with the failure "
+                       "class above: https://github.com/JasGujral/mokata-oss/issues."),
     FAILURE_CORRUPT: "Restore or regenerate the file, then run `mokata doctor`.",
     FAILURE_ENGINE: "Reinstall mokata (`pip install -U mokata`), then run `mokata doctor`.",
     # D6 — the ONLY remediation: this build cannot be taught to read a doc it predates.

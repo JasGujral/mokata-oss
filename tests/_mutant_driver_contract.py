@@ -523,8 +523,28 @@ DECLARED_INTERNAL_DRIVERS = {
 }
 
 
+#: The quarantine. ⛔ NOT A SKIP IN `discover_drivers`, AND THE DIFFERENCE IS THE WHOLE POINT.
+#: Narrowing the WALK was the first fix and two independent enumerations of the same tree caught it
+#: immediately — which is exactly what they are for: *"a sweep pointed at a subset reads as a
+#: general claim while meaning 'the part I remembered'."* The domain is unchanged; what changes is
+#: the answer to the question `location_verdict` actually asks, which is **does this driver SHIP?**
+#:
+#: `_to_delete/` is excluded from the public mirror TWICE — `sync-public.sh`'s `--exclude` and its
+#: `INTERNAL_PATHS` guard — so a driver under it cannot make the mirror's mutation corpus
+#: incomplete, which is the harm this verdict exists to detect. It is also the only DELETE a dev
+#: machine has: the device bridge's mount refuses `unlink(2)`, so retiring a driver means moving it
+#: here, and the sweep was convicting a file for the one deletion its filesystem permits.
+#:
+#: ⚠ IT IS NOT DERIVED FROM `sync-public.sh`, and that is deliberate rather than lazy: this test
+#: SHIPS and `sync-public.sh` does not, so reading it here would be
+#: `SHIPPED-TEST-READS-INTERNAL-FILE` — a class this repo has already closed twice.
+QUARANTINE_ROOT = "_to_delete"
+
+
 def location_verdict(rel):
     if rel in DECLARED_INTERNAL_DRIVERS:
+        return LOCATION_DECLARED_INTERNAL
+    if rel.split("/")[0] == QUARANTINE_ROOT:
         return LOCATION_DECLARED_INTERNAL
     if rel.split("/")[0] == DRIVER_HOME:
         return LOCATION_SHIPPED

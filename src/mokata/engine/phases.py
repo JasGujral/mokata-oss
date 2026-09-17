@@ -164,9 +164,12 @@ def _mark_gate_passed(store: Any, phase: str) -> None:
         from ..session import current_run_id
         from ..govern.resume import PipelineCheckpoint
         PipelineCheckpoint(store, current_run_id()).mark_passed(phase)
-    except Exception:
+    except Exception as exc:
+        # ⛔ `exc` IS FORWARDED, NOT DISCARDED. A bare `except Exception:` here threw away the one
+        # fact that says whether the FILESYSTEM refused or MOKATA'S OWN CODE raised, and the notice
+        # then asserted the first — see OSS #67, where the user disproved that assertion by hand.
         from ..session_flow import note_persist_failure
-        note_persist_failure("gate:" + phase)
+        note_persist_failure("gate:" + phase, error=exc)
 
 
 def _karpathy_context(ctx: PhaseContext) -> KarpathyContext:

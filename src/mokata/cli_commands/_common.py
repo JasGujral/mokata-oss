@@ -22,7 +22,7 @@ from ..crossplat import current_user as _current_user
 from ..detect import Detector
 from ..init import init_repo, plan_init, render_plan
 from ..notify import announce_prompt
-from ..prompt import read_yes_no
+from ..prompt import confirmed, decline_notice, read_yes_no
 from .. import MOKATA_DIR
 from ..adapters import (
     AdapterContract,
@@ -183,6 +183,8 @@ __all__ = [
     "plan_init",
     "render_plan",
     "read_yes_no",
+    "confirmed",
+    "decline_notice",
     "MOKATA_DIR",
     "AdapterContract",
     "MCPRegistry",

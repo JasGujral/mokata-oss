@@ -31,6 +31,7 @@ import shutil
 import tempfile
 import unittest
 
+import _store_snapshot
 import _support  # noqa: F401
 
 from mokata.knowledge import anchor_fingerprints as AF
@@ -221,7 +222,11 @@ class RidesTheGate(_Base):
 
         store = MemoryStore(SQLiteBackend(os.path.join(cwd, "m.db")))
         store.remember(_item("payment rule", about_code=["src/pay.py"]), assume_yes=True)
-        self.assertEqual(["m.db", "src"], sorted(os.listdir(cwd)))
+        # WITHOUT_SIDECARS: on a build whose WAL `-wal`/`-shm` survive the last close (pyenv
+        # py3.13 / sqlite 3.51 does, Debian 3.37 does not — measured, same tree), the store's
+        # own sidecars appear here. They are libsqlite3's files, not a MINT, and this pin is
+        # about what mokata creates. Every other name still has to be accounted for.
+        self.assertEqual(["m.db", "src"], _store_snapshot.without_sidecars(os.listdir(cwd)))
         self.assertFalse(os.path.exists(AF.record_path(cwd)))
 
 
