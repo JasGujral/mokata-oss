@@ -36,6 +36,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 import multiprocessing as mp
 import os
 import re
+import shutil
 import sqlite3
 import tempfile
 import time
@@ -94,10 +95,6 @@ def _hold_reader_bare(db_path, holding, release):
     holding.set()
     release.wait(timeout=30.0)
     conn.close()
-
-
-def _sidecars(d):
-    return sorted(n for n in os.listdir(d) if n.endswith(("-wal", "-shm")))
 
 
 class _NoWalConnection:
@@ -201,16 +198,59 @@ class TestM4Regression(unittest.TestCase):
                 release.set()
                 p.join(timeout=20.0)
 
-    def test_concurrent_windows_leave_no_sidecars_at_rest(self):
-        # Sidecar hygiene: connections are per-operation, so the LAST close checkpoints and removes
-        # -wal/-shm. At rest the store is one complete file — nothing for a copier to miss.
+    def test_the_store_is_COMPLETE_at_rest(self):
+        """At rest the `.db` carries everything — nothing for a copier to miss.
+
+        ⛔ THIS USED TO ASSERT THAT NO `-wal`/`-shm` FILE EXISTED, AND THAT WAS A PROXY
+        FOR THIS, NOT THE THING.
+        Whether a clean last-close UNLINKS `-wal`/`-shm` is a property of the libsqlite3 build:
+        measured at the 0.0.20 cut, removed on Debian sqlite 3.37 and PERSISTED on pyenv py3.13 /
+        sqlite 3.51 — same tree, same commit, and proven with `sqlite3` alone and no mokata in the
+        process, so there is nothing for mokata to fix and nothing a pure-Python remedy can remove
+        (`wal_checkpoint(TRUNCATE)`, `journal_size_limit=0` and a `journal_mode=DELETE` switch were
+        all measured; none of them clears both files).
+
+        ⭐ What the comment actually claimed — *nothing for a copier to miss* — is TRUE on both
+        builds, and is what this now asserts: the `.db` ALONE, copied cold, reads back every item.
+        A file COUNT was never that property; it just happened to imply it on one build."""
         with tempfile.TemporaryDirectory() as d:
             db = os.path.join(d, "memory.db")
             b = SQLiteBackend(db)
             b.put(MemoryItem.create("decision", "x", id="x"))
             b.close()
-            self.assertEqual(_sidecars(d), [], "WAL sidecars survived at rest")
             self.assertTrue(os.path.exists(db))
+            with tempfile.TemporaryDirectory() as cold:
+                lone = os.path.join(cold, "memory.db")
+                shutil.copy2(db, lone)              # THE .db AND NOTHING ELSE
+                self.assertEqual(["x"], sorted(i.id for i in SQLiteBackend(lone).all()),
+                                 "the store at rest is NOT self-contained — a user copying "
+                                 "memory.db would lose committed, human-approved writes")
+
+    def test_the_completeness_check_can_actually_FAIL(self):
+        """ANTI-VACUITY for the pin above. `.all()` on a copied store returning the right rows is
+        only evidence if the same check reds when the store genuinely ISN'T complete. A connection
+        held open with a COMMITTED but un-checkpointed write is exactly that state — the row lives
+        in the `-wal`, and the `.db` alone does not have it. If this ever stops failing, the pin
+        above has stopped grading anything."""
+        with tempfile.TemporaryDirectory() as d:
+            db = os.path.join(d, "memory.db")
+            b = SQLiteBackend(db)
+            b.put(MemoryItem.create("decision", "first", id="a"))
+            b.close()
+            held = connect_sqlite(db)
+            try:
+                held.execute(_UPSERT, ("b", "decision", "s", "active", "{}"))
+                held.commit()                        # committed, NOT checkpointed
+                with tempfile.TemporaryDirectory() as cold:
+                    lone = os.path.join(cold, "memory.db")
+                    shutil.copy2(db, lone)
+                    ids = sorted(r[0] for r in
+                                 sqlite3.connect(lone).execute("SELECT id FROM memory"))
+                self.assertNotIn("b", ids,
+                                 "a copy taken mid-transaction saw an un-checkpointed row — the "
+                                 "completeness pin above cannot distinguish complete from lucky")
+            finally:
+                held.close()
 
 
 # ================================================================== (b) factory coverage
@@ -297,6 +337,36 @@ class TestPragmas(unittest.TestCase):
             conn = connect_sqlite(os.path.join(d, "m.db"))
             try:
                 self.assertEqual(conn.execute("PRAGMA synchronous").fetchone()[0], 2)  # FULL
+            finally:
+                conn.close()
+
+    def test_the_durability_pragma_is_SET_BY_US_and_not_INHERITED(self):
+        # ANTI-VACUITY, and the test above needed it for two years. `PRAGMA synchronous` has TWO
+        # compile-time defaults: SQLITE_DEFAULT_SYNCHRONOUS (FULL) on a rollback journal, and
+        # SQLITE_DEFAULT_WAL_SYNCHRONOUS **once the DB is in WAL** — which some builds ship as
+        # NORMAL. So on a generous build the assertion above passes whether or not mokata wrote
+        # anything, and on a stricter one it fails while naming no defect. Measured at the 0.0.20
+        # cut: FULL on Debian's sqlite 3.37, NORMAL on pyenv 3.13 / sqlite 3.51 — same tree.
+        #
+        # Hand the factory a connection ALREADY on NORMAL. Nothing but an explicit write moves it
+        # back, so this grades the CODE and never the box it runs on.
+        real_connect = sqlite3.connect
+
+        def hostile(*args, **kwargs):
+            conn = real_connect(*args, **kwargs)
+            conn.execute("PRAGMA synchronous=NORMAL")
+            assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1, (
+                "the hostile fixture did not take — this test would grade nothing")
+            return conn
+
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(sqlite3, "connect", side_effect=hostile):
+                conn = connect_sqlite(os.path.join(d, "m.db"))
+            try:
+                self.assertEqual(
+                    conn.execute("PRAGMA synchronous").fetchone()[0], 2,
+                    "connect_sqlite INHERITED this build's synchronous instead of SETTING it — "
+                    "mokata's durability then depends on how somebody else compiled libsqlite3")
             finally:
                 conn.close()
 

@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, List, Optional, Sequence
+from typing import Any, List, Optional, Sequence, Tuple
 
 from ..errors import MokataError
 
@@ -155,6 +155,87 @@ def fire_upgrade_notice_once(root: str) -> Optional[str]:
     except OSError:
         return None
     return UPGRADE_NOTICE
+
+
+# ---------------------------------------------------------------- the evidence, DERIVED not told
+#
+# 🔴 `GRAPH-REQUIRED-GATE-TURNS-ON-A-BOOLEAN-THE-MODEL-WROTE` (doc 84, measured 2026-08-26).
+# `session_save` is an MCP TOOL taking the whole brainstorm as a dict; `spec_emit`'s refusal read
+# `impact.graph_degraded` back off it, and NOTHING between the two ever computed it. Measured three
+# ways: the field omitted → emit ALLOWED · `False` typed by the model → ALLOWED · `True` typed by
+# the model → BLOCKED. So the gate was exactly as strong as the model's willingness to report
+# against its own interest — and `from_dict` defaults the field to `False`, which made *"a real
+# graph answered"* and *"nobody computed one"* the same value (§7g).
+#
+# ⭐ THAT IS `SI.3` WITH EVIDENCE IN PLACE OF CONSENT — *a `confirm=True` the MODEL types is not
+# consent* — on the one gate whose whole purpose is to prove a decision input was not a guess.
+#
+# ⚠ THE LINE THIS DRAWS, STATED BECAUSE IT IS THE WHOLE DESIGN. The model still supplies WHICH
+# SYMBOLS its approach touches — that is its design statement and legitimately its job. What it may
+# no longer supply is WHETHER A REAL GRAPH ANSWERED ABOUT THEM. The first is a claim about the
+# change; the second is a claim about the evidence, and evidence a party grades for itself is not
+# evidence.
+
+#: The three states this derivation can be in. ⛔ NOT a bool: *"a graph answered"*, *"the lexical
+#: floor answered"* and *"mokata could not look"* are three facts, and collapsing the third into
+#: either of the others is how the original defect was invisible.
+DERIVED_CLEAN = "derived-clean"
+DERIVED_DEGRADED = "derived-degraded"
+UNDERIVABLE = "underivable"
+
+
+def derive_graph_degraded(surface: Any, targets: Any, *,
+                          _lens: Any = None, _build_layer: Any = None) -> Tuple[str, bool]:
+    """`(basis, degraded)` — run the blast-radius lens HERE, over `targets`, and report what the
+    tree's own graph actually answered.
+
+    ⭐ REUSES `compute_impact` RATHER THAN RE-IMPLEMENTING ITS RULE. That function already encodes
+    the subtle part — the AST floor answering WITH evidence is not degraded, a missing layer with
+    targets IS, an approach naming no targets is neither — and a second implementation of that rule
+    would drift from it. The honest machinery already existed; nothing on the brainstorm path was
+    calling it.
+
+    ⚠ `_lens` / `_build_layer` ARE TEST SEAMS AND EXIST FOR ONE REASON, stated rather than left to
+    be guessed: the two FAIL-CLOSED branches below are unreachable from any real repo — a layer is
+    always buildable and the lens catches its own query faults — so mutants that turned them into
+    fail-OPEN both SURVIVED. §7f: the clean case had graded the guard away. Injection is the same
+    idiom `compute_impact(layer=...)` already uses, and it is the boundary, not the reader (§7e).
+
+    ⛔ FAILS CLOSED, and says which kind of closed. If the layer cannot be built or the lens raises,
+    the answer is `UNDERIVABLE` with `degraded=True`: a gate that cannot see is not a gate that
+    approves. The caller renders that differently from a measured degradation, because *"the floor
+    answered"* and *"mokata could not look"* send a reader to different places."""
+    tgts = [str(t).strip() for t in (targets or []) if str(t).strip()]
+    if not tgts:
+        # Nothing was queried, so nothing degraded. This is not a pass by omission: the caller
+        # only reaches the gate for an approach that named a surface to touch.
+        return DERIVED_CLEAN, False
+    try:
+        if _lens is None:
+            from ..brainstorm_impact import compute_impact as _lens_default
+        else:
+            _lens_default = _lens
+        try:
+            if _build_layer is not None:
+                layer = _build_layer(surface)
+            else:
+                from ..knowledge import KnowledgeLayer
+                layer = KnowledgeLayer.from_surface(surface)
+        except Exception:                             # noqa: BLE001 — no layer IS an answer
+            layer = None
+        if layer is None:
+            # ⭐ NO LAYER AT ALL IS `UNDERIVABLE`, NOT `DERIVED_DEGRADED`, EVEN THOUGH BOTH REFUSE.
+            # `compute_impact`'s rule would call this degraded and be right, but the two send a
+            # reader to different places: a degraded answer means *adopt a graph, or accept the
+            # lexical floor for this session*; this means *mokata could not look at all*, which is
+            # usually a broken adoption rather than a missing one. Same verdict, different sentence
+            # — which is the entire content of §7g.
+            return UNDERIVABLE, True
+        impact = _lens_default("graph-required-gate", tgts, layer=layer)
+    except Exception:                                 # noqa: BLE001 — see the fail-closed note
+        return UNDERIVABLE, True
+    degraded = bool(getattr(impact, "graph_degraded", True))
+    return (DERIVED_DEGRADED if degraded else DERIVED_CLEAN), degraded
 
 
 # --------------------------------------------------------------------------- the verdict

@@ -10,6 +10,249 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.20] — 2026-09-17
+
+**The release that closes a promise it made four releases ago, and stops a remedy from lying.**
+0.0.16 disclosed that the FTS lexical tier ranked *worse* than the keyword floor it replaced and
+scheduled the repair for 0.0.17. It was absent from 0.0.17, 0.0.18 and 0.0.19. **It is here, and it
+is retired on a measurement rather than on a claim** — which matters, because retiring it on a claim
+is precisely how it came to be disclosed in the first place.
+
+### Added
+
+- **The code graph reads TypeScript.** `mokata defs`, `callers`, `imports` and the blast radius now
+  answer from `.ts`, `.tsx`, `.mts` and `.cts` files in the same index as your Python, with real
+  call and import edges rather than a grep. It is an **optional extra**, not part of the base
+  install: `pip install 'mokata[graph-ts]'` adds it, mokata **auto-detects** it, and — this is the
+  half that makes an optional parser safe — `mokata doctor` **says which state you are in**. A repo
+  with TypeScript and no parser is told its graph answers are *incomplete*, because an answer that
+  looks fine is worse than one that is missing. ⚠ Plain JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`)
+  is **not** covered — a different grammar this release does not ship. See *Known limitations*.
+- **`mokata doctor` notices a capability chain that predates an embedded provider, and proposes the
+  fix.** A `code_graph` chain committed before the embedded AST provider shipped names external
+  tools and the grep floor, and nothing ever re-offered the AST provider to it — so a repo whose
+  chain read `neo4j → ripgrep → grep` lost Neo4j at 0.0.18 and landed on **grep**, while the AST
+  floor (no install, real call/import edges) sat right there unwired. The removal notice could say
+  *"the canonical graph already answers here"* and be true about mokata and false about your repo.
+  A new `graph-floor-unwired` warning names the gap and the one command that closes it. **It never
+  edits your chain** — the manifest is yours, so doctor proposes and `mokata reconfigure --add`
+  previews and asks. A repo with no Python is told nothing, because a provider that would answer
+  nothing there is not advice.
+- **An unreadable PostgreSQL version is now its own answer.** The supported-version floor has four
+  outcomes, not three: below-floor, at-floor, and *"mokata could not read this server's version, so
+  the floor was NOT checked on this connection."* Before, an unknown version and a checked-and-fine
+  version shared one silence — so a connection where the check never ran looked exactly like one
+  where it passed.
+- **Import edges carry their kind.** The embedded graph now distinguishes a value import from a
+  type-only one (`import type {…}`, and `if TYPE_CHECKING:` in Python), so a blast radius can
+  include a type dependency while `imports` answers about runtime edges. The on-disk cache is
+  versioned; an older cache is dropped rather than guessed at.
+
+### Fixed
+
+- 🔴 **mokata was not durable on WAL, on any build whose `SQLITE_DEFAULT_WAL_SYNCHRONOUS` is
+  `NORMAL`.** `PRAGMA synchronous` has two compile-time defaults — one for a rollback journal, and
+  a separate one that governs the connection **once the database is in WAL**. mokata's own WAL
+  switch is therefore what moved the store off `FULL`, and `memory/_sqlite.py` had declared the
+  guarantee (*"Deliberately NOT set … so the default (FULL) stands"*) without ever writing it.
+  Measured on the same commit: `FULL` on Debian sqlite 3.37, **`NORMAL` on pyenv py3.13 / sqlite
+  3.51**. The trade it silently accepted — losing the last committed transaction on power loss —
+  is one mokata explicitly refuses, on writes a human approved (P2). Now set explicitly at the one
+  connection factory, graded by a test that hands the factory a connection already on `NORMAL` so
+  it can never again pass by inheriting a generous build.
+- **`memory/_sqlite.py` and `backends.py` claimed that the last close removes the `-wal`/`-shm`
+  sidecars.** It checkpoints — so the `.db` alone is complete and a copier loses nothing — but
+  whether the files are unlinked belongs to the libsqlite3 build, and on some builds they survive.
+  The docstrings now say what is true on every build. Two test instruments had encoded the
+  file-count claim as if it were mokata's; they now assert completeness and read each store's
+  committed content, which also catches a write still buffered in an un-checkpointed `-wal` that
+  the byte comparison never could.
+- **The version-parity test asserted a fact about the machine.** `test_matching_version_setup_adds_
+  no_parity_noise` ran the real setup against whatever `mokata-mcp` happened to be first on `PATH`,
+  so it failed for the environment rather than for the property — reliably on the machine releases
+  are cut from, which is backwards for a release gate. It now constructs the matching pair, with a
+  companion test proving the MISMATCH arm still fires.
+
+- 🔴 **The code graph answered from your dependencies' source.** On any JavaScript or TypeScript
+  repository the shipped graph floor walked straight into `node_modules` — which holds file
+  extensions mokata already indexes — so `defs`, `callers` and every blast radius named files you
+  do not maintain, and a symbol that exists **only** inside an installed package was answered as
+  though it were yours. The walker's own docstring had described the harm since it was written; its
+  only detector was a nested `.git`, and an npm package does not have one. The prune now reaches
+  every walker in the tree from **one** declaration that sits beside the file extensions it belongs
+  with. ⚠ Go's `vendor/` and Rust's `target/` are deliberately **not** pruned: `vendor/` is
+  hand-maintained source in some repositories, and pruning it would silently delete a user's own
+  code from their own graph — the same harm, in the direction nobody notices.
+- 🔴 **A failed checkpoint told you to check your disk, whatever had actually gone wrong.** When
+  mokata could not write a crash-safety checkpoint it printed *"retry a save once the disk/
+  permissions recover"* — a diagnosis it had never made. The exception was caught and thrown away,
+  so the same sentence fired for a real permission error and for a bug in mokata's own code. It now
+  names the failure's **type** and says which of the two it is: a filesystem refusal still points at
+  permissions and disk; anything else says plainly that nothing on your machine needs fixing and
+  points at the issue tracker. ⚠ The exception's **text** is still never shown — it routinely
+  contains a path, and a diagnostic may not leak your directory layout — so what you get is the type
+  and, for an I/O error, its `errno` symbol, which is what a bug report needs anyway. And the notice
+  is still once per moment, but the **count** is not: `mokata doctor` now tells you how many times a
+  checkpoint failed, so a session that failed a hundred times no longer reads like one that failed
+  once and recovered. *(Reported as OSS #67 and #68.)*
+- 🔴 **`mokata spec amend` could hang forever, and on the MCP surface it timed out at 60 seconds.**
+  When an amendment WIDENS scope, mokata re-runs the blast-radius lens over the newly-authorized
+  targets — and that lens had **no clock at all**. It queries the code graph once per target, and on
+  a repository with no structural graph each query walks the corpus: **measured at 7.1 s for one
+  target and 14.6 s for three on a 3,000-file checkout**. So a widening amendment on a real
+  repository ran past the MCP surface's 60-second budget (which returned a bare *timed out*), and on
+  the command line — which bounded nothing — simply never came back. ⚠ **The slow path is the
+  degraded path**, which is why it bit hardest when you could least diagnose it: the lexical floor
+  is what you are on when the graph is unreachable. The lens now has a **20-second budget**, a third
+  of the MCP surface's, so mokata's own answer always arrives first. ⛔ **It still fails closed** —
+  an unknown blast radius on a widening amendment is refused, never approved as though the lens had
+  run and found nothing — but the refusal now *arrives*, says the lens ran out of time rather than
+  broke, and names the way out: widen less, or override deliberately. When the repository is on the
+  lexical floor it says so and points at the provider to install, which is the fix that makes the
+  lens near-instant. *(Reported as OSS #66, #69, #70 and #73.)*
+- 🔴 **A prompt that nobody could answer said "aborted", as though someone had.** With no terminal —
+  in CI, in a hook, under an agent harness — `mokata gate override`, `mokata approve`,
+  `mokata spec amend`, `mokata upgrade` and the degraded-evidence prompt all declined and reported
+  it in the words of a human decision, without naming the flag that answers them. They now say
+  which of the three it was: you declined, nobody was asked (with `--yes` named inline), or stdin
+  closed with the question open. ⚠ **And the audit ledger recorded the fabrication too** — a
+  no-terminal run was written down as `declined / human declined`, which is the record an auditor
+  reads long after the terminal is gone, and mokata's rule-learning read it as a human pushing back
+  on the pattern. Those rows are now `unanswered`, and rule-learning ignores them. `mokata spec
+  amend` gets the loudest fix, because its decline leaves the run regressed with development writes
+  blocked: it now prints **both** ways out. *(Reported as OSS #66.)*
+- **`mokata test` and `mokata review` shared one blind spot, and mokata had told them to.** A test
+  written against an acceptance criterion proved the *producer* populated a value while the code
+  that consumed it read a different field — and the reviewer, re-running that same suite, inherited
+  the gap. Two changes, both at the instruction: `test` now requires each criterion to be asserted
+  **where the value is read**, and to be fed the boundary of its own inputs — empty, **zero and
+  other falsy-but-present values**, absent versus present-and-empty, a hostile key. That is the
+  approved criterion actually tested, not new scope, and the rule that used to call it scope creep
+  said so out loud. `review` now treats the test suite as the builder's claim in executable form:
+  it must open a real consumer of each changed contract, and name one input class the tests never
+  feed. ⚠ Inventing a criterion is still forbidden — the scope rule was narrowed, not removed.
+  *(Reported as OSS #65.)*
+- 🔴 **`mokata reconfigure --remove` could not unwire a provider it had itself wired.**
+  `--add pgvector` put it in your memory chain; `--remove pgvector` reported *"no changes — your
+  setup already matches. Nothing written."* and left it there. `--add` picked its candidates from
+  the tool catalog and `--remove` picked its own from a different list, so **anything mokata knows
+  but the setup wizard does not offer could be wired and never removed.** Both commands now share
+  one rule — *removable = wired, and not one of the always-present local floors* — and the floor set
+  is read off the profile rather than kept beside it. `--remove grep` is unchanged.
+- **The gate that refuses an edit on a degraded code graph now MEASURES the degradation instead of
+  reading it.** The refusal turned on a boolean written into the session by the model driving it. It
+  is now derived at the moment of refusal from the graph itself, and when the two disagree the
+  refusal says so.
+- **A removed channel stops being answered as a typo.** `mokata migrate obsidian` exits 1 with the
+  removal notice — where your data is, and the one command that brings it across — while a genuine
+  misspelling still exits 2 with argparse's *"invalid choice"*. *Existed and is gone* and *never
+  existed* are different answers, and they now differ in wording **and** in exit code.
+
+### Ranking
+
+- 🟢 **THE FTS/BM25 RANKING REGRESSION IS FIXED, AND THE DISCLOSURE PUBLISHED SINCE 0.0.16 IS
+  RETIRED ON THE MEASUREMENT BELOW.** The defect was that `normalize_lexical_scores` scaled each
+  engine's scores against the best score *in its own result set*, flattening exactly the gap that
+  would have ranked a mid-pack answer. **The repair separates the two jobs the tier was conflating:
+  FTS5 SELECTS the candidates and Jaccard SCORES them.** On the **100,000**-item benchmark, two
+  independently seeded corpora, same probes and same code:
+
+      arm                  before            after            Δrecall    ΔMRR
+      A: jaccard (floor)   0.5000 / 0.8334   0.5000 / 0.8334    0.00      0.00
+      B: fts               0.4444 / 0.7258   0.5000 / 0.8528   +5.56    +12.70
+      C: +vector           0.4306 / 0.7235   0.5000 / 0.8253   +6.94    +10.18
+      D: +expansion        0.7639 / 0.7235   0.8333 / 0.8253   +6.94    +10.18
+      B+expansion          0.7778 / 0.7258   0.8333 / 0.8528   +5.55    +12.70
+      B+expansion (full)   0.7778 / 0.7258   0.8333 / 0.8667   +5.55    +14.09
+
+  **The FTS tier now MEETS the keyword floor on recall and beats it on ordering.** The disclosed
+  regression — −5.6pp recall, −10.8pp MRR at 100k — is measured closed.
+
+  ⚠ **The repair applies to BOTH lexical paths**, and that is not tidiness: the tier has two
+  implementations, and scoring only one of them would have made mokata's answer depend on whether
+  the backend can nominate its own candidates.
+
+  ⚠ **The vector tier's ordering cost is NOT closed and is not being quietly folded in.** See
+  *Known limitations*.
+
+### Re-scheduled
+
+One commitment published in the v0.0.19 notes named **0.0.20** and is not in it. It is named here
+with what it was promised for, where it lands, and why.
+
+- **The sub-10-minute PR gate.** First promised at **0.0.18** and carried by two releases since
+  without being built; the second of those moves is what put it in this one, and it is absent from
+  this one too:
+  **the sub-10-minute PR gate is re-scheduled to 0.0.21**.
+
+  ⚠ That is the third move of the same item, so the
+  reason is stated rather than implied: the target cannot be reached by trimming around the edges,
+  because a single step — the unit suite — is **91%** of the binding leg, and this release again
+  added tests rather than removing them. Reaching it means cutting inside the suite, which is a
+  piece of work in its own right and has never been booked as one. Contributor-facing; it does not
+  affect the published package.
+
+  ⚠ **The history above is described rather than quoted, and that is deliberate.** An earlier draft
+  recited each past move in its published phrasing, and the resolver correctly read every one of
+  them as a live promise about a release that has already shipped. A line that reads like a
+  commitment in a shipped file **is** one, whatever the author meant by it.
+
+⛔ **The ranking repair is deliberately not in this section.** It was published against this slot
+and it shipped in this release — see *Ranking*. A section that listed it would be disclosing a slip
+that did not happen, which is the same failure as hiding one.
+
+### Known limitations
+
+- **TypeScript support is an OPTIONAL EXTRA, and without it the graph is quietly incomplete on a
+  TypeScript repository.** The base install carries no TypeScript grammar; `pip install
+  'mokata[graph-ts]'` adds two packages, about **5.1 MB** installed. Without them mokata indexes
+  your Python and skips your `.ts`/`.tsx` files — `mokata doctor` says so, and that notice is the
+  only thing standing between you and an answer that looks complete. **Plain JavaScript is not
+  covered at all**, extra or no extra: `.js`, `.jsx`, `.mjs` and `.cjs` need a different grammar
+  this release does not ship, and handing them to the TypeScript parser to widen the headline would
+  have meant reporting whatever came out. Resolution is by name — `x.y()` resolves to `y` — the
+  same model, and the same limitation, as mokata's Python graph.
+- **The PostgreSQL floor is ENFORCED, and one dimension of its evidence is manual.** Unchanged from
+  0.0.19, and the reason is now stronger rather than weaker: the CI legs written to retire this
+  sentence — a real below-floor server on a runner — **have still never executed**. The WARN and
+  REFUSE arms, the date arithmetic and the version detection are covered by the automated suite;
+  what CI cannot do is run them against a server, so the live legs were executed by hand against
+  **PostgreSQL 16.14** and a genuinely below-floor server — a real PostgreSQL 14 — was never used.
+  ⛔ Nothing here should be read as "enforced and verified", and retiring this because the legs are
+  now *present* would be the defect this release exists to close.
+- **Adding the embedder still costs ordering, and only the recall half of that disclosure is
+  closed.** Against the Jaccard keyword floor on the **100,000**-item benchmark, the vector tier now
+  costs **0.00pp** recall (it cost **6.94pp**) and **−0.81pp** MRR@10 (it cost **−6.3pp**). The
+  recall half is closed; the ordering half stands and is not being folded into the line above it.
+- **A release can still proceed on a protection read it could not fully corroborate, and that
+  exemption is now three releases old.** When GitHub's branch-protection endpoint is unreadable,
+  `branch_protection.py` has a third state that passes **only** on positive corroboration, prints
+  the assurances it did not obtain, and exits **3** so an untaught caller reads it as a refusal.
+  Restoring FULL verification was assigned to this release and **neither candidate mechanism was
+  built**, so the constant naming the release now names the next one. Nothing has been released on
+  a degraded verdict yet; the exemption is armed, not spent. Maintainer-facing — it does not affect
+  the published package.
+- **The Windows notification sound is CALLED, not verified.** CI grades that
+  `winsound.MessageBeep` is invoked with the right flag on Windows. No human has heard the result,
+  and no headless runner can. The visual toast on Windows does not exist at all. Treat the arm as
+  wired and unproven.
+- **On Linux, the notification's *sound* needs a sound stack — and if there is none, and no
+  terminal to ring, you get the banner and no audio.** mokata tries `canberra-gtk-play`
+  (`libcanberra-gtk3-bin`), then `paplay` (`pulseaudio-utils`); on a terminal it falls back to the
+  bell, which needs nothing. The uncovered case is an **MCP gated write on a box with no audio
+  player**: an MCP server has no TTY, so there is no bell to fall back to. mokata raises the
+  banner, names the degrade once, and tells you which package to install — it does not pretend to
+  have made a sound. `settings.ux.notify_audio false` stops it asking. macOS is unaffected.
+- **The PR gate still takes 26–31 minutes against a target of under 10, and this release did not
+  measure it again.** The figures stand from the 0.0.18 cut: **1556 s**, **1791 s** and **1872 s**
+  wall clock over three mirror runs, with a single step — the unit suite — at **91%** of the
+  binding leg. This release added tests, so the number has not fallen. Contributor-facing only.
+  See *Re-scheduled*.
+- **#28 closes on "you can tell", not on "the gate blocks".** An unregistered run is still allowed
+  through the phase gate. What 0.0.19 fixed is that the allow no longer reads as an approval: you
+  are told, once per session, that the gate is not enforcing. If you need it to refuse, wire the
+  hook — `mokata init --yes` does that for you, and `mokata doctor` reports the state.
+
 ## [0.0.19] — 2026-08-23
 
 **The release that grades its own promises.** 0.0.18 went to PyPI carrying five commitments

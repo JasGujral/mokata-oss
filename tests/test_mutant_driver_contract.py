@@ -422,6 +422,29 @@ class TestTheRealCorpus(unittest.TestCase):
             "NEW non-conformance; a driver still in it that now conforms is a stale exemption, "
             "and a stale exemption is where the next real one hides.")
 
+    def test_the_QUARANTINE_is_SEEN_but_does_not_count_as_SHIPPING(self):
+        """⛔ SEEN, NOT SKIPPED — and the first draft got that wrong in a way this file caught.
+
+        Narrowing `discover_drivers` to step over `_to_delete/` made two INDEPENDENT enumerations
+        of the same tree disagree with it, which is precisely what they exist to do: *"a sweep
+        pointed at a subset reads as a general claim while meaning 'the part I remembered'."* The
+        domain must stay whole. What was wrong was the VERDICT, and the verdict's own question is
+        **does this driver SHIP?** — to which `_to_delete/`, excluded from the mirror twice, answers
+        no.
+
+        Measured 2026-09-03 on the dev checkout: `_to_delete/retired/_stage17_mutants.sh` — a
+        RETIRED driver — reported as *"outside tests/ and not declared internal"*, i.e. the sweep
+        convicting a file for the only deletion its filesystem permits.
+        """
+        self.assertEqual(MDC.location_verdict("_to_delete/retired/_old_mutants.sh"),
+                         MDC.LOCATION_DECLARED_INTERNAL)
+        self.assertEqual(MDC.location_verdict("tests/_planted_mutants.sh"),
+                         MDC.LOCATION_SHIPPED,
+                         "the quarantine rule ate the shipping verdict")
+        self.assertEqual(MDC.location_verdict("somewhere/else/_x_mutants.sh"),
+                         MDC.LOCATION_UNDECLARED,
+                         "every location now reads as internal — the guard grades nothing")
+
     def test_every_driver_location_is_declared(self):
         undeclared = [name for name in self.discovered
                       if MDC.location_verdict(name) == MDC.LOCATION_UNDECLARED]

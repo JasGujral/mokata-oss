@@ -27,6 +27,7 @@ import stat
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import _support  # noqa: F401  (path fix: puts src/ on sys.path)
@@ -431,17 +432,75 @@ class TestNoBehaviourChange(unittest.TestCase):
                              {"command": HS.resolved_mcp_command(), "args": []})
 
     def test_matching_version_setup_adds_no_parity_noise(self):
-        # A clean MATCH with no shadow/plugin is a quiet pass: parity_lines emits nothing, so
-        # setup output is unchanged. (Uses the real resolved mokata-mcp, which matches this CLI.)
+        """A clean MATCH with no shadow/plugin is a quiet pass: `parity_lines` emits nothing, so
+        setup output is unchanged.
+
+        ⛔ THE MATCH IS ARRANGED HERE, AND IT USED TO BE ASSUMED. The old body ran the real
+        `setup_harness` and carried this parenthetical:
+
+            # (Uses the real resolved mokata-mcp, which matches this CLI.)
+
+        That is a claim about the MACHINE written as a fact about the code, and it is false on any
+        machine with another mokata ahead of this one on PATH. `resolved_console_script` tries
+        `shutil.which` FIRST — by design, and correctly — so on a maintainer's box with a pyenv or
+        global install the registration points at THAT interpreter's `mokata-mcp`, the versions
+        genuinely differ, and `parity_lines` correctly prints MISMATCH. The test then fails for the
+        environment rather than for the property.
+
+        ⚠ AND IT FAILED EXACTLY WHERE IT MATTERS MOST. `release.sh`'s `run_test_preflight` builds a
+        throwaway venv, `pip install -e .` into it, and runs the suite with that venv's python
+        WITHOUT putting its bin on PATH — so `which` keeps finding the ambient install. The suite is
+        green in a container whose only mokata is the editable one and RED on the machine the cut is
+        run from, which is backwards for a release gate. Measured 2026-09-16 at the 0.0.20 cut:
+        registered 0.0.19 at `~/.pyenv/shims/mokata-mcp`, CLI 0.0.20 in the preflight venv. This is
+        doc 85 §7c — the reviewer's environment is not the repo — inside the gate that guards the
+        release.
+
+        The property is unchanged: a matching registration produces a quiet setup. What changed is
+        that the match is CONSTRUCTED from this interpreter rather than hoped for."""
+        # THE FIXTURE, asserted before it is used: the console script beside THIS interpreter is
+        # this CLI by construction (`pip install -e .` puts it there). If it is absent the
+        # arrangement is not available, and that is worth a named failure rather than a silent skip
+        # — every tree this gate runs in installs the package.
+        sibling = Path(sys.executable).parent / HS.MCP_COMMAND
+        if not sibling.is_file():
+            sibling = Path(sys.executable).parent / (HS.MCP_COMMAND + ".exe")
+        self.assertTrue(sibling.is_file(),
+                        "no %r beside this interpreter (%s), so a MATCHING registration cannot be "
+                        "arranged — install the package into the environment running the suite"
+                        % (HS.MCP_COMMAND, sys.executable))
         with tempfile.TemporaryDirectory() as d:
             lines = []
-            HS.setup_harness("claude", root=d, scope="project", home=d,
-                             assume_yes=True, out=lines.append)
+            with mock.patch.object(HS, "resolved_mcp_command", return_value=str(sibling)):
+                HS.setup_harness("claude", root=d, scope="project", home=d,
+                                 assume_yes=True, out=lines.append)
             blob = "\n".join(lines)
-            self.assertNotIn("MISMATCH", blob.upper())
+            self.assertNotIn("MISMATCH", blob.upper(),
+                             "a registration pointing at THIS interpreter reported a version "
+                             "mismatch against THIS CLI:\n%s" % blob)
             self.assertNotIn("PROBE", blob.upper())
             # CONNECTED verification (prior stage) still present — not displaced by parity.
             self.assertTrue(any(ln.startswith("mokata-mcp:") for ln in lines))
+
+    def test_the_MISMATCH_arm_still_fires_when_the_versions_really_differ(self):
+        """⛔ THE CONTROL FOR THE ARRANGEMENT ABOVE. Patching the resolved command is one edit away
+        from patching the reporter into silence, and then "no MISMATCH" would be true of a setup
+        that can no longer detect one at all. A registration pointing at a DIFFERENT version must
+        still say so."""
+        with tempfile.TemporaryDirectory() as d:
+            fake = Path(d) / "fake-mcp"
+            fake.write_text("#!/bin/sh\necho 'mokata-mcp 9.9.9'\n", encoding="utf-8")
+            fake.chmod(fake.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+            lines = []
+            with mock.patch.object(HS, "resolved_mcp_command", return_value=str(fake)):
+                HS.setup_harness("claude", root=d, scope="project", home=d,
+                                 assume_yes=True, out=lines.append)
+            blob = "\n".join(lines)
+            self.assertIn("MISMATCH", blob.upper(),
+                          "a registration on 9.9.9 did NOT report a mismatch against %s — the "
+                          "reporter is silent, so the quiet pass above grades nothing"
+                          % __version__)
+            self.assertIn("9.9.9", blob)
 
     def test_parity_lines_never_raises(self):
         # Even a garbage registration yields lines, never an exception (fail-open reporter).

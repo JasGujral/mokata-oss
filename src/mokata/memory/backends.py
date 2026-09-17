@@ -291,6 +291,15 @@ LEXICAL_MODE_FTS5 = "fts5"
 LEXICAL_MODE_TSVECTOR = "tsvector"
 LEXICAL_MODE_JACCARD = "jaccard"
 
+#: 🔴 THE THIRD MODE, AND IT IS NOT A DEGRADE — 0.0.20 lane A stage 03
+#: (`FTS-NORMALIZE-FLATTENS`). FTS5 SELECTS the candidates and Jaccard SCORES them. It shares a
+#: word with neither of the other two on purpose (§7g): `fts5` claimed bm25 ordered the result and
+#: `jaccard` claims nothing selected it, and this configuration is the truth of neither. A surface
+#: that reported it as `jaccard` would be announcing a degrade on the release's best-measured
+#: ranking; one that reported `fts5` would keep crediting bm25 for an ordering it no longer
+#: produces.
+LEXICAL_MODE_FTS5_SELECTED_JACCARD_SCORED = "fts5-selected+jaccard-scored"
+
 # SQLite's index lives beside the rows it indexes, in the SAME governed store file.
 FTS_TABLE = "memory_fts"
 # The text an FTS row indexes — `subject + value`, i.e. exactly `tiered._text(item)`. `value` is
@@ -945,8 +954,17 @@ class SQLiteBackend(MemoryBackend):
         MS.S4 — `busy_timeout` is a PER-CONNECTION pragma, so a per-op connection must set it
         every time; `journal_mode=WAL` is a property of the FILE, so after the first connect it
         re-asserts as a no-op. `connect_sqlite` does both. The per-op close is also what keeps the
-        WAL sidecars honest: the LAST connection to close checkpoints and removes `-wal`/`-shm`,
-        so at rest the store is a single complete `memory.db`."""
+        store SELF-CONTAINED: the last connection to close CHECKPOINTS, so at rest `memory.db`
+        carries every committed row and a user who copies that one file loses nothing.
+
+        ⚠ It does NOT follow that the `-wal`/`-shm` files are gone. This docstring used to say the
+        last close "removes" them, and that is a property of the libsqlite3 BUILD, not of mokata —
+        measured at the 0.0.20 cut, removed on Debian sqlite 3.37 and PERSISTED on pyenv py3.13 /
+        sqlite 3.51, with `sqlite3` alone and no mokata in the process. Nothing here can change
+        that (`wal_checkpoint(TRUNCATE)`, `journal_size_limit=0` and a `journal_mode=DELETE` switch
+        were all measured; none clears both), and nothing needs to: the guarantee users have is
+        COMPLETENESS, which holds on both. Two test suites had encoded the file-count claim as if
+        it were mokata's — see `test_ms_s4_sqlite_wal.test_the_store_is_COMPLETE_at_rest`."""
         if self._memory:
             yield self._mem_conn
         else:

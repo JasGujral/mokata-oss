@@ -1293,7 +1293,12 @@ DECLARED_CALLERS = {
     # each moved. Derived with an AST walk for the `commit_push` call in each file — the same
     # operation `gate_enclosure` performs — and the register stayed the authority on WHICH callers
     # exist. `CALLER-LIST-UNPINNED` (doc 84) is the row that ends this arithmetic; it is not mine.
-    ("vault.py", "commit_push"): (("cli_commands/collab.py", 126), ("mcp/tools_share.py", 69)),
+    # ⚠ 126 -> 130 at 0.0.20 stage 11: `collab.py`'s `--to/--from` pair became one call to
+    # `deprecation.answerable_choices`, with the rule and the reason moved into that helper,
+    # which added four lines above this call site. RE-DERIVED by reading the line, not by
+    # nudging the number until the sweep went quiet — which is what the failure message asks
+    # for, and it is asking because somebody once did the other thing.
+    ("vault.py", "commit_push"): (("cli_commands/collab.py", 130), ("mcp/tools_share.py", 69)),
     ("memory/vector.py", "PgVectorBackend.put"): (("memory/reembed.py", 124),),
 }
 

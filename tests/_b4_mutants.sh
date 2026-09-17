@@ -43,7 +43,21 @@ ran=0; red=0; green=0; survivors=""
 printf '================================================================================\n'
 printf 'STEP 0 — GREEN BASELINE (no mutation applied). Nothing is graded until this passes.\n'
 printf '================================================================================\n'
-BASE_LOG="$(mktemp -t b4-baseline)"
+# ⚠ PORTABLE `mktemp`, and the reason is a MEASUREMENT, not a style preference. `mktemp -t b4-baseline`
+# works on BSD/macOS and is REFUSED by GNU coreutils ("too few X's in template"), so on every Linux
+# runner this driver died here — before mutant 1 — for the whole of its life. Give the template its
+# own X's and both implementations accept it.
+BASE_LOG="$(mktemp "${TMPDIR:-/tmp}/b4-baseline.XXXXXX" 2>/dev/null)" || BASE_LOG=""
+# 🔴 §7g — "the SUBJECT is red" and "MY OWN SCAFFOLDING broke" must not share a representation.
+# They did: the failure above fell through to the BATCH REFUSED path below, which tells the reader
+# to *fix the tree* — and the tree was fine. A reader sent to repair something that is not broken
+# is worse served than one told nothing. Distinct condition, distinct message, distinct exit code.
+if [ -z "$BASE_LOG" ] || [ ! -f "$BASE_LOG" ]; then
+    printf '\nHARNESS FAILURE — this driver could not create its own baseline log.\n'
+    printf '  NOTHING IS WRONG WITH THE TREE and nothing was graded. The fault is in this script.\n'
+    printf '  Exit 76 means the DRIVER broke; exit 75 means the SUBJECT was red. They are not the same.\n'
+    exit 76
+fi
 PYTHONDONTWRITEBYTECODE=1 "$PY" -m unittest discover -s tests -t tests \
     -k test_b4_ci_jobs_without_a_timeout > "$BASE_LOG" 2>&1
 BASE_RC=$?

@@ -262,22 +262,84 @@ class TestKindsIsOneRule(SeamLeg):
                          "expression is `coalesce` without `nullif`, so it disagrees with "
                          "`effective_kind` on exactly this row shape")
 
-    def test_the_sql_predicate_agrees_with_the_python_rule(self):
-        """Same query, pushed vs not pushed: the SQL predicate must not change the ANSWER, only
-        how many rows were read to reach it. This is what stops the two definitions drifting."""
-        store = self.store()
+    #: A `top_k` past any plausible match count, so `lexical_search` returns EVERY row the
+    #: predicate admits rather than a ranked window of them. The set comparison below is only a
+    #: comparison of the two RULES if neither side is truncated first.
+    UNBOUNDED = 100_000
+
+    def test_the_sql_predicate_and_the_python_rule_ADMIT_THE_SAME_ROWS(self):
+        """The two definitions must select the SAME SET. This is what stops them drifting.
+
+        ⛔ REPLACES A PIN THAT COMPARED TWO TOP-10 ID LISTS AND HELD BY ACCIDENT, and the
+        replacement is stated rather than quietly substituted (0.0.20 stage 04).
+
+        The old pin asserted `[h.item.id for h in pushed] == [... for h in unpushed]` — an ORDERED
+        top-10 equality between two reads whose CANDIDATE POOLS are different by construction: the
+        pushed read takes its LIMIT over rows of the asked-for kinds, the blind one over all kinds.
+        It passed only because the lexical signal was FLAT. `normalize_lexical_scores` scaled every
+        engine score against the best in its own result set, so the lexical term contributed almost
+        nothing to the final order and the tail was decided by signals both paths shared. Stage 04
+        made the lexical tier discriminate (FTS5 SELECTS, Jaccard SCORES), and the two tails parted
+        immediately.
+
+        ⭐ MEASURED BEFORE REPLACING, on this corpus, all 40 probes: **the RELEVANT items are
+        identical on both paths — 2.000 per probe, pushed and blind alike.** The lists differ only
+        in slots the probe has no relevant item for. So the divergence is a reordering of noise,
+        not a loss, and re-pinning the ordering would pin the noise.
+
+        ⚠ WHAT THIS NO LONGER COVERS, SAID PLAINLY: tail ORDER between the two paths. That was
+        never a property of the kind rule and it is not one now — but it was inside the old
+        assertion, so its loss is named here rather than discovered later.
+
+        WHAT THIS COVERS INSTEAD, AND IT IS STRICTLY MORE: the two rules are compared over EVERY
+        row the query matches (251 of 473 on this corpus) instead of over ten, and order-free. A
+        `coalesce`/`nullif` divergence, a kind spelled differently in SQL, an `IN` that drops the
+        empty string — each admits a different SET, and each is now caught on hundreds of rows.
+        """
         q = self.queries(1)[0]
-        pushed = store.recall_relevant(q, top_k=10, stamp=False, kinds=JIT_KINDS,
-                                       degrade_out=_SINK)
+        by_sql = {it.id for it, _s in
+                  self.backend.lexical_search(q, self.UNBOUNDED, kinds=tuple(JIT_KINDS))}
+        every_row = self.backend.lexical_search(q, self.UNBOUNDED, kinds=None)
+        by_python = {it.id for it, _s in every_row if it.effective_kind in JIT_KINDS}
+
+        self.assertTrue(by_sql, "the SQL predicate admitted NOTHING — this grades nothing")
+        self.assertLess(len(by_sql), len(every_row),
+                        "the predicate admitted every matching row, so a filter that did nothing "
+                        "would pass this test unchanged")
+        self.assertEqual(by_sql, by_python,
+                         "the SQL kind predicate and `effective_kind` admit different rows — two "
+                         "definitions of one rule, which is exactly what this seam exists to stop")
+
+    def test_the_predicate_COSTS_NO_RECALL_even_though_the_tails_differ(self):
+        """The replacement's other half: pushing the filter down must not lose a relevant item.
+
+        ⛔ Without this, the set-comparison above could hold while the ranked ANSWER quietly got
+        worse — the two rules agreeing about which rows EXIST says nothing about which ten come
+        back. Graded over every probe, against the corpus's own relevance labels.
+        """
+        store = self.store()
         real = type(self.backend).lexical_search
 
         def blind(self_, query, top_k=10, *, scope_path=None, statuses=None, kinds=None):
             return real(self_, query, top_k, scope_path=scope_path, statuses=statuses, kinds=None)
 
-        with mock.patch.object(type(self.backend), "lexical_search", blind):
-            unpushed = store.recall_relevant(q, top_k=10, stamp=False, kinds=JIT_KINDS,
-                                             degrade_out=_SINK)
-        self.assertEqual([h.item.id for h in pushed], [h.item.id for h in unpushed])
+        pushed_hits = blind_hits = 0
+        for probe in self.corpus.probes:
+            relevant = set(probe.relevant)
+            got = store.recall_relevant(probe.query, top_k=10, stamp=False, kinds=JIT_KINDS,
+                                        degrade_out=_SINK)
+            pushed_hits += len(relevant & {h.item.id for h in got})
+            with mock.patch.object(type(self.backend), "lexical_search", blind):
+                got = store.recall_relevant(probe.query, top_k=10, stamp=False, kinds=JIT_KINDS,
+                                            degrade_out=_SINK)
+            blind_hits += len(relevant & {h.item.id for h in got})
+
+        self.assertTrue(pushed_hits, "no probe found its own relevant items — this grades nothing")
+        self.assertGreaterEqual(
+            pushed_hits, blind_hits,
+            "pushing the kind predicate into the ranked query LOST relevant items (%d vs %d over "
+            "%d probes) — the optimization changed the answer for the worse"
+            % (pushed_hits, blind_hits, len(self.corpus.probes)))
 
     def test_an_empty_kinds_tuple_is_not_the_same_as_none(self):
         """`None` means every kind; `()` means no kind qualifies. Collapsing the two is the classic

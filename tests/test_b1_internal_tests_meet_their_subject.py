@@ -455,11 +455,68 @@ class TestTheRuntimeDecidedSkipsAreCountedToo(unittest.TestCase):
                                     '        self.skipTest("x")"""\n'
                                     '        self.assertTrue(True)\n'), ())
 
-    def test_the_real_corpus_carries_exactly_the_four_known_companions(self):
+    def test_a_TREE_STATE_probe_is_counted_too(self):
+        """★ THE SECOND SPELLING. `if tree_state(ROOT).kind != TREE_DEV: skipTest()` fires on the
+        mirror and nowhere else, and until 0.0.20 this reader could not see it — the mirror reported
+        167 skips against a derivation of 166, and only the comparison of two independent readings
+        said so. It names no path, so it is keyed on a CONDITION."""
+        rows = self._rows('        if isub.tree_state(ROOT).kind != isub.TREE_DEV:\n'
+                          '            self.skipTest("not a dev checkout")\n'
+                          '        self.assertTrue(True)\n')
+        self.assertEqual([r.key for r in rows], ["tests/t.py::T.test_x"])
+        self.assertEqual(rows[0].subjects, (isub.DEV_TREE_SUBJECT,))
+
+    def test_a_tree_state_probe_that_fires_ON_the_dev_tree_is_NOT_counted(self):
+        """The operator is load-bearing here for the same reason the negation is one shape over:
+        `== TREE_DEV` skips at home, and counting it would predict a mirror skip that never fires."""
+        self.assertEqual(self._rows('        if isub.tree_state(ROOT).kind == isub.TREE_DEV:\n'
+                                    '            self.skipTest("dev only")\n'), ())
+
+    def test_a_kind_that_did_NOT_come_from_tree_state_is_NOT_counted(self):
+        """⛔ A NAME WHERE IT MEANS A MECHANISM — this module's own SEAM_EXPANSION lesson. Any
+        object may carry a `.kind`; only `tree_state(…)`'s says which tree this run is in."""
+        self.assertEqual(self._rows('        if self.report.kind != isub.TREE_DEV:\n'
+                                    '            self.skipTest("some other kind")\n'), ())
+
+    def test_a_file_with_NO_anchored_constant_can_still_carry_a_companion(self):
+        """⛔ The blind spot the second shape created and this closes. The reader used to abandon a
+        file with no anchored path constant — harmless while every shape named a path, and a silent
+        miss the moment one did not."""
+        source = ('import unittest\n'
+                  'class T(unittest.TestCase):\n'
+                  '    def test_x(self):\n'
+                  '        if isub.tree_state(ROOT).kind != isub.TREE_DEV:\n'
+                  '            self.skipTest("not a dev checkout")\n')
+        rows = isub.runtime_boundary_skips({"tests/t.py": source})
+        self.assertEqual([r.key for r in rows], ["tests/t.py::T.test_x"])
+
+    def test_the_CONDITION_subject_is_read_as_a_condition_and_not_as_a_path(self):
+        """⛔ Both directions, because one alone is satisfied by a reader that always says the same
+        thing. On a DEV tree the tree-state companion RUNS, so it must not be predicted as a skip;
+        on a MIRROR it skips, so it must be. A `subject_state` that stat()ed the sentinel would
+        answer ABSENT in both — and predict a skip at home for a test that runs there."""
+        # ⛔ BOTH TREE STATES ARE SUPPLIED, NOT INHERITED — and the first draft inherited one.
+        # It read `subject_state(ROOT, …) == GRADED`, which is a claim about the tree the test
+        # happens to run in, and this file SHIPS: on the public mirror the ambient tree is the
+        # mirror, the sentinel is correctly ABSENT_BY_DESIGN, and the assertion failed for the
+        # BOUNDARY WORKING. That is `SHIPPED-TEST-READS-INTERNAL-FILE`'s shape committed inside the
+        # test written to grade the tree-state model — found 2026-09-13 by the public-subset
+        # preflight. The property was never about the ambient tree; it is the MAPPING.
+        dev = isub.TreeReport(isub.TREE_DEV)
+        mirror = isub.TreeReport(isub.TREE_MIRROR)
+        self.assertEqual(isub.subject_state(ROOT, (isub.DEV_TREE_SUBJECT,), dev), isub.GRADED)
+        self.assertEqual(isub.subject_state(ROOT, (isub.DEV_TREE_SUBJECT,), mirror),
+                         isub.ABSENT_BY_DESIGN)
+
+    def test_the_real_corpus_carries_exactly_the_known_companions(self):
+        """⚠ AN INVENTORY, NOT A COUNT — which is why the names are here and the number is not.
+        It read FOUR until 0.0.20; `test_a15` had made it five and this pin agreed with the blind
+        reader rather than with the tree. A population that changes is news either way."""
         rows = isub.runtime_boundary_skips(_corpus(ROOT))
         self.assertEqual(
             sorted({r.filename for r in rows}),
-            ["tests/test_s11_bookkeeping_derived.py",
+            ["tests/test_a15_docs_index_next_free_is_derived.py",
+             "tests/test_s11_bookkeeping_derived.py",
              "tests/test_s12_release_publisher.py",
              "tests/test_s27_preflight_parity.py",
              "tests/test_tag_is_not_a_publish.py"],

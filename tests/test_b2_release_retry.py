@@ -351,6 +351,17 @@ class _Harness:
         """A public checkout on `main`, with a bare origin it has already pushed to."""
         bare = self.tmp()
         self.git("init", "-q", "--bare", ".", cwd=bare)
+        # 🔴 THE BARE'S HEAD IS SET EXPLICITLY, AND THIS LINE IS THE WHOLE TEST ON A FRESH MACHINE.
+        # `git init --bare` names its HEAD from the AMBIENT `init.defaultBranch`, which is unset on
+        # a stock git (so: `master`) and is `main` on a machine whose owner set it years ago. The
+        # checkout below pushes only `main`, so on a stock git the bare's HEAD points at a ref that
+        # never exists — and `git clone` of it says *"remote HEAD refers to nonexistent ref, unable
+        # to checkout"*, hands back an EMPTY working tree, and every later step fails with a raw
+        # git pathspec error that names neither the cause nor this fixture.
+        # ⛔ THAT IS §7c IN A FIXTURE: the test passed on the author's machine and was RED on every
+        # fresh checkout, this container and the dev machine included. `git symbolic-ref` rather
+        # than `--initial-branch` because it needs no git-version floor.
+        self.git("symbolic-ref", "HEAD", "refs/heads/main", cwd=bare)
         dest = self.tmp()
         self._write(os.path.join(dest, "seed.txt"), "seed\n")
         self.git("init", "-q", cwd=dest)
@@ -609,6 +620,54 @@ class TestN6N7TagsConvergeOrRefuseButNeverMove(_Harness, unittest.TestCase):
         self.assertIn("attestation-bearing", proc.stderr)
         self.assertEqual(self.remote_sha(f"refs/tags/{TAG}^{{}}", cwd=dest), published,
                          "a published, attestation-bearing tag was moved")
+
+
+class TheFixtureDoesNotDependOnTheAMBIENTGitDefault(_Harness, unittest.TestCase):
+    """§7c. The bug this class exists to catch was in the FIXTURE, not in the subject.
+
+    `git init --bare` names its HEAD from `init.defaultBranch`. Unset (a stock git, a fresh CI
+    runner, this container, the dev machine) that is `master`; on a machine whose owner set it, it
+    is `main`. The fixture pushes only `main`, so on a stock git the bare's HEAD pointed at a ref
+    that never existed, `git clone` handed back an EMPTY working tree with a warning nobody reads,
+    and the failure surfaced four steps later as `error: pathspec 'master' did not match any
+    file(s) known to git` — an error naming neither the cause nor this file.
+
+    ⛔ A TEST THAT PASSES ONLY ON A MACHINE CONFIGURED LIKE THE AUTHOR'S IS NOT A TEST. This runs
+    `dest()` under BOTH ambient values and requires the same answer, so the dependency cannot come
+    back — and it fails on the value the author's machine does NOT have, which is the direction that
+    went unnoticed.
+    """
+
+    def _bare_head_under(self, default_branch):
+        env = dict(os.environ)
+        env["GIT_CONFIG_COUNT"] = "1"
+        env["GIT_CONFIG_KEY_0"] = "init.defaultBranch"
+        env["GIT_CONFIG_VALUE_0"] = default_branch
+        real = os.environ
+        try:
+            os.environ = env                                  # noqa: B003 — restored below
+            _dest, bare = self.dest()
+        finally:
+            os.environ = real
+        proc = subprocess.run(["git", "symbolic-ref", "HEAD"], cwd=bare,
+                              capture_output=True, text=True)
+        return proc.stdout.strip()
+
+    def test_the_bare_HEAD_is_main_whatever_the_machine_defaults_to(self):
+        answers = {d: self._bare_head_under(d) for d in ("master", "main")}
+        self.assertEqual(set(answers.values()), {"refs/heads/main"},
+                         "the fixture's bare repo inherits the machine's `init.defaultBranch`, so "
+                         "this suite passes or fails by whose laptop it runs on: %r" % (answers,))
+
+    def test_a_clone_of_that_bare_HAS_A_WORKING_TREE(self):
+        """The symptom, pinned directly: an empty clone is what made the real error four steps
+        later unreadable."""
+        _dest, bare = self.dest()
+        other = self.tmp()
+        self.git("clone", "-q", bare, other, cwd=self.tmp())
+        self.assertTrue(os.path.exists(os.path.join(other, "seed.txt")),
+                        "the clone came back with an EMPTY working tree — the bare's HEAD names a "
+                        "ref nothing was ever pushed to")
 
 
 if __name__ == "__main__":

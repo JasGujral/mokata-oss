@@ -276,6 +276,20 @@ def _wired_integrations(root: str) -> set:
     return wired
 
 
+def _default_profile_floors() -> frozenset:
+    """The tools `DEFAULT_PROFILE` wires for every user — the ones `--remove` must not touch.
+
+    DERIVED from the profile table, never listed. These are the local, always-wired fallbacks a
+    chain ends in; everything else reached a chain because a human asked for it (`--add`) or an
+    older release put it there, and both must be undoable. ⚠ Reading the DEFAULT profile rather
+    than the CURRENT one is deliberate: `full` wires `serena` and `code-review-graph`, which are
+    opt-in providers a user must still be able to unwire, and keying on the current profile would
+    make removability depend on which profile happened to be selected."""
+    from .profiles import PROFILES
+    caps = (PROFILES.get(DEFAULT_PROFILE) or {}).get("capabilities") or {}
+    return frozenset(t for chain in caps.values() for t in (chain or []))
+
+
 def _removable_tools(root: str) -> set:
     """The tools `--remove` may take out of a chain — a DIFFERENT question from the one above.
 
@@ -288,13 +302,33 @@ def _removable_tools(root: str) -> set:
     user whose manifest plainly still names it. The removal record points at that command, so the
     remedy would have been a lie told by the notice that exists to stop lies.
 
-    Removable = an offered integration, OR anything in a chain the catalog no longer knows. The
-    second clause is the new one and it is deliberately narrow: a tool this release does not ship
-    cannot be one of the always-present floors, so `--remove grep` stays the no-op it always was
-    and every other behaviour is byte-identical."""
+    ⛔ THE TWO-CLAUSE RULE THAT LANDED AT 0.0.18 STAGE 14 WAS STILL WRONG, AND 0.0.20 STAGE 11b
+    MEASURED IT RATHER THAN INFERRING IT. It read *offered (`OPTIONAL_INTEGRATIONS`) OR unknown to
+    the catalog*, which leaves a third state uncovered: **a tool the catalog KNOWS and the wizard
+    does not OFFER.** `pgvector` is exactly that today — `mokata reconfigure --add pgvector` wires
+    it, and `--remove pgvector` reported *"no changes — your setup already matches"* and left it in
+    the chain. **A provider that was never removed, broken by the same defect the removal row is
+    about**, because `--add` picks its candidates out of `TOOL_CATALOG` and `--remove` picked its
+    own out of a different tuple. ⭐ **The two commands did not share a candidate set, and that —
+    not the removal — is the actual bug.**
+
+    ⭐ ONE DERIVED RULE REPLACES THREE CLAUSES: **removable = wired, and not a floor mokata wired
+    for you** — where the floors are DERIVED from `DEFAULT_PROFILE`'s own capability chains rather
+    than listed here. Anything else in a chain got there because somebody ran `--add`, or because
+    an older release put it there, and both are things a user must be able to undo.
+
+    Held to the three states it must cover, and every one is a test:
+      * offered integrations (`postgres`, `serena`, `code-review-graph`) — removable, as before;
+      * catalog-known but unoffered (`pgvector`) — removable, **which it was not**;
+      * unknown to the catalog (a REMOVED provider, e.g. `neo4j`) — removable, as before;
+      * `DEFAULT_PROFILE`'s floors (`ast` / `ripgrep` / `grep` / `sqlite`) — **still no-ops**, so
+        `--remove grep` behaves exactly as it always has. The floor set is not typed here: it is
+        read off the profile table, so a profile change moves it and no second declaration goes
+        stale (`DERIVE-COUNTS-DO-NOT-TYPE-THEM` applied to a set)."""
     out = set()
+    floors = _default_profile_floors()
     for chain in _current_wiring(root).values():
-        out.update(t for t in chain if t in OPTIONAL_INTEGRATIONS or t not in TOOL_CATALOG)
+        out.update(t for t in chain if t not in floors)
     return out
 
 

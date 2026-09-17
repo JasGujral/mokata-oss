@@ -236,10 +236,22 @@ class TestCliSpecCheck(unittest.TestCase):
         return surface
 
     def test_cli_conflict_blocks_without_confirmation(self):
+        """⚠ THE STDIN IS THIS TEST'S, NOT THE MACHINE'S (0.0.20 stage 10).
+
+        Without the double, which arm this grades was decided by whoever ran the suite. Off a TTY
+        `read_yes_no` takes the fail-closed `NO_TTY` branch and the test passes; **at a real
+        terminal it reaches `input()`, and the prompt is swallowed by the `redirect_stdout` two
+        lines below, so the run hangs with nothing on screen** until somebody types blindly. That
+        happened, on the dev machine, and it read as a regression: a stray `yes` was consumed,
+        mokata approved, and `rc` came back 0. Reproduced under a pty and filed as
+        `SUITE-HANGS-AT-A-TTY-ON-THREE-TESTS`.
+
+        ⭐ The arm under test is the NON-INTERACTIVE one — a model or a CI job running `spec-check`
+        with no `--yes` — so the double says "not a terminal" and says it on every host."""
         with tempfile.TemporaryDirectory() as d:
             self._repo_with_spec(d)
             buf = io.StringIO()
-            with redirect_stdout(buf):
+            with redirect_stdout(buf), _support.stdin_is(_support.NoTtyStdin()):
                 rc = cli.main(["spec-check", "--symbols", "process_payment", "--path", d])
             out = buf.getvalue()
             self.assertEqual(rc, 1)                      # BLOCKED until confirmed

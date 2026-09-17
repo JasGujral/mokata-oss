@@ -199,17 +199,26 @@ class TestPerMoment(_Base):
                 raise OSError("disk full")
 
             orig = FLOW.save_session
-            warned = io.StringIO()
+            notices = []
             FLOW.save_session = boom
             try:
-                flow = FLOW.SessionFlow(surface, warn=warned.write)
+                flow = FLOW.SessionFlow(surface, warn=notices.append)
                 # the moment returns cleanly (None on degrade), never raises
                 self.assertIsNone(flow.milestone(_in_progress().to_dict()))
                 self.assertIsNone(flow.milestone(_in_progress().to_dict()))  # 2nd time: no re-warn
             finally:
                 FLOW.save_session = orig
             self.assertEqual(len(boom_calls), 2)                 # both moments attempted
-            self.assertEqual(warned.getvalue().count("\n"), 1)   # but warned exactly ONCE
+            # ⛔ COUNT THE NOTICES, NOT THE NEWLINES. This read `.count("\n") == 1`, which is a
+            # proxy for "warned once" that measures neither half: a two-line notice would have read
+            # as TWO warnings and a notice with no trailing newline reads as ZERO — which is how it
+            # broke when the message moved to the D5 register (0.0.20, OSS #67). One `write` call
+            # per notice is the property; the newline was an artefact of the old print.
+            self.assertEqual(len(notices), 1, notices)
+            # ⭐ AND THE NOTICE NAMES THE CAUSE. An injected OSError is the FILESYSTEM refusing, so
+            # the disk advice is the true one here — the case that made it look true everywhere.
+            self.assertIn("OSError", notices[0])
+            self.assertIn("permissions/disk", notices[0])
 
 
 # ============================================================ gate integrity (P2 + HARD-GATE)

@@ -135,8 +135,21 @@ mutant "T05 quality-at-scale.yml — a step drops to a tag pin" "$W/quality-at-s
 mutant "T07 embeddings-leg.yml — a step drops to a tag pin" "$W/embeddings-leg.yml" \
   "$CHECKOUT" "$CHECKOUT_TAG" "$T"
 
+# ⚠ ANCHORED ON THE JOB'S OWN DSN LINE, not on the pin alone. `live-db-legs.yml` gained a SECOND
+# job at 0.0.20 stage 08a (the below-floor arm needs its own container), so the checkout pin now
+# occurs TWICE in this file and a bare quotation is ambiguous — `mutate.sh` exits 3 there and
+# aborts the batch, leaving every mutant after it ungraded. The batch sweep caught it the moment
+# the job landed, which is the whole reason the sweep exists. `MOKATA_TEST_DSN` occurs exactly
+# once and belongs to the first job, so the three lines below name one checkout and only one.
 mutant "T08 live-db-legs.yml — a step drops to a tag pin" "$W/live-db-legs.yml" \
-  "$CHECKOUT" "$CHECKOUT_TAG" "$T"
+  "      MOKATA_TEST_DSN: \"postgresql://mokata@localhost:5432/mokata_legs\"
+      PGPASSWORD: \"mokata\"
+    steps:
+      - uses: $CHECKOUT" \
+  "      MOKATA_TEST_DSN: \"postgresql://mokata@localhost:5432/mokata_legs\"
+      PGPASSWORD: \"mokata\"
+    steps:
+      - uses: $CHECKOUT_TAG" "$T"
 
 mutant "T09 real-crg.yml — a step drops to a tag pin" "$W/real-crg.yml" \
   "$CHECKOUT" "$CHECKOUT_TAG" "$T"

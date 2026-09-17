@@ -368,7 +368,20 @@ class _ScanSpy:
 
 class NoPythonScanTest(unittest.TestCase):
 
-    def test_db_s3_no_python_scan(self):
+    def test_db_s3_python_scoring_is_BOUNDED_not_proportional_to_the_store(self):
+        """⚠ RE-DERIVED AT 0.0.20 STAGE 04. This asserted **zero** Python scoring with FTS live, and
+        the repair makes that false: FTS5 now SELECTS the candidates and Jaccard SCORES them, which
+        is Python, by design and after measurement (`03-ranking-bm25.findings.md`).
+
+        ⛔ **ZERO WAS NEVER THE PROPERTY DB.S3 BOUGHT.** What DB.S3 removed was a *full-store scan* —
+        a cost proportional to the store, 51,606 rows on the 100k fixture, on every recall. Scoring
+        the ≤`CANDIDATE_UNION_CAP` rows the database already nominated and hydrated is O(nominees)
+        and does not grow with the store at all. **Zero-versus-nonzero was a proxy for
+        bounded-versus-proportional, and the proxy stopped tracking the property.**
+
+        ⭐ So the assertion becomes the property itself, and it is STRICTLY STRONGER than the old
+        one: a future change that reintroduced the scan would satisfy *"scores in Python"* just as
+        this one does, and would fail here."""
         corpus = _quality_corpus()
         backend = _sqlite_backend(corpus)
         self.addCleanup(backend.close)
@@ -382,8 +395,15 @@ class NoPythonScanTest(unittest.TestCase):
         finally:
             tiered.lexical_score = original
 
-        self.assertEqual(spy.calls, 0,
-                         "with FTS live the lexical tier must not score rows in Python")
+        self.assertLessEqual(
+            spy.calls, tiered.CANDIDATE_UNION_CAP,
+            f"the lexical tier scored {spy.calls} rows in Python, past the declared "
+            f"{tiered.CANDIDATE_UNION_CAP}-row candidate union — a bounded read has become a scan "
+            "again, which is the whole of what DB.S3 removed")
+        self.assertLess(
+            spy.calls, len(corpus),
+            f"the lexical tier scored {spy.calls} of {len(corpus)} rows — that is the full-store "
+            "scan DB.S3 replaced, whatever it is called now")
         self.assertTrue(hits)
         self.assertEqual(hits[0].item.id, "gate")
 

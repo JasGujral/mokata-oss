@@ -28,6 +28,7 @@ from ..errors import failure_class_of
 from .embed import Embedder, cosine
 from .expansion import EDGE_WEIGHT
 from .item import ACTIVE, DEFAULT_TOP_K
+from .backends import normalize_lexical_scores
 from .episodic import lexical_score
 from .lifecycle import UsageSignal, recency_score, usage_score
 
@@ -219,7 +220,8 @@ def lexical_tier(store: Any, query: str, items: List[Any], top_k: int,
         whose search raised. The user asked for FTS recall and is getting keyword overlap, so say
         so ONCE (`note_degraded`) — the exact silence D5 was written to end.
     """
-    from .backends import LEXICAL_MODE_JACCARD
+    from .backends import (LEXICAL_MODE_FTS5_SELECTED_JACCARD_SCORED,
+                           LEXICAL_MODE_JACCARD, normalize_lexical_scores)
     backend = getattr(store, "backend", None)
     search = getattr(backend, "lexical_search", None)
     mode = getattr(backend, "lexical_mode", LEXICAL_MODE_JACCARD)
@@ -231,7 +233,18 @@ def lexical_tier(store: Any, query: str, items: List[Any], top_k: int,
             # hit outside it is dropped. The FTS predicate composes with visibility (the backend
             # already applied its project scope); it never overrides it.
             visible = {it.id for it in items}
-            return {it.id: float(s) for it, s in ranked if it.id in visible}, mode
+            # ⭐ THE SAME RULE AS THE BOUNDED PATH — FTS5 SELECTS, JACCARD SCORES (stage 03).
+            # Applied here too, and the symmetry is not tidiness: without it mokata's ANSWER would
+            # depend on whether the backend can nominate. Stage 01 established, and pinned, that
+            # the candidate path is worth **0.0000pp** — the bounded and wide arms land
+            # byte-identically. Scoring only one of them would have made that pin false by
+            # construction, which is a ranking change disguised as an optimization detail: exactly
+            # the class `_bounded_candidates`' own precedence comment warns about.
+            pairs = [(it.id, lexical_score(query, _text(it)))
+                     for it, _bm25 in ranked if it.id in visible]
+            normed = normalize_lexical_scores([v for _i, v in pairs], higher_is_better=True)
+            return ({i: v for (i, _raw), v in zip(pairs, normed)},
+                    LEXICAL_MODE_FTS5_SELECTED_JACCARD_SCORED)
         except Exception as exc:
             # Broad for the same reason the semantic tier's handler is: `lexical_search` spans a
             # psycopg driver error (an OPTIONAL extra, not nameable at module scope), a sqlite3
@@ -357,7 +370,46 @@ def _nominate(store: Any, query: str, top_k: int,
                       detail=f"{type(exc).__name__}: {exc}", out=degrade_out)
         return None
 
-    lex = {it.id: float(score) for it, score in ranked}
+    # 🔴 FTS5 SELECTS; JACCARD SCORES. 0.0.20 lane A stage 03, and this line is the whole of
+    # `FTS-NORMALIZE-FLATTENS`'s repair.
+    #
+    # The row was disclosed in four consecutive releases and each set of notes prescribed a better
+    # NORMALIZATION of the bm25 score. Stage 02 proved no normalization can work — every one of
+    # them is monotone in the raw score, so every one preserves bm25's order — and located the loss
+    # exactly: at N=100,000 the items arm A finds and arm B misses are all INSIDE the nomination
+    # window and are simply SCORED lower. ⭐ So the score being normalized is the thing to drop.
+    #
+    # MEASURED, on two independently seeded 100k corpora, 36 probes each, against the Jaccard floor
+    # (a full scan) and against today's bm25 ordering of the same nominees:
+    #
+    #                       seed 20260801            seed 19770413
+    #     A: jaccard floor  0.5000 / 0.8334          0.4861 / 0.8301
+    #     B: bm25 ranked    0.4444 / 0.7258          0.4167 / 0.7667      <- the disclosure
+    #     THIS             0.5000 / 0.8528          0.5000 / 0.8667      <- ABOVE the floor, both
+    #
+    # and MRR falls MONOTONICALLY as bm25 weight is reintroduced (0.85 -> 0.82 -> 0.81 -> 0.78 ->
+    # 0.73 on the first corpus), which is a dose-response rather than a lucky point.
+    #
+    # ⛔ THE SELECTION IS UNTOUCHED, AND THAT IS THE POINT. FTS5 is what makes this read bounded —
+    # ~50 nominees out of 51,606 active rows, measured at 511x cheaper than the scan. What is
+    # removed is bm25's ORDERING of those nominees, which is worse than Jaccard's on this corpus.
+    # Keep the selector, drop the ranker.
+    #
+    # ⚠ AND IT IS SCORED OVER THE HYDRATED CANDIDATES, so it costs no extra read: those items are
+    # already in memory for precedence resolution.
+    # ⚠ AND IT IS NORMALIZED, for a reason stage 02 proved on the way to this repair.
+    # `normalize_lexical_scores` exists to map an engine's native scores onto the [0,1] range the
+    # fusion weights assume, and K1's arithmetic — `EDGE_WEIGHT x kind x DECAY < LEXICAL_WEIGHT` —
+    # is stated against a full match worth exactly `LEXICAL_WEIGHT`. Normalized bm25 always put its
+    # best hit at 1.0; RAW Jaccard does not, so scoring with it un-normalized shrinks the lexical
+    # term and lets a 1-hop neighbour outrank a direct match. `test_db_s7b`'s "can surface, does not
+    # displace" caught exactly that.
+    # ⭐ Stage 02's finding is what makes the repair safe: EVERY normalization is MONOTONE, which is
+    # why none of them could fix bm25's ORDER — and is equally why normalizing Jaccard cannot
+    # disturb the order this repair earned. Same ranking, restored scale, bound intact.
+    _jac = [(it.id, lexical_score(query, _text(it))) for it, _bm25 in ranked]
+    _norm = normalize_lexical_scores([v for _i, v in _jac], higher_is_better=True)
+    lex = {i: v for (i, _raw), v in zip(_jac, _norm)}
     # The PRECEDENCE GROUPS of the nominees, not just the nominees. `precedence.resolve_items`
     # collapses a scope union to one winner per `subject`, so hydrating a nominee without its
     # siblings would let a narrow item that LOSES to a broader pinned one be returned as a winner

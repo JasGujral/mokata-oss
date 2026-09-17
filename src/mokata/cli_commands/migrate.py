@@ -41,7 +41,7 @@ import sys
 
 from ._common import _load_surface
 from .. import deprecation
-from ..deprecation import REMOVED_CHANNELS
+from ..deprecation import REMOVED_CHANNELS, answerable_choices
 
 
 def _present(channel: str, root: str) -> bool:
@@ -90,7 +90,12 @@ def register(sub, common):
     # longer any gap between "what works" and "what we still answer for". A channel removed AFTER
     # this stage is accepted and advertised without anyone editing this file — which is the whole
     # of `MIGRATE-ANSWERS-A-REMOVED-CHANNEL-AS-A-TYPO`, closed by derivation rather than by a list.
-    p.add_argument("channel", choices=tuple(REMOVED_CHANNELS),
+    # ⚠ ONE HELPER, SHARED WITH `collab.py`'s `--to/--from` (0.0.20 stage 11). Here the LIVE set is
+    # empty — every channel this command answers for is removed — so `choices` is the removed set
+    # and `metavar` advertises it, which is the degenerate case of the same rule rather than a
+    # second rule. The general form is in `deprecation.answerable_choices`.
+    _choices, _ = answerable_choices((), REMOVED_CHANNELS)
+    p.add_argument("channel", choices=_choices,
                    metavar="{%s}" % ",".join(REMOVED_CHANNELS),
                    help="the removed channel to explain")
     p.set_defaults(func=cmd_migrate)

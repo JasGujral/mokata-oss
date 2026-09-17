@@ -127,7 +127,7 @@ def floor_fix() -> str:
 
 
 def floor_notice(server_major: Optional[int], verdict: str) -> str:
-    """The ONE user-facing sentence about the floor — empty for OK and UNKNOWN.
+    """The ONE user-facing sentence about the floor — empty for OK, and OK ALONE.
 
     Every surface renders THIS: the health detail every session prints, `mokata doctor`, and the
     refusal itself. One spelling, or the surfaces start disagreeing about what happens and when.
@@ -135,7 +135,25 @@ def floor_notice(server_major: Optional[int], verdict: str) -> str:
     ⚠ IT CARRIES A NUMBER AND NOTHING ELSE. This sits on a path that holds a DSN; the server major
     is a fact about the software, while the host, user, database name and password are the user's
     secrets. Nothing but the number is interpolated here, which is the property
-    `TestNothingButTheNumberTravels` grades rather than assumes."""
+    `TestNothingButTheNumberTravels` grades rather than assumes.
+
+    🔴 UNKNOWN GOT ITS OWN SENTENCE AT 0.0.20 (doc 105 §9, G12), AND UNTIL THEN IT SHARED OK'S
+    SILENCE. That silence is how `SERVER-VERSION-SHAPE-CHANGE-LAPSES-THE-FLOOR` reaches a human as
+    nothing at all: the day psycopg moves `conn.info.server_version`, every server reads UNKNOWN,
+    `floor_verdict` stops ever returning REFUSE, and every surface goes on printing the empty
+    string it printed when the floor was being met. **A dated public commitment stops being
+    enforced and the product says exactly what it said while it was working.**
+
+    ⭐ THE DISTINCTION THAT MAKES THIS SAFE, AND IT IS THE ONE THE OLD PIN DID NOT DRAW. The reason
+    for the old silence was right: *a notice for UNKNOWN would put a claim about the USER'S SERVER
+    into every surface on the strength of a version nobody managed to read.* It still would — so
+    this sentence makes **no claim about the server**. It reports a fact about MOKATA: the check did
+    not run. It names no version, interpolates NOTHING, and therefore cannot carry a DSN component
+    into a surface that a WARN/REFUSE sentence is separately grep-guarded against.
+
+    ⚠ AND IT IS NOT NOISE, because it cannot fire on a healthy driver: `_server_major` answers None
+    only when a live connection's version read raises, vanishes, or is not an integer. On every
+    working server this branch is unreachable. If it starts printing, that IS the finding."""
     if verdict == FLOOR_WARN:
         return (f"PostgreSQL {server_major} is below mokata's supported floor of "
                 f"{MIN_PG_MAJOR} — on {PG_FLOOR_ENFORCED_FROM.isoformat()} it reaches upstream "
@@ -146,6 +164,14 @@ def floor_notice(server_major: Optional[int], verdict: str) -> str:
                 f"{MIN_PG_MAJOR} and has been past upstream end-of-life since "
                 f"{PG_FLOOR_ENFORCED_FROM.isoformat()} — mokata is serving from the local store "
                 f"instead. Nothing is lost. {floor_fix()}")
+    if verdict == FLOOR_UNKNOWN:
+        # No version, no host, no interpolation of any kind — see the docstring. The sentence says
+        # what MOKATA did not do, never what the server is.
+        return ("mokata could not read this server's PostgreSQL version, so the supported-version "
+                "floor was NOT checked on this connection. Nothing is being refused and nothing is "
+                "lost — but this check is not currently protecting you, and on a healthy server it "
+                "does not happen. If it persists, report it: it means the version read this floor "
+                "depends on has changed shape.")
     return ""
 
 

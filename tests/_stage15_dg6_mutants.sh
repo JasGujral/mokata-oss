@@ -14,7 +14,7 @@
 # fourth is what stops "we'll unify it later" being said a fourth time.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-M="$ROOT/scripts/mutate.sh"
+M="${MUTATE_SH:-$ROOT/scripts/mutate.sh}"
 export PYTHON="${PYTHON:-python3}"
 
 # The guard under test, and the two user-facing pages it now walks.

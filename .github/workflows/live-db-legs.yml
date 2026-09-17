@@ -128,6 +128,47 @@ jobs:
       # `working-directory: tests` matches the repo's `-t tests` top-level (each file does
       # `import _support` to put src/ on the path).
 
+      - name: "Preflight — THE DRIVER-SHAPE GATE MUST BE ON (a skipped shape check reads GREEN)"
+        working-directory: tests
+        # 0.0.20 stage 08 — `SERVER-VERSION-SHAPE-CHANGE-LAPSES-THE-FLOOR`. The PostgreSQL floor is
+        # a PUBLISHED, DATED commitment and its whole enforcement hangs on one third-party read,
+        # `conn.info.server_version`. Every other test of the floor drives a psycopg STUB —
+        # deliberately, because the floor's logic is mokata's, not psycopg's wire protocol — and a
+        # stub has the right shape forever, by construction. `test_c8_pg_driver_shape` is the one
+        # place the REAL library is read, and it SKIPS wherever the optional extra is absent.
+        #
+        # ⛔ A skipped run of it has proven nothing, and would report OK. So the gate is asserted by
+        # IMPORTING THE VERY PREDICATE the tests skip on — the same rule the live-DB preflight
+        # above states: two implementations of "is the driver real" is how a preflight passes while
+        # the tests it guards skip anyway.
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sys
+          import _support  # noqa: F401  (puts src/ on the path)
+          from test_c8_pg_driver_shape import real_psycopg
+          present, reason = real_psycopg()
+          if not present:
+              print(f"::error::the driver-shape gate is OFF ({reason}). The floor's one input "
+                    "would go unchecked against the real library, and the job would report "
+                    "success for a check that never ran.")
+              sys.exit(1)
+          print("driver-shape gate ON — the real psycopg will be read, not skipped.")
+          PY
+
+      - name: "Stage 08 — the floor's one input still exists in the REAL driver"
+        working-directory: tests
+        # ⚠ NO SERVER NEEDED, and that is why this leg is cheap and why it is not waiting on
+        # infrastructure. Proving that a real server still yields a parseable major is the OTHER
+        # half (08a) and needs the database; proving that psycopg has not renamed, moved or
+        # retyped the attribute needs only the installed package.
+        run: |
+          set -euo pipefail
+          if ! python -m unittest -v test_c8_pg_driver_shape; then
+            echo "::error::the PostgreSQL floor's single input has changed shape in the real psycopg. Until this is repaired, every server reads FLOOR_UNKNOWN, floor_verdict never returns FLOOR_REFUSE, and mokata's dated public commitment against PG14's EOL is NOT being enforced -- silently, with every other test green."
+            exit 1
+          fi
+
       - name: DB.S2a live leg — real psycopg reproduces the pushdown oracle
         working-directory: tests
         # Shim boundary being closed: the emitted SQL ran on SQLite with `%s`→`?`. Red here means
@@ -324,3 +365,132 @@ jobs:
           echo "N=100,000, with a preflight and a skip guard so a leg that did not run cannot"
           echo "report as one that passed."
           echo "The recorded shim boundaries are measured, not assumed."
+
+  # ==============================================================================================
+  # 0.0.20 stage 08a, FIRST SLICE — the below-floor arm, against a server that really is below it.
+  #
+  # THE SENTENCE THIS EXISTS TO RETIRE, from the release notes: "a genuinely below-floor server — a
+  # real PostgreSQL 14 — was never used. The below-floor arm is therefore proven against a
+  # simulated version report and not against the database it describes."
+  #
+  # ⭐ A SEPARATE JOB AND A SEPARATE CONTAINER, on purpose. The job above runs
+  # `pgvector/pgvector:pg16` because every leg in it needs a modern server and the extension. A
+  # below-floor arm needs a server that is genuinely OLD, and it needs no extension and no schema:
+  # the entire subject is the version handshake.
+  #
+  # ⛔ AND IT MAY NOT RETIRE THE DISCLOSURE UNTIL IT IS SEEN GREEN. It was written by a coordinator
+  # that cannot run GitHub Actions. Retiring a disclosure on the PRESENCE of a check rather than on
+  # its RESULT is `DISCLOSURE-PRESENCE-IS-NOT-DISCLOSURE-TRUTH`, a row this repo already carries.
+  pg-floor-below:
+    name: the floor REFUSES a real below-floor server (opt-in)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    services:
+      postgres14:
+        # This image is DELIBERATELY under `MIN_PG_MAJOR`, because being under it is the entire
+        # fixture: the arm exists to prove mokata REFUSES a real below-floor server, and a
+        # compliant image would let every assertion pass while proving the opposite.
+        # `tests/_pg_floor.py` reads the marker below, excuses this ONE tag, and reds if the marker
+        # ever stops sitting on a below-floor image (`unearned_markers`) — so the exemption cannot
+        # outlive the thing it exempts. The pg16 image in the job above is still graded normally,
+        # which is why this is a marker and not a deny-listed file.
+        #
+        # ⚠ THE MARKER RIDES THE IMAGE LINE ITSELF, not this block. The first draft put it at the
+        # top of these comments, seven lines up, and the guard REFUSED IT — correctly: a marker
+        # that reached that far could drift onto a different image the day somebody edits the
+        # prose above it. It reaches the tag's own line and the one immediately above, and nothing
+        # else, which is the property `test_a_marker_two_lines_up_does_NOT_reach` pins.
+        image: postgres:14  # pg-floor: BELOW BY DESIGN — the fixture IS the violation
+        env:
+          POSTGRES_USER: mokata
+          POSTGRES_PASSWORD: mokata
+          POSTGRES_DB: mokata_floor
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U mokata -d mokata_floor"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      # Password-less DSN + PGPASSWORD (libpq), same rule as the job above: no inline credential in
+      # a connection string that a test or an error might echo. Throwaway container credential.
+      MOKATA_PG_BELOW_DSN: "postgresql://mokata@localhost:5433/mokata_floor"
+      PGPASSWORD: "mokata"
+      MOKATA_LIVE_DB: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install mokata + the postgres extra (NOT editable, and that is deliberate)
+        # ⚠ `pip install`, not `pip install -e`. This job needs psycopg and mokata importable and
+        # nothing more — the tests put `src/` on the path themselves via `_support`, so the TREE is
+        # what runs either way. An editable install would join a population
+        # `test_pinned_dependency_property` reconciles against an external Dependabot reading that
+        # only a human can re-take, and a ninth editable site would falsify that row's finding
+        # ("eight sites, seven alerts, one blind spot") until somebody re-read the alert list. That
+        # is a real cost paid for an editability this job does not use. The guard caught it the
+        # moment the job landed — for the second time this release.
+        run: pip install ".[postgres]"
+
+      - name: "Preflight — THE BELOW-FLOOR GATE MUST BE ON (a skipped arm reads GREEN)"
+        working-directory: tests/integration
+        # Same rule the job above states twice: assert the gate by IMPORTING THE VERY PREDICATE the
+        # tests skip on. Two implementations of "is the below-floor server up" is how a preflight
+        # passes while the test it guards skips anyway.
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sys
+          import _support  # noqa: F401  (puts src/ on the path)
+          from test_c8a_pg_floor_below_live import below_floor_live
+          on, reason = below_floor_live()
+          if not on:
+              print(f"::error::the below-floor arm is OFF ({reason}). It would SKIP, and a skipped "
+                    "arm reads GREEN — so the job fails here instead of reporting success for the "
+                    "one check the release notes' disclosure is waiting on.")
+              sys.exit(1)
+          print("below-floor gate ON — the arm below will RUN, not skip.")
+          PY
+
+      - name: "Preflight — AND THE SERVER MUST REALLY BE BELOW THE FLOOR"
+        working-directory: tests/integration
+        # ⭐ The precondition, asserted before the arm rather than inside it. A container tag that
+        # silently resolved to something modern would let every assertion pass while proving the
+        # OPPOSITE of what this job claims — and the tag is the one thing here nobody controls.
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, sys
+          import _support  # noqa: F401
+          import psycopg
+          from mokata import teamdb
+          with psycopg.connect(os.environ["MOKATA_PG_BELOW_DSN"]) as conn:
+              major = teamdb._server_major(conn)
+              shown = conn.execute("SHOW server_version").fetchone()[0]
+          print(f"server reports {shown!r}; mokata reads major {major!r}; floor is "
+                f"{teamdb.MIN_PG_MAJOR}")
+          if major is None:
+              print("::error::mokata could not read a major from a REAL, REACHABLE connection — "
+                    "that is SERVER-VERSION-SHAPE-CHANGE-LAPSES-THE-FLOOR happening live.")
+              sys.exit(1)
+          if major >= teamdb.MIN_PG_MAJOR:
+              print(f"::error::this job's service is NOT below the floor ({major} >= "
+                    f"{teamdb.MIN_PG_MAJOR}). The arm would pass and prove the opposite of what it "
+                    "claims. Pin the service image to a genuinely below-floor major.")
+              sys.exit(1)
+          PY
+
+      - name: Stage 08a — the floor REFUSES a real below-floor server
+        working-directory: tests/integration
+        run: |
+          set -euo pipefail
+          if ! python -m unittest -v test_c8a_pg_floor_below_live; then
+            echo "::error::the below-floor arm is RED against a real PostgreSQL below the floor. mokata's published, dated commitment against PG14's end-of-life is not being met by the code that is supposed to enforce it."
+            exit 1
+          fi

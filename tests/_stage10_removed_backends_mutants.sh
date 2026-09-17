@@ -89,10 +89,10 @@ mutant() {
 
 # ==== A. the removal itself ======================================================================
 
+# ⚠ RE-AIMED at 0.0.20 stage 09. Intent unchanged, quotation re-read from the file as it is now.
 mutant "A01 ★★ the two channels are still ANNOUNCED as deprecated — a notice for a dead thing" "$DEP" \
-  'REMOVED: Dict[str, RemovedNotice] = {' \
-  'CHANNELS["obsidian"] = CHANNELS["neo4j"]
-REMOVED: Dict[str, RemovedNotice] = {' "$T10"
+  'DEPRECATED_CHANNELS = tuple(CHANNELS)' \
+  'DEPRECATED_CHANNELS = tuple(CHANNELS) + tuple(REMOVED)' "$T10"
 
 mutant "A02 ★★ the REMOVED registry is empty — nothing is a removed channel any more" "$DEP" \
   'REMOVED_CHANNELS = tuple(REMOVED)' \
@@ -123,8 +123,9 @@ mutant "B03 ★★ the refusal stops naming WHERE the notes are" "$SEL" \
   '            raise deprecation.RemovedChannelError(
                 deprecation.removed_notice(tool).render())' "$T10"
 
+# ⚠ RE-AIMED at 0.0.20 stage 09. Intent unchanged, quotation re-read from the file as it is now.
 mutant "B04 ★★ an EXPLICIT ask falls to the empty floor instead of refusing" "$SEL" \
-  '    if tool in deprecation.REMOVED:
+  '    if isinstance(deprecation.REMOVED.get(tool), deprecation.RemovedNotice):
         # An EXPLICIT ask for a removed backend' \
   '    if False:
         # An EXPLICIT ask for a removed backend' "$T10"
@@ -183,9 +184,10 @@ mutant "C01 ★★ a stale chain entry with nothing behind it now HARD-FAILS eve
   '        deprecation.warn_removed(tool, root)' \
   '        raise deprecation.RemovedChannelError(deprecation.removed_notice(tool).render())' "$TSP"
 
+# ⚠ RE-AIMED at 0.0.20 stage 09. Intent unchanged, quotation re-read from the file as it is now.
 mutant "C02 ★★★ THE MARKER COLLAPSE — the removal notice is keyed on the channel alone, so every
        repo that already saw the 0.0.17 DEPRECATION warn is silent about the removal" "$DEP" \
-  '    marker = _marker_path(mokata_dir, "%s@removed-%s" % (channel, notice.removed))' \
+  '    marker = _marker_path(mokata_dir, "%s@removed-%s" % (channel, REMOVAL_FILED))' \
   '    marker = _marker_path(mokata_dir, channel)' "$T10"
 
 mutant "C03 ★★ the notice fires on EVERY read — a diagnostic becomes a nag" "$DEP" \

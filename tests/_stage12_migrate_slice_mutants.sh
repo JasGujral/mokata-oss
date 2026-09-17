@@ -43,16 +43,23 @@ DR=tests/_deprecation_removal.py
 
 T12='test_stage12_migrate_slice.py'
 T35C='test_stage35c_memory_migrate.py'
-T17='test_stage17_vault_rehome_gated.py'
+# ⛔ A THIRD BASELINE PATTERN WAS HERE — T17, naming stage 17's vault-rehome test module — LONG
+# AFTER THAT FILE WAS DELETED. (The name is deliberately not quoted in this comment: the
+# guard below reads quoted test globs out of a driver's TEXT, and a note about a dead glob
+# must not read as one.) — and the baseline PASSED, because `unittest discover` over a pattern that
+# matches nothing prints `Ran 0 tests ... OK`. So one third of this batch's green baseline
+# was an empty suite reporting success. Removed at 0.0.20 stage 12, and the class is now
+# graded: `_mutant_sweep.globs_matching_no_test` reds on any driver naming a test glob that
+# matches no file, baseline globs included (the argv-based check could not see them).
 
-TOTAL=24
+TOTAL=16
 ran=0; red=0; green=0; survivors=""
 
 # ---- step 0: the green baseline ---------------------------------------------------------------
 printf '================================================================================\n'
 printf 'STEP 0 — GREEN BASELINE (no mutation applied). Nothing is graded until this passes.\n'
 printf '================================================================================\n'
-for pat in "$T12" "$T35C" "$T17"; do
+for pat in "$T12" "$T35C"; do
     if ! PYTHONDONTWRITEBYTECODE=1 "$PY" -m unittest discover -s tests -t tests \
             -p "$pat" >/dev/null 2>&1; then
         printf '\nBATCH REFUSED — %s is not green before mutant 1.\n' "$pat"
@@ -160,23 +167,41 @@ mutant "B04 **   a destination this release supports is dropped from SUPPORTED �
   'SUPPORTED = ("sqlite", "postgres", "pgvector")' \
   'SUPPORTED = ("sqlite", "postgres")' "$T12"
 
-mutant "B05 ***  THE BOUNDARY BREAKS — the channel migrator acquires a memory-store dependency,
-       which is how a deletion slice takes a survivor with it by association" "$MC" \
-  'CHANNELS = ("vault",)' \
-  'from .memory.migrate import migrate_memory   # noqa: F401
-CHANNELS = ("vault",)' "$T12"
+# ⛔ RETIRED — B05 *** THE BOUNDARY BREAKS — the channel migrator acquires a memory-store dependency, which is how a deletion slice takes a survivor with it by association
+#    RETIRED at 0.0.20 stage 09. Its target, src/mokata/migrate_channels.py, was DELETED at
+#    0.0.18 lane D slice 4 — the vault migrator was not a framework with channels plugged into it,
+#    it WAS the vault migrator, and it left with the channel. So mutate.sh exited 3 here and ABORTED
+#    THE BATCH, which means every mutant listed after it has been ungraded ever since, while this
+#    batch's score stayed in the record. Nothing is repairable: the behaviour, not the spelling,
+#    is gone.
 
 # ==== C. the removal answer, GENERALISED to a channel removed AFTER this stage ==================
 
+# ⚠ RE-AIMED at 0.0.20 stage 09. The intent is unchanged; the quotation is not. `cmd_migrate` was
+# rewritten when the last live channel left — the `if channel in REMOVED_CHANNELS:` dispatch is
+# gone because the command now answers unconditionally and always exits 1 — so this mutant's
+# `old` had stopped occurring and the batch was aborting here.
+# ⚠ RE-AIMED at 0.0.20 stage 11. Intent unchanged; the quotation follows the refactor that gave this
+# surface and `collab.py` ONE shared helper (`deprecation.answerable_choices`) instead of two
+# hand-written copies of the same rule. ⭐ The sweep found this pattern the moment the refactor
+# landed, which is the whole reason the sweep exists.
 mutant "C01 ***  THE MUTANT THIS STAGE EXISTS TO CATCH — the dispatch stops reading the registry
        and hardcodes today's three channels. GREEN for every channel that is already removed,
        and a TYPO answer for every channel removed after this stage" "$MIG" \
-  '    if channel in REMOVED_CHANNELS:' \
-  '    if channel in ("obsidian", "native-memory", "memory-share"):' "$T12"
+  '    p.add_argument("channel", choices=_choices,' \
+  '    p.add_argument("channel", choices=("obsidian", "native-memory", "memory-share"),' "$T12"
 
+# ⚠ RE-AIMED at 0.0.20 stage 09. The intent is unchanged; the quotation is not. `cmd_migrate` was
+# rewritten when the last live channel left — the `if channel in REMOVED_CHANNELS:` dispatch is
+# gone because the command now answers unconditionally and always exits 1 — so this mutant's
+# `old` had stopped occurring and the batch was aborting here.
+# ⚠ RE-AIMED at 0.0.20 stage 11. Intent unchanged; the quotation follows the refactor that gave this
+# surface and `collab.py` ONE shared helper (`deprecation.answerable_choices`) instead of two
+# hand-written copies of the same rule. ⭐ The sweep found this pattern the moment the refactor
+# landed, which is the whole reason the sweep exists.
 mutant "C02 ***  argparse REFUSES the word — 'invalid choice' (exit 2), which is what it says
        about a TYPO, on the command every 0.0.17 notice told the user to run" "$MIG" \
-  '    p.add_argument("channel", choices=tuple(CHANNELS) + tuple(REMOVED_CHANNELS),' \
+  '    p.add_argument("channel", choices=_choices,' \
   '    p.add_argument("channel", choices=tuple(CHANNELS),' "$T12"
 
 mutant "C03 ***  the RECORD CLASS stops being chosen by TYPE — a file channel gets the backend
@@ -185,29 +210,57 @@ mutant "C03 ***  the RECORD CLASS stops being chosen by TYPE — a file channel 
   '    return isinstance(REMOVED.get(channel), RemovedFileNotice)' \
   '    return False' "$T12"
 
-mutant "C04 **   --help ADVERTISES the removed channels — selling a channel that is gone, while
-       the answer path exists to say it is gone" "$MIG" \
-  '                   metavar="{%s}" % ",".join(CHANNELS),' \
-  '                   metavar="{%s}" % ",".join(tuple(CHANNELS) + tuple(REMOVED_CHANNELS)),' "$T12"
+# ⭐ G04a — THE SUCCESSOR TO THE RETIRED C04/G04, and it grades what is actually true now.
+# `register()` derives `choices` and `metavar` from the SAME registry so that what the help
+# advertises is exactly what the parser accepts (`migrate.py:88-94` says so in its own words). The
+# defect that replaced "advertising a removed channel" is the two lists DIVERGING: help offers a
+# word argparse then refuses as an 'invalid choice', which is the typo answer this whole lane
+# exists to stop, arriving through the help text instead of the dispatch.
+mutant "G04a ***  metavar and choices DIVERGE — help advertises a set the parser refuses, so the
+       user is told to type a word that comes back as a TYPO" "$MIG" \
+  '                   metavar="{%s}" % ",".join(REMOVED_CHANNELS),' \
+  '                   metavar="{%s}" % ",".join(tuple(REMOVED_CHANNELS) + ("vault",)),' "$T12"
 
+# ⛔ RETIRED — C04 ** --help ADVERTISES the removed channels — selling a channel that is gone, while the answer path exists to say it is gone
+#    RETIRED at 0.0.20 stage 09 — §7h, THE PIN ENCODED A FALSE PREMISE.
+#    It graded "--help must not advertise the removed channels". That was right while a LIVE set
+#    existed and the two lists differed. With the last live channel gone, `register()` derives BOTH
+#    `choices` and `metavar` from REMOVED_CHANNELS on purpose (`migrate.py:88-94`): the command exists
+#    precisely to answer for removed channels, so advertising them is now the CORRECT behaviour and
+#    this mutant asked for the defect. Re-quoting it would have carried the false premise across the
+#    refactor, which is the failure mode §7h names. The live property it leaves behind — metavar must
+#    advertise exactly what choices accepts — is graded by G04a in _stage12_migrate_slice_mutants.sh.
+
+# ⚠ RE-AIMED at 0.0.20 stage 09. Intent unchanged, quotation re-read from the file as it is now.
 mutant "C05 **   a removal record that names no release — the user is told a thing was removed
        and not which release did it" "$DEP" \
-  '    remedy: str             # the one way to bring it into the canonical store
-    removed: str = REMOVAL_RELEASE' \
-  '    remedy: str             # the one way to bring it into the canonical store
+  '    # happened. What release removed this channel is not a promise, it is history.
+    removed: str' \
+  '    # happened. What release removed this channel is not a promise, it is history.
     removed: str = "an earlier release"' "$T12"
 
 # ==== D. the gate is STILL CLOSED, and vault is NOT this slice's ================================
 
-mutant "D01 ***  THE SCOPE VIOLATION THIS STAGE MUST NOT COMMIT — vault leaves CHANNELS one slice
-       early, taking the live migration path with it" "$MC" \
-  'CHANNELS = ("vault",)' \
-  'CHANNELS = ()' "$T12"
+# ⛔ RETIRED — D01 *** THE SCOPE VIOLATION THIS STAGE MUST NOT COMMIT — vault leaves CHANNELS one slice early, taking the live migration path with it
+#    RETIRED at 0.0.20 stage 09. Its target, src/mokata/migrate_channels.py, was DELETED at
+#    0.0.18 lane D slice 4 — the vault migrator was not a framework with channels plugged into it,
+#    it WAS the vault migrator, and it left with the channel. So mutate.sh exited 3 here and ABORTED
+#    THE BATCH, which means every mutant listed after it has been ungraded ever since, while this
+#    batch's score stayed in the record. Nothing is repairable: the behaviour, not the spelling,
+#    is gone.
 
-mutant "D02 ***  the gate's probe stops seeing vault, so the lane READS finished while two
-       channels are still implemented" "$DR" \
-  '    "vault": "mokata.vault",' \
-  '    "vault": "mokata.vault_gone_module",' "$T12"
+# ⚠ RE-AIMED at 0.0.20 stage 12. Intent unchanged; the quotation is re-read from the page/guard
+# as it is now. The pre-fix text these mutants quoted was corrected when the 0.0.18 removal landed.
+# ⛔ RETIRED — D02 *** the gate's probe stops seeing vault, so the lane READS finished while two channels are still implemented
+#    RETIRED at 0.0.20 stage 12 — §7h, the premise is history and the mutation is inert.
+#    It graded "the gate's probe stops seeing vault, so the lane READS finished while two channels are
+#    still implemented". Both channels left: vault at 0.0.18 lane D slice 4, neo4j at stage 14. And the
+#    IMPLEMENTATIONS entry it mutates already points at a class that was DELETED — the probe's job for a
+#    removed channel is to find nothing — so swapping one absent import target for another absent one
+#    changes nothing any test could observe. REPLAYED through the real mutator at 0.0.20 stage 12 and it
+#    SURVIVED, which is the measurement behind this line rather than the reasoning alone. The live
+#    property (a channel that comes BACK must be detected) is graded by the same batch over a SUPPLIED
+#    map, which does not depend on this entry.
 
 mutant "D03 **   vault stops being ANNOUNCED as deprecated — the lane goes quiet about a channel
        it has not removed" "$DEP" \
@@ -217,42 +270,45 @@ DEPRECATED_CHANNELS = tuple(CHANNELS)' "$T12"
 
 # ==== E. BACKCOMPAT-SWEEP, and what the swept dispatcher fed ====================================
 
-mutant "E01 ***  THE SWEEP IS REVERTED — the dead channel dispatcher comes back, with the
-       unreachable arm that made it dead" "$MC" \
-  'def _vault_tags(surface: Any) -> List[str]:' \
-  'def _source_subjects(surface: Any, channel: str) -> List[str]:
-    if channel == "vault":
-        return _vault_tags(surface)
-    return []
+# ⛔ RETIRED — E01 *** THE SWEEP IS REVERTED — the dead channel dispatcher comes back, with the unreachable arm that made it dead
+#    RETIRED at 0.0.20 stage 09. Its target, src/mokata/migrate_channels.py, was DELETED at
+#    0.0.18 lane D slice 4 — the vault migrator was not a framework with channels plugged into it,
+#    it WAS the vault migrator, and it left with the channel. So mutate.sh exited 3 here and ABORTED
+#    THE BATCH, which means every mutant listed after it has been ungraded ever since, while this
+#    batch's score stayed in the record. Nothing is repairable: the behaviour, not the spelling,
+#    is gone.
 
+# ⛔ RETIRED — E02 *** THE ARM THE SWEEP HAD TO KEEP — the unknown-channel guard goes, so an unknown channel previews 'nothing to migrate' instead of raising. 'Empty' and 'not a channel' collapse into one answer (§7g), which is what the deleted [] fallback used to do
+#    RETIRED at 0.0.20 stage 09. Its target, src/mokata/migrate_channels.py, was DELETED at
+#    0.0.18 lane D slice 4 — the vault migrator was not a framework with channels plugged into it,
+#    it WAS the vault migrator, and it left with the channel. So mutate.sh exited 3 here and ABORTED
+#    THE BATCH, which means every mutant listed after it has been ungraded ever since, while this
+#    batch's score stayed in the record. Nothing is repairable: the behaviour, not the spelling,
+#    is gone.
 
-def _vault_tags(surface: Any) -> List[str]:' "$T12"
+# ⛔ RETIRED — E03 ** the run-side unknown guard goes too — an unknown channel is dispatched straight into the vault migrator
+#    RETIRED at 0.0.20 stage 09. Its target, src/mokata/migrate_channels.py, was DELETED at
+#    0.0.18 lane D slice 4 — the vault migrator was not a framework with channels plugged into it,
+#    it WAS the vault migrator, and it left with the channel. So mutate.sh exited 3 here and ABORTED
+#    THE BATCH, which means every mutant listed after it has been ungraded ever since, while this
+#    batch's score stayed in the record. Nothing is repairable: the behaviour, not the spelling,
+#    is gone.
 
-mutant "E02 ***  THE ARM THE SWEEP HAD TO KEEP — the unknown-channel guard goes, so an unknown
-       channel previews 'nothing to migrate' instead of raising. 'Empty' and 'not a channel'
-       collapse into one answer (§7g), which is what the deleted [] fallback used to do" "$MC" \
-  '    if channel not in CHANNELS:
-        raise ValueError(f"unknown migration channel '"'"'{channel}'"'"' (one of {CHANNELS})")' \
-  '    if False:
-        raise ValueError(f"unknown migration channel '"'"'{channel}'"'"' (one of {CHANNELS})")' "$T12"
+# ⛔ RETIRED — E04 *** the PREVIEW stops reading the vault and reports an empty one — the sweep removed the only wrapper around this call, so nothing else would notice
+#    RETIRED at 0.0.20 stage 09. Its target, src/mokata/migrate_channels.py, was DELETED at
+#    0.0.18 lane D slice 4 — the vault migrator was not a framework with channels plugged into it,
+#    it WAS the vault migrator, and it left with the channel. So mutate.sh exited 3 here and ABORTED
+#    THE BATCH, which means every mutant listed after it has been ungraded ever since, while this
+#    batch's score stayed in the record. Nothing is repairable: the behaviour, not the spelling,
+#    is gone.
 
-mutant "E03 **   the run-side unknown guard goes too — an unknown channel is dispatched straight
-       into the vault migrator" "$MC" \
-  '    if channel not in CHANNELS:
-        return ChannelMigrateResult(channel=channel, aborted=True,' \
-  '    if False:
-        return ChannelMigrateResult(channel=channel, aborted=True,' "$T12"
-
-mutant "E04 ***  the PREVIEW stops reading the vault and reports an empty one — the sweep removed
-       the only wrapper around this call, so nothing else would notice" "$MC" \
-  '    subjects = _vault_tags(surface)' \
-  '    subjects = []' "$T12"
-
-mutant "E05 **   the preview MINTS THE ONE-TIME MARKER — a read-only plan with a durable side
-       effect, so the real migration afterwards says 'already migrated'" "$MC" \
-  '    target = "the canonical transport"' \
-  '    _write_marker(surface.mokata_dir, channel, 0)
-    target = "the canonical transport"' "$T12"
+# ⛔ RETIRED — E05 ** the preview MINTS THE ONE-TIME MARKER — a read-only plan with a durable side effect, so the real migration afterwards says 'already migrated'
+#    RETIRED at 0.0.20 stage 09. Its target, src/mokata/migrate_channels.py, was DELETED at
+#    0.0.18 lane D slice 4 — the vault migrator was not a framework with channels plugged into it,
+#    it WAS the vault migrator, and it left with the channel. So mutate.sh exited 3 here and ABORTED
+#    THE BATCH, which means every mutant listed after it has been ungraded ever since, while this
+#    batch's score stayed in the record. Nothing is repairable: the behaviour, not the spelling,
+#    is gone.
 
 # ==== verdict ==================================================================================
 

@@ -51,20 +51,39 @@ def _graph_required_emit_refusal(surface: Any, store: Any, run_id: str,
         if not name:
             return None
         imp = (getattr(session, "impacts", {}) or {}).get(name)
-        if imp is None or not getattr(imp, "graph_degraded", False):
+        # 🔴 THE TARGETS ARE THE MODEL'S TO STATE; THE EVIDENCE ABOUT THEM IS NOT.
+        # `GRAPH-REQUIRED-GATE-TURNS-ON-A-BOOLEAN-THE-MODEL-WROTE` (doc 84): this read
+        # `imp.graph_degraded` — a field arriving through `session_save`, an MCP tool — and nothing
+        # ever computed it. Measured: omitted → ALLOWED, `False` → ALLOWED. The gate was as strong
+        # as the model's willingness to report against itself. It now runs the lens ITSELF; the
+        # reported value is kept only to say when the two disagree.
+        targets = list(getattr(imp, "targets", []) or []) if imp is not None else []
+        if not targets:
+            chosen_approach = next((a for a in getattr(session, "approaches", []) or []
+                                    if getattr(a, "name", None) == name), None)
+            targets = list(getattr(chosen_approach, "targets", []) or [])
+        basis, degraded = GR.derive_graph_degraded(surface, targets)
+        if not degraded:
             return None
         if GR.read_degraded_override(surface.root, run_id):
             return None
+        reported = bool(getattr(imp, "graph_degraded", False)) if imp is not None else False
         notice = GR.fire_upgrade_notice_once(surface.root)
+        consumer = ("blast radius (Lens 1)" if basis != GR.UNDERIVABLE else
+                    "blast radius (Lens 1) — MOKATA COULD NOT RUN THE LENS AT ALL")
         gate = GR.check_graph_required(
             degraded=True, required=True, overridden=False,
-            consumer="blast radius (Lens 1)", mentions=int(getattr(imp, "caller_count", 0) or 0),
+            consumer=consumer, mentions=int(getattr(imp, "caller_count", 0) or 0),
             files=int(getattr(imp, "file_count", 0) or 0),
-            targets=list(getattr(imp, "targets", []) or []), notice=notice)
+            targets=list(targets), notice=notice)
         if not gate.refused:
             return None
+        disagreement = ("" if reported else
+                        " ⚠ the persisted brainstorm reported this blast radius as NON-degraded; "
+                        "mokata re-ran the lens and it is. The gate uses what it measured.")
         return {"status": "blocked", "committed": False, "gate": "graph-required",
-                "reason": gate.render(),
+                "basis": basis, "reported_degraded": reported,
+                "reason": gate.render() + disagreement,
                 "hint": ("this approach's blast radius is a degraded lexical estimate — adopt a "
                          "code graph (`mokata graph adopt`) or accept it for this session with "
                          "`--allow-degraded`. Nothing was written; there is nothing to approve.")}

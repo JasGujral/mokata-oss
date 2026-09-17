@@ -110,7 +110,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Set, Tuple
 
 from .state import StateStore
-from .tdd_state import state_dir
+from .tdd_state import TDD_STATE_PREFIX, state_dir
 
 # The pipeline-run checkpoint (owner: `govern.resume.CHECKPOINT_PREFIX`). A LITERAL here, not an
 # import, and the reason is a latency contract rather than taste: `gate_hook` imports this module at
@@ -125,10 +125,25 @@ CHECKPOINT_PREFIX = "pipeline_run__"
 # by mokata's own id. Holds exactly one field, `run_id` (secret-safe by construction).
 BINDING_PREFIX = "session_run_binding__"
 
-# The run-scoped state prefixes that make a run id a CANDIDATE. Declared here, with the resolver,
-# because "what counts as a run" is a resolution question; `gate_hook` imports them from here so
-# enforcement and resolution can never disagree about the candidate set.
-TDD_STATE_PREFIX = "tdd_state__"
+# The run-scoped state prefixes that make a run id a CANDIDATE.
+#
+# 🔴 0.0.20 STAGE 07 — `RUN-RESOLVER-TDD-PREFIX-DEAD`. This block used to declare its own literal
+# `TDD_STATE_PREFIX = "tdd_state__"`, under a comment claiming that `gate_hook` imports these "so
+# enforcement and resolution can never disagree about the candidate set." **They disagreed, and the
+# comment is what hid it.** `tdd_state.TDD_STATE_PREFIX` — the module that WRITES the file — is
+# `tdd_phase__`; `gate_hook:111` imports the real one from there and reads the right key at `:435`,
+# while `run_ids()` counted a prefix nothing in `src/` has ever written. A run whose only state was
+# TDD phase was therefore INVISIBLE to the one resolver every surface reads.
+#
+# ⛔ It is not a dead branch, which is what the row called it. MEASURED: a repo holding
+# `tdd_phase__A` (run A, RED recorded) plus a bare `pipeline_run__B` resolves to
+# `RunResolution('B', basis='single')` — a CONFIDENT answer naming the WRONG run, whose empty red
+# set then licenses the write A's red set forbids. `basis='single'` is worse than `ambiguous`: this
+# resolver's whole design is that it refuses to guess, and here it did not know it was guessing.
+#
+# ⭐ So the prefix is IMPORTED FROM ITS OWNER, exactly as `gate_hook` already does. The latency
+# argument that keeps `CHECKPOINT_PREFIX` a literal does NOT apply: `.tdd_state` is already imported
+# one line up for `state_dir`, so this costs nothing that was not already paid.
 APPROACH_PREFIX = "approved_approach__"
 SPEC_PREFIX = "emitted_spec__"
 RUN_STATE_PREFIXES = (TDD_STATE_PREFIX, APPROACH_PREFIX, SPEC_PREFIX, CHECKPOINT_PREFIX)

@@ -265,9 +265,10 @@ mutant "M19 --exec runs the interpreter on PATH — the floor venv is built and 
   '        exec "$PY" "${EXEC_ARGS[@]}" ;;' \
   '        exec python3 "${EXEC_ARGS[@]}" ;;' "$TP"
 
+# ⚠ RE-AIMED at 0.0.20 stage 09. Intent unchanged, quotation re-read from the file as it is now.
 mutant "M20 the provisioning command stops REQUESTING the floor — whatever uv picks becomes it" "$P" \
-  "        printf 'uv venv --seed --python %s %s' \"\$FLOOR\" \"\$VENV\"" \
-  "        printf 'uv venv --seed %s' \"\$VENV\"" "$TP"
+  'uv_route()     { printf '"'"'uv venv --clear --seed --python %s %s'"'"' "$FLOOR" "$VENV"; }' \
+  'uv_route()     { printf '"'"'uv venv --clear --seed %s'"'"' "$VENV"; }' "$TP"
 
 mutant "M21 the default venv escapes the mirror-excluded directory — an interpreter ships" "$P" \
   'VENV="build/floor-venv"' \
