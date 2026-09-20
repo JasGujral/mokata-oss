@@ -51,7 +51,21 @@ ran=0; red=0; green=0; survivors=""
 printf '================================================================================\n'
 printf 'STEP 0 — GREEN BASELINE (no mutation applied). Nothing is graded until this passes.\n'
 printf '================================================================================\n'
-BASE_LOG="$(mktemp -t tagguard-baseline)"
+# ⚠ PORTABLE `mktemp`, and the reason is a MEASUREMENT, not a style preference. `mktemp -t tagguard-baseline`
+# works on BSD/macOS and is REFUSED by GNU coreutils ("too few X's in template"), so on every Linux
+# runner this driver died here — before mutant 1 — for the whole of its life. Give the template its
+# own X's and both implementations accept it.
+BASE_LOG="$(mktemp "${TMPDIR:-/tmp}/tagguard-baseline.XXXXXX" 2>/dev/null)" || BASE_LOG=""
+# 🔴 §7g — "the SUBJECT is red" and "MY OWN SCAFFOLDING broke" must not share a representation.
+# They did: the failure above fell through to the BATCH REFUSED path below, which tells the reader
+# to *fix the tree* — and the tree was fine. A reader sent to repair something that is not broken
+# is worse served than one told nothing. Distinct condition, distinct message, distinct exit code.
+if [ -z "$BASE_LOG" ] || [ ! -f "$BASE_LOG" ]; then
+    printf '\nHARNESS FAILURE — this driver could not create its own baseline log.\n'
+    printf '  NOTHING IS WRONG WITH THE TREE and nothing was graded. The fault is in this script.\n'
+    printf '  Exit 76 means the DRIVER broke; exit 75 means the SUBJECT was red. They are not the same.\n'
+    exit 76
+fi
 PYTHONDONTWRITEBYTECODE=1 "$PY" -m unittest discover -s tests -t tests \
     -k test_tag_is_not_a_publish > "$BASE_LOG" 2>&1
 BASE_RC=$?
@@ -316,9 +330,10 @@ mutant "D06 ★★★ every provenance is trustworthy — the refusal is unreach
   '        return self.state == ANSWERED_IN_ROOT' \
   '        return True' "$T"
 
+# ⚠ RE-AIMED at 0.0.20 stage 09. Intent unchanged, quotation re-read from the file as it is now.
 mutant "D07 ★★ the remedy stops naming PYTHONPATH — a refusal with no way out" "$PKG" \
-  "        return 'PYTHONPATH=\"%s/src\" python3 -m mokata release-check <version> --root \"%s\"' % (" \
-  "        return 'PYTHON_PATH=\"%s/src\" python3 -m mokata release-check <version> --root \"%s\"' % (" "$T"
+  '        return '"'"'PYTHONPATH="%s" python3 -m mokata release-check <version> --root "%s"'"'"' % (' \
+  '        return '"'"'PYTHON_PATH="%s" python3 -m mokata release-check <version> --root "%s"'"'"' % (' "$T"
 
 mutant "D08 ★★★ two exit codes collapse into one — the master defect class, here (§7g)" "$CLI" \
   'RELEASE_CHECK_ANSWERED_ELSEWHERE = 3' \

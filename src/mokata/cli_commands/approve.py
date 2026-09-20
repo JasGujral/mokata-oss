@@ -66,7 +66,7 @@ def _ledger(root: str):
 def cmd_approve(args: argparse.Namespace) -> int:
     """Approve ONE proposed durable write — or, with no id, list what is waiting on you."""
     from .. import approval
-    from ..prompt import read_yes_no
+    from ..prompt import confirmed, decline_notice
 
     root = _root(args.path)
 
@@ -101,8 +101,9 @@ def cmd_approve(args: argparse.Namespace) -> int:
         return 0
 
     question = f"Approve this {p.tool} write? It commits ONCE, then the approval is burned."
-    if not (args.yes or read_yes_no("", question)):
-        print("aborted — nothing was approved, and nothing will be written.")
+    decision = confirmed(args.yes, "", question)
+    if not decision:
+        print(f"nothing was approved and nothing will be written — {decline_notice(decision)}.")
         return 1
 
     res = approval.approve(root, p.proposal_id, actor=args.actor, ledger=_ledger(root))

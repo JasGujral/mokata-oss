@@ -185,15 +185,18 @@ class TestDegradeClean(_Base):
                 raise OSError("disk full")
 
             orig = FLOW.save_session
-            warned = io.StringIO()
-            flow = FLOW.SessionFlow(surface, warn=warned.write)
+            notices = []
+            flow = FLOW.SessionFlow(surface, warn=notices.append)
             FLOW.save_session = boom
             try:
                 self.assertIsNone(flow.turn(_in_progress(n=1).to_dict()))   # degrade → None
                 self.assertIsNone(flow.turn(_in_progress(n=2).to_dict()))   # 2nd: no re-warn
             finally:
                 FLOW.save_session = orig
-            self.assertEqual(warned.getvalue().count("\n"), 1)              # warned exactly ONCE
+            # ⛔ NOTICES, NOT NEWLINES — see the note on the sibling assertion in
+            # `test_ss_s1_wire_persistence`. The newline count measured the message's punctuation.
+            self.assertEqual(len(notices), 1, notices)
+            self.assertIn("OSError", notices[0])
 
             # the disk recovers — the next turn save RETRIES and succeeds
             res = flow.turn(_in_progress(n=3).to_dict())

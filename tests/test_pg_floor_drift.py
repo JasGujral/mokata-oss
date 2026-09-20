@@ -112,6 +112,82 @@ class TestNoSurfaceStatesAnotherFloor(unittest.TestCase):
                         "no tracked surface states a PostgreSQL floor at all — either the "
                         "detector broke or every claim was deleted; both need a human")
 
+    def test_no_BELOW_BY_DESIGN_marker_has_stopped_excusing_a_violation(self):
+        """🔴 THE ROT CHECK, and it is why a marker is safe where a line number is not.
+
+        A below-floor image can be deliberate — stage 08a's arm needs a real PostgreSQL 14, because
+        being below the floor is the whole fixture. What must never happen is the marker OUTLIVING
+        the violation: somebody bumps the image to a compliant major, the marker stays, and a
+        permanent hole sits in the corpus with a written reason attached to nothing. ⛔ It is
+        invisible exactly because everything is green."""
+        low = floor.declared_floor(REPO)[0]
+        unearned = floor.unearned_markers(_corpus(), low)
+        self.assertEqual(
+            [], unearned,
+            "these BELOW-BY-DESIGN markers no longer excuse anything — the image is at or above "
+            "the floor of %d, so the marker is a hole with a reason attached to nothing:\n%s"
+            % (low, "\n".join("  %s:%d pins %d — %s" % (r, n, m, l) for r, n, m, l in unearned)))
+
+    def test_the_rot_check_can_actually_FIRE(self):
+        """§7f — the anti-vacuity control, and it was added because a mutant proved it was needed.
+
+        `unearned_markers` over the real tree returns `[]`, and it returns `[]` for two completely
+        different reasons: no marker has rotted, or the function reports nothing at all. A mutant
+        that emptied it (`_pg_floor_mutants.sh` M15) **SURVIVED** the real-tree assertion above —
+        a clean tree had graded the guard away. So the rot is PLANTED here, on a supplied corpus,
+        and the detector has to find it."""
+        import tempfile
+        low = floor.declared_floor(REPO)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            rotted = os.path.join(tmp, "rotted.yml")
+            with open(rotted, "w", encoding="utf-8") as fh:
+                # A marker sitting on a COMPLIANT image: the violation it once excused is gone,
+                # and the hole with a reason attached to nothing is what remains.
+                fh.write("        image: postgres:%d  # pg-floor: BELOW BY DESIGN — stale\n" % low)
+            found = floor.unearned_markers({"rotted.yml": rotted}, low)
+        self.assertEqual([(r, m) for r, _n, m, _l in found], [("rotted.yml", low)],
+                         "a marker sitting on a compliant image was not reported as unearned, so "
+                         "the rot check reports nothing and its green means nothing")
+
+    def test_a_marker_on_a_REAL_violation_is_not_reported_as_rot(self):
+        """The other direction, or the test above is satisfied by a detector that flags every
+        marker — which would make the mechanism unusable and the guard would be deleted."""
+        import tempfile
+        low = floor.declared_floor(REPO)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            live = os.path.join(tmp, "live.yml")
+            with open(live, "w", encoding="utf-8") as fh:
+                fh.write("        image: postgres:%d  # pg-floor: BELOW BY DESIGN — the fixture\n"
+                         % (low - 1))
+            self.assertEqual([], floor.unearned_markers({"live.yml": live}, low))
+
+    def test_the_marker_excuses_ONE_TAG_and_not_its_file(self):
+        """The property the mechanism was chosen for, driven on SUPPLIED text (§7i) so a tree with
+        one marked image cannot pass by accident. A file-level deny-list would have stopped
+        guarding the compliant image sitting three hundred lines above the marked one."""
+        low = floor.declared_floor(REPO)[0]
+        text = ("      # pg-floor: BELOW BY DESIGN — the fixture\n"
+                "        image: postgres:%d\n"
+                "        image: postgres:%d\n" % (low - 1, low - 2))
+        graded = floor.instantiations(text)
+        excused = floor.below_by_design(text)
+        self.assertEqual([m for _n, m, _l in excused], [low - 1],
+                         "the marker excused something other than the tag beneath it")
+        self.assertEqual([m for _n, m, _l in graded], [low - 2],
+                         "the UNMARKED below-floor image in the same file stopped being graded — "
+                         "which is the failure a file-level exemption would have had")
+
+    def test_a_marker_two_lines_up_does_NOT_reach(self):
+        """⛔ The blast radius of the mechanism, pinned. A marker that reached further than the
+        line beneath it could drift onto a DIFFERENT image the day somebody inserts a comment."""
+        low = floor.declared_floor(REPO)[0]
+        text = ("      # pg-floor: BELOW BY DESIGN — the fixture\n"
+                "      # (an innocent comment somebody added later)\n"
+                "        image: postgres:%d\n" % (low - 1))
+        self.assertEqual([], floor.below_by_design(text))
+        self.assertEqual([m for _n, m, _l in floor.instantiations(text)], [low - 1],
+                         "the image went ungraded on a marker that no longer sits over it")
+
     def test_every_postgres_image_tag_satisfies_the_floor(self):
         """The other half, and graded differently ON PURPOSE: a tag is an INSTANTIATION, so any
         major at or above the floor is correct. Grading a pin for equality would red on a
@@ -174,13 +250,50 @@ class TestNoSurfaceStatesAnotherFloor(unittest.TestCase):
                           "the %s sentence does not name the date: %s" % (verdict, lead))
 
     def test_the_floor_notice_is_silent_where_it_must_be(self):
-        """§7g at the rendering layer: OK and UNKNOWN produce NO sentence. A notice that rendered
-        something for UNKNOWN would put a claim about the user's server into every surface on the
-        strength of a version nobody managed to read."""
+        """§7g at the rendering layer: OK produces NO sentence.
+
+        ⚠ RE-REASONED AT 0.0.20, NOT WEAKENED (doc 105 §9, G12). This test used to require the same
+        silence for UNKNOWN, with this reason: *a notice that rendered something for UNKNOWN would
+        put a claim about the user's server into every surface on the strength of a version nobody
+        managed to read.* **That reason was right and it is still enforced** — by
+        `test_the_UNKNOWN_notice_makes_no_claim_about_the_server` below, which is a stronger
+        assertion than silence: it requires the sentence to contain no digit and no fragment of the
+        connection at all.
+
+        ⭐ What the old form could not distinguish is that *"your server is old"* and *"mokata did
+        not check"* are claims about **different subjects**. Requiring silence for both made the
+        release's own dated commitment fail silently, which is
+        `SERVER-VERSION-SHAPE-CHANGE-LAPSES-THE-FLOOR` arriving at the user as nothing at all."""
         from mokata import teamdb
-        for verdict in (teamdb.FLOOR_OK, teamdb.FLOOR_UNKNOWN):
-            self.assertEqual("", teamdb.floor_notice(None, verdict))
-            self.assertEqual("", teamdb.floor_notice(teamdb.TARGET_PG_MAJOR, verdict))
+        self.assertEqual("", teamdb.floor_notice(None, teamdb.FLOOR_OK))
+        self.assertEqual("", teamdb.floor_notice(teamdb.TARGET_PG_MAJOR, teamdb.FLOOR_OK))
+
+    def test_the_UNKNOWN_verdict_is_no_longer_INDISTINGUISHABLE_from_a_met_floor(self):
+        """🔴 THE DEFECT G12 CLOSES. Two different facts had one representation on every surface —
+        the health line every session prints, `mokata doctor`, and the refusal itself."""
+        from mokata import teamdb
+        met = teamdb.floor_notice(teamdb.TARGET_PG_MAJOR, teamdb.FLOOR_OK)
+        unread = teamdb.floor_notice(None, teamdb.FLOOR_UNKNOWN)
+        self.assertNotEqual(met, unread,
+                            "a met floor and an unread one render identically again — the lapse "
+                            "this sentence exists to make audible is silent")
+        self.assertTrue(unread.strip(), "UNKNOWN renders nothing at all")
+
+    def test_the_UNKNOWN_notice_makes_no_claim_about_the_server(self):
+        """The clause that makes G12 safe, asserted rather than promised.
+
+        ⛔ This sits on a path that holds a DSN. The WARN/REFUSE sentences may carry the major
+        because a version is a fact about the software; the UNKNOWN sentence has no version to
+        carry, so it may carry NOTHING — no digit, no interpolation, no fragment of a connection.
+        A future edit that helpfully added *"(host: %s)"* would be caught here."""
+        from mokata import teamdb
+        unread = teamdb.floor_notice(None, teamdb.FLOOR_UNKNOWN)
+        self.assertEqual([], [c for c in unread if c.isdigit()],
+                         "the UNKNOWN sentence carries a number, and there is no number it could "
+                         "honestly carry: %r" % unread)
+        # And it is the SAME sentence whatever it is handed, because it reads none of it.
+        self.assertEqual(unread, teamdb.floor_notice(9, teamdb.FLOOR_UNKNOWN))
+        self.assertEqual(unread, teamdb.floor_notice(99, teamdb.FLOOR_UNKNOWN))
 
     def test_the_enforcement_date_is_declared_once(self):
         """The date changes BEHAVIOUR on its own, which makes a second copy worse than a second

@@ -49,7 +49,7 @@ T13='test_stage13_vault_slice.py'
 T55='test_stage55b_session_transport.py'
 T9='test_stage9_removal_release.py'
 
-TOTAL=28
+TOTAL=27
 ran=0; red=0; green=0; survivors=""
 
 # ---- step 0: the green baseline ---------------------------------------------------------------
@@ -101,10 +101,10 @@ mutant "A02 ***  the removed kind is HIDDEN rather than deleted — the refusal 
   '    _refuse_removed_kind(kind, root)' \
   '    pass    # no removal refusal' "$T13"
 
+# ⚠ RE-AIMED at 0.0.20 stage 09. Intent unchanged, quotation re-read from the file as it is now.
 mutant "A03 ***  the removed-kind guard stops reading the registry and hardcodes today's names —
-       GREEN for every channel removed so far, wrong for every one removed after this stage" \
-  "$STX" \
-  '    if kind not in deprecation.REMOVED:' \
+       GREEN for every channel removed so far, wrong for every one removed after this stage" "$STX" \
+  '    if not deprecation.is_removed_file_channel(kind):' \
   '    if kind not in ("obsidian", "native-memory", "memory-share"):' "$T13"
 
 # ==== B. the FEATURE survives — the mistake the gate's own map invited ==========================
@@ -184,9 +184,13 @@ mutant "C07 ***  the artifact user is handed the SESSION channel's removal notic
 
 # ==== D. the removal ANSWER — never a typo answer ==============================================
 
+# ⚠ RE-AIMED at 0.0.20 stage 11. Intent unchanged; the quotation follows the refactor that gave this
+# surface and `collab.py` ONE shared helper (`deprecation.answerable_choices`) instead of two
+# hand-written copies of the same rule. ⭐ The sweep found this pattern the moment the refactor
+# landed, which is the whole reason the sweep exists.
 mutant "D01 ***  `mokata migrate` stops accepting the removed channels — every one of them answers
        argparse's 'invalid choice', on the command a year of notices told users to run" "$MIG" \
-  '    p.add_argument("channel", choices=tuple(REMOVED_CHANNELS),' \
+  '    p.add_argument("channel", choices=_choices,' \
   '    p.add_argument("channel", choices=(),' "$T13"
 
 mutant "D02 ***  the help SELLS a schedule again — 'scheduled for removal in X' in the release
@@ -202,15 +206,23 @@ mutant "D03 ***  the metavar advertises the LIVE registry instead of what the co
   '                   metavar="{%s}" % ",".join(REMOVED_CHANNELS),' \
   '                   metavar="{%s}" % ",".join(deprecation.CHANNELS),' "$T13"
 
+# ⚠ RE-AIMED at 0.0.20 stage 11. Intent unchanged; the quotation follows the refactor that gave this
+# surface and `collab.py` ONE shared helper (`deprecation.answerable_choices`) instead of two
+# hand-written copies of the same rule. ⭐ The sweep found this pattern the moment the refactor
+# landed, which is the whole reason the sweep exists.
 mutant "D04 ***  THE SECOND SURFACE, AND THE FIRST DRAFT OF THIS SLICE GOT IT WRONG — `--to/--from`
        derive from the LIVE registry only, so `--to vault` answers 'invalid choice'" "$COL" \
-  'STX_KINDS = tuple(_LIVE_KINDS) + tuple(REMOVED_CHANNELS)' \
-  'STX_KINDS = tuple(_LIVE_KINDS)' "$T13"
+  'STX_KINDS, STX_METAVAR = answerable_choices(_LIVE_KINDS)' \
+  'STX_KINDS, STX_METAVAR = tuple(_LIVE_KINDS), "{%s}" % ",".join(_LIVE_KINDS)' "$T13"
 
+# ⚠ RE-AIMED at 0.0.20 stage 11. Intent unchanged; the quotation follows the refactor that gave this
+# surface and `collab.py` ONE shared helper (`deprecation.answerable_choices`) instead of two
+# hand-written copies of the same rule. ⭐ The sweep found this pattern the moment the refactor
+# landed, which is the whole reason the sweep exists.
 mutant "D05 **   …and the other half of the same property: the metavar starts ADVERTISING the
        removed kinds, so the help sells a transport that no longer exists" "$COL" \
-  'STX_METAVAR = "{%s}" % ",".join(_LIVE_KINDS)' \
-  'STX_METAVAR = "{%s}" % ",".join(tuple(_LIVE_KINDS) + tuple(REMOVED_CHANNELS))' "$T13"
+  'STX_KINDS, STX_METAVAR = answerable_choices(_LIVE_KINDS)' \
+  'STX_KINDS, STX_METAVAR = answerable_choices(_LIVE_KINDS), "{%s}" % ",".join(tuple(_LIVE_KINDS) + tuple(REMOVED_CHANNELS))' "$T13"
 
 mutant "D06 ***  the file channel's location is hardcoded to the FIRST file channel again — the
        vault user is told their session bundles are in a memory backup file (the stage-12 row)" \
@@ -231,10 +243,15 @@ mutant "D08 **   a removed transport kind is reported as UNAVAILABLE on MCP — 
 
 # ==== E. the gate MOVES, and the move is the DELETION's ========================================
 
-mutant "E01 ***  neo4j leaves CHANNELS one stage early — the gate would read LANDED with a channel
-       still implemented, i.e. the lane reports finished while stage 14 has not run" "$DEP" \
-  '    "neo4j": DeprecationNotice(' \
-  '    "_neo4j_disabled": DeprecationNotice(' "$T13"
+# ⛔ RETIRED — E01 *** neo4j leaves CHANNELS one stage early — the gate would read LANDED with a channel still implemented, i.e. the lane reports finished while stage 14 has not run
+#    RETIRED at 0.0.20 stage 09 — §7h, THE PIN ENCODED A FALSE PREMISE.
+#    It graded "neo4j must NOT leave CHANNELS yet", i.e. that the channel was still deprecated-but-live
+#    and its early removal would make the lane gate read LANDED before stage 14 had run. Stage 14 DID
+#    run: neo4j left CHANNELS at 0.0.18 and now sits in REMOVED as a RemovedDerivedNotice. The premise
+#    this mutant asserts about the tree is no longer true, so re-quoting it would have carried a false
+#    premise across the refactor — the failure §7h names. What replaced the property is graded by TYPE,
+#    not by membership: removed_channels_in filters on the record CLASS (_stage11 C01) and
+#    _refuse_removed_kind on is_removed_file_channel (_stage13 A03).
 
 mutant "E02 ***  the removed channel is dropped from IMPLEMENTATIONS instead of being required to
        be ABSENT — the probe stops checking at the moment the check acquires a subject" "$DR" \

@@ -73,7 +73,7 @@ def cmd_gate_status(args: argparse.Namespace) -> int:
 def cmd_gate_override(args: argparse.Namespace) -> int:
     """Explicitly, re-confirmedly, session-scopedly, ledgeredly stop enforcing ONE gate (P14)."""
     from ..gate_hook import GATES, OVERRIDE_PREFIX, read_override
-    from ..prompt import read_yes_no
+    from ..prompt import confirmed, decline_notice
 
     gate = args.gate
     if gate not in GATES:
@@ -99,8 +99,11 @@ def cmd_gate_override(args: argparse.Namespace) -> int:
             f"  Scope: THIS session only — a new session enforces again.\n"
             f"  Reason (recorded to the audit ledger): {args.reason}\n"
             f"  The secret-guard is unaffected — security blocks are never overridable.")
-    if not (args.yes or read_yes_no(plan, f"Override '{gate}' for this session?")):
-        print("aborted — the gate stays enforced.")
+    decision = confirmed(args.yes, plan, f"Override '{gate}' for this session?")
+    if not decision:
+        # OSS #66: this said "aborted — the gate stays enforced." for BOTH a human's no and a run
+        # with no terminal, and named no flag. The outcome half is unchanged; the cause half is new.
+        print(f"the gate stays enforced — {decline_notice(decision)}.")
         return 1
 
     scopes = sorted(set(read_override(surface.root, run_id)) | {gate})

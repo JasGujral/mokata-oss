@@ -21,8 +21,9 @@ These tests pin the fix:
   (b) Factory coverage (grep-guard, like CM.S3's): every `sqlite3.connect` in `src/` goes through
       `_sqlite.connect_sqlite` — no second pragma path can be introduced without failing this.
   (c) Pragmas verified by querying them BACK off an opened connection: `journal_mode=wal` and the
-      chosen `busy_timeout`. Plus: the two pragmas are the ONLY two (no `synchronous` durability
-      trade smuggled in as "perf").
+      chosen `busy_timeout`. THREE pragmas since 191162a, not two: `synchronous=FULL` is set
+      explicitly and BEFORE the WAL switch, because the switch is what decides which compile-time
+      default would otherwise apply. The prose here said "two" for one commit after that landed.
   (d) Degrade: a WAL-refusing filesystem (simulated faithfully — a REAL SQLite left on 'delete')
       still WORKS, and says so LOUDLY exactly ONCE per subsystem despite many per-op connects.
   (e) Sidecar hygiene: at rest (all connections closed) the store is a single, fully-checkpointed
@@ -33,13 +34,16 @@ These tests pin the fix:
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
 
+import ast
 import multiprocessing as mp
 import os
 import re
+import shutil
 import sqlite3
 import tempfile
 import time
 import unittest
+from contextlib import closing
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
@@ -94,10 +98,6 @@ def _hold_reader_bare(db_path, holding, release):
     holding.set()
     release.wait(timeout=30.0)
     conn.close()
-
-
-def _sidecars(d):
-    return sorted(n for n in os.listdir(d) if n.endswith(("-wal", "-shm")))
 
 
 class _NoWalConnection:
@@ -201,16 +201,70 @@ class TestM4Regression(unittest.TestCase):
                 release.set()
                 p.join(timeout=20.0)
 
-    def test_concurrent_windows_leave_no_sidecars_at_rest(self):
-        # Sidecar hygiene: connections are per-operation, so the LAST close checkpoints and removes
-        # -wal/-shm. At rest the store is one complete file — nothing for a copier to miss.
+    def test_the_store_is_COMPLETE_at_rest(self):
+        """At rest the `.db` carries everything — nothing for a copier to miss.
+
+        ⛔ THIS USED TO ASSERT THAT NO `-wal`/`-shm` FILE EXISTED, AND THAT WAS A PROXY
+        FOR THIS, NOT THE THING.
+        Whether a clean last-close UNLINKS `-wal`/`-shm` is a property of the libsqlite3 build:
+        measured at the 0.0.20 cut, removed on Debian sqlite 3.37 and PERSISTED on pyenv py3.13 /
+        sqlite 3.51 — same tree, same commit, and proven with `sqlite3` alone and no mokata in the
+        process, so there is nothing for mokata to fix and nothing a pure-Python remedy can remove
+        (`wal_checkpoint(TRUNCATE)`, `journal_size_limit=0` and a `journal_mode=DELETE` switch were
+        all measured; none of them clears both files).
+
+        ⭐ What the comment actually claimed — *nothing for a copier to miss* — is TRUE on both
+        builds, and is what this now asserts: the `.db` ALONE, copied cold, reads back every item.
+        A file COUNT was never that property; it just happened to imply it on one build."""
         with tempfile.TemporaryDirectory() as d:
             db = os.path.join(d, "memory.db")
             b = SQLiteBackend(db)
             b.put(MemoryItem.create("decision", "x", id="x"))
             b.close()
-            self.assertEqual(_sidecars(d), [], "WAL sidecars survived at rest")
             self.assertTrue(os.path.exists(db))
+            with tempfile.TemporaryDirectory() as cold:
+                lone = os.path.join(cold, "memory.db")
+                shutil.copy2(db, lone)              # THE .db AND NOTHING ELSE
+                self.assertEqual(["x"], sorted(i.id for i in SQLiteBackend(lone).all()),
+                                 "the store at rest is NOT self-contained — a user copying "
+                                 "memory.db would lose committed, human-approved writes")
+
+    def test_the_completeness_check_can_actually_FAIL(self):
+        """ANTI-VACUITY for the pin above. `.all()` on a copied store returning the right rows is
+        only evidence if the same check reds when the store genuinely ISN'T complete. A connection
+        held open with a COMMITTED but un-checkpointed write is exactly that state — the row lives
+        in the `-wal`, and the `.db` alone does not have it. If this ever stops failing, the pin
+        above has stopped grading anything."""
+        with tempfile.TemporaryDirectory() as d:
+            db = os.path.join(d, "memory.db")
+            b = SQLiteBackend(db)
+            b.put(MemoryItem.create("decision", "first", id="a"))
+            b.close()
+            held = connect_sqlite(db)
+            try:
+                held.execute(_UPSERT, ("b", "decision", "s", "active", "{}"))
+                held.commit()                        # committed, NOT checkpointed
+                with tempfile.TemporaryDirectory() as cold:
+                    lone = os.path.join(cold, "memory.db")
+                    shutil.copy2(db, lone)
+                    # ⛔ THE HANDLE GOES FIRST, DETERMINISTICALLY — never left to a collector.
+                    # Chained onto the connect, the connection stays alive until the CYCLIC
+                    # collector runs on CPython 3.12, so it is still open on this file when the
+                    # enclosing `TemporaryDirectory` is removed: POSIX unlinks an open file and
+                    # never notices, Windows refuses and the cleanup dies with `WinError 32`.
+                    # MEASURED: this exact line, ERROR (not failure) on both 3.12 Windows legs of
+                    # run 35484977365 and clean on the 3.10 leg — the 1-handle-on-3.12 /
+                    # 0-on-3.10 split `test_si_6...` had already written down. That comment was
+                    # the ONLY thing enforcing the rule, which is how the rule came back three
+                    # days later; `TheStoreHandleIsClosedBeforeItsDirectory` below now enforces it.
+                    with closing(sqlite3.connect(lone)) as cold_conn:
+                        ids = sorted(r[0] for r in
+                                     cold_conn.execute("SELECT id FROM memory"))
+                self.assertNotIn("b", ids,
+                                 "a copy taken mid-transaction saw an un-checkpointed row — the "
+                                 "completeness pin above cannot distinguish complete from lucky")
+            finally:
+                held.close()
 
 
 # ================================================================== (b) factory coverage
@@ -297,6 +351,36 @@ class TestPragmas(unittest.TestCase):
             conn = connect_sqlite(os.path.join(d, "m.db"))
             try:
                 self.assertEqual(conn.execute("PRAGMA synchronous").fetchone()[0], 2)  # FULL
+            finally:
+                conn.close()
+
+    def test_the_durability_pragma_is_SET_BY_US_and_not_INHERITED(self):
+        # ANTI-VACUITY, and the test above needed it for two years. `PRAGMA synchronous` has TWO
+        # compile-time defaults: SQLITE_DEFAULT_SYNCHRONOUS (FULL) on a rollback journal, and
+        # SQLITE_DEFAULT_WAL_SYNCHRONOUS **once the DB is in WAL** — which some builds ship as
+        # NORMAL. So on a generous build the assertion above passes whether or not mokata wrote
+        # anything, and on a stricter one it fails while naming no defect. Measured at the 0.0.20
+        # cut: FULL on Debian's sqlite 3.37, NORMAL on pyenv 3.13 / sqlite 3.51 — same tree.
+        #
+        # Hand the factory a connection ALREADY on NORMAL. Nothing but an explicit write moves it
+        # back, so this grades the CODE and never the box it runs on.
+        real_connect = sqlite3.connect
+
+        def hostile(*args, **kwargs):
+            conn = real_connect(*args, **kwargs)
+            conn.execute("PRAGMA synchronous=NORMAL")
+            assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1, (
+                "the hostile fixture did not take — this test would grade nothing")
+            return conn
+
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(sqlite3, "connect", side_effect=hostile):
+                conn = connect_sqlite(os.path.join(d, "m.db"))
+            try:
+                self.assertEqual(
+                    conn.execute("PRAGMA synchronous").fetchone()[0], 2,
+                    "connect_sqlite INHERITED this build's synchronous instead of SETTING it — "
+                    "mokata's durability then depends on how somebody else compiled libsqlite3")
             finally:
                 conn.close()
 
@@ -432,6 +516,94 @@ class TestNoBehaviourChange(unittest.TestCase):
         b.put(MemoryItem.create("decision", "mem", id="m1"))
         self.assertEqual(b.get("m1").value, "mem")
         b.close()
+
+
+# ====================================== (g) a store handle outlives nothing that contains it ====
+#: The openers whose result is a live OS handle on a file.
+_HANDLE_OPENERS = ("connect", "connect_sqlite")
+#: The statement calls that, chained straight onto one, leave that handle with no name to close.
+_HANDLE_USES = ("execute", "executemany", "executescript", "cursor")
+
+
+def chained_handle_offenders(tree):
+    """`sqlite3.connect(p).execute(...)` and its family: a store opened with NO name to close it.
+
+    AST, DELIBERATELY NOT TEXT. The rule has to be blind to the comments that DESCRIBE it, or the
+    one file that wrote the rule down is convicted by it and the guard gets weakened to shut that
+    file up — this repo's own lesson that describing a violation by quoting it commits it again,
+    arriving one layer up. A `closing(...)` or an assigned name never produces this shape at all,
+    so the check needs no allow-list and has nothing to tune."""
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in _HANDLE_USES:
+            continue
+        inner = node.func.value
+        if not isinstance(inner, ast.Call):
+            continue
+        opener = (inner.func.attr if isinstance(inner.func, ast.Attribute)
+                  else getattr(inner.func, "id", ""))
+        if opener in _HANDLE_OPENERS:
+            offenders.append((node.lineno, "%s().%s" % (opener, node.func.attr)))
+    return offenders
+
+
+class TheStoreHandleIsClosedBeforeItsDirectory(unittest.TestCase):
+    """POSIX cannot see this class of defect at all, so only a guard can hold the line.
+
+    ⚠ WHERE it reproduces is Windows; WHETHER it is a defect is not environmental. A test that
+    deletes a directory it still holds a handle into is wrong on every platform — POSIX just
+    declines to say so."""
+
+    def test_the_checker_convicts_the_shape_it_exists_for(self):
+        # ANTI-VACUITY FIRST (§7i): the tree carries ZERO offenders as of this commit, so without
+        # this the guard below is a check that has never been shown to be able to red.
+        planted = ("import sqlite3\n"
+                   "rows = sqlite3.connect(p)" + ".execute('SELECT 1').fetchall()\n")
+        found = chained_handle_offenders(ast.parse(planted))
+        self.assertEqual([(2, "connect().execute")], found)
+
+    def test_a_closed_handle_and_a_named_one_are_both_accepted(self):
+        # The NEGATIVE control: the two spellings the remedy actually produces must not red, or
+        # the guard would push people back onto the form it is trying to remove.
+        clean = ("from contextlib import closing\n"
+                 "import sqlite3\n"
+                 "with closing(sqlite3.connect(p)) as c:\n"
+                 "    rows = c.execute('SELECT 1').fetchall()\n"
+                 "conn = sqlite3.connect(q)\n"
+                 "conn.execute('SELECT 1')\n"
+                 "conn.close()\n")
+        self.assertEqual([], chained_handle_offenders(ast.parse(clean)))
+
+    def test_nothing_shipped_or_tested_chains_a_connect_into_a_statement(self):
+        # CORPUS: THE WORKING TREE. The same answer, and for the same reason, as `TestOneFactory`
+        # two classes up: an UNTRACKED `.py` under `src/` really does ship (`sync-public.sh`
+        # mirrors with `rsync`), and an untracked one under `tests/` really does run — discovery
+        # reads the disk. The index would be blind to exactly the file most likely to break the
+        # rule, which is the one somebody just wrote and has not committed yet.
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        offenders = []
+        for top in ("src", "tests", "scripts"):
+            for base, _dirs, files in os.walk(os.path.join(repo, top)):
+                for fn in sorted(files):
+                    if not fn.endswith(".py"):
+                        continue
+                    path = os.path.join(base, fn)
+                    with open(path, encoding="utf-8") as fh:
+                        body = fh.read()
+                    try:
+                        tree = ast.parse(body)
+                    except SyntaxError:
+                        continue
+                    for lineno, shape in chained_handle_offenders(tree):
+                        offenders.append("%s:%d  %s" % (os.path.relpath(path, repo), lineno, shape))
+        self.assertEqual([], offenders,
+                         "a store is opened and never given a name to close — the handle is then "
+                         "released by the collector, so any directory removed in the same block "
+                         "is removed with the file still open. POSIX unlinks it silently; Windows "
+                         "raises WinError 32 and the test ERRORS. Bind it: "
+                         "`with closing(sqlite3.connect(p)) as conn:`")
 
 
 if __name__ == "__main__":

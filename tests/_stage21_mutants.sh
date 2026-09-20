@@ -102,8 +102,9 @@ mutant "M11 the index stops asking what was skipped" "$I" \
   '            prune_source_dirs(dirpath, dirnames, skipped=skipped)' \
   '            prune_source_dirs(dirpath, dirnames)' "$T"
 
+# ⚠ RE-AIMED at 0.0.20 stage 09. Intent unchanged, quotation re-read from the file as it is now.
 mutant "M12 the record is never written back after the walk" "$I" \
-  '        self.skipped_checkouts = sorted(os.path.relpath(p, root) for p in skipped)' \
+  '        self.skipped_checkouts = names_of(skipped, root)' \
   '        pass' "$T"
 
 mutant "M13 an abandoned walk keeps the PREVIOUS walk's record — declares a skip it never made" "$I" \

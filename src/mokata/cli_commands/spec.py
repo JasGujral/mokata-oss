@@ -435,8 +435,17 @@ def cmd_spec_amend(args: argparse.Namespace) -> int:
             lambda text: read_yes_no(text, f"Amend the spec to v{plan.to_version}?")))
 
     if not outcome.committed:
-        print(f"amend declined — nothing was written ({outcome.reason}).")
-        print("The run stays regressed. Abandon it with: mokata spec amend --abort")
+        # OSS #66 — "MOkata amend spec getting stuck". This said "amend declined" for a run in which
+        # NOBODY WAS ASKED, and it leaves the run REGRESSED with development writes blocked, so an
+        # unactionable message here is not a cosmetic problem: it is a wedged pipeline whose one
+        # sentence names no way out. `outcome.reason` now carries the flag when there was no
+        # terminal; the two escape hatches are printed either way.
+        print(f"nothing was written — {outcome.reason}.")
+        print("The run stays REGRESSED (development writes stay blocked) until a correct amendment "
+              "lands. Either:")
+        print(f"  re-run this command with --yes   (records the amendment to v{plan.to_version})")
+        print("  mokata spec amend --abort        (abandon it; the run returns to its existing "
+              "spec)")
         return 1
 
     print(f"spec amended to v{outcome.version} — v{plan.from_version} superseded (kept), the diff "

@@ -15,7 +15,7 @@ point where "local" stopped meaning "one window" (P22).
 This module is the SINGLE place a SQLite connection is opened (the twin of `_pg.connect_psycopg`),
 so the pragmas can never drift or be forgotten at a new call site.
 
-Two pragmas, both defended as CORRECTNESS — not perf tuning:
+Three pragmas, all defended as CORRECTNESS — not perf tuning:
   * `journal_mode=WAL` — THE fix. Readers stop blocking the writer and the writer stops blocking
     readers, so concurrent windows read a consistent snapshot instead of colliding. WAL is a
     property of the DATABASE FILE (set once, persists across connections), so re-asserting it per
@@ -26,10 +26,18 @@ Two pragmas, both defended as CORRECTNESS — not perf tuning:
     stdlib change to that default must not be able to move mokata's behaviour silently. See
     `BUSY_TIMEOUT_MS`.
 
-Deliberately NOT set: `synchronous=NORMAL`, WAL's usual companion, trades DURABILITY for speed —
-it can lose the last committed transaction on power loss. That is perf tuning, and it weakens a
-guarantee mokata's human-gated writes depend on (P2), so the default (FULL) stands. `foreign_keys`
-is a no-op on this schema (no FKs). Two pragmas, no more.
+  * `synchronous=FULL` — SET, not inherited, and this module spent 0.0.x getting that wrong.
+    `synchronous=NORMAL` is WAL's usual companion and trades DURABILITY for speed: it can lose the
+    last committed transaction on power loss. mokata refuses that trade (P2 — a human APPROVED
+    that write). The old text concluded "so the default (FULL) stands" and set nothing, which
+    reads the refusal as *do not write NORMAL* when what it needs is *write FULL*. ⛔ The default
+    is not a constant: `synchronous` defaults to `SQLITE_DEFAULT_SYNCHRONOUS` (FULL) on a rollback
+    journal, but to `SQLITE_DEFAULT_WAL_SYNCHRONOUS` **once the DB is in WAL** — a SEPARATE
+    compile-time knob that some builds ship as NORMAL. So switching to WAL, the fix two bullets
+    up, is itself what can silently move `synchronous` off FULL. A durability guarantee that
+    depends on how somebody else compiled libsqlite3 is not a guarantee, and it is the exact
+    reasoning `busy_timeout` above already applies to a stdlib default. `foreign_keys` is a no-op
+    on this schema (no FKs). Three pragmas, no more.
 
 Degrade-clean (P8, CM.S2 notice pattern): some filesystems — network mounts (NFS/SMB) that cannot
 back WAL's shared-memory `-shm` index — cannot do WAL at all. SQLite says so either by returning a
@@ -186,6 +194,12 @@ def _apply_pragmas(conn: Any, path: str, *, busy_timeout_ms: int,
     # below — but only against a HELD transaction, not against a sibling racing the same switch,
     # which is refused outright. `_switch_to_wal` owns that gap (MS.S7).
     conn.execute(f"PRAGMA busy_timeout={int(busy_timeout_ms)}")
+
+    # synchronous SECOND, and also unconditionally — BEFORE the WAL switch below, because the
+    # switch is what changes which compile-time default would otherwise apply (see the module
+    # docstring). Writing it explicitly makes the value mokata's own on every build instead of
+    # Apple's, Debian's or a future CPython's. Setting FULL where FULL already holds is a no-op.
+    conn.execute("PRAGMA synchronous=FULL")
 
     if is_memory_path(path):
         return  # nothing to share, nothing to degrade.

@@ -81,7 +81,24 @@ SYMBOL_EDGE_KINDS = ("callers", "callees", "implementers", "blast_radius")
 
 CACHE_DIRNAME = "knowledge_ast"
 CACHE_FILENAME = "edges.json"
-CACHE_SCHEMA_VERSION = 1
+#: An import edge's KIND. 0.0.20 (doc 105 §9, G13).
+#:
+#: 🔴 A COMPILE-TIME CONTRACT EDGE AND A RUNTIME EDGE ARE DIFFERENT FACTS (§7g). `from x import Y`
+#: inside `if TYPE_CHECKING:` creates **no runtime dependency** — the module is never imported at
+#: run time — and it creates a **real contract dependency**: change `Y`'s shape and this file stops
+#: type-checking. Emitting it as an ordinary import asserts a runtime edge that does not exist;
+#: dropping it answers *"nothing depends on this"* about a type other modules are written against.
+#:
+#: ⭐ `imports(x)` answers BOTH by default — the honest superset — and a caller that needs only
+#: runtime edges filters on the kind, which it could not do while the two shared a representation.
+IMPORT_VALUE = "value"
+IMPORT_TYPE = "type"
+
+#: ⚠ BUMPED 1 → 2 at 0.0.20: `FileEdges.imports` gained a third element. A cache written by the
+#: previous version would hydrate two-tuples into a reader expecting three, so the version is what
+#: turns a silent shape mismatch into a re-parse. §7d — pre-1.0 this is a re-derive, not a
+#: migration: the cache is derived data and rebuilding it costs one walk.
+CACHE_SCHEMA_VERSION = 2
 
 
 def parse_source(source: str) -> ast.AST:
@@ -97,7 +114,7 @@ class FileEdges:
 
     defs: List[Tuple[str, int, str]] = field(default_factory=list)          # (name, line, kind)
     classes: List[Tuple[str, int, List[str]]] = field(default_factory=list)  # (name, line, bases)
-    imports: List[Tuple[str, int]] = field(default_factory=list)            # (token, line)
+    imports: List[Tuple[str, int, str]] = field(default_factory=list)      # (token, line, kind)
     calls: List[Tuple[str, int, str]] = field(default_factory=list)         # (callee, line, scope)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -111,7 +128,12 @@ class FileEdges:
         return cls(
             defs=[tuple(x) for x in d.get("defs", [])],
             classes=[(x[0], x[1], list(x[2])) for x in d.get("classes", [])],
-            imports=[tuple(x) for x in d.get("imports", [])],
+            # ⚠ A two-element row is a CACHE FROM BEFORE THE KIND EXISTED. It is not migrated
+            # into `value` — that would guess, and the guess would be wrong for every
+            # TYPE_CHECKING import the old walker recorded. `CACHE_SCHEMA_VERSION` rejects such a
+            # payload before this is reached; the guard here is so a hand-edited cache degrades
+            # into a re-parse rather than into a wrong answer.
+            imports=[tuple(x) for x in d.get("imports", []) if len(x) == 3],
             calls=[tuple(x) for x in d.get("calls", [])],
         )
 
@@ -137,7 +159,7 @@ def _add_module_tokens(toks: set, dotted: str) -> None:
             toks.add(seg)
 
 
-def _import_edges(node: ast.AST) -> List[Tuple[str, int]]:
+def _import_edges(node: ast.AST, kind: str = IMPORT_VALUE) -> List[Tuple[str, int, str]]:
     line = getattr(node, "lineno", 0)
     toks: set = set()
     if isinstance(node, ast.Import):
@@ -155,7 +177,25 @@ def _import_edges(node: ast.AST) -> List[Tuple[str, int]]:
                     toks.add(f"{mod}.{alias.name}")
             if alias.asname:
                 toks.add(alias.asname)
-    return [(t, line) for t in sorted(toks) if t]
+    return [(t, line, kind) for t in sorted(toks) if t]
+
+
+def _is_type_checking_guard(node: ast.AST) -> bool:
+    """Is `node` an `if TYPE_CHECKING:` (or `typing.TYPE_CHECKING`) statement?
+
+    ⚠ MATCHED ON THE NAME, WHICH IS THE ONLY THING AVAILABLE and is stated rather than hidden: the
+    floor does not resolve imports, so it cannot prove the `TYPE_CHECKING` in scope is typing's.
+    The failure mode is bounded and one-directional — a project that binds that name to something
+    else gets its imports marked `type`, which under-claims a runtime edge rather than inventing
+    one, and `imports(x)` answers both kinds by default so no query loses the site."""
+    if not isinstance(node, ast.If):
+        return False
+    test = node.test
+    if isinstance(test, ast.Name):
+        return test.id == "TYPE_CHECKING"
+    if isinstance(test, ast.Attribute):
+        return test.attr == "TYPE_CHECKING"
+    return False
 
 
 def extract_edges(tree: ast.AST) -> FileEdges:
@@ -163,28 +203,40 @@ def extract_edges(tree: ast.AST) -> FileEdges:
     (call attribution); `in_class` marks a class body (so a nested function is a `method`)."""
     edges = FileEdges()
 
-    def walk(node: ast.AST, scope: str, in_class: bool) -> None:
+    def walk(node: ast.AST, scope: str, in_class: bool,
+             import_kind: str = IMPORT_VALUE) -> None:
         for child in ast.iter_child_nodes(node):
+            if _is_type_checking_guard(child):
+                # ⭐ PYTHON HAS TYPE-ONLY IMPORTS TOO, and until 0.0.20 the floor did not know it.
+                # `if TYPE_CHECKING:` is the language's own way of saying "this import exists for
+                # the type checker and is never executed" — the same fact `import type` states in
+                # TypeScript, which is where G13 was ruled. Everything inside the guard's body is a
+                # TYPE edge; the `else:` branch is NOT (it runs).
+                for inner in child.body:
+                    walk(ast.Module(body=[inner], type_ignores=[]), scope, in_class, IMPORT_TYPE)
+                for inner in child.orelse:
+                    walk(ast.Module(body=[inner], type_ignores=[]), scope, in_class, import_kind)
+                continue
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 edges.defs.append((child.name, child.lineno,
                                    "method" if in_class else "function"))
-                walk(child, child.name, False)
+                walk(child, child.name, False, import_kind)
             elif isinstance(child, ast.ClassDef):
                 bases = [n for n in (_name_of(b) for b in child.bases) if n]
                 edges.defs.append((child.name, child.lineno, "class"))
                 edges.classes.append((child.name, child.lineno, bases))
-                walk(child, scope, True)
+                walk(child, scope, True, import_kind)
             elif isinstance(child, (ast.Import, ast.ImportFrom)):
-                edges.imports.extend(_import_edges(child))
-                walk(child, scope, in_class)
+                edges.imports.extend(_import_edges(child, import_kind))
+                walk(child, scope, in_class, import_kind)
             elif isinstance(child, ast.Call):
                 callee = _name_of(child.func)
                 if callee:
                     line = getattr(child.func, "lineno", child.lineno)
                     edges.calls.append((callee, line, scope))
-                walk(child, scope, in_class)
+                walk(child, scope, in_class, import_kind)
             else:
-                walk(child, scope, in_class)
+                walk(child, scope, in_class, import_kind)
 
     walk(tree, "", False)
     return edges
@@ -296,7 +348,7 @@ class AstBackend(GraphBackend):
         cache = self._load_cache()
         edges: Dict[str, FileEdges] = {}
         fresh: Dict[str, Any] = {}
-        for ab in self._py_files():
+        for ab in self._source_files():
             rel = name_of(ab, self.root)
             try:
                 st = os.stat(ab)
@@ -319,17 +371,41 @@ class AstBackend(GraphBackend):
         self._edges = edges
         self._save_cache(fresh)
 
-    def _py_files(self):
+    def _source_files(self):
+        """Every file this backend can produce edges for — `.py` always, TS when the extra is in.
+
+        ⚠ THE CORPUS IS CONDITIONAL AND THAT IS THE POINT (doc 105 §9/G14). `[graph-ts]` is an
+        optional extra, so on a machine without it a repo's TypeScript is simply not in the graph
+        — and `mokata doctor` says so, rather than the user discovering it at emit. Membership is
+        recomputed on every walk, so installing or removing the extra takes effect immediately.
+        """
+        from . import ts_edges
+        ts_on = ts_edges.available()
         for dirpath, dirnames, filenames in os.walk(self.root):
-            # Hidden dirs and nested checkouts alike: parsing a vendored dependency's `.py`
-            # into THIS repo's edge graph makes every blast-radius answer name a file the user
-            # does not maintain, twice.
+            # Hidden dirs, nested checkouts and package-manager install directories alike: parsing
+            # a vendored dependency into THIS repo's edge graph makes every blast-radius answer
+            # name a file the user does not maintain, twice.
             prune_source_dirs(dirpath, dirnames)
             for fn in filenames:
                 if fn.endswith(".py"):
                     yield os.path.join(dirpath, fn)
+                elif ts_on and ts_edges.is_ts_source(fn):
+                    yield os.path.join(dirpath, fn)
 
     def _parse_file(self, abspath: str) -> Optional[FileEdges]:
+        """Edges for one file, dispatched by extension. None means COULD NOT PARSE.
+
+        ⛔ None and an empty `FileEdges` are different answers on both paths — *this file did not
+        parse* against *this file has no symbols* — and `_ensure_index` treats None as a coverage
+        gap rather than as an empty file, which is why the distinction has to survive the dispatch.
+        """
+        from . import ts_edges
+        if ts_edges.is_ts_source(abspath):
+            try:
+                with open(abspath, encoding="utf-8", errors="replace") as fh:
+                    return ts_edges.parse_source(fh.read(), abspath)
+            except OSError:
+                return None
         try:
             with open(abspath, encoding="utf-8", errors="replace") as fh:
                 source = fh.read()
@@ -412,7 +488,7 @@ class AstBackend(GraphBackend):
         out: List[Reference] = []
         seen: set = set()
         for rel, fe in self._edges.items():
-            for token, line in fe.imports:
+            for token, line, _kind in fe.imports:
                 if token != target:
                     continue
                 key = (rel, line)

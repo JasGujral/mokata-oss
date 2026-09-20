@@ -190,13 +190,15 @@ def mark_emitted(store: Any, run_id: str, ledger: Any = None) -> None:
         cp = PipelineCheckpoint(store, run_id, ledger=ledger)
         for phase in ("completeness_gate", "emit"):
             cp.mark_passed(phase)
-    except Exception:
+    except Exception as exc:
         # BROAD ON PURPOSE (and matching `phases.py:_mark_gate_passed` exactly): the checkpoint
         # write goes through a caller-supplied store, whose failure modes are not knowable here.
         # The emit itself already succeeded and MUST NOT be failed by its own bookkeeping — but the
         # human is told the checkpoint is gone, so a lost resume is a fact, not a surprise.
+        # ⚠ BROAD IS NOT THE SAME AS BLIND. Catching everything is right; DISCARDING it was not —
+        # `exc` is what tells the reader whether to look at their disk or at mokata (OSS #67).
         from ..session_flow import note_persist_failure
-        note_persist_failure("gate:emit")
+        note_persist_failure("gate:emit", error=exc)
 
 
 def spec_version(store: Any) -> int:
@@ -429,9 +431,9 @@ def note_supersede(ledger: Any, run_id: str, verdict: ReemitVerdict, title: str)
         ledger.record("spec_reemit", run=run_id, title=title,
                       from_version=verdict.from_version, to_version=verdict.version,
                       superseded=verdict.archive)
-    except Exception:                # noqa: BLE001 — the spec is committed; bookkeeping cannot undo it
+    except Exception as exc:         # noqa: BLE001 — the spec is committed; bookkeeping cannot undo it
         from ..session_flow import note_persist_failure
-        note_persist_failure("ledger:spec_reemit")
+        note_persist_failure("ledger:spec_reemit", error=exc)
 
 
 def spec_commit(store: Any, spec: Spec, *, version: int = 0,

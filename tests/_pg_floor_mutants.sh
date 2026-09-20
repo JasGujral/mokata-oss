@@ -37,7 +37,7 @@ T='test_pg_floor_drift.py'
 # `test_mutant_batch_driver.TestTheAccountingCannotDrift`, because "3 of 8 never ran" is only true
 # if 8 is true — a batch that overstates its own list is the silent-truncation shape doc 85 warns
 # about, wearing the costume of an honest abort.
-TOTAL=14
+TOTAL=17
 
 ran=0
 red=0
@@ -184,10 +184,18 @@ mutant "M07 the prefix half of the deny-list is dropped — docs/build/ reds on 
   '    return not any(rel.startswith(prefix) for prefix in HISTORY_PREFIXES)' \
   '    return True' "$T"
 
+# ⚠ RE-ANCHORED at 0.0.20 (G12). `unearned_markers` reuses the same scope guard, so this two-line
+# quotation now occurs TWICE and `mutate.sh` exits 3 on it — aborting the batch and leaving nine
+# mutants ungraded. Anchored on `scan`'s own first line, which is unique. ⭐ The batch sweep flagged
+# it the moment the function landed, which is the entire reason stage 09 built the sweep.
 mutant "M08 scan ignores scope entirely — the deny-list is decorative" "$C" \
-  '        if not in_scope(rel):
+  '    drifted, tags = [], []
+    for rel in sorted(corpus):
+        if not in_scope(rel):
             continue' \
-  '        if False:
+  '    drifted, tags = [], []
+    for rel in sorted(corpus):
+        if False:
             continue' "$T"
 
 # ---------------------------------------------------------------------------------------------
@@ -216,9 +224,13 @@ mutant "M11 an image tag is read as a floor claim — a correct pin becomes a vi
   '_IMAGE_TAG = re.compile(r"\b(?:postgres|pgvector)[:/](?:pgvector:)?(?:pg)?(\d{2})\b", re.I)
 _PATTERNS = _PATTERNS + (_IMAGE_TAG,)' "$T"
 
+# ⚠ RE-ANCHORED at 0.0.20 (G12), same cause: `below_by_design` reads the same detector, so the bare
+# line is ambiguous. The `if` beneath it is what tells the two functions apart.
 mutant "M12 the tag detector stops finding tags — a PG14 image ships unnoticed" "$C" \
-  '        match = _IMAGE_TAG.search(line)' \
-  '        match = None' "$T"
+  '        match = _IMAGE_TAG.search(line)
+        if match is not None and not _marked_below_by_design(lines, n - 1):' \
+  '        match = None
+        if match is not None and not _marked_below_by_design(lines, n - 1):' "$T"
 
 # ---------------------------------------------------------------------------------------------
 # THE THREE-STATE BASIS — the half of this guard that a dev-tree-only run cannot grade at all,
@@ -235,6 +247,27 @@ mutant "M13 ABSENT and INERT collapse into one basis — §7g inside the expiry 
 mutant "M14 every exemption is declared internal — a vanished SHIPPING path is forgiven" "$C" \
   '            if not ships}' \
   '            if ships or not ships}' "$T"
+
+# ==== G12 — the BELOW-BY-DESIGN marker is a guard, so it is graded ============================
+
+mutant "M13 ★★★ THE MARKER EXCUSES EVERYTHING — every below-floor image in the tree goes ungraded,
+       and the file-level deny-list this stage chose a marker to AVOID arrives as a blanket one" "$C" \
+  '    if _BELOW_BY_DESIGN.search(lines[index]):
+        return True' \
+  '    if True:
+        return True' "$T"
+
+mutant "M14 ★★ the marker REACHES FURTHER — two lines up now excuses a tag, so an innocent comment
+       inserted above it silently un-grades a different image" "$C" \
+  '    return index > 0 and bool(_BELOW_BY_DESIGN.search(lines[index - 1]))' \
+  '    return any(bool(_BELOW_BY_DESIGN.search(lines[i])) for i in range(max(0, index - 2), index))' "$T"
+
+mutant "M15 ★★★ the ROT CHECK goes quiet — a marker that stopped excusing a violation stays, and a
+       permanent hole sits in the corpus with a reason attached to nothing" "$C" \
+  '            if major >= floor_major:
+                unearned.append((rel, line_no, major, line))' \
+  '            if False:
+                unearned.append((rel, line_no, major, line))' "$T"
 
 printf '\n'
 printf '================================================================================\n'

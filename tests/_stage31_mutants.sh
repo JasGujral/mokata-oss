@@ -39,12 +39,20 @@
 #     mutant of this code can grade a gap the code does not claim to close.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-M="$ROOT/scripts/mutate.sh"
+M="${MUTATE_SH:-$ROOT/scripts/mutate.sh}"
+# 🔴 TWO ROLES, ONE VARIABLE — SPLIT. `$M` was both *the mutator this driver RUNS* and *the file
+# this driver MUTATES* (it grades `mutate.sh` itself, on a copy). While the mutator was hard-coded
+# the two were the same path and the conflation was invisible. The moment the mutator became a seam
+# — so the batch sweep can run this driver without applying anything — they diverge: the sweep
+# would have copied the STAND-IN and then reported every one of this batch's patterns as stale,
+# because they are quoted from the real `mutate.sh` and none of them occurs in a stub. The subject
+# is a property of the repo; the mutator is a property of the RUN. They get separate names.
+SUBJECT_SRC="$ROOT/scripts/mutate.sh"
 export PYTHON="${PYTHON:-python3}"
 
 WORK="$(mktemp -d)"
 COPY="$WORK/mutate.sh"
-cp "$M" "$COPY"
+cp "$SUBJECT_SRC" "$COPY"
 chmod +x "$COPY"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 export MUTATE_SH_UNDER_TEST="$COPY"

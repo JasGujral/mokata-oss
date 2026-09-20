@@ -77,12 +77,41 @@ MIN_LADDER_RECALL_GAIN = 0.15
 #: fixture is deterministic (`test_db_s8a_fixture` F-1) so these reproduce rather than approximate.
 #: A change here is a change in retrieval quality at scale and must be a deliberate edit with a
 #: reason — never a re-record to make a red test green.
+#: 🔴 RE-RECORDED AT 0.0.20 STAGE 04 — `FTS-NORMALIZE-FLATTENS` IS REPAIRED (FTS5 SELECTS, Jaccard
+#: SCORES). Stage 03 measured it on two independently seeded 100k corpora; `03-ranking-bm25.
+#: findings.md` is the derivation. **EVERY arm moved and none moved DOWN:**
+#:
+#:     arm                 before recall / mrr      stage 04 recall / mrr    Δ
+#:     A:jaccard           0.5000 / 0.8334          0.5000 / 0.8334    unchanged — THE CONTROL
+#:     B:fts               0.4444 / 0.7258          0.5000 / 0.8528    +5.56pp / +12.70pp
+#:     C:+vector           0.4306 / 0.7235          0.5000 / 0.8253    +6.94pp / +10.18pp
+#:     D:+expansion        0.7639 / 0.7235          0.8333 / 0.8253    +6.94pp / +10.18pp
+#:     B+expansion         0.7778 / 0.7258          0.8333 / 0.8528    +5.55pp / +12.70pp
+#:     B+expansion(full)   0.7778 / 0.7258          0.8333 / 0.8667    +5.55pp / +14.09pp
+#:
+#: ⭐ **ARM A IS THE CONTROL AND IT DID NOT MOVE** — the floor never touches FTS, so a change
+#: confined to what it claims must leave it byte-identical, and it does at both scales.
+#: ⭐ **THE DISCLOSED REGRESSION INVERTS:** arm B was −5.56pp / −10.76pp against the floor; it is
+#: now **+0.00pp / +1.94pp**. Every arm gains on both metrics; none loses on either.
+#:
+#: 🔴 A FIRST PASS SCORED WITH RAW JACCARD AND READ BETTER STILL — both expansion arms reached
+#: recall 1.0000. **That was the K1 BOUND FAILING.** `normalize_lexical_scores` maps the tier onto
+#: the `[0,1]` range the fusion weights assume, and K1 is stated against a full match worth exactly
+#: `LEXICAL_WEIGHT`; raw Jaccard never reaches 1.0, so the lexical term shrank and 1-hop neighbours
+#: climbed over direct matches, inflating expansion recall. `test_db_s7b`'s *"can surface, does not
+#: displace"* caught it. ⛔ **Those numbers are void and are recorded here so nobody re-derives
+#: them from the git history and believes them.**
 BASELINE_100K = {
     Q.ARM_JACCARD:       {"recall": 0.5000, "mrr": 0.8334},
-    Q.ARM_FTS:           {"recall": 0.4444, "mrr": 0.7258},
-    Q.ARM_VECTOR:        {"recall": 0.4306, "mrr": 0.7235},
-    Q.ARM_EXPANSION:     {"recall": 0.7639, "mrr": 0.7235},
-    Q.ARM_FTS_EXPANSION: {"recall": 0.7778, "mrr": 0.7258},
+    Q.ARM_FTS:           {"recall": 0.5000, "mrr": 0.8528},
+    Q.ARM_VECTOR:        {"recall": 0.5000, "mrr": 0.8253},
+    Q.ARM_EXPANSION:     {"recall": 0.8333, "mrr": 0.8253},
+    Q.ARM_FTS_EXPANSION: {"recall": 0.8333, "mrr": 0.8528},
+    #: 0.0.20 stage 01 — THE PATH CONTROL, recorded from a real 100k run on 2026-08-25.
+    #: ⭐ **BYTE-IDENTICAL TO `B+expansion` ABOVE, and that identity is the stage's whole result.**
+    #: This arm reads the full active set (1074.0s) where `B+expansion` reads a bounded 50 (2.1s) —
+    #: a 511x cost difference that moves recall and MRR by 0.0000 in both directions.
+    Q.ARM_FTS_EXPANSION_FULL: {"recall": 0.8333, "mrr": 0.8667},
 }
 
 TOL = 0.001
@@ -176,38 +205,153 @@ class QualityAtTheDeclaredScale(unittest.TestCase):
     # asserted so the finding cannot drift silently — NOT because the behaviour is desired. Each
     # names the doc-84 row that owns the fix. When a row is fixed, the pin here INVERTS.
 
-    def test_finding_fts_normalize_flattens_costs_RECALL_at_scale_not_only_ordering(self):
-        """FTS-NORMALIZE-FLATTENS (doc 84) was filed as "an ORDERING defect, invisible to recall@k
-        entirely". True at 5,000, FALSE at 100,000: arm B loses recall against the Jaccard floor,
-        not merely MRR. The row's scope is widened by this measurement."""
+    def test_fts_normalize_flattens_is_REPAIRED_at_scale(self):
+        """🟢 **INVERTED AT STAGE 04, WHICH IS WHAT THE OLD PIN ASKED FOR.**
+
+        It read: *"arm B no longer loses RECALL to the Jaccard floor at 100k — if this is a fix,
+        invert this pin and update FTS-NORMALIZE-FLATTENS"*. It is a fix. The row was filed as *"an
+        ORDERING defect, invisible to recall@k entirely"*, widened at 100k when arm B turned out to
+        lose recall too — and stage 03's repair closes both halves at the scale that showed them.
+
+        ⛔ THE ASSERTION IS "NO LONGER WORSE", NOT "BETTER". Arm B measures `0.5000/0.8528` against
+        the floor's `0.5000/0.8334`, so it IS ahead — but pinning a margin would pin one corpus's
+        luck, and the disclosure only ever claimed a loss."""
         a, b = self.results[Q.ARM_JACCARD], self.results[Q.ARM_FTS]
-        self.assertLess(b.recall_at_k, a.recall_at_k,
-                        "arm B no longer loses RECALL to the Jaccard floor at 100k — if this is a "
-                        "fix, invert this pin and update FTS-NORMALIZE-FLATTENS")
-        self.assertLess(b.mrr_at_k, a.mrr_at_k)
+        self.assertGreaterEqual(b.recall_at_k, a.recall_at_k - TOL,
+                                "arm B lost RECALL to the Jaccard floor again — "
+                                "`FTS-NORMALIZE-FLATTENS` has returned at scale")
+        self.assertGreaterEqual(b.mrr_at_k, a.mrr_at_k - TOL,
+                                "arm B fell back below the Jaccard floor on MRR at scale")
 
-    def test_finding_arm_D_no_longer_lands_on_the_isolation_arm(self):
-        """DB.S8f's closing evidence was that arm D lands EXACTLY on the isolation arm, so the
-        ladder's confound was gone. At 100k they diverge and the embedder arm is WORSE."""
-        d = self.results[Q.ARM_EXPANSION].recall_at_k
-        iso = self.results[Q.ARM_FTS_EXPANSION].recall_at_k
-        self.assertLess(d, iso,
-                        "arm D has caught up with the isolation arm at 100k — the DB.S8f identity "
-                        "would then hold at scale and this finding should be retired")
+    def test_arm_D_lands_on_the_isolation_arm_ON_RECALL_and_diverges_ON_MRR(self):
+        """🟢 **RE-DERIVED AT STAGE 04, AND THE OLD PIN ASKED FOR IT IN THOSE WORDS.**
 
-    def test_finding_the_vector_tier_is_net_negative_on_recall_at_scale(self):
-        """VECTOR-TIER-NOISE was CLOSED at DB.S8f because arm C recovered to parity with arm B at
-        5,000. It does not recover at 100,000 — with `HashingEmbedder`, whose noise floor (0.65)
-        very nearly overlaps its signal band (0.71-0.83), more corpus means more near-signal noise.
+        It asserted arm D loses RECALL to the isolation arm at 100k — DB.S8f's closing evidence
+        having been that they land exactly together — and its message said: *"arm D has caught up
+        with the isolation arm at 100k — the DB.S8f identity would then hold at scale and this
+        finding should be retired"*. **Stage 03's lexical repair is what made it catch up: both
+        measure 0.8333, from 0.7639 against 0.7778.**
 
-        NOTE the scope, because it is what keeps this honest: `memory.embedder` is UNSET on a
-        default install, so the shipped default arm is B+expansion and this measures an OPT-IN
-        embedder — the same distinction DB.S8f drew. The embeddings CI leg is what will let this
-        be re-measured against a REAL embedder (probed floor 0.3067) rather than the hashing one."""
+        ⛔ THE FINDING IS NOT RETIRED WHOLESALE, because the divergence moved metric rather than
+        vanishing: arm D still costs **−2.75pp MRR** against the isolation arm. ⭐ That is the SAME
+        fact as `the_vector_tiers_cost_at_scale_is_MRR_NOW`, seen from the ladder instead of from
+        the rung — B→C and D→(B+expansion) are both the semantic tier — and the two tests agreeing
+        is what says the attribution below is reading one effect rather than two."""
+        d = self.results[Q.ARM_EXPANSION]
+        iso = self.results[Q.ARM_FTS_EXPANSION]
+        self.assertAlmostEqual(d.recall_at_k, iso.recall_at_k, delta=TOL,
+                               msg="arm D and the isolation arm diverged on RECALL again at 100k — "
+                                   "`ARM-D-CONFOUND-BACK`'s original claim is back, and it was "
+                                   "closed on stage 03's repair")
+        self.assertLess(d.mrr_at_k, iso.mrr_at_k,
+                        "the semantic tier stopped costing MRR at 100k as well — that is the whole "
+                        "of the finding gone; retire it and re-measure VECTOR-TIER-NOISE with it")
+
+    def test_the_divergence_is_ATTRIBUTED_and_the_candidate_path_owns_none_of_it(self):
+        """0.0.20 stage 01 — `ARM-D-CONFOUND-BACK`, and the row is REFUTED by the measurement it
+        asked for.
+
+        The row said the ladder "can no longer attribute its own gain", because the B->C rung
+        flips two variables at once: the semantic tier turns ON and the bounded candidate read
+        turns OFF. It proposed watching `D - (B+expansion)` as the tier's standing drag. **That
+        delta spans both variables**, so it could not be the tier's drag on the argument's own
+        terms — and at 100k arm D costs 1187.5s against `B+expansion`'s 2.1s, which is a different
+        read, not a scoring tier's price.
+
+        ⭐ **MEASURED WITH THE PATH CONTROL, 2026-08-25: the candidate path owns 0.0000pp of it.**
+        `B+expansion(full)` reads the full active set with the semantic tier off and lands
+        BYTE-IDENTICALLY on `B+expansion` — 0.7778 / 0.7258, both metrics, at 511x the cost. So
+        the whole -1.389pp is the semantic tier, and `D - (B+expansion)` was the right number all
+        along.
+
+        ⛔ **That is not a vindication of the row and this docstring will not read as one.** The
+        delta was right by coincidence — one of its two terms happens to be zero — and nobody could
+        know which until the control existed. A number that is correct for a reason you cannot
+        state is not a measurement. **This test asserts the decomposition, not the coincidence:**
+        if the path term ever stops being zero, the old delta silently stops meaning what four
+        months of notes say it means, and this reds instead.
+        """
+        d = self.results[Q.ARM_EXPANSION]
+        iso = self.results[Q.ARM_FTS_EXPANSION]
+        full = self.results[Q.ARM_FTS_EXPANSION_FULL]
+        # ⚠ **AMENDED AT STAGE 04: RECALL IS STILL AN IDENTITY; MRR IS NOW A BOUND.** With bm25
+        # ordering the nominees, the bounded and wide paths were byte-identical on both metrics and
+        # stage 01 recorded `0.0000pp`. With Jaccard scoring them, the two paths' slightly different
+        # candidate sets become visible — **0.0000pp recall, 1.39pp MRR at N=100,000** (1.53pp at
+        # N=5,000). ⭐ The old pin did exactly what it was written to do: it red, and its message
+        # said *"quote `D - B+expansion(full)` instead"*. That is what the tier attribution below
+        # now rests on, so the weaker claim costs the argument nothing.
+        self.assertAlmostEqual(
+            0.0, full.recall_at_k - iso.recall_at_k, delta=TOL,
+            msg=("the CANDIDATE PATH started owning RECALL at 100k — a bounded read that finds "
+                 "different ANSWERS is not an optimization, and `D - B+expansion(full)` stops "
+                 "isolating the semantic tier"))
+        path_mrr = abs(full.mrr_at_k - iso.mrr_at_k)
+        self.assertLess(
+            path_mrr, 0.02,
+            f"the CANDIDATE PATH now owns {path_mrr*100:+.3f}pp of MRR at 100k, past the 2.00pp "
+            "bound stage 04 derived from 1.39pp measured. Re-check every ranking claim in the "
+            "notes that rests on `D - (B+expansion)`.")
+        tier = d.recall_at_k - full.recall_at_k
+        self.assertAlmostEqual(d.recall_at_k - iso.recall_at_k, tier + (full.recall_at_k - iso.recall_at_k),
+                               delta=1e-9)
+
+    def test_finding_the_full_scan_costs_511x_and_buys_nothing_MEASURED(self):
+        """⭐ THE STAGE'S OTHER RESULT, and it is about production rather than about the harness.
+
+        `tiered._can_nominate`'s third condition sends any store with an embedder and no vector
+        index to the full active-set scan. Its docstring argues this at length and the argument is
+        sound in principle: nominating lexically and then re-scoring would redefine semantic recall
+        as "re-rank the lexical hits", so an item that is semantically near and lexically zero
+        would stop being findable.
+
+        **On this fixture, at N=100,000, that trade buys 0.0000pp of recall and 0.0000pp of MRR,
+        for 1074.0s against 2.1s.** It is the first number anyone has attached to the decision.
+
+        ⚠ **SCOPE, stated because it is what keeps this honest and it is NOT a small caveat.** This
+        measures `HashingEmbedder`, whose noise floor (0.65) very nearly overlaps its signal band
+        (0.71-0.83) — so on this corpus there may simply BE no semantically-near / lexically-zero
+        item for the wide read to find, in which case the trade is worth nothing HERE and could be
+        worth a great deal against a real embedder. `memory.embedder` is unset on a default
+        install, so the shipped default arm is `B+expansion` and pays none of this.
+        ⛔ **This is a measurement, not a proposal to change `_can_nominate`.** The embeddings CI
+        leg (probed floor 0.3067) is what could turn it into one.
+        """
+        iso = self.results[Q.ARM_FTS_EXPANSION]
+        full = self.results[Q.ARM_FTS_EXPANSION_FULL]
+        # ⚠ AMENDED AT STAGE 04. "Buys nothing" was measured while bm25 ordered the nominees, which
+        # made the two paths byte-identical. With Jaccard scoring them the full scan buys
+        # **0.0000pp of recall and 1.39pp of MRR** for the same 511x. The conclusion is unchanged
+        # and the number is no longer zero, so the number is what is written down.
+        self.assertAlmostEqual(iso.recall_at_k, full.recall_at_k, delta=TOL)
+        self.assertLess(abs(iso.mrr_at_k - full.mrr_at_k), 0.02,
+                        "the full scan started buying real MRR — at that point it is a trade "
+                        "worth re-arguing, not a 511x tax on nothing")
+
+    def test_the_vector_tiers_cost_at_scale_is_MRR_NOW_AND_NO_LONGER_RECALL(self):
+        """⚠ RE-DERIVED AT STAGE 04, AND HALF OF `VECTOR-TIER-NOISE` IS CLOSED BY MEASUREMENT.
+
+        This asserted arm C loses RECALL to arm B at 100k — the row's sharpest claim, and its own
+        message said what to do if it stopped being true: *"VECTOR-TIER-NOISE can stay closed and
+        this finding retired"*. Stage 03's lexical repair made it stop being true: **arm C recovers
+        to recall parity with arm B (0.5000 both, from 0.4306 against 0.4444).**
+
+        ⛔ THE ROW IS NOT RETIRED, because the other half survives and is now the whole of it: arm C
+        still costs **−2.75pp MRR** against a repaired arm B. It is a RANKING cost, not a recall
+        one, and stating it as recall would now be false.
+
+        ⚠ Scope unchanged, and it is what keeps this honest: `memory.embedder` is UNSET on a default
+        install, so this measures an OPT-IN `HashingEmbedder` whose noise floor (0.65) very nearly
+        overlaps its signal band (0.71–0.83). The embeddings CI leg is what re-measures it against a
+        real embedder."""
         b, c = self.results[Q.ARM_FTS], self.results[Q.ARM_VECTOR]
-        self.assertLess(c.recall_at_k, b.recall_at_k,
-                        "arm C no longer costs recall against arm B at 100k — VECTOR-TIER-NOISE "
-                        "can stay closed and this finding retired")
+        self.assertAlmostEqual(c.recall_at_k, b.recall_at_k, delta=TOL,
+                               msg="arm C's RECALL parity with arm B broke again at 100k — that is "
+                                   "`VECTOR-TIER-NOISE`'s original claim returning, and it was "
+                                   "closed on stage 03's repair")
+        self.assertLess(c.mrr_at_k, b.mrr_at_k,
+                        "arm C stopped costing MRR against arm B at 100k — the surviving half of "
+                        "VECTOR-TIER-NOISE is gone too; retire the row")
 
     def test_the_bounds_still_hold_at_scale(self):
         """The four DB.S8f bounds are arithmetic over live constants, so scale cannot break them —

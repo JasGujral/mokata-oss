@@ -45,7 +45,7 @@
 #   * The 3.10 floor. These mutants run on one interpreter; the floor is a separate gate.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-M="$ROOT/scripts/mutate.sh"
+M="${MUTATE_SH:-$ROOT/scripts/mutate.sh}"
 export PYTHON="${PYTHON:-python3}"
 
 S=tests/_corpus_sweep.py            # the classifier — the §7i-graded gate

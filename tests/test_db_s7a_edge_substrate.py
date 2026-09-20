@@ -19,6 +19,7 @@ import sqlite3
 import tempfile
 import unittest
 
+import _store_snapshot
 import _support  # noqa: F401  (puts src/ on the path)
 
 from mokata import teamdb
@@ -32,18 +33,21 @@ def _item(subject="s", value="v", **kw):
 
 
 def _tree_snapshot(root):
-    """Every byte under `root` — the store, its WAL sidecars, the ledger, the manifest.
+    """Whole-tree "nothing was written", from the ONE shared instrument (`_store_snapshot`).
 
     Whole-tree rather than store-only, and borrowed deliberately from DB.S7d's P10 pin: the write
     that breaks a "nothing is written" charter is by definition the one nobody anticipated, so a
-    snapshot scoped to the file the pin's author thought of would miss it. Bytes, not mtimes."""
-    snap = {}
-    for base, _dirs, files in os.walk(root):
-        for name in sorted(files):
-            p = os.path.join(base, name)
-            with open(p, "rb") as fh:
-                snap[_support.posix_rel(p, root)] = fh.read()
-    return snap
+    snapshot scoped to the file the pin's author thought of would miss it. Bytes, not mtimes.
+
+    ⛔ This was a SECOND private copy of si_6's snapshot, byte-identical to it including the wrong
+    assumption underneath — that a clean last-close always unlinks SQLite's `-wal`/`-shm`. It does
+    not; that is a property of the libsqlite3 BUILD (measured at the 0.0.20 cut: removed on Debian
+    3.37, persisted on pyenv py3.13 / sqlite 3.51), and both copies broke on the same machine on
+    the same day because a duplicated instrument duplicates its blind spot too. One instrument now,
+    one place: sidecars leave the byte set and each store contributes an authoritative read of its
+    COMMITTED CONTENT instead — which also catches a write buffered in an un-checkpointed `-wal`,
+    something neither copy could ever do. See `test_a27_the_snapshot_instrument`."""
+    return _store_snapshot.tree_snapshot(root)
 
 
 def _rows(path, sql="SELECT src_id, dst_id, kind, valid_to FROM memory_edges ORDER BY seq"):

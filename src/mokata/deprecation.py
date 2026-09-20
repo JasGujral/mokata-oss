@@ -572,6 +572,60 @@ def warn_removed(channel: str, mokata_dir: str, *, detail: str = "",
     return True
 
 
+def answerable_choices(live: Any, removed: Any = None) -> tuple:
+    """`(choices, metavar)` for an argparse surface a removal record can name.
+
+    ⭐ ONE HELPER, BECAUSE THE TENSION IS GENERAL AND TWO SURFACES HAVE ALREADY HIT IT.
+    `TRANSPORT-KINDS-DEDUPE-REINTRODUCED-THE-TYPO-ANSWER` (doc 84): a single derived list is the
+    right answer for drift, and a REMOVED member has to stay **acceptable** — so it can be answered
+    with its own removal record — while not being **advertised**. That is two lists, and it is
+    exactly what a de-duplication naturally collapses into one.
+
+    ⛔ THE FAILURE IT PREVENTS IS NOT COSMETIC. Deriving `choices` from the live registry alone
+    makes `--to vault` answer *"invalid choice: 'vault'"*, exit 2 — **argparse's word for a TYPO** —
+    on a flag a year of published docs and shipped `--help` text told people to pass. A removed
+    channel is not a typo, and the whole removal-answer lane exists because that distinction is the
+    difference between a user being told what happened and a user being told they cannot spell.
+
+    `choices` accepts live + removed; `metavar` advertises live only. Order is preserved: a caller's
+    registry order is the order a user sees.
+    """
+    live = tuple(live or ())
+    removed = tuple(removed if removed is not None else REMOVED_CHANNELS)
+    # Deduplicated while keeping first-seen order — a name in both registries is a registry defect,
+    # not this helper's business, and the exactness gate one module over is what grades it.
+    seen, choices = set(), []
+    for name in live + removed:
+        if name not in seen:
+            seen.add(name)
+            choices.append(name)
+    return tuple(choices), "{%s}" % ",".join(live)
+
+
+def deprecated_channels_in(chain: Any) -> tuple:
+    """The DEPRECATED channels a supplied provider chain still names, in the chain's own order.
+
+    ⭐ THE FIRST HALF OF THE PIPELINE, WIRED — `WARN-DEPRECATED-HAS-NO-CALLERS` (doc 84).
+    `warn_deprecated` had **zero production call sites**: `vault`'s went with the transport at
+    stage 13 and `neo4j`'s with the backend at stage 14. So the deprecate-then-remove cycle had a
+    working announcer that nothing announced through, and the day somebody added a channel to
+    `CHANNELS` the result would have been **silence** — not a bug anyone could see, because an
+    empty registry and an unwired one produce exactly the same output (§7g).
+
+    ⛔ A guard exercising `warn_deprecated` against a planted channel proves the MECHANISM works and
+    says nothing about whether anything reaches it. This function is the reach, and it is the exact
+    mirror of `removed_channels_in`: pure over a SUPPLIED chain (§7i — the tree ships no manifest
+    naming a deprecated channel, so a version that went and read the repo would pass having graded
+    nothing), same order, same shape.
+
+    ⚠ NO `kind` PARAMETER, and that is not an oversight — `CHANNELS` holds exactly one record type
+    and there is no second one to be confused with. `removed_channels_in` needs `kind` because
+    `REMOVED` grew a second and then a third; if `CHANNELS` ever does, this signature changes with
+    it rather than defaulting."""
+    return tuple(tool for tool in (chain or ()) if isinstance(CHANNELS.get(tool),
+                                                              DeprecationNotice))
+
+
 def removed_channels_in(chain: Any, kind: Any) -> tuple:
     """The removed channels of record type `kind` that a supplied provider chain still names, in
     the chain's own order.

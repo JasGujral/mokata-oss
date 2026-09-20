@@ -63,6 +63,19 @@ class Language:
     _import: str
     # a subtype declaration -> (subtype_name, supertypes_text). Empty tuple => no convention.
     _inherit: Tuple[str, int, int] = ("", 0, 0)   # (pattern, name_group, supers_group)
+    #: Directory names this language's package manager INSTALLS INTO — vendored dependency source
+    #: that must never enter a code-graph corpus. ⛔ It lives HERE, beside the extensions it
+    #: belongs with, rather than as a list inside a walker: the next language brings its own, as
+    #: one line next to its own file types, instead of a second declaration somebody has to
+    #: remember to update. `repo_walk` derives the whole set from this table.
+    #:
+    #: ⚠ POPULATE IT ONLY FOR A DIRECTORY THAT IS *BY DEFINITION* AN INSTALL TARGET. `node_modules`
+    #: qualifies — npm owns the name and nobody hand-authors source there. Go's `vendor/` and
+    #: Rust's `target/` are left EMPTY on purpose: `vendor/` is a real, hand-maintained source
+    #: directory in some repos, and pruning it would silently delete a user's own code from their
+    #: graph, which is the same harm in the other direction. An empty tuple is a decision not to
+    #: guess, not an omission.
+    vendor_dirs: Tuple[str, ...] = ()
     # every defined symbol name in a file's text (def/class/type/...): patterns, name=group 1
     _defs: Tuple[str, ...] = ()
     # a test-function start line -> its name (group "name"); and/or a test attribute line
@@ -239,6 +252,7 @@ JAVASCRIPT = Language(
                 r"|^\s*(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\("),
     _import=r"^\s*(?:import\b|export\b.*\bfrom\b)|require\s*\(",
     _inherit=(r"\bclass\s+(\w+)\s+(?:extends|implements)\s+([\w,\s.<>]+?)\s*\{", 1, 2),
+    vendor_dirs=("node_modules",),
     _defs=(r"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(\w+)",
            r"^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?(?:class|interface)\s+(\w+)",
            r"^\s*(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=",
@@ -339,6 +353,24 @@ for _lang in LANGUAGES.values():
 
 # Every source extension the grep floor walks — the union across all known languages.
 SOURCE_EXTENSIONS: Tuple[str, ...] = tuple(sorted(_BY_EXT))
+
+def vendor_dirs_of(table: Dict[str, Language]) -> frozenset:
+    """The union of every language's install directories, over a SUPPLIED table.
+
+    ⛔ A FUNCTION RATHER THAN A COMPREHENSION, and the reason is that the property was otherwise
+    ungradable. Only `javascript` populates `vendor_dirs` today, so *"the union across the table"*
+    and *"whatever javascript declares"* return the same set — a mutant narrowing the union to one
+    language came back GREEN. Taking the table as an argument lets a test plant a SECOND language
+    and require it to contribute, which is what makes the union a real claim instead of a
+    coincidence of the current data.
+    """
+    return frozenset(name for lang in table.values() for name in lang.vendor_dirs)
+
+
+#: Every package-manager install directory the language table declares — DERIVED, never listed
+#: again. `repo_walk.prune_source_dirs` prunes these, so a new language's vendor directory reaches
+#: every walker in this repo by being declared once beside that language's extensions.
+VENDOR_DIRS: frozenset = vendor_dirs_of(LANGUAGES)
 
 
 def language_for(path: str) -> Language:

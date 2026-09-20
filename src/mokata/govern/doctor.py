@@ -397,6 +397,218 @@ def wiring_drift_findings(surface: Any, home: Any = None) -> List[DoctorFinding]
         f"restart Claude Code")]
 
 
+#: `graph_floor_verdict`'s answers. Four, because "the chain already names it", "it is missing and
+#: it would ANSWER here", "it is missing and it would answer NOTHING here" and "the question could
+#: not be asked" are four different facts about a repo, and a reader that folds the last two into
+#: "no finding" cannot tell a healthy chain from an unreadable one (§7g).
+FLOOR_WIRED = "wired"
+FLOOR_MISSING = "missing"
+FLOOR_NOT_APPLICABLE = "not_applicable"
+FLOOR_UNDECIDABLE = "undecidable"
+
+
+def _embedded_floors_for(need: str) -> tuple:
+    """The catalog providers for `need` that need NO INSTALL — `kind == "builtin"`.
+
+    ⛔ NOT A LIST OF NAMES, AND THAT IS THE POINT. `ast` is the provider this row is about today,
+    but the row is about the CLASS — a chain committed before a floor existed — and the next floor
+    to ship would repeat it silently against a typed name.
+
+    ⭐ ONE PROPERTY, ON PURPOSE, AND THE FIRST CUT HAD TWO. It read `DEFAULT_PROFILE`'s chain for
+    this capability AND filtered that by `kind`. Both are true and the pair is not gradeable:
+    `_a18_graph_floor_mutants.sh` F02 swapped the profile to `full` and came back **GREEN**,
+    because `full` adds only non-builtins and the `kind` filter removes them again. **A property
+    defended twice is a property no single mutation can break, and therefore one no mutant can
+    grade** — the redundancy read as care and functioned as a blind spot. The profile read is gone;
+    `kind` is the whole rule and F02 now mutates it.
+
+    ⚠ AND `kind` IS THE RULE THAT MATCHES THE ROW'S OWN JUSTIFICATION — *"the AST floor, which
+    needs no install and gives real call/import edges, is sitting right there."* It is also what
+    keeps this from NAGGING: without it a user who deliberately unwired `ripgrep` would be told
+    their chain is behind, forever, about a choice they made on purpose. **A builtin is not a
+    choice — it is the thing that was not on offer yet.**
+    """
+    from ..profiles import TOOL_CATALOG
+    return tuple(t for t, entry in sorted(TOOL_CATALOG.items())
+                 if (entry or {}).get("kind") == "builtin"
+                 and (entry or {}).get("provides") == need)
+
+
+def graph_floor_verdict(surface: Any, need: str = "code_graph", detector: Any = None) -> tuple:
+    """`(verdict, missing)` — does this repo's `need` chain predate an embedded floor?
+
+    Returns the providers the DEFAULT profile wires, this repo's chain omits, and that would
+    actually ANSWER here. ⛔ Reporting one that would answer NOTHING is worse than saying nothing:
+    it sends a zero-Python repo to wire a provider whose whole detect strategy is *are there `.py`
+    files*, and the user follows the advice and gets the same grep results.
+    """
+    try:
+        m = surface.manifest
+        if need not in getattr(m, "capabilities", {}):
+            return FLOOR_NOT_APPLICABLE, ()
+        chain = list(m.fallback_order(need))
+    except Exception:                                 # noqa: BLE001 — see the fail-quiet note
+        # An unreadable manifest is NOT "your chain is fine". `diagnose` already reports a broken
+        # manifest as an ERROR through `schema.validate_manifest`, so this returns the state that
+        # says the question was not asked rather than adding a second voice for the same fault.
+        return FLOOR_UNDECIDABLE, ()
+
+    candidates = tuple(t for t in _embedded_floors_for(need) if t not in chain)
+    if not candidates:
+        return FLOOR_WIRED, ()
+
+    from ..detect import Detector
+    from ..profiles import TOOL_CATALOG
+    # ⚠ THE DETECTOR IS ROOTED AT THE SURFACE, NOT AT THE CWD, and it is the difference between
+    # a real answer and a coincidence. `python_files` — the AST floor's whole detect strategy — is
+    # the one root-dependent probe in the catalog, and a doctor run from a parent directory would
+    # otherwise report on whatever Python happened to be under the shell's cwd rather than under
+    # the repo being diagnosed. `Detector` takes the root for exactly this reason (GR.S2).
+    det = detector if detector is not None else Detector(root=getattr(surface, "root", "."))
+    answering = []
+    for tid in candidates:
+        try:
+            if det.is_present(tid, TOOL_CATALOG[tid]):
+                answering.append(tid)
+        except Exception:                             # noqa: BLE001 — see below
+            # ⛔ A FAILED PROBE IS `UNDECIDABLE`, NOT "NOTHING TO REPORT". Skipping the candidate
+            # would make an unaskable question byte-identical to an answered one — the finding
+            # simply would not appear, and the user would read a clean doctor run as *your chain
+            # is fine*. `diagnose` already takes this posture for the rule tiers
+            # (`rules-unverifiable`: *"Could not check" is a finding*), and this follows it.
+            # Broad because `is_present` spans every detect strategy in the catalog: a filesystem
+            # walk, a PATH lookup and an importlib probe, whose failure classes have nothing in
+            # common and none of which may crash a read-only diagnostic.
+            return FLOOR_UNDECIDABLE, candidates
+    if not answering:
+        return FLOOR_NOT_APPLICABLE, candidates
+    return FLOOR_MISSING, tuple(answering)
+
+
+#: `ts_parser_verdict`'s answers. Four, because "there is no TypeScript here", "there is and the
+#: parser is in", "there is and it is NOT" and "the question could not be asked" are four different
+#: facts about a repo (§7g).
+TS_NOT_APPLICABLE = "ts_not_applicable"
+TS_PARSED = "ts_parsed"
+TS_UNPARSED = "ts_unparsed"
+TS_UNDECIDABLE = "ts_undecidable"
+
+#: How many files a repo must carry before this check calls it "a TypeScript repo". ⚠ ONE is
+#: deliberate and it is the low end on purpose: a single `.ts` file whose symbols are missing from
+#: the graph is still a wrong answer, and a threshold picked to avoid seeming noisy would be a
+#: threshold that hides the smallest instance of the defect. What keeps this quiet is that it fires
+#: only when the parser is ABSENT — a repo with the extra installed never sees it.
+TS_MINIMUM_FILES = 1
+
+
+def ts_parser_verdict(root: str, available=None, walker=None) -> tuple:
+    """`(verdict, count)` — does this repo hold TypeScript the graph cannot currently read?
+
+    ⭐ G14 CLAUSE 3, AND THE RULING SAYS THIS IS WHAT MAKES THE RULING ACCEPTABLE. `[graph-ts]` is
+    an optional extra, so the DEFAULT experience on a TypeScript repo is the degraded one — and
+    `JS-TS-GRAPH-FLOOR`'s second complaint is that *"the refusal arrives last rather than first"*:
+    a user completes six phases and is refused at emit. **An extra that announces itself at the
+    first structural question is a choice; an extra nobody hears about until phase seven is the
+    defect the row filed.** doc 105 §9: *"If clause 3 is not built, re-open G14."*
+
+    ⛔ COUNTS THE REPO'S OWN FILES, using the SAME corpus predicate the walker uses, so the check
+    and the thing it describes cannot disagree — and the same `prune_source_dirs` walk, so a repo
+    whose only TypeScript is inside `node_modules` is NOT a TypeScript repo for this purpose.
+    """
+    from ..knowledge import ts_edges
+    from ..repo_walk import prune_source_dirs
+    is_source = walker if walker is not None else ts_edges.is_ts_source
+    try:
+        count = 0
+        for dirpath, dirnames, filenames in os.walk(root):
+            prune_source_dirs(dirpath, dirnames)
+            for name in filenames:
+                if is_source(name):
+                    count += 1
+    except Exception:                                 # noqa: BLE001 — see below
+        # ⛔ An unwalkable tree is UNDECIDABLE, not "no TypeScript here". Reporting the absence of
+        # something you could not look for is the collapse this module refuses everywhere else.
+        return TS_UNDECIDABLE, 0
+    if count < TS_MINIMUM_FILES:
+        return TS_NOT_APPLICABLE, count
+    have = ts_edges.available if available is None else available
+    try:
+        installed = bool(have())
+    except Exception:                                 # noqa: BLE001 — a probe is not a verdict
+        return TS_UNDECIDABLE, count
+    return (TS_PARSED if installed else TS_UNPARSED), count
+
+
+def ts_parser_findings(surface: Any, available=None) -> List[DoctorFinding]:
+    """`JS-TS-GRAPH-FLOOR` clause 3 — say it here, not at emit."""
+    root = getattr(surface, "root", ".")
+    verdict, count = ts_parser_verdict(root, available=available)
+    if verdict == TS_UNDECIDABLE:
+        return [DoctorFinding(
+            "info", "graph-ts-unverifiable",
+            "whether this repo holds TypeScript the code graph cannot read could NOT be "
+            "determined — the tree or the parser probe was unreadable. This check ran and "
+            "answered nothing; it is not a pass.")]
+    if verdict != TS_UNPARSED:
+        return []
+    return [DoctorFinding(
+        "warning", "graph-ts-absent",
+        "this repo holds %d TypeScript file(s) and mokata cannot read them: the code graph is "
+        "answering from the lexical floor for all of them, so `implementers`, `callers` and "
+        "blast radius are incomplete HERE even when they look fine. Nothing is wrong with your "
+        "setup — the parser ships as an opt-in extra so a base install adds no dependency for "
+        "the majority who never open a .ts file. Fix: run `pip install 'mokata[graph-ts]'`, then "
+        "`mokata index`. No configuration and no flag: with it present the files are simply in "
+        "the graph." % (count,))]
+
+
+def graph_floor_findings(surface: Any, need: str = "code_graph",
+                         detector: Any = None) -> List[DoctorFinding]:
+    """`WIRED-GRAPH-CHAIN-PREDATES-THE-AST-PROVIDER` — doctor NOTICES, and PROPOSES.
+
+    A `code_graph` chain committed before the embedded AST provider shipped names external tools
+    and the grep floor, and **nothing re-offers the AST provider to a repo whose manifest was
+    written earlier.** A user whose chain read `['neo4j', 'ripgrep', 'grep']` lost Neo4j at 0.0.18
+    and landed on **grep**, while the AST floor — no install, real call/import edges — sat right
+    there unwired.
+
+    ⭐ THE REMOVAL NOTICE CAN SAY *"the canonical graph already answers here"* AND BE TRUE ABOUT THE
+    PRODUCT AND FALSE ABOUT THAT REPO. That gap — between a correct message and a correct outcome —
+    is the whole row.
+
+    ⛔ A WARNING THAT PROPOSES, NEVER A WRITE. The row was deliberately left unfixed at 0.0.18
+    stage 14 because *"re-writing a user's committed chain is a governed write and a removal stage
+    is the wrong place to introduce one (P2)"*. Doctor is read-only; it names the one command that
+    makes the change through the ordinary human gate, and `mokata reconfigure --add` previews the
+    diff and asks before writing.
+
+    ⚠ THE REMEDY IS VERIFIED BY EXECUTION, not by being spelled correctly — the lesson stage 11b
+    paid for. `mokata reconfigure --add ast` against a chain of `['ripgrep', 'grep']` produces
+    `['ast', 'ripgrep', 'grep']`, front of the chain, and `test_a18_*` runs exactly that.
+    """
+    verdict, missing = graph_floor_verdict(surface, need, detector)
+    if verdict == FLOOR_UNDECIDABLE:
+        # INFO, not warning: nothing is known to be wrong. But a check that could not run must not
+        # look like a check that passed (§7f — a clean result can mean UNGRADABLE).
+        return [DoctorFinding(
+            "info", "graph-floor-unverifiable",
+            "whether capability '%s' is wired to an embedded floor could NOT be determined — the "
+            "manifest or the provider probe was unreadable, so this check ran and answered "
+            "nothing. It is not a pass." % (need,))]
+    if verdict != FLOOR_MISSING:
+        return []
+    names = ", ".join("`%s`" % t for t in missing)
+    return [DoctorFinding(
+        "warning", "graph-floor-unwired",
+        "capability '%s' is wired to a chain that PREDATES %s — a provider mokata now wires by "
+        "default, that needs no install, and that answers on this repo. Your chain still "
+        "resolves; it resolves to a weaker provider than the one sitting here unused. This is "
+        "usually a manifest written before that floor shipped, not a choice. "
+        "Fix: run `mokata reconfigure --add %s` (previews the change and asks before writing) — "
+        "mokata will not edit a chain you committed without being asked."
+        % (need, names, " ".join(missing)))]
+
+
 def wiring_check_lines(root: str = ".", home: Any = None, *,
                        ascii_only: bool = False) -> tuple:
     """`mokata doctor --wiring` — the WIRING-ONLY check, as `(ok, lines)`.
@@ -460,7 +672,30 @@ def render_degrade_report(*, ascii_only: bool = False) -> str:
     lines = [f"{glyph} degraded this session ({len(notices)}) — a capability fell back to a floor:"]
     for notice in notices:
         lines.append(f"  {notice.render(ascii_only=ascii_only)}")
+    lines.extend(_repeat_lines())
     return "\n".join(lines)
+
+
+def _repeat_lines() -> List[str]:
+    """HOW MANY TIMES each checkpoint failed — not how many times it was ANNOUNCED.
+
+    ⛔ THE NOTICE IS ONCE PER MOMENT AND THE FAILURE IS NOT, and until 0.0.20 those two were the
+    same number on every surface mokata has. OSS #68 reports *"session_save was degrading all
+    session"*: one line early, silence after, and a session in which the checkpoint failed a hundred
+    times renders byte-identically to one in which it failed once and recovered — doc 85 §7g, in the
+    report that exists to answer *"what degraded?"*. Suppressing the repeat NOTICE is right; a
+    reader who then asks doctor is asking precisely for the number, and it costs one line.
+
+    Only repeats are listed: a single failure is already fully described by its notice above, and a
+    permanent `x1` on every row is the "0 degrades" noise this block's own docstring refuses."""
+    from ..session_flow import persist_failures
+    repeats = {moment: n for moment, n in persist_failures().items() if n > 1}
+    if not repeats:
+        return []
+    out = ["  and it kept failing after the one notice above:"]
+    for moment, n in sorted(repeats.items()):
+        out.append(f"    checkpoint '{moment}' failed {n} times this session")
+    return out
 
 
 def diagnose(surface: Any) -> DoctorReport:
@@ -545,6 +780,19 @@ def diagnose(surface: Any) -> DoctorReport:
     # widened) since the user's last `mokata setup claude` is silently absent. Warning-level:
     # what IS wired still fires. Same verdict the briefing and the MCP status surface render.
     findings.extend(wiring_drift_findings(surface))
+
+    # 6b-iii-c) WIRED-GRAPH-CHAIN-PREDATES-THE-AST-PROVIDER — a capability chain committed before
+    # an embedded floor shipped goes on resolving, quietly, to a weaker provider than the one
+    # sitting here unused. Nothing else re-offers it: `init` writes a chain once and `--add` is
+    # something a user has to know to run. Warning-level and PROPOSING, never writing — the chain
+    # is a file the user owns (P2), so doctor names the command and the human gate does the rest.
+    findings.extend(graph_floor_findings(surface))
+
+    # 6b-iii-d) JS-TS-GRAPH-FLOOR clause 3 (doc 105 §9/G14) — a repo whose TypeScript the graph
+    # cannot read hears about it HERE, at the first structural question, rather than at emit six
+    # phases later. The ruling that made `[graph-ts]` an extra says in terms that this clause is
+    # what makes that ruling acceptable.
+    findings.extend(ts_parser_findings(surface))
 
     # 6b-iv) SECRET-IGNORE — the active suppression count (and a tampered store as an error), so
     # entropy-layer ignores stay VISIBLE rather than accumulating unseen.

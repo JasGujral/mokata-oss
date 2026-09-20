@@ -93,6 +93,32 @@ def _modules_calling(target: str) -> Set[str]:
     return {mod for mod, tree in _modules() if target in _called_names(tree)}
 
 
+#: The names that REACH the shared y/N gate. ⚠ TWO, NOT ONE, SINCE 0.0.20 (OSS #66).
+#: `prompt.confirmed(assume_yes, ...)` is the one-hop wrapper that replaced the
+#: `args.yes or read_yes_no(...)` expression at five commands — the expression that collapsed
+#: `ConsentDecision` back to a bool and printed "aborted" for a run nobody was asked about. A corpus
+#: derivation keyed on the LEAF name alone stopped seeing those five the moment they started going
+#: through the wrapper, and reported the reader's reach SHRINKING while it in fact grew. Following
+#: the hop is what keeps the pin about the property (which modules can block on a human) rather than
+#: about one spelling of reaching it — this file's own §7j lesson, one indirection along.
+YES_NO_ENTRY_POINTS = ("read_yes_no", "confirmed")
+
+
+def _modules_reaching_yes_no() -> Set[str]:
+    """Every module that can block on the shared y/N gate, by either entry point."""
+    out: Set[str] = set()
+    for name in YES_NO_ENTRY_POINTS:
+        out |= _modules_calling(name)
+    return out - {"prompt"}          # the gate's own module is the definition, not a call site
+
+
+def _functions_reaching_yes_no() -> Set[str]:
+    out: Set[str] = set()
+    for name in YES_NO_ENTRY_POINTS:
+        out |= _functions_calling(name)
+    return out
+
+
 def _functions_calling(target: str) -> Set[str]:
     """`module:function` for every function whose body reaches a call to `target`."""
     found = set()
@@ -272,8 +298,15 @@ class TestTriggerCorpus(unittest.TestCase):
     def test_read_yes_no_call_sites_span_twenty_one_modules_not_ten(self):
         """The measurement that made the corpus pin necessary, kept as a pin so the claim in this
         suite's docstring cannot rot. It asserts a FLOOR and the exact module set, so a deleted
-        call site reds too."""
-        mods = _modules_calling("read_yes_no")
+        call site reds too.
+
+        ⚠ THE SET IS UNCHANGED AT TWENTY-ONE AND THAT IS THE POINT. At 0.0.20 five of these
+        commands stopped writing `args.yes or read_yes_no(...)` and started calling
+        `prompt.confirmed`, so a derivation keyed on the leaf name alone lost four modules and
+        gained `prompt` — a pin reporting that the human gate's reach had SHRUNK, on a change that
+        did not move a single prompt. The corpus follows the one hop (`YES_NO_ENTRY_POINTS`), so
+        the membership below still means *these modules can block on a human*."""
+        mods = _modules_reaching_yes_no()
         self.assertEqual(
             mods,
             {"cli_commands.approve", "cli_commands.core", "cli_commands.docsync",
@@ -449,7 +482,10 @@ class TestSilence(unittest.TestCase):
         """FACT 3, pinned where it actually lives. `--yes` does not silence a notification — it
         removes the WAIT, by short-circuiting before the reader runs. Pinned structurally over the
         real call sites so the claim is about the tree, not about one example."""
-        self.assertIn("cli_commands.approve:cmd_approve", _functions_calling("read_yes_no"),
+        # ⚠ REACHES the gate — `cmd_approve` goes through `prompt.confirmed` since 0.0.20, and a
+        # fixture check keyed on the leaf name alone would fail for the INDIRECTION rather than for
+        # the property (that the approve path really can block on a human).
+        self.assertIn("cli_commands.approve:cmd_approve", _functions_reaching_yes_no(),
                       "fixture check: the approve path must really read a y/N")
 
         spy = _Spy()

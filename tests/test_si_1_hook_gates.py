@@ -52,6 +52,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
+import _support                                                     # noqa: E402
 from mokata import gate_hook as G                                  # noqa: E402
 from mokata import hook_cli                                        # noqa: E402
 from mokata import tdd_state as T                                  # noqa: E402
@@ -363,9 +364,15 @@ class TestOverride(unittest.TestCase):
 
     def test_declining_the_reconfirmation_leaves_the_gate_enforced(self):
         """P14 re-confirmation: without an explicit yes (non-interactive stdin -> No, fail-closed),
-        nothing is written and the gate still enforces."""
+        nothing is written and the gate still enforces.
+
+        ⚠ THE NON-INTERACTIVE STDIN IS THIS TEST'S, NOT THE MACHINE'S (0.0.20 stage 10). The
+        docstring and the comment below both SAID "stdin not a TTY" — and neither made it so. At a
+        real terminal this reached `input()` and waited for a human, which is the one thing a
+        fail-closed gate's test must never depend on. Filed as
+        `SUITE-HANGS-AT-A-TTY-ON-THREE-TESTS`; the double is `_support.NoTtyStdin`."""
         from mokata.cli import main
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory() as d, _support.stdin_is(_support.NoTtyStdin()):
             _repo(d)
             _approve(d), _emit_spec(d)
             rc = main(["gate", "override", G.GATE_TDD, "--reason", "nope",

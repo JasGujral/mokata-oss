@@ -8,7 +8,8 @@ from ._common import (
     __version__,
     build_bootstrap,
     Detector,
-    read_yes_no,
+    confirmed,
+    decline_notice,
     ManifestError,
     TOOL_CATALOG,
     _load_surface,
@@ -222,10 +223,10 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
         return 0
     # pip install — propose `pip install -U mokata`, HUMAN-GATED (never auto-runs).
     print(f"To upgrade: {steps[0]}")
-    if not args.yes:
-        if not read_yes_no(f"run `{steps[0]}` now?", "Run the upgrade?"):
-            print("not run — run it yourself when ready (or re-run with --yes).")
-            return 0
+    decision = confirmed(args.yes, f"run `{steps[0]}` now?", "Run the upgrade?")
+    if not decision:
+        print(f"not run — {decline_notice(decision)}. Run it yourself when ready.")
+        return 0
     run_pip_upgrade()
     print(f"ran: {steps[0]}")
     if getattr(args, "no_refresh", False):

@@ -53,6 +53,10 @@ THE_WORKFLOWS = (
     # A development aid on a deletion clock — see the header of the file itself and doc 84's
     # `WINDOWS-PROBE-IS-A-DEV-AID`. Decide at 0.0.19 (by 2026-09-30) whether it stays.
     "windows-probe.yml",
+    # 0.0.20 stage 10. An opt-in leg, and it is the only job in the tree whose SUBJECT is the
+    # suite's own relationship to a terminal — CI cannot catch that class by running the suite,
+    # because CI is never a TTY and therefore takes the same branch the defective tests take.
+    "tty-sweep.yml",
 )
 
 GOOD_SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1"

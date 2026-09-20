@@ -605,3 +605,85 @@ def sample_manifest_data():
             },
         },
     }
+
+
+# ======================================================================================
+# stdin doubles — the ONE seam a test may drive to choose which consent arm it grades
+# ======================================================================================
+#
+# 🔴 WHY THIS IS SHARED CODE AND NOT A HELPER EACH TEST WRITES.
+#
+# Every consent gate in mokata is fail-closed off a TTY: `prompt.read_yes_no` and
+# `cli_commands/_common._cli_ask` both take the safe default WITHOUT calling `input()` when
+# `stdin.isatty()` is false. That is correct at runtime and a trap in a suite, because it means
+# **the machine decides which arm a test grades**. Off a TTY the test reaches the `NO_TTY` branch
+# and passes; at a real terminal the same test reaches `input()` — and if it also redirected
+# stdout, the prompt is swallowed and the run hangs, silently, until a human types into the void.
+#
+# Measured 2026-08-26 over all 7,616 tests (`tests/_tty_prompt_sweep.py`): three tests were in that
+# state, and one of them had produced a failure that looked for all the world like a regression.
+# Filed as `SUITE-HANGS-AT-A-TTY-ON-THREE-TESTS`.
+#
+# ⭐ `test_a3_decline_strands_at_spec` had the right answer already and had it first: install your
+# own stdin, let the REAL reader read it (doc 85 §7e — drive the boundary, never patch the reader),
+# and the arm you grade is the arm you chose, on every host. These are that file's doubles, moved
+# here so the other three use the same ones rather than three more copies of a non-obvious shape.
+
+
+class NoTtyStdin:
+    """A captured / redirected stdin: not a terminal, and any read raises. This is what an agent
+    harness, a pipe, or `< /dev/null` under capture actually hands the process."""
+
+    def isatty(self):
+        return False
+
+    def readline(self, *a):
+        raise OSError("reading from a non-interactive stdin")
+
+    def read(self, *a):
+        raise OSError("reading from a non-interactive stdin")
+
+    def fileno(self):
+        raise OSError("no fileno")
+
+
+class TtyStdin:
+    """A REAL terminal, as far as every check mokata makes is concerned, handing back a scripted
+    answer. `input()` falls back to `sys.stdin.readline()` because `fileno()` raises, so the answer
+    is read through the same path a human's keystroke takes."""
+
+    def __init__(self, answer="n"):
+        self._lines = [answer if answer.endswith("\n") else answer + "\n"]
+
+    def isatty(self):
+        return True
+
+    def readline(self, *a):
+        return self._lines.pop(0) if self._lines else ""
+
+    def read(self, *a):
+        return "".join(self._lines)
+
+    def fileno(self):
+        raise OSError("no fileno")
+
+
+class stdin_is:
+    """`with stdin_is(TtyStdin("y")):` — swap stdin, always put it back.
+
+    ⛔ Restores in `__exit__` unconditionally: a test that left a double installed would decide the
+    arm for every test after it in the same process, which is the ambient-decides defect this whole
+    block exists to remove, moved one scope over."""
+
+    def __init__(self, fake):
+        self.fake = fake
+
+    def __enter__(self):
+        import sys as _sys
+        self.orig = _sys.stdin
+        _sys.stdin = self.fake
+        return self.fake
+
+    def __exit__(self, *_exc):
+        import sys as _sys
+        _sys.stdin = self.orig

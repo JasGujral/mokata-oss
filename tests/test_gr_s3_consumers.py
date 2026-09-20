@@ -23,6 +23,7 @@ import _support  # noqa: F401  (puts src/ on the path)
 
 from mokata.brainstorm import Approach, BrainstormGateError, BrainstormSession
 from mokata.brainstorm_impact import DesignFitVerdict, compute_impact
+from mokata.govern import graph_required as GR
 from mokata.knowledge.query import QueryResult, Reference
 from mokata.knowledge.query import BASIS_LEXICAL, BASIS_STRUCTURAL
 
@@ -172,12 +173,27 @@ class TestMcpParity(unittest.TestCase):
             self.assertIn("REFUSED", out.get("reason", ""))
 
     def test_spec_emit_proceeds_when_radius_is_healthy(self):
+        """⚠ REWRITTEN AT 0.0.20, AND THE REWRITE IS THE POINT.
+
+        This used to make the radius "healthy" by handing `_session_with_impact` a fake layer
+        that reported `degraded=False`, persisting the session, and expecting the gate to believe
+        it. **That is exactly the hole
+        `GRAPH-REQUIRED-GATE-TURNS-ON-A-BOOLEAN-THE-MODEL-WROTE` describes** — health asserted by
+        whoever built the session rather than measured — and the fix made this test fail, which is
+        the correct outcome and the reason it is being rewritten rather than adjusted.
+
+        Health now means what it always should have: **the repo's own graph answers about the
+        symbol.** So the repo gets a real Python file containing it, and the AST floor — which
+        needs no adoption and answers with evidence — supplies the clean verdict."""
         from mokata.mcp import tools_write
         from mokata.brainstorm import save_brainstorm_progress
         with tempfile.TemporaryDirectory() as root:
             surface = _init(root)
-            layer = _Layer(_TABLE, uses_graph=True, degraded=False)     # a real graph
-            s = _session_with_impact(layer)
+            # A real symbol, with a real caller, in a real file. Nothing is injected.
+            with open(os.path.join(root, "billing.py"), "w", encoding="utf-8") as fh:
+                fh.write("def pay(amount):\n    return amount\n\n\n"
+                         "def charge(order):\n    return pay(order)\n")
+            s = _session_with_impact(_Layer(_TABLE, uses_graph=True, degraded=False))
             s.approve("jas", "a")
             save_brainstorm_progress(s, surface.state)
             out = tools_write.spec_emit(
@@ -185,6 +201,32 @@ class TestMcpParity(unittest.TestCase):
                 criteria=[{"id": "AC1", "text": "charge on submit"}],
                 tests=[{"name": "test_charge", "ac_ids": ["AC1"]}], approach="a")
             self.assertNotEqual(out.get("gate"), "graph-required")       # not refused by GR.S3
+
+    def test_a_session_CLAIMING_health_cannot_buy_it(self):
+        """🔴 THE ROW ITSELF. Same call, same persisted claim of a healthy radius — but the repo
+        holds no such symbol, so mokata's own lens degrades and the gate refuses anyway.
+
+        ⛔ Before 0.0.20 this passed the gate: `session_save` is an MCP tool, the field arrived in
+        its payload, and nothing between the tool and the gate ever computed it. Measured then:
+        omitted → ALLOWED, `False` → ALLOWED."""
+        from mokata.mcp import tools_write
+        from mokata.brainstorm import save_brainstorm_progress
+        with tempfile.TemporaryDirectory() as root:
+            surface = _init(root)          # no billing.py — nothing knows `pay`
+            s = _session_with_impact(_Layer(_TABLE, uses_graph=True, degraded=False))
+            s.approve("jas", "a")
+            save_brainstorm_progress(s, surface.state)
+            out = tools_write.spec_emit(
+                path=root, title="bill users",
+                criteria=[{"id": "AC1", "text": "charge on submit"}],
+                tests=[{"name": "test_charge", "ac_ids": ["AC1"]}], approach="a")
+            self.assertEqual("graph-required", out.get("gate"),
+                             "a persisted claim of a healthy blast radius bought a pass again")
+            self.assertFalse(out.get("reported_degraded"),
+                             "the fixture no longer reproduces the row: the session must CLAIM "
+                             "health for this test to mean anything")
+            self.assertIn("re-ran the lens", out.get("reason", ""),
+                          "the refusal does not say the two readings disagreed")
 
 
 # ================================================================ spec-check refusal
@@ -285,6 +327,41 @@ class TestExitCriterionSweep(unittest.TestCase):
 
 
 # ---------------------------------------------------------------- init helper
+class TheDerivationFailsCLOSED(unittest.TestCase):
+    """§7f — the anti-vacuity controls, and they exist because two mutants proved they were needed.
+
+    `derive_graph_degraded`'s fail-closed branches are unreachable from any real repo: a layer is
+    always buildable (the AST floor needs no adoption) and the lens catches its own query faults.
+    So mutants that turned both branches fail-OPEN **survived** — the clean case had graded the
+    guard away. Each is driven here at the injected boundary, never by patching the reader."""
+
+    def test_a_lens_that_RAISES_refuses(self):
+        def explodes(*_a, **_k):
+            raise RuntimeError("the lens blew up")
+        basis, degraded = GR.derive_graph_degraded(object(), ["pay"], _lens=explodes,
+                                                   _build_layer=lambda _s: object())
+        self.assertEqual(GR.UNDERIVABLE, basis)
+        self.assertTrue(degraded, "a gate that cannot see became a gate that approves")
+
+    def test_NO_LAYER_AT_ALL_refuses_and_says_which_kind_of_closed(self):
+        basis, degraded = GR.derive_graph_degraded(object(), ["pay"],
+                                                   _build_layer=lambda _s: None)
+        self.assertEqual(GR.UNDERIVABLE, basis,
+                         "no layer was reported as a measured degradation — same verdict, but it "
+                         "sends the reader to adopt a graph rather than to fix a broken one")
+        self.assertTrue(degraded)
+
+    def test_a_layer_that_ANSWERS_is_not_refused(self):
+        """The control on both: a derivation that refused unconditionally would satisfy them."""
+        class _Clean:
+            graph_degraded = False
+        basis, degraded = GR.derive_graph_degraded(object(), ["pay"],
+                                                   _lens=lambda *_a, **_k: _Clean(),
+                                                   _build_layer=lambda _s: object())
+        self.assertEqual(GR.DERIVED_CLEAN, basis)
+        self.assertFalse(degraded)
+
+
 def _init(root):
     from mokata.init import init_repo
     from mokata.config import Surface

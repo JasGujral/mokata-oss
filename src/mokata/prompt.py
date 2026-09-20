@@ -89,6 +89,49 @@ def read_yes_no(prompt: str, question: str = "") -> ConsentDecision:
         return ConsentDecision(False, UNREADABLE_STDIN)
 
 
+def confirmed(assume_yes: bool, prompt: str, question: str = "") -> ConsentDecision:
+    """The y/N gate WITH its `--yes` shortcut, as ONE decision object.
+
+    ⛔ IT EXISTS TO KILL `if not (args.yes or read_yes_no(...))`, which four commands wrote and
+    which throws the `basis` away at the exact call sites `ConsentDecision` was built for. A `bool`
+    in that expression cannot say WHICH no it is, so all four printed *"aborted"* — a word that
+    means a human declined — for a run where no human was ever asked.
+
+    ⭐ `--yes` IS AN `ASKED` YES, and that is not a convenience: a person typed the flag, so a human
+    did answer, just earlier and on the command line. Filing it as anything else would put a
+    second, weaker kind of approval into a taxonomy whose whole job is that approvals do not blur.
+    """
+    if assume_yes:
+        return ConsentDecision(True, ASKED)
+    return read_yes_no(prompt, question)
+
+
+def decline_notice(decision: ConsentDecision, *, flag: str = "--yes") -> str:
+    """WHY it was a no, in the words the reader's NEXT MOVE depends on. One sentence, no period.
+
+    ⛔ THE THREE BASES HAVE THREE DIFFERENT NEXT MOVES AND THEY ALL USED TO PRINT "aborted".
+    OSS #66 is one of them from the outside: the user ran `mokata gate override`, got a decline, and
+    had to read `--help` to discover that a flag existed which would have answered it — because the
+    message described an outcome and never the cause. A decline that does not name the one flag that
+    fixes it is a dead end dressed as a decision.
+
+      * ASKED             — settled. A human said no; do NOT suggest a way around their answer.
+      * NO_TTY            — nobody was asked. The flag is the whole remedy and it is named inline.
+      * UNREADABLE_STDIN  — asked, and the stream died first. Nothing was decided by anyone.
+
+    ⚠ `ASKED` deliberately gets NO flag hint. Telling a person who just declined how to re-run the
+    command as approved is not help, it is nagging past a human gate — and P2's whole point is that
+    the gate is the human's, not the caller's.
+    """
+    if decision.basis == NO_TTY:
+        return (f"nobody was asked — stdin is not a terminal, so mokata took the safe default. "
+                f"Re-run with `{flag}` to answer it on the command line")
+    if decision.basis == UNREADABLE_STDIN:
+        return (f"nobody answered — stdin closed while the question was open, so nothing was "
+                f"decided either way. Re-run with `{flag}`, or from a terminal")
+    return "you declined"
+
+
 def _stdin_is_tty() -> bool:
     """True only when stdin is a real interactive terminal. Fail-closed and never raises: a
     missing stdin (None) or an isatty() that itself errors counts as non-interactive."""

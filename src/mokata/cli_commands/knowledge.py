@@ -136,7 +136,7 @@ def cmd_spec_check(args: argparse.Namespace) -> int:
     # scoped ledgered override, and proceeds with the degraded marking intact (P22).
     from ..govern import graph_required as GR
     from ..session import current_run_id
-    from ..prompt import read_yes_no
+    from ..prompt import confirmed, decline_notice
     run_id = current_run_id()
     graph_required = GR.graph_required_enabled(surface)
     if getattr(args, "allow_degraded", False) and graph_required:
@@ -146,8 +146,9 @@ def cmd_spec_check(args: argparse.Namespace) -> int:
                 f"  The regression guard cannot vouch for a clean corpus without a real graph.\n"
                 f"  Scope: THIS session only — a new session enforces again.\n"
                 f"  Reason (recorded to the audit ledger): {reason}")
-        if not (args.yes or read_yes_no(plan, "Accept degraded evidence for this session?")):
-            print("aborted — the graph.required gate stays enforced.")
+        decision = confirmed(args.yes, plan, "Accept degraded evidence for this session?")
+        if not decision:
+            print(f"the graph.required gate stays enforced — {decline_notice(decision)}.")
             return 1
         GR.write_degraded_override(surface, run_id, reason=reason, ledger=ledger)
     graph_overridden = bool(GR.read_degraded_override(surface.root, run_id))

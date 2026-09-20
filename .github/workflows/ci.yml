@@ -51,7 +51,25 @@ jobs:
     #
     # It sits >=15m above every leg that has ever finished and >=10m below the wedge it exists to
     # cut, and it turns a hang from 360 minutes (GitHub's default) into 44.
-    timeout-minutes: 44
+    #
+    # ⛔ 44 WAS DERIVED FROM LEGS THAT RAN AGAINST A STORE THAT WAS NOT DURABLE, and 0.0.20 made it
+    # durable: `PRAGMA synchronous=FULL` is now SET rather than inherited, which buys an fsync per
+    # commit (MEASURED 70x per commit on the dev VM — 0.421ms vs 0.006ms). The 0.0.20 cut's Windows
+    # leg is the first measurement on the other side of that change, and it is decisive:
+    #
+    #     unit-suite STEP alone, windows-latest, 0.0.20:   Ran 7935 tests in 2269.3s = 37m49s
+    #
+    # The slowest FULL job that had ever completed was 29m07s. One step now exceeds it, and the job
+    # also pays install, the dedicated stress step (which re-runs the same storm), integration and
+    # the smoke run — call it ~48m. 1.5 x 48 = 72 -> **70**, keeping this file's own rule (a
+    # ceiling that clears the worst case with room for suite growth) rather than picking a number
+    # that merely clears today.
+    #
+    # ⚠ AND THIS ONE IS HONESTLY WEAKER THAN THE 44 IT REPLACES, which must not be lost: 44 was
+    # 1.5x a leg that had COMPLETED; 70 is 1.5x an ESTIMATE, because no Windows leg has completed
+    # since the pragma landed. It is OWED a re-derivation from the first one that does. The storm
+    # now prints its own wall clock (see MS_S7_BUDGET) precisely so that number arrives.
+    timeout-minutes: 70
     # Every `run:` step uses bash on both OSes — windows-latest defaults to pwsh, which would
     # break the `mktemp -d` / `|| true` POSIX steps. windows-latest ships Git Bash.
     defaults:
@@ -159,16 +177,29 @@ jobs:
         # unit-suite discover below, which also runs it) so that a red says "two windows can corrupt
         # a repo" instead of reddening an opaque 2800-test suite, and so its wall-clock is visible.
         #
-        # Bounded by construction: 2 workers x 2000 seeded ops, ~3s on a dev box. `timeout-minutes`
+        # Bounded by construction: 2 workers x 2000 seeded ops, ~7s on a dev box. `timeout-minutes`
         # is the backstop for the failure this stage most fears — a cross-process DEADLOCK, which
         # would otherwise hang the runner for its full 6h rather than failing.
+        #
+        # ⛔ RAISED FROM 5 AT THE 0.0.20 CUT, AND NOT BECAUSE THE TEST GOT FLAKY. 0.0.20 sets
+        # `PRAGMA synchronous=FULL` explicitly rather than inheriting it from whatever compiled the
+        # local libsqlite3, which buys an fsync per commit — MEASURED at 70x per commit on the dev
+        # VM (0.421 ms vs 0.006 ms). This storm is ~4000 commits and Windows' FlushFileBuffers is
+        # far dearer than a Linux fsync, so the Windows leg spent >180 s here and was killed at 5.
+        # The pragma is a durability fix on human-approved writes and stays; what was calibrated
+        # against a non-durable store is this number. ⭐ The ORDERING is the point: the test's own
+        # `WORKER_REPORT_TIMEOUT_S` (600 s) sits INSIDE this cap, so a deadlock still fails as a
+        # readable unittest error carrying a wall clock, and this only ever catches a run wedged
+        # past that. Both bounds stay far below the 6h runner cap.
+        # ⚠ The Windows cost is still unmeasured — the storm now PRINTS its wall clock, so restate
+        # both numbers from that run rather than from this comment.
         #
         # On windows-latest this is also the first real exercise of oslock's `msvcrt` branch under
         # genuine contention (POSIX takes `fcntl`; the Windows half has only ever been dead code in
         # CI). One jsonschema leg per OS is enough — file locking is orthogonal to jsonschema, and
         # the unit-suite step re-runs it on every leg regardless.
         if: matrix.jsonschema == 'present'
-        timeout-minutes: 5
+        timeout-minutes: 20
         run: python -m unittest discover -s tests -t tests -p "test_ms_s7_stress.py" -v
       - name: Run unit test suite
         # MOKATA_REQUIRE_MCP_SDK carries into the whole suite so the NINE converted MCP gates
