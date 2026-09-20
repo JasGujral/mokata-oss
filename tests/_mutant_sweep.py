@@ -125,8 +125,21 @@ def _stub_wrapper(tmpdir: str, stub: Path) -> str:
     the tests run under -- a sweep that silently used a different python would be measuring a
     different tree's idea of the source."""
     path = os.path.join(tmpdir, "mutate_stub")
+    # ⛔ POSIX-SPELLED AND QUOTED, and both halves are load-bearing. This line is SHELL SOURCE, and
+    # on Windows `sys.executable` is `C:\\hostedtoolcache\\...\\python.exe`: interpolated raw into
+    # `/bin/sh`, every backslash is an ESCAPE, so the shell reads
+    # the drive letter followed by every segment RUN TOGETHER — the separators are gone, not
+    # escaped — so it cannot find that word, and the driver exits
+    # **127**. Every driver then returns 127, the sweep records nothing, and `test_a9` reports
+    # "0 mutants were swept" — a corpus that reaches nothing says "no stale patterns" for the same
+    # reason a working one does (§7f, arriving through a path separator). MEASURED at the 0.0.20
+    # cut: three Windows legs, `('_a11_deprecation_arm_mutants.sh', 8, 0, …, 127)`, and the rc is
+    # what named the cause after a line-ending theory had been reproduced and wrongly believed.
+    # The quotes are for the spaces Windows paths carry (`C:/Program Files/…`); `as_posix` is for
+    # the separator. Neither alone is enough.
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write("#!/bin/sh\nexec %s %s \"$@\"\n" % (sys.executable, stub))
+        fh.write("#!/bin/sh\nexec '%s' '%s' \"$@\"\n"
+                 % (_support.as_posix(sys.executable), _support.as_posix(str(stub))))
     os.chmod(path, 0o755)
     return path
 

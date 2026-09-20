@@ -328,3 +328,68 @@ class TheSweepDoesNotTakeTheStubsWordForIt(unittest.TestCase):
                 verify_records(results),
                 "a stub that reported `applies` for a string no file contains was believed — the "
                 "second count is not actually independent")
+
+
+class TheSeamIsShellSourceAndIsSpelledForAShell(unittest.TestCase):
+    """⛔ THE 0.0.20 WINDOWS RED, AND THE REASON IT LOOKED LIKE NOTHING.
+
+    `_stub_wrapper` writes a `/bin/sh` script that execs this interpreter. That file is SHELL
+    SOURCE, and on Windows `sys.executable` is `C:\\hostedtoolcache\\...\\python.exe` — interpolated
+    raw, every backslash is an escape, the shell reads `C:hostedtoolcachewindows...`, and the
+    driver exits **127**. Every driver returns 127, the sweep records nothing, and the suite above
+    reports *"0 mutants were swept"* — which is §7f arriving through a path separator: a corpus
+    that reaches nothing says *no stale patterns* for the same reason a working one does.
+
+    ⭐ DRIVEN ON POSIX, because the platform that breaks is the one nobody here runs. `as_posix`
+    takes `sep` precisely so its Windows branch executes where somebody is looking (§7i), and the
+    assertion is made with `shlex`, which MODELS the shell's own word splitting rather than
+    grepping for a character — the question is not "is there a backslash" but "will the shell read
+    this as ONE word".
+    """
+
+    WINDOWS_EXE = r"C:\Program Files\Python310\python.exe"
+    WINDOWS_STUB = r"C:\a\mokata-oss\tests\_mutant_pattern_stub.py"
+
+    def _seam_line(self, exe, stub, sep):
+        return "exec '%s' '%s' \"$@\"" % (_support.as_posix(exe, sep=sep),
+                                          _support.as_posix(stub, sep=sep))
+
+    def test_a_windows_spelled_seam_is_ONE_word_per_path_to_a_shell(self):
+        import shlex
+        line = self._seam_line(self.WINDOWS_EXE, self.WINDOWS_STUB, "\\")
+        words = shlex.split(line)
+        self.assertEqual(
+            ["exec", "C:/Program Files/Python310/python.exe",
+             "C:/a/mokata-oss/tests/_mutant_pattern_stub.py", "$@"], words,
+            "a shell does not read this seam as three words — the driver will exit 127 and the "
+            "sweep will report an empty corpus as if nothing were stale:\n%s" % line)
+
+    def test_the_UNQUOTED_RAW_form_is_what_it_used_to_be_and_is_still_broken(self):
+        """ANTI-VACUITY. The assertion above is only evidence if the form it replaced FAILS it —
+        otherwise it would pass against the very line that reded three Windows legs."""
+        import shlex
+        broken = 'exec %s %s "$@"' % (self.WINDOWS_EXE, self.WINDOWS_STUB)
+        words = shlex.split(broken)
+        self.assertNotIn("C:/Program Files/Python310/python.exe", words)
+        self.assertIn("C:Program", words[1],
+                      "the old form no longer mangles the path, so this suite has stopped "
+                      "grading the defect it was written for: %r" % (words,))
+
+    def test_the_real_seam_writer_produces_a_shell_safe_line_here_too(self):
+        """And the function itself, on this host, with a path that carries a SPACE — the other
+        half a bare `as_posix` would not have fixed."""
+        import shlex
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            spaced = Path(d) / "a dir with spaces"
+            spaced.mkdir()
+            stub = spaced / "stub.py"
+            stub.write_text("", encoding="utf-8")
+            wrapper = MS._stub_wrapper(d, stub)
+            with open(wrapper, encoding="utf-8") as fh:
+                line = [ln for ln in fh.read().splitlines() if ln.startswith("exec ")][0]
+            words = shlex.split(line)
+            self.assertEqual(4, len(words), "seam is not exec + exe + stub + $@: %r" % (words,))
+            self.assertEqual(str(stub), words[2].replace("/", os.sep) if os.sep != "/" else words[2],
+                             "the stub path did not survive quoting: %r" % (words,))

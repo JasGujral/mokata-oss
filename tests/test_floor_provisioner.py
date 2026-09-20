@@ -88,6 +88,19 @@ EXIT_NOT_PROVISIONED = 5
 BASH = _support.BASH
 NO_BASH = ("no bash on PATH — the provisioner is a shell script and cannot be RUN here. This is "
            "an un-run check, not a passing one (doc 85 §7g).")
+NO_ROUTE_FIXTURE_UNBUILDABLE = (
+    "the no-route fixture is built from what PYTHON's `shutil.which` can see, and the script is "
+    "run by BASH — on Windows those disagree. Git Bash keeps `grep`/`head` in its own `usr/bin`, "
+    "which is not on the Windows PATH, so the utilities the script needs are never linked into "
+    "the fixture and `floor-python.sh` reports 'pyproject.toml declares no `requires-python`' "
+    "about a pyproject.toml that declares one. ⚠ THIS IS A SKIP AND NOT A FIX, and it is a skip "
+    "because the repair is to resolve the tokens THROUGH BASH (its own PATH, its own `cygpath`), "
+    "which is Windows-only code that cannot be driven from any machine this project runs — "
+    "writing it untested at a release cut is how the 0.0.20 line-ending theory happened. The "
+    "property is graded on every POSIX leg; the fixture is owed a bash-resolved build. See "
+    "doc 84 NO-ROUTE-FIXTURE-ASKS-PYTHON-WHERE-BASH-WILL-LOOK."
+)
+
 NOT_POSIX = (NO_BASH + " (or: the synthetic-venv shim below is a POSIX construct — a `bin/python` "
              "shell script is not how a venv presents an interpreter on Windows.)")
 
@@ -279,6 +292,7 @@ class TheFloorIsDerivedFromTheManifest(unittest.TestCase):
                           "the %s route reuses whatever is already at the venv path: %s"
                           % (prefix, line))
 
+    @unittest.skipUnless(os.name == "posix", NO_ROUTE_FIXTURE_UNBUILDABLE)
     def test_a_dry_run_with_NO_ROUTE_is_not_a_green(self):
         """★ THE §7g HALF OF THE SAME DEFECT, and the one that made it invisible. `--dry-run` used
         to print `<NO ROUTE>` and exit 0: the same machine and the same fact reported as a failure
