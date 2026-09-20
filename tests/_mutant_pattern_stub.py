@@ -53,6 +53,31 @@ import json
 import os
 import sys
 
+# ⛔ THE DRIVER↔STUB CHANNEL IS UTF-8, DECLARED HERE AND DECODED AS UTF-8 BY `_mutant_sweep`.
+# `scripts/mutate.sh` — the thing this file stands in for — is bash `printf`: it hands the label's
+# bytes to the pipe untouched and cannot fail on any console codepage. Python ENCODES instead, and
+# on a GitHub Windows runner `sys.stdout` comes up **cp1252**, where a label carrying `★` (U+2605)
+# or `≥` (U+2265) raises `UnicodeEncodeError` — AFTER the record has been written — so the driver
+# reads a nonzero exit, aborts its batch, and every mutant after that one is never graded. The
+# sweep then reports a corpus that reached almost nothing, which says "no stale patterns" for the
+# same reason a working one does (§7f).
+#
+# MEASURED at the 0.0.20 cut: `_a11 swept 1`, `_pg_floor swept 2`, `_stage28 swept 5` on the
+# Windows legs of run 35484977365 — and the SAME THREE NUMBERS on Linux with
+# `PYTHONIOENCODING=cp1252`, which is what named the cause rather than reproducing a symptom.
+#
+# `src/mokata/__init__._force_utf8_io` already does exactly this for the product; this stub never
+# imports mokata, which is precisely why it was the one thing left speaking the console codepage.
+# UNCONDITIONAL, unlike the product's `os.name != "nt"` early return: the guard that keeps this
+# fixed runs on Linux, and a repair that is a no-op there would be graded by nobody (§7i).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError, OSError):
+        # A caller that handed us a replaced, detached or closed stream owns that decision; the
+        # verdict line is cosmetic to the driver, which reads only the leading RED/GREEN word.
+        pass
+
 #: The one status a real `mutate.sh` returns when the pattern occurred zero times or twice. Named
 #: rather than typed at the comparison, because this file's whole subject is that number.
 MUTATE_EXIT_PATTERN_NOT_APPLIED = 3

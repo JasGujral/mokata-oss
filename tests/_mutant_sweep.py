@@ -174,8 +174,16 @@ def run_sweep(root: Path | None = None, drivers=None, timeout: int = 120,
                 # gate and WAIT — the shape that wedged a Windows leg for 54 minutes, and the same
                 # shape stage 10 measured three tests into this same release. A sweep that can
                 # block is a gate nobody runs.
+                # ⛔ `encoding="utf-8"`, NOT `text=True`. `text=True` decodes with the
+                # LOCALE encoding, which on a Windows runner is cp1252 — so the far end of this
+                # pipe would be read as whatever codepage the machine happened to boot with. The
+                # stub declares UTF-8 on its side (see its header, and the three swept counts this
+                # reproduced); this is the same declaration on the reading side. `errors="replace"`
+                # because a driver's stdout is DIAGNOSTIC text: it must never be able to turn a
+                # graded batch into a decode traceback in the sweep itself.
                 proc = subprocess.run(_support.bash_argv(str(driver)), cwd=str(root),
-                                      env=env, capture_output=True, text=True,
+                                      env=env, capture_output=True,
+                                      encoding="utf-8", errors="replace",
                                       stdin=subprocess.DEVNULL, timeout=timeout)
                 rc, out = proc.returncode, proc.stdout + proc.stderr
             except subprocess.TimeoutExpired as exc:

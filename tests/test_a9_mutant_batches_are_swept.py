@@ -183,10 +183,20 @@ class TheBatchesStillAddressThisTree(unittest.TestCase):
         gaps = [(name, declared, swept, rc)
                 for name, declared, swept, rc in reconcile(_SWEEP)
                 if declared is not None and declared != swept and name not in subject_absent]
+        # ⛔ THE DRIVER'S OWN LAST WORDS GO IN THE MESSAGE. Twice in this release a Windows leg
+        # reported this table and nothing else, and the cause was in the aborting driver's stderr
+        # both times (`exec: ...: not found`, then `UnicodeEncodeError`). A table of counts names
+        # WHICH driver stopped and never WHY, so each red cost a full round trip to a machine
+        # nobody here owns. `maxDiff` is lifted for the same reason: unittest elides the payload
+        # exactly when the payload is the finding.
+        self.maxDiff = None
+        tails = {r.driver: [ln for ln in (r.stdout or "").splitlines() if ln.strip()][-3:]
+                 for r in _SWEEP}
         detail = "\n".join(
-            "  %-46s declared=%-4s swept=%-4d rc=%s%s"
+            "  %-46s declared=%-4s swept=%-4d rc=%s%s\n%s"
             % (n, d, s, rc, "   (rc 75 = the driver's own green-baseline step refused)"
-               if rc == 75 else "")
+               if rc == 75 else "",
+               "\n".join("        | " + ln[:160] for ln in tails.get(n, [])) or "        | <no output>")
             for n, d, s, rc in gaps)
         self.assertEqual([], gaps,
                          "%d driver(s) never reached the end of their own mutant list, so those "
@@ -393,3 +403,104 @@ class TheSeamIsShellSourceAndIsSpelledForAShell(unittest.TestCase):
             self.assertEqual(4, len(words), "seam is not exec + exe + stub + $@: %r" % (words,))
             self.assertEqual(str(stub), words[2].replace("/", os.sep) if os.sep != "/" else words[2],
                              "the stub path did not survive quoting: %r" % (words,))
+
+
+class TheSeamSurvivesALegacyConsoleCodepage(unittest.TestCase):
+    """⭐ THE SECOND WINDOWS SEAM, and the one that only a HOSTILE ARRANGEMENT can grade.
+
+    The first was the seam's SPELLING (rc 127, fixed at 2e5fb9b). This is its ENCODING. Every
+    label in this tree carries `★`, `⛔`, `—`, `≥`; the stub PRINTS the label; and a GitHub Windows
+    runner hands Python a **cp1252** stdout, where `★` cannot be encoded at all. The stub then dies
+    at exit 1 *after* writing its record, the driver aborts the batch, and everything after that
+    mutant goes ungraded — a corpus that reaches almost nothing reports "no stale patterns" for the
+    same reason a working one does (§7f).
+
+    MEASURED, and this is what separates it from a reproduction: three Windows legs of run
+    35484977365 gave `_a11 swept 1`, `_pg_floor swept 2`, `_stage28 swept 5`, and Linux with
+    `PYTHONIOENCODING=cp1252` gave THE SAME THREE NUMBERS. A reproduction proves a mechanism is
+    sufficient; three matching non-trivial counts is what makes it the one that fired.
+
+    ⛔ These tests must keep running on POSIX. The defect is invisible there by default, so a
+    `skipUnless(win)` would move the only guard onto the one platform nobody develops on."""
+
+    STAR_LABEL = "K01 ★★★ a label of the shape every driver in this tree writes"
+
+    def _stub_argv(self, target):
+        return [self.STAR_LABEL, target, "old text", "new text", "test_pattern.py"]
+
+    def test_the_arrangement_really_is_hostile(self):
+        """FIXTURE CHECK. If cp1252 stdout did not actually refuse this label on THIS host, every
+        assertion below would pass by describing a machine instead of the seam."""
+        import subprocess
+        import sys
+        proc = subprocess.run([sys.executable, "-c", "print('\\u2605')"],
+                              capture_output=True, stdin=subprocess.DEVNULL,
+                              env=dict(os.environ, PYTHONIOENCODING="cp1252"))
+        self.assertNotEqual(0, proc.returncode,
+                            "cp1252 stdout accepted U+2605 here — this suite grades nothing")
+        self.assertIn(b"UnicodeEncodeError", proc.stderr)
+
+    def test_the_stub_still_reports_a_verdict_on_a_cp1252_stdout(self):
+        import json
+        import subprocess
+        import sys
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            target = os.path.join(d, "subject.txt")
+            with open(target, "w", encoding="utf-8") as fh:
+                fh.write("old text\n")
+            log = os.path.join(d, "sweep.jsonl")
+            stub = Path(MS.repo_root()) / "tests" / MS.STUB
+            proc = subprocess.run([sys.executable, str(stub)] + self._stub_argv(target),
+                                  capture_output=True, stdin=subprocess.DEVNULL,
+                                  env=dict(os.environ, PYTHONIOENCODING="cp1252",
+                                           MUTANT_SWEEP_LOG=log))
+            self.assertEqual(0, proc.returncode,
+                             "the stub died on its own label — every mutant after it in the "
+                             "driver's list is now ungraded: %s"
+                             % proc.stderr.decode("utf-8", "replace")[-400:])
+            self.assertTrue(proc.stdout.decode("utf-8").startswith("RED"),
+                            "the driver reads the leading verdict word and found none")
+            with open(log, encoding="utf-8") as fh:
+                records = [json.loads(line) for line in fh if line.strip()]
+            self.assertEqual(1, len(records))
+            self.assertTrue(records[0]["applies"])
+
+    def test_a_driver_reaches_the_end_of_its_list_on_a_cp1252_stdout(self):
+        """The whole seam, end to end: bash -> wrapper -> stub -> log -> the sweep's own decode.
+
+        A SYNTHETIC driver, not one of the tree's, so this grades the SEAM and not whichever batch
+        happens to be first in a listing — and so it grades identically on the mirror, whose driver
+        set is a subset of this one's."""
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            target = os.path.join(d, "subject.txt")
+            with open(target, "w", encoding="utf-8") as fh:
+                fh.write("old text\n")
+            driver = Path(d) / "_synthetic_codepage_mutants.sh"
+            driver.write_text(
+                '#!/usr/bin/env bash\n'
+                'set -uo pipefail\n'
+                'TOTAL=3\n'
+                'M="${MUTATE_SH:?}"\n'
+                'for n in 1 2 3; do\n'
+                '  out="$("$M" "K0$n ★★★ synthetic" "%s" "old text" "new text" "t.py")" '
+                '|| exit $?\n'
+                '  case "$out" in RED*) ;; *) exit 70 ;; esac\n'
+                'done\n' % target,
+                encoding="utf-8")
+            driver.chmod(0o755)
+            with mock.patch.dict(os.environ, {"PYTHONIOENCODING": "cp1252"}):
+                results = MS.run_sweep(drivers=[driver], timeout=120)
+            self.assertEqual(1, len(results))
+            result = results[0]
+            self.assertEqual(0, result.returncode,
+                             "the driver aborted mid-list: %s" % result.stdout[-400:])
+            self.assertEqual(3, len(result.records),
+                             "%d of 3 mutants reached the stub — the batch was truncated by the "
+                             "console codepage, which is exactly the shape that makes a sweep "
+                             "report 'no stale patterns' while checking almost nothing"
+                             % len(result.records))
