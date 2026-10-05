@@ -71,6 +71,76 @@ class AffectedDecision:
                    matched=list(d.get("matched", [])))
 
 
+# ==================================================================================================
+# 🔴 Fix D (0.0.21 stage 14) — WHY the blast radius degraded, as a vocabulary rather than a bool.
+#
+# `graph_degraded` is ONE bool standing for FOUR different situations, and the `graph.required` gate
+# renders the same sentence for all of them: *"Adopt a real code graph — `mokata graph adopt`."*
+# For two of the four that advice is simply WRONG, which is the reported symptom wearing a
+# different hat: the user is told to adopt a graph they already adopted.
+#
+#   * the chain is LEXICAL          -> adopt a graph. (today's message, correct here)
+#   * the graph is adopted and FAILED, and the floor answered structurally
+#                                   -> `mokata doctor` / re-adopt. Adopting again fixes nothing.
+#   * the floor answered and found NOTHING
+#                                   -> neither adopting nor doctoring helps; check the target name.
+#   * mokata could not LOOK (no layer)
+#                                   -> already separated one level up as `UNDERIVABLE`.
+#
+# ⛔ THE VERDICT IS DELIBERATELY UNCHANGED BY THIS. Which of these four `graph.required` should
+# refuse is a PRODUCT decision with a live user-visible consequence, and §7h says a pin can encode a
+# false premise — including a pin I move on my own. This is the SEAM: the reason is derived, carried
+# and rendered, and every existing refusal still refuses. Jas rules on the UX; the machinery to
+# implement any of the three options is in place either way.
+DEGRADE_NO_LAYER = "no-layer"                 # mokata could not look at all
+DEGRADE_QUERY_FAULT = "query-fault"           # a structural query raised — the answer was withheld
+DEGRADE_CHAIN_IS_LEXICAL = "chain-lexical"    # no structural backend in the chain to begin with
+DEGRADE_GRAPH_FAILED = "graph-failed"         # a graph IS adopted; this answer fell to the floor
+DEGRADE_FLOOR_FOUND_NOTHING = "floor-empty"   # the floor answered, and found nothing either way
+#: 🔴 REVIEW FINDING 3-1 — a graph IS ADOPTED and its tool is not LIVE. `uses_graph` answers
+#: availability (`select_backends`: *"an absent tool never reaches here — it resolves to grep"*), so
+#: the most common broken adoption used to read as `chain-lexical` and send the user to adopt a graph
+#: they already had. Adoption and availability are two facts (§7g) and the first was a one-line
+#: durable read nobody asked. This is in the REPAIR family: a pinned tool that will not launch is a
+#: broken install, not a missing one.
+DEGRADE_GRAPH_UNAVAILABLE = "graph-unavailable"
+
+
+def _pinned_graph_tool(layer: Any) -> Optional[str]:
+    """The graph tool this layer's repo has ADOPTED, or None. Never raises (REVIEW FINDING 3-1).
+
+    ⚠ Read off the LAYER, by the same duck-typing rule as `uses_graph`: `assess_impacts` declares the
+    layer duck-typed on `.blast_radius` alone, so a layer that cannot answer this is simply one that
+    did not say, and the answer is None — *"not adopted"*. That direction is deliberate and it is the
+    same argument `_reads_as_a_graph` makes: `adopt` is harmless advice for a repo that does have a
+    graph, while `repair` sends a repo that does not to fix nothing."""
+    if layer is None:
+        return None
+    try:
+        tool = getattr(layer, "pinned_graph_tool", None)
+        return str(tool) if tool else None
+    except Exception:  # noqa: BLE001 — a layer that cannot say is a layer that did not say
+        return None
+
+
+def _reads_as_a_graph(layer: Any) -> bool:
+    """Does this layer present a STRUCTURAL backend? One reading, one default (REVIEW FINDING B-F4).
+
+    ⛔ The default is FALSE — *"no graph unless it says so"* — and that direction is the deliberate
+    one: `chain-lexical` sends the user to `mokata graph adopt`, which is harmless advice for a repo
+    that turns out to have a graph, while `graph-failed` sends them to `mokata doctor` for a graph
+    that may not exist. Between two wrong sentences, prefer the one that cannot send someone to
+    repair nothing. A property that RAISES is not a graph either, and is not an exception the lens
+    should propagate: before this, a raising `uses_graph` was read twice and answered differently
+    each time."""
+    if layer is None:
+        return False
+    try:
+        return bool(getattr(layer, "uses_graph", False))
+    except Exception:  # noqa: BLE001 — a layer that cannot say is a layer that did not say
+        return False
+
+
 @dataclass
 class ApproachImpact:
     """The Lens-1 blast-radius report for ONE approach — structured + comparable. `degraded` marks
@@ -99,6 +169,16 @@ class ApproachImpact:
     # (`ast_backend._holds_definition`), which is why this OR is unchanged and all three GR.S3
     # consumers inherit it — none of them carries its own copy of the rule.
     graph_degraded: bool = False
+    # 🔴 Fix D — WHICH of the situations above produced `graph_degraded`, in the order encountered.
+    #
+    # ⛔ DELIBERATELY ABSENT FROM `to_dict`/`from_dict`, AND THAT IS THE POINT, not an oversight.
+    # `graph_degraded` IS on the wire, and the defect recorded twenty lines above is exactly what
+    # that cost: `session_save` takes the whole brainstorm as a dict, so the gate's central input
+    # was a bool the MODEL typed. A reason that can be typed is worth less than no reason at all —
+    # it would let a model explain away its own refusal. This is computed from the layer and the
+    # queries, by whoever runs them, and there is no path by which a dict can supply it. A guard
+    # test asserts it stays off the wire.
+    graph_degrade_reasons: tuple = ()
 
     @property
     def file_count(self) -> int:
@@ -176,13 +256,37 @@ def compute_impact(approach: str, targets: Sequence[str], *, layer: Any = None,
     # Degraded = no layer at all, OR the layer is the grep floor (no real graph). Either way the
     # about_code intersection + any grep hits STILL score — degradation lowers confidence, not the
     # ability to compare (doc 63 §2). A layer without `uses_graph` is assumed a real graph.
-    degraded = layer is None or (getattr(layer, "uses_graph", True) is False)
+    # 🔴 REVIEW FINDING B-F4 — ONE reading of `uses_graph`, not two with OPPOSITE defaults. This
+    # line defaulted to True ("a layer without `uses_graph` is assumed a real graph") while the
+    # reason derivation below defaulted to False, so the SAME object was simultaneously "a real
+    # graph" for the display caveat and "no graph is wired" for the advice (§7g). `assess_impacts`
+    # declares the layer duck-typed on `.blast_radius` alone, so an attribute-less layer is a
+    # SUPPORTED input, not a test artefact. A property that RAISES is also read once here rather
+    # than twice with two answers.
+    chain_has_a_graph = _reads_as_a_graph(layer)
+    # 🔴 REVIEW FINDING 3-1 — ADOPTION is a separate fact from AVAILABILITY, and the advice turns on
+    # it. A pinned tool that is not live is a BROKEN install; `chain_has_a_graph` cannot see the
+    # difference because an absent tool never reaches the chain at all.
+    pinned_tool = _pinned_graph_tool(layer)
+    degraded = layer is None or not chain_has_a_graph
     # GR.S3 — the QUERY-LEVEL floor signal: True only when a structural answer was ATTEMPTED and
     # fell to the lexical grep floor (no layer, a failed query, or `qr.degraded`). The AST floor
     # answering WITH evidence does NOT set it (its query is `degraded=False`), so AST-with-evidence
     # is not refused. An approach that named NO targets has no blast radius to refuse (nothing was
     # queried) — it is not "degraded", just empty; so the signal starts False when `tgts` is empty.
     graph_degraded = bool(tgts) and layer is None
+    # Fix D — the reasons, in encounter order, deduped. `chain-lexical` vs `graph-failed` is read
+    # off the LAYER (does a structural backend exist at all?) rather than off the query result,
+    # because `qr.degraded` is True for both and `demote_to_floor` sets the same basis either way.
+    reasons: List[str] = []
+    empty_targets = 0          # 4-2 — counted per target, decided for the APPROACH after the loop
+
+    def _reason(r: str) -> None:
+        if r not in reasons:
+            reasons.append(r)
+
+    if bool(tgts) and layer is None:
+        _reason(DEGRADE_NO_LAYER)
     touched_syms = set(tgts)
     touched_files: set = set()
     ref_keys: set = set()
@@ -195,10 +299,43 @@ def compute_impact(approach: str, targets: Sequence[str], *, layer: Any = None,
             except Exception:
                 degraded = True                       # a failing query → degrade, keep scoring
                 graph_degraded = True                 # the structural answer was withheld
+                # 🔴 REVIEW FINDING B-F2 — `chain_has_a_graph` was computed three lines up and then
+                # NOT consulted here, so a floor-only repo whose primary raised (production shape:
+                # `select_backends` leaves `fallback=None` when the floor IS primary, and `_run` then
+                # re-raises) recorded `query-fault` alone. `_roads_out` sent that user to "REPAIR the
+                # graph you already have" — a graph they never adopted. **That is the reported symptom
+                # inverted**, which is the one outcome fix D exists to prevent. The fault and the
+                # chain are two different facts and both are known here (§7g).
+                _reason(DEGRADE_QUERY_FAULT)
+                if not chain_has_a_graph:
+                    _reason(DEGRADE_GRAPH_UNAVAILABLE if pinned_tool
+                            else DEGRADE_CHAIN_IS_LEXICAL)
                 continue
             if getattr(qr, "degraded", False):
                 degraded = True                       # the grep floor answered
                 graph_degraded = True                 # ...from the lexical floor (a decision input)
+                # Fix D — WHICH degradation. A graph in the chain means it was adopted and this
+                # answer still fell to the floor, so "adopt a graph" is the wrong sentence.
+                if chain_has_a_graph:
+                    _reason(DEGRADE_GRAPH_FAILED)
+                elif pinned_tool:
+                    # 🔴 3-1: adopted, and the tool is not live. "Adopt a graph" is the one thing
+                    # that cannot help here, and it is what this said before.
+                    _reason(DEGRADE_GRAPH_UNAVAILABLE)
+                else:
+                    _reason(DEGRADE_CHAIN_IS_LEXICAL)
+                # 🔴 REVIEW FINDING 4-2 — THIS IS AN APPROACH-SCOPED FACT AND IT WAS EMITTED
+                # PER TARGET. `remedy_for` reads `floor-empty` as a statement about the whole
+                # approach — its stated merit is *"if the floor can find no textual mention of the
+                # symbol ANYWHERE, a working graph finds nothing either"* — and that is only true
+                # when EVERY target was empty. With two targets, one empty and one with 40
+                # references, the shipped refusal said *"the floor found NOTHING for widget_cache,
+                # render — so this is not a small blast radius, it is an ABSENT one"*: four false
+                # statements in one message, and it suppressed the `adopt` advice the repo needed.
+                # ⛔ §7j — a derivation that types its own scope, here by reading a per-item fact at
+                # the level of the set. Counted now, and decided after the loop.
+                if not (getattr(qr, "references", None) or []):
+                    empty_targets += 1
             for r in getattr(qr, "references", []) or []:
                 path = getattr(r, "path", "") or ""
                 line = getattr(r, "line", 0) or 0
@@ -211,6 +348,14 @@ def compute_impact(approach: str, targets: Sequence[str], *, layer: Any = None,
                 sym = getattr(r, "symbol", None)
                 if sym:
                     touched_syms.add(sym)
+
+    # 🔴 4-2 — the APPROACH-level decision. `floor-empty` means THIS APPROACH has no structural
+    # evidence at all, so checking the target names is the only move that can change the answer. One
+    # empty target beside one with evidence is NOT that: there the radius is real and the advice is
+    # about the graph. Both halves are required — a target the floor answered emptily AND no
+    # references from any target — because either alone is satisfied by cases this must not claim.
+    if empty_targets and not ref_keys:
+        _reason(DEGRADE_FLOOR_FOUND_NOTHING)
 
     files = sorted(touched_files)
     buckets = {b: 0 for b in BUCKETS}
@@ -237,7 +382,7 @@ def compute_impact(approach: str, targets: Sequence[str], *, layer: Any = None,
         approach=approach, targets=tgts, impacted_files=files,
         impacted_symbols=sorted(touched_syms), caller_count=caller_count,
         buckets=buckets, affected_decisions=affected, degraded=degraded, note=note,
-        graph_degraded=graph_degraded)
+        graph_degraded=graph_degraded, graph_degrade_reasons=tuple(reasons))
 
 
 def compare_impacts(impacts: Sequence[ApproachImpact]) -> List[ApproachImpact]:

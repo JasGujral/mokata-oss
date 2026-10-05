@@ -156,9 +156,18 @@ class TestNoRuntimeDDLGuard(unittest.TestCase):
 
     Allowed: `teamdb.py` — the single source of schema truth, run by `team init` alone; and
     `SQLiteBackend` in memory/backends.py — the LOCAL floor, a per-repo file mokata wholly owns
-    (no roles, no shared DB, nothing to lock down). ANY other DDL site is a D1 regression."""
+    (no roles, no shared DB, nothing to lock down). ANY other DDL site is a D1 regression.
 
-    ALLOWED = {("teamdb.py", None), ("memory/backends.py", "SQLiteBackend")}
+    ➕ R1.S1a adds `events/store.py` on the SQLiteBackend reading, not a new one, and the test
+    of that claim is the rule D1 is actually about: *would a DML-only runtime role be denied
+    CREATE here?* The event store is a per-repo SQLite file under `temp_local/`, declared
+    local-only in every profile by doc 42 and never reachable on a shared Postgres — there is
+    no role, no grant and nothing to deny. ⚠ The exemption would become FALSE the day anything
+    points this store at a shared backend, which is why it is filed with its reason rather than
+    as a path: a future author who re-homes it has to come and disagree with this paragraph."""
+
+    ALLOWED = {("teamdb.py", None), ("memory/backends.py", "SQLiteBackend"),
+               ("events/store.py", None)}
 
     def _ddl_sites(self):
         src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -419,7 +428,20 @@ class TestSchemaVersionRange(unittest.TestCase):
         # flush skips the projection entirely when the table is absent. The tripwire is written into
         # the constant's own comment and pinned by `test_db_s7a_edge_substrate` — the day ANY read
         # becomes mandatory on that table, the floor moves in the same change.
-        self.assertEqual(5, teamdb.TEAM_SCHEMA_VERSION)
+        # ⭐ v5 → v6 (CM.S5, 2026-10-04): `mokata_events` RESHAPED to the typed envelope and the
+        # v1 trio (`kind`/`at`/`payload`) retired. Same additive argument, same floor: NOTHING in
+        # the runtime requires that table — publishing is opt-in, local-first, and a v5 store
+        # declines it with a named degrade — so raising the floor would fail-close every existing
+        # team for a feature nobody has turned on. ⚠ The retirement REFUSES rather than migrating
+        # if it finds rows, because "no build ever wrote here" is a measurement about mokata and
+        # still a claim about somebody else's database. Tripwire restated: the day any runtime
+        # READ becomes mandatory on `mokata_events`, THIS FLOOR MOVES IN THE SAME CHANGE.
+        #
+        # ⚠ This literal is a TRIPWIRE and not a stale figure, which is the distinction stage 11
+        # had to make twice: a bump must come here and say WHY. (The live-DB twin in
+        # `test_db_s7a_live_db` typed the same number as an incidental assertion and was wrong to
+        # — it reads `TEAM_SCHEMA_VERSION` now.)
+        self.assertEqual(6, teamdb.TEAM_SCHEMA_VERSION)
         self.assertEqual(3, teamdb.TEAM_SCHEMA_MIN_SUPPORTED)
         self.assertLessEqual(teamdb.TEAM_SCHEMA_MIN_SUPPORTED, teamdb.TEAM_SCHEMA_VERSION)
 

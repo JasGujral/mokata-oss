@@ -834,26 +834,36 @@ class TestTheBoundaryIsUnchangedByThisStage(unittest.TestCase):
     so its grader could run would put a hole in the single control to fix a test-coverage problem,
     so both halves are transcribed here as they read at `b9b203b`, before this stage. History cannot
     be derived (§7j) — that is why these are literals, and it is the one place in this file where a
-    literal is the correct shape."""
+    literal is the correct shape.
 
-    #: `--exclude=` clauses, at `b9b203b`.
+    ⚠ **THE BASELINE WAS ADVANCED ONCE, AT 0.0.21 STAGE 02, AND THE DIRECTION IS WHY THAT IS
+    ALLOWED.** `scripts/verify-mirror.sh` was added to both controls — a release-machine tool that
+    verifies the PRIVATE mirror before a cut and has no meaning in the published package. That
+    makes the public surface NARROWER, which is the safe direction and the opposite of the hole
+    this pin exists to prevent. ⭐ **It shipped on its first run and this file's own mirror census
+    is what caught it** — three classes of `test_a32` reported GRADED in the public mirror, where
+    they should have been absent by design. The pin stays an EQUALITY rather than becoming a
+    superset check: a boundary change should cost a deliberate edit here, including a widening
+    one, because "nothing was removed" is a weaker claim than "this is the set"."""
+
+    #: `--exclude=` clauses, at `b9b203b`, plus `scripts/verify-mirror.sh` at 0.0.21 stage 02.
     EXCLUDES = frozenset({
         "*.REFUSED-RESTORE*.bak", "*.egg-info", "*.pyc", "*.tgz", ".DS_Store", ".claude", ".env*",
         ".git", ".mokata", ".mutate.lock", ".pytest_cache", ".venv", "/*.mp4", "/mokata-*",
         "/release-backup-*", "CLAUDE.md", "__pycache__", "_to_delete", "build", "dist",
         "docs/build", "docs/launch", "docs/marketing", "docs/talks", "editors/vscode/node_modules",
         "editors/vscode/out", "push-to-github.command", "scripts/check-tracker-tables.py",
-        "scripts/release.sh", "scripts/sync-public.sh", "site",
+        "scripts/release.sh", "scripts/sync-public.sh", "scripts/verify-mirror.sh", "site",
     })
 
-    #: `INTERNAL_PATHS=( … )`, at `b9b203b`.
+    #: `INTERNAL_PATHS=( … )`, at `b9b203b`, plus `scripts/verify-mirror.sh` at 0.0.21 stage 02.
     GUARDS = frozenset({
         "*.egg-info", "*.mp4", "*.pyc", "*.tgz", ".DS_Store", ".claude", ".env", ".mokata",
         ".pytest_cache", ".venv", "CLAUDE.md", "__pycache__", "_to_delete", "build", "dist",
         "docs/build", "docs/launch", "docs/marketing", "docs/talks",
         "editors/vscode/node_modules", "editors/vscode/out", "push-to-github.command",
         "release-backup-*", "scripts/check-tracker-tables.py", "scripts/release.sh",
-        "scripts/sync-public.sh", "site",
+        "scripts/sync-public.sh", "scripts/verify-mirror.sh", "site",
     })
 
     def setUp(self):

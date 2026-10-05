@@ -9,6 +9,8 @@ Default (no graph wired) stays SILENT: no graph is the default, not a degrade.
 
 import unittest
 
+import _support  # noqa: F401  (puts src/ on the path, and runs the stage-05 provisioning preflight)
+
 from mokata.docsync import AuditDegradation, graph_symbol_resolver
 from mokata.knowledge import GrepBackend, KnowledgeLayer
 

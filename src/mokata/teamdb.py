@@ -235,7 +235,37 @@ def _server_major(conn: Any) -> Optional[int]:
 # (CREATE TABLE IF NOT EXISTS + an add-then-backfill that is idempotent by predicate), owned by
 # `team init` alone (C4) — no runtime DDL. `TEAM_SCHEMA_MIN_SUPPORTED` stays 3 for the DB.S5 reason,
 # restated below where the floor lives.
-TEAM_SCHEMA_VERSION = 5
+#
+# v5 → v6 (CM.S5, doc 77 §6 C-5): `mokata_events` is RESHAPED to the typed envelope it is supposed
+# to carry, and the three columns it was provisioned with in v1 are retired.
+#
+# ⛔ **WHY A RESHAPE AND NOT AN ADDITION.** The v5 table was `(namespace, project, kind, at, actor,
+# payload)` and the local event envelope is `(event_id, ts, schema_version, type, session_id,
+# run_id, actor, duration_ms, ledger_seq, data)`. Publishing into the v5 shape would have had to
+# drop `duration_ms` and `ledger_seq` — **the two fields `events/schema.py` exists to keep
+# DISTINGUISHABLE FROM ZERO** (doc 85 §7g: a decision nobody timed has no duration, and 0 would
+# say it took no time; an event deriving from no ledger entry has no seq, and 0 is a real seq).
+# A shared copy that silently zeroed both would be the §7g defect at the team boundary, which is
+# the one place more people read it. It would also have carried TWO names for one thing, and
+# `kind` is the worst of them: in the audit ledger `kind` is one of 65 LEDGER kinds, while here it
+# would mean one of 7 event TYPES.
+#
+# ⭐ **WHAT MAKES THE RETIREMENT SAFE IS A MEASUREMENT, NOT AN ASSUMPTION.** v1 provisioned this
+# table and its own comment said *"provisioned only; local-first population until a later UI"* —
+# and a grep of `src/` confirms **zero inserts and zero readers** in every build since. doc 77 §6
+# C-5 recorded the same thing in 2026-07 (*"zero inserts, zero LISTEN/NOTIFY subscribers anywhere
+# in src/"*). So the DDL below RETIRES the trio, and because "nothing ever wrote here" is a claim
+# rather than a proof about somebody else's database, it **REFUSES** — loudly, by name, changing
+# nothing — if it finds rows under the v5 column set. Pre-1.0 means delete rather than deprecate
+# (doc 85 §7d); it does not mean delete somebody's data on a hunch.
+#
+# `TEAM_SCHEMA_MIN_SUPPORTED` STAYS 3, for the DB.S5 reason and with the same tripwire: nothing in
+# the runtime requires `mokata_events` — publishing is opt-in, local-first, and a v5 store
+# declines it with a named degrade (`EVENTS_SCHEMA_MIN` below — read that note before trusting
+# this sentence, which was false for the length of one stage). **The day any runtime READ becomes
+# mandatory on this table, THIS FLOOR MOVES IN THE SAME CHANGE.** Floor and requirement move
+# together or the floor is a lie.
+TEAM_SCHEMA_VERSION = 6
 SCHEMA_VERSION_TABLE = "mokata_schema_version"
 
 # D2 — the OLDEST shared schema this build can still serve. Not a guess: the live SQL SELECTs
@@ -262,6 +292,26 @@ SCHEMA_VERSION_TABLE = "mokata_schema_version"
 # is not there — the exact class of failure the floor exists to refuse LOUDLY. Floor and requirement
 # move together or the floor is a lie.
 TEAM_SCHEMA_MIN_SUPPORTED = 3
+
+# ---- per-feature floors ------------------------------------------------------------------------
+# ⭐ `EVENTS_SCHEMA_MIN` IS WHAT MAKES THE SENTENCE ABOVE TRUE, and it exists because that
+# sentence shipped before the thing it describes.
+#
+# ⛔ At 0.0.21 stage 11 the "named degrade" DID NOT EXIST. The global floor is 3, so
+# `compatibility()` returns IN RANGE for a v3/v4/v5 artifact; the publisher's first statement then
+# asked `mokata_events` for `local_seq`, a column the pre-v6 table does not have, and a v5 team —
+# which was EVERY existing team until someone re-ran `mokata team init` — got `UndefinedColumn` as
+# an UNCAUGHT traceback out of `mokata events --share`. Found by the stage's independent review
+# (F1), reproduced against a live PostgreSQL. §7h: the pin encoded a false premise, and the stage's
+# own mutant graded the CONSTANT while nothing graded the behaviour the constant is named for.
+#
+# ⭐ The repair is NOT to move the global floor. Refusing a v5 team's memory, sessions and audit
+# over a table it is not using is the fail-closed trap `TEAM_SCHEMA_MIN_SUPPORTED` documents at
+# length. A feature whose table arrived later declares its OWN floor here and refuses on it, so
+# "floor and requirement move together" stays true per-feature without partitioning a team
+# mid-upgrade. ⚠ THE TRIPWIRE IS THE SAME: the day the events table gains a column the publisher
+# reads, THIS NUMBER MOVES IN THAT CHANGE.
+EVENTS_SCHEMA_MIN = 6
 
 # A pre-D2 artifact is a bare `version` row with no `min_supported` column: it declares no range.
 # Read its floor as its OWN version — it certainly served the build that wrote it, and it made no
@@ -1188,10 +1238,74 @@ def provision_sql(project_id: Optional[str] = None) -> "list[str]":
         f"CREATE TABLE IF NOT EXISTS {AUDIT_TABLE} ("
         "  id BIGSERIAL PRIMARY KEY, namespace TEXT NOT NULL, actor TEXT NOT NULL,"
         "  seq BIGINT, kind TEXT, at TEXT, entry TEXT)",
-        # events — provisioned only; local-first population until a later UI (doc 48).
+        # events (v6, CM.S5) — the typed envelope's OWN column names, because the v5 shape could
+        # not hold it. See the v5 → v6 note at the top of this module for why that mattered:
+        # `duration_ms` and `ledger_seq` are the two fields the local store exists to keep
+        # DISTINGUISHABLE from zero, and the v5 trio (kind/at/payload) had nowhere to put them.
         f"CREATE TABLE IF NOT EXISTS {EVENTS_TABLE} ("
-        "  id BIGSERIAL PRIMARY KEY, namespace TEXT, project TEXT, kind TEXT,"
-        "  at TEXT, actor TEXT, payload TEXT)",
+        "  id BIGSERIAL PRIMARY KEY, namespace TEXT, project TEXT,"
+        "  event_id TEXT, ts TEXT, schema_version INT, type TEXT,"
+        "  session_id TEXT, run_id TEXT, actor TEXT,"
+        "  duration_ms BIGINT, ledger_seq BIGINT, data TEXT, local_seq BIGINT)",
+        # ⛔ THE REFUSAL, and it runs AFTER the CREATE so the table always exists to be asked
+        # about. Retiring the v5 trio is only safe because NO MOKATA BUILD HAS EVER WRITTEN A ROW
+        # HERE — the v5 comment said "provisioned only" and a grep confirmed zero inserts. Rows
+        # under the v5 column set therefore came from something that is not mokata, and dropping
+        # their columns would destroy data this project never owned. So it REFUSES, loudly, by
+        # name, and changes nothing — the one outcome better than a clever migration.
+        f"""DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_name = '{EVENTS_TABLE}' AND column_name = 'payload')
+       AND EXISTS (SELECT 1 FROM {EVENTS_TABLE} LIMIT 1)
+    THEN
+        RAISE EXCEPTION 'mokata_events carries rows under the pre-v6 column set '
+            '(kind/at/payload). No mokata build has ever written a row to this table, so those '
+            'rows came from something else. Inspect and move them, then re-run `mokata team '
+            'init`. NOTHING was changed.';
+    END IF;
+END
+$$""",
+        # the v5 → v6 migration for an EXISTING artifact: idempotent ADD-COLUMN-IF-NOT-EXISTS,
+        # exactly the v2–v4 seam. A fresh database took the new shape from the CREATE above and
+        # these are no-ops on it.
+        f"ALTER TABLE {EVENTS_TABLE} ADD COLUMN IF NOT EXISTS event_id TEXT",
+        f"ALTER TABLE {EVENTS_TABLE} ADD COLUMN IF NOT EXISTS ts TEXT",
+        f"ALTER TABLE {EVENTS_TABLE} ADD COLUMN IF NOT EXISTS schema_version INT",
+        f"ALTER TABLE {EVENTS_TABLE} ADD COLUMN IF NOT EXISTS type TEXT",
+        f"ALTER TABLE {EVENTS_TABLE} ADD COLUMN IF NOT EXISTS session_id TEXT",
+        f"ALTER TABLE {EVENTS_TABLE} ADD COLUMN IF NOT EXISTS run_id TEXT",
+        f"ALTER TABLE {EVENTS_TABLE} ADD COLUMN IF NOT EXISTS duration_ms BIGINT",
+        f"ALTER TABLE {EVENTS_TABLE} ADD COLUMN IF NOT EXISTS ledger_seq BIGINT",
+        f"ALTER TABLE {EVENTS_TABLE} ADD COLUMN IF NOT EXISTS data TEXT",
+        # `local_seq` is the PUBLISHER'S OWN append index, not a shared order — see the note on
+        # the unique index below for what it is for and what it is NOT.
+        f"ALTER TABLE {EVENTS_TABLE} ADD COLUMN IF NOT EXISTS local_seq BIGINT",
+        # …and the v5 trio is DELETED, not deprecated (doc 85 §7d, pre-1.0). Two names for one
+        # thing is how the drift this release keeps finding starts: `kind` in particular collides
+        # with the AUDIT LEDGER's `kind` (65 ledger kinds) while meaning the event TYPE (7 of
+        # them), so a reader of the shared table would have had every reason to read it wrong.
+        f"ALTER TABLE {EVENTS_TABLE} DROP COLUMN IF EXISTS kind",
+        f"ALTER TABLE {EVENTS_TABLE} DROP COLUMN IF EXISTS at",
+        f"ALTER TABLE {EVENTS_TABLE} DROP COLUMN IF EXISTS payload",
+        # ⭐ PUBLISHING IS IDEMPOTENT BY PREDICATE, not by the publisher remembering. `event_id` is
+        # a uuid4 minted once by the local store, so (namespace, event_id) is the natural key and
+        # a re-published batch lands as ON CONFLICT DO NOTHING rather than as duplicate rows. This
+        # is the DB.S7a edge-table pattern: make the second run a no-op in the SCHEMA, so no
+        # bookkeeping on the client can drift from it.
+        #
+        # ⚠ AND IT IS NOT REDUNDANT WITH `local_seq`, which is the §7f question to ask of any
+        # second guard. They catch different things and each catches something the other cannot:
+        #   * `local_seq` makes RESUME cheap — `MAX(local_seq)` per (namespace, actor) says where
+        #     this publisher got to, so a re-publish sends the tail instead of the whole store and
+        #     relying on the index to throw the rest away. It is the publisher's OWN append index
+        #     in its OWN local store: it is NOT a team-wide order and two actors' values say
+        #     nothing about each other.
+        #   * the unique index catches exactly the cases `local_seq` gets wrong — two machines
+        #     publishing under ONE actor name, and a local store rebuilt so its seqs restart below
+        #     a number already published. Both are real, and both would otherwise duplicate rows.
+        f"CREATE UNIQUE INDEX IF NOT EXISTS {EVENTS_TABLE}_namespace_event"
+        f"  ON {EVENTS_TABLE} (namespace, event_id)",
         # the schema-version row LAST — the (current, min_supported) RANGE (D2). ON CONFLICT DO
         # UPDATE (not DO NOTHING) so re-running init also refreshes the range on an artifact that
         # already carries this version but predates the range column. Idempotent either way (E5).

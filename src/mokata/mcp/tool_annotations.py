@@ -80,6 +80,7 @@ OPEN_WORLD_TOOLS = frozenset({
     "session_pull",    # tools_session.session_pull -> plan_session_pull reads the source bundle
     "session_name",    # tools_session.session_name -> plan_session_rename reads transport (collision)
     "audit_share",     # tools_team.audit_share  -> pending_share connects to the shared PG log
+    "events_share",    # tools_team.events_share -> pending_publish connects to the shared PG store
     # --- remote catalog — a stack index / manifest resolved from a possibly-remote source -----
     "stacks_list",     # tools_read.stacks_list     -> stacks.load_index(source)
     "stacks_search",   # tools_read.stacks_search   -> stacks.load_index(source)

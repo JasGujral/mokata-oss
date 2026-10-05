@@ -25,6 +25,8 @@ import tempfile
 import time
 import unittest
 
+import _support  # noqa: F401  (puts src/ on the path, and runs the stage-05 provisioning preflight)
+
 from mokata.knowledge import freshness as F
 from mokata.knowledge.ast_backend import AstBackend
 from mokata.knowledge.grep_backend import GrepBackend

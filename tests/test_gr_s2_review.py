@@ -14,6 +14,8 @@ Graph-absent review is byte-identical to today's review (the whole point of the 
 
 import unittest
 
+import _support  # noqa: F401  (puts src/ on the path, and runs the stage-05 provisioning preflight)
+
 from mokata.engine import ChangeSet
 from mokata.execmode.review import two_stage_review
 from mokata.execmode.review_graph import graph_verify

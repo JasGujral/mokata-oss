@@ -64,7 +64,12 @@ EXPECTED_WRITE = {"remember", "import_stack", "reset", "apply_proposal", "init",
                   # M-4/R5 — PHASE 2: the agent submits the summary it DRAFTED. Propose-only and
                   # human-gated like every write here; the model may reference consent, never mint
                   # it, so it cannot approve the text it just wrote.
-                  "consolidate"}
+                  "consolidate",
+                  # CM.S5 (0.0.21) — publish typed events to the team's shared store. Propose-only
+                  # + human-gated (kind `send`). Registered in 0.0.21 and absent here because this
+                  # suite could not IMPORT on the release invocation until the cut
+                  # (`THE-PRECUT-PATH-MASKED-THE-RELEASE-PATH`): the list went stale unread.
+                  "events_share"}
 # AP-MCP (doc 85 §5 D26 amendment): the in-chat approve tool is its OWN kind — neither a read nor
 # a propose-only write — so it is excluded from both name lists (and from the SI.3 write-tool
 # sweeps). Default-OFF opt-in; see test_ap_mcp_in_chat_approval.py for its behaviour.

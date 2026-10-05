@@ -68,18 +68,31 @@ class TestInitFootprint(unittest.TestCase):
                 body = fh.read()
             self.assertIn("temp_local/", body)
 
-    def test_init_creates_only_the_bootstrap_ledger_under_temp_local(self):
-        # KB.S1 amends the 24D "init pre-creates no temp_local" invariant: init now records a single
-        # bootstrap audit entry (P7 — every durable write leaves a record; the ledger's own creation
-        # is that first entry). Its footprint is EXACTLY the audit ledger — no memory store, no
-        # state, no index/caches are pre-created. temp_local/ stays gitignored (never committed).
+    def test_init_creates_only_the_bootstrap_ledger_and_its_projection(self):
+        # KB.S1 amended the 24D "init pre-creates no temp_local" invariant: init records a single
+        # bootstrap audit entry (P7 — every durable write leaves a record; the ledger's own
+        # creation is that first entry).
+        #
+        # R1.S1b AMENDS IT A SECOND TIME, and the amendment is a CONSEQUENCE rather than a
+        # decision taken here: the event stream is a PROJECTION of the ledger, wired at
+        # `AuditLedger.record`, so the bootstrap entry projects and the event store comes into
+        # being with it. ⭐ Two amendments, one principle: the repo's audit trail and its typed
+        # view of that trail are born together, and neither is pre-created for its own sake.
+        # ⚠ THE EXCEPTION THAT WAS CONSIDERED AND REJECTED: making the projection skip `init`
+        # would have kept this pin at one entry, and it would have been the first special case in
+        # a derivation whose whole value is that it has none (§7i). A uniform projection with a
+        # two-directory footprint is worth more than a one-directory footprint with a carve-out.
+        #
+        # What is still NOT pre-created, which is what the pin is actually defending: no memory
+        # store, no state, no index or caches. temp_local/ stays gitignored (never committed).
         with tempfile.TemporaryDirectory() as d:
             init_repo(root=d, profile="standard", assume_yes=True, out=_silent)
             tl = os.path.join(d, MOKATA_DIR, TEMP_LOCAL_DIRNAME)
             self.assertTrue(os.path.isdir(tl), "init records the bootstrap entry, so temp_local/ "
                                                "now holds the audit ledger")
-            self.assertEqual(sorted(os.listdir(tl)), ["audit"],
-                             "the ONLY runtime footprint init leaves is the audit ledger")
+            self.assertEqual(sorted(os.listdir(tl)), ["audit", "events"],
+                             "init's runtime footprint is the audit ledger and the typed "
+                             "projection of it — and nothing else")
 
 
 class TestFullRunFootprint(unittest.TestCase):

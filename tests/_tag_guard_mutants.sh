@@ -275,8 +275,14 @@ mutant "C02 ★★★ a LIVE dev-repo CI wait is re-armed — the direction is r
   'echo "NOTE: ${DEV_REPO}'"'"'s own CI is not a release gate and has not been one since 0.0.10."' \
   'wait_for_ci_green "$DEV_REPO" "$(git rev-parse HEAD)" "the dev repo"' "$T"
 
+# ⚠ RE-DERIVED at 0.0.21 stage 01. The anchor used to re-read the branch head INSIDE the call:
+# `git rev-parse "$BRANCH"`. That is the defect stage 01 removes — the CI gate and the merge each
+# resolved the head separately, so a PR that moved between them was merged on a commit CI had
+# never seen. The call now takes `$CI_SHA`, read ONCE from the PR itself, and this mutant's old
+# pattern stopped occurring. Caught by `test_a9_mutant_batches_are_swept`, which is the guard that
+# exists for exactly this: a stale pattern exits 3 and aborts the rest of the batch.
 mutant "C03 ★★★ a MIRROR CI wait is deleted — the ENFORCED gate goes (the negative)" "$SH" \
-  'wait_for_ci_green "$PUB_REPO" "$(cd "$PUB_CHECKOUT" && git rev-parse "$BRANCH")" "the release PR (${BRANCH})"' \
+  'wait_for_ci_green "$PUB_REPO" "$CI_SHA" "the release PR (${BRANCH})"' \
   ': # the release PR CI wait, removed' "$T"
 
 mutant "C04 ★★ the operator is no longer told at the moment of use" "$SH" \

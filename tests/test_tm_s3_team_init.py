@@ -181,7 +181,30 @@ class TestProvisionSql(unittest.TestCase):
         IS NULL`), so a second run matches zero rows AND no run can ever change a value that is
         already there. The check stays meaningful for the same reason as the other two — the WHERE
         must constrain THE COLUMN BEING SET, so an unconditional `UPDATE … SET` (or one guarded on
-        some unrelated column) still fails here."""
+        some unrelated column) still fails here.
+
+        CM.S5 adds the seventh too, and it is the one that should have been here from the start:
+        **`DROP … IF EXISTS` is the same guard as `IF NOT EXISTS`, pointed the other way.** The
+        first six shapes all describe CREATING or WRITING something, because until v6 nothing in
+        this schema had ever been RETIRED — so the check knew `CREATE TABLE IF NOT EXISTS` and had
+        never been shown `ALTER TABLE … DROP COLUMN IF EXISTS`, which is just as idempotent (a
+        second run finds nothing to drop). ⚠ Meaningfulness is unchanged: an UNGUARDED `DROP
+        COLUMN kind` names no precondition and still fails here, which is the whole property —
+        every statement must state the condition under which it does nothing.
+
+        CM.S5 adds the EIGHTH, and like DB.S7a's it is a new SHAPE rather than a loosening: a
+        READ-ONLY REFUSAL PROBE. (⚠ It said "the sixth" while the paragraph above it said "the
+        seventh" — two shapes introduced in one stage, both numbered from the pre-CM.S5 count.
+        Review F10. The count is DERIVED below; these words are prose about it, and prose that
+        disagrees with itself in consecutive paragraphs is how a reader stops trusting either.) The v6 events migration retires three columns, and that retirement
+        rests on a measurement about mokata (*"no build ever wrote to this table"*) which is still
+        a CLAIM about somebody else's database — so a `DO $$ … RAISE EXCEPTION … $$` block asks
+        first and refuses loudly if it finds rows under the old shape. It is idempotent in the
+        strongest way available: **it writes nothing at all**, so a second run does exactly what
+        the first did. ⚠ And the check stays meaningful for the same reason as the other three: the
+        block must contain NO write verb, so a `DO` block that quietly UPDATEs or DROPs something
+        inside itself still fails here. A shape that qualified merely by starting with `DO` would
+        be a keyword rubber-stamp — the thing this test refuses to be."""
         import re
 
         from mokata import teamdb
@@ -193,8 +216,26 @@ class TestProvisionSql(unittest.TestCase):
             guarded_update = up.startswith("UPDATE") and ("IS DISTINCT FROM" in up or hole_fill)
             guarded_insert = (up.startswith("INSERT") and " SELECT " in up
                               and "NOT EXISTS" in up)
+            # CM.S5 — a read-only refusal probe: writes NOTHING, so it is idempotent by
+            # construction. Qualifying on the VERBS it does not contain rather than on its `DO`
+            # prefix is what keeps this a check instead of a rubber-stamp.
+            # ⛔ WORD BOUNDARIES, NOT SPACES. The first version padded each verb with spaces
+            # (`" DROP "`), so `EXECUTE 'DROP COLUMN kind'` — a quote before the verb, not a
+            # space — passed this check while the docstring claimed *"a `DO` block that quietly
+            # UPDATEs or DROPs something inside itself still fails here"*. Review F10: the
+            # sentence was true of the intent and false of the predicate, which is exactly the
+            # shape §7h names.
+            write_verbs = ("INSERT", "UPDATE", "DELETE", "ALTER", "DROP",
+                           "CREATE", "TRUNCATE", "GRANT", "REVOKE")
+            writes_something = re.search(
+                r"(?<![A-Z0-9_])(?:%s)(?![A-Z0-9_])" % "|".join(write_verbs), up[3:])
+            read_only_probe = up.startswith("DO ") and not writes_something
+            # CM.S5 — the retirement half of the same guard. `IF EXISTS` on a DROP states the
+            # precondition exactly as `IF NOT EXISTS` does on a CREATE; an unguarded DROP does not
+            # and still fails below.
+            guarded_drop = " DROP " in f" {up} " and "IF EXISTS" in up
             ok = (("IF NOT EXISTS" in up) or ("ON CONFLICT" in up)
-                  or guarded_update or guarded_insert)
+                  or guarded_update or guarded_insert or read_only_probe or guarded_drop)
             self.assertTrue(ok, f"non-idempotent DDL: {stmt}")
 
     def test_no_extensions_on_the_golden_path(self):

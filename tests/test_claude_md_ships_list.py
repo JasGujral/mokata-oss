@@ -394,7 +394,14 @@ class TestTheKnownBadListIsRED(unittest.TestCase):
         tracked = sr.tracked_excludes(ROOT, mb.exclude_entries(script))
         result = mb.resolve_ships_list(self.BEFORE, script, tracked)
         self.assertEqual(result.verdict, mb.RED, "the known-bad list no longer reds")
-        self.assertEqual(result.omitted, ("docs/talks", "scripts/check-tracker-tables.py"))
+        # ⚠ THREE NOW, AND THE THIRD IS NOT A DRIFT — it is this guard working. 0.0.21 stage 02
+        # added `scripts/verify-mirror.sh` as a fourth dev-only script, so the historical list is
+        # short by one MORE than it was. ⭐ The assertion is still an EQUALITY and still over the
+        # transcribed historical text: the set grows only when a new internal path is added and a
+        # human says so here. That is the two-directional property (an omitted exclude is the LEAK,
+        # an over-claimed one is the FALSE REASSURANCE) doing its job, one release later.
+        self.assertEqual(result.omitted, ("docs/talks", "scripts/check-tracker-tables.py",
+                                          "scripts/verify-mirror.sh"))
         self.assertEqual(
             result.overclaimed, (),
             "the pre-stage list over-claimed nothing — everything it said was true, which is the "

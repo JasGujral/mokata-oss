@@ -148,10 +148,17 @@ class TestTheV5MigrationOnAPopulatedStore(unittest.TestCase):
         self.assertEqual(4, _conn(self.dsn).execute(
             f"SELECT max(version) FROM {self.teamdb.SCHEMA_VERSION_TABLE}").fetchone()[0])
 
-    def test_the_migration_moves_the_three_implicit_kinds_and_stamps_v5(self):
+    def test_the_migration_moves_the_three_implicit_kinds_and_stamps_THIS_BUILDS_VERSION(self):
+        """⚠ RENAMED AND DE-LITERALISED 2026-10-04 (CM.S5's v6 bump). This asserted the literal
+        `5` in two places, and `provision` stamps whatever version the BUILD declares — so a
+        legitimate additive bump reddened a test whose subject was the migration, not the number.
+        That is `BACKLOG-EVIDENCE-UNDATED` inside a test: a figure that was true when written and
+        became a claim about the past. The version is DERIVED now and the assertion is strictly
+        stronger (it stays true at v7); the FLOOR below keeps its literal `3`, because there the
+        number IS the assertion — reading it from the constant would make it vacuous."""
         self._populate()
         result = self.teamdb.provision(self.dsn, project_id="fixture")
-        self.assertEqual(5, result.version)
+        self.assertEqual(self.teamdb.TEAM_SCHEMA_VERSION, result.version)
         self.assertIn(self.teamdb.EDGES_TABLE, result.tables)
         self.assertEqual({
             ("mid-fact", "old-fact", "supersedes"),
@@ -161,7 +168,7 @@ class TestTheV5MigrationOnAPopulatedStore(unittest.TestCase):
             ("new-fact", "src/auth.py::login", "about_code"),
             ("dupes", "old-fact", "supersedes"),
         }, {(r[0], r[1], r[2]) for r in _edge_rows(self.dsn)})
-        self.assertEqual(5, _conn(self.dsn).execute(
+        self.assertEqual(self.teamdb.TEAM_SCHEMA_VERSION, _conn(self.dsn).execute(
             f"SELECT max(version) FROM {self.teamdb.SCHEMA_VERSION_TABLE}").fetchone()[0])
 
     def test_the_floor_the_migration_stamps_is_still_3(self):
@@ -169,7 +176,7 @@ class TestTheV5MigrationOnAPopulatedStore(unittest.TestCase):
         existing v3/v4 team fail-closes on upgrade for a table nothing yet requires."""
         self._populate()
         self.teamdb.provision(self.dsn, project_id="fixture")
-        self.assertEqual((5, 3), _conn(self.dsn).execute(
+        self.assertEqual((self.teamdb.TEAM_SCHEMA_VERSION, 3), _conn(self.dsn).execute(
             f"SELECT version, min_supported FROM {self.teamdb.SCHEMA_VERSION_TABLE} "
             f"ORDER BY version DESC LIMIT 1").fetchone())
 

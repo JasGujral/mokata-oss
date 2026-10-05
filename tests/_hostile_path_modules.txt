@@ -1,0 +1,21 @@
+# The modules the HOSTILE-PATH preflight leg runs — `NOTHING-PROVES-THE-SUITE-SURVIVES-A-HOSTILE-PATH`.
+#
+# ⭐ ONE DECLARATION, TWO READERS, WHICH IS WHY THIS IS A FILE AND NOT A LIST IN EITHER OF THEM.
+# `scripts/release.sh:run_hostile_path_preflight` RUNS these; `tests/test_a31_the_interpreter_and_
+# the_path.py` DERIVES the same set from the tree and reds when the two part. A list maintained in
+# the shell script alone would be a list nobody notices going stale — which is the defect class
+# this whole stage is about, one file over.
+#
+# A module belongs here when it reaches `resolved_console_script`, `resolved_mcp_command` or
+# `MCP_COMMAND` — i.e. when it can ask the ambient machine where mokata is. The membership rule is
+# mechanical and `test_a31` applies it; this file is the answer, not the rule.
+#
+# Blank lines and `#` comments are ignored by both readers.
+test_b_ver_version_parity
+test_stage3b2_mcp_group
+test_hook_resolve
+test_hook_shell_agnostic
+test_g1_adoption_modes
+test_stage3b3_setup_verify
+test_harness_setup
+test_b1_hook_path_resolution

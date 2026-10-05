@@ -66,9 +66,24 @@ jobs:
     # that merely clears today.
     #
     # ⚠ AND THIS ONE IS HONESTLY WEAKER THAN THE 44 IT REPLACES, which must not be lost: 44 was
-    # 1.5x a leg that had COMPLETED; 70 is 1.5x an ESTIMATE, because no Windows leg has completed
-    # since the pragma landed. It is OWED a re-derivation from the first one that does. The storm
-    # now prints its own wall clock (see MS_S7_BUDGET) precisely so that number arrives.
+    # 1.5x a leg that had COMPLETED; 70 is 1.5x an ESTIMATE, because no Windows leg had completed
+    # since the pragma landed. It was OWED a re-derivation from the first one that did.
+    #
+    # ✅ THE DEBT IS PAID. CI #141 on `release/0.0.20` @ c5bfa1f, 2026-09-20 — the first fully
+    # green Windows run this project has had. Per-leg RUN TIME, measured:
+    #     windows py3.10 present  32m05s
+    #     windows py3.12 absent   37m37s   <- worst
+    #     windows py3.12 present  33m54s
+    #     ubuntu, all four legs   17m18s - 18m45s
+    # So the estimate above (~48m) was PESSIMISTIC by ten minutes, Windows costs ~2x Linux for
+    # this suite, and 70 is 1.86x the worst leg actually observed.
+    #
+    # ⛔ AND IT IS DELIBERATELY NOT TIGHTENED TO THE 1.5x THE RULE ASKS FOR (which would be 60).
+    # One green run is one sample, not a distribution — these are the first Windows completion
+    # times that have ever existed here, and the reason 44 was wrong was that it was derived from
+    # too few. Tightening on n=1 would repeat that mistake with a smaller number. 70 stands until
+    # there is a spread to derive from; `CI-CEILING-IS-DERIVED-ONCE-AND-NEVER-RE-DERIVED` is the
+    # open row that owns getting one.
     timeout-minutes: 70
     # Every `run:` step uses bash on both OSes — windows-latest defaults to pwsh, which would
     # break the `mktemp -d` / `|| true` POSIX steps. windows-latest ships Git Bash.

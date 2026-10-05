@@ -149,10 +149,12 @@ mutant "C04 ★ staleness stops being reported — an entry that describes nothi
 
 # ==== D. ★★ THE CHECK UNWIRED — a check that runs nowhere is B1's row, in B1's release =========
 
+# ⚠ D01's PATTERN WAS REFRESHED AT 0.0.21 STAGE 03, which moved both of these into the COLLECTED
+# cheap-gate block (so a second cheap failure is reported in the same run rather than on the
+# retry). The MUTATION is unchanged: stop running the resolving gate.
 mutant "D01 ★★ release.sh stops running the resolving gate" scripts/release.sh \
-  'verify_release_notes "." "the dev checkout (HEAD)"
-verify_disclosure_resolves' \
-  'verify_release_notes "." "the dev checkout (HEAD)"' "$T"
+  'gate "every published schedule still resolves (B5)" verify_disclosure_resolves' \
+  ': # verify_disclosure_resolves' "$T"
 
 # ==== summary =================================================================================
 printf '\n================================================================================\n'

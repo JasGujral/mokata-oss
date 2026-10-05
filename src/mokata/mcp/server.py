@@ -17,6 +17,7 @@ import functools
 import re
 import sys
 import threading
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 from . import status as _status
@@ -184,6 +185,37 @@ def _coerce(op: str, result: Any) -> Dict[str, Any]:
     }
 
 
+def _emit_tool_call(path: str, op: str, kind: Optional[str], result: Any,
+                    duration_ms: int) -> None:
+    """R1.S1b — one `ToolCall` event per served MCP dispatch, with its DURATION.
+
+    ⭐ **THIS IS THE OTHER HALF OF R1.S1b, AND IT CANNOT COME FROM THE LEDGER.** The ledger
+    projection covers every gate decision and approval outcome because those are recorded there;
+    an MCP tool call is not, and doc 42 names tool dispatch explicitly. So the event is emitted
+    where the fact exists — here, in the ONE dispatch wrapper every tool rides, which is the
+    same §7i reasoning that put the ledger projection in `AuditLedger.record` instead of at 90
+    call sites.
+
+    ⚠ **AND THIS IS WHERE `duration_ms` IS REAL RATHER THAN DERIVED.** `_serve` already runs
+    the body on a worker and joins it under a budget, so the wall clock around that join is the
+    tool's actual elapsed time. Doc 99's events exit criterion asks for duration on governance
+    events; measured at the head of this stage, **zero of the ledger's 49 kinds carried one**,
+    and the ledger cannot retrofit it — an append knows when it happened, not how long the thing
+    it describes took. A dispatch wrapper knows both.
+
+    `ok` is read from the structured status the wrapper returns, not from "did it raise": a
+    `refused`, an `error` and a `timed_out` are all non-exceptional returns here, and treating
+    them as successes would make the event say the opposite of what the caller was told."""
+    try:
+        status = result.get("status") if isinstance(result, dict) else None
+        ok = status not in ("error", "timed_out", "refused")
+        from ..events import ToolCall, emit as emit_event
+        emit_event(path or ".", ToolCall(tool=op, surface=kind or "mcp", ok=ok),
+                   duration_ms=duration_ms)
+    except Exception:  # noqa: BLE001 — the observability lane never fails a tool call
+        return
+
+
 def _serve(fn: Callable[..., Any], name: Optional[str] = None,
            kind: Optional[str] = None) -> Callable[..., Any]:
     """The ONE systemic dispatch wrapper (MCP-R.D0). Every served tool call self-registers this
@@ -212,9 +244,11 @@ def _serve(fn: Callable[..., Any], name: Optional[str] = None,
         except ValidationError as bad:
             return refusal(bad, op)
 
-        _spawn_registration(_call_path(args, kwargs))     # R5 — concurrent, never gates the body
+        call_path = _call_path(args, kwargs)
+        _spawn_registration(call_path)                    # R5 — concurrent, never gates the body
         budget = _mcp_timeout_for(op)                     # R1/R7 — per-tool wall-clock cap
         box: Dict[str, Any] = {}
+        started = time.monotonic()                        # R1.S1b — the event's real duration
 
         def _run() -> None:
             try:
@@ -226,16 +260,26 @@ def _serve(fn: Callable[..., Any], name: Optional[str] = None,
         worker.start()
         worker.join(budget)
 
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+
+        # R1.S1b — ONE exit, so every outcome is evented. The four returns below used to be four
+        # returns; a wrapper whose instrumentation sits on three of them is a wrapper that
+        # reports `timed_out` least often, which is the outcome anyone reading this store most
+        # wants to find (§7e: an instrument that goes quiet exactly where the trouble is).
         if worker.is_alive():                             # R1 — over budget, still running
-            return _timed_out(op, budget)
-        if "exc" in box:
+            out = _timed_out(op, budget)
+        elif "exc" in box:
             # D1d — a tool-local validator (an enum / comma-list whose vocabulary is the TOOL's, not
             # the surface's) raises from inside the body. It is still a caller fault, so it converts
             # through the SAME single site as the pre-step's, ahead of R2's server-fault reclaim.
             if isinstance(box["exc"], ValidationError):
-                return refusal(box["exc"], op)
-            return _as_error(op, box["exc"])              # R2 — reclaim the exception
-        return _coerce(op, box.get("result"))             # R3 — never None / non-dict
+                out = refusal(box["exc"], op)
+            else:
+                out = _as_error(op, box["exc"])           # R2 — reclaim the exception
+        else:
+            out = _coerce(op, box.get("result"))          # R3 — never None / non-dict
+        _emit_tool_call(call_path, op, kind, out, elapsed_ms)
+        return out
 
     return wrapper
 

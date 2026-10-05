@@ -87,10 +87,10 @@ This site follows the [Diátaxis](https://diataxis.fr/) model:
 | J | Distribution | cross-harness boundary, shareable stack manifests, portable sessions (transport derived from the repo's mode); `release-notes-check` **refuses the cut** when the notes announce a different version than the tag, or quietly drop a fact the changelog declared as a known limitation |
 | K | Config | per-layer/tool toggles, profiles, local-first, committed config, trust dial, doctor (incl. the DSN deep-check and retrieval-stack line), reset |
 | L | Composability | standalone commands, mid-pipeline entry, direct skills, catalog, chaining, suggestions |
-| M | MCP surface | 61 tools (40 read · 20 write · 1 opt-in approve), every call bounded with a `timed_out` status that names the operation, typed annotations, structured `response_format`, cursor pagination, and a loud `AWAITING APPROVAL` head so waiting-on-a-human never reads as a hang |
+| M | MCP surface | 62 tools (40 read · 21 write · 1 opt-in approve), every call bounded with a `timed_out` status that names the operation, typed annotations, structured `response_format`, cursor pagination, and a loud `AWAITING APPROVAL` head so waiting-on-a-human never reads as a hang |
 
 Counts in the box today: **26 Agent Skills** (16 curated + 10 domain) · **37 slash commands** ·
-**69 CLI subcommands** · **61 MCP tools** · **9 backed gates** · **1 runtime dependency**.
+**70 CLI subcommands** · **62 MCP tools** · **9 backed gates** · **1 runtime dependency**.
 
 Published docs: <https://mokata.ai/> · Source & issues:
 <https://github.com/JasGujral/mokata-oss>.

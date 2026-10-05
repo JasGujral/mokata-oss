@@ -128,7 +128,7 @@ from __future__ import annotations
 
 import ast
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional, Sequence, Tuple
 
 # ---- the resolution axis, and the dispositions that precede it -----------------------------------
@@ -145,6 +145,23 @@ DISCLOSED = "DISCLOSED"
 HELD = "HELD"
 #: The release named is at or before the version being cut: dated history, not a live promise.
 SPENT = "SPENT"
+#: A promise phrased RELATIVE to the release — "this release", "the next release". There is no
+#: version to resolve against, so this is not UNRESOLVED (which means "we looked and it is not
+#: there") — it is unresolvABLE, and it is red.
+#:
+#: 🔴 `B5-BLIND-TO-VERSIONLESS-RELEASE-CLAIMS` (0.0.21 stage 03), and the row's own argument is the
+#: reason this has a disposition of its own rather than reusing UNRESOLVED:
+#:
+#:   All nine original `CLAIM_PATTERNS` require a version literal, so *"…on Windows **this
+#:   release**"* was invisible to the check built to catch exactly this class — `notify.py` IS in
+#:   the 262-source corpus, B5 found ZERO claims in it, and the same reader convicted the same
+#:   sentence the instant a version literal was added.
+#:
+#: ⭐ **AND THE VERSIONLESS SHAPE IS THE WORSE OF THE TWO.** A claim naming `0.0.20` is comparable
+#: against a plan and can be found FALSE. *"This release"* **re-targets itself at whatever is being
+#: cut** — it can never be false, and therefore can never be checked. **A promise that silently
+#: re-points is not a weaker claim than a dated one; it is an uncheckable one.**
+UNRESOLVABLE = "UNRESOLVABLE"
 
 #: The dispositions a run may treat as satisfied. `NOT_CHECKABLE` is deliberately absent.
 PASSING = (RESOLVES, DISCLOSED, HELD, SPENT)
@@ -193,6 +210,64 @@ CLAIM_PATTERNS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
         r"[^.;|]{0,60}?\bin\s+\**" + _VERSION, re.I)),
 )
 
+#: ⭐ RELEASE-RELATIVE PHRASINGS — the shape with no version to resolve against. SEPARATE from
+#: `CLAIM_PATTERNS` on purpose: every entry there yields a `target` that is a version literal, and
+#: the whole resolution ladder is built on comparing that target against a plan. A pattern here
+#: yields a target that is a PHRASE, so folding it in would silently hand `version_tuple` a string
+#: like "this release" (§7g: two kinds of target must not share a representation).
+#:
+#: ⚠ DELIBERATELY NARROW, and the narrowness is the declaration. These are commitment verbs plus a
+#: release-relative noun phrase — not every sentence containing the word "release". *"Released in
+#: this release"* is past tense and excluded by `_PAST` like any other history.
+_RELEASE_RELATIVE = r"(?:this|the\s+next|an?\s+upcoming|a\s+(?:future|later|forthcoming))\s+release"
+
+#: ⭐ THE FORWARD-LOOKING SUBSET, AND THE SPLIT IS A MEASUREMENT RATHER THAN A PREFERENCE.
+#:
+#: `this release` is as often a FACTUAL SCOPE STATEMENT as a promise, and my first version — which
+#: convicted it bare — reddened the live tree on one:
+#:
+#:     branch_protection.py:290  "NOT OBTAINED — these four assurances were NOT verified for
+#:                                this release:"
+#:
+#: That is a correct degraded-state message measuring the run it is printed in. It does not
+#: re-target itself at a future cut, because it is not about a future cut. Convicting it would mean
+#: B5 reds on an honest disclosure, which is the §7i trap pointed the wrong way: a guard whose only
+#: live offender is a correct line.
+#:
+#: `the next release` / `an upcoming release` / `a future release` CANNOT be descriptive of the
+#: release being cut. A bare occurrence of one of those IS a promise with no version in it, and it
+#: is exactly the shape the row calls uncheckable. So the bare pattern covers those, and `this
+#: release` is convicted only with a commitment verb (the two patterns above).
+#:
+#: ⚠ WHAT THAT LEAVES OPEN IS STATED RATHER THAN HIDDEN: a bare-qualifier promise phrased with
+#: `this release` and no verb — *"…slower on Windows this release"*, which is the row's own quoted
+#: example — is still not caught. Filed as its own row rather than closed by a pattern that reds on
+#: correct prose; see doc 84's `B5-BARE-THIS-RELEASE-IS-AMBIGUOUS-BY-CONSTRUCTION`.
+_FORWARD_RELATIVE = r"(?:the\s+next|an?\s+upcoming|a\s+(?:future|later|forthcoming))\s+release"
+
+RELATIVE_CLAIM_PATTERNS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
+    ("owed-this-release", re.compile(
+        r"\b(?:restore|remove|removal|close|land|enforce|implement|complete|deliver|fix|ship|add)"
+        r"(?:s|es|d|ed)?\b"
+        r"[^.;|]{0,60}?\b(?:in|for|with|by)\s+\**" + _RELEASE_RELATIVE, re.I)),
+    ("scheduled-this-release", re.compile(
+        r"\b(?:scheduled|slated|planned|deferred|displaced|re-?scheduled|re-?homed|ruled)\s+"
+        r"(?:for|to)\s+\**" + _RELEASE_RELATIVE, re.I)),
+    # ⚠ THE SHAPE THE ROW ACTUALLY MEASURED, and it has no commitment verb AND no preposition: a
+    # bare qualifier riding a statement — *"…slower on Windows **this release**"*. It is a promise
+    # because of WHERE it is printed (a shipped release surface) and because it re-targets itself,
+    # not because of a verb.
+    #
+    # ⛔ TWO NARROWINGS, BOTH MEASURED, BOTH ON MY OWN FIRST DRAFTS. (1) It had the preposition
+    # `(?:in|for|with|by)` in front, and so did not match the row's own quoted offender —
+    # *"on Windows this release"* has no preposition before the phrase. (2) Removing that, it
+    # convicted `branch_protection.py:290`'s correct degraded-state message, so the phrase set is
+    # now `_FORWARD_RELATIVE` rather than `_RELEASE_RELATIVE` — see that constant. What is left
+    # here still needs `_subject_position`, because a CHANGELOG says *"The next release adds X"*
+    # too, and the phrase as grammatical SUBJECT is description rather than commitment.
+    ("bare-relative-qualifier", re.compile(r"\**" + _FORWARD_RELATIVE, re.I)),
+)
+
 # Past tense is history, not a commitment. Applied BEFORE the patterns, so `restored in 0.0.18`
 # never reaches `owed-in`. The tense half of the §7j declaration above.
 _PAST = re.compile(
@@ -202,6 +277,36 @@ _PAST = re.compile(
 # A backlog/row identifier: a screaming-kebab token of three or more segments. This is the KEY a
 # claim resolves by, and its shape is the repo's existing row-name convention, not a new one.
 _ITEM_KEY = re.compile(r"\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+){2,}\b")
+
+
+#: Derived from the tuple above rather than typed again — a second list would be the §7f shape, and
+#: `resolve`'s short-circuit is the one place that must never disagree with what was matched.
+_RELATIVE_PATTERN_NAMES = frozenset(name for name, _p in RELATIVE_CLAIM_PATTERNS)
+
+#: Leading markdown/bullet/emphasis noise a human line starts with, so "position in the sentence"
+#: is asked of the PROSE rather than of the markup.
+_LEADING_NOISE = re.compile(r"^[\s>*\-#|`\[(\u2022\u26a0\u2b50\u26d4\U0001f534\U0001f7e2\U0001f7e1]*")
+
+
+def _subject_position(text: str, start: int) -> bool:
+    """Is the match at `start` the grammatical SUBJECT of its sentence?
+
+    ⭐ THE ONE DISTINCTION THAT MAKES A BARE `this release` USABLE AS A CLAIM PATTERN. A changelog
+    says *"This release adds X"* constantly — the phrase as subject, describing what happened, which
+    is not a commitment and must not be convicted. The row's measured offender is the opposite
+    position: *"…slower on Windows this release"*, a trailing qualifier that scopes a statement to
+    whatever is being cut.
+
+    ⚠ POSITION, NOT PART-OF-SPEECH. Asking "is the next word a verb" needs a lexicon that would
+    rot; asking "does the sentence start here" needs only the text. Sentence start means the
+    beginning of the line (after markdown noise) or just after a `.`/`:`/`;`/`!`/`?`.
+    """
+    before = text[:start]
+    stripped = _LEADING_NOISE.sub("", before)
+    if not stripped.strip():
+        return True                         # the phrase opens the line
+    tail = stripped.rstrip()
+    return bool(tail) and tail[-1] in ".:;!?"
 
 
 def version_tuple(version: str) -> Tuple[int, ...]:
@@ -226,6 +331,18 @@ class Claim:
     pattern: str
     text: str
     key: Optional[str] = None
+    #: The version of the `## …` section this claim sits under, when the surface is sectioned by
+    #: release (the CHANGELOG). None for an unsectioned surface or a line above the first heading.
+    #:
+    #: 🔴 0.0.21 stage 03. A DATED claim ages out on its own: `0.0.17 <= cutting` is SPENT, dated
+    #: history rather than a live promise. A RELEASE-RELATIVE claim has no version, so nothing in
+    #: its text can age it — and the first version of B5's relative patterns therefore reddened the
+    #: tree on *"(fix scheduled for the next release)"* sitting in a CHANGELOG section from several
+    #: releases ago. ⛔ That promise is history by POSITION, and the only honest way to say so is to
+    #: read the position: the CHANGELOG is sectioned by release, and its newest `##` IS the release
+    #: being cut (which `test_dg7` enforces). So the section dates the claim exactly as a version
+    #: literal dates a dated one.
+    section: Optional[str] = None
 
     @property
     def site(self) -> str:
@@ -252,6 +369,29 @@ def _claims_in_text(where: str, line: int, text: str) -> List[Claim]:
         for match in pattern.finditer(text):
             found.append(Claim(where=where, line=line, target=match.group(1),
                                pattern=name, text=text, key=key))
+    # 🔴 B5-BLIND-TO-VERSIONLESS-RELEASE-CLAIMS. A release-relative promise carries no version, so
+    # its `target` is the PHRASE and `resolve` short-circuits it to UNRESOLVABLE before any version
+    # arithmetic can be attempted on it.
+    #
+    # ⚠ ONLY WHERE NO DATED CLAIM WAS FOUND ON THE SAME LINE. *"deferred to 0.0.22 in a future
+    # release"* is odd prose, but the dated half IS resolvable and is the stronger claim; reporting
+    # both would convict one sentence twice and the fix for the pair is the same edit.
+    if not found:
+        for name, pattern in RELATIVE_CLAIM_PATTERNS:
+            hit = None
+            for match in pattern.finditer(text):
+                # The bare qualifier is the only one that can land on a SUBJECT, because it is the
+                # only one with nothing in front of it. The other two carry a verb or a
+                # preposition, which already places them mid-sentence.
+                if name == "bare-relative-qualifier" and _subject_position(text, match.start()):
+                    continue
+                hit = match
+                break
+            if hit is not None:
+                found.append(Claim(where=where, line=line,
+                                   target=" ".join(hit.group(0).split()).lstrip("*"),
+                                   pattern=name, text=text, key=key))
+                break               # one verdict per line: the phrasings overlap by design
     return found
 
 
@@ -276,6 +416,29 @@ def printable_constants(source: str) -> Tuple[Tuple[int, str], ...]:
     return tuple((node.lineno, node.value) for node in ast.walk(tree)
                  if isinstance(node, ast.Constant) and isinstance(node.value, str)
                  and id(node) not in docstrings)
+
+
+_SECTION_HEADING = re.compile(r"^##\s+\**\[?v?(\d+\.\d+\.\d+)", re.M)
+
+
+def section_of_line(text: str) -> Tuple[Optional[str], ...]:
+    """For each 1-indexed line of `text`, the version of the `## …` section it sits under.
+
+    Returns a tuple whose index 0 is unused (`None`) so `result[line]` reads naturally against a
+    1-indexed line number — the same indexing every `Claim` already carries.
+
+    ⚠ PURE, AND OVER THE SUPPLIED TEXT (§7i). A heading this reader does not recognise leaves its
+    lines on the PREVIOUS section rather than on None: a changelog whose format drifts should
+    degrade towards "dated by the section above", not towards "undatable", because the second
+    silently turns historical prose into live promises."""
+    out: List[Optional[str]] = [None]
+    current: Optional[str] = None
+    for raw in text.splitlines():
+        match = _SECTION_HEADING.match(raw)
+        if match:
+            current = match.group(1)
+        out.append(current)
+    return tuple(out)
 
 
 def _prose_claims(where: str, text: str) -> List[Claim]:
@@ -342,7 +505,14 @@ def scheduling_claims(sources: Dict[str, Optional[str]]) -> Tuple[Claim, ...]:
             for line, value in constants:
                 found.extend(_claims_in_text(where, line, value))
         else:
-            found.extend(_prose_claims(where, text))
+            prose = _prose_claims(where, text)
+            # The section is attached HERE rather than inside `_prose_claims`, because it is a
+            # property of the FILE's shape and that function reads a two-line window with its own
+            # line arithmetic. One reader of the headings, one place it is applied.
+            sections = section_of_line(text)
+            found.extend(
+                [replace(c, section=(sections[c.line] if 0 < c.line < len(sections) else None))
+                 for c in prose])
     return tuple(found)
 
 
@@ -562,11 +732,18 @@ PUBLISHED_COMMITMENTS: Tuple[PublishedCommitment, ...] = (
     #: fail-closed behaviour this module exists for. It is `HELD` for the same reason the 0.0.19
     #: pair were: `account_for` matches on `promised_for == claim.target`, and what this text names
     #: is 0.0.21, which it has not yet moved from. §7g at the accounting layer, filed and unfixed.
+    #:
+    #: 🔴 AND AT THE 0.0.21 CUT IT DID NOT HOLD — the fourth release in a row. Re-declared rather than
+    #: left `HELD`: a held entry for a slot that shipped without the item is a false account, and
+    #: `test_cut_rescheduled_section` is what reads this table to decide whether the notes' section
+    #: is complete. `now_lands` is `"unscheduled"` ON PURPOSE and it is not a placeholder: the v0.0.21
+    #: notes name no new release for the PR gate, because a target nobody has booked work against is
+    #: not a schedule — and printing one here would make this table the place a promise was invented.
     PublishedCommitment(
         fragment="the sub-10-minute PR gate is re-scheduled to 0.0.21",
         subject="PR gate",
-        promised_for="0.0.21", now_lands="0.0.21", status=ACCOUNT_HELD, on="2026-08-27",
-        venue='the v0.0.20 release notes and CHANGELOG, "Re-scheduled" section'),
+        promised_for="0.0.21", now_lands="unscheduled", status=ACCOUNT_DISCLOSED, on="2026-10-05",
+        venue='the v0.0.21 release notes and CHANGELOG, "Re-scheduled" section'),
 )
 
 
@@ -619,7 +796,8 @@ class Verdict:
         return self.state in PASSING
 
     def render(self) -> str:
-        mark = "✗ " if self.state == UNRESOLVED else ("? " if self.state == NOT_CHECKABLE else "  ")
+        mark = ("✗ " if self.state in (UNRESOLVED, UNRESOLVABLE)
+                else ("? " if self.state == NOT_CHECKABLE else "  "))
         return "  %s%-13s %s\n      %s" % (mark, self.state, self.claim.render(), self.detail)
 
 
@@ -636,6 +814,37 @@ def resolve(claim: Claim,
     version being cut rather than against a hand-typed list of dead releases (`removal_state`'s
     shape, one file over).
     """
+    # 🔴 FIRST, AND BEFORE ANY VERSION ARITHMETIC. A release-relative claim's `target` is a PHRASE,
+    # so `version_tuple` would raise on it — and more importantly there is nothing to compare it
+    # against. ⛔ The honest verdict is UNRESOLVABLE, never ABSENT: the check did not fail to find
+    # a plan entry, there IS no question a plan could answer. A promise that re-points at whatever
+    # is being cut can never be false, and a claim that can never be false can never be checked.
+    if claim.pattern in _RELATIVE_PATTERN_NAMES:
+        # ⭐ DATED BY POSITION. A relative promise carries no version, so `SPENT` cannot be reached
+        # through `claim.target` — but the CHANGELOG is sectioned by release, and a promise printed
+        # under 0.0.16's heading was answered four releases ago. Without this, every historical
+        # *"fix scheduled for the next release"* in the changelog reds forever and the only way to
+        # go green is to EDIT HISTORY, which this project refuses everywhere else.
+        # ⛔ STRICTLY OLDER, AND THE ASYMMETRY WITH THE DATED LADDER IS DELIBERATE. A dated claim
+        # NAMING the version being cut is SPENT: its content is landing now. A claim sitting UNDER
+        # that version's heading is the opposite — that section IS the release being cut, so a
+        # relative promise printed there is live and uncheckable. `<=` here made the live case
+        # SPENT, which is the fail-open direction and is what the first draft did.
+        if cutting and claim.section and version_tuple(claim.section) < version_tuple(cutting):
+            return Verdict(claim, SPENT,
+                           "this promise is release-relative and therefore undatable from its own "
+                           "text — but it sits under the %s section, which is OLDER than the "
+                           "version being cut (%s). It is a record of what %s promised, not a live "
+                           "commitment. ⚠ A relative promise in the NEWEST section is a different "
+                           "answer: that section IS the release being cut."
+                           % (claim.section, cutting, claim.section))
+        return Verdict(claim, UNRESOLVABLE,
+                       "this promise is phrased relative to the release (%r), so it carries no "
+                       "version to resolve against and re-targets itself at whatever is being cut. "
+                       "It can never be false, and therefore can never be checked — which makes it "
+                       "WORSE than a dated promise that slipped, not better. Name the release it "
+                       "is owed in, or delete the commitment." % claim.target)
+
     if cutting and version_tuple(claim.target) <= version_tuple(cutting):
         return Verdict(claim, SPENT,
                        "%s is at or before the version being cut (%s), so this records what was "
@@ -704,8 +913,20 @@ class DisclosureReport:
         return self.of(NOT_CHECKABLE)
 
     @property
+    def unresolvable(self) -> Tuple[Verdict, ...]:
+        """Release-relative promises — B5's versionless shape. Red, and its OWN bucket.
+
+        ⛔ NOT folded into `unresolved`, even though both are red. `UNRESOLVED` means *we looked
+        and the plan does not say that*; `UNRESOLVABLE` means *there is no question a plan could
+        answer*. Same colour, different remedies: one is fixed by correcting the plan or the
+        version, the other only by naming a release or deleting the commitment. Two facts, two
+        representations (§7g)."""
+        return self.of(UNRESOLVABLE)
+
+    @property
     def failed(self) -> bool:
-        return bool(self.unresolved) or bool(self.stale) or bool(self.unparseable)
+        return (bool(self.unresolved) or bool(self.unresolvable)
+                or bool(self.stale) or bool(self.unparseable))
 
     @property
     def undecided(self) -> bool:
@@ -767,6 +988,7 @@ __all__ = [
     "RESOLVES", "UNRESOLVED", "NOT_CHECKABLE", "DISCLOSED", "HELD", "SPENT", "PASSING",
     "ACCOUNT_DISCLOSED", "ACCOUNT_HELD", "DECLARATION_MODULE",
     "REASON_NO_CORPUS", "REASON_NO_KEY", "CLAIM_PATTERNS",
+    "UNRESOLVABLE", "RELATIVE_CLAIM_PATTERNS",
     "Claim", "Assignment", "PublishedCommitment", "Verdict", "DisclosureReport",
     "PUBLISHED_COMMITMENTS",
     "version_tuple", "printable_constants", "scheduling_claims", "unparseable",

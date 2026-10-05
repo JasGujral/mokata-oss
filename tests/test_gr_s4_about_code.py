@@ -13,6 +13,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+import _support  # noqa: F401  (puts src/ on the path, and runs the stage-05 provisioning preflight)
+
 from mokata.knowledge.about_code import AboutCodeCheck, check_about_code_anchors
 from mokata.knowledge.query import GraphBackend, QueryResult
 from mokata.knowledge.query import BASIS_STRUCTURAL

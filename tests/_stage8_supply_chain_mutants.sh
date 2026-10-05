@@ -289,9 +289,12 @@ mutant "F01 ★★ docs/talks/ leaves the never-ships list — today's real defe
   '`docs/marketing/`, `docs/talks/`,' \
   '`docs/marketing/`,' "$T_LIST"
 
+# ⚠ PATTERN REFRESHED AT 0.0.21 STAGE 02: `scripts/verify-mirror.sh` joined the never-ships
+# list and the bullet now wraps across two lines. The MUTATION is unchanged.
 mutant "F02 ★★ scripts/check-tracker-tables.py leaves it — the entry the row actually names" "$CM" \
-  '`scripts/release.sh`, `scripts/check-tracker-tables.py`.' \
-  '`scripts/release.sh`.' "$T_LIST"
+  '`scripts/verify-mirror.sh`,
+  `scripts/check-tracker-tables.py`.' \
+  '`scripts/verify-mirror.sh`.' "$T_LIST"
 
 mutant "F03 ★★ the stays-public list loses the helper release.yml runs — stage 6's drift, restored" "$CM" \
   '`scripts/normalize_sdist.py` +

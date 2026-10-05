@@ -9,11 +9,27 @@ Full documentation: <https://mokata.ai/>.
 
 ```bash
 git clone https://github.com/JasGujral/mokata-oss && cd mokata-oss
-pip install -e ".[mcp,schema]" # editable install + both extras (MCP server + jsonschema), for dev
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[mcp,schema]"                        # the package + both dev extras
+pip install -r requirements/ci.txt                    # the TEST dependencies (PyYAML and friends)
 ```
 
 mokata has **no required runtime dependencies**; `jsonschema` is optional and degraded
 over. Python 3.10–3.13 are supported.
+
+> ⚠ **A venv, and `requirements/ci.txt`, are both load-bearing for the test suite** — this is
+> not boilerplate. The suite asks the environment where *its* `mokata-mcp` is, so the console
+> scripts have to be installed into the interpreter that runs it; and `requirements/ci.txt`
+> carries PyYAML, which ~116 tests import and deliberately **fail** on rather than skip.
+>
+> **Without both, a correct tree reports 30 failures and 116 errors.** That is measured, not
+> hypothetical: it is what the documented instructions used to produce on a clean checkout, and
+> the reasonable conclusion a reader drew was that the tree was broken.
+>
+> ⭐ **The suite now REFUSES to run rather than reporting that number.** An unprovisioned
+> interpreter gets a short message naming what is missing and this command, and exits `2` —
+> distinct from `1`, so "your interpreter is wrong" and "your tests failed" are different
+> answers. There is no skip: a run that cannot measure must not report a count.
 
 ## Running the tests (in BOTH jsonschema states)
 

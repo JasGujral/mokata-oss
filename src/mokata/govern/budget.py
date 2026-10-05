@@ -12,6 +12,14 @@ from dataclasses import dataclass, field
 from typing import Any, List
 
 
+#: How many retrieved identifiers a savings label may NAME. Identifiers are not content (see
+#: `MemoryOp`'s docstring and `team_events.notify`), but an UNBOUNDED list of them in an audit
+#: label is a different object from a handful: it is a retrieval manifest, in a field whose
+#: readers treat it as a short name. Stage 10's review found the unbounded version while checking
+#: the report's claim that the event stream is content-free (F4).
+RETRIEVAL_LABEL_ID_CAP = 8
+
+
 @dataclass
 class SavingsEvent:
     label: str
@@ -81,8 +89,27 @@ class SavingsTracker:
         return event
 
     def record_retrieval(self, result: Any) -> SavingsEvent:
-        """Record a JIT-retrieval win (F2): file-dump baseline vs retrieved tokens."""
-        label = "retrieval:" + ",".join(result.identifiers)
+        """Record a JIT-retrieval win (F2): file-dump baseline vs retrieved tokens.
+
+        ⛔ **THE LABEL IS BOUNDED, AND IT WAS NOT (stage 10 review F4).** It read
+        `"retrieval:" + ",".join(result.identifiers)` — every identifier of every retrieved item,
+        unbounded, into the audit ledger and from there into a projected `TokenSpend.label`. A
+        500-item retrieval wrote a 20 KB label; the stage 10 report meanwhile claimed the event
+        stream is *content-free*, and a reader checking that claim found this.
+
+        ⭐ **IDENTIFIERS ARE NOT CONTENT AND THAT IS NOT THE DEFECT.** `MemoryOp`'s own docstring
+        states mokata's position — *"the item's ID and TYPE, never its subject or value"* — and
+        `team_events.notify` ships the same rule. The defect is that this one was UNBOUNDED, so
+        the same sentence covered a three-item retrieval and a dump of the whole store.
+
+        ⚠ The cap DROPS rather than truncates, and names how many it dropped. Half an identifier
+        is a wrong identifier (`notify`'s argument, same reasoning): a reader must never be able
+        to mistake `src/mokata/govern/bud` for a path that exists."""
+        ids = [str(i) for i in (result.identifiers or [])]
+        shown = ids[:RETRIEVAL_LABEL_ID_CAP]
+        label = "retrieval:" + ",".join(shown)
+        if len(ids) > len(shown):
+            label += "+%d more" % (len(ids) - len(shown))
         return self.record(label, result.tokens_if_dumped, result.tokens_retrieved)
 
     def report(self) -> BudgetReport:

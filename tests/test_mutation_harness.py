@@ -1530,5 +1530,59 @@ class TestTheHarnessIsShippable(unittest.TestCase):
         self.assertNotIn("jsvenv", src, "a developer-specific virtualenv leaked into the script")
 
 
+class TestNoSNAPSHOTIsTrackedInTheRepo(unittest.TestCase):
+    """⛔ FOUND 2026-10-04, AND IT HAD BEEN IN THE REPO SINCE 0.0.20 STAGE 08 (`aa6d69d`).
+
+    `tests/_pg_floor.py.bak` was **committed** — a byte-identical copy of a live test module,
+    sitting at exactly the path `mutate.sh` writes its snapshot to. It is the
+    `MUTATE-SH-NO-CONCURRENCY-INTERLOCK` hazard arriving through a door the stage-18 interlock
+    does not cover, because the interlock guards against ANOTHER RUN and this is a file in the
+    INDEX:
+
+      * `mutate.sh:480` is `cp "$target" "$target.bak"` with **no pre-existence check**, so a run
+        on `_pg_floor.py` silently overwrites the tracked file;
+      * `restore` then `mv -f`s it back, which **DELETES a tracked file** — and hole 6's whole
+        promise is that a completed run leaves `git status` clean;
+      * worse, a run that dies *before* the `cp` leaves the trap's `[ -f "$target.bak" ]` branch
+        true, so it restores from a snapshot **this run never took**. Harmless while the copy is
+        byte-identical; the moment somebody legitimately edits `_pg_floor.py`, an early abort
+        reverts that edit with `git status` clean afterwards.
+
+    ⭐ The debris is deleted and this is the guard, because the next copy will arrive the same way
+    it did the first time: `git add -A` in a tree a mutation run was interrupted in. **Repairing
+    `mutate.sh` to REFUSE a pre-existing `.bak` is the mechanical fix and is filed rather than
+    taken here** — it changes the exit contract of the tool currently grading this stage.
+    """
+
+    def _tracked(self):
+        out = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT,
+                             capture_output=True, text=True, check=False)
+        if out.returncode != 0:
+            self.skipTest("not a git checkout")
+        return [p for p in out.stdout.split("\0") if p]
+
+    def test_no_bak_file_is_tracked_anywhere_in_the_repo(self):
+        baks = sorted(p for p in self._tracked() if p.endswith(".bak"))
+        self.assertEqual(baks, [],
+                         "a mutation SNAPSHOT is tracked in the index. `mutate.sh` overwrites "
+                         "`<file>.bak` without checking and deletes it on restore, so a run over "
+                         "the matching target would delete a tracked file and could restore from "
+                         f"a snapshot it never took: {baks}")
+
+    def test_no_REFUSED_RESTORE_copy_is_tracked_either(self):
+        """The displaced snapshot a refusal leaves behind. Committing one of those is worse than
+        committing a `.bak`: it is the pristine copy of a file a run REFUSED to restore, so the
+        repo would carry both sides of an unresolved collision with nothing saying so."""
+        kept = sorted(p for p in self._tracked() if "REFUSED-RESTORE" in p)
+        self.assertEqual(kept, [], f"a refused-restore snapshot is tracked: {kept}")
+
+    def test_the_guard_FIRES_on_a_planted_offender(self):
+        """§7i — the corpus is the real index, so the guard must be shown to catch something."""
+        tracked = self._tracked() + ["tests/_planted.py.bak"]
+        self.assertEqual(sorted(p for p in tracked if p.endswith(".bak")),
+                         ["tests/_planted.py.bak"],
+                         "the predicate this guard uses does not notice a planted snapshot")
+
+
 if __name__ == "__main__":
     unittest.main()

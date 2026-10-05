@@ -13,6 +13,8 @@ import os
 import re
 import unittest
 
+import _support  # noqa: F401  (puts src/ on the path, and runs the stage-05 provisioning preflight)
+
 _HERE = os.path.dirname(__file__)
 _EXT = os.path.normpath(os.path.join(_HERE, "..", "editors", "vscode"))
 

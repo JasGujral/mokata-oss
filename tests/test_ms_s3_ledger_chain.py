@@ -25,6 +25,8 @@ import tempfile
 import textwrap
 import unittest
 
+import _support  # noqa: F401  (puts src/ on the path, and runs the stage-05 provisioning preflight)
+
 from mokata.govern.ledger import AuditLedger, verify_chain
 
 

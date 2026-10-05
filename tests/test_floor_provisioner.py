@@ -34,10 +34,12 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
+import io
 import os
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 
 import _support  # noqa: F401 - puts src/ on the path
@@ -89,17 +91,35 @@ BASH = _support.BASH
 NO_BASH = ("no bash on PATH — the provisioner is a shell script and cannot be RUN here. This is "
            "an un-run check, not a passing one (doc 85 §7g).")
 NO_ROUTE_FIXTURE_UNBUILDABLE = (
-    "the no-route fixture is built from what PYTHON's `shutil.which` can see, and the script is "
-    "run by BASH — on Windows those disagree. Git Bash keeps `grep`/`head` in its own `usr/bin`, "
-    "which is not on the Windows PATH, so the utilities the script needs are never linked into "
-    "the fixture and `floor-python.sh` reports 'pyproject.toml declares no `requires-python`' "
-    "about a pyproject.toml that declares one. ⚠ THIS IS A SKIP AND NOT A FIX, and it is a skip "
-    "because the repair is to resolve the tokens THROUGH BASH (its own PATH, its own `cygpath`), "
-    "which is Windows-only code that cannot be driven from any machine this project runs — "
-    "writing it untested at a release cut is how the 0.0.20 line-ending theory happened. The "
-    "property is graded on every POSIX leg; the fixture is owed a bash-resolved build. See "
-    "doc 84 NO-ROUTE-FIXTURE-ASKS-PYTHON-WHERE-BASH-WILL-LOOK."
+    "no bash, so the no-route fixture cannot be BUILT: its utilities are resolved through bash "
+    "itself (`command -v` in bash's own PATH, `cygpath -w` where one exists). This is an un-run "
+    "check, not a passing one (doc 85 §7g)."
 )
+
+#: 🔴 WHAT THIS SKIP USED TO SAY, AND WHY IT IS GONE — `NO-ROUTE-FIXTURE-ASKS-PYTHON-WHERE-BASH-
+#: WILL-LOOK`, closed at 0.0.21 stage 07. The skip read:
+#:
+#:   "the no-route fixture is built from what PYTHON's `shutil.which` can see, and the script is
+#:    run by BASH — on Windows those disagree. Git Bash keeps `grep`/`head` in its own `usr/bin`,
+#:    which is not on the Windows PATH, so the utilities the script needs are never linked into the
+#:    fixture and `floor-python.sh` reports 'pyproject.toml declares no `requires-python`' about a
+#:    pyproject.toml that declares one. ⚠ THIS IS A SKIP AND NOT A FIX … the repair is to resolve
+#:    the tokens THROUGH BASH (its own PATH, its own `cygpath`), which is Windows-only code that
+#:    cannot be driven from any machine this project runs."
+#:
+#: ⭐ THE REPAIR TURNED OUT NOT TO BE WINDOWS-ONLY CODE. `command -v` is a POSIX builtin and
+#: `cygpath` is guarded by `command -v cygpath`, so the SAME code path runs on every host — which
+#: means it is graded on every POSIX leg rather than written blind for one platform. That is the
+#: difference between "Windows-only code" and "code that asks the shell instead of the
+#: interpreter", and the row's own fix direction had already named it.
+#:
+#: ⛔ WHAT IS STILL UNVERIFIED, SAID PLAINLY: no machine this project owns runs Windows, so the
+#: `cygpath` branch has never executed. It is guarded, it is a no-op where `cygpath` is absent, and
+#: the fixture now REFUSES to hand out a directory whose linked tools bash cannot find back —
+#: so the failure mode on Windows is a loud assertion naming the missing tools, not a wrong answer
+#: about pyproject.toml. The first real Windows execution is still the cut (see
+#: `WINDOWS-HAS-NO-RUNNER-UNTIL-THE-CUT`), and that is the row this stage's other half is about.
+_NO_ROUTE_SKIP_HISTORY = "see doc 84 `NO-ROUTE-FIXTURE-ASKS-PYTHON-WHERE-BASH-WILL-LOOK`"
 
 NOT_POSIX = (NO_BASH + " (or: the synthetic-venv shim below is a POSIX construct — a `bin/python` "
              "shell script is not how a venv presents an interpreter on Windows.)")
@@ -128,6 +148,63 @@ def _offset(floor: str, minors: int) -> str:
 _ROUTE_PREFIXES = ("uv", "python")
 
 _NO_ROUTE_DIR = None
+
+
+def _resolve_through_bash(tokens):
+    """`{token: native path}` for every token BASH can resolve to a real file in ITS PATH.
+
+    ⭐ ASKED OF BASH, NOT OF PYTHON, and that is the row. `command -v` is used rather than `which`
+    because it is a POSIX builtin and needs nothing on PATH to work; a builtin resolves to its own
+    name rather than a path, so anything that is not an existing file is dropped. `cygpath -w` runs
+    only when it exists, which is exactly the Git-Bash case and a no-op everywhere else.
+
+    ⚠ ONE SUBPROCESS FOR THE WHOLE SET. One per token would be ~60 shell spawns per fixture build,
+    and the fixture is built once per process — paying 60 spawns to avoid a loop in shell is the
+    wrong way round."""
+    if not BASH:
+        return {}
+    script = (
+        'for t in "$@"; do\n'
+        '  p="$(command -v -- "$t" 2>/dev/null)" || continue\n'
+        '  case "$p" in /*|?:[\\\\/]*) ;; *) continue ;; esac\n'
+        '  [ -f "$p" ] || continue\n'
+        '  if command -v cygpath >/dev/null 2>&1; then p="$(cygpath -w -- "$p")"; fi\n'
+        '  printf "%s\\t%s\\n" "$t" "$p"\n'
+        'done\n')
+    try:
+        proc = subprocess.run(_support.bash_argv("-c", script, "bash", *tokens),
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                              timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    out = {}
+    for line in (proc.stdout or "").splitlines():
+        if "\t" not in line:
+            continue
+        token, path = line.split("\t", 1)
+        if token and path and os.path.isfile(path):
+            out[token] = path
+    return out
+
+
+def _unreachable_from_bash(names, path_dir):
+    """Which of `names` BASH cannot find when `path_dir` is its ONLY PATH entry.
+
+    The anti-vacuity half of `no_route_path`: the old fixture verified that neither ROUTE was
+    present and never that the script's own TOOLS were, so it passed its own probe on the host
+    where it broke."""
+    if not BASH:
+        return ()
+    script = ('PATH="$1"; shift\n'
+              'for t in "$@"; do command -v -- "$t" >/dev/null 2>&1 || printf "%s\\n" "$t"; done\n')
+    try:
+        proc = subprocess.run(_support.bash_argv("-c", script, "bash",
+                                                 _support.as_posix(path_dir), *names),
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                              timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    return tuple(line.strip() for line in (proc.stdout or "").splitlines() if line.strip())
 
 
 def no_route_path() -> str:
@@ -164,11 +241,21 @@ def no_route_path() -> str:
     tmp = tempfile.mkdtemp(prefix="floor-no-route-")
     atexit.register(shutil.rmtree, tmp, True)
     linked = set()
-    for token in set(re.findall(r"[A-Za-z_][A-Za-z0-9_.\-]*", _read(SCRIPT))):
-        if token.startswith(_ROUTE_PREFIXES):
-            continue
-        resolved = shutil.which(token)
-        if not resolved or token in linked:
+    # 🔴 `NO-ROUTE-FIXTURE-ASKS-PYTHON-WHERE-BASH-WILL-LOOK` (0.0.21 stage 07). This used to call
+    # `shutil.which(token)` — PYTHON's view of PATH — and then hand the directory to a script run
+    # by BASH. On Windows those disagree: Git Bash keeps `grep`/`head` in its own `usr/bin`, which
+    # is not on the Windows PATH, so the script's own tools were never linked in, its `grep` found
+    # nothing, and it reported *"pyproject.toml declares no `requires-python`"* about a file that
+    # declares one.
+    #
+    # ⭐ The fixture's docstring was emphatic that the directory is BUILT, not named, precisely so
+    # the property is host-independent — **and it asked the wrong process where to look.** Asking
+    # BASH closes that: one `bash -c` resolves the whole token set in bash's own PATH and converts
+    # to native paths with `cygpath` when one exists.
+    tokens = sorted(t for t in set(re.findall(r"[A-Za-z_][A-Za-z0-9_.\-]*", _read(SCRIPT)))
+                    if not t.startswith(_ROUTE_PREFIXES))
+    for token, resolved in _resolve_through_bash(tokens).items():
+        if token in linked:
             continue
         try:
             os.symlink(resolved, os.path.join(tmp, token))
@@ -182,6 +269,23 @@ def no_route_path() -> str:
     for name in ("uv", "python%s" % floor):
         assert shutil.which(name, path=tmp) is None, (
             "the no-route fixture still offers %r — it would grade the WRONG branch" % name)
+    # ⭐ AND THE SECOND PROBE, WHICH IS THE WHOLE POINT OF ASKING BASH: everything that WAS
+    # resolved must be reachable FROM BASH inside this directory. The old fixture passed the
+    # exclusion probe above on Windows and still broke, because "neither route is here" and "the
+    # script's own utilities are here" are different facts and only the first was checked (§7g).
+    #
+    # ⚠ THE SET IS WHAT WAS LINKED, NOT A NAMED LIST — and my first version named one
+    # (`grep head sed tr sort`), which failed immediately because `floor-python.sh` uses neither
+    # `tr` nor `sort`. A named list asserts what I think the script needs; the linked set asserts
+    # that the round trip worked, which is the thing that can actually break (a silently failed
+    # symlink, a copy onto a read-only dir, a name bash spells differently).
+    missing = _unreachable_from_bash(sorted(linked), tmp)
+    assert not missing, (
+        "the no-route fixture resolved %s through bash and then could not offer them BACK to "
+        "bash, so `floor-python.sh` cannot parse pyproject.toml and will report 'declares no "
+        "requires-python' about a file that declares one. That is the exact Windows failure this "
+        "fixture was rebuilt to end." % (missing,))
+    assert linked, "the fixture linked NOTHING, so it grades nothing (§7i)"
     _NO_ROUTE_DIR = tmp
     return tmp
 
@@ -199,6 +303,85 @@ def provision_line(stdout, prefix="provision"):
     lines = [line for line in stdout.splitlines() if line.startswith(prefix)]
     assert len(lines) == 1, "expected exactly one %r line:\n%s" % (prefix, stdout)
     return lines[0]
+
+
+@unittest.skipUnless(BASH, NO_BASH)
+class TheNoRouteFixtureAsksBASHWhereBASHWillLook(unittest.TestCase):
+    """🔴 `NO-ROUTE-FIXTURE-ASKS-PYTHON-WHERE-BASH-WILL-LOOK` (0.0.21 stage 07).
+
+    The fixture's utilities were resolved with `shutil.which` — PYTHON's view of PATH — and the
+    directory was then handed to a script run by BASH. On Windows those disagree: Git Bash keeps
+    `grep`/`head` in its own `usr/bin`, which is not on the Windows PATH, so the script's own tools
+    were never linked in and `floor-python.sh` reported *"pyproject.toml declares no
+    `requires-python`"* about a file that declares one.
+
+    ⛔ WHAT CANNOT BE GRADED HERE, SAID RATHER THAN HIDDEN. **On POSIX, `shutil.which` and bash's
+    `command -v` agree**, so swapping the resolver back is observationally identical on every
+    machine this project owns — the mutant for it is EQUIVALENT here and is withdrawn as such in
+    `_stage07_hostile_arrangements_mutants.sh`. ⭐ **That identity IS the row**: *"on POSIX the
+    broken and the correct spelling behave identically"* is why five cuts of Windows failures were
+    invisible to their authors. The asymmetry itself is in the list of things
+    `tests/_hostile_arrangements.py` declares cannot be arranged on POSIX.
+
+    ⭐ WHAT IS GRADED IS THE ROUND TRIP, which is observable everywhere and is the half that
+    actually broke: whatever the fixture resolved must be reachable FROM BASH inside the directory
+    it hands out. The old fixture passed its own exclusion probe on Windows and still broke,
+    because *"neither route is here"* and *"the script's own utilities are here"* are different
+    facts and only the first was checked (§7g)."""
+
+    def test_the_resolver_returns_only_paths_that_EXIST(self):
+        found = _resolve_through_bash(["grep", "head", "sed", "definitely-not-a-real-tool-xyz"])
+        self.assertNotIn("definitely-not-a-real-tool-xyz", found)
+        for token, path in found.items():
+            self.assertTrue(os.path.isfile(path), "%s -> %r is not a file" % (token, path))
+
+    def test_the_resolver_DROPS_shell_builtins(self):
+        """`command -v printf` answers `printf` — the NAME, not a path — because it is a builtin.
+        Linking that would create a file called `printf` containing nothing, and the script would
+        then run it instead of the real one."""
+        found = _resolve_through_bash(["printf", "cd", "export"])
+        for name in ("cd", "export"):
+            self.assertNotIn(name, found, "%r is a builtin and has no path to link" % name)
+
+    def test_the_resolver_finds_a_PLANTED_tool_through_bash(self):
+        """The positive control: without it, every assertion above is also true of a resolver that
+        returns nothing at all — which would make the fixture link nothing and grade nothing."""
+        with tempfile.TemporaryDirectory() as planted:
+            tool = os.path.join(planted, "mokata-planted-tool")
+            with io.open(tool, "w", encoding="utf-8") as handle:
+                handle.write("#!/usr/bin/env bash\nexit 0\n")
+            os.chmod(tool, 0o755)
+            saved = os.environ.get("PATH", "")
+            os.environ["PATH"] = planted + os.pathsep + saved
+            try:
+                found = _resolve_through_bash(["mokata-planted-tool"])
+            finally:
+                os.environ["PATH"] = saved
+        self.assertIn("mokata-planted-tool", found,
+                      "bash could not see a tool on its own PATH, so the resolver is not asking "
+                      "bash anything useful")
+
+    def test_the_fixture_REFUSES_a_directory_whose_tools_bash_cannot_find_BACK(self):
+        """⭐ THE ROUND-TRIP PROBE, graded by breaking it. This is the assertion the old fixture
+        lacked: it verified that neither ROUTE was present and never that the script's own TOOLS
+        were, so it passed its own probe on the host where it broke."""
+        with tempfile.TemporaryDirectory() as empty:
+            missing = _unreachable_from_bash(("grep", "head"), empty)
+        self.assertEqual(("grep", "head"), missing,
+                         "an EMPTY directory was reported as offering grep and head to bash, so "
+                         "the round-trip probe cannot fail and grades nothing (§7i)")
+
+    def test_the_CONTROL_the_real_fixture_passes_its_own_round_trip(self):
+        path = no_route_path()
+        linked = sorted(name for name in os.listdir(path))
+        self.assertTrue(linked, "the fixture linked nothing")
+        self.assertEqual((), _unreachable_from_bash(linked, path))
+
+    def test_the_fixture_still_excludes_BOTH_routes(self):
+        """The property the fixture existed for in the first place, unchanged by the rewrite."""
+        path = no_route_path()
+        for name in ("uv", "python%s" % declared_floor()):
+            self.assertIsNone(shutil.which(name, path=path))
 
 
 class TheScriptIsInTheRepoAndIsRunnable(unittest.TestCase):
@@ -292,7 +475,10 @@ class TheFloorIsDerivedFromTheManifest(unittest.TestCase):
                           "the %s route reuses whatever is already at the venv path: %s"
                           % (prefix, line))
 
-    @unittest.skipUnless(os.name == "posix", NO_ROUTE_FIXTURE_UNBUILDABLE)
+    # ⭐ NO LONGER `skipUnless(os.name == "posix")` — 0.0.21 stage 07 closed
+    # `NO-ROUTE-FIXTURE-ASKS-PYTHON-WHERE-BASH-WILL-LOOK` by resolving the fixture's utilities
+    # through BASH instead of through `shutil.which`. The class is already gated on `BASH`, which
+    # is the honest gate: the fixture needs a shell to be built at all.
     def test_a_dry_run_with_NO_ROUTE_is_not_a_green(self):
         """★ THE §7g HALF OF THE SAME DEFECT, and the one that made it invisible. `--dry-run` used
         to print `<NO ROUTE>` and exit 0: the same machine and the same fact reported as a failure

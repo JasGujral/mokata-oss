@@ -126,7 +126,15 @@ class RidesTheGate(_Base):
     # above, the thing that makes a refusal visible — was reported as a write the decline had
     # leaked. Nothing leaked: with the carve-out disabled entirely, the only two files a DECLINED
     # write touches are `audit/ledger.jsonl` and its `.count`, on every platform.
-    _LEDGER = ".mokata/temp_local/audit"
+    # ➕ R1.S1b ADDS THE SECOND HALF OF THE SAME CARVE-OUT, on the same grounds and not on
+    # new ones. The typed event stream is a PROJECTION of the ledger, wired at
+    # `AuditLedger.record`, so the `write_gate` entry a declined write appends now also lands
+    # as a `gate_decision` event. It is the same refusal, recorded twice in two shapes, for the
+    # same reason the first one is exempt: a refusal nobody can see is not a governed refusal.
+    # ⚠ WHAT IS NOT EXEMPT, and the pin still proves it: with BOTH carve-outs disabled, a
+    # declined write touches `audit/ledger.jsonl`, its `.count`, and the event database — and
+    # nothing else. No memory item, no state key, no file the write named.
+    _AUDIT_SURFACES = (".mokata/temp_local/audit", ".mokata/temp_local/events")
 
     def _snapshot(self):
         out = {}
@@ -134,7 +142,7 @@ class RidesTheGate(_Base):
             for fn in filenames:
                 ab = os.path.join(dirpath, fn)
                 rel = _support.posix_rel(ab, self.root)
-                if rel.startswith(self._LEDGER):
+                if rel.startswith(self._AUDIT_SURFACES):
                     continue
                 try:
                     with open(ab, "rb") as fh:

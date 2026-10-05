@@ -189,17 +189,37 @@ def cmd_ci_check(args: argparse.Namespace) -> int:
 
 
 def _git_changed_files(root: str, base: str) -> list:
-    """The files changed since `base` (`git diff --name-only base...HEAD`). Degrade-clean — any
-    git failure yields an empty list (→ nothing to check → PASS), never a crash."""
+    r"""The files changed since `base` (`git diff --name-only base...HEAD`). Degrade-clean — any
+    git failure yields an empty list (→ nothing to check → PASS), never a crash.
+
+    🔴 REVIEW FINDING 4-6 — THE SAME BLINDNESS AS `knowledge/freshness.py`'s READERS, IN THE ONE
+    PLACE IT GATES A MERGE. `core.quotePath` is on by default and git quotes any path with a
+    non-ASCII byte, a `"`, a `\` or a control character. This function fed `run_ci_check`, which
+    derives `symbols_in_files(root, changed_files)` — so a PR touching an accented path yielded
+    the quoted name, `symbols_in_files` found nothing under it, the spec-awareness leg had nothing
+    to check, and **the gate passed green**:
+
+        symbols for the REAL name     : ['accented_symbol']
+        symbols for git's QUOTED name : []
+
+    ⛔ That is §7e at a merge boundary: an instrument that fails OPEN is a false green, and this one
+    failed open on a filename. `-z` plus NUL splitting closes every quoting class; the degrade-clean
+    empty-list contract above is UNCHANGED — what changed is that a legal filename is no longer a
+    reason to produce it.
+
+    ⚠ `-c core.quotePath=false` was here too and is GONE (§7f, §7d): with `-z` git does not quote at
+    all, so no input distinguishes the two and nothing can grade the flag. See the deleted
+    `_no_quote_path` in `knowledge/freshness.py` for the full measurement."""
     import subprocess
     for spec in (f"{base}...HEAD", base):
         try:
-            out = subprocess.run(["git", "-C", root, "diff", "--name-only", spec],
-                                 capture_output=True, text=True, timeout=30)
+            out = subprocess.run(
+                ["git", "-C", root, "diff", "--name-only", "-z", spec],
+                capture_output=True, text=True, timeout=30)
         except (OSError, subprocess.SubprocessError):
             return []
         if out.returncode == 0:
-            return [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
+            return [p for p in (out.stdout or "").split("\0") if p]
     return []
 
 

@@ -74,6 +74,8 @@ from unittest import mock
 import _writegraph
 import test_si_6_writegate_side_doors as sweep
 
+import _support  # noqa: F401  (puts src/ on the path, and runs the stage-05 provisioning preflight)
+
 
 def _plant(root, files):
     """Write a throwaway package and return its root. Used to prove the audit can go RED."""

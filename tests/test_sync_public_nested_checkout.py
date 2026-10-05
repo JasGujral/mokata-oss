@@ -138,6 +138,7 @@ class _RealScriptHarness:
     def _git(self, *args, cwd, check=True):
         return subprocess.run(["git", *args], cwd=cwd, check=check,
                               capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL,
                               env={**os.environ, **_GIT_ENV})
 
     def _src(self, nested=()):
@@ -145,7 +146,10 @@ class _RealScriptHarness:
         placing the script at `<tree>/scripts/sync-public.sh` makes `<tree>` the source."""
         src = self.tmp()
         os.makedirs(os.path.join(src, "scripts"))
-        shutil.copy2(self.sync_script, os.path.join(src, "scripts", "sync-public.sh"))
+        # `sync-public.sh` plus its companions — see `_support.install_release_scripts` for
+        # why a tree carrying only `sync-public.sh` measures that script's own missing-helper
+        # refusal rather than the behaviour under test.
+        _support.install_release_scripts(_REPO, os.path.join(src, "scripts"))
         self._write(os.path.join(src, "pyproject.toml"), 'version = "9.9.9"\n')
         self._write(os.path.join(src, "README.md"), "shippable\n")
         self._write(os.path.join(src, "src", "pkg", "mod.py"), "def widget():\n    return 1\n")
@@ -330,6 +334,213 @@ class TestTheSourcesOwnGitEntry(_RealScriptHarness, unittest.TestCase):
         self.assertFalse(
             os.path.exists(os.path.join(dest, CHECKOUT_MARKER, "LEAKED-FROM-SOURCE")),
             "the source's .git DIRECTORY was mirrored into the public checkout")
+
+
+@unittest.skipUnless(os.path.exists(SYNC_SH),
+                     "sync-public.sh is dev-only, excluded from the public mirror")
+@unittest.skipIf(_MISSING, f"needs {', '.join(_MISSING)} on PATH")
+class TheDeleterDoesNotForceAndProvesWhereItIsPointing(
+        _RealScriptHarness, unittest.TestCase):
+    """🟢 JAS'S RULING, 2026-10-02: rework the loop so the sync does not end in `rm -rf` — *"build
+    beside and swap, or enumerate deletions"* — and **don't accept "documented" as closure.**
+
+    ⛔ WHAT WAS THERE. `_check_internal` ended in `rm -rf -- "$p"`, run from inside the public
+    checkout, on a path produced by string surgery over `find` output
+    (`d="${marker#./}"; d="${d%/.git}"`). Every comment around it argued the derivation was
+    correct — and the comments were right, which is the problem: a recursive force-delete whose
+    safety rests on three string operations being correct has **no floor**. One wrong expansion is
+    the mirror's object store, or `$HOME`.
+
+    ⭐ THE REMEDY IS STRUCTURAL, NOT A LOUDER WARNING. Containment is PROVED physically, and the
+    delete then names every file it removes and uses `rmdir` for directories — which **cannot**
+    remove a non-empty one. The catastrophic shape is not argued away; it is unavailable.
+
+    ⚠ THESE RUN THE REAL SCRIPT. A textual pin here would assert the code I happened to write, for
+    a rule with two moving parts (a resolver and a deleter). Same reasoning as this file's existing
+    classes, and the same harness."""
+
+    sync_script = SYNC_SH
+
+    def test_the_script_contains_no_recursive_force_delete_at_all(self):
+        """The one textual assertion that belongs here, because it is a statement about the FILE
+        rather than about a behaviour: the construct is gone, not merely unreached. Comments may
+        still discuss it — they are the record of what it replaced — so the test reads only the
+        lines bash would execute."""
+        with open(self.sync_script, encoding="utf-8") as fh:
+            code = fh.readlines()
+        offenders = [(n, ln.rstrip()) for n, ln in enumerate(code, 1)
+                     if "rm -rf" in ln and not ln.lstrip().startswith("#")]
+        self.assertEqual([], offenders,
+                         "a recursive force-delete is back in the executable body of "
+                         "sync-public.sh; Jas's 2026-10-02 ruling was that this script does not "
+                         "end in one. Enumerate the deletion instead (see _enumerated_rm).")
+
+    def test_untracked_junk_is_still_removed_so_the_ruling_cost_nothing(self):
+        """⚠ THE CONTROL, AND IT COMES FIRST. A guard that refuses more than it should would pass
+        every assertion below while quietly breaking the thing the deleter is FOR: internal junk
+        that `git add -A` would otherwise sweep into the release commit."""
+        src, dest = self._src(), self._dest()
+        self._write(os.path.join(dest, "_to_delete", "deep", "nested", "junk.tgz"), "junk\n")
+        self._write(os.path.join(dest, "_to_delete", "top.txt"), "junk\n")
+        os.symlink("/etc/passwd", os.path.join(dest, "_to_delete", "escape"))
+        proc = self._sync(src, dest)
+        self.assertFalse(os.path.exists(os.path.join(dest, "_to_delete")),
+                         "the internal path must still be gone — enumeration is a different "
+                         "mechanism, not a weaker outcome")
+        self.assertIn("CLEANED", proc.stdout)
+        self.assertIn("enumerated:", proc.stdout,
+                      "and it must SAY what it enumerated: the sync's own output is the record "
+                      "of what went")
+        self.assertTrue(os.path.exists("/etc/passwd"),
+                        "⛔ the symlink pointed OUT of the checkout and only the LINK may go — "
+                        "`find` does not follow symlinks, which is why the enumeration is safe "
+                        "where a recursive delete through a link would not be")
+
+    def test_a_path_resolving_OUTSIDE_the_checkout_is_REFUSED_not_deleted(self):
+        """⭐ THE ASSERTION THE WHOLE REWORK EXISTS FOR, and it needs a real offender rather than a
+        hypothetical one: a symlinked DIRECTORY whose name is an internal path, pointing out of the
+        mirror. Under `rm -rf -- "$p"` the link itself would go (harmless); under a resolver that
+        did not check containment, a later `-rf` through it would not be. The guard refuses on the
+        RESOLVED path and says where it pointed, which is the difference between a failed sync and
+        a delete somewhere else."""
+        src, dest = self._src(), self._dest()
+        outside = self.tmp()
+        self._write(os.path.join(outside, "precious.txt"), "do not delete me\n")
+        os.symlink(outside, os.path.join(dest, "_to_delete"))
+        proc = self._sync(src, dest, expect_rc=0)
+        self.assertTrue(os.path.exists(os.path.join(outside, "precious.txt")),
+                        "the file outside the checkout must survive")
+        self.assertFalse(os.path.exists(os.path.join(dest, "_to_delete")),
+                         "and the LINK is what goes — the deleter removes a non-directory "
+                         "entry without recursing, so containment never has to be argued")
+
+    def test_the_resolver_REFUSES_a_path_whose_PARENT_leaves_the_checkout(self):
+        """⭐ ADDED AFTER A MUTANT SURVIVED, and the survivor is the one that mattered: dropping the
+        strictly-inside case entirely — `"$PUBLIC_ROOT"/?*)` → `*)` — was GREEN against this whole
+        file. The symlink test above does not reach it, because a symlinked internal path is deleted
+        as a non-directory ENTRY and never asks about containment at all.
+
+        ⛔ So the offender has to be a path whose PARENT resolves out of the mirror, which is exactly
+        the shape a wrong derivation produces: `cd -P link` lands outside, `pwd -P` reports outside,
+        and `abs` is then a path in somebody else's directory that the deleter would walk. This is
+        the assertion standing between a bad `${marker#./}` and a delete in `$HOME`."""
+        src, dest = self._src(), self._dest()
+        self._sync(src, dest)
+        outside = self.tmp()
+        os.makedirs(os.path.join(outside, "sub"))
+        self._write(os.path.join(outside, "sub", "precious.txt"), "do not delete me\n")
+        os.symlink(outside, os.path.join(dest, "link"))
+        probe = ('set -euo pipefail\ncd "$1"\nPUBLIC_ROOT="$(pwd -P)"\n'
+                 + self._resolver_source()
+                 + '_resolve_under_root "link/sub" "internal-only path"\n')
+        proc = subprocess.run(_support.bash_argv("-c", probe, "bash",
+                                                 _support.as_posix(dest)),
+                              capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL,
+                              env={**os.environ, **_GIT_ENV})
+        self.assertNotEqual(0, proc.returncode,
+                            "a path whose parent resolves outside the public checkout must be "
+                            f"REFUSED; the resolver returned 0 and echoed:\n{proc.stdout}")
+        self.assertIn("NOT inside the public checkout", proc.stdout + proc.stderr,
+                      "and the refusal must name WHICH check failed — a generic abort reads the "
+                      "same as the .git one and the traversal one (§7g)")
+        self.assertIn(os.path.realpath(outside), proc.stdout + proc.stderr,
+                      "and it must print where the path actually pointed, because that is the "
+                      "only way a human debugs a wrong derivation")
+        self.assertTrue(os.path.exists(os.path.join(outside, "sub", "precious.txt")))
+
+    def test_the_resolver_REFUSES_the_mirrors_own_git_directory_BY_NAME(self):
+        """§7f, re-reasoned rather than inherited. The old comment argued that the `.git` omission
+        from `INTERNAL_PATHS` must be the ONLY defence, because a second one covering the same path
+        could not be graded — and that was correct while the deleter was `rm -rf`. It is no longer:
+        the resolver refuses `$PUBLIC_ROOT/.git` with its own message and its own exit, so the two
+        defences produce DIFFERENT observable failures and both can be graded. §7f is about
+        defences that cannot be told apart, not about how many there are.
+
+        Driven as a function rather than through a sync, because reaching it through `INTERNAL_PATHS`
+        would mean editing the array the other pin guards."""
+        src, dest = self._src(), self._dest()
+        self._sync(src, dest)                      # lay the mirror down, so DEST/.git is real
+        probe = (
+            'set -euo pipefail\n'
+            'cd "$1"\n'
+            # the two lines the script derives, replayed verbatim
+            'PUBLIC_ROOT="$(pwd -P)"\n'
+            + self._resolver_source() +
+            '_resolve_under_root ".git" "internal-only path"\n')
+        proc = subprocess.run(_support.bash_argv("-c", probe, "bash",
+                                                 _support.as_posix(dest)),
+                              capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL,
+                              env={**os.environ, **_GIT_ENV})
+        self.assertNotEqual(0, proc.returncode,
+                            "the resolver must REFUSE the mirror's own git directory; it "
+                            f"returned 0 and printed:\n{proc.stdout}")
+        self.assertIn("MIRROR'S OWN git directory", proc.stdout + proc.stderr,
+                      "and it must say WHICH refusal this is — a generic abort would read the "
+                      "same as the containment one (§7g)")
+        self.assertTrue(os.path.isdir(os.path.join(dest, ".git")),
+                        "and nothing was deleted")
+
+    def test_the_resolver_REFUSES_a_traversal_and_the_root_itself(self):
+        src, dest = self._src(), self._dest()
+        self._sync(src, dest)
+        for arg in ("..", ".", "/"):
+            probe = ('set -euo pipefail\ncd "$1"\nPUBLIC_ROOT="$(pwd -P)"\n'
+                     + self._resolver_source()
+                     + '_resolve_under_root "%s" "internal-only path"\n' % arg)
+            proc = subprocess.run(_support.bash_argv("-c", probe, "bash",
+                                                     _support.as_posix(dest)),
+                                  capture_output=True, text=True,
+                                  stdin=subprocess.DEVNULL,
+                                  env={**os.environ, **_GIT_ENV})
+            self.assertNotEqual(0, proc.returncode,
+                                f"_resolve_under_root({arg!r}) must refuse; it returned 0 and "
+                                f"printed:\n{proc.stdout}")
+
+    def test_the_CONTROL_the_resolver_ACCEPTS_an_ordinary_path_inside(self):
+        """Without this, every refusal above is also true of a resolver that refuses everything —
+        which would break the deleter and pass four tests."""
+        src, dest = self._src(), self._dest()
+        self._sync(src, dest)
+        os.makedirs(os.path.join(dest, "scratch"), exist_ok=True)
+        probe = ('set -euo pipefail\ncd "$1"\nPUBLIC_ROOT="$(pwd -P)"\n'
+                 + self._resolver_source()
+                 + '_resolve_under_root "scratch" "internal-only path"\n')
+        proc = subprocess.run(_support.bash_argv("-c", probe, "bash",
+                                                 _support.as_posix(dest)),
+                              capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL,
+                              env={**os.environ, **_GIT_ENV})
+        self.assertEqual(0, proc.returncode,
+                         f"an ordinary path inside the checkout must resolve:\n{proc.stdout}\n"
+                         f"{proc.stderr}")
+        # ⚠ `as_posix` ON THE EXPECTATION, not just on the input — caught by
+        # `test_repo_paths_invariant.test_no_module_converts_one_side_of_a_comparison_and_not_the_
+        # other`. This module already passes `as_posix(dest)` INTO bash, so bash answers with a
+        # `/`-spelled path; leaving the expectation as a bare `os.path.join` would compare it
+        # against a `\`-spelled one on Windows. Converting one side of a pair and not the other is
+        # the exact defect that detector exists for, and it found this line on its first run.
+        self.assertEqual(_support.as_posix(os.path.realpath(os.path.join(dest, "scratch"))),
+                         proc.stdout.strip(),
+                         "and it echoes the PHYSICAL path, which is what the deleter acts on")
+
+    # --- the seam -----------------------------------------------------------
+    def _resolver_source(self):
+        """`_resolve_under_root`'s real body, lifted from the real script.
+
+        ⚠ EXTRACTED RATHER THAN RE-WRITTEN, and that is the whole point: a copy of the function in
+        this file would be a test of my transcription (§7c — the observer is not the repo). If the
+        extraction ever fails to find the function, that is a failure, not a skip."""
+        with open(self.sync_script, encoding="utf-8") as fh:
+            code = fh.read()
+        start = code.find("_resolve_under_root() {")
+        self.assertNotEqual(-1, start,
+                            "_resolve_under_root is gone from sync-public.sh — the containment "
+                            "proof Jas's ruling asked for is what these tests grade")
+        end = code.find("\n}\n", start)
+        self.assertNotEqual(-1, end, "could not find the end of _resolve_under_root")
+        return code[start:end + 3]
 
 
 @unittest.skipUnless(os.path.exists(SYNC_SH), "sync-public.sh is dev-only")

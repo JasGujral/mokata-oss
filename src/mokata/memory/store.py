@@ -104,6 +104,32 @@ class MemoryStats:
                 f"({self.reads} reads / {self.writes} writes)")
 
 
+def merge_counters(current: Any, *, reads: int = 0, writes: int = 0) -> Dict[str, Any]:
+    """Add the deltas to `memory_stats` AND KEEP EVERY OTHER KEY. Pure; the mutator body.
+
+    The whole content of this function is the sentence `_persist_stats` was missing for five
+    releases: a `StateStore.update` mutator returns the file's ENTIRE new value, so a literal
+    naming only the keys the caller came to change deletes the rest. There was nothing else in
+    the file to delete, so the defect was latent rather than observed — and H-2's `calibration`
+    section (`govern.calibration.CALIBRATION_STATS_KEY`) is the sibling that made it real.
+
+    Extracted rather than inlined so BOTH writers of this one file are the same shape and a test
+    can RUN this instead of reading the lambda it lives in: `govern.calibration.merged_stats` is
+    the other half, and each one preserves what the other wrote."""
+    base: Dict[str, Any] = dict(current) if isinstance(current, dict) else {}
+    try:
+        prev_reads = int(base.get("reads", 0) or 0)
+    except (TypeError, ValueError):
+        prev_reads = 0
+    try:
+        prev_writes = int(base.get("writes", 0) or 0)
+    except (TypeError, ValueError):
+        prev_writes = 0
+    base["reads"] = prev_reads + int(reads)
+    base["writes"] = prev_writes + int(writes)
+    return base
+
+
 @dataclass
 class WriteResult:
     item: Optional[MemoryItem]
@@ -430,7 +456,16 @@ class MemoryStore:
         process's view is the true total, not just its own share.
 
         Single-process: the merged value equals the in-memory total, so the output is unchanged. A
-        store without `update` (an injected fake) keeps the previous blind write."""
+        store without `update` (an injected fake) keeps the previous blind write.
+
+        ⚠ 0.0.21 STAGE 09 — THIS MUTATOR USED TO RETURN A TWO-KEY LITERAL, so it did not merely
+        fail to merge the counters' siblings: it DELETED them. The mutator's return value is the
+        WHOLE new value of the file, so anything else the file held was gone on the next counted
+        read. Nothing was ever lost, because `memory_stats.json` held exactly those two keys —
+        which is why a latent §7j (a read-modify-write that TYPES its own schema) sat here
+        unnoticed. H-2 adds a `calibration` section to this same file, so the hazard became live:
+        a hook would measure the token ratio and the next `recall` would erase it. The fix is the
+        general one — preserve what you did not come to change — not a third key in the literal."""
         store = self._stats_store
         if store is None:
             return
@@ -439,14 +474,48 @@ class MemoryStore:
             return
         merged = store.update(
             self._stats_key,
-            lambda cur: {"reads": int((cur or {}).get("reads", 0) or 0) + reads,
-                         "writes": int((cur or {}).get("writes", 0) or 0) + writes},
+            lambda cur: merge_counters(cur, reads=reads, writes=writes),
             default={"reads": 0, "writes": 0})
         self.stats = MemoryStats.from_dict(merged)
 
     def _bump_read(self, n: int = 1) -> None:
         self.stats.reads += n            # in-memory total (authoritative with no stats store)
         self._persist_stats(reads=n)     # ... then re-synced from the merged on-disk total
+        self._emit_memory_read(n)
+
+    def _emit_memory_read(self, n: int) -> None:
+        """R1.S1c — a `MemoryOp` for a counted READ. Never raises.
+
+        ⭐ **READS ARE THE HALF THE LEDGER CANNOT SEE.** Memory writes and heals all pass the
+        WriteGate and land in the audit ledger, so the projection already turns them into
+        `MemoryOp` events. A read is ungated by design (P2 is about durable writes) and is
+        therefore recorded nowhere — so "what did this session actually look at" had no answer
+        in any store. This is that answer, and it is the one event type here with no ledger twin.
+
+        ⚠ **VOLUME IS BOUNDED BY `_bump_read`'S OWN CONTRACT, NOT BY A CAP HERE.** Three
+        separate docstrings in this module exist to keep the per-turn injection path from
+        counting a read — `scoped_active` and the offer path deliberately do not bump, because
+        `memory_stats.reads` would otherwise become a count of TURNS. This rides that
+        discipline rather than adding a second one: wherever a read is worth counting it is
+        worth an event, and where it is not counted it is not evented.
+
+        ⛔ **IT CARRIES A COUNT AND NOTHING ELSE — no id, no subject, no value.** A read touches
+        the items a query matched, and naming them would put the SHAPE of a user's memory into a
+        store that is queried and exported. The write path's events carry an id because a write
+        names one item a human approved; a read names whatever it found."""
+        try:
+            store = self._stats_store
+            root = getattr(store, "root", None)
+            if not isinstance(root, str):
+                return
+            from ..tdd_state import root_of_state_dir
+            repo = root_of_state_dir(root)
+            if not repo:
+                return
+            from ..events import MemoryOp, emit as emit_event
+            emit_event(repo, MemoryOp(op="read", count=int(n)))
+        except Exception:  # noqa: BLE001 — observability never fails the read it describes
+            return
 
     def _bump_write(self, n: int = 1) -> None:
         self.stats.writes += n

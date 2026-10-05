@@ -18,6 +18,8 @@ without a live server.
 
 import unittest
 
+import _support  # noqa: F401  (puts src/ on the path, and runs the stage-05 provisioning preflight)
+
 from mokata.knowledge import (
     CodeReviewGraphBackend,
     KnowledgeLayer,

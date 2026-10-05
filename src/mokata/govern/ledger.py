@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-from .. import TEMP_LOCAL_DIRNAME
+from .. import MOKATA_DIR as MOKATA_DIR_NAME, TEMP_LOCAL_DIRNAME
 from ..oslock import file_lock
 
 AUDIT_DIRNAME = "audit"
@@ -196,6 +196,72 @@ class AuditLedger:
     def from_mokata_dir(cls, mokata_dir: str) -> "AuditLedger":
         return cls(cls.path_for(mokata_dir))
 
+    @staticmethod
+    def root_of_path(ledger_path: str) -> Optional[str]:
+        """The repo root a ledger path belongs to — the INVERSE of `path_for`.
+
+        R1.S1b needs it because the event projection is rooted at the REPO and the ledger only
+        ever holds a path. Written as an inverse rather than as four `dirname`s at the call site
+        for the reason `tdd_state.root_of_state_dir` gives: the forward direction is one
+        expression in one place, and so is the backward one. Returns None when the path is not
+        a ledger path, rather than a root nobody asked for."""
+        # ⛔ STRUCTURAL, NOT A STRING SUFFIX, and the first draft was the string. It compared the
+        # path against a joined tail and then had to spell `tail.replace(os.sep, "/")` to cover
+        # the other platform — which `test_repo_paths_invariant` convicted on sight, correctly:
+        # *a `.replace` at a consumer is evidence of an unrouted producer, not a fix.* Walking
+        # the four components needs no conversion at all, on either platform.
+        full = os.path.abspath(ledger_path)
+        audit = os.path.dirname(full)
+        temp_local = os.path.dirname(audit)
+        mokata = os.path.dirname(temp_local)
+        if (os.path.basename(full) != LEDGER_FILENAME
+                or os.path.basename(audit) != AUDIT_DIRNAME
+                or os.path.basename(temp_local) != TEMP_LOCAL_DIRNAME
+                or os.path.basename(mokata) != MOKATA_DIR_NAME):
+            return None
+        return os.path.dirname(mokata)
+
+    # ------------------------------------------------------------- R1.S1b: the event projection
+    #
+    # ⭐ THE PROJECTION POINT IS HERE AND NOT AT THE 90 CALL SITES, which is §7i applied before
+    # the fact: a guard wired at the sites it can see protects the sites it can see, and the 91st
+    # is written next week by someone who never read `events/projection.py`. doc 42 R1.S1b asks
+    # for exactly this — "the ledger stays canonical, events derive from it".
+    #
+    # ⚠ It runs OUTSIDE `hold()`. The ledger's cross-process lock exists so two Claude Code
+    # windows cannot interleave an append; taking a second file's lock while holding it is how a
+    # deadlock gets written, and the projection has nothing to gain from atomicity with the
+    # append it describes (a lost event costs a row in a derived store, and the canonical record
+    # is already on disk by then).
+
+    # ⛔ `_events_enabled()` USED TO LIVE HERE AND IS DELETED (§7d — pre-1.0 means delete, not
+    # deprecate). It asked `events.store.enabled_for_root` the same question `events.store.emit`
+    # now asks for every root-string caller, and TWO DEFENCES THAT CANNOT BE TOLD APART ARE
+    # UNTESTABLE (§7f): a mutant that broke either copy would have survived the suite, because the
+    # other one still answered. ⚠ It existed because `emit` only consulted the toggle when handed
+    # a `Surface` — and this ledger was the ONE producer that noticed, which is exactly why
+    # `events.enabled: false` appeared to work while doing nothing for the other five (review
+    # F1). The toggle is honoured in one place now, and this projection's own `if not root`
+    # check below is what it kept: a ledger outside any repo projects nothing, which is a
+    # different question from whether events are on.
+
+    def _project(self, entry: Dict[str, Any]) -> None:
+        """Derive a typed event from one appended ledger entry. Never raises, never blocks."""
+        try:
+            root = self.root_of_path(self.path)
+            if not root:
+                return
+            from ..events.projection import project
+            from ..events.store import emit as _emit
+            payload = project(str(entry.get("kind", "")), entry)
+            if payload is None:
+                return                      # not a governance event — a real answer, see the register
+            seq = entry.get("seq")
+            _emit(root, payload, actor=str(entry.get("actor") or ""),
+                  ledger_seq=seq if isinstance(seq, int) else None)
+        except Exception:  # noqa: BLE001 — the projection NEVER fails the canonical append
+            return
+
     # --- cross-process locking (reentrant in-process) -----------------------------------------
     def _lock_path(self) -> str:
         d, base = os.path.dirname(self.path), os.path.basename(self.path)
@@ -290,7 +356,9 @@ class AuditLedger:
                 fh.flush()
                 os.fsync(fh.fileno())
             self._write_counter(entry["seq"], entry[_HASH_FIELD])
-            return entry
+        # Outside `hold()` — see the note above the projection helpers.
+        self._project(entry)
+        return entry
 
     def entries(self) -> List[Dict[str, Any]]:
         if not os.path.exists(self.path):
