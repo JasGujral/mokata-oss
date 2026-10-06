@@ -92,6 +92,14 @@ def _prompt_reaching_modules():
     return found
 
 
+#: The sweep's bound. ⚠ MEASURED PER PLATFORM (0.0.21 cut, mirror run 37438013172): ~48 s on
+#: Linux, but the windows-latest py3.10 leg — whose WHOLE suite ran 3162 s against Linux's ~670 s —
+#: crossed 150 s with the sweep still printing output, i.e. slow, not hung. A bound sized for one
+#: box read as a HANG on a box ~4.7x slower. Windows gets the same ratio of headroom, not a
+#: different meaning: a genuine recursion (see `_SELF`) still dies with a name on both.
+SWEEP_TIMEOUT_S = 600 if os.name == "nt" else 150
+
+
 def run_sweep(modules, extra_tree=None):
     """Run the sweep over `modules` and return (proc, journal records)."""
     env = dict(os.environ)
@@ -116,15 +124,15 @@ def run_sweep(modules, extra_tree=None):
         # `TimeoutExpired`, i.e. a RED with a name on it.
         try:
             proc = subprocess.run(argv, cwd=_TESTS, env=env, capture_output=True, text=True,
-                                  stdin=subprocess.DEVNULL, timeout=150)
+                                  stdin=subprocess.DEVNULL, timeout=SWEEP_TIMEOUT_S)
         except subprocess.TimeoutExpired as expired:
             raise AssertionError(
-                "the tty sweep did not finish within 150s over %d module(s). The measured "
-                "cost is ~48s, so this is a HANG rather than a slow box — and a guard for a "
-                "row about hanging suites must fail with a name rather than stall. The usual "
-                "cause is the swept set including THIS module, which makes the sweep sweep "
-                "itself (see `_SELF`).\n--- tail ---\n%s"
-                % (len(modules), (expired.output or b"")[-1500:])) from expired
+                "the tty sweep did not finish within %ds over %d module(s). The measured "
+                "cost is ~48s on Linux, so this is a HANG rather than a slow box — and a guard "
+                "for a row about hanging suites must fail with a name rather than stall. The "
+                "usual cause is the swept set including THIS module, which makes the sweep "
+                "sweep itself (see `_SELF`).\n--- tail ---\n%s"
+                % (SWEEP_TIMEOUT_S, len(modules), (expired.output or b"")[-1500:])) from expired
         records = []
         if os.path.exists(journal):
             with io.open(journal, encoding="utf-8") as fh:

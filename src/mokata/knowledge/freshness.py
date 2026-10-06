@@ -425,7 +425,13 @@ def git_head_sha(root: str) -> Optional[str]:
 
 
 def _default_git_run(root: str, args: List[str]):
-    p = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, timeout=10)
+    # ⚠ UTF-8, NAMED (0.0.21 cut, mirror run 37438013172, all three Windows legs). `text=True`
+    # alone decodes with the LOCALE codec — cp1252 on Windows — while git emits paths as raw UTF-8
+    # bytes under `-z`. `caf\u00e9.py` came back mojibaked (two cp1252 chars for the one UTF-8
+    # e-acute): a path that names no file, so signal 2 reported a change nothing could find. `replace` keeps an undecodable byte VISIBLE as U+FFFD
+    # rather than raising inside a degrade-clean reader.
+    p = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=10)
     return p.returncode, p.stdout
 
 

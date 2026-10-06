@@ -435,6 +435,9 @@ class TheBaselineIsADDITIVENow(unittest.TestCase):
         self.assertTrue(self._pass().fresh, "a touch is not a change")
         self.assertTrue(self._pass().fresh, "and it must not re-drift on the next pass either")
 
+    @unittest.skipIf(os.name == "nt", "st_ctime is the CREATION time on Windows and does not move "
+                     "on a content write — this class is DISCLOSED open there (freshness.py, the "
+                     "ctime clause), not claimed closed, so it is not graded there")
     def test_4_1_a_SAME_SIZE_edit_that_RESTORES_the_mtime_is_still_caught(self):
         """🔴 REVIEW FINDING 4-1 — a REAL content edit to a tracked, indexed, non-ignored `.py` read
         `fresh=True` with an EMPTY note. §7g: the same representation as a genuinely clean tree.
@@ -447,6 +450,14 @@ class TheBaselineIsADDITIVENow(unittest.TestCase):
         ⭐ `st_ctime` is the inode CHANGE time and POSIX gives userspace no way to set it. Measured
         on both attacks: mtime False, size False, **ctime True**."""
         ab = os.path.join(self.root, "a.py")
+        # ⚠ THE PREMISE WAS A CLOCK RACE (0.0.21 cut, release.sh preflight, macOS). With git's
+        # default `core.trustctime=true` its stat cache compares ctime to the SECOND, so the premise
+        # below held only when the write landed in the same wall-clock second as `git add` — and
+        # failed whenever `_pass()` carried it across one. Pin what the docstring describes: a git
+        # whose stat cache trusts mtime + size alone (`trustctime=false`, the documented setting
+        # for exactly the restore/vendor-drop workflows this attack models). mokata's OWN ctime
+        # clause is untouched by this — it reads `st_ctime` itself, which is the point.
+        _git(self.root, "config", "core.trustctime", "false")
         os.utime(ab, (1700000000, 1700000000))        # a ROUND mtime, as tar/touch -d gives
         _git(self.root, "add", "-A")
         _git(self.root, "commit", "-qm", "round mtime")
