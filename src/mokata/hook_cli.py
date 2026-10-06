@@ -419,6 +419,29 @@ def gate_guard_main(argv: Optional[List[str]] = None) -> int:
 # dirty-track (PostToolUse, ASYNC OBSERVABILITY hook — GR.S4)
 # ======================================================================================
 
+def _calibrate_from_transcript(root: str, payload: dict, session_id: Optional[str]) -> None:
+    """H-2 — fold the transcript's new assistant messages into `memory_stats.calibration` and
+    log ONE ledger record per model with a REAL `actual`, so `doctor`'s `calibration-drift`
+    finding can fire outside a test for the first time since R11 shipped it.
+
+    Guarded end to end and silent: this is the async observability lane, and `observe` already
+    returns a reason rather than raising. ⚠ It REFUSES on a repo that is not a mokata repo —
+    writing `memory_stats` would otherwise create `.mokata/` in a tree the user never
+    initialized, which is the one thing a hook on an uninitialized repo must not do (see
+    `session_start_main`'s WT-ROOT comment for the same rule arriving from the other side)."""
+    try:
+        transcript_path = payload.get("transcript_path")
+        if not isinstance(transcript_path, str) or not transcript_path.strip():
+            return
+        from .config import Surface
+        if not Surface.is_initialized(root):
+            return
+        from .govern.calibration import observe
+        observe(root, transcript_path=transcript_path.strip(), session_id=session_id or "")
+    except Exception:  # noqa: BLE001 — the async lane NEVER fails a tool call
+        pass
+
+
 def dirty_track_main(argv: Optional[List[str]] = None) -> int:
     """Append the just-written path to the session graph dirty-set (GR.S4).
 
@@ -461,13 +484,24 @@ def dirty_track_main(argv: Optional[List[str]] = None) -> int:
             if p:
                 paths = [p]
 
+        from .config import find_project_root
+        root = find_project_root(cwd)
+
+        # H-2 — close R11's calibration loop while we are already in this envelope. EVERY hook
+        # payload carries `transcript_path`, and that file is the only place a text mokata can
+        # read and a real token count the harness reports line up; `govern.calibration` reads it
+        # incrementally behind `adapters.transcript` (doc 85 §7l: read-only, adapter-wrapped,
+        # hooks primary) and never raises. It runs BEFORE the dirty-set block and outside its
+        # `not paths` exit on purpose — a PostToolUse call with nothing to mark is still a turn
+        # whose output is measurable, and tying the measurement to the dirty-set's own early
+        # return would have made the sample set a side effect of someone else's guard.
+        _calibrate_from_transcript(root, payload, session_id)
+
         if not paths:
             return 0                       # nothing to record — still a clean success
 
-        from .config import find_project_root
         from .knowledge.freshness import mark_dirty
         from .repo_paths import name_of
-        root = find_project_root(cwd)
         # The dirty set is a serialized list of NAMES: `freshness`'s cold walk fills the same
         # channel with `name_of(...)` and the two are matched against each other and against the
         # knowledge index's keys. This loop built them with a bare `relpath` until the invariant

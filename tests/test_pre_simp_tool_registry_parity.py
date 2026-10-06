@@ -42,6 +42,12 @@ SNAPSHOT_FULL = [
     # than slotted beside the memory tools it belongs with by domain, so every pre-existing
     # position is unchanged (the rule this snapshot exists to enforce, same as WT-LIST above).
     'consolidate',
+    # CM.S5 (0.0.21 stage 11) — `events_share`, publishing the typed event stream to the team's own
+    # store. APPENDED to the tail of the WRITE block, not slotted beside `audit_share` where it
+    # belongs by domain, for exactly the reason the two notes above give: every pre-existing
+    # position must be unchanged. (The first draft DID slot it by domain, and this snapshot caught
+    # it — which is the whole value of recording an order rather than a set.)
+    'events_share',
     'approve',
 ]
 SNAPSHOT_WRITE = [
@@ -50,6 +56,7 @@ SNAPSHOT_WRITE = [
     'spec_amend', 'spec_check', 'init', 'reconfigure', 'config_set', 'export_stack',
     'stacks_install',
     'consolidate',                     # M-4/R5 — appended, see SNAPSHOT_FULL
+    'events_share',                    # CM.S5 — appended, see SNAPSHOT_FULL
 ]
 
 

@@ -82,9 +82,23 @@ EOF
 mutant "C02 the ci.txt install moves INSIDE the present branch (absent leg still broken)" \
   "$R" "$C02_OLD" "$C02_NEW" "$T"
 
-mutant "C03 ci.yml stops installing requirements/ci.txt — the DERIVED set silently shrinks" "$C" \
-  '        run: pip install --require-hashes -r requirements/ci.txt' \
-  '        run: pip install -e .' "$T"
+# ⚠ RE-AIMED AT THE 0.0.21 CUT. `hooks-execute` and `live-db` now install ci.txt too (mirror run
+# 37310393789 went red without it), so the bare install line occurs three times and a union over
+# jobs no longer SHRINKS when one goes. The mutant now removes the `test` job's own install — the
+# two-line old text is unique — and is killed by the PER-JOB pin, which is the check the union
+# could never be.
+C03_OLD=$(cat <<'EOF'
+        # regenerated from requirements/ci.in — see requirements/README.md.
+        run: pip install --require-hashes -r requirements/ci.txt
+EOF
+)
+C03_NEW=$(cat <<'EOF'
+        # regenerated from requirements/ci.in — see requirements/README.md.
+        run: pip install -e .
+EOF
+)
+mutant "C03 the test job stops installing requirements/ci.txt — one suite job left unprovisioned" \
+  "$C" "$C03_OLD" "$C03_NEW" "$T"
 
 # ==== the derivation itself ====================================================================
 

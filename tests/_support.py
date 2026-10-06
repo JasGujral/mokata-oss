@@ -7,6 +7,36 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+# --- STAGE 05: THE INTERPRETER REFUSES BEFORE IT COUNTS ----------------------------------------
+# `NO-COMMAND-PROVISIONS-THE-INTERPRETER-THE-SUITE-NEEDS`. A full run on an unprovisioned
+# interpreter returned 30 failures and 116 errors on a CORRECT tree, and the documented way to run
+# the suite was that way. ⛔ An unprovisioned run must not be able to report a NUMBER at all — a
+# skip reports `OK (skipped=146)`, which is a green with a footnote, and that is not the same fact
+# (§7g). ⛔ `_provisioning` calls `os._exit` — `SystemExit` was tried first and `unittest`'s loader
+# swallowed it into a `_FailedTest`, printing `Ran 1 test … FAILED (errors=1)`, i.e. a number, per
+# module. See that module's docstring; the measurement is recorded there.
+#
+# ⚠ HERE AND NOT IN A `tests/__init__.py`, WHICH THE FIX SHAPE NAMED. Discovery runs with
+# `-t tests`, so `tests/` is the top-level directory and not a package — a `tests/__init__.py`
+# would not be imported at all, and the refusal would simply never fire. ⭐ EVERY test module in
+# this tree imports `_support` to reach `src/`, which makes this the one import that is actually
+# on every path. `test_a31_the_interpreter_and_the_path` grades that claim rather than trusting it.
+#
+# 🔴 `THE-PRECUT-PATH-MASKED-THE-RELEASE-PATH` (0.0.21 cut, 2026-10-05). `_provisioning` is this
+# file's SIBLING, and the bare import below found it only because `tests/` happened to be on
+# `sys.path` — true for the unit suite (`-t tests`) and for the precut (`PYTHONPATH=tests`), FALSE
+# for `release.sh`'s integration leg (`discover -s tests/integration -t tests/integration`), which
+# loads this file by PATH through `tests/integration/_support.py`. All 27 integration modules died
+# at import on the release machine and on no other run. ⭐ Resolve the sibling relative to THIS
+# FILE, not to whoever loaded it. APPENDED, not inserted at 0: `tests/` must never outrank the
+# integration package's own same-named modules (`_support` above all) in that suite's lookup.
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _TESTS_DIR not in sys.path:
+    sys.path.append(_TESTS_DIR)
+import _provisioning  # noqa: E402
+
+_provisioning.refuse_unless_provisioned()
+
 
 # --- WINDOWS PORTABILITY: THE TWO THINGS A POSIX-ONLY AUTHOR GETS WRONG -------------------
 # Both of these were found the expensive way — 19 of the 20 tests that reded on all three Windows
@@ -687,3 +717,34 @@ class stdin_is:
     def __exit__(self, *_exc):
         import sys as _sys
         _sys.stdin = self.orig
+
+
+# --- the release scripts, copied into a synthetic tree ------------------------------------------
+#: `sync-public.sh` does not stand alone any more: since 0.0.21 stage 02 it asks
+#: `scripts/verify-mirror.sh` for the mirror's default branch rather than guessing `main`
+#: (`RELEASE-SH-HARDCODES-main`). A synthetic tree carrying only `sync-public.sh` is therefore not
+#: a copy of the script — it is a copy that hits the script's own "my helper is missing" refusal,
+#: and that refusal is what three test modules measured instead of what they meant to.
+#:
+#: ⚠ THREE CALL SITES WANTED THIS AND I ADDED THE THIRD, which is the moment to make it one
+#: declaration rather than the moment to copy the line again. A fourth site that copies by hand
+#: will drift the day a second companion appears; this one cannot.
+SYNC_COMPANIONS = ("sync-public.sh", "verify-mirror.sh")
+
+
+def install_release_scripts(repo_root, dest_scripts_dir, names=SYNC_COMPANIONS):
+    """Copy the release scripts a synthetic source tree needs into `<tree>/scripts/`.
+
+    Returns the names actually copied. A name that is absent from `repo_root` is SKIPPED rather
+    than raised on: these files are internal-only, so a shipped-subset run legitimately has none
+    of them, and the caller's own `skipUnless` guard is what decides whether that matters.
+    """
+    import shutil as _shutil
+    os.makedirs(dest_scripts_dir, exist_ok=True)
+    copied = []
+    for name in names:
+        src = os.path.join(repo_root, "scripts", name)
+        if os.path.exists(src):
+            _shutil.copy2(src, os.path.join(dest_scripts_dir, name))
+            copied.append(name)
+    return tuple(copied)

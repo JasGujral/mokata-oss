@@ -117,6 +117,48 @@ class WriteGate:
                                       content_hash=content_hash_for(req), run=req.run)
         return None
 
+    def _emit_scan_hits(self, req: "WriteRequest", findings: Any,
+                        workspace_root: Optional[str] = None) -> None:
+        """R1.S1a/b — the seventh event type, emitted where the fact EXISTS and nowhere else.
+
+        ⛔ `SecretScanHit` is the one of doc 42's seven types the ledger projection cannot
+        produce, and saying why matters more than the code: the `write_gate` entry records that
+        the write was BLOCKED and that the reason was "secret detected", and that is all it
+        records. The findings themselves never reach the ledger — correctly, because a ledger
+        entry naming a finding's matched text would put the secret in the audit trail. So the
+        event is derived here, from the findings in hand, carrying their KIND and a COUNT and
+        nothing else.
+
+        ⭐ **ONE EVENT PER KIND, NOT PER FINDING.** Eight AWS keys in one file is one fact about
+        that file, and eight rows would let a reader infer how many secrets a path holds — which
+        is a little more about the content than this store should know.
+
+        ⚠ It carries no `ledger_seq`, and that is the §7g distinction working: this event is
+        NOT backed by the ledger's hash chain, because the ledger does not hold it."""
+        try:
+            from ..events import SecretScanHit, emit as emit_event
+            counts: Dict[str, int] = {}
+            for f in findings or ():
+                k = str(getattr(f, "kind", "") or "secret")
+                counts[k] = counts.get(k, 0) + 1
+            root = workspace_root
+            if not root:
+                # No containment root was threaded (every pre-SELF-PROTECT caller), so the repo
+                # is resolved from the target the write names. `find_project_root` walks up to
+                # the nearest `.mokata/`, and returns its argument when there is none — at which
+                # point `emit` finds no initialized surface and does nothing, which is the right
+                # answer for a write outside any mokata repo.
+                import os.path
+
+                from ..config import find_project_root
+                target = str(req.target or "")
+                root = find_project_root(os.path.dirname(target) or ".")
+            for kind, n in sorted(counts.items()):
+                emit_event(root, SecretScanHit(kind=kind, where=str(req.kind or ""), count=n),
+                           actor=str(req.actor or ""))
+        except Exception:  # noqa: BLE001 — the observability lane never changes a gate verdict
+            return
+
     def _carried_forward_seq(self, req: WriteRequest, chash: str) -> Optional[int]:
         """UX-CONFIRM (D7b/c) — the seq of an approval ALREADY on the ledger that licenses exactly
         this write, or None. Mirrors `approval.propose`'s live-proposal short-circuit: a human who
@@ -241,6 +283,7 @@ class WriteGate:
                         for_send=(req.kind == "send"), ignores=store)
         if findings:
             self._log(req, "blocked", "secret detected")
+            self._emit_scan_hits(req, findings, workspace_root)
             # The SAME builder the `secret-guard` hook uses, so the two surfaces cannot drift —
             # the wording lives in one module, never inside a tool (R3/R4).
             return WriteOutcome(False, True,

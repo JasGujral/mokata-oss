@@ -47,6 +47,9 @@ EXPECTED_OPEN_WORLD = {
     "recall", "status", "audit", "session_list", "govern", "apply_proposal",
     "memory_export", "memory_import", "session_push", "session_pull", "session_name",
     "audit_share",
+    # CM.S5 — `events_share` reaches the team's own Postgres over a DSN, so it is OPEN-WORLD for
+    # the same reason `audit_share` is: the network target is not this machine.
+    "events_share",
     # remote catalog (stack index / manifest resolved from a possibly-remote source)
     "stacks_list", "stacks_search", "stacks_show", "import_stack", "stacks_install",
 }
@@ -111,8 +114,10 @@ class TestCoverage(unittest.TestCase):
         # 56 -> 58 at REVIEW-FIX.R3 (0.0.16): `review_status` + `review_record`;
         # 58 -> 59 at WT-LIST (0.0.16): `worktree_list`, the read-only worktree×session join;
         # 59 -> 61 at M-4/R5 (0.0.16): `consolidate_proposals` (read — the drafting request) +
-        # `consolidate` (gated write — the agent submits the summary it drafted).
-        self.assertEqual(len(TOOLS), 61)
+        # `consolidate` (gated write — the agent submits the summary it drafted);
+        # 61 -> 62 at CM.S5 (0.0.21 stage 11): `events_share` (gated write — publishing the typed
+        # event stream to the team's own store; open-world, because it reaches a remote DSN).
+        self.assertEqual(len(TOOLS), 62)
         for spec in TOOLS:
             ann = A.annotations_for(spec.kind, spec.name)
             self.assertIn("readOnlyHint", ann)           # present + bool for EVERY tool
@@ -150,8 +155,8 @@ class TestSdkAttach(unittest.TestCase):
         tools = {t.name: t for t in asyncio.run(server.list_tools())}
         # 55 -> 56 at HANDOFF.G1 (`spec_show`); 56 -> 58 at REVIEW-FIX.R3 (the 6r review loop);
         # 58 -> 59 at WT-LIST (`worktree_list`); 59 -> 61 at M-4/R5 (`consolidate_proposals` +
-        # `consolidate`, the two-phase drafted-summary flow)
-        self.assertEqual(len(tools), 61)
+        # `consolidate`, the two-phase drafted-summary flow); 61 -> 62 at CM.S5 (`events_share`)
+        self.assertEqual(len(tools), 62)
 
         by_name = {s.name: s for s in TOOLS}
         for name, tool in tools.items():

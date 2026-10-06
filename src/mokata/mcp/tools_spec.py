@@ -62,7 +62,9 @@ def _graph_required_emit_refusal(surface: Any, store: Any, run_id: str,
             chosen_approach = next((a for a in getattr(session, "approaches", []) or []
                                     if getattr(a, "name", None) == name), None)
             targets = list(getattr(chosen_approach, "targets", []) or [])
-        basis, degraded = GR.derive_graph_degraded(surface, targets)
+        # Fix D (0.0.21 stage 14) — the DETAIL sibling, so the refusal can say WHICH degradation
+        # this is. Same derivation, same verdict; it just keeps the reasons the 2-tuple discards.
+        basis, degraded, reasons = GR.derive_graph_degraded_detail(surface, targets)
         if not degraded:
             return None
         if GR.read_degraded_override(surface.root, run_id):
@@ -75,7 +77,7 @@ def _graph_required_emit_refusal(surface: Any, store: Any, run_id: str,
             degraded=True, required=True, overridden=False,
             consumer=consumer, mentions=int(getattr(imp, "caller_count", 0) or 0),
             files=int(getattr(imp, "file_count", 0) or 0),
-            targets=list(targets), notice=notice)
+            targets=list(targets), notice=notice, reasons=reasons)
         if not gate.refused:
             return None
         disagreement = ("" if reported else
@@ -84,9 +86,17 @@ def _graph_required_emit_refusal(surface: Any, store: Any, run_id: str,
         return {"status": "blocked", "committed": False, "gate": "graph-required",
                 "basis": basis, "reported_degraded": reported,
                 "reason": gate.render() + disagreement,
-                "hint": ("this approach's blast radius is a degraded lexical estimate — adopt a "
-                         "code graph (`mokata graph adopt`) or accept it for this session with "
-                         "`--allow-degraded`. Nothing was written; there is nothing to approve.")}
+                "reasons": list(reasons),
+                # 🔴 REVIEW FINDING B-F1 (independent review, 0.0.21 stage 14). This `hint` was NOT
+                # touched by fix D, and it is the one refusal that actually fires in the shipped
+                # product — so the MCP client received "ADOPTING AGAIN WILL NOT FIX THIS" in `reason`
+                # and "adopt a code graph" in `hint`, IN THE SAME PAYLOAD. Fix D's whole purpose was
+                # to stop telling a user whose graph is adopted and broken to adopt one, and it was
+                # defeated on the only live path. It was also unconditional, so an UNDERIVABLE
+                # refusal called itself "a degraded lexical estimate" and a `floor-empty` refusal was
+                # told to adopt. `GR.hint_for` derives it from the SAME reasons `reason` renders, so
+                # the two cannot disagree again (§7f — one rule, one implementation).
+                "hint": GR.hint_for(reasons)}
     except Exception:                                     # noqa: BLE001 — a parity guard never crashes emit
         return None
 

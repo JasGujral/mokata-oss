@@ -52,6 +52,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+import _support  # noqa: F401  (puts src/ on the path, and runs the stage-05 provisioning preflight)
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHECKER = os.path.join(ROOT, "scripts", "check-tracker-tables.py")
 DOCS_BUILD = os.path.join(ROOT, "docs", "build")

@@ -35,6 +35,8 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
+import _support  # noqa: F401  (puts src/ on the path, and runs the stage-05 provisioning preflight)
+
 from mokata import session as S                                    # noqa: E402
 from mokata import tdd_state as T                                  # noqa: E402
 from mokata.config import STATE_DIRNAME, Surface                   # noqa: E402

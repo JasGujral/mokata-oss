@@ -56,7 +56,7 @@ from .config import Surface
 from .cli_commands import (
     setup, core, knowledge, memory, collab, mode, sync, skills, rules, index, mcp, diagnostics,
     distribution, reset, pipeline, runviews, plan, menu, docs, docsync, gate, approve, spec,
-    graph, migrate, secret,
+    graph, migrate, secret, events,
 )
 from .cli_commands._common import (
     _load_surface, _review_scope, _backend_projects, _SCOPE_CURRENT, _cli_ask, _profile_for,
@@ -141,6 +141,7 @@ def build_parser() -> argparse.ArgumentParser:
     sync.register(sub, common)
     skills.register(sub, common)
     rules.register(sub, common)
+    events.register(sub, common)
     index.register(sub, common)
     graph.register(sub, common)
     mcp.register(sub, common)
@@ -180,7 +181,55 @@ def _subcommand_set(parser: argparse.ArgumentParser) -> set:
     return set()
 
 
+def _survive_a_narrow_stdio() -> None:
+    """Make an un-encodable character degrade VISIBLY instead of killing the command.
+
+    🔴 `WINDOWS-HAS-NO-RUNNER-UNTIL-THE-CUT` (0.0.21 stage 07), and this is a LIVE defect that the
+    hostile-arrangement leg found on its first run rather than a precaution:
+
+        $ PYTHONIOENCODING=cp1252 python -m mokata release-notes-check 0.0.20
+        UnicodeEncodeError: 'charmap' codec can't encode character '\u2212' in position 3253
+
+    A GitHub Windows runner hands Python a **cp1252** stdout. mokata's diagnostics carry `−`
+    (U+2212, a real minus sign), `★`, `⚠` and friends, so on that stdout the WRITE raises and the
+    command dies mid-line — `release-notes-check` among them, which `release.sh` runs as a gate.
+    ⛔ **A gate that crashes while printing its verdict has no verdict**, and the crash names an
+    encoding rather than the thing it was checking.
+
+    ⭐ THE FIX IS `errors="backslashreplace"`, NOT A CHARACTER PURGE. mokata's output is diagnostic
+    prose, and the two options are *lose a glyph* or *lose the answer*. A purge would also need
+    enforcing forever over every message in the tree, which is a rule no one can keep — and the
+    tree would still break the first time a user's own filename carried a non-cp1252 byte, which
+    is not under our control at all.
+
+    ⚠ `backslashreplace` AND NOT `replace`: `\u2212` tells a reader exactly which character was
+    dropped, while `?` tells them nothing and is indistinguishable from a literal `?` in the text.
+
+    ⚠ IT TOUCHES ONLY THE ENCODING, never the stream, the buffering or the newline translation. And
+    it is a no-op on a UTF-8 stdio, which is every machine this project develops on — so the
+    arrangement is the only thing that exercises it, which is why the arrangement exists."""
+    # ⚠ `strict` IS NOT THE ONLY HANDLER THAT DIES, and my first version only upgraded that one.
+    # Under `LC_ALL=C` CPython gives stdout `encoding="ascii"` with `errors="surrogateescape"` —
+    # which is NOT strict and still raises on a real non-ASCII character, because surrogateescape
+    # only round-trips lone surrogates. `mokata --help` died exactly there, on the em-dash in its
+    # own description, with the arrangement reporting `'ascii' codec can't encode '\u2014'`.
+    #
+    # ⭐ So the test is the other way round: leave alone the handlers that REPLACE, and upgrade
+    # everything else. That is a short, closed list, where "is it strict?" was an open one.
+    replacing = ("backslashreplace", "replace", "xmlcharrefreplace", "namereplace")
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:          # a replaced stream (a test double, a pipe wrapper)
+            continue
+        try:
+            if (getattr(stream, "errors", None) or "strict") not in replacing:
+                reconfigure(errors="backslashreplace")
+        except (ValueError, OSError):     # a stream that refuses; printing must still work
+            continue
+
+
 def main(argv: Optional[List[str]] = None) -> int:
+    _survive_a_narrow_stdio()
     parser = build_parser()
     raw = list(sys.argv[1:] if argv is None else argv)
     # Stage 56 — a friendly "did you mean …" + next step on an unknown subcommand, BEFORE
@@ -205,7 +254,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 __all__ = [
-    "main", "build_parser", "_load_surface", "_review_scope", "_backend_projects",
+    "main", "_survive_a_narrow_stdio", "build_parser", "_load_surface", "_review_scope", "_backend_projects",
     "_SCOPE_CURRENT", "_cli_ask", "_profile_for", "_ledger_for", "cmd_init", "cmd_tour",
     "cmd_reconfigure", "cmd_setup", "cmd_unsetup", "cmd_bootstrap", "cmd_validate",
     "cmd_release_check", "cmd_route", "cmd_detect", "cmd_status", "cmd_version",

@@ -335,6 +335,13 @@ def tracked_excludes(root, excludes):
 #: plus the three dev-only scripts. What it EXCLUDES is as load-bearing as what it holds —
 #: `docs/marketing/` is gitignored, `.git` exists on both sides of the boundary, and `.venv`/
 #: `build`/`dist`/`site`/`.mokata` are in no checkout at all.
+#:
+#: ⚠ EDITED ONCE AT 0.0.21 STAGE 02, and the direction is why: `scripts/verify-mirror.sh` is a
+#: fourth dev-only script — it verifies the PRIVATE mirror checkout before a cut and has no meaning
+#: in the published package — so the internal set GREW and the shipped surface shrank. ⭐ **This
+#: declaration is held to the tracked corpus in BOTH directions on purpose**, which is why adding a
+#: dev-only script reds here until a human says so: a floor cannot tell *"we closed one"* from
+#: *"we lost one"*, and losing one is precisely how this guard went vacuous once before.
 DECLARED_TRACKED_EXCLUDES = frozenset([
     "CLAUDE.md",
     "docs/build",
@@ -343,6 +350,7 @@ DECLARED_TRACKED_EXCLUDES = frozenset([
     "scripts/check-tracker-tables.py",
     "scripts/release.sh",
     "scripts/sync-public.sh",
+    "scripts/verify-mirror.sh",
 ])
 
 BASIS_DERIVING_SET_DECLARED = "deriving_set_declared"   # matches the declaration -> GREEN

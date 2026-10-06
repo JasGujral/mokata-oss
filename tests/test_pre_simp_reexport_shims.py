@@ -73,6 +73,7 @@ class TestToolsWriteAggregatorShim(unittest.TestCase):
             "audit_share", "spec_check", "init", "reconfigure", "config_set", "export_stack",
             "stacks_install",
             "consolidate",     # M-4/R5 (0.0.16) — APPENDED; every pre-existing position unchanged
+            "events_share",    # CM.S5 (0.0.21) — APPENDED, same discipline
         ])
 
     def test_spec_emit_amend_are_attributes_even_though_not_in_all(self):

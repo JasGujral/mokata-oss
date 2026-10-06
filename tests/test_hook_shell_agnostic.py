@@ -63,6 +63,34 @@ import _support  # noqa: F401  (puts src/ on the path)
 from mokata import harness_setup, hook_wiring
 from mokata.govern.doctor import hook_resolution_findings
 
+
+def _a_launchable_program(tmp, name="mokata-hook"):
+    """CONSTRUCT an executable this test can wire a hook to. Returns its absolute path.
+
+    🔴 0.0.21 STAGE 04. Two tests below needed *"a command that DOES resolve"* — their own words —
+    and OBTAINED it from `harness_setup.resolved_console_script`, whose documented third rung is
+    *"the bare name as a last resort"*. So the precondition was asserted in a comment and sourced
+    from a function documented not to meet it, and on any box where mokata is not installed as a
+    console script the wired command did not resolve: `hooks-not-firing` fired first and the
+    per-shell check the test exists to grade was NEVER REACHED.
+
+    ⛔ IT DID NOT FAIL LOUDLY — IT GRADED A DIFFERENT SUBJECT and said `AssertionError`. Measured
+    on this VM: `resolved_console_script('mokata-hook')` returns the bare name and
+    `shutil.which('mokata-hook')` is None, so the victim was red in EVERY invocation form,
+    including alone — which is why doc 84's *"passes alone"* was a property of the machine it was
+    measured on rather than of the test.
+
+    `mcp_admin._command_resolves` accepts an existing executable FILE at an absolute path, so a
+    real file in the test's own temp dir satisfies the precondition without asking the machine
+    anything. The idiom is `test_b1_hook_path_resolution`'s (`_make_bindir` + `_MinimalPath`),
+    adopted rather than reinvented."""
+    import stat
+    exe = Path(tmp) / "bin" / name
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    exe.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    exe.chmod(exe.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return str(exe)
+
 ROOT = Path(__file__).resolve().parents[1]
 HOOKS_DIR = ROOT / "src" / "mokata" / "hooks"
 HOOKS_JSON = HOOKS_DIR / "hooks.json"
@@ -449,13 +477,22 @@ class TestDoctorPerShellFinding(unittest.TestCase):
             settings.parent.mkdir(parents=True)
             # A shell-form mokata hook wired to a command that DOES resolve — so the existing
             # `hooks-not-firing` check passes it, and only the per-shell check can catch it.
+            # 🔴 THE PROGRAM IS CONSTRUCTED, NOT ASKED FOR (stage 04) — see `_a_launchable_program`.
             settings.write_text(json.dumps({"hooks": {"PreToolUse": [
                 {"matcher": "Write", "hooks": [{"type": "command",
-                 "command": '"%s" secret-guard' % harness_setup.resolved_console_script(
-                     "mokata-hook")}]}]}}), encoding="utf-8")
+                 "command": '"%s" secret-guard' % _a_launchable_program(d)}]}]}}),
+                encoding="utf-8")
             codes = [f.code for f in hook_resolution_findings(
                 SimpleNamespace(root=str(root)), str(home), windows=True, git_bash=False)]
             self.assertIn("hooks-shell-unrunnable", codes)
+            # ⛔ AND THE PRECONDITION IS ASSERTED, NOT ASSUMED. Without this, the day the wired
+            # program stops resolving this test goes red with `['hooks-not-firing']` and reads as a
+            # regression in the per-shell check — which is exactly how it was misfiled as an
+            # ORDERING defect for eight days. A precondition that fails must say it is the
+            # precondition (§7g).
+            self.assertNotIn("hooks-not-firing", codes,
+                             "the wired program did not resolve, so this test never reached its "
+                             "subject — the FIXTURE is broken, not the per-shell check")
 
     def test_doctor_stays_quiet_on_a_posix_box(self):
         with tempfile.TemporaryDirectory() as d:
@@ -494,7 +531,7 @@ class TestDoubleFireIsAKnownFact(unittest.TestCase):
             (home / ".claude").mkdir(parents=True)
             root = Path(d) / "repo"
             (root / ".claude").mkdir(parents=True)
-            exe = harness_setup.resolved_console_script("mokata-hook")
+            exe = _a_launchable_program(d)   # constructed, not inherited (stage 04)
             (root / ".claude" / "settings.json").write_text(json.dumps({"hooks": {
                 "PreToolUse": [{"matcher": "Write", "hooks": [
                     {"type": "command", "command": exe, "args": ["secret-guard"]}]}]}}),

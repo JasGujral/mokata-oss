@@ -760,8 +760,9 @@ class TestParityAndRegistry(unittest.TestCase):
     def test_the_tool_count_moved_56_to_58(self):
         # R3's own delta was 56 -> 58 (`review_status` + `review_record`); WT-LIST (0.0.16) then
         # added `worktree_list` (59), and M-4/R5 added `consolidate_proposals` + `consolidate`
-        # (61). R3's two tools are pinned by name above, which is the property this class owns.
-        self.assertEqual(len(REG.TOOLS), 61)
+        # (62, after CM.S5's `events_share`). R3's two tools are pinned by NAME above, which is
+        # the property this class owns — the count is a tripwire for somebody else's addition.
+        self.assertEqual(len(REG.TOOLS), 62)   # 61 -> 62 at CM.S5: `events_share`
         self.assertEqual(len(REG.tool_names()), len(set(REG.tool_names())))
 
     def test_annotations_are_projected_and_neither_is_open_world(self):

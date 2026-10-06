@@ -101,7 +101,7 @@ UNOBTAINED_ASSURANCES = (
 # promise was live and pointed at a release that would not keep it — which is exactly the defect B5
 # exists to catch, in `src/` rather than in the notes, and it is now the row's own regression test:
 # `mokata release-notes-check` reds on this constant if the release it names stops owning the item.
-RESTORE_ROW = "BRANCH-PROTECTION-DEGRADED-PASS — filed 2026-08-17, restore full verification in 0.0.21"
+RESTORE_ROW = "BRANCH-PROTECTION-DEGRADED-PASS — filed 2026-08-17, restore full verification in 0.0.22"
 
 # A gh runner is (api_path) -> (returncode, stdout, stderr). Injected in tests; the default below
 # shells out to `gh api`. It takes a PATH rather than (repo, branch) because state 3 has to read

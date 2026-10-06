@@ -22,6 +22,8 @@ import unittest
 import warnings
 from pathlib import Path
 
+import _support  # noqa: F401  (puts src/ on the path, and runs the stage-05 provisioning preflight)
+
 from mokata.memory.backends import SQLiteBackend
 from mokata.memory.item import MemoryItem
 

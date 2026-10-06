@@ -312,12 +312,27 @@ class PlantedOffenderTest(unittest.TestCase):
 
     def test_the_count_gate_reads_the_mcp_split_across_a_wrap_and_a_parenthetical(self):
         """`docs/how-it-works/index.md` writes the split with example tool names between the read
-        and write legs, and wraps in the middle of them. Both legs were ungraded."""
-        offender = ("exposes **61 tools** — **40 read** (`progress`, `lanes`,\n"
-                    "`watch`, `govern`, …), **19 write**, and **1 approve** — reachable in chat.\n")
+        and write legs, and wraps in the middle of them. Both legs were ungraded.
+
+        ★ Every number here is INTERPOLATED from the derivation, and only the write leg is bent
+        (`write - 1`). Typed literals went stale the moment CM.S5 added the 62nd tool: this test
+        then reddened on its own fixture rather than on the shape it exists to grade, and its
+        diagnostic named a count no page states. A planted offender must differ from the truth in
+        exactly ONE declared way — the way it is planting."""
+        total = self.facts["mcp_tools"].value
+        write = self.facts["mcp_write"].value
+        read = self.facts["mcp_read"].value
+        approve = self.facts["mcp_approve"].value
+        self.assertEqual(total, read + write + approve,
+                         "the split no longer partitions the registry — this fixture's arithmetic "
+                         "is part of the claim it plants, so reword the sentence, not the sum")
+        offender = ("exposes **%d tools** — **%d read** (`progress`, `lanes`,\n"
+                    "`watch`, `govern`, …), **%d write**, and **%d approve** — reachable in chat.\n"
+                    % (total, read, write - 1, approve))
         findings = pc.grade("x.md", offender, self.facts)
         self.assertEqual(1, len(findings), findings)
-        self.assertIn("states mcp_write = 19, the code derives 20", findings[0])
+        self.assertIn("states mcp_write = %d, the code derives %d" % (write - 1, write),
+                      findings[0])
 
     def test_a_claim_does_not_WELD_across_a_paragraph_break(self):
         """The other side of joining: a number ending one paragraph must not marry a phrase
@@ -331,10 +346,22 @@ class PlantedOffenderTest(unittest.TestCase):
         self.assertIn("states hook_enforced = 4, the code derives 5", findings[0])
 
     def test_the_count_gate_stays_silent_on_correct_text(self):
+        """The negative control: the landing summary line, with every number taken FROM the
+        derivation rather than typed. Typed, this fixture reddened the moment the registry grew —
+        a false red on the one test whose job is to prove the gate stays quiet when the page is
+        right, and a maintainer taught to re-type the fixture after every surface change is a
+        maintainer taught to re-type `docs/index.md` the same way."""
+        f = self.facts
+        self.assertEqual(1, f["runtime_dependencies"].value,
+                         "more than one runtime dependency — the line below needs the plural, and "
+                         "so does every page that states it")
         correct = (
-            "**26 Agent Skills** (16 curated + 10 domain) · **37 slash commands** ·\n"
-            "**69 CLI subcommands** · **61 MCP tools** · **9 backed gates** · "
-            "**1 runtime dependency**.\n"
+            "**%d Agent Skills** (%d curated + %d domain) · **%d slash commands** ·\n"
+            "**%d CLI subcommands** · **%d MCP tools** · **%d backed gates** · "
+            "**%d runtime dependency**.\n"
+            % (f["skills"].value, f["curated_skills"].value, f["domain_skills"].value,
+               f["slash_commands"].value, f["cli_subcommands"].value, f["mcp_tools"].value,
+               f["backed_gates"].value, f["runtime_dependencies"].value)
         )
         self.assertEqual([], pc.grade("x.md", correct, self.facts))
 

@@ -363,6 +363,126 @@ _register("onboarding.py", {
 # broad handlers. `_common._backend_projects` stopped swallowing altogether (see below), and the
 # rest narrowed to the classes their callees actually raise.
 
+# ------------------------------------------------------- R1.S1a-b: the typed event stream
+#
+# Every handler here guards a PROJECTION. The canonical record — the audit ledger, the gate's
+# own verdict, the tool's own structured status — is already written and already returned by
+# the time any of these run, so the worst case is a derived row that is not there. None of them
+# can change a verdict, a gate or a fact, and that is why they are silent rather than loud: a
+# notice for every one would be noise about something nobody's behaviour depended on.
+
+_register("events/store.py", {
+    "emit": (SUPPRESS_OK,
+        "the module-level emitter. Losing a derived row costs a query a line and costs no "
+        "verdict — the same reading `log_calibration` carries one register over."),
+    "EventStore.emit": (SUPPRESS_OK, "the store half of the same emitter, same reading."),
+    "EventStore.after_seq": (DEGRADE_CLEAN,
+        "the RESUME half of the same read-only surface, with the same DOCUMENTED empty-list "
+        "contract: an absent, locked or corrupt store resumes as nothing new. ⚠ The empty list is "
+        "SAFE here in the direction that matters — a publisher that reads nothing publishes "
+        "nothing and tries again next time; it can never read PAST an event and record a "
+        "high-water mark it did not earn, because the mark comes from the rows it actually got."),
+    "EventStore.query": (DEGRADE_CLEAN,
+        "a read-only surface with a DOCUMENTED empty-list contract: an absent, locked or "
+        "corrupt store reads as no events. (i) rather than (iv) because the empty list IS the "
+        "signal its readers branch on, and the contract is written in the method's docstring "
+        "rather than inferred from the handler."),
+    "EventStore.count": (DEGRADE_CLEAN, "the same contract, returning 0."),
+    "EventStore.max_seq": (DEGRADE_CLEAN,
+        "⭐ THE ONE READER ON THIS SURFACE WHOSE EMPTY ANSWER IS NOT SAFE, which is why it has a "
+        "THIRD answer. `after_seq` and `count` above both degrade to nothing-to-see, and the note "
+        "on `after_seq` argues that is safe for a publisher — true of the RESUME, and FALSE of "
+        "the comparison: CM.S5's review (F7) found that a corrupt `events.db` made *\'nothing to "
+        "publish\'* and *\'I cannot see your events\'* render identically on the one surface a "
+        "human checks. So this method answers `None` for unreadable and `0` for absent-or-empty, "
+        "and the publisher REFUSES on `None` (§7g). (i) rather than (iii) because the None is the "
+        "DOCUMENTED contract its caller branches on, not a swallowed failure."),
+    "enabled": (SUPPRESS_OK,
+        "reading one manifest toggle. ⚠ Doubt resolves to ON, which is the fail-SAFE direction "
+        "here and the reason this is not a silent degrade: an unreadable toggle must never "
+        "quietly switch an audit surface OFF."),
+    "enabled_for_root": (SUPPRESS_OK, "the cached form of the same read, same reading."),
+})
+_register("govern/ledger.py", {
+    "AuditLedger._project": (SUPPRESS_OK,
+        "the ledger's own projection into the event stream. It runs OUTSIDE `hold()` and AFTER "
+        "the canonical append has been fsynced, so the record a human audits is already on "
+        "disk. ⛔ This handler is the thing that makes 'events derive from the ledger' safe to "
+        "wire at the append point at all: the projection must never be able to fail the write "
+        "it describes."),
+})
+_register("govern/gate.py", {
+    "WriteGate._emit_scan_hits": (SUPPRESS_OK,
+        "the seventh event type, emitted from the one place the findings exist. The gate has "
+        "ALREADY blocked the write and already logged `secret detected` by the time this runs; "
+        "a failure here loses a counts-only row and changes no verdict."),
+})
+_register("mcp/server.py", {
+    "_emit_tool_call": (SUPPRESS_OK,
+        "one derived event per served MCP dispatch. It runs after the tool's outcome is decided "
+        "and returns nothing to the caller, so it cannot change what the agent is told. The "
+        "wrapper's contract (R2/R3/R6) is that every outcome reaches the caller as a structured "
+        "status; an observability row that failed to record is not one of those outcomes."),
+})
+_register("cli_commands/events.py", {
+    "_surface_or_none": (DEGRADE_CLEAN,
+        "\"is this a mokata repo?\" asked by returning None. The CLI surface's whole job here is "
+        "to print a sentence a human can act on (`run `mokata init` first`) rather than a "
+        "traceback, and \"not initialized\" is an ANSWER on this path, not a failure. Broad "
+        "because the failure classes span a missing directory, an unreadable manifest and a "
+        "malformed one, and the caller's response is the same sentence for all three."),
+})
+_register("team_events.py", {
+    "notify_support": (SUPPRESS_OK,
+        "CM.S5 — asking `dsn_inspect` whether LISTEN/NOTIFY can survive this connection shape. "
+        "The handler cannot hide a failure, because its answer on doubt is the LOUDEST of the "
+        "three: an uninspectable DSN resolves to UNKNOWN, never to `supported`. ⚠ That is the "
+        "opposite of `enabled_for_root`'s doubt-resolves-to-ON above, and deliberately: there, "
+        "doubt that silenced an audit surface would be the harm; here, doubt that PROMISED "
+        "deliverable notifications would be — so each resolves toward the answer that cannot "
+        "mislead, which is not the same answer."),
+    "SharedEventLog._require_schema": (NARROW_IS_HONEST,
+        "CM.S5 review F1 — the pre-v6 refusal. It asks `teamdb._read_schema_version` what schema "
+        "the team's store is at, and the REAL exception class is whatever the installed DBAPI "
+        "driver raises: psycopg2 and psycopg3 do not share an ancestor this module may import, "
+        "and the driver is not even known to be present. ⛔ AND IT CANNOT HIDE A FAILURE — every "
+        "arm RAISES `SharedEventsUnavailable` with the remedy named; the handler converts an "
+        "unreadable answer into a REFUSAL, never into permission. Unknown is not permission, "
+        "which is the same reading `notify_support` above carries."),
+    "SharedEventLog.close": (SUPPRESS_OK,
+        "closing a connection on the way out. A connection that cannot be closed is already "
+        "unusable, and raising here would replace the caller's real outcome — a published batch, "
+        "or a refusal it needs to see — with a failure to hang up the phone."),
+})
+_register("progress_events.py", {
+    "_project_event": (SUPPRESS_OK,
+        "R1.S1c — the progress log's own projection into the event stream. It runs at the END of "
+        "`append_event`, OUTSIDE the append lock, so the canonical log line is already written "
+        "and fsynced by the time this is reached: the same ordering, and the same reason, as "
+        "`AuditLedger._project` above. Losing the derived row costs a query a line and costs the "
+        "progress log nothing."),
+})
+_register("execmode/orchestrator.py", {
+    "_emit_token_spend": (SUPPRESS_OK,
+        "R1.S1c — one TokenSpend row per completed execution, emitted after the run's totals are "
+        "final and returning nothing to the caller. The spend itself is already in the run "
+        "result and in the savings ledger; this handler can only lose the DERIVED copy. ⚠ Note "
+        "it is reached at all only when `actual_total > 0`, so the handler cannot convert a "
+        "simulated run into a measured one by failing."),
+})
+_register("session_bundle.py", {
+    "clear_session_state": (DEGRADE_CLEAN,
+        "R1.S1a clean resume. The handler is PER KEY and the function RETURNS the keys it really "
+        "removed, so a delete that fails leaves that key out of the REPORT rather than out of "
+        "sight — and the caller surfaces that list as `GateResult.cleared`. Clearing a user's "
+        "in-progress session is the most destructive thing a pull does; a partial clear that "
+        "claimed to be total would be the worst answer available here."),
+    "_key_exists": (SUPPRESS_OK,
+        "an existence PROBE used to build that list. A store that cannot answer 'do you have "
+        "this key' yields False, the key is not reported as cleared, and the pull proceeds."),
+})
+
+
 _register("hook_cli.py", {
     "_read_stdin_bounded._reader": (SUPPRESS_OK,
         "A torn-down/errored stdin IS 'no input' — there is no other answer to give. The docstring "
@@ -825,6 +945,12 @@ _register("memory/staleness.py", {
         "`note_degraded('stale-ref', SCHEMA)` names the loss and its fix."),
 })
 _register("memory/store.py", {
+    "MemoryStore._emit_memory_read": (SUPPRESS_OK,
+        "R1.S1c — the MemoryOp row for a COUNTED read, the one event type with no ledger twin "
+        "(reads are ungated by design, so nothing else records them). It runs after `_bump_read` "
+        "has already updated the in-memory total and persisted it, so a failure here loses the "
+        "derived row and leaves the COUNTER — the thing `doctor` and the calibration ratio read "
+        "— untouched. The read it describes has already happened and is returned regardless."),
     "MemoryStore._moved_code_anchors": (DEGRADES_LOUD,
         "H-6 S3 — the code-anchor evidence behind the CODE_ANCHOR_STALE arm. It must not take the "
         "OTHER arms down with it (contradiction, near-dup and cross-writer are unaffected by a "
@@ -1425,23 +1551,20 @@ _register("execmode/decompose.py", {
         "'Graph-verified' must mean the graph was actually asked."),
 })
 _register("govern/graph_required.py", {
-    "derive_graph_degraded": (DEGRADE_CLEAN,
-        "0.0.20's G14 measurement. TWO broad handlers, one type, and the fail direction is the "
-        "whole justification: BOTH return `(UNDERIVABLE, True)` — a verdict that carries its own "
-        "reason to a caller whose only use for it is to REFUSE. Nothing is swallowed; the "
-        "exception becomes the answer. The signal comes out at "
-        "`mcp/tools_spec._graph_required_emit_refusal`, which renders `UNDERIVABLE` as its own "
-        "sentence rather than folding it into the degraded one (§7g — *mokata could not look at "
-        "all* is not *mokata looked and the graph is degraded*). "
-        "Broad on purpose, in both places: the inner one wraps `KnowledgeLayer.from_surface`, "
-        "which spans every adopted provider's own failure modes — an MCP transport error, a "
-        "malformed adoption record, an unreadable manifest — none nameable at module scope "
-        "without importing the providers this layer exists to stay lazy about. The outer one "
-        "wraps `compute_impact`, which walks whatever that layer returned. "
-        "⛔ A NARROWER CATCH HERE WOULD FAIL OPEN: an unnamed exception would propagate out of a "
-        "GATE, and a gate that raises is a gate that gets caught and skipped upstream. The "
-        "direction is fail-CLOSED — doubt refuses — which is the same posture "
-        "`govern/enforce.evaluate` carries one file over."),
+    # `derive_graph_degraded`'s entry was REMOVED at 0.0.21 stage 14 Fix D: its body moved into the
+    # detail form below (the mutant sweep insisted — two copies of the rule means a mutant cannot
+    # say which copy it graded), so it holds no broad handler of its own any more, and D5's own
+    # stale-entry check is what caught the leftover. A justification for a handler that does not
+    # exist is a lie.
+    "derive_graph_degraded_detail": (DEGRADE_CLEAN,
+        "0.0.21 stage 14 Fix D — the DETAIL sibling of `derive_graph_degraded`, with the SAME two "
+        "broad handlers for the same reason, and the entry above is the justification in full. "
+        "One addition that is specific to this one: each handler now returns a REASON as well as "
+        "the verdict — `(UNDERIVABLE, True, (DEGRADE_NO_LAYER,))` for an unbuildable layer and "
+        "`(UNDERIVABLE, True, (DEGRADE_QUERY_FAULT,))` for a lens that raised — so the exception "
+        "does not merely become the answer, it becomes a DISTINGUISHABLE answer, and 'no reason "
+        "recorded' (an empty tuple) never shares a representation with 'could not look' (§7g). "
+        "Fail-CLOSED in both: doubt refuses."),
     "graph_required_enabled": (SUPPRESS_OK,
         "An unreadable/absent manifest → the SAFE default (required-on). Mirrors "
         "`progress.statusline_enabled`: a config read that falls to its documented default, not a "
@@ -1507,6 +1630,28 @@ _register("govern/tokens.py", {
     "log_bootstrap_calibration": (SUPPRESS_OK,
         "Same, on the SessionStart hot path — where an exception would cost the user their briefing "
         "to save a metrics row."),
+})
+_register("govern/calibration.py", {
+    "observe": (DEGRADE_CLEAN,
+        "H-2 — the function's whole CONTRACT is a verdict instead of an exception: it returns a "
+        "`CalibrationOutcome` whose `reason` names which of the several different nothings "
+        "happened (no transcript, unreachable file, no new records, records in a shape the "
+        "adapter no longer understands). The inner handler is the ledger RESOLUTION, whose "
+        "failure leaves `memory_stats.calibration` written and the audit row missing — the "
+        "per-window warning is lost, the running aggregate is not, and `doctor` reads both."),
+    "save_cursor": (SUPPRESS_OK,
+        "A BOOKMARK, not state. Losing it re-reads one window, and the ratio is a quotient of "
+        "totals — both move by the same window, so a repeated read cannot shift it (only the "
+        "`samples` count, which is why the cursor advances before the fold is persisted). There "
+        "is no fallback to announce because nothing behaved differently."),
+})
+_register("hook_cli.py", {
+    "_calibrate_from_transcript": (SUPPRESS_OK,
+        "H-2 — `govern.calibration.observe` is documented never-raises and returns a reason, so "
+        "this guard is the async-lane floor rather than the error channel: a PostToolUse hook "
+        "must never fail the tool call it follows. Losing a calibration sample changes no "
+        "behaviour and no verdict — the same reason `log_bootstrap_calibration` carries one "
+        "block up, on the hook event next door."),
 })
 _register("session_flow.py", {
     "SessionFlow.checkpoint": (DEGRADE_CLEAN,
@@ -1725,6 +1870,26 @@ _register("brainstorm_impact.py", {
         "Sets `degraded=True`, which the impact report renders as lowered confidence. This is the "
         "flag `spec_awareness.expand_touch_set` was NOT setting (see above) — same situation, and "
         "this module already got it right."),
+    "_pinned_graph_tool": (SUPPRESS_OK,
+        "0.0.21, REVIEW FINDING 3-1 — asks the LAYER which graph tool the committed manifest pins, "
+        "which is ADOPTION rather than availability. Broad because the layer is duck-typed "
+        "(`assess_impacts` declares `.blast_radius` as the only requirement) and the answer walks a "
+        "manifest read, so it may raise anything. ⭐ Silence is correct and the DIRECTION is the "
+        "justification, the same one `_reads_as_a_graph` carries: a layer that cannot say is a layer "
+        "that did not say, so it reads as NOT adopted — which routes the user to `mokata graph "
+        "adopt` (harmless for a repo that does have one) rather than to `mokata doctor` for a graph "
+        "that may not exist. Nothing is masked: the degraded caveat comes from a different value and "
+        "still rides the answer."),
+    "_reads_as_a_graph": (SUPPRESS_OK,
+        "0.0.21 stage 14, REVIEW FINDING B-F4 — the ONE reading of `layer.uses_graph`, replacing two "
+        "with OPPOSITE defaults (True for the display caveat, False for the advice), which made the "
+        "same object simultaneously 'a real graph' and 'no graph is wired' (§7g). Broad because the "
+        "layer is duck-typed (`assess_impacts` declares `.blast_radius` as the only requirement), so "
+        "`uses_graph` may be a property that raises anything at all. ⭐ Silence is correct and the "
+        "DIRECTION is the justification: a layer that cannot say is a layer that did not say, so it "
+        "reads as NO graph — which routes the user to `mokata graph adopt` (harmless for a repo that "
+        "does have one) rather than to `mokata doctor` for a graph that may not exist. Nothing is "
+        "masked: `degraded=True` follows from the same value and the caveat still rides the answer."),
 })
 _register("memory/intelligence.py", {
     "_field": (SUPPRESS_OK,
@@ -1832,9 +1997,45 @@ _register("knowledge/freshness.py", {
         "A degrade-clean git probe → [] on any error. [] means 'no changes detected via git'; the "
         "cold-walk baseline + dirty-set still catch edits, so a missing/broken git never masks "
         "staleness — it just narrows which signal caught it."),
+    "stale_against": (SUPPRESS_OK,
+        "0.0.21 stage 14, REVIEW FINDING A3 — the never-raising staleness predicate. `is_stale` ends "
+        "in `file_fingerprint(ab)`, which OPENS the file, so an INDEXED but unreadable path (a "
+        "`*.py` symlink to a directory, a mode-000 file) raised `IsADirectoryError` straight out of "
+        "`_reconcile`; `ensure_fresh` then recorded a degrade and returned a silent `fresh=True` on "
+        "every pass. ⭐ Silence is correct and the swallow is the ANSWER, not a loss: a read fault "
+        "means 'cannot hash', and the handler returns stale=True unless the baseline already records "
+        "the path as UNFINGERPRINTABLE — so a newly-broken path is REPORTED once and an already-"
+        "reconciled one does not loop. A narrower catch would have to enumerate every OS error every "
+        "platform can raise on every unreadable thing, and getting that list wrong fails OPEN into "
+        "the crash this replaced. `is_stale` itself is deliberately unchanged — it is correct for "
+        "its own callers (§7g)."),
+    "git_untracked": (SUPPRESS_OK,
+        "Same contract as `git_changed_since`, and the same reason: a degrade-clean git probe → [] "
+        "on any error, which is ALSO the correct answer in a non-git tree (0.0.21 stage 14 Fix C). "
+        "[] narrows which signal catches a brand-new file; it never asserts one is absent."),
     "_sid": (SUPPRESS_OK,
         "Session-id resolution falls back to 'default' if identity can't be resolved — cosmetic "
         "scoping of a transient run-state file; nothing is lost."),
+    "_resolve_session": (SUPPRESS_OK,
+        "0.0.21 stage 14 (Fix A, moved here by REVIEW FINDING A1) — asks `run_resolver` which run "
+        "this caller is in so the hook's dirty-set and the reader's drain land on the SAME key. THE "
+        "ONE body behind `resolve_freshness_session` (a caller's pin ⇒ the EXPLICIT rung) and "
+        "`resolve_harness_session` (Claude Code's session id ⇒ the BOUND rung's input); they differ "
+        "in one argument and that argument is the difference between signal 1 working and signal 1 "
+        "being dead, so they are two entry points over one implementation rather than two copies "
+        "(§7f/§7g). Broad because the ladder reads the StateStore, the registry and the environment, "
+        "any of which may fail novelly. ⭐ Silence is correct HERE and only here: the fallback is "
+        "not a guess, it is the `unbound` basis, and `_reconcile` renders a note whenever an "
+        "in-harness record is filed under a key this process is not reading. So the swallow loses "
+        "nothing — the caller is told by a different channel, which is the whole point of returning "
+        "a basis rather than just an id (§7g)."),
+    "FreshnessController._advance_baseline": (SUPPRESS_OK,
+        "0.0.21 stage 14 (Fix B) — records the fingerprint of paths just reconciled so an ungated "
+        "signal 2 does not re-report the same uncommitted edit forever. Broad because it stats and "
+        "hashes arbitrary working-tree paths that may vanish mid-pass. ⭐ The failure is SAFE BY "
+        "DIRECTION: a baseline that cannot be written costs a REDUNDANT REBUILD on the next query, "
+        "never a missed edit — it fails toward doing more work, not toward answering stale. That "
+        "asymmetry is why silence is right rather than a notice nobody can act on."),
     "FreshnessController._anchor_signal": (SUPPRESS_OK,
         "H-6 S2 — the code-anchor tripwire's input. It degrades to NO anchor signal, which is "
         "byte-identical to the pre-H-6 reconcile: the other three signals (dirty-set, HEAD, cold "
@@ -1864,11 +2065,12 @@ _register("knowledge/freshness.py", {
         "Best-effort baseline seed. A failed walk → no baseline + no forced rebuild; fresh backend "
         "instances still re-parse changed files via the mtime-keyed on-disk cache, so staleness is "
         "not masked."),
-    "FreshnessController.for_root": (SUPPRESS_OK,
+    # `FreshnessController.for_root` was DELETED at 0.0.21 stage 14 Fix C (zero callers in src/
+    # AND in tests/ — this register entry was the only thing in the repo that mentioned it, which
+    # is §7i: a guard describing a handler nobody reaches grades nothing). Its entry went with it.
+    "FreshnessController.for_surface": (SUPPRESS_OK,
         "Construction guard: an unreachable run-state surface → None, so freshness doesn't engage "
         "(byte-identical). Never a reason a layer can't be built."),
-    "FreshnessController.for_surface": (SUPPRESS_OK,
-        "Same construction guard as `for_root` — None ⇒ no freshness, byte-identical."),
     "FreshnessController.recheck_after_answer": (SUPPRESS_OK,
         "Best-effort out-of-band catch (∝ result size). A failure → no requery; the dirty-set + HEAD "
         "reconcile still cover the common cases, so this never blocks or crashes a query."),
@@ -1901,6 +2103,17 @@ _register("knowledge/graph_backend.py", {
 })
 
 _register("knowledge/layer.py", {
+    "KnowledgeLayer.pinned_graph_tool": (SUPPRESS_OK,
+        "0.0.21, REVIEW FINDING 3-1 — the committed manifest's pinned graph tool, i.e. ADOPTION as "
+        "opposed to the AVAILABILITY `uses_graph` answers. Broad because it is a file read plus a "
+        "JSON parse plus a schema-shaped lookup, any layer of which can raise on an exotic or "
+        "half-written manifest, and this property is read from inside a LENS — a raise here would "
+        "propagate out of a blast-radius computation and be relabelled as a query fault, which is a "
+        "worse answer than None. ⭐ None reads as NOT adopted, and that direction is the "
+        "justification: it routes the user to `mokata graph adopt`, harmless for a repo that does "
+        "have a graph, rather than to `mokata doctor` for one that may not exist. Nothing is masked "
+        "— `mokata doctor` and `mokata graph status` read the manifest directly and report a broken "
+        "one loudly."),
     "_supports_kind": (SUPPRESS_OK,
         "The layer-side half of the SAME CRG-NAV capability probe. Identical reasoning: it fails "
         "PERMISSIVE (assume the backend answers), so nothing is skipped silently — the query still "

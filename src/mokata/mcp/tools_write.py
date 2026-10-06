@@ -45,7 +45,7 @@ from .tools_memory import (apply_proposal, consolidate, memory_export,
 from .tools_session import session_name, session_pull, session_push
 from .tools_share import vault_push
 from .tools_spec import spec_amend, spec_check, spec_emit
-from .tools_team import audit_share
+from .tools_team import audit_share, events_share
 
 __all__ = [
     "remember", "import_stack", "reset", "apply_proposal", "memory_export",
@@ -53,6 +53,7 @@ __all__ = [
     "audit_share", "spec_check", "init", "reconfigure", "config_set", "export_stack",
     "stacks_install",
     "consolidate",          # M-4/R5 — appended, matching the registration discipline below
+    "events_share",         # CM.S5 — appended, same discipline
 ]
 
 # ---- registration: registry-driven, in the EXACT historical order (parity with the pre-split
@@ -82,3 +83,8 @@ _tool("stacks_install", "write")(stacks_install)
 # M-4/R5 (0.0.16) — APPENDED, not slotted beside `apply_proposal` where it belongs by domain: the
 # registry snapshot pins tool order and its rule is that a new tool keeps every existing position.
 _tool("consolidate", "write")(consolidate)      # submit an agent-DRAFTED summary (human-gated)
+# CM.S5 (0.0.21 stage 11) — APPENDED to the tail of the write block rather than slotted
+# beside `audit_share`, which is where it belongs by domain. The registry snapshot
+# (`test_pre_simp_tool_registry_parity`) is append-only on purpose: slotting it by domain
+# moves every position after it, and that ordering is a public surface.
+_tool("events_share", "write")(events_share)    # publish the typed stream (human-gated)

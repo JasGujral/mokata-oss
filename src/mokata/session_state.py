@@ -91,6 +91,30 @@ class SessionScopedStore:
         # deletes only THIS session's scoped file; the legacy singleton is left intact (one-way).
         return self._base.delete(self._phys(name))
 
+    def delete_session_state(self, name: str) -> bool:
+        """Delete this session's scoped value **and** the pre-upgrade singleton behind it.
+
+        ⛔ **THIS EXISTS BECAUSE `exists()` AND `delete()` DISAGREED, AND THE CLEAN-RESUME RULE
+        FELL THROUGH THE GAP (stage 10 review F3).** `exists` answers True for a scoped key when
+        only the LEGACY singleton is on disk — that fallback is deliberate, a pre-upgrade session
+        must keep working. `delete` removes only `name__<sid>`. So
+        `session_bundle.clear_session_state` asked for every present key, deleted the scoped file
+        that was not there, got `False`, and **reported `cleared: []` while the replaced session's
+        `approved_approach` sat untouched** — which is precisely the authority
+        `strip_imported_approval` exists to withhold. A clear that reports nothing cleared and
+        clears nothing is indistinguishable from a clear that had nothing to do (§7g).
+
+        ⚠ **IT IS A SEPARATE METHOD, NOT A CHANGE TO `delete`.** `delete`'s one-way contract is
+        right for ordinary writes: a scoped delete must not reach through and destroy a singleton
+        other sessions still read. The CLEAN-RESUME is the one caller whose job is to clear what
+        this context can see, and what it can see includes the singleton."""
+        gone = self._base.delete(self._phys(name))
+        if name in self._scoped:
+            # ⭐ ORDER MATTERS ONLY FOR THE RETURN VALUE: both are attempted, and `or gone` keeps
+            # a True from either. A legacy-only key must report CLEARED, which is the bug.
+            gone = self._base.delete(name) or gone
+        return gone
+
 
 def scoped_store(base: StateStore, session_id: Optional[str] = None,
                  scoped_keys: "frozenset[str]" = SESSION_SCOPED_KEYS) -> SessionScopedStore:

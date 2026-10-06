@@ -62,6 +62,7 @@ DEGRADE_FAMILY = {
     "EmbedderStampMismatch": FAILURE_ENGINE,        # embedder ≠ the stamp → lexical, + re-embed
     "SessionTransportUnavailable": FAILURE_UNREACHABLE,
     "SharedAuditUnavailable": FAILURE_UNREACHABLE,  # → the log stays LOCAL
+    "SharedEventsUnavailable": FAILURE_UNREACHABLE,  # CM.S5 → the stream stays LOCAL
     "SubagentUnavailable": FAILURE_UNREACHABLE,     # → sequential flow
     "BackendError": FAILURE_UNREACHABLE,            # knowledge query → the grep floor
     "CrgUnavailable": FAILURE_UNREACHABLE,          # code-review-graph down → the AST floor
@@ -495,6 +496,8 @@ class TestDoctorAnswersWhatDegraded(unittest.TestCase):
 def _live_classes():
     """The exception classes, IMPORTED — so we assert on real MROs, not on source text."""
     from mokata import netguard, oslock, skills, stacks, teamdb, team_audit, team_journal, vault
+    # CM.S5 (0.0.21 stage 11) — `SharedEventsUnavailable`, the shared event store's degrade.
+    from mokata import team_events
     from mokata import config, config_cmd, brainstorm, dsn, manifest, pipeline, plans, refine
     from mokata import agent_skills, harness_setup, session_bundle, session_transport, share
     # SIMP.S3 (0.0.18 stage 10) — `RemovedChannelError` lives here, beside the REMOVED registry
@@ -511,7 +514,8 @@ def _live_classes():
     # MCP-R.D1d — the MCP surface's input-validation fault (SDK-free to import).
     from mokata.mcp import validation as mcp_validation
 
-    mods = (netguard, oslock, skills, stacks, teamdb, team_audit, team_journal, vault, config,
+    mods = (netguard, oslock, skills, stacks, teamdb, team_audit, team_events, team_journal,
+            vault, config,
             config_cmd, brainstorm, dsn, manifest, pipeline, plans, refine, agent_skills,
             harness_setup, session_bundle, session_transport, share, deprecation, tasks,
             authoring,

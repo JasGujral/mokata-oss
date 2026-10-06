@@ -673,7 +673,7 @@ GATED = {
     # ⚠ THE CALLER LIST BELOW IS CORRECTED, and the correction is the point (0.0.17 review F3a).
     # The old single entry read "sole callers are the two gated session_bundle committers
     # (SS.S5-verified)". That was FALSE and nothing checked it: `write_bundle` has THREE call sites
-    # — session_bundle.py:695 (push) and :908 (rename), both gated, AND migrate_channels.py:304,
+    # — session_bundle.py:695 (push) and :988 (rename), both gated, AND migrate_channels.py:304,
     # the vault channel's re-home, which is NOT a WriteGate write (see `migrate_channels.py:
     # _write_marker` in UNGATED_BY_DESIGN for what that flow actually carries). The classification
     # stays GATED because the two session_bundle committers are the governed push/rename path this
@@ -683,7 +683,7 @@ GATED = {
     ("session_transport.py", "_FileTransport.write_bundle"): "raw committer, FILE transport "
         "(`atomic_write_text`, session_transport.py:95; inherited by LocalTransport and "
         "VaultTransport). THREE callers, ALL THREE GATED as of 0.0.17 stage 17: "
-        "session_bundle.py:695 (push) + :908 (rename), and migrate_channels.py:267, the vault "
+        "session_bundle.py:695 (push) + :988 (rename), and migrate_channels.py:267, the vault "
         "channel re-home. "
         "⚠ THAT LAST ONE IS THE ENTRY'S OWN HISTORY, kept because it is the evidence: this "
         "sentence used to end 'THIRD, ungated caller: migrate_channels.py:304', which made the "
@@ -694,15 +694,15 @@ GATED = {
         "verdict on each call site is derived from source, not from this sentence.",
     ("session_transport.py", "PostgresTransport.write_bundle"): "raw committer, POSTGRES transport "
         "(the bundle upsert, session_transport.py:188). Same three callers as the file transport "
-        "above — session_bundle.py:695 + :908 + migrate_channels.py:267 — and, since stage 17 "
+        "above — session_bundle.py:695 + :988 + migrate_channels.py:267 — and, since stage 17 "
         "gated the third, the same verdict on all three: gate-enclosed. One exception covered both "
         "twins; closing the single call site retired it for both.",
     ("session_transport.py", "_FileTransport.delete_bundle"): "raw committer, FILE transport "
         "(`os.remove`, session_transport.py:114). Sole caller is the gated rename "
-        "(session_bundle.py:909) — re-checked at the 0.0.17 review, unlike its `write_bundle` twin "
+        "(session_bundle.py:989) — re-checked at the 0.0.17 review, unlike its `write_bundle` twin "
         "this one holds.",
     ("session_transport.py", "PostgresTransport.delete_bundle"): "raw committer, POSTGRES transport "
-        "(session_transport.py:209). Sole caller is the gated rename (session_bundle.py:909).",
+        "(session_transport.py:209). Sole caller is the gated rename (session_bundle.py:989).",
     ("vault.py", "commit_push"): "raw committer — both callers gated, and BOTH ARE NOW PINNED as "
         "data in `DECLARED_CALLERS` rather than asserted here (CALLER-LIST-UNPINNED). "
         "⚠ THE FIFTH FALSE CALLER STRING, and the one that says the mechanism was worth building: "
@@ -904,6 +904,39 @@ UNGATED_BY_DESIGN = {
     # above, which is where a reader chasing that call site now arrives.
     ("progress_events.py", "ProgressLog.append_event"): "append-only run telemetry under "
                                                         "temp_local/",
+    # R1.S1a — the typed event stream. FOUR sites, because the sweep sees SQL statements and not
+    # just methods, and each one deserves its own answer rather than a shared wave.
+    ("events/store.py", "EventStore.emit"):
+        "R1.S1b — the typed event stream's ONLY writer, and it is a PROJECTION. Every row it "
+        "INSERTs is derived from a ledger entry that has already been written (and, for a gate "
+        "decision, already gated): the event carries that entry's `ledger_seq` and the ledger's "
+        "hash chain is its integrity. Gating the projection would be gating the same decision "
+        "twice, and the second gate would fire after the first had already committed. It holds "
+        "no content — ids, verdicts and counts — under temp_local/, same class as the progress "
+        "log one line up.",
+    ("events/store.py", "EventStore._connect"):
+        "the schema DDL (`CREATE TABLE IF NOT EXISTS` + two indexes) and two PRAGMAs. It brings "
+        "the store into being and writes no data; the sweep sees `execute`, which is right — a "
+        "DDL statement IS a durable write, and saying 'it is only CREATE TABLE' is the kind of "
+        "reasoning-from-names this register exists to refuse.",
+    ("events/store.py", "EventStore.query"):
+        "a SELECT. It is here because the sweep classifies by RECEIVER and not by leading verb "
+        "(the `project_edges` lesson: a statement assembled elsewhere defeats a verb filter), so "
+        "a read lands in the same net as a write and gets the same one-line answer.",
+    ("events/store.py", "EventStore.count"): "a SELECT COUNT — same reading as `query` above.",
+    ("events/store.py", "EventStore.max_seq"):
+        "CM.S5 review F7 — `SELECT MAX(seq)`. Same reading as `count` above: a read caught by a "
+        "sweep that classifies by RECEIVER rather than by leading verb. ⚠ It exists as a THIRD "
+        "reader beside `count` and `after_seq` because those two answer an unreadable store and "
+        "an empty one with the same value, and a publisher must tell them apart — this one "
+        "answers `None` for unreadable, and nothing in it writes.",
+    ("events/store.py", "EventStore.after_seq"):
+        "CM.S5 — the RESUME read (`WHERE seq > ?`, oldest first). Same reading as `query`: a "
+        "SELECT, caught by a sweep that classifies by RECEIVER rather than by leading verb, and "
+        "given the same one-line answer. ⚠ It is a separate method from `query` ON PURPOSE (the "
+        "two orderings are two contracts, and a flag that inverts one silently is how a publisher "
+        "loses the middle of its backlog), so it earns its own register key rather than hiding "
+        "under its sibling's.",
     ("state.py", "StateStore._atomic_write"): "StateStore — process/run state under temp_local/",
     ("state.py", "StateStore.delete"): "StateStore — process/run state under temp_local/",
     ("knowledge/ast_backend.py", "AstBackend._save_cache"): "GR.S1 — the incremental AST edge cache under "
@@ -935,8 +968,27 @@ UNGATED_BY_DESIGN = {
         "every byte of it is re-derivable by re-hashing the repo. Losing it costs one silent "
         "re-record and can never cost a fact. The SQLite memory store lives under the same "
         "directory and outlives every session too — durability is not the gating question.",
+    ("govern/calibration.py", "save_cursor"):
+        "H-2 \u2014 the transcript READ BOOKMARK under temp_local/calibration/, on the GR.S4 "
+        "dirty-set pattern two entries up and for the same reading: P2 gates durable writes of "
+        "FACTS \u2014 memory, code, config \u2014 and this holds `{session_id, offset}`, two values that "
+        "say where a file was last read to. It stores no transcript content of any kind (the "
+        "adapter it serves counts characters and drops the text in one expression), nothing a "
+        "human said, and nothing that is not re-derivable: deleting it costs ONE re-read of one "
+        "window, and because the ratio it feeds is a quotient of totals, a re-read moves that "
+        "ratio by nothing at all. It is also the reason the write is best-effort rather than "
+        "loud \u2014 see its SUPPRESS_OK entry in the D5 register.",
     ("session_state.py", "SessionScopedStore.update"): "session run-state under temp_local/",
     ("session_state.py", "SessionScopedStore.delete"): "session run-state under temp_local/",
+    ("session_state.py", "SessionScopedStore.delete_session_state"):
+        "session run-state under temp_local/ — the same class as `delete` and `update` either "
+        "side of it, and it exists because they disagreed. `exists()` answers True for a scoped "
+        "key when only the pre-MS.S2 unscoped singleton is on disk (a deliberate fallback), while "
+        "`delete` removes only `name__<sid>` — so the CLEAN-RESUME rule asked for every present "
+        "key, deleted files that were not there, and reported `cleared: []` while the replaced "
+        "session's `approved_approach` survived (stage 10 review F3). This one removes both. Still "
+        "not a governed durable write: the subject is session run-state under temp_local/, and the "
+        "clean resume itself is the step a human approved.",
     ("govern/revert.py", "ReversibleStateStore.revert"): "undo of a state write under temp_local/",
     ("flush_liveness.py", "store_state"): "flush backoff/liveness state under temp_local/",
     ("flush_liveness.py", "update_state"): "flush backoff/liveness state under temp_local/",
@@ -1131,6 +1183,26 @@ UNGATED_BY_DESIGN = {
     ("team_audit.py", "SharedAuditLog.list_projects"): "SI.6-DB — `SELECT DISTINCT namespace` (the shared project "
         "key) for `audit --team --list-projects`. Read-only.",
 
+    # ---- team_events.py — CM.S5's SHARED event store. ⭐ A DIFFERENT answer from the audit twin
+    # above, and the difference is the point: the audit ledger cannot be gated without recursing
+    # (a write approved before the approval can be recorded has no bottom), but publishing EVENTS
+    # is not that — it is ordinary egress, and it IS gated. `team_events.publish` submits a
+    # `WriteRequest(kind="send")` to the universal WriteGate, human-gated and secret-scanned as a
+    # hard block, before any of the three methods below is reached. They are registered as the
+    # mechanics of an already-gated write, not as an exemption from one.
+    ("team_events.py", "SharedEventLog.append_all"): "SI.6-DB — `INSERT … ON CONFLICT DO NOTHING` "
+        "of one batch into the SHARED event store. Reached ONLY from inside the WriteGate's commit "
+        "closure (`team_events.publish`), so the gate has already approved and scanned these exact "
+        "bytes. Append-only and idempotent by `(namespace, event_id)`, so a re-publish adds "
+        "nothing rather than duplicating.",
+    ("team_events.py", "SharedEventLog.max_local_seq"): "SI.6-DB — `SELECT MAX(local_seq) … WHERE "
+        "namespace=%s AND actor=%s`, so a re-publish sends only the tail. Read-only.",
+    ("team_events.py", "SharedEventLog.notify"): "SI.6-DB — `SELECT pg_notify(…)`: the doorbell, "
+        "sent AFTER the inserts commit, carrying identifiers and counts and never an event. It "
+        "writes no row and persists nothing; a missed notification costs a reader one SELECT.",
+    ("team_events.py", "SharedEventLog.read"): "SI.6-DB — `SELECT … ORDER BY id`: the team-wide "
+        "read of the shared stream. Read-only.",
+
     # ---- team_journal.py — its apply_memory_write / _close_edges_for are GATED above.
     ("team_journal.py", "_read_remote"): "SI.6-DB — reads the remote row for a key so a CAS miss "
         "can be reported as a CONFLICT with the other state attached, instead of a silent "
@@ -1281,12 +1353,18 @@ DECLARED_CALLERS = {
     # held the vault channel's re-home — the call site this pair spent two releases arguing about
     # — and the module was deleted with the channel. Two callers each now, both gated, both in
     # `session_bundle.py`. Line numbers RE-DERIVED, never adjusted until they looked right.
+    # ⚠ 988/989 -> 1004/1005 at 0.0.21 stage 10's review repair: `clear_session_state` gained the
+    # paragraph explaining why it must reach the pre-MS.S2 singleton (review F3), and every call
+    # site below it moved by the length of that paragraph. RE-DERIVED with an AST walk for the
+    # `write_bundle`/`delete_bundle` calls — the same operation `gate_enclosure` performs — not
+    # nudged until the sweep went quiet. Third time this arithmetic has been paid in this file,
+    # which is what `CALLER-LIST-UNPINNED` (doc 84) exists to end.
     ("session_transport.py", "_FileTransport.write_bundle"): (
-        ("session_bundle.py", 695), ("session_bundle.py", 908)),
+        ("session_bundle.py", 695), ("session_bundle.py", 1004)),
     ("session_transport.py", "PostgresTransport.write_bundle"): (
-        ("session_bundle.py", 695), ("session_bundle.py", 908)),
-    ("session_transport.py", "_FileTransport.delete_bundle"): (("session_bundle.py", 909),),
-    ("session_transport.py", "PostgresTransport.delete_bundle"): (("session_bundle.py", 909),),
+        ("session_bundle.py", 695), ("session_bundle.py", 1004)),
+    ("session_transport.py", "_FileTransport.delete_bundle"): (("session_bundle.py", 1005),),
+    ("session_transport.py", "PostgresTransport.delete_bundle"): (("session_bundle.py", 1005),),
     # ⚠ BOTH NUMBERS RE-DERIVED AT 0.0.18 LANE D SLICE 4, NOT ADJUSTED UNTIL THEY PASSED. This
     # slice edited the prose above both call sites (`tools_share.py`'s docstring had spent three
     # releases calling itself the deletion set; `collab.py` gained a removed-bundle announcer), so
@@ -1385,10 +1463,21 @@ CALLER_PINS = {
         ("agent_skills.py", "_regenerate_plugin_skills"),
         ("harness_setup.py", "apply_setup"),
     ),
+    # H-2 — one caller, and the entry's justification rests on WHAT it writes (a two-field
+    # bookmark, re-derivable, under temp_local/), not on who calls it. The pin is what makes
+    # that a checked statement.
+    ("govern/calibration.py", "save_cursor"): (
+        ("govern/calibration.py", "observe"),
+    ),
+    # R1.S1a — the event store's schema DDL has exactly one caller, its own writer.
+    ("events/store.py", "EventStore._connect"): (
+        ("events/store.py", "EventStore.emit"),
+    ),
     ("atomicfile.py", "atomic_write_text"): (
         ("config_cmd.py", "config_set._commit"),
         ("flush_liveness.py", "store_state"),
         ("flush_liveness.py", "update_state"),
+        ("govern/calibration.py", "save_cursor"),
         ("govern/secret_ignore.py", "_gated_write._commit"),
         ("init.py", "InitPlan.write_files"),
         ("knowledge/anchor_fingerprints.py", "_write_record"),
@@ -1562,6 +1651,11 @@ CALLER_PINS = {
         ("cli_commands/sync.py", "cmd_sync"),
     ),
     ("teamdb.py", "_read_schema_version"): (
+        # ⭐ DERIVED by `_writegraph.derive_callers`, never typed. CM.S5's review repair (F1) made
+        # the events publisher a second caller: the shared-schema version is now read to REFUSE a
+        # pre-v6 store by name, and the register entry above says "read-only", which is still
+        # true of both callers.
+        ("team_events.py", "SharedEventLog._require_schema"),
         ("teamdb.py", "probe._work"),
     ),
     ("teamdb.py", "_run_ddl"): (
@@ -2024,19 +2118,36 @@ class TestZeroBypass(unittest.TestCase):
                           "than leaving a stale one in the report.")
 
     def test_rule_e_yield_is_stated_not_left_as_a_silent_ratio(self):
-        """RULE (e) RESOLVES 36 CALLS AND ADDS 2 DERIVED SITES, and 36 -> 2 is a ratio a reader of
+        """RULE (e) RESOLVES 40 CALLS AND ADDS 3 DERIVED SITES, and the ratio is one a reader of
         a derived report is entitled to have explained rather than left to wonder at.
 
         THE EXPLANATION, and it is checkable, not a hand-wave: the rule's job is to resolve calls
         through a constructor-bound receiver, and MOST such receivers are not write-reaching at all
         — a `Path`, a planner, a formatter. Only the resolutions whose TARGET reaches a durable
-        write can add anything to the closure, so the honest denominator is not 36. This asserts
+        write can add anything to the closure, so the honest denominator is not 39. This asserts
         the whole chain: the count matches the recorded edges, the write-reaching subset is what it
         is, and the sites that appear are exactly those two.
 
         Both baselines were re-derived through `scripts/mutate.sh` with a measurement label rather
         than by hand (doc 85 §7b: "I am only measuring, not mutation-testing" is not an exemption):
         rule (e) ON gives 118 derived sites, the M05-shape mutation OFF gives 116.
+
+        39 -> 40 AT 0.0.21 STAGE 11, re-derived rather than bumped, and the ONE new edge is
+        nameable: `team_events.publish` constructs a `WriteGate` locally and then calls
+        `WriteGate.submit` on it, which is rule (e)'s exact shape. ⭐ **And it is NOT
+        write-reaching, which is the most instructive case this list has yet carried:** the
+        receiver it binds is the GATE — the one object whose entire purpose is to BE the approved
+        path — so resolving the call adds no unregistered durable write and `productive` is
+        unchanged. 40 resolutions still buy 3 sites, and the reason is not an accident of the
+        corpus: a publish reaching the WriteGate is the system working.
+
+        36 -> 39 AT 0.0.21 STAGE 09, re-derived rather than bumped, and all three edges are
+        nameable. H-2 added two functions that build a `StateStore` locally and then call it:
+        `govern/calibration.py:observe` resolves ONE (`StateStore.update`, writing the per-model
+        ratio into `memory_stats`) and `govern/doctor.py:token_calibration_findings` resolves TWO
+        (`StateStore.exists` and `StateStore.read`, the doctor reading it back). ⭐ Exactly ONE of
+        the three is write-reaching, so `productive` gains `observe` and nothing else — which is
+        this test's own point made by the change that broke it: three resolutions bought one site.
 
         35 -> 36 AT 0.0.17 STAGE 21, re-derived rather than bumped. `KnowledgeIndex._iter_files`
         stopped being a `@staticmethod` (it now RECORDS the nested checkouts it skipped, which is
@@ -2050,17 +2161,19 @@ class TestZeroBypass(unittest.TestCase):
         self.assertEqual(len(graph.receiver_edges), graph.receiver_calls,
                          "the rule-(e) COUNT and the rule-(e) EDGE LIST disagree — a count with no "
                          "list can only be re-asserted, never re-graded")
-        self.assertEqual(graph.receiver_calls, 36,
+        self.assertEqual(graph.receiver_calls, 40,
                          "rule (e)'s resolution count moved; re-derive its yield before trusting "
                          "any number in the audit report that depends on it")
         productive = sorted({caller for caller, _ln, target in graph.receiver_edges
                              if target in reaching})
         self.assertEqual(
             productive,
-            [("mcp/tools_read.py", "session_save"), ("team_journal.py", "_floor_rows")],
-            "of rule (e)'s 36 resolutions, exactly these reach a durable write — every other one "
-            "binds a receiver whose class writes nothing, which is why 36 resolutions buy 2 sites "
-            "rather than 35. If this list moved, the ratio in the report is stale.")
+            [("govern/calibration.py", "observe"), ("mcp/tools_read.py", "session_save"),
+             ("team_journal.py", "_floor_rows")],
+            "of rule (e)'s 40 resolutions, exactly these reach a durable write — every other one "
+            "binds a receiver whose class writes nothing (or, since CM.S5, IS the WriteGate), "
+            "which is why 40 resolutions buy 3 sites rather than 39. If this list moved, the "
+            "ratio in the report is stale.")
         for site in productive:
             self.assertIn(site, closure.derived,
                           f"{site} is rule (e)'s whole contribution to the register and it is not "

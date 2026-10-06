@@ -56,6 +56,8 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
+import _support  # noqa: F401  (puts src/ on the path, and runs the stage-05 provisioning preflight)
+
 from mokata import approval as A                                   # noqa: E402
 from mokata import session                                         # noqa: E402
 from mokata.config import Surface                                  # noqa: E402
