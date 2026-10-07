@@ -259,6 +259,36 @@ class KnowledgeLayer:
     def uses_graph(self) -> bool:
         return self.primary.is_graph
 
+    @property
+    def pinned_graph_tool(self) -> Optional[str]:
+        """The graph tool the COMMITTED manifest pins, or None (floor-only) — ADOPTION, not
+        availability, and the two are different facts (§7g).
+
+        🔴 REVIEW FINDING 3-1 (0.0.21, third independent review pass). `uses_graph` answers
+        AVAILABILITY: it reads `primary.is_graph`, and `select_backends` says in its own docstring
+        that *"`router.resolve` only returns a tool whose command is present, so an absent tool
+        never reaches here (it resolves to grep)"*. So the MOST COMMON broken adoption — the
+        `code-review-graph` command uninstalled, a wrong venv, a PATH that lost it — produced
+        `uses_graph=False`, which the reason derivation read as *"no graph is wired"*, which told
+        the user to **adopt a graph they had already adopted**.
+
+        ⛔ THAT IS THE EXACT SENTENCE FIX D EXISTS TO DELETE, on the one GR.S3 refusal that fires in
+        the shipped product. Reproduced end to end by the reviewer on a repo carrying what
+        `adopt_graph` writes, with the binary absent: `('chain-lexical',)` → *"Adopt a real code
+        graph"*. The adoption fact was a one-line durable read the whole time and nothing asked it.
+
+        Degrade-clean: None on any manifest fault, which reads as *"not adopted"* — the direction
+        that sends a reader to `mokata graph adopt`, harmless for a repo that turns out to have one,
+        rather than to `mokata doctor` for a graph that may not exist."""
+        try:
+            from .graph_adopt import _load_manifest_data, graph_pinned_tool
+            root = getattr(self.primary, "root", None)
+            if not root:
+                return None
+            return graph_pinned_tool(_load_manifest_data(root))
+        except Exception:  # noqa: BLE001 — a manifest fault is "not adopted", never a raise into a lens
+            return None
+
     # --- typed queries ------------------------------------------------------
     def _run(self, kind: str, target: str, depth: int = 1) -> QueryResult:
         # GR.S4 — FRESHNESS-BEFORE-ANSWER: reconcile the graph against the dirty-set + HEAD probe
@@ -358,7 +388,13 @@ class KnowledgeLayer:
         # GR.S4 — out-of-band recheck: an editor edit (no hook, HEAD unchanged) that touched a
         # file THIS answer references is caught by hash-staleness on the referenced files (bounded
         # by the result, never the repo). Rebuild + re-query once so the answer is fresh, never
-        # stale. Only meaningful for a long-lived layer whose controller holds the cold baseline.
+        # stale.
+        #
+        # 🔴 REVIEW FINDING A8 (0.0.21 stage 14) — the sentence that used to end this comment,
+        # "Only meaningful for a long-lived layer whose controller holds the cold baseline", is FALSE
+        # after fix C: the recheck loads the PERSISTED baseline, so it is live in every process, for
+        # a layer of any lifetime. §7h — a prose site repeating an overturned premise is a claim, and
+        # it was still asserting the thing the fix removed.
         if self.freshness is not None:
             try:
                 if self.freshness.recheck_after_answer(self, result):

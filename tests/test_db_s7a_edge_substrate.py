@@ -387,9 +387,17 @@ class TestE3AV4TeamIsUntouched(unittest.TestCase):
 
     def test_the_floor_did_not_move_and_the_version_did(self):
         """MUTATION: raise the floor to 4 or 5 and this goes RED. It would fail-close every existing
-        team on upgrade for a table nothing yet requires."""
-        self.assertEqual(5, teamdb.TEAM_SCHEMA_VERSION)
+        team on upgrade for a table nothing yet requires.
+
+        ⚠ The VERSION is derived and the FLOOR is a literal, and the asymmetry is the point (the
+        distinction stage 11 had to draw twice). This test's subject is *"the floor stayed while
+        the version moved"*: reading the floor from the constant would make it vacuous, while
+        typing the version makes every later additive bump red for no reason — which is exactly
+        what v5 → v6 did to its live-DB twin. `test_d1_d2_schema_ddl_version` owns the deliberate
+        version TRIPWIRE, so a bump still has to be announced somewhere, once."""
+        self.assertGreaterEqual(teamdb.TEAM_SCHEMA_VERSION, 5)
         self.assertEqual(3, teamdb.TEAM_SCHEMA_MIN_SUPPORTED)
+        self.assertLess(teamdb.TEAM_SCHEMA_MIN_SUPPORTED, teamdb.TEAM_SCHEMA_VERSION)
 
     def test_the_floor_comment_states_the_tripwire_that_would_move_it(self):
         """The floor is only honest while the condition that would raise it is WRITTEN DOWN. Pinned

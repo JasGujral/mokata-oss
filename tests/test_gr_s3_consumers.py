@@ -23,6 +23,7 @@ import _support  # noqa: F401  (puts src/ on the path)
 
 from mokata.brainstorm import Approach, BrainstormGateError, BrainstormSession
 from mokata.brainstorm_impact import DesignFitVerdict, compute_impact
+from mokata import brainstorm_impact as BI
 from mokata.govern import graph_required as GR
 from mokata.knowledge.query import QueryResult, Reference
 from mokata.knowledge.query import BASIS_LEXICAL, BASIS_STRUCTURAL
@@ -330,36 +331,53 @@ class TestExitCriterionSweep(unittest.TestCase):
 class TheDerivationFailsCLOSED(unittest.TestCase):
     """§7f — the anti-vacuity controls, and they exist because two mutants proved they were needed.
 
-    `derive_graph_degraded`'s fail-closed branches are unreachable from any real repo: a layer is
-    always buildable (the AST floor needs no adoption) and the lens catches its own query faults.
+    `derive_graph_degraded_detail`'s fail-closed branches are unreachable from any real repo: a layer
+    is always buildable (the AST floor needs no adoption) and the lens catches its own query faults.
     So mutants that turned both branches fail-OPEN **survived** — the clean case had graded the
-    guard away. Each is driven here at the injected boundary, never by patching the reader."""
+    guard away. Each is driven here at the injected boundary, never by patching the reader.
+
+    ⚠ MOVED OFF `derive_graph_degraded` AT 0.0.21 STAGE 14 (review finding B-F5): that two-value
+    wrapper was deleted under §7d once the reviewer measured zero production callers, and these were
+    its only callers anywhere. The assertions are unchanged; each now also pins the REASON, because
+    an `UNDERIVABLE` that carries no reason is indistinguishable from a clean answer (§7g)."""
 
     def test_a_lens_that_RAISES_refuses(self):
         def explodes(*_a, **_k):
             raise RuntimeError("the lens blew up")
-        basis, degraded = GR.derive_graph_degraded(object(), ["pay"], _lens=explodes,
-                                                   _build_layer=lambda _s: object())
+        basis, degraded, reasons = GR.derive_graph_degraded_detail(
+            object(), ["pay"], _lens=explodes, _build_layer=lambda _s: object())
         self.assertEqual(GR.UNDERIVABLE, basis)
         self.assertTrue(degraded, "a gate that cannot see became a gate that approves")
+        self.assertEqual((BI.DEGRADE_QUERY_FAULT,), reasons,
+                         "and it must say WHICH kind of closed — an empty tuple here reads as "
+                         "'nothing to explain', which is what a CLEAN answer carries")
 
     def test_NO_LAYER_AT_ALL_refuses_and_says_which_kind_of_closed(self):
-        basis, degraded = GR.derive_graph_degraded(object(), ["pay"],
-                                                   _build_layer=lambda _s: None)
+        basis, degraded, reasons = GR.derive_graph_degraded_detail(
+            object(), ["pay"], _build_layer=lambda _s: None)
         self.assertEqual(GR.UNDERIVABLE, basis,
                          "no layer was reported as a measured degradation — same verdict, but it "
                          "sends the reader to adopt a graph rather than to fix a broken one")
         self.assertTrue(degraded)
+        self.assertEqual((BI.DEGRADE_NO_LAYER,), reasons)
 
     def test_a_layer_that_ANSWERS_is_not_refused(self):
         """The control on both: a derivation that refused unconditionally would satisfy them."""
         class _Clean:
             graph_degraded = False
-        basis, degraded = GR.derive_graph_degraded(object(), ["pay"],
-                                                   _lens=lambda *_a, **_k: _Clean(),
-                                                   _build_layer=lambda _s: object())
+        basis, degraded, reasons = GR.derive_graph_degraded_detail(
+            object(), ["pay"], _lens=lambda *_a, **_k: _Clean(),
+            _build_layer=lambda _s: object())
         self.assertEqual(GR.DERIVED_CLEAN, basis)
         self.assertFalse(degraded)
+        self.assertEqual((), reasons)
+
+    def test_the_two_value_wrapper_is_GONE(self):
+        """§7d, review finding B-F5. It had zero production callers and its stated reason to exist —
+        *"the live caller unpacks two values"* — was made false by the same commit that wrote it."""
+        self.assertFalse(hasattr(GR, "derive_graph_degraded"),
+                         "deleted at 0.0.21 stage 14; use `derive_graph_degraded_detail`")
+        self.assertTrue(hasattr(GR, "derive_graph_degraded_detail"), "the CONTROL")
 
 
 def _init(root):

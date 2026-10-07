@@ -715,6 +715,28 @@ approved write: approval is a methodology gate, never a security override.
 ### `mokata rules`
 Show the 4-tier rules and their line budgets; exit non-zero if a tier is over cap.
 
+### `mokata events [--share] [--yes]`
+The typed event stream's one human surface (CM.S5). With no flags it reports **status**: how many
+events the local store holds, whether publishing to the team's store is on, how many are not yet
+published — and **whether a live notification could be received at all over the configured DSN.**
+That last line matters because LISTEN/NOTIFY does not survive a transaction-mode pooler: the
+publisher cannot tell *"nobody is listening"* from *"nothing can listen"*, so mokata says which.
+
+`--share` publishes new local events to the team's **OWN** managed Postgres (an env-var DSN —
+**NO telemetry**, nothing is ever phoned home to mokata or Anthropic). It is **OPT-IN**
+(`mokata config set settings.events.shared true`) and **LOCAL-FIRST**: the default publishes
+nothing, ever. Publishing is data leaving your machine, so it goes through the universal WriteGate
+as an egress `send` — **human-gated, and secret-scanned as a hard block that an approval cannot
+override.** Rows are append-only, per-actor, namespaced per project, and idempotent by
+`(namespace, event_id)`, so a re-publish adds nothing rather than duplicating. Events carry
+**counts and identifiers only** — never the content of a memory item, a file or a conversation.
+The DSN secret is never stored; only the env-var name is recorded.
+
+In-harness equivalent: the `events_share` MCP write tool (propose → `mokata approve <id>` →
+publish). ⚠ The status view has no MCP read tool on purpose — it is a terminal convenience, and
+the in-harness read of the stream is the IDE's own event surface, not a second tool shipped ahead
+of it.
+
 ### `mokata audit [--why] [--team] [--share] [--consent show|grant|revoke] [--tail N] [--yes]`
 Show the append-only audit ledger (every gate decision, tool call, write, …). Add `--why`
 for a readable **what + decision + why** timeline of the run — for each entry, what happened,

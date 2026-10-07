@@ -401,6 +401,27 @@ class TestAgainstTheRealTree(unittest.TestCase):
             % EXCLUDED_FOR_SERVICES)
         self.assertIn("service containers", reasons[EXCLUDED_FOR_SERVICES])
 
+    def test_every_job_that_runs_a_suite_installs_the_provisioning_prerequisite(self):
+        """🔴 THE 0.0.21 CUT'S CI RED, pinned per JOB. The union above stayed green while four
+        hooks-execute legs and live-db could not import the suite at all (`_provisioning`
+        refuses without PyYAML), because ONE job installing ci.txt satisfies a union."""
+        self.assertEqual(
+            [], pp.suite_jobs_missing(self.ci),
+            "these ci.yml jobs run a suite under tests/ without installing requirements/ci.txt, so "
+            "`tests/_support.py` refuses (exit 2) before a single test runs")
+
+    def test_the_per_job_check_REDS_on_the_shape_that_shipped_red(self):
+        """The control: the check above is worth nothing unless it convicts the ci.yml that
+        actually failed. Strip every install step this cut added and it must name both jobs."""
+        lines = self.ci.split("\n")
+        marker = "      - name: Install the suite's provisioning prerequisite (PyYAML, requirements/ci.txt)"
+        starts = [i for i, ln in enumerate(lines) if ln == marker]
+        self.assertEqual(2, len(starts), "the control's anchor moved; re-aim it, do not delete it")
+        for i in reversed(starts):
+            del lines[i:i + 5]
+        self.assertEqual(["hooks-execute", "live-db"],
+                         sorted(j for j, _ in pp.suite_jobs_missing("\n".join(lines))))
+
     def test_the_derived_set_is_the_one_named_in_this_files_docstring(self):
         """Anti-vacuity. An empty or half-parsed derived set would satisfy the subset check just
         as loudly as a genuinely covered preflight."""

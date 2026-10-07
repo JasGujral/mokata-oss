@@ -227,6 +227,37 @@ def ci_requirements(ci_text):
     return frozenset(found)
 
 
+def suite_jobs_missing(ci_text, required="requirements/ci.txt"):
+    """`[(job_id, roots)]` — every ci.yml job that RUNS a suite under tests/ yet never installs
+    `required`. ⚠ Over ALL jobs, service-container jobs INCLUDED: the exclusion in
+    `unit_suite_jobs` is about what a LOCAL preflight can reproduce, and this is a different
+    question — whether the CI job itself can even import the suite.
+
+    🔴 THE 0.0.21 CUT (mirror run 37310393789, PR #76). `tests/_support.py` refuses (exit 2) on an
+    interpreter without PyYAML, and `hooks-execute` (four legs) and `live-db` never installed it —
+    five red jobs that measured nothing, found by the first CI run since the refusal landed. Each
+    job's installs are read separately here, because the DERIVED UNION above was satisfied the
+    whole time by the one job (`test`) that did install it."""
+    doc = safe_load(ci_text)
+    if not isinstance(doc, dict) or not isinstance(doc.get("jobs"), dict):
+        return []
+    # ⚠ Spelled differently from `ci_requirements` ON PURPOSE: `_stage27_mutants.sh` addresses that
+    # function by exact text, and a second copy of the same lines would make its patterns ambiguous.
+    out = []
+    for job_id, job in doc["jobs"].items():
+        if not isinstance(job, dict):
+            continue
+        runs = _step_runs(job)
+        roots = sorted({m.group(1) for run in runs for m in _DISCOVER.finditer(run)})
+        installed = {m.group(1)
+                     for run in runs for ln in run.splitlines() if "pip install" in ln
+                     for arg in _DASH_R.findall(ln)
+                     for m in [_REQ_FILE.search(arg)] if m}
+        if roots and required not in installed:
+            out.append((job_id, tuple(roots)))
+    return out
+
+
 # ---- the release.sh side: parsed too ---------------------------------------------------------
 
 def _code_only(text):

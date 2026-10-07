@@ -112,8 +112,29 @@ class TestTheLiveNotes(unittest.TestCase):
         self.assertTrue(published,
                         "no commitment is declared for %s, so every assertion below would pass "
                         "having graded nothing" % __version__)
-        self.assertTrue(any(c.moved for c in published), "no slip to look for")
-        self.assertTrue(any(not c.moved for c in published), "no held item to look for")
+
+    def test_each_half_of_the_rule_has_a_live_subject_or_says_it_has_none(self):
+        """⚠ §7h — THIS USED TO ASSERT BOTH HALVES WERE PRESENT, AND THAT IS A FACT ABOUT 0.0.19.
+
+        0.0.19's cut had a slip AND a hold (the PostgreSQL floor, pinned to an upstream EOL date),
+        and the original assertion encoded that release's population as a law: *every cut has
+        something that held.* 0.0.21's does not — the one commitment published against it, the PR
+        gate, slipped — and the test reded for the release rather than for the property.
+
+        The property is that neither half of the rule is graded on NOTHING while looking like a pass.
+        So a half with no live subject is now SKIPPED, BY NAME, with the reason — a stated fact, not a
+        silence — and both halves stay graded unconditionally by the planted corpus in
+        `TestTheRuleCanActuallyFire`, which does not depend on what any one release promised.
+        """
+        published = [c for c in PUBLISHED_COMMITMENTS if c.promised_for == __version__]
+        for half, present in (("slipped", any(c.moved for c in published)),
+                              ("held", any(not c.moved for c in published))):
+            with self.subTest(half):
+                if not present:
+                    self.skipTest(
+                        "no commitment published for %s %s, so the live '%s' half of the rule "
+                        "grades nothing at this cut — said here rather than passed over. The "
+                        "planted corpus above still grades it." % (__version__, half, half))
 
     def test_every_entry_carries_a_subject(self):
         for entry in PUBLISHED_COMMITMENTS:

@@ -700,6 +700,12 @@ class GateResult:
     committed: bool
     reason: str
     findings: List[Any] = field(default_factory=list)
+    # R1.S1a clean resume — the state keys the hydrate CLEARED before loading the target. A
+    # REPORTED list and not a silent side effect: clearing a user's in-progress session is the
+    # most destructive thing a pull does, so the caller can say which keys went, and a pull that
+    # cleared nothing is distinguishable from one that was never asked to (§7g). Empty on every
+    # other gated operation, which never clears.
+    cleared: List[str] = field(default_factory=list)
 
 
 def commit_session_push_gated(plan: SessionPushPlan, *, ledger: Any = None,
@@ -785,6 +791,90 @@ def plan_session_pull(store_root: str, tag: str, target_root: str,
                            origin_repo=bundle.get("origin_repo", ""))
 
 
+def resumable_state_keys(store: Any) -> List[str]:
+    """Every state key a session pull could leave BEHIND when the incoming bundle does not
+    name it. Derived, not listed (§7j).
+
+    Two declarations already exist and this is their union, plus whatever checkpoints are
+    actually on disk:
+
+      * `_SESSION_KEYS` — what a bundle CAN carry (this module's own declaration);
+      * `session_state.SESSION_SCOPED_KEYS` — the per-session pipeline singletons MS.S2
+        identified as the ones two windows would clobber. It carries `approved_refinements`,
+        which `_SESSION_KEYS` does not, and that asymmetry is exactly why a hand-written third
+        list would have been wrong within a release;
+      * every `pipeline_run__*` checkpoint present in the store, enumerated the way
+        `progress.list_runs` enumerates them, because the StateStore has no list API.
+
+    Only keys that EXIST are returned, so the caller's report is of what it really cleared."""
+    from .session_state import SESSION_SCOPED_KEYS
+    declared = set(_SESSION_KEYS) | set(SESSION_SCOPED_KEYS)
+    present = [k for k in sorted(declared) if _key_exists(store, k)]
+    root = getattr(store, "root", None)
+    if root and os.path.isdir(root):
+        try:
+            for fn in sorted(os.listdir(root)):
+                if fn.startswith(CHECKPOINT_PREFIX) and fn.endswith(".json"):
+                    present.append(fn[:-len(".json")])
+        except OSError:
+            pass                                 # an unreadable state dir clears no checkpoints
+    return present
+
+
+def _key_exists(store: Any, key: str) -> bool:
+    try:
+        return bool(store.exists(key))
+    except Exception:  # noqa: BLE001 — see the register entry; a probe never breaks a resume
+        return False
+
+
+def clear_session_state(store: Any) -> List[str]:
+    """CLEAR the active session's state. Returns the keys actually removed.
+
+    ⭐ **THE CLEAN-RESUME RULE (doc 42 R1.S1a, Jas 2026-07-03), and it is a STANDING rule across
+    every harness mokata runs under, not a Claude Code fix.** *"Resuming/loading a referenced
+    session must FIRST clear the current in-context session state, THEN load the target — never
+    layer the loaded session on top of whatever was already active."*
+
+    ⛔ **IT WAS NOT HONOURED, AND THE SHAPE OF THE MISS IS WHY IT NEEDED A RULE RATHER THAN
+    CARE.** `hydrate_bundle` wrote `for key, data in write_state.items()` — an ADDITIVE loop. A
+    bundle that carries a brainstorm but no spec, pulled into a repo holding both, leaves the
+    OLD spec in place and the resumed session then reads one session's brainstorm beside
+    another's emitted spec. Nothing errors, nothing warns, and the bleed-through is invisible
+    precisely because every individual value is well-formed. ⚠ And `strip_imported_approval`
+    made it worse rather than better in one specific way: it DROPS `approved_approach` from
+    every incoming bundle so the receiver re-earns approval — so under an additive write the
+    PREVIOUS session's approval survived the pull untouched, which is the exact authority the
+    strip exists to withhold.
+
+    Degrade-clean per key: a delete that fails leaves that key out of the returned list, so the
+    caller reports what it really cleared rather than what it meant to.
+
+    ⛔ **AND IT MUST CLEAR THE PRE-UPGRADE SINGLETON, WHICH IT DID NOT (review F3).** A
+    `SessionScopedStore` answers `exists("approved_approach")` True when only the LEGACY
+    unscoped file is on disk — a deliberate fallback, so a pre-MS.S2 session keeps working — but
+    its `delete` removes only `approved_approach__<sid>`. So this loop asked for every present
+    key, deleted a scoped file that was not there, got `False` for each, and **reported
+    `cleared: []` while the replaced session's approval sat untouched.** That is the exact
+    authority `strip_imported_approval` is written to withhold, surviving the one step that
+    exists to remove it — and the report said nothing had been cleared, which is also what an
+    already-clean repo says (§7g).
+
+    ⭐ `delete_session_state` is asked for by NAME and fallen back from, rather than branching on
+    the store's type: a plain `StateStore` has no legacy/scoped distinction and its own `delete`
+    is already the whole answer.
+    """
+    removed: List[str] = []
+    clear_one = getattr(store, "delete_session_state", None) or store.delete
+    for key in resumable_state_keys(store):
+        try:
+            if clear_one(key):
+                removed.append(key)
+        except Exception:  # noqa: BLE001 — see the register entry
+            continue
+    return removed
+
+
 def hydrate_bundle(target_surface: Any, bundle: Dict[str, Any], *, ledger: Any = None,
                    confirm=None, assume_yes: bool = False,
                    policy: Any = None) -> GateResult:
@@ -806,8 +896,13 @@ def hydrate_bundle(target_surface: Any, bundle: Dict[str, Any], *, ledger: Any =
     store = target_surface.state
     blob = json.dumps(full_state, sort_keys=True)       # scan EVERY bundled value, approval included
     gate = WriteGate(ledger=ledger, trust=policy_trust(policy))
+    cleared: List[str] = []
 
     def _write_all() -> None:
+        # R1.S1a clean resume: CLEAR, then load. Inside the gate's commit closure on purpose —
+        # a declined or blocked gate must hydrate nothing AND clear nothing, so the clear lives
+        # where the write does rather than one statement before `gate.submit`.
+        cleared.extend(clear_session_state(store))
         for key, data in write_state.items():
             store.write(key, data)
 
@@ -817,7 +912,8 @@ def hydrate_bundle(target_surface: Any, bundle: Dict[str, Any], *, ledger: Any =
                      surface=policy_surface(policy, CLI_SURFACE)),
         commit=_write_all, confirm=confirm, assume_yes=assume_yes,
         human_approved=policy_approved(policy))
-    return GateResult(outcome.committed, outcome.reason, list(outcome.findings))
+    return GateResult(outcome.committed, outcome.reason, list(outcome.findings),
+                      cleared=list(cleared))
 
 
 # ----------------------------------------------------------------------------- rename (gated)

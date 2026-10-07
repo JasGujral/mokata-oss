@@ -333,6 +333,39 @@ REFUSED = {
     ("notify.py", "_debounced"):
         "writes — creates/touches the notification rate-limit stamp under temp_local/ (no content: "
         "the state is the file's mtime), so it cannot be bound as write-free",
+    # H-2 (0.0.21 stage 09). Same shape as `_debounced` above and the same reason for being
+    # here rather than bound: the register entry beside it argues from what the file HOLDS
+    # (two integers, re-derivable), and a reader could take that for write-freedom. It is not.
+    # `save_cursor` creates an inode under temp_local/calibration/ and replaces its contents,
+    # so a binding asserting "not one byte of the tree moved" would be false about the tree.
+    # R1.S1a — all four event-store sites, and the two READS are the interesting half.
+    ("events/store.py", "EventStore.emit"):
+        "writes — it is the store's only writer, one INSERT per projected event",
+    ("events/store.py", "EventStore._connect"):
+        "writes — `CREATE TABLE IF NOT EXISTS` plus two indexes, which brings the database file "
+        "into being on first use",
+    ("events/store.py", "EventStore.query"):
+        "writes — and this is the one worth reading twice: it is a SELECT, but opening a SQLite "
+        "database in WAL mode creates its `-shm` and `-wal` sidecars, so the first read of an "
+        "existing store really does move bytes in the tree. Binding it as write-free would be "
+        "FALSE about the tree while looking like the careful answer — which is the exact failure "
+        "`_debounced` is filed here for.",
+    ("events/store.py", "EventStore.count"):
+        "writes — same WAL sidecars as `query` above, same refusal",
+    ("events/store.py", "EventStore.after_seq"):
+        "writes — CM.S5's resume read, and the same WAL-sidecar answer as `query`: a SELECT that "
+        "opens the database still creates `-shm`/`-wal` on first touch. Listed separately rather "
+        "than folded into `query` because it is a separate method with a separate contract (the "
+        "opposite ordering), and a register whose unit is the SITE must name the site.",
+    ("events/store.py", "EventStore.max_seq"):
+        "writes — CM.S5 review F7's third reader, and the same WAL-sidecar answer as `query` and "
+        "`after_seq`: a SELECT that opens the database still creates `-shm`/`-wal` on first "
+        "touch, so it cannot be bound as write-free however read-only the statement is. Named as "
+        "its own site because the register's unit is the site.",
+    ("govern/calibration.py", "save_cursor"):
+        "writes — replaces the transcript read bookmark under temp_local/calibration/ (content: "
+        "a session id and a byte offset, nothing an approval could review), so it cannot be "
+        "bound as write-free",
     ("memory/backends.py", "PostgresBackend._read_edges_present"): _SHARED_DB_SUBSTRATE,
     ("memory/backends.py", "PostgresBackend._read_scope_backfilled"): _SHARED_DB_SUBSTRATE,
     ("memory/backends.py", "PostgresBackend.all"): _SHARED_DB_SUBSTRATE,
@@ -361,6 +394,18 @@ REFUSED = {
     ("team_audit.py", "SharedAuditLog.append"):
         "writes — INSERTs one row into the shared audit table (shared DB, so (a) as well)",
     ("team_audit.py", "SharedAuditLog.list_projects"): _SHARED_DB_SUBSTRATE,
+    # CM.S5 — the shared EVENT store. Same substrate answer as the audit twin above; `append_all`
+    # and `notify` are writers that never claimed write-freedom.
+    ("team_events.py", "SharedEventLog.append_all"):
+        "writes — INSERTs the batch into the shared event store (shared DB, so (a) as well). ⚠ It "
+        "is reached only from inside the WriteGate's commit closure, so it is a GATED write rather "
+        "than an ungated one — but the binding here is about whether it moves bytes, and it does.",
+    ("team_events.py", "SharedEventLog.notify"):
+        "writes — `SELECT pg_notify(…)`. It persists no row, which is exactly why it is listed "
+        "rather than assumed: a reader could reasonably bind it as write-free, and the honest "
+        "answer is that it sends a message over the shared connection (shared DB, so (a)).",
+    ("team_events.py", "SharedEventLog.max_local_seq"): _SHARED_DB_SUBSTRATE,
+    ("team_events.py", "SharedEventLog.read"): _SHARED_DB_SUBSTRATE,
     ("team_audit.py", "SharedAuditLog.max_seq"): _SHARED_DB_SUBSTRATE,
     ("team_audit.py", "SharedAuditLog.read"): _SHARED_DB_SUBSTRATE,
     ("team_journal.py", "_edges_present"): _SHARED_DB_SUBSTRATE,
@@ -433,6 +478,16 @@ REFUSED = {
     ("progress_events.py", "ProgressLog.append_event"): "writes — appends a run-telemetry event "
         "under temp_local/",
     ("session_state.py", "SessionScopedStore.delete"): "writes — deletes session run-state",
+    # 0.0.21 stage 10 review F3 added this third remover, and the honesty pin caught it the first
+    # time the suite ran afterwards — which is the pin doing exactly its job: a new
+    # UNGATED_BY_DESIGN entry landed in neither set, and silence is the one answer this stage does
+    # not accept. It belongs HERE rather than bound, for `delete`'s reason one line up: it REMOVES
+    # files, so a binding asserting "not one byte of the tree moved" would be false about the tree.
+    ("session_state.py", "SessionScopedStore.delete_session_state"):
+        "writes — removes BOTH the scoped session file and the pre-MS.S2 unscoped singleton, which "
+        "is the whole reason it exists apart from `delete` (stage 10 review F3: `exists()` answered "
+        "True on the singleton while `delete` removed only `name__<sid>`, so a clean resume "
+        "reported `cleared: []` with the replaced session's approval still on disk)",
     ("session_state.py", "SessionScopedStore.update"): "writes — session run-state under temp_local/",
     ("state.py", "StateStore._atomic_write"): "writes — process/run state under temp_local/",
     ("state.py", "StateStore.delete"): "writes — deletes process/run state",

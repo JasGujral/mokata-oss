@@ -513,6 +513,49 @@ class ReleaseNotesCheck:
         """A schedule this leg could NOT check — the third state. Not red, and NOT a pass."""
         return bool(self.claims is not None and self.claims.undecided)
 
+    @property
+    def reachable_exit(self) -> int:
+        """The BEST exit code this invocation could possibly return. Derived, not documented.
+
+        🔴 `RELEASE-NOTES-CHECK-RC-0-IS-UNREACHABLE` (0.0.21 stage 03). A stage brief demanded
+        `release-notes-check 0.0.19` return **rc=0**. It returns 2, and 0 was **unreachable by
+        construction**: DG-7 passes, nothing is unresolved, nothing is stale, and the single
+        undecided claim is a keyed one *the shipped leg cannot resolve by construction* — the
+        planning corpus it would resolve against is dropped by both mirror controls, so a shipped
+        reader of it is `SHIPPED-TEST-READS-INTERNAL-FILE`, filed four times.
+
+        ⭐ **THE DEFECT IS NOT THE EXIT CODE. It is that nothing could TELL you the bar was
+        unclearable.** The coordinator set it, the builder derived the real ceiling by hand and
+        declined to chase it, and the only reason that went well is that the builder looked. A
+        criterion a human types from reading the docstring is a criterion that can be wrong about
+        the tool.
+
+        So the tool answers the question itself. `reachable_exit` is what this run could return if
+        every *fixable* thing were fixed:
+
+          * **0** — a corpus was supplied and every claim is decidable here.
+          * **2** — some claim is undecidable from this artefact, so 2 is the ceiling and demanding
+            0 is demanding the impossible.
+
+        ⚠ It is deliberately NOT the same as "the exit code": a run with a real failure returns 1
+        while its ceiling may be 0. The ceiling is about what the INVOCATION can reach, which is a
+        property of where it runs, not of whether this tree is currently right."""
+        return 2 if self.claims_undecided else 0
+
+    def reachable_note(self) -> str:
+        """One line stating the ceiling, printed on every run — including a passing one.
+
+        ⚠ ON EVERY RUN, and that is the point rather than noise. A note that appeared only when the
+        ceiling was 2 would be absent from exactly the runs someone is reading to decide what to
+        write in a brief."""
+        if self.reachable_exit == 0:
+            return ("  best attainable exit for THIS invocation: 0 — every claim is decidable "
+                    "here, so 0 is a fair bar to hold this run to.")
+        return ("  best attainable exit for THIS invocation: 2 — at least one claim cannot be "
+                "resolved from this artefact at all, so 0 is UNREACHABLE here and a criterion "
+                "demanding it cannot be met. 2 is the pass-equivalent for this leg; the resolving "
+                "gate (which has the planning corpus) is what can return 0.")
+
     def render(self) -> str:
         head = ("release-notes-check PASS" if self.ok else "release-notes-check FAIL")
         lines = [f"{head} — intended tag {self.target or '(none given)'}"]
@@ -536,6 +579,7 @@ class ReleaseNotesCheck:
                          "a measured regression.")
         if self.claims is not None:
             lines.append(self.claims.render())
+            lines.append(self.reachable_note())
         return "\n".join(lines)
 
 

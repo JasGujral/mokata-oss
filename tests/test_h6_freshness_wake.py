@@ -118,11 +118,26 @@ class Wake(_Base):
     def test_an_unrecorded_anchor_is_silent(self):
         # P6 reaching the freshness lane: no baseline is no opinion, so an anchored file that was
         # never recorded is not a reason to rebuild.
+        #
+        # 🔴 RE-SCOPED BY REVIEW FINDING 3-5, AND THE OLD ASSERTION WAS GREEN FOR THE WRONG REASON.
+        # It asserted the WHOLE reconcile stayed fresh after an out-of-band edit — which was only
+        # true while signals 1, 2 and 2b were dead or purely subtractive. An edit to an INDEXED file
+        # must now drive a rebuild; that is this module's entire purpose, and asserting otherwise
+        # would pin the defect. What P6 actually claims is about SIGNAL 4: an anchor with no recorded
+        # fingerprint is no opinion, so it must not be the thing that forces the rebuild. The
+        # forced-anchor ledger is where signal 4 writes its verdict, so that is what this grades.
         self.write("pkg/mod.py", "def f():\n    return 1\n")
         ctrl, layer = self.controller(), _Layer(_Primary())
         self.settled(ctrl, layer)
         self.write("pkg/mod.py", "def f():\n    return 2\n")
-        self.assertTrue(ctrl.ensure_fresh(layer).fresh)
+        out = ctrl.ensure_fresh(layer)
+        self.assertFalse(out.fresh,
+                         "an edit to an indexed file MUST rebuild — the additive baseline sees it")
+        self.assertEqual({}, ctrl._load_state().forced_anchors,
+                         "but signal 4 must not have claimed it: an anchor with no recorded "
+                         "fingerprint is NO OPINION (P6), not a reason to rebuild")
+        self.assertEqual([], ctrl._anchor_signal().paths,
+                         "and the anchor signal itself must name nothing")
 
 
 # ================================================================ S2a — the forced-ledger

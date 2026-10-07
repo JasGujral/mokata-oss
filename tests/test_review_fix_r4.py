@@ -759,7 +759,7 @@ class TestNothingElseMoved(_NoPinnedSession):
         # R4 itself added no tool; the total moved 58 -> 59 at WT-LIST (`worktree_list`) and
         # 59 -> 61 at M-4/R5 (`consolidate_proposals` + `consolidate`), which is what this now
         # pins. R4's own "nothing moved" property is the signature checks above.
-        self.assertEqual(len(REG.TOOLS), 61)
+        self.assertEqual(len(REG.TOOLS), 62)   # 61 -> 62 at CM.S5: `events_share`
 
 
 # ======================================================= 7 · the callers state the new contract

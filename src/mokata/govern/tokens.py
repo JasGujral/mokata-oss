@@ -97,6 +97,10 @@ class UsageEntry:
     label: str
     input_tokens: int
     output_tokens: int
+    # H-2(c) — this row was accounted while a batch was still running, and the batch then
+    # degraded. The spend is REAL; what is partial is the batch, so the row is MARKED rather
+    # than deleted. See `TokenTracker.mark_degraded`.
+    degraded: bool = False
 
 
 @dataclass
@@ -126,6 +130,32 @@ class TokenTracker:
         return (self.total_input / 1000 * self.input_cost_per_1k
                 + self.total_output / 1000 * self.output_cost_per_1k)
 
+    @property
+    def degraded(self) -> bool:
+        """At least one accounted row belongs to a batch that did not finish."""
+        return any(e.degraded for e in self.entries)
+
+    def mark_degraded(self) -> int:
+        """H-2(c) — mark the trail PARTIAL instead of discarding it. Returns rows kept.
+
+        ⛔ `execmode.orchestrator` used to call `tracker.entries.clear()` here, with the comment
+        *"discard partial accounting"*, and the consequence was not a missing number — it was a
+        WRONG one. Every task that completed before the subagent went unavailable had really
+        spent its tokens; clearing the trail made `RunResult.actual_cost` report **$0.0000** for
+        a run that had spent money, and `within_budget` — which is `actual_total <= budget` —
+        return True for a batch that may have blown its budget before it fell over. ⭐ R-13F
+        already settled the principle this violates from the other side: a SIMULATED task
+        contributes nothing because nothing ran, and real work is accounted because it ran.
+        Erasing real work is the same defect with the sign flipped.
+
+        ⚠ And `degraded` is not a second source of truth for that — it is what makes the
+        distinction representable at all: an honest zero (nothing ran) and an erased total (work
+        ran and we deleted the evidence) were the same three characters before this (§7g)."""
+        for entry in self.entries:
+            entry.degraded = True
+        return len(self.entries)
+
     def report(self) -> str:
+        partial = " — PARTIAL (the batch degraded)" if self.degraded else ""
         return (f"tokens: {self.total_input} in / {self.total_output} out "
-                f"across {len(self.entries)} call(s) — est. cost ${self.cost():.4f}")
+                f"across {len(self.entries)} call(s) — est. cost ${self.cost():.4f}{partial}")

@@ -144,6 +144,10 @@ class ProgressLog:
                 os.makedirs(parent, exist_ok=True)
             with open(self.path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(entry) + "\n")
+        # R1.S1c — project into the typed event stream, OUTSIDE the append lock (the same
+        # reasoning as the ledger's projection: the canonical line is already on disk, and
+        # taking a second store's lock while holding this one is how a deadlock gets written).
+        _project_event(self.path, entry)
         return entry
 
     def read_events(self, tail: Optional[int] = DEFAULT_TAIL) -> List[Dict[str, Any]]:
@@ -658,3 +662,57 @@ def ship_review_gate(surface: Any, run_id: Optional[str] = None) -> ReviewGate:
                           message="review passed (independent ✓)")
     return ReviewGate(present=True, passed=True, independent=False, blocks=False,
                       message="review passed (inline — not independent)")
+
+
+
+# ======================================================================================
+# R1.S1c — the typed projection
+#
+# ⭐ THIS MODULE PROMISED THIS IN 0.0.16 AND IT IS FINALLY TRUE. The docstring at the top
+# declares the envelope "a COMPATIBLE SUBSET of 0.1.0's R1.S1a event stream, so R1.S1a can
+# absorb this log as a superset rather than a second store to migrate." Absorbing it is what
+# this does — and until now "forward-compatible" meant nothing had tried.
+#
+# ⚠ THE LOG STAYS. It is not replaced by the projection and must not be: `build_stage_badge`
+# and the ship-review gate read it on the hot path with a BACKWARD scan that stops at the first
+# match for the run it asks about (REVIEW-FIX.R2), and an answer that no longer depends on how
+# much noise landed after the evidence is not a property to trade for tidiness.
+
+def _project_event(log_path: str, entry: Dict[str, Any]) -> None:
+    """Derive one typed event from a progress-log line. Never raises, never blocks.
+
+    The three types map the way this module's own docstring said they would:
+
+      * `stage_enter` / `stage_pass` → **PhaseTransition**, with the outcome carried;
+      * `review_verdict` → **GateDecision**, because a verdict IS a gate's decision and
+        filing it as a phase transition would lose that — the review gate's own verdict is
+        the thing an auditor looks for, and `progress_events`' docstring already separated
+        "PhaseTransition (enter/pass)" from "verdict events" for the same reason.
+
+    ⛔ NO `ledger_seq`. These events derive from the progress log, not from the audit ledger,
+    so they carry no integrity claim — and a `ledger_seq` invented here would be the one thing
+    `events.store`'s whole integrity story forbids (§7g)."""
+    try:
+        from .tdd_state import root_of_state_dir
+        root = root_of_state_dir(os.path.dirname(log_path))
+        if not root:
+            return
+        from .events import GateDecision, PhaseTransition, emit
+        etype = str(entry.get("type", ""))
+        stage = str(entry.get("stage", "") or "")
+        run_id = entry.get("run_id")
+        run_id = run_id if isinstance(run_id, str) else ""
+        data = entry.get("data") if isinstance(entry.get("data"), dict) else {}
+        if etype == REVIEW_VERDICT:
+            verdict = data.get("verdict", data.get("decision", "recorded"))
+            # No `reason` — see `events.schema.GateDecision`: a verdict's reason is free text
+            # and the log already holds it.
+            payload = GateDecision(gate="review", decision=str(verdict), subject=stage)
+        elif etype in (STAGE_ENTER, STAGE_PASS):
+            payload = PhaseTransition(
+                phase=stage, outcome="enter" if etype == STAGE_ENTER else "pass")
+        else:
+            return                     # an unknown type is not projected — see the register
+        emit(root, payload, run_id=run_id)
+    except Exception:  # noqa: BLE001 — observability never fails the write it describes
+        return

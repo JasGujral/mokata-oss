@@ -15,6 +15,8 @@ import sys
 import tempfile
 import unittest
 
+import _support  # noqa: F401  (puts src/ on the path, and runs the stage-05 provisioning preflight)
+
 from mokata import hook_cli
 from mokata.knowledge import freshness as F
 

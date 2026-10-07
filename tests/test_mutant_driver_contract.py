@@ -28,6 +28,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _mirror_bookkeeping as MB           # noqa: E402
 import _mutant_driver_contract as MDC      # noqa: E402
 
+import _support  # noqa: F401  (puts src/ on the path, and runs the stage-05 provisioning preflight)
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # ⚠ THIS FILE SHIPS AND THE THINGS IT REASONS ABOUT DO NOT. `scripts/sync-public.sh` and

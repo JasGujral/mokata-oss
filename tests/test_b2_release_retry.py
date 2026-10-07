@@ -220,15 +220,35 @@ class TestTheScriptsObeyTheRules(unittest.TestCase):
                          "'a PR may already exist' — two facts, one representation (§7g)")
 
     def test_n4_the_pr_state_is_asked_for_rather_than_inferred(self):
-        self.assertRegex(self.release, r"PR_STATE=.*gh pr view .*--json state",
-                         "the PR's state must come from gh, not from an exit code")
+        """N4's PROPERTY, re-pointed at the mechanism that now carries it.
+
+        ⛔ **THIS TEST PINNED A PREMISE 0.0.21 STAGE 01 DELETED (§7h).** It asserted
+        `PR_STATE=.*gh pr view .*--json state` on one line and a FOUR-name vocabulary
+        (`OPEN`/`MERGED`/`CLOSED`/`*`). Stage 01 split both deliberately: the read is
+        `pr_facts()` — ONE `gh pr view` returning state AND head together, because two reads can
+        observe two different PRs — and the classification is `pr_state()`, a pure function over
+        SEVEN names, because `OPEN` was answering two different questions (open at this commit,
+        open somewhere else) and the script then guessed which.
+
+        ⭐ **The vocabulary itself is NOT re-asserted here.** `test_a41` owns it and compares the
+        script's own `pr_vocabulary` against one typed list; a second copy in this file is two
+        lists of one thing, which drift (§7f). What N4 keeps is its own question: *is the state
+        ASKED FOR, or inferred from an exit code?*"""
+        self.assertIn("gh pr view", self.release,
+                      "the PR's state must come from gh, not from an exit code")
+        self.assertRegex(self.release, r"PR_STATE=.*pr_state ",
+                         "PR_STATE must be CLASSIFIED by the pure function, not assigned by hand "
+                         "— assigning it directly is how the old code ended up with no head")
+        self.assertRegex(self.release, r"gh pr view [^\n]*--json state,headRefOid",
+                         "the state and the head must come from ONE read")
         arms = case_arms(self.release, "PR_STATE")
-        self.assertEqual(sorted(a for a in arms if a),
-                         ["*", "CLOSED", "MERGED", "OPEN"],
-                         "every PR state the script can meet must be named, including the "
-                         "catch-all — an unknown state must refuse, not fall through")
-        self.assertTrue(arms["CLOSED"] and arms["*"])
-        self.assertFalse(arms["OPEN"] or arms["MERGED"])
+        self.assertIn("*", arms,
+                      "an unknown state must refuse, not fall through the case")
+        self.assertTrue(arms["*"], "the catch-all arm is empty, so an unknown state falls through")
+        self.assertGreaterEqual(
+            len([a for a in arms if a]), 5,
+            "the PR_STATE case has collapsed back toward the four-name vocabulary; see test_a41, "
+            "which owns the closed set: %r" % (sorted(a for a in arms if a),))
 
     # --- N5 ----------------------------------------------------------------------------------
     def test_n5_the_merge_is_no_longer_a_bare_subshell_under_set_e(self):
@@ -263,11 +283,21 @@ class TestTheScriptsObeyTheRules(unittest.TestCase):
     #   shape every stage of 0.0.19 was built in. The COUNT is unchanged (31), which is exactly why
     #   a count alone could never have caught it and the hash is here.
     #
-    # `INTERNAL_PATHS` is unchanged (27, 295a1a4341c5) and `.git` is deliberately NOT among them:
-    # that loop ends in `rm -rf` inside the public checkout, so adding it deletes the mirror's own
-    # object store on every sync. Measured — see the comment beside the array.
-    INTERNAL_PATHS_SHA1 = "295a1a4341c5"
-    EXCLUDE_SHA1 = "7a5a2237c9b0"
+    # `.git` is deliberately NOT among `INTERNAL_PATHS`: that loop DELETES inside the public
+    # checkout, so adding it would remove the mirror's own object store on every sync. Measured —
+    # see the comment beside the array. (At 0.0.21 that deleter stopped being `rm -rf`: it now
+    # enumerates and refuses `$PUBLIC_ROOT/.git` by name. The omission still stands and is still
+    # pinned; see `test_sync_public_nested_checkout`.)
+    #
+    # ⚠ BOTH HASHES WERE ADVANCED ONCE, AT 0.0.21 STAGE 02, and the direction is why that is
+    # allowed: `scripts/verify-mirror.sh` joined both controls. It is a RELEASE-MACHINE tool —
+    # it verifies the PRIVATE mirror checkout before a cut and has no meaning in the published
+    # package — so the public surface got NARROWER, which is the opposite of the hole these hashes
+    # exist to catch. ⭐ It shipped on its first run; `test_b1`'s mirror census caught it, with
+    # three classes of `test_a32` reporting GRADED in a mirror where they should have been absent
+    # by design. 27 → 28 internal paths, 31 → 32 excludes.
+    INTERNAL_PATHS_SHA1 = "22a7c5212a1a"
+    EXCLUDE_SHA1 = "8d25b2061831"
 
     def test_the_public_boundary_controls_are_byte_identical(self):
         block = re.search(r"INTERNAL_PATHS=\(\n(.*?)\n\)\n", self.sync, re.S)
@@ -275,8 +305,8 @@ class TestTheScriptsObeyTheRules(unittest.TestCase):
         names = [t for ln in block.group(1).splitlines()
                  if not ln.strip().startswith("#") for t in ln.split()]
         excludes = re.findall(r"--exclude='([^']*)'", self.sync)
-        self.assertEqual(len(names), 27)
-        self.assertEqual(len(excludes), 31)
+        self.assertEqual(len(names), 28)
+        self.assertEqual(len(excludes), 32)
         self.assertEqual(hashlib.sha1(" ".join(names).encode()).hexdigest()[:12],
                          self.INTERNAL_PATHS_SHA1,
                          "INTERNAL_PATHS changed — update this hash in the same commit, or "
@@ -341,7 +371,11 @@ class _Harness:
     def src(self, body="def widget():\n    return 1\n"):
         src = self.tmp()
         os.makedirs(os.path.join(src, "scripts"))
-        shutil.copy2(self.sync_script, os.path.join(src, "scripts", "sync-public.sh"))
+        # ⚠ `sync-public.sh` AND its companions (0.0.21 stage 02): it asks
+        # `scripts/verify-mirror.sh` for the mirror's default branch instead of guessing `main`,
+        # so a tree carrying only this script hits its missing-helper refusal. One declaration in
+        # `_support`, because three modules wanted it.
+        _support.install_release_scripts(_REPO, os.path.join(src, "scripts"))
         self._write(os.path.join(src, "pyproject.toml"), f'version = "{VER}"\n')
         self._write(os.path.join(src, "README.md"), "shippable\n")
         self._write(os.path.join(src, "src", "pkg", "mod.py"), body)
@@ -370,6 +404,15 @@ class _Harness:
         self.git("branch", "-M", "main", cwd=dest)
         self.git("remote", "add", "origin", bare, cwd=dest)
         self.git("push", "-q", "-u", "origin", "main", cwd=dest)
+        # ⚠ `origin/HEAD`, AND IT IS A FIXTURE-FIDELITY FIX RATHER THAN A WORKAROUND (0.0.21 stage
+        # 02). `git clone` always records `refs/remotes/origin/HEAD`; a checkout assembled with
+        # `git init` + `git remote add` — which is what this fixture does, to control the bare —
+        # does NOT. `sync-public.sh` now asks `verify-mirror.sh` for the mirror's default branch
+        # instead of guessing `main`, and that derivation reads the remote's own answer, so without
+        # this line the fixture is a checkout no real clone resembles and the refusal it triggers is
+        # correct. ⭐ Setting it makes the fixture MORE like the thing it stands in for, which is
+        # the only acceptable reason to change a fixture that a new gate rejected.
+        self.git("remote", "set-head", "origin", "-a", cwd=dest)
         return dest, bare
 
     _clock = 0
@@ -506,7 +549,11 @@ class TestN2TheReleaseBranchIsReusedNeverRecut(_Harness, unittest.TestCase):
         self.git("clone", "-q", bare, other, cwd=self.tmp())
         self.git("reset", "-q", "--hard", "HEAD~1", cwd=other)
         self.assertNotEqual(self.sha("main", cwd=other), merged, "the fixture is not stale")
-        shutil.copy2(self.sync_script, os.path.join(src, "scripts", "sync-public.sh"))
+        # ⚠ `sync-public.sh` AND its companions (0.0.21 stage 02): it asks
+        # `scripts/verify-mirror.sh` for the mirror's default branch instead of guessing `main`,
+        # so a tree carrying only this script hits its missing-helper refusal. One declaration in
+        # `_support`, because three modules wanted it.
+        _support.install_release_scripts(_REPO, os.path.join(src, "scripts"))
         self.sync(src, other)
         self.assertEqual(self.sha(BRANCH, cwd=other), merged,
                          "the retry did not converge onto the merged commit")

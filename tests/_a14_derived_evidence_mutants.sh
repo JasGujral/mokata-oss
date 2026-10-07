@@ -8,6 +8,13 @@
 # `GRAPH-REQUIRED-GATE-TURNS-ON-A-BOOLEAN-THE-MODEL-WROTE` was invisible for two releases because
 # the field defaulted to False and nothing computed it — so every mutant below hands the verdict
 # back to the reporter, in one way or another, and requires the tests to red on it.
+#
+# ⚠ P01 AND P05'S PATTERNS WERE REFRESHED AT 0.0.21 STAGE 14 FIX D, and `test_a9_mutant_batches_are_swept`
+# is what demanded it — both had gone to ZERO occurrences, which aborts this batch and silently
+# ungrades every mutant after it. Neither MUTATION changed: the call in `tools_spec` became
+# `derive_graph_degraded_detail` (three values), and the fail-closed return grew its reason tuple.
+# The subject of each mutant — the gate believing a persisted field, and NO LAYER reading as a pass
+# — is exactly what it was.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -55,9 +62,9 @@ mutant() {
 
 mutant "P01 ★★★ THE ROW, RESTORED — the gate believes the persisted field again instead of the
        lens it just ran. This is the exact state 0.0.20 found the tree in" "$TS" \
-  '        basis, degraded = GR.derive_graph_degraded(surface, targets)
+  '        basis, degraded, reasons = GR.derive_graph_degraded_detail(surface, targets)
         if not degraded:' \
-  '        basis, degraded = GR.derive_graph_degraded(surface, targets)
+  '        basis, degraded, reasons = GR.derive_graph_degraded_detail(surface, targets)
         degraded = bool(getattr(imp, "graph_degraded", False)) if imp is not None else False
         if not degraded:' "$T"
 
@@ -82,9 +89,9 @@ mutant "P04 ★★★ a lens that RAISES is read as a pass — a gate that canno
 
 mutant "P05 ★★★ NO LAYER AT ALL is read as a pass — the repo has no graph and the gate whose whole
        subject is 'was there a graph' says yes" "$GR" \
-  '            return UNDERIVABLE, True
+  '            return UNDERIVABLE, True, (DEGRADE_NO_LAYER,)
         impact = _lens_default(' \
-  '            return UNDERIVABLE, False
+  '            return UNDERIVABLE, False, (DEGRADE_NO_LAYER,)
         impact = _lens_default(' "$T"
 
 printf '\n================================================================================\n'

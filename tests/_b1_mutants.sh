@@ -84,8 +84,11 @@ mutant "S02 ★ SUBJECT: sync-public.sh's boundary walk stops finding nested che
   'done < <(find "$SRC" -mindepth 2 -name .git -print 2>/dev/null || true)' \
   'done < <(find "$SRC" -mindepth 2 -name .gitmodules -print 2>/dev/null || true)' "$T"
 
+# ⚠ PATTERN REFRESHED AT 0.0.21 STAGE 02: `scripts/verify-mirror.sh` joined the never-ships
+# list and the bullet now wraps across two lines. The MUTATION is unchanged.
 mutant "S03 ★ SUBJECT: the CLAUDE.md ships-list drops an entry the controls exclude" "$C" \
-  '`scripts/sync-public.sh`, `scripts/release.sh`, `scripts/check-tracker-tables.py`.' \
+  '`scripts/sync-public.sh`, `scripts/release.sh`, `scripts/verify-mirror.sh`,
+  `scripts/check-tracker-tables.py`.' \
   '`scripts/sync-public.sh`, `scripts/release.sh`.' "$T"
 
 # ==== T. the three-state tree (§7g) ============================================================

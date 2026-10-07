@@ -37,6 +37,17 @@ class RunResult:
         return self.actual_input + self.actual_output
 
     @property
+    def accounting_is_partial(self) -> bool:
+        """H-2(c) — the actuals cover the work that ran BEFORE the degrade, not the batch.
+
+        DERIVED from the two fields that already say it rather than stored as a third: a batch
+        that degraded with real spend on the clock has a partial accounting, and one that
+        degraded having run nothing (no subagent runner at all) honestly has zero. §7f — a
+        second stored flag agreeing with these two would be the redundant defence no test can
+        separate from them."""
+        return self.degraded and self.actual_total > 0
+
+    @property
     def within_budget(self) -> bool:
         return self.budget is None or self.actual_total <= self.budget
 
@@ -226,9 +237,15 @@ def run_tasks(tasks: List[Task], choice: ExecutionChoice, runner=None,
                                     handback_cap, density, router, worktrees)
         except SubagentUnavailable as exc:
             degraded = True
-            tracker.entries.clear()                  # discard partial accounting
+            # H-2(c) — the partial accounting is MARKED, not discarded. `tracker.entries.clear()`
+            # stood here and reported $0.0000 for a batch that had really spent tokens before the
+            # runner went away; see `TokenTracker.mark_degraded` for why that was a wrong number
+            # rather than a missing one. The fallback below is simulated and contributes nothing
+            # (R-13F), so `actual_*` is now exactly the real work that ran — flagged partial by
+            # `degraded`, which this line sets one statement up.
+            kept = tracker.mark_degraded()
             if ledger is not None:
-                ledger.record("exec_degrade", reason=str(exc))
+                ledger.record("exec_degrade", reason=str(exc), accounted_rows_kept=kept)
             # the runner just proved unavailable — the fallback batch is simulated (B3).
             results = _run_sequential(tasks, ledger, tracker)
     else:
@@ -241,8 +258,48 @@ def run_tasks(tasks: List[Task], choice: ExecutionChoice, runner=None,
         # common case — simulates, and says so on every row).
         results = _run_sequential(tasks, ledger, tracker, runner=runner)
 
-    return RunResult(
+    out = RunResult(
         choice=choice, estimate=estimate, results=results, degraded=degraded,
         actual_input=tracker.total_input, actual_output=tracker.total_output,
         actual_cost=tracker.cost(), budget=budget,
     )
+    _emit_token_spend(ledger, out, choice)
+    return out
+
+
+def _emit_token_spend(ledger: Any, result: RunResult, choice: ExecutionChoice) -> None:
+    """R1.S1c — one `TokenSpend` carrying the run's REAL totals. Never raises.
+
+    ⭐ **WHAT THIS ADDS THAT THE LEDGER PROJECTION DOES NOT.** `exec_estimate` is already
+    recorded and already projects, with `estimated=True` — it is the chars/4 guess taken BEFORE
+    the run. Nothing recorded the ACTUAL afterwards, so the one place in this tree where an
+    estimate and a real count could be compared had only the estimate in it. This is the other
+    half of that pair.
+
+    ⛔ **NOTHING IS EMITTED WHEN NOTHING REALLY RAN.** R-13F established that a simulated task
+    contributes nothing to the tracker, so a fully-simulated batch has `actual_total == 0` — and
+    a `TokenSpend` of zero would read as "this run cost nothing" rather than "nothing ran"
+    (§7g). A degraded batch DOES emit: its spend is real, it is simply partial, and
+    `RunResult.degraded` is the field that says so.
+
+    ⚠ **IT NEEDS THE LEDGER ONLY FOR THE REPO ROOT**, which is the honest limitation: a
+    `run_tasks` call with no ledger emits nothing, because this function has no other way to
+    learn which repo it is in and inventing one would mean a second answer to a question
+    `AuditLedger.root_of_path` already answers."""
+    try:
+        if result.actual_total <= 0:
+            return
+        path = getattr(ledger, "path", None)
+        if not isinstance(path, str):
+            return
+        from ..events import TokenSpend, emit as emit_event
+        from ..govern.ledger import AuditLedger
+        root = AuditLedger.root_of_path(path)
+        if not root:
+            return
+        emit_event(root, TokenSpend(label=f"exec:{choice.mode}",
+                                    input_tokens=result.actual_input,
+                                    output_tokens=result.actual_output,
+                                    estimated=False))
+    except Exception:  # noqa: BLE001 — observability never fails the run it describes
+        return

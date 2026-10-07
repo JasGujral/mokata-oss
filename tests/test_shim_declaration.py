@@ -104,6 +104,18 @@ ALLOWED_TRANSLATION_SITES = {
         "SAME-ENGINE substitution, so not this defect at all. It edits a schema-version literal "
         "inside a provisioning DDL and runs it on LIVE POSTGRES via MOKATA_TEST_DSN — the SQL is "
         "authored for Postgres and executed by Postgres. Nothing is standing in for anything.",
+
+    ("tests/integration/test_cm_s5_live_db.py",
+     "TestTheV6RetirementRefusesRatherThanMigrating._run_events_ddl"):
+        "SAME-ENGINE substitution, the same reading as `_provision_v4` one entry up. It swaps the "
+        "TABLE NAME in the events DDL this build ships and runs it on LIVE POSTGRES — Postgres "
+        "SQL executed by Postgres, with no engine standing in for another. ⭐ The rewrite is what "
+        "makes the test honest rather than what makes it suspect: the alternative is to retype "
+        "the v6 statements beside the shipped ones, and then the guard under test would be a copy "
+        "of the guard rather than the guard. ⚠ IT WAS UNDECLARED FOR A FULL STAGE — committed at "
+        "0.0.21 stage 11 and red at HEAD ever since, because `test_shim_declaration` sat outside "
+        "`scripts/precut.py`'s derived set for the same reason `test_public_counts_guard` did "
+        "(`TAINT-STOPS-ONE-HOP-SHORT`, doc 84). Second red that gap hid.",
 }
 
 # Every module holding a translating double, with the suite it declares. Derived by AST below and

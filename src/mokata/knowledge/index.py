@@ -25,21 +25,42 @@ def file_fingerprint(abspath: str) -> Tuple[str, float, int]:
     return hashlib.sha256(data).hexdigest(), os.path.getmtime(abspath), len(data)
 
 
+def file_ctime(abspath: str) -> float:
+    """The inode CHANGE time, or 0.0 when it cannot be read.
+
+    🔴 REVIEW FINDING 4-1. Separate from `file_fingerprint` on purpose: that function has five other
+    callers that unpack its 3-tuple, and widening it would be a refactor across all of them for one
+    field two of them need. 0.0 is the ABSENT value — an index written before this field existed has
+    no opinion, which must not read as "changed" (§7g)."""
+    try:
+        return float(os.stat(abspath).st_ctime)
+    except OSError:
+        return 0.0
+
+
 @dataclass
 class IndexEntry:
     path: str            # relative to the repo root
     content_hash: str
     mtime: float
     size: int
+    # 🔴 REVIEW FINDING 4-1 — INODE CHANGE TIME, and it is the only one of the three a userspace
+    # write cannot forge. `mtime` and `size` are both settable (`tar -xp`, `cp -p`, `rsync --times`,
+    # `touch -r`, `os.utime`), so a same-size vendor drop or restore left BOTH unchanged and a real
+    # content edit read as a clean tree. Measured: mtime False, size False, **ctime True**, for both
+    # `os.utime` and a real `tar -xp`. Defaults to 0.0 so an index persisted before this field
+    # simply has no opinion rather than reading as changed.
+    ctime: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {"path": self.path, "content_hash": self.content_hash,
-                "mtime": self.mtime, "size": self.size}
+                "mtime": self.mtime, "size": self.size, "ctime": self.ctime}
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "IndexEntry":
         return cls(path=d["path"], content_hash=d["content_hash"],
-                   mtime=float(d.get("mtime", 0)), size=int(d.get("size", 0)))
+                   mtime=float(d.get("mtime", 0)), size=int(d.get("size", 0)),
+                   ctime=float(d.get("ctime", 0)))
 
 
 class KnowledgeIndex:
@@ -87,7 +108,7 @@ class KnowledgeIndex:
         for ab in self._iter_files(root, extensions):
             rel = name_of(ab, root)
             h, m, s = file_fingerprint(ab)
-            self.entries[rel] = IndexEntry(rel, h, m, s)
+            self.entries[rel] = IndexEntry(rel, h, m, s, file_ctime(ab))
         return list(self.entries)
 
     def diff(self, root: str, extensions=DEFAULT_EXTENSIONS) -> Dict[str, List[str]]:
@@ -113,7 +134,7 @@ class KnowledgeIndex:
             ab = os.path.join(root, rel)
             if os.path.exists(ab):
                 h, m, s = file_fingerprint(ab)
-                self.entries[rel] = IndexEntry(rel, h, m, s)
+                self.entries[rel] = IndexEntry(rel, h, m, s, file_ctime(ab))
         return targets
 
     def is_stale(self, root: str, rel_path: str) -> bool:

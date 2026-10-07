@@ -123,6 +123,16 @@ from .tokens import (
     log_bootstrap_calibration,
     log_calibration,
 )
+from .calibration import (
+    CALIBRATION_MIN_ESTIMATE_TOKENS,
+    CALIBRATION_STATS_KEY,
+    CalibrationOutcome,
+    ModelCalibration,
+    calibration_of,
+    fold,
+    merged_stats,
+    observe,
+)
 
 __all__ = [
     # F1/F2
@@ -130,6 +140,9 @@ __all__ = [
     # R11 — token-estimate calibration logging
     "CalibrationRecord", "calibration_record", "log_calibration",
     "log_bootstrap_calibration", "CALIBRATION_KIND", "CALIBRATION_MARGIN_RATIO",
+    # H-2 — the half R11 wired and nothing closed: a REAL actual, read from the transcript
+    "ModelCalibration", "CalibrationOutcome", "observe", "fold", "merged_stats",
+    "calibration_of", "CALIBRATION_STATS_KEY", "CALIBRATION_MIN_ESTIMATE_TOKENS",
     # F3 — handback cap
     "Handback", "cap_summary",
     # F4 — output density

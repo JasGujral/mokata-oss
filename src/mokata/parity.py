@@ -155,6 +155,14 @@ def _surfaces() -> List[CommandSurface]:
                             "own shared log → gated write (`audit_share`: append-only, per-actor, "
                             "namespaced; secret-scanned egress; NO telemetry, the team's storage "
                             "only)"),
+        CommandSurface("events", mcp_write=("events_share",),
+                       note="CM.S5 — publishing the typed event stream to the team's own shared "
+                            "store → gated write (`events_share`: opt-in, append-only, idempotent "
+                            "by (namespace, event_id), secret-scanned egress; NO telemetry). "
+                            "⚠ The STATUS view (`mokata events` with no flags) has no in-harness "
+                            "read tool on purpose: it is a terminal convenience, and the "
+                            "in-harness read of the stream is the IDE's own event surface "
+                            "(ID.S3), not a second tool shipped ahead of it"),
         CommandSurface("preview", mcp_read=("preview",),
                        note="pipeline dry-run → read tool"),
         CommandSurface("progress", slash=("progress",),

@@ -187,6 +187,59 @@ def calibration_drift_findings(surface: Any) -> List[DoctorFinding]:
     return out
 
 
+def token_calibration_findings(surface: Any) -> List[DoctorFinding]:
+    """H-2 — report the MEASURED `chars/4` constant per model, which is the one reader
+    `memory_stats.calibration` has, and it is a human one.
+
+    ⛔ **IT EXISTS BECAUSE A WRITTEN-AND-NEVER-READ FIELD IS A DEFECT THIS BACKLOG ALREADY
+    CARRIES A ROW ABOUT** (`DEGRADE-DETAIL-IS-COMPUTED-BY-38-SITES-AND-SHOWN-BY-NONE`). The
+    calibration hook would otherwise populate a number on every file-mutating tool call that
+    nothing on earth displays.
+
+    ⭐ **AND IT IS A DIFFERENT FACT FROM `calibration_drift_findings` NEXT DOOR, which is why
+    §7f does not condemn the pair.** That one reads the LEDGER and warns about ONE observation
+    window whose actual blew the margin. This reads the running AGGREGATE — the constant itself,
+    over every window — and reports it whether or not it is in trouble, because *"the margin is
+    holding at 0.91 over 40k tokens"* is the measurement P16 asked for and no warning can carry
+    it. One finding, not one per model, so a long-lived repo does not turn doctor into a table.
+
+    ⚠ A model under the publish floor is REPORTED AS UNDER THE FLOOR, never as a ratio of its
+    noisy totals (§7g). `info`, so doctor's ok/exit semantics stay reserved for real blockers;
+    read-only and guarded, and it creates nothing."""
+    try:
+        from .. import TEMP_LOCAL_DIRNAME
+        from ..memory.store import MEMORY_STATS_KEY
+        from ..state import StateStore
+        from ..tdd_state import STATE_DIRNAME
+        from .calibration import CALIBRATION_MIN_ESTIMATE_TOKENS, calibration_of
+        # The KEY resolves the filename, so renaming the state key cannot orphan this reader
+        # while leaving it green on a file nobody writes any more.
+        store = StateStore(os.path.join(surface.mokata_dir, TEMP_LOCAL_DIRNAME, STATE_DIRNAME))
+        if not store.exists(MEMORY_STATS_KEY):
+            return []                       # nothing measured yet — not a finding
+        rows = calibration_of(store.read(MEMORY_STATS_KEY))
+    except (OSError, ValueError, AttributeError, ImportError):
+        # Unreadable or unparseable state. The INTEGRITY of mokata's state is not this
+        # function's subject, and reporting "I could not read it" here would say the same thing
+        # the state surfaces already say when they degrade.
+        return []
+    if not rows:
+        return []
+    parts: List[str] = []
+    for model, rec in sorted(rows.items()):
+        ratio = rec.ratio
+        if ratio is None:
+            parts.append(f"{model}: {rec.estimate_total} est tokens over {rec.samples} message(s)"
+                         f" — under the {CALIBRATION_MIN_ESTIMATE_TOKENS}-token floor to publish"
+                         " a ratio")
+        else:
+            verdict = "margin BLOWN" if rec.over_margin else "margin holding"
+            parts.append(f"{model}: actual/estimate {ratio:.2f} over {rec.estimate_total} est "
+                         f"tokens / {rec.samples} message(s) — {verdict}")
+    return [DoctorFinding("info", "token-calibration",
+                          "measured chars/4 calibration — " + "; ".join(parts))]
+
+
 def ledger_integrity_findings(surface: Any) -> List[DoctorFinding]:
     """MS.S3 — walk the audit ledger's hash-chain and surface a BREAK (a tampered/removed/truncated
     entry): the ledger is the proof substrate for every gate claim (P16), so a broken chain means
@@ -766,6 +819,9 @@ def diagnose(surface: Any) -> DoctorReport:
 
     # 6b) R11 — token-estimate calibration drift (a logged actual that blew the chars/4 margin).
     findings.extend(calibration_drift_findings(surface))
+    # H-2 — the aggregate beside the per-window warning: the constant, measured, whether or not
+    # it is in trouble. See `token_calibration_findings` for why the two are not one.
+    findings.extend(token_calibration_findings(surface))
 
     # 6b-ii) MS.S3 — audit ledger hash-chain integrity (a broken/tampered/truncated trust record).
     findings.extend(ledger_integrity_findings(surface))
