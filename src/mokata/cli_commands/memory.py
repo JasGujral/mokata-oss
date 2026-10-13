@@ -116,6 +116,8 @@ def cmd_memory(args: argparse.Namespace) -> int:
         return _memory_promote(store, args)
     if action == "review":
         return _memory_review(store, args)
+    if action == "harvest":
+        return _memory_harvest(surface, args)
     if action == "consolidate":
         # C7 — surface PROPOSAL-ONLY consolidations (merge/summarize/prune). Reads only;
         # nothing is applied here (applying stays the gated `apply_consolidation` path).
@@ -396,6 +398,37 @@ def _memory_promote(store, args) -> int:
     return 0 if res.changed or (res.aborted is False) else 1
 
 
+def _memory_harvest(surface, args) -> int:
+    """H-1c (0.0.22 D6) — `mokata memory harvest`: the session notes mokata DRAFTED at Stop /
+    PreCompact / SessionEnd. Lists the pending ones; `--approve <id>` saves one as an `episodic`
+    memory through the store's human-gated `remember` (secret-scanned, ledgered, asks unless
+    `--yes`); `--reject <id>` drops it. Nothing is a memory until a person accepts it."""
+    from ..harvest import HarvestError, decide, drafts
+    from ..prompt import read_yes_no
+    root = surface.root
+    for flag, accept in (("approve", True), ("reject", False)):
+        draft_id = getattr(args, flag, None)
+        if draft_id:
+            try:
+                print(decide(root, draft_id, accept, confirm=read_yes_no,
+                             assume_yes=bool(getattr(args, "yes", False))))
+            except HarvestError as exc:
+                print(f"memory harvest: {exc}")
+                return 2
+            return 0
+    pending = drafts(root)
+    if not pending:
+        print("memory harvest: no session notes waiting.")
+        return 0
+    print(f"memory harvest: {len(pending)} session note(s) waiting — "
+          f"`--approve <id>` saves one as episodic memory, `--reject <id>` drops it")
+    for d in pending:
+        print(f"\n[{d.id}] {d.subject}")
+        for line in d.value.splitlines():
+            print(f"  {line}")
+    return 0
+
+
 def _memory_review(store, args) -> int:
     """TM.S11 — `mokata memory review`: the PM review surface (CLI). With no op it LISTS the pending
     proposals (Draft / In-Review / Approved) with a rendered "what changed" diff; `--submit`,
@@ -446,12 +479,14 @@ def register(sub, common):
     )
     p_mem.add_argument("action", nargs="?",
                        choices=("export", "import", "migrate", "reembed", "edit", "consolidate",
-                                "promote", "review"),
+                                "promote", "review", "harvest"),
                        default=None,
                        help="export (back up memory to a file) / import (restore a backup, gated), "
                             "migrate the store, reembed the vector index (gated), edit an entry, "
-                            "consolidate (propose-only), promote a rule's enforcement binding, or "
-                            "review pending memory proposals")
+                            "consolidate (propose-only), promote a rule's enforcement binding, "
+                            "review pending memory proposals, or harvest: the session notes "
+                            "mokata drafted when a session stopped (accept with --approve ID, "
+                            "drop with --reject ID)")
     p_mem.add_argument("file", nargs="?", default=None,
                        help="backup file (export dest / import source), the subject to edit, or "
                             "the item id to promote")

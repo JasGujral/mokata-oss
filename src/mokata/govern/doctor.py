@@ -759,6 +759,13 @@ def diagnose(surface: Any) -> DoctorReport:
     for e in schema.validate_manifest(m.data):
         findings.append(DoctorFinding("error", "manifest", e))
 
+    # 1b) 0.0.22 E1 — the Claude Code floor. SILENT when Claude Code is absent (another harness is
+    # not an old Claude Code) or new enough; a WARNING naming each feature that is off when older.
+    from ..claude_code_version import check as claude_code_check
+    cc = claude_code_check()
+    if not cc.ok:
+        findings.append(DoctorFinding("warning", "claude-code-too-old", cc.detail()))
+
     # 2) missing providers — capabilities that resolve to nothing present
     for need in m.capabilities:
         try:

@@ -42,6 +42,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
 
 import re
+from _code_lines import code_text
 
 
 # ---- verdicts ---------------------------------------------------------------------------------
@@ -154,7 +155,7 @@ def invocations(text, where):
     exists. `run_test_preflight` is more comment than code and its comments QUOTE the redirect they
     describe, so a reader that kept them would find a `< /dev/null` that no shell ever runs.
     """
-    code = "\n".join(ln for ln in (text or "").splitlines() if not ln.lstrip().startswith("#"))
+    code = code_text(text)
     out = []
     for m in _DISCOVER_CALL.finditer(code):
         inv = _one(m.group("tail"), where)

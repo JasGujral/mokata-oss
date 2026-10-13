@@ -16,8 +16,12 @@ this log as a superset rather than a second store to migrate:
 
     {event_id, ts, schema_version, type, stage, run_id, data}
 
-`type` ∈ {stage_enter, stage_pass, review_verdict}. These map conceptually onto R1.S1a's
-`PhaseTransition` (enter/pass) and verdict events. `run_id` reuses the EXISTING pipeline /
+`type` ∈ {stage_enter, run_finished, review_verdict}. These map conceptually onto R1.S1a's
+`PhaseTransition` (enter/finish) and verdict events. `run_finished` is the ship-completion event
+(0.0.22 C1, `B-LIFE-FU`): written once, by `/mokata:ship` after the human chose how to land the
+run, so "this run is over" is a recorded fact rather than an inference from entering `ship`. It
+replaced `stage_pass`, a constant that was defined from 0.0.16 and never written by anything.
+`run_id` reuses the EXISTING pipeline /
 session_bundle run identity; R1.S1a introduces the fuller `session_id` (uuid-per-session) —
 this field is the forward-compatible hook it will bind to.
 
@@ -37,6 +41,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from .errors import MokataError
+
 # The log lives beside the pipeline run-state (StateStore.root =
 # .mokata/temp_local/state/), so a reader that already holds `surface.state` finds it
 # without new plumbing. It is transient runtime data, gitignored like the state store.
@@ -47,9 +53,20 @@ PROGRESS_SCHEMA_VERSION = 1
 
 # The event types this minimal log records. A strict subset of R1.S1a's vocabulary.
 STAGE_ENTER = "stage_enter"
-STAGE_PASS = "stage_pass"
+RUN_FINISHED = "run_finished"
 REVIEW_VERDICT = "review_verdict"
-PROGRESS_EVENT_TYPES = (STAGE_ENTER, STAGE_PASS, REVIEW_VERDICT)
+#: 0.0.22 C2 (SL.S3) — a run-state gate BLOCKED an implementation write: mokata caught something
+#: IN THE LOOP, before review. Written by the gate-guard hook, keyed to the run whose state blocked.
+GATE_BLOCK = "gate_block"
+#: 0.0.22 D4 (H-3) — a contracted subagent of this run FINISHED: its type, id, and the HandbackReport
+#: it returned (or why it returned none). Written by the SubagentStop hook. What lets a review that
+#: says it was independent be checked against a subagent that was actually seen to finish.
+SUBAGENT_FINISHED = "subagent_finished"
+PROGRESS_EVENT_TYPES = (STAGE_ENTER, RUN_FINISHED, REVIEW_VERDICT, GATE_BLOCK, SUBAGENT_FINISHED)
+
+#: How a finished run was LANDED — the four options `/mokata:ship` step 3 presents to the human.
+#: A finish names one; "finished, somehow" is not a record anybody can audit.
+LANDINGS = ("merged", "pr", "kept", "discarded")
 
 # The envelope keys every entry carries — the R1.S1a-compatible subset the drift/subset
 # test asserts against (so the two schemas can never silently diverge).
@@ -327,6 +344,7 @@ def _resolve_verdict_run(surface: Any) -> Optional[str]:
 
 def record_review_verdict(surface: Any, *, passed: bool, independent: bool,
                           findings: Optional[Any] = None,
+                          blocking: Optional[int] = None,
                           run_id: Any = _CURRENT_RUN) -> Dict[str, Any]:
     """Append the closing review's verdict as a `review_verdict` event and return it.
 
@@ -345,8 +363,205 @@ def record_review_verdict(surface: Any, *, passed: bool, independent: bool,
     data: Dict[str, Any] = {"passed": bool(passed), "independent": bool(independent)}
     if findings is not None:
         data["findings"] = findings
+    # SL.S3 (0.0.22 C2) — the COUNT of Blocking findings this review raised: what review caught
+    # that the loop did not. Absent is NOT zero (§7g): a verdict without it leaves the run's
+    # caught-at-review rate UNMEASURED rather than reading as "review caught nothing".
+    if blocking is not None:
+        if isinstance(blocking, bool) or not isinstance(blocking, int) or blocking < 0:
+            raise ValueError("blocking must be a whole number of Blocking findings (0 or more)")
+        problem = verdict_contradiction(bool(passed), blocking)
+        if problem:
+            raise ValueError(problem)
+        data["blocking"] = blocking
     return ProgressLog.from_surface(surface).append_event(
         REVIEW_VERDICT, "review", run_id=run_id, data=data)
+
+
+def verdict_contradiction(passed: bool, blocking: Optional[int]) -> str:
+    """REVIEW-LIB-SWEEP (0.0.22 C2) — a verdict and its Blocking count must agree, or "" when they do.
+
+    Adopted, clean-room, from the blocking / non-blocking split that both Conventional Comments
+    (`(blocking)` decoration, CC BY 3.0) and Google's review guide ("Nit:" marks the optional; the
+    rest must be addressed, CC BY 3.0) rest on: a BLOCKING finding is by definition one the change
+    may not be accepted with. So a PASS that raised one is not a pass, and a FAIL that raised none
+    names nothing to fix. Mapped to the ship gate rather than added as prose: the record refuses,
+    so ship can never accept a verdict its own count contradicts. No count, no check (§7g: unknown
+    is not zero)."""
+    if blocking is None:
+        return ""
+    if passed and blocking > 0:
+        return (f"a review that raised {blocking} Blocking finding(s) cannot be recorded as PASSED "
+                f"— record it as failed, or fix them and re-review")
+    if not passed and blocking == 0:
+        return ("a FAILED review must name at least one Blocking finding — if nothing blocks, "
+                "record it as passed (Minor findings never fail a review)")
+    return ""
+
+
+def record_gate_block(state_root: str, run_id: str, gate: str, path: str) -> Optional[Dict]:
+    """An in-loop catch: a run-state gate blocked `path` in `run_id`. Written by the gate-guard
+    hook. Observability tier (append-only, UNGATED). Returns the event, or None when there is no
+    run to key it to — a run-less block is not a catch any run can be credited with."""
+    if not run_id or not gate:
+        return None
+    return ProgressLog.from_state_dir(state_root).append_event(
+        GATE_BLOCK, "develop", run_id=run_id, data={"gate": gate, "path": path})
+
+
+def record_subagent_finished(state_root: str, run_id: str, contract: Dict[str, Any],
+                             report: Any, why: str = "") -> Optional[Dict]:
+    """H-3 — a contracted subagent of `run_id` finished. Written by the SubagentStop hook.
+    Observability tier (append-only, UNGATED). `report` is a `HandbackReport` or None; None records
+    WHY there was none, so "no handback" and "no subagent" stay different facts."""
+    if not run_id:
+        return None
+    data: Dict[str, Any] = {"agent_id": contract.get("agent_id"),
+                            "agent_type": contract.get("agent_type") or "",
+                            "read_only": bool(contract.get("read_only"))}
+    if report is not None:
+        data["handback"] = report.facts()
+    else:
+        data["handback_missing"] = why or "no handback"
+    if data["agent_id"] and any(e.get("data", {}).get("agent_id") == data["agent_id"]
+                                for e in subagents_finished(state_root, run_id)):
+        # 0.0.22 live check: with the plugin AND `mokata init`'s project hooks both wired, every
+        # hook fires twice — one subagent is one finish, so the second firing records nothing.
+        return None
+    return ProgressLog.from_state_dir(state_root).append_event(
+        SUBAGENT_FINISHED, "develop", run_id=run_id, data=data)
+
+
+def subagents_finished(state_root: str, run_id: Optional[str],
+                       since: Optional[str] = None) -> List[Dict[str, Any]]:
+    """The `subagent_finished` events of `run_id` (oldest first), optionally only those at or after
+    the ISO timestamp `since`. Empty for no run. Never raises."""
+    if not run_id:
+        return []
+    out: List[Dict[str, Any]] = []
+    try:
+        for e in ProgressLog.from_state_dir(state_root).read_events_backward():
+            if e.get("type") != SUBAGENT_FINISHED or e.get("run_id") != run_id:
+                continue
+            ts = e.get("ts")
+            if since and isinstance(ts, str) and ts < since:
+                continue
+            out.append(e)
+    except Exception:  # noqa: BLE001 — an unreadable log observes nothing
+        return []
+    out.reverse()
+    return out
+
+
+@dataclass(frozen=True)
+class ReviewYield:
+    """SL.S3 — what review caught vs what the loop caught, for one run or summed over runs.
+
+    `in_loop` is the number of DISTINCT `(gate, path)` blocks the run-state gates raised; a model
+    retrying the same blocked write is one catch, not five. `at_review` is the Blocking findings
+    the run's review verdicts recorded. `measured` is False when any verdict lacks its count, or
+    when no review has run — `rate` is then None, never 0 (three states, never two: "review caught
+    nothing" and "nobody counted" are different facts). `rate` is `at_review / (at_review +
+    in_loop)`, and None too when nothing was caught at all (no denominator)."""
+    run_id: Optional[str]
+    in_loop: int
+    at_review: int
+    reviews: int
+    measured: bool
+
+    @property
+    def rate(self) -> Optional[float]:
+        total = self.in_loop + self.at_review
+        if not self.measured or total == 0:
+            return None
+        return self.at_review / total
+
+    def line(self) -> str:
+        if not self.reviews and self.run_id is None:
+            return "caught at review: not measured — no run has a review with its Blocking count"
+        if not self.reviews:
+            return "caught at review: not measured — no review verdict is on record"
+        if not self.measured:
+            return (f"caught at review: not measured — a review verdict was recorded without its "
+                    f"Blocking count ({self.in_loop} caught in the loop)")
+        if self.rate is None:
+            return "caught at review: nothing caught, in the loop or at review"
+        return (f"caught at review: {self.at_review} of {self.at_review + self.in_loop} "
+                f"({self.rate:.0%}) — {self.in_loop} caught in the loop by the gates")
+
+
+def _yields(log: "ProgressLog") -> Dict[str, ReviewYield]:
+    blocks: Dict[str, set] = {}
+    review: Dict[str, list] = {}
+    for e in log.read_events(tail=None):
+        rid = e.get("run_id")
+        if not isinstance(rid, str) or not rid:
+            continue
+        data = e.get("data") if isinstance(e.get("data"), dict) else {}
+        if e.get("type") == GATE_BLOCK:
+            blocks.setdefault(rid, set()).add((str(data.get("gate")), str(data.get("path"))))
+        elif e.get("type") == REVIEW_VERDICT:
+            review.setdefault(rid, []).append(data.get("blocking"))
+    out = {}
+    for rid in set(blocks) | set(review):
+        counts = review.get(rid, [])
+        known = [c for c in counts if isinstance(c, int) and not isinstance(c, bool)]
+        out[rid] = ReviewYield(rid, len(blocks.get(rid, ())), sum(known), len(counts),
+                               bool(counts) and len(known) == len(counts))
+    return out
+
+
+def review_yield(surface: Any, run_id: Optional[str]) -> ReviewYield:
+    """The caught-at-review figures for ONE run (unmeasured when the run has no record)."""
+    if not run_id:
+        return ReviewYield(None, 0, 0, 0, False)
+    return _yields(ProgressLog.from_surface(surface)).get(
+        run_id, ReviewYield(run_id, 0, 0, 0, False))
+
+
+def review_yield_all(surface: Any) -> ReviewYield:
+    """Summed over every run whose figures are MEASURED. Unmeasured runs are left out rather than
+    counted as zero — and `reviews` counts only the runs that were summed."""
+    measured = [y for y in _yields(ProgressLog.from_surface(surface)).values() if y.measured]
+    return ReviewYield(None, sum(y.in_loop for y in measured), sum(y.at_review for y in measured),
+                       len(measured), bool(measured))
+
+
+class FinishRefused(MokataError):
+    """`record_run_finished` would not write: no run to finish, or no landing named. A finish
+    with no run proves nothing and one with no landing says nothing, so neither is recorded."""
+
+
+def record_run_finished(surface: Any, *, landing: str,
+                        run_id: Any = _CURRENT_RUN) -> Dict[str, Any]:
+    """Append the run's ship-completion event (`run_finished`) and stamp the checkpoint's
+    `completed_at`. Returns the event. `B-LIFE-FU` (0.0.22 C1).
+
+    Until this existed the strongest end-of-run evidence was ENTERING ship (`stage_enter: ship`),
+    written only by the CLI — so a run that finished through the harness never stamped
+    `completed_at`, and "the run is over" was an inference from "the run started its last phase".
+
+    Same tier as `stage_enter` and `review_verdict`: append-only and UNGATED (no durable
+    code/memory/config is written). Unlike a verdict, it is NEVER recorded run-less: an omitted
+    `run_id` resolves the same session-aware way the verdict does (`_resolve_verdict_run`), and if
+    that resolves to nothing — no run, or several and none identifiably this caller's — it raises
+    `FinishRefused` rather than write an event no reader can key to anything. `landing` must be
+    one of `LANDINGS`. The `completed_at` stamp is best-effort: the event is the record."""
+    landing = (landing or "").strip()
+    if landing not in LANDINGS:
+        raise FinishRefused("name how the run was landed: one of " + ", ".join(LANDINGS))
+    if run_id is _CURRENT_RUN:
+        run_id = _resolve_verdict_run(surface)
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise FinishRefused("no run could be resolved here to finish — name it with --run "
+                            "<run id> (`mokata sessions` lists them)")
+    event = ProgressLog.from_surface(surface).append_event(
+        RUN_FINISHED, "ship", run_id=run_id, data={"landing": landing})
+    try:
+        from .govern.resume import PipelineCheckpoint
+        PipelineCheckpoint(surface.state, run_id).mark_completed()
+    except Exception:  # noqa: BLE001 — the event is the record; the stamp is a display aid
+        pass
+    return event
 
 
 def latest_review_verdict_event(surface: Any,
@@ -563,6 +778,11 @@ def review_log_path(surface: Any) -> str:
         return PROGRESS_EVENTS_FILENAME
 
 
+#: D4 ruling — an independent pass with no subagent observed: credited as inline, and said so.
+UNOBSERVED_INDEPENDENT_MESSAGE = ("review passed (inline — independence claimed, but no subagent "
+                                  "of this run was observed)")
+
+
 @dataclass(frozen=True)
 class ReviewGate:
     """Ship's read of the persisted review verdict — evidence, not conversation context.
@@ -578,6 +798,10 @@ class ReviewGate:
     blocks: bool           # ship must STOP
     message: str           # the one line ship surfaces
     unblock: str = ""      # the single action that clears a block
+    # D4 — for a PASS recorded as independent: True when a subagent of the run was SEEN to finish at
+    # or before it, False when none was (then `independent` is False: credited as inline), None when
+    # the verdict did not claim independence or did not pass.
+    observed: Optional[bool] = None
     # REVIEW-FIX.R4 — False when the verdict could not be READ (an unreadable/damaged log), as
     # opposed to read fine and found ABSENT. Both block; they need different remedies. Additive
     # with a True default, so every pre-R4 construction of this gate keeps its exact meaning.
@@ -658,8 +882,23 @@ def ship_review_gate(surface: Any, run_id: Optional[str] = None) -> ReviewGate:
                     f"{bound:g}h freshness bound (`mokata config set "
                     f"settings.review.verdict_max_age_hours <hours>` changes it; `off` disables)")
     if independent:
-        return ReviewGate(present=True, passed=True, independent=True, blocks=False,
-                          message="review passed (independent ✓)")
+        # SUBAGENT-REVIEW-INSTRUCTED (0.0.22 D4) — "independent" was a claim nothing checked.
+        # DERIVED here, never stored beside the verdict (§7f — a second stored fact drifts): was a
+        # contracted subagent of THIS run seen to finish (SubagentStop's `subagent_finished`) at or
+        # before the verdict?
+        # RULING (2026-10-11, Jas delegated "decide what is best for the system"): an UNOBSERVED
+        # claim is treated as INLINE — not blocked, not credited. Blocking it would be stricter than
+        # an honest inline review, which ships; crediting it is the gap this row names. The gate
+        # reports what it can prove, so a harness that cannot observe subagents (no hooks) reads
+        # every review as inline, which is exactly what mokata can vouch for there.
+        ts = event.get("ts")
+        seen = [e for e in subagents_finished(surface.state.root, run_id)
+                if not (isinstance(ts, str) and isinstance(e.get("ts"), str) and e["ts"] > ts)]
+        if seen:
+            return ReviewGate(present=True, passed=True, independent=True, blocks=False,
+                              message="review passed (independent ✓)", observed=True)
+        return ReviewGate(present=True, passed=True, independent=False, blocks=False,
+                          message=UNOBSERVED_INDEPENDENT_MESSAGE, observed=False)
     return ReviewGate(present=True, passed=True, independent=False, blocks=False,
                       message="review passed (inline — not independent)")
 
@@ -683,7 +922,8 @@ def _project_event(log_path: str, entry: Dict[str, Any]) -> None:
 
     The three types map the way this module's own docstring said they would:
 
-      * `stage_enter` / `stage_pass` → **PhaseTransition**, with the outcome carried;
+      * `stage_enter` → **PhaseTransition** `enter`; `run_finished` → **PhaseTransition**
+        `(ship, finish)` — the run's last transition, so the typed stream sees the end too;
       * `review_verdict` → **GateDecision**, because a verdict IS a gate's decision and
         filing it as a phase transition would lose that — the review gate's own verdict is
         the thing an auditor looks for, and `progress_events`' docstring already separated
@@ -708,9 +948,16 @@ def _project_event(log_path: str, entry: Dict[str, Any]) -> None:
             # No `reason` — see `events.schema.GateDecision`: a verdict's reason is free text
             # and the log already holds it.
             payload = GateDecision(gate="review", decision=str(verdict), subject=stage)
-        elif etype in (STAGE_ENTER, STAGE_PASS):
-            payload = PhaseTransition(
-                phase=stage, outcome="enter" if etype == STAGE_ENTER else "pass")
+        elif etype == STAGE_ENTER:
+            payload = PhaseTransition(phase=stage, outcome="enter")
+        elif etype == RUN_FINISHED:
+            payload = PhaseTransition(phase="ship", outcome="finish")
+        elif etype == GATE_BLOCK:
+            payload = GateDecision(gate=str(data.get("gate", "") or "gate"), decision="block",
+                                   subject=stage)
+        elif etype == SUBAGENT_FINISHED:
+            handed = "handback" if "handback" in data else "no-handback"
+            payload = GateDecision(gate="subagent-contract", decision=handed, subject=stage)
         else:
             return                     # an unknown type is not projected — see the register
         emit(root, payload, run_id=run_id)

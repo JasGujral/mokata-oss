@@ -385,7 +385,8 @@ def register(sub, common):
     p_setup.add_argument("--no-hooks", action="store_true",
                          help="skip wiring mokata's hooks (SessionStart briefing + "
                               "user-prompt-submit per-turn recall + secret-guard + run-state "
-                              "gate-guard + dirty-track) — this also skips the MCP tool grant, "
+                              "gate-guard + dirty-track + run-bind + pre-compact + subagent-start + "
+                              "subagent-stop + stop + session-end) — this also skips the MCP tool grant, "
                               "which shares settings.json")
     p_setup.add_argument("--no-grant", action="store_true",
                          help="don't grant Claude Code permission for mokata's MCP tools / "

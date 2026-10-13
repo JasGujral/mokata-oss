@@ -178,7 +178,7 @@ mutant "P02 ★ 'release.sh runs the suite nowhere' derives GREEN instead of UND
   '    BASIS_NO_PREFLIGHT_FUNCTIONS: GREEN,' "$TP"
 
 mutant "P03 the scope is read WITHOUT stripping comments (a commented preflight counts)" "$P" \
-  '    body = _code_only(release_text)
+  '    body = code_text(release_text)
     found = []' \
   '    body = release_text
     found = []' "$TP"

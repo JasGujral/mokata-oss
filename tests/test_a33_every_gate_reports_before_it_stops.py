@@ -22,6 +22,7 @@ import re
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _code_lines import code_line_texts
 
 from mokata import disclosure as D
 from mokata.packaging import ReleaseNotesCheck
@@ -262,7 +263,7 @@ class TheCheapGatesRunToCompletion(unittest.TestCase):
     def setUp(self):
         with io.open(RELEASE_SH, encoding="utf-8") as fh:
             self.script = fh.read()
-        raw = [ln for ln in self.script.splitlines() if not ln.lstrip().startswith("#")]
+        raw = code_line_texts(self.script)
         # ⚠ LINE CONTINUATIONS ARE JOINED, and the first version of this class did not do it: four
         # of the collected gates are written as `gate "label" \` with the command on the next
         # line, so a reader that looked at physical lines reported them as uncollected. A shell
@@ -384,8 +385,16 @@ class TheCheapGatesRunToCompletion(unittest.TestCase):
         # ⚠ The bare CALL, not the definition: `run_test_preflight() {` appears hundreds of lines
         # earlier and matching it compared the wrong two positions.
         mirror_at = body.index('gate "the mirror checkout')
-        preflight_at = body.index("\nrun_test_preflight\n")
-        self.assertLess(mirror_at, preflight_at)
+        # ⚠ MOVED AT 0.0.22 A1: the call now sits inside the re-entry arm that runs it unless a
+        # remote fact proves it already passed, so it is INDENTED. Located as a LIVE CALL SITE
+        # (`_release_retry.live_calls_in`), never by its column — a pin keyed on indentation reds
+        # on a re-indent and says nothing about order.
+        import _release_retry as RR
+        calls = [n for n, _ln in RR.live_calls_in(self.script, "run_test_preflight")]
+        self.assertEqual(1, len(calls), "expected ONE live call of run_test_preflight: %r" % calls)
+        mirror_line = self.script[:self.script.index('gate "the mirror checkout')].count("\n") + 1
+        self.assertGreater(mirror_at, -1)
+        self.assertLess(mirror_line, calls[0])
 
     def test_the_mirror_gate_hands_its_VALUE_back_through_a_FILE(self):
         """⚠ `gate` runs its command in a command substitution, so a variable set inside dies with

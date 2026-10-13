@@ -582,6 +582,14 @@ def baseline_drift(base: Any, root: str) -> List[str]:
     return sorted(out)
 
 
+# WINDOWS-CTIME-IS-CREATION-TIME — the ctime clause above is a POSIX mechanism. On Windows
+# `st_ctime` is the CREATION time and does not move on a content write, so a same-size write that
+# restores the mtime is NOT caught there. This constant is the one place that says so; the product
+# doc (docs/concepts/knowledge.md, "Known limitation (Windows)") and the Windows arm of `test_a28`
+# 4_1_a are graded against it, so the disclosure cannot outlive (or under-state) the behaviour.
+CTIME_CLAUSE_CATCHES_A_RESTORED_WRITE = os.name != "nt"
+
+
 def _git_paths(out: str) -> List[str]:
     r"""Split a NUL-delimited git path list.
 

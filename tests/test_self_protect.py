@@ -34,6 +34,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import _support  # noqa: F401  (import side effect: puts src/ on the path)
 
@@ -858,14 +859,20 @@ class TestTheBashLane(unittest.TestCase):
                 self.assertTrue(out.blocked, cmd)
                 self.assertEqual(out.rule, SP.RULE_INSTALLED, cmd)
 
-    def test_the_run_state_gates_do_not_read_the_command(self):
-        """A Bash call reaches the run-state gates with NO path and exits before them — the gates
-        are unchanged, and a heuristic target must never drive a methodology block."""
-        with tempfile.TemporaryDirectory() as d:
-            _mokata_repo(d)
-            code, err = _hook(d, command=f"sed -i s/a/b/ {d}/src/app.py")
-            self.assertEqual(code, 0, err)
-            self.assertEqual(err.strip(), "")
+    def test_the_run_state_gates_judge_a_bash_write_exactly_as_a_Write(self):
+        """REVERSED at 0.0.22 D5 (the Bash write side door). Until then a Bash call reached the
+        run-state gates with no path and exited before them, so `sed -i` walked around a block
+        `Write` would meet. Now the destinations the parser sees meet the SAME gates: the verdict
+        and the message are the native write's, never a stricter or a looser one."""
+        got = []
+        for how in ("path", "command"):                # a fresh repo each: the notice is once/session
+            with tempfile.TemporaryDirectory() as d:
+                _mokata_repo(d)
+                target = os.path.join(d, "src", "app.py")
+                code, err = (_hook(d, path=target) if how == "path"
+                             else _hook(d, command=f"sed -i s/a/b/ {target}"))
+                got.append((code, err.replace(d, "<repo>")))
+        self.assertEqual(got[0], got[1])
 
 
 # ======================================================================================
@@ -934,13 +941,22 @@ class TestTheWriteGateLane(unittest.TestCase):
                                   assume_yes=True, workspace_root="/srv/project")
         self.assertIn(SP.RULE_OUT_OF_ROOT, out.reason)
 
-    def test_containment_is_off_when_no_root_is_supplied(self):
-        """Every pre-0.0.16 caller passes no root, so rule (c) does not apply to them — which is why
-        a human-typed `mokata … --out ~/elsewhere.json` still works. Rules (a)/(b) still do."""
-        box = []
-        out = self._gate().submit(self._req("/opt/outside/x.py"),
-                                  commit=lambda: box.append(1), assume_yes=True)
-        self.assertTrue(out.committed, out.reason)
+    def test_without_a_root_the_agent_is_contained_and_the_human_at_the_cli_is_not(self):
+        """REVERSED at 0.0.22 D5 (HP.S4). Until then a caller that passed no root got no rule (c) at
+        all — which was ~26 callers, the agent's included. Now the gate derives its own workspaces
+        and contains the AGENT; a person at the CLI who typed `--out ~/elsewhere.json` chose that
+        destination and still gets it. Rules (a)/(b) apply to both, as before."""
+        from mokata.govern import WriteRequest
+        outside = "/opt/outside/x.py"
+        with mock.patch("mokata.selfprotect._temp_roots", return_value=()):
+            agent = self._gate().submit(self._req(outside), commit=lambda: None, assume_yes=True)
+            box = []
+            human = self._gate().submit(
+                WriteRequest(kind="code", target=outside, content="x = 1\n", surface="cli"),
+                commit=lambda: box.append(1), assume_yes=True)
+        self.assertFalse(agent.committed)
+        self.assertIn("OUTSIDE the workspace root", agent.reason)
+        self.assertTrue(human.committed, human.reason)
         self.assertEqual(box, [1])
 
     def test_the_mcp_write_lane_supplies_the_root(self):

@@ -48,6 +48,17 @@ TOTAL=15
 
 FROM="${FROM:-1}"
 TO="${TO:-$TOTAL}"
+# MUTANT-DRIVER-WINDOW-FAILS-OPEN-ON-A-NON-INTEGER (0.0.22 A2). Driven from zsh, `set -- $w` did not
+# word-split, so FROM='1 10' and TO='' — `[ -lt ]` errored, every index fell INSIDE the window, and the
+# whole batch was graded under a window label. A window that cannot be read is refused, never widened.
+case "$FROM" in ''|*[!0-9]*) _bad_window=1 ;; esac
+case "$TO" in ''|*[!0-9]*) _bad_window=1 ;; esac
+if [ -n "${_bad_window:-}" ] || [ "$FROM" -lt 1 ] || [ "$FROM" -gt "$TO" ]; then
+    printf 'WINDOW REFUSED — FROM=%s TO=%s is not a window of 1..%s (two integers, 1 <= FROM <= TO).\n' \
+        "'$FROM'" "'$TO'" "$TOTAL" >&2
+    printf '  Nothing was graded. A malformed window would otherwise grade the WHOLE batch.\n' >&2
+    exit 3
+fi
 LEDGER="${MUTANT_LEDGER:-}"
 
 _sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1
@@ -106,8 +117,8 @@ _record() {
 # ==== V · the vocabulary is closed and lives in ONE place =======================================
 
 mutant "V01 ★★★ a name leaves the closed set — the state it describes becomes unspellable" "$SH" \
-  '                CLOSED-DECLINED CLOSED-BRANCH-GONE UNKNOWN' \
-  '                CLOSED-DECLINED UNKNOWN' "$T"
+  '                CLOSED-DECLINED CLOSED-BRANCH-GONE CLOSED-BRANCH-REPUSHED \' \
+  '                CLOSED-DECLINED CLOSED-BRANCH-REPUSHED \' "$T"
 
 mutant "V02 ★★★ the two OPEN names collapse — the whole point of the stage, undone" "$SH" \
   '    OPEN)     if [ -n "$2" ] && [ "$2" = "$3" ]; then echo "OPEN-AT-THIS-COMMIT"
@@ -132,9 +143,9 @@ mutant "S02 ★★★ the EMPTY-head guard goes — an unreadable head compares 
   '    OPEN)     if [ "$2" = "$3" ]; then echo "OPEN-AT-THIS-COMMIT"' "$T"
 
 mutant "S03 ★★★ the two CLOSED facts collapse — a deleted branch reads as a declined release" "$SH" \
-  '    CLOSED)   if [ "$4" = "yes" ]; then echo "CLOSED-DECLINED"
-              else echo "CLOSED-BRANCH-GONE"; fi ;;' \
-  '    CLOSED)   echo "CLOSED-DECLINED" ;;' "$T"
+  '                BRANCH-DELETED) if [ "$4" = "yes" ]; then echo "CLOSED-BRANCH-REPUSHED"
+                                else echo "CLOSED-BRANCH-GONE"; fi ;;' \
+  '                BRANCH-DELETED) echo "CLOSED-DECLINED" ;;' "$T"
 
 mutant "S04 ★★★ an ABSENT PR stops being its own answer — NONE reads as UNKNOWN" "$SH" \
   '    "")       echo "NONE" ;;' \
@@ -147,12 +158,12 @@ mutant "S05 ★★★ the pure function reaches the NETWORK — it can no longer
 # ==== R · `pr_facts` — ONE read for BOTH fields =================================================
 
 mutant "R01 ★★★ the state and the head come from TWO reads — two reads, two PRs" "$SH" \
-  '  ( cd "$1" && gh pr view "$2" --json state,headRefOid \' \
-  '  ( cd "$1" && gh pr view "$2" --json headRefOid >/dev/null 2>&1; gh pr view "$2" --json state,headRefOid \' "$T"
+  '  ( cd "$1" && gh pr view "$2" --json state,headRefOid,number \' \
+  '  ( cd "$1" && gh pr view "$2" --json headRefOid >/dev/null 2>&1; gh pr view "$2" --json state,headRefOid,number \' "$T"
 
 mutant "R02 ★★★ the HEAD field is dropped — the state is read and the commit is guessed again" "$SH" \
-  '      --jq '"'"'[.state, .headRefOid] | @tsv'"'"' 2>/dev/null ) || true' \
-  '      --jq '"'"'[.state] | @tsv'"'"' 2>/dev/null ) || true' "$T"
+  '      --jq '"'"'[.state, .headRefOid, (.number | tostring)] | @tsv'"'"' 2>/dev/null ) || true' \
+  '      --jq '"'"'[.state, (.number | tostring)] | @tsv'"'"' 2>/dev/null ) || true' "$T"
 
 # ==== C · THE DEFECT THIS STAGE IS NAMED FOR ===================================================
 #
@@ -189,8 +200,13 @@ mutant "M01 ★★★ a refusal goes to STDOUT — invisible in the piped log th
   '      echo "REFUSING: the release PR for ${BRANCH} is OPEN but its head is ${PR_HEAD:-<unreadable>},"' "$T"
 
 mutant "M02 ★★★ a refusal names a remedy that does not EXIST — it sends a person looking" "$SH" \
-  '      echo "      (cd ${PUB_CHECKOUT} && git push -u origin ${BRANCH})" >&2' \
-  '      echo "      (cd ${PUB_CHECKOUT} && git unclose-pr ${BRANCH})" >&2' "$T"
+  '      echo "      (cd ${PUB_CHECKOUT} && git fetch origin ${BRANCH})" >&2' \
+  '      echo "      (cd ${PUB_CHECKOUT} && git unfetch-pr ${BRANCH})" >&2' "$T"
+# ⚠ V01, S03, R01, R02 AND M02 RE-QUOTED AT 0.0.22 A1 (`CLOSED-BRANCH-GONE-REMEDY-IS-FALSE`): the
+# vocabulary grew two names, CLOSED is keyed on the close reason gh reports, `pr_facts` reads the
+# number in the same call, and the branch-gone arm's `git push -u origin` remedy was the FALSE one
+# and is gone — so M02 now plants a non-existent command in the remedy that remains
+# (OPEN-ELSEWHERE's `git fetch origin`). Same five properties graded.
 
 printf '\n================================================================================\n'
 printf 'STAGE 01 RETRY-READS-THE-HEAD MUTANTS — window %s..%s of %s: %s RED, %s GREEN\n' \

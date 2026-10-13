@@ -41,6 +41,7 @@ import unittest
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _observed_review import observe_review_subagent
 
 from mokata.cli_commands.runviews import (
     RECORD_REVIEW_FAILED_EXIT,
@@ -383,6 +384,7 @@ class TestCliReadErrorVsAbsentVerdict(_NoPinnedSession):
             surface = _repo(d)
             _persist_run(d, "solo")
             _corrupt(surface)
+            observe_review_subagent(d, "solo")  # D4 ruling
             record_review_verdict(surface, passed=True, independent=True, run_id="solo")
             rc, out = _cli(["progress", "review-status", "--path", d], d)
             self.assertEqual((rc, out), (0, "review passed (independent ✓)\n"))
@@ -707,6 +709,7 @@ class TestNothingElseMoved(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
             _persist_run(d, "solo")
+            observe_review_subagent(d)  # D4 ruling
             _cli(["progress", "record-review", "--passed", "--independent", "--path", d], d)
             self.assertEqual(_cli(["progress", "review-status", "--path", d], d),
                              (0, "review passed (independent ✓)\n"))
@@ -749,8 +752,10 @@ class TestNothingElseMoved(_NoPinnedSession):
 
     def test_the_record_tool_gained_no_parameters(self):
         import inspect
+        # R4 added none; 0.0.22 C2 (SL.S3) added `blocking`, the Blocking-finding count.
         self.assertEqual(set(inspect.signature(TR.review_record).parameters),
-                         {"path", "passed", "failed", "independent", "findings", "run"})
+                         {"path", "passed", "failed", "independent", "findings", "run",
+                          "blocking"})
         self.assertEqual(set(inspect.signature(TR.review_status).parameters),
                          {"path", "run", "response_format"})
 
@@ -759,7 +764,7 @@ class TestNothingElseMoved(_NoPinnedSession):
         # R4 itself added no tool; the total moved 58 -> 59 at WT-LIST (`worktree_list`) and
         # 59 -> 61 at M-4/R5 (`consolidate_proposals` + `consolidate`), which is what this now
         # pins. R4's own "nothing moved" property is the signature checks above.
-        self.assertEqual(len(REG.TOOLS), 62)   # 61 -> 62 at CM.S5: `events_share`
+        self.assertEqual(len(REG.TOOLS), 65)   # 61 -> 62 at CM.S5: `events_share`; -> 64 at C1; -> 65 at D2
 
 
 # ======================================================= 7 · the callers state the new contract

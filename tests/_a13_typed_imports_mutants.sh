@@ -60,7 +60,7 @@ mutant "N01 ★★★ THE COLLAPSE, DIRECTION A — the guard is never recognise
   '    if True:
         return False' "$T"
 
-mutant "N02 ★★★ THE COLLAPSE, DIRECTION B — EVERY `if` is a type guard, so a conditional runtime
+mutant "N02 ★★★ THE COLLAPSE, DIRECTION B — EVERY \`if\` is a type guard, so a conditional runtime
        import (a version check, a platform branch) is reported as creating no runtime edge" "$AST" \
   '    if not isinstance(node, ast.If):
         return False' \

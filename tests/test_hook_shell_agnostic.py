@@ -124,7 +124,9 @@ _SUBCOMMANDS = sorted(harness_setup._HOOK_SUBCOMMAND.values())
 
 def _subcommand_of(hook):
     text = hook.get("command", "") + " " + " ".join(hook.get("args", []) or [])
-    return next(s for s in _SUBCOMMANDS if s in text)
+    # TOKEN-exact, not substring: a substring match filed `subagent-stop` as `stop` the moment a
+    # hook named `stop` existed (0.0.22 D6) — a shorter name inside a longer one.
+    return next(t for t in text.replace('"', " ").split() if t in _SUBCOMMANDS)
 
 
 # =====================================================================================

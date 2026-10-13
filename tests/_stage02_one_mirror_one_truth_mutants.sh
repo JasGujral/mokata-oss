@@ -12,7 +12,8 @@
 #     draft did: the alarming word for the routine problem, and a real divergence saying the same.
 #   B01-B02 ★★★ the DEFAULT BRANCH derivation: guessing `main`, and the fail-closed refusal when
 #     neither the remote nor origin/HEAD answers.
-#   F01-F03 ★★★ the FAST-FORWARD half, which is where the hazard actually lived: both refusals
+#   F01-F02 ★★★ the FAST-FORWARD half (said F01 to F03 until 0.0.22 B2's header check: no F03 was
+#     ever written), which is where the hazard actually lived: both refusals
 #     back to best-effort, and the soft note that carried on from a stale base.
 #   N01     ★★★ the checkout fallback's mask coming back.
 #   C01     ★★★ the polarity control — verify-mirror refuses everything, which would make every

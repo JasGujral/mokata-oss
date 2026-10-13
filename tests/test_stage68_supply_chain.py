@@ -20,6 +20,8 @@ What runs WHERE:
 import os
 import unittest
 
+from _code_lines import code_text
+
 import _release_repo_guards as rg
 from _workflow_pins import safe_load
 
@@ -414,17 +416,6 @@ class TestSyncPublicBoundaryHardened(unittest.TestCase):
         "editors/vscode/node_modules", "editors/vscode/out",
     )
 
-    @staticmethod
-    def _code_only(block):
-        """`block` with every `#` comment line dropped.
-
-        Load-bearing, not tidiness. Both controls are documented IN PLACE, and those comments name
-        the very paths being pinned — the `_to_delete` entry sits under six lines of prose that say
-        "_to_delete" four times. A raw substring check therefore passes on the COMMENT after the
-        array entry it describes has been deleted, which is a pin that reports GREEN precisely when
-        the control it guards is gone. Caught by mutation (TD-2 survived until this stripped)."""
-        return "\n".join(ln for ln in block.splitlines() if not ln.lstrip().startswith("#"))
-
     def setUp(self):
         self.sh = _read(SYNC_SH)
         # Isolate the two controls so we assert against each independently.
@@ -435,8 +426,8 @@ class TestSyncPublicBoundaryHardened(unittest.TestCase):
         # otherwise satisfy a membership check on their own.
         guard_end = self.sh.find("\n)", guard_start)
         self.assertNotEqual(guard_end, -1, "INTERNAL_PATHS array is unterminated")
-        self.exclude_block = self._code_only(self.sh[:guard_start])
-        self.guard_block = self._code_only(self.sh[guard_start:guard_end])
+        self.exclude_block = code_text(self.sh[:guard_start])
+        self.guard_block = code_text(self.sh[guard_start:guard_end])
 
     def test_exclude_list_covers_every_internal_path(self):
         for p in self.REQUIRED:

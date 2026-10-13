@@ -109,9 +109,11 @@ mutant "T03 ★★★ the PATH edit is no longer function-local — it outlives 
 # ==== H · the hostile leg ======================================================================
 
 mutant "H01 ★★★ the cut never CALLS the hostile leg — §7i, a leg nothing invokes" "$R" \
-  'run_hostile_path_preflight
-run_public_subset_preflight' \
-  'run_public_subset_preflight' "$T"
+  '    run_hostile_path_preflight
+    run_public_subset_preflight' \
+  '    run_public_subset_preflight' "$T"
+# ⚠ RE-QUOTED AT 0.0.22 A1: the three preflight calls moved inside the re-entry arm that runs them
+# unless a remote fact proves they passed at HEAD, so they are indented. Same call, same mutant.
 
 mutant "H02 ★★★ the shim answers with the REAL version — the arrangement is no longer hostile" "$R" \
   'if [ "\${1:-}" = "--version" ]; then echo "${m} ${HOSTILE_SHIM_VERSION}"; exit 0; fi' \

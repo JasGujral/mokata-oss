@@ -434,6 +434,11 @@ class _Harness:
             _support.bash_argv(_support.as_posix(os.path.join(src, "scripts", "sync-public.sh")),
                                _support.as_posix(dest)),
             stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            # ⚠ NO CONTROLLING TERMINAL (0.0.22 A1). A divergence now OFFERS a fast-forward behind
+            # a confirm that reads /dev/tty, so a suite run from a developer's terminal would stop
+            # at that prompt. A new session has no tty: the confirm fails CLOSED, which is the
+            # refusal these tests grade.
+            start_new_session=True,
             env={**os.environ, **_GIT_ENV,
                  "GIT_AUTHOR_DATE": stamp, "GIT_COMMITTER_DATE": stamp})
         self.assertEqual(proc.returncode, expect_rc,
@@ -509,7 +514,13 @@ class TestN2TheReleaseBranchIsReusedNeverRecut(_Harness, unittest.TestCase):
         proc = self.sync(src, dest, expect_rc=1)
         self.assertIn("REFUSING", proc.stderr)
         self.assertIn(BRANCH, proc.stderr, "the refusal must name the branch")
-        self.assertIn("push origin --delete", proc.stderr, "the refusal must name the remedy")
+        # ⚠ MOVED AT 0.0.22 A1 (§7h). This pinned the remedy *"delete the remote branch"* — the
+        # remedy that CLOSED PR #76 at the 0.0.21 cut. The published head is an ancestor here, so the
+        # sync now offers a confirm-gated fast-forward; with no terminal the confirm fails closed and
+        # the refusal names the two deliberate choices instead.
+        self.assertIn("type 'yes' to fast-forward", proc.stderr, "the refusal must name the remedy")
+        self.assertIn("bump the version", proc.stderr)
+        self.assertNotIn("--delete", proc.stderr, "the PR-closing remedy is back")
         self.assertEqual(self.remote_sha(f"refs/heads/{BRANCH}", cwd=dest), published,
                          "a divergence was published over the head CI had already graded")
 

@@ -34,7 +34,7 @@
         ]
       },
       {
-        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|Skill|Agent|Task",
         "hooks": [
           {
             "type": "command",
@@ -52,6 +52,71 @@
             "type": "command",
             "shell": "bash",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" dirty-track"
+          }
+        ]
+      },
+      {
+        "matcher": "^mcp__(?:plugin_mokata_)?mokata__session_save$",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" run-bind"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" pre-compact"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" subagent-start"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" subagent-stop"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" stop"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" session-end"
           }
         ]
       }

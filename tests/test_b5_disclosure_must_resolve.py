@@ -521,14 +521,26 @@ class TestTheWiring(unittest.TestCase):
         self.assertIn("if not res.ok or res.claims_failed:", text)
 
     def test_b5_the_shipped_command_exits_2_here(self):
+        """2 (NOT CHECKABLE) whenever the notes print a schedule the shipped leg cannot resolve.
+
+        ⚠ §7h, 0.0.22 — this asserted 2 unconditionally, which is a fact about the releases that
+        printed a keyed FORWARD promise. 0.0.22's notes name no later release for anything, so
+        every claim is spent and the honest exit is 0. The expectation is derived from the same
+        check the command runs, so the wiring (exit code ⇔ undecided claims) stays graded."""
+        from mokata import __version__
+        from mokata.packaging import check_release_notes
+        undecided = check_release_notes(__version__, _REPO).claims_undecided
         proc = subprocess.run(
             [sys.executable, "-m", "mokata", "release-notes-check", "--root", _REPO],
             cwd=_REPO, capture_output=True, text=True, stdin=subprocess.DEVNULL,
             env=dict(os.environ, PYTHONPATH=os.path.join(_REPO, "src")))
-        self.assertEqual(proc.returncode, 2,
-                         "expected NOT CHECKABLE (2) from the shipped leg\n%s\n%s"
+        self.assertEqual(proc.returncode, 2 if undecided else 0,
+                         "exit must be NOT CHECKABLE (2) exactly when a claim is undecided\n%s\n%s"
                          % (proc.stdout[-2000:], proc.stderr[-2000:]))
-        self.assertIn("NOT CHECKABLE HERE", proc.stdout)
+        if undecided:
+            self.assertIn("NOT CHECKABLE HERE", proc.stdout)
+        else:
+            self.assertNotIn("NOT CHECKABLE HERE", proc.stdout)
 
 
 @unittest.skipUnless(

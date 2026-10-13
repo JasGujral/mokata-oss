@@ -86,7 +86,8 @@ class TestSetupProject(unittest.TestCase):
         # here, and the help enumerates rather than counts. Neither can drift again.
         help_text = _flag_help("setup", "--no-hooks")
         named = ("SessionStart", "user-prompt-submit", "secret-guard", "gate-guard",
-                 "dirty-track")
+                 "dirty-track", "run-bind", "pre-compact", "subagent-start", "subagent-stop",
+                 "stop", "session-end")
         for hook in named:
             self.assertIn(hook, help_text,
                           f"--no-hooks help does not name the {hook} hook it skips: {help_text!r}")

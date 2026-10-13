@@ -455,6 +455,11 @@ _register("team_events.py", {
         "or a refusal it needs to see — with a failure to hang up the phone."),
 })
 _register("progress_events.py", {
+    "subagents_finished": (SUPPRESS_OK,
+        "0.0.22 D4 — an unreadable progress log observes no subagent: an independent review is then "
+        "credited as INLINE (the D4 ruling), the cautious reading. It never blocks ship."),
+})
+_register("progress_events.py", {
     "_project_event": (SUPPRESS_OK,
         "R1.S1c — the progress log's own projection into the event stream. It runs at the END of "
         "`append_event`, OUTSIDE the append lock, so the canonical log line is already written "
@@ -483,6 +488,40 @@ _register("session_bundle.py", {
 })
 
 
+_register("hook_cli.py", {
+    "_ide_for_prompt": (DEGRADES_LOUD,
+        "0.0.22 E2 — `/mokata:review-window`: a window that will not open is SAID in the turn's context "
+        "('mokata ide could not start (…)'), and the command template then falls back to "
+        "`mokata ide --no-browser`. Never raised into the human's turn."),
+    "_snapshot_before": (SUPPRESS_OK,
+        "0.0.22 E2 — the review window's BEFORE snapshot on an allowed write; a fault never touches "
+        "the write or the gate verdict already reached."),
+    "_snapshot_after": (SUPPRESS_OK,
+        "0.0.22 E2 — the AFTER snapshot in the async observability lane, which never fails a tool."),
+    "_harvest_main": (SUPPRESS_OK,
+        "0.0.22 D6 (H-1c) — Stop / SessionEnd ALWAYS exit 0 and print nothing: exit 2 on Stop would "
+        "send Claude back to work. A fault drafts no note and costs nothing else."),
+    "_harvest_waiting": (SUPPRESS_OK,
+        "0.0.22 D6 — the 'notes are waiting' briefing line is informational; a fault omits it and "
+        "the briefing starts as before."),
+    "_own_record_refusal": (SUPPRESS_OK,
+                            "the own-record lane fails open like every gate-guard lane; the "
+                            "hook's floor (DEGRADES_LOUD) is the loud one"),
+    "_bash_lane_refusal": (SUPPRESS_OK,
+        "0.0.22 D5 — two handlers: the Bash lane FAILS OPEN on a fault (the run-state gates are "
+        "fail-open by design, `check_write` is total), and counting a refusal as an in-loop catch "
+        "is best-effort — the block stands whether or not it was counted."),
+    "_subagent_contract_refusal": (SUPPRESS_OK,
+        "0.0.22 D4 (HP.S3) — the subagent contract check FAILS OPEN on any fault: an unreadable "
+        "contract is an unpoliced subagent, never a broken tool. Self-protect has already run and "
+        "the run-state gates run after it, so a fault here never weakens either."),
+    "subagent_start_main": (SUPPRESS_OK,
+        "0.0.22 D4 — SubagentStart is context only and cannot block; a fault adds no contract text "
+        "and costs the human nothing (always exit 0)."),
+    "subagent_stop_main": (SUPPRESS_OK,
+        "0.0.22 D4 (H-3) — a fault at SubagentStop lets the subagent finish: a crash here must "
+        "never hold a subagent open (the hook blocks only through its JSON decision)."),
+})
 _register("hook_cli.py", {
     "_read_stdin_bounded._reader": (SUPPRESS_OK,
         "A torn-down/errored stdin IS 'no input' — there is no other answer to give. The docstring "
@@ -1301,6 +1340,151 @@ _register("dashboard.py", {
         "snapshot IO, and re-listing its classes here would drift from it."),
 })
 
+_register("working_set.py", {
+    "working_set": (DEGRADE_CLEAN,
+        "0.0.22 D2 (HP.S2) — two handlers around the DERIVED references (checkpoint; approach/spec/"
+        "stage reads). A fault leaves those fields None AND sets `readable=False` in the returned "
+        "object, so a working set that could not be read is visibly not an empty one (§7g)."),
+    "_persisted": (DEGRADE_CLEAN,
+        "0.0.22 D2 — the persisted extras' read; returns `({}, False)` and the caller carries the "
+        "False out as `readable`, never as 'no files touched'."),
+})
+_register("live_context.py", {
+    "live_context_lines": (SUPPRESS_OK,
+        "0.0.22 D2 (HP.S1) — the live repo block's probes (git, test command, instruction files). "
+        "Each is one command away for the reader, and the briefing must start: a probe that "
+        "fails is omitted, and the block is omitted when nothing is known."),
+})
+_register("bootstrap.py", {
+    "_render": (SUPPRESS_OK,
+        "0.0.22 D2 (HP.S1) — the guard around the live repo block inside the briefing render. "
+        "Its callee is already total; this keeps an import fault from breaking SessionStart. "
+        "The block is a convenience and the first thing dropped under budget by design."),
+})
+_register("hook_cli.py", {
+    "_record_working_set": (SUPPRESS_OK,
+        "0.0.22 D2 (HP.S2) — the async PostToolUse lane appending written paths to the bound run's "
+        "WorkingSet. It must never fail the tool call it follows; a lost path makes the touched "
+        "list shorter, which is a convenience field, not evidence any gate reads."),
+})
+
+_register("govern/gate.py", {
+    "_user_config_allowed": (SUPPRESS_OK,
+        "0.0.22 D5 (HP.S4) — the user-harness-config allowance FAILS CLOSED: any fault reads as "
+        "'not allowed', so containment holds and the write is refused with the rule-(c) message."),
+})
+_register("ide/snapshots.py", {
+    "capture": (SUPPRESS_OK,
+        "0.0.22 E2 — a snapshot is an OBSERVATION of a write that already met its gates; one that "
+        "cannot be taken is skipped and the write it observes is never affected. The review window "
+        "then lacks that one point in time, and its live diff (the working tree) still shows it."),
+    "capture_before_first_write": (SUPPRESS_OK,
+        "0.0.22 E2 — the BEFORE of a session's first write: same as `capture` — never touches the "
+        "write; a miss means that file's session diff starts from its first AFTER."),
+})
+_register("ide/launch.py", {
+    "_open": (SUPPRESS_OK,
+        "0.0.22 E2 — opening a browser is a convenience: the link is printed (CLI) or put in the "
+        "turn's context (/mokata:review-window) either way, so a headless machine loses nothing."),
+})
+_register("ide/server.py", {
+    "build_app._json.handler": (DEGRADES_LOUD,
+        "0.0.22 E2 — a read that fails returns a JSON error the page SHOWS ('could not read: …'), "
+        "never a blank view that reads as 'nothing changed' (§7g)."),
+})
+_register("harvest.py", {
+    "build_note": (SUPPRESS_OK,
+        "0.0.22 D6 (H-1c) — five handlers, one per optional fact (position, working set, in-loop "
+        "catches, subagents, review). A fact that cannot be read is left out of the DRAFT note; "
+        "the note is a proposal a person reviews, never a memory, so a thinner draft is honest."),
+    "harvest": (DEGRADES_LOUD,
+        "0.0.22 D6 — a failed draft emits a `session-harvest` `local-io` notice (this session's "
+        "note was not drafted; nothing else is affected) and returns None: a harvest never costs "
+        "the human their turn."),
+    "decide": (SUPPRESS_OK,
+        "0.0.22 D6 — ledgering the decision is best-effort; the decision itself (the gated "
+        "`remember`, or the drop) has already been made and recorded on the draft."),
+    "_say_degraded": (SUPPRESS_OK,
+        "0.0.22 D6 — the degrade notice itself is best-effort; the caller has already decided."),
+})
+_register("bash_lane.py", {
+    "analyze": (SUPPRESS_OK,
+        "0.0.22 D5 — a parser fault sees NOTHING (no targets, no unreadable reason), which is the "
+        "behaviour before D5: the native-tool lane and SELF-PROTECT are untouched, and the hook's "
+        "own fail-open floor holds. A parser that crashes a hook would cost the human the tool."),
+})
+_register("subagent_contract.py", {
+    "start_contract": (DEGRADES_LOUD,
+        "0.0.22 D4 (HP.S3) — a failed contract write emits a `subagent-contract` `local-io` notice "
+        "naming the consequence (this subagent runs unpoliced) and the fix. Not recording a "
+        "contract is the behaviour before this stage, never a blocked subagent."),
+    "read_contract": (SUPPRESS_OK,
+        "0.0.22 D4 — an unreadable contract reads as 'no contract': that subagent is unpoliced, which "
+        "is what it was before D4. The run-state gates still decide its writes independently."),
+    "ledger_unhonored": (SUPPRESS_OK,
+        "0.0.22 D4 — ledgering a refusal is best-effort: the refusal itself has already been made "
+        "(the block stands, or the subagent was let go) whether or not it is counted."),
+    "_record_finished": (DEGRADES_LOUD,
+        "0.0.22 D4 (H-3) — a failed `subagent_finished` append emits a `subagent-contract` notice: "
+        "the run cannot count this subagent, so an independent review may show as 'claimed'."),
+    "_say_degraded": (SUPPRESS_OK,
+        "0.0.22 D4 — the degrade notice itself is best-effort; the caller has already decided."),
+})
+_register("reanchor.py", {
+    "next_write": (SUPPRESS_OK,
+        "0.0.22 verification D-2 — an unreadable working set falls back to judging a NEW "
+        "implementation file; the verdict is still the gate's own, so nothing is hidden."),
+    "build_reanchor": (SUPPRESS_OK,
+        "0.0.22 D2 — the WorkingSet line on the re-anchor block; omitted if it cannot be read, so "
+        "the block's run/obligation lines (the part that matters after a compaction) still stand."),
+    "position": (SUPPRESS_OK,
+        "0.0.22 D1 (CP.S1) — reads this session's run position for the post-compaction re-anchor. "
+        "A fault reads as 'no claim', which adds NOTHING to the briefing: the general briefing (the "
+        "gate list, the rules) is still injected, and the gates themselves read their state "
+        "independently, so a re-anchor that cannot read never weakens enforcement."),
+    "write_anchor": (DEGRADES_LOUD,
+        "0.0.22 D1 (H-1b) — two handlers: a failed anchor write emits a `compaction-anchor` "
+        "`local-io` notice naming the consequence (the re-anchor cannot say whether anything moved) "
+        "and the fix; the inner one keeps a failing notice from raising inside PreCompact."),
+    "_read_anchor": (SUPPRESS_OK,
+        "0.0.22 D1 — an unreadable anchor reads as absent, and the re-anchor then SAYS 'no "
+        "pre-compaction anchor was recorded' rather than claiming the round trip held."),
+})
+_register("hook_cli.py", {
+    "pre_compact_main": (SUPPRESS_OK,
+        "0.0.22 D1 (H-1b) — the PreCompact hook's floor. It must never cost the human their "
+        "compaction; the callee notes a failed write itself, and anything else (an unparseable "
+        "envelope) only means the re-anchor says no anchor was recorded."),
+})
+
+_register("run_intent.py", {
+    "record_intent": (DEGRADES_LOUD,
+        "0.0.22 C1 RUN-REG — a failed intent write means the gate will NOT wait for the run this "
+        "session asked for: the pre-stage fail-open, which is safe for the edit but a real loss of "
+        "the new guard. It emits a `run-registration` `local-io` notice naming that and the fix, "
+        "and never blocks: it runs in UserPromptSubmit / PreToolUse, where a raise eats a turn."),
+    "bind_registered": (DEGRADES_LOUD,
+        "0.0.22 C1 RUN-REG — a failed bind leaves an open intent waiting (the gate keeps blocking "
+        "with its remedy), or, with no intent, today's fail-open. Same `run-registration` notice; "
+        "it runs in a PostToolUse hook after the tool already succeeded, so it must not raise."),
+    "session_claim": (SUPPRESS_OK,
+        "0.0.22 C1 RUN-REG — the READ of this session's claim. Unreadable reads as NO claim, which "
+        "is exactly the gate's pre-stage behaviour (the SI.1 fail-open floor, whose own unreadable-"
+        "state notice the gate already prints). Blocking on a claim it cannot read would police a "
+        "session that may never have asked for a pipeline."),
+    "_say_degraded": (SUPPRESS_OK,
+        "The notice for the two handlers above. Best-effort by definition: the caller has already "
+        "decided, and a failing notice must not turn a degrade into a raise inside a hook."),
+})
+
+_register("progress_events.py", {
+    "record_run_finished": (SUPPRESS_OK,
+        "0.0.22 C1 — ONE handler, around the `completed_at` stamp AFTER the `run_finished` event "
+        "is already on disk. The event is the record (every reader keys on it); the stamp is a "
+        "display aid for `build_progress`. A stamp failure loses no signal the event does not "
+        "carry, and must not turn a recorded finish into a reported failure."),
+})
+
 _register("visibility.py", {
     "changed_since_line": (SUPPRESS_OK,
         "ONE cosmetic line in the SessionStart briefing, and the briefing must start even if it "
@@ -1310,6 +1494,17 @@ _register("visibility.py", {
 })
 
 _register("mcp/tools_read.py", {
+    "progress_mark": (DEGRADE_CLEAN,
+        "0.0.22 C1 — the in-harness twin of `mokata progress mark`. Two handlers: the best-effort "
+        "`completed_at` stamp on `ship` (the CLI twin's own, SUPPRESS-shaped: the event is the "
+        "record, the stamp a display aid), and the outer one, which RETURNS the failure — "
+        "`recorded: false`, `status: 'error'`, a `reason` naming `{exc}` and the terminal remedy — "
+        "rather than raising, because a stage mark must never break the phase it records."),
+    "run_finish": (DEGRADE_CLEAN,
+        "0.0.22 C1 — the in-harness twin of `mokata progress finish`. Returns the failure IN the "
+        "result (`recorded: false`, `status: 'error'`) with the SAME `run_finish_refused_line` its "
+        "CLI twin prints as it exits 1. Broad for the same reason as `review_record`: the append "
+        "spans filesystem, locking and encoding faults."),
     "status": (SUPPRESS_OK,
         "Two handlers, both guarding ADDITIVE, optional keys on an otherwise-complete status "
         "response. (a) `pending`: `resolve_read_routing` never raises on the read path and carries "
@@ -1341,6 +1536,14 @@ _register("mcp/tools_read.py", {
         "made that bar binding on the CLI twin too, and closed the last divergence: this answer no "
         "longer claims 'review hasn't run' when the read RAISED — it reports `readable: false` with "
         "the shared read-error sentences, the same pair the CLI prints."),
+    "working_set": (DEGRADE_CLEAN,
+        "0.0.22 D2 (HP.S2) — returns `status: 'error'` with `{exc}` IN the result; the note it may "
+        "have been asked to append and the read share one handler, and either failing is reported, "
+        "never raised. `{exc}` carries no content beyond the caller's own note."),
+    "_caught_figures": (DEGRADE_CLEAN,
+        "0.0.22 C2 (SL.S3) — the `caught` figures on `review_status`. Returns None IN the result "
+        "when they cannot be read, so the gate fields beside it (the actual verdict) still stand; "
+        "a None is visibly not a number, so it can never be read as a 0% rate."),
     "review_record": (DEGRADE_CLEAN,
         "Returns the failure IN the result, and REVIEW-FIX.R4 made it LOUD: `recorded: false`, "
         "`status: 'error'`, `satisfies_gate: false`, a `reason` naming `{exc}`, and a `message` "
@@ -1925,7 +2128,38 @@ _register("branch_protection.py", {
         "into `NOT safely protected`, i.e. it re-labelled an unreadable document as a read one. It "
         "now says 'unreadable' and the caller decides — never the other way round."),
 })
+_register("hook_cli.py", {
+    "_record_in_loop_catch": (SUPPRESS_OK,
+        "0.0.22 C2 (SL.S3) — records a BLOCK as an in-loop catch, inside gate-guard, just before "
+        "the block is reported. The block stands whatever happens here; a lost record only makes "
+        "the run's in-loop count smaller, which the rate states as a count, never as a verdict. "
+        "A raise would turn a correct block into the gate's fail-open floor."),
+    "_record_prompt_intent": (SUPPRESS_OK,
+        "0.0.22 C1 — a wrapper around `run_intent.record_intent`, which emits its own degrade "
+        "notice. This catch is for the import/parse fault around it, inside UserPromptSubmit, "
+        "where a raise would eat the human's turn; silence leaves the gate at its pre-stage "
+        "fail-open, never a block."),
+    "_record_skill_intent": (SUPPRESS_OK,
+        "0.0.22 C1 — the same, for the `Skill` arm of gate-guard (PreToolUse). The callee notes "
+        "its own write fault; this catch keeps an import fault from failing the skill call."),
+    "run_bind_main": (SUPPRESS_OK,
+        "0.0.22 C1 — the PostToolUse run-bind hook's floor. The tool already ran; the callee "
+        "(`bind_registered`) notes a failed write itself; anything else here (an unparseable "
+        "envelope) leaves the gate exactly where it was, so exit 0 and silence lose no signal."),
+})
 _register("cli_commands/runviews.py", {
+    "_print_review_yield": (SUPPRESS_OK,
+        "0.0.22 C2 (SL.S3) — the opt-in `review-status --caught` figure, printed AFTER the gate's "
+        "verdict line. A figure that cannot be read is omitted: the verdict above it is the gate "
+        "and its exit code is already decided; a raise here would turn a passing gate into a "
+        "crash over an informational line."),
+    "cmd_progress_finish": (DEGRADES_LOUD,
+        "0.0.22 C1 — the ship-completion event's CLI. A finish that could not be written PRINTS "
+        "`did NOT record the finish — could not write it ({exc}). Nothing was written; the run "
+        "still reads as unfinished.` and EXITS 1 — the `record-review` posture, not `mark`'s, "
+        "because a finish is the record that the run is OVER and one that silently did not land "
+        "is B-LIFE's bug one layer down. Broad because the append spans filesystem, locking and "
+        "encoding faults; `{exc}` is echoed because this is a WRITE fault carrying no log content."),
     "cmd_progress_mark": (SUPPRESS_OK,
         "Two handlers: transient run-registry upkeep (commented 'registry upkeep never breaks "
         "recording a stage' — the stage IS recorded, only the index is best-effort), and one that "

@@ -35,6 +35,7 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import re
+from _code_lines import code_lines  # noqa: F401  (re-exported; B2: one implementation)
 
 __all__ = [
     "RETRY_GUARDS", "code_lines", "shell_function_source", "shell_function_names",
@@ -57,16 +58,6 @@ RETRY_GUARDS = {
 }
 
 _FUNC_HEAD = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{", re.MULTILINE)
-
-
-def code_lines(text):
-    """`[(lineno, line)]` with whole-line comments dropped.
-
-    The scripts have to be able to DESCRIBE the defect they removed — both of them quote the old
-    false message and both explain why forcing was rejected — without that prose being convicted
-    as the thing it describes."""
-    return [(n, ln) for n, ln in enumerate((text or "").splitlines(), 1)
-            if not ln.lstrip().startswith("#")]
 
 
 def shell_function_names(text):

@@ -25,6 +25,7 @@ except ImportError:                         # absence is FAILED LOUD at the pin,
     _HAVE_YAML = False
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _code_lines import code_text
 
 from mokata.branch_protection import (
     EXIT_DEGRADED,
@@ -32,6 +33,7 @@ from mokata.branch_protection import (
     EXIT_PROTECTED,
     EXIT_UNREADABLE,
     RESTORE_ROW,
+    ProtectionCache,
     STATE_NOT_PROTECTED,
     STATE_PROTECTED,
     STATE_UNREADABLE,
@@ -96,6 +98,22 @@ def _routed(responses, default=UNREADABLE_503):
 def _degraded_runner(branch=(0, '{"protected": true}'), rulesets=(0, "[]")):
     """The real-world state 3: the DETAIL 503s, the two corroborating reads answer."""
     return _routed({DETAIL_PATH: UNREADABLE_503, BRANCH_PATH: branch, RULESETS_PATH: rulesets})
+
+
+def _hit_cache(testcase):
+    """A last-read cache holding a SAFE document read a minute ago — the one thing state 3 now
+    needs, besides the two live reads, to pass (0.0.22 A1, BRANCH-PROTECTION-DEGRADED-PASS (b)).
+    Before A1 the degraded pass needed no cache at all; these fixtures arrange the HIT explicitly
+    so the boolean-only pass that was deleted cannot come back through a test that forgot one."""
+    import datetime
+    import shutil
+    import tempfile
+    tmp = tempfile.mkdtemp()
+    testcase.addCleanup(shutil.rmtree, tmp, True)
+    cache = ProtectionCache(tmp)
+    cache.store(REPO, "main", SAFE_PAYLOAD,
+                datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=1))
+    return cache
 
 
 class EvaluatePayload(unittest.TestCase):
@@ -237,24 +255,32 @@ class State3UnreadableMustEarnItsPass(unittest.TestCase):
 
     It passes ONLY on evidence that was actually READ. Every refusal below is the same rule stated
     once more: a read that did not succeed proves nothing, and must not be allowed to mean "fine"
-    merely because it happened one level below the read that failed."""
+    merely because it happened one level below the read that failed.
+
+    ⚠ EVERY REFUSAL BELOW RUNS WITH A FRESH, SAFE LAST-READ CACHE (0.0.22 A1). Without one, the
+    cache MISS refuses too, and two defences of one property are ungradable (§7f): the first run of
+    `_branch_protection_states_mutants.sh` after A1 scored 13/16, with B04 and B08 surviving because
+    a neutered boolean check was masked by the MISS. With a HIT in place the live read is the ONLY
+    thing that can refuse, which is what each of these tests claims to grade."""
 
     def test_passes_when_corroboration_succeeds_and_says_protected(self):
-        v = check_branch_protection(runner=_degraded_runner())
+        v = check_branch_protection(runner=_degraded_runner(), cache=_hit_cache(self))
         self.assertTrue(v.ok)
         self.assertTrue(v.degraded)
         self.assertEqual(v.state, STATE_UNREADABLE)
         self.assertEqual(v.exit_code, EXIT_DEGRADED)
 
     def test_refuses_when_protected_is_false(self):
-        v = check_branch_protection(runner=_degraded_runner(branch=(0, '{"protected": false}')))
+        v = check_branch_protection(runner=_degraded_runner(branch=(0, '{"protected": false}')),
+                                    cache=_hit_cache(self))
         self.assertFalse(v.ok)
         self.assertFalse(v.degraded)
         self.assertEqual(v.exit_code, EXIT_UNREADABLE)
         self.assertTrue(any("protected" in f for f in v.failures))
 
     def test_refuses_when_protected_is_missing(self):
-        v = check_branch_protection(runner=_degraded_runner(branch=(0, '{"name": "main"}')))
+        v = check_branch_protection(runner=_degraded_runner(branch=(0, '{"name": "main"}')),
+                                    cache=_hit_cache(self))
         self.assertFalse(v.ok)
 
     def test_refuses_when_protected_is_truthy_but_not_the_boolean_true(self):
@@ -266,8 +292,10 @@ class State3UnreadableMustEarnItsPass(unittest.TestCase):
         for spelling in ('"true"', "1", '"protected"', "[1]"):
             with self.subTest(protected=spelling):
                 v = check_branch_protection(
-                    runner=_degraded_runner(branch=(0, '{"protected": %s}' % spelling)))
+                    runner=_degraded_runner(branch=(0, '{"protected": %s}' % spelling)),
+                    cache=_hit_cache(self))
                 self.assertFalse(v.ok, f"`protected: {spelling}` must not corroborate")
+                self.assertEqual(v.cache_outcome, "", "the cache, not the boolean, refused it")
 
     def test_refuses_when_the_corroborating_branch_payload_is_not_an_object(self):
         """A JSON array or scalar where the branch document should be is not a branch document.
@@ -275,30 +303,37 @@ class State3UnreadableMustEarnItsPass(unittest.TestCase):
         `{"protected": True}` SURVIVED — nothing fed a non-object body.)"""
         for body in ("[]", '["main"]', "42", '"main"', "null"):
             with self.subTest(body=body):
-                v = check_branch_protection(runner=_degraded_runner(branch=(0, body)))
+                v = check_branch_protection(runner=_degraded_runner(branch=(0, body)),
+                                            cache=_hit_cache(self))
                 self.assertFalse(v.ok, f"a branch body of {body} must not corroborate")
+                self.assertEqual(v.cache_outcome, "", "the cache, not the branch read, refused it")
 
     def test_refuses_when_the_corroborating_branch_read_itself_fails(self):
         """THE BUG BEING FIXED, one level down. A failed read is not a pass."""
-        v = check_branch_protection(runner=_degraded_runner(branch=UNREADABLE_503))
+        v = check_branch_protection(runner=_degraded_runner(branch=UNREADABLE_503),
+                                    cache=_hit_cache(self))
         self.assertFalse(v.ok)
         self.assertFalse(v.degraded)
         self.assertTrue(any("ALSO failed" in f for f in v.failures))
 
     def test_refuses_when_the_corroborating_rulesets_read_itself_fails(self):
-        v = check_branch_protection(runner=_degraded_runner(rulesets=UNREADABLE_503))
+        v = check_branch_protection(runner=_degraded_runner(rulesets=UNREADABLE_503),
+                                    cache=_hit_cache(self))
         self.assertFalse(v.ok)
         self.assertTrue(any("ALSO failed" in f for f in v.failures))
 
     def test_refuses_when_the_corroborating_reads_return_unparseable_bodies(self):
-        v = check_branch_protection(runner=_degraded_runner(branch=(0, "not-json{")))
+        v = check_branch_protection(runner=_degraded_runner(branch=(0, "not-json{")),
+                                    cache=_hit_cache(self))
         self.assertFalse(v.ok)
-        v2 = check_branch_protection(runner=_degraded_runner(rulesets=(0, "not-json{")))
+        v2 = check_branch_protection(runner=_degraded_runner(rulesets=(0, "not-json{")),
+                                     cache=_hit_cache(self))
         self.assertFalse(v2.ok)
 
     def test_refuses_when_the_rulesets_are_inconsistent(self):
         v = check_branch_protection(runner=_degraded_runner(
-            rulesets=(0, '[{"name": "main", "enforcement": "disabled"}]')))
+            rulesets=(0, '[{"name": "main", "enforcement": "disabled"}]')),
+            cache=_hit_cache(self))
         self.assertFalse(v.ok)
         self.assertTrue(any("not consistent" in f for f in v.failures))
 
@@ -340,10 +375,15 @@ class AReadFailureNeverSuggestsAWrite(unittest.TestCase):
             check_branch_protection(runner=_degraded_runner(branch=(0, '{"protected": false}'))),
             check_branch_protection(runner=_degraded_runner(branch=UNREADABLE_503)),
             check_branch_protection(runner=_degraded_runner(rulesets=UNREADABLE_503)),
-            check_branch_protection(runner=_degraded_runner()),   # the DEGRADED PASS text too
+            # the DEGRADED PASS text too — which since 0.0.22 A1 needs a HIT to render at all.
+            # Without one this row was a MISS refusal, and mutant C02 (a PUT planted in the
+            # degraded notice) SURVIVED: nothing here rendered the degraded notice any more.
+            check_branch_protection(runner=_degraded_runner(), cache=_hit_cache(self)),
         ]
 
     def test_no_unreadable_verdict_ever_emits_a_put(self):
+        self.assertTrue(any(v.degraded for v in self._unreadable_verdicts()),
+                        "no verdict in this corpus renders the degraded notice, so it is not graded")
         for v in self._unreadable_verdicts():
             text = v.render()
             self.assertEqual(v.state, STATE_UNREADABLE)
@@ -367,7 +407,8 @@ class TheDegradedNoticeIsLoudDatedAndTemporary(unittest.TestCase):
     RELEASE-SH-DEV-CI-WAIVER-OUTLIVED-ITS-SCOPE, which survived seven releases."""
 
     def setUp(self):
-        self.text = check_branch_protection(runner=_degraded_runner()).render()
+        self.text = check_branch_protection(runner=_degraded_runner(),
+                                            cache=_hit_cache(self)).render()
 
     def test_it_says_it_is_not_a_green(self):
         self.assertIn("DEGRADED", self.text)
@@ -380,9 +421,12 @@ class TheDegradedNoticeIsLoudDatedAndTemporary(unittest.TestCase):
         for assurance in UNOBTAINED_ASSURANCES:
             self.assertIn(assurance, self.text)
 
-    def test_it_says_it_proceeded_on_the_corroborating_boolean_alone(self):
-        self.assertIn("CORROBORATING BOOLEANS ALONE", self.text)
+    def test_it_says_it_proceeded_on_the_last_read_document_and_the_live_boolean(self):
+        """Moved at 0.0.22 A1: the pass is no longer on the boolean alone, so the notice that said
+        so would now be false. It must say which document it leaned on, and when it was read."""
+        self.assertIn("LAST SUCCESSFULLY READ DOCUMENT", self.text)
         self.assertIn("protected: true", self.text)
+        self.assertNotIn("BOOLEANS ALONE", self.text)
 
     def test_it_is_dated(self):
         import datetime
@@ -414,6 +458,27 @@ class TheDegradedNoticeIsLoudDatedAndTemporary(unittest.TestCase):
 class CliExitCode(unittest.TestCase):
     """The CLI subcommand maps the three states onto FOUR exit codes, so `release.sh` can tell
     "not protected" (apply) from "could not read" (retry) from "degraded" (proceed, loudly)."""
+
+    def setUp(self):
+        # ⚠ THE CLI NOW WRITES A CACHE (0.0.22 A1), so every call here is pointed at a private
+        # XDG_CACHE_HOME. Without it the suite would write the developer's real
+        # ~/.cache/mokata/branch-protection, and the exit-3 test below would pass or fail on
+        # whatever an earlier run left there — a test that hopes for an arrangement.
+        import shutil
+        import tempfile
+        self.xdg = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.xdg, True)
+        old = os.environ.get("XDG_CACHE_HOME")
+        os.environ["XDG_CACHE_HOME"] = self.xdg
+        self.addCleanup(lambda: os.environ.__setitem__("XDG_CACHE_HOME", old) if old is not None
+                        else os.environ.pop("XDG_CACHE_HOME", None))
+
+    def _seed_a_successful_read(self):
+        """The exit-3 path needs a document read IN FULL earlier — by the CLI itself, so the write
+        side is graded by the same call a real release run makes."""
+        import json
+        rc, _out, _err = self._run_cmd(_runner_returning(0, json.dumps(SAFE_PAYLOAD)))
+        self.assertEqual(rc, EXIT_PROTECTED)
 
     def _run_cmd(self, runner):
         from mokata import branch_protection, degrade
@@ -451,12 +516,14 @@ class CliExitCode(unittest.TestCase):
         self.assertIn("UNREADABLE", out)
 
     def test_exit_three_when_unreadable_but_corroborated(self):
+        self._seed_a_successful_read()
         rc, out, _err = self._run_cmd(_degraded_runner())
         self.assertEqual(rc, EXIT_DEGRADED)
         self.assertIn("DEGRADED", out)
 
     def test_the_degraded_pass_also_lands_in_the_d5_degrade_register(self):
         """So `mokata doctor` can answer "what degraded this session?" after it scrolled away."""
+        self._seed_a_successful_read()
         rc, _out, err = self._run_cmd(_degraded_runner())
         self.assertEqual(rc, EXIT_DEGRADED)
         self.assertIn("branch-protection: DEGRADED", err)
@@ -541,7 +608,7 @@ class ReleaseScriptThreeStates(unittest.TestCase):
         if end == -1:
             raise AssertionError("release.sh's verify_branch_protection() is unterminated")
         body = sh[start:end]
-        cls.body = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))
+        cls.body = code_text(body)
 
     def test_it_dispatches_on_the_exit_code_rather_than_on_truthiness(self):
         """`if cmd; then ... else ...` is the two-state shape. Three states need the code."""
@@ -589,7 +656,12 @@ class ReleaseScriptThreeStates(unittest.TestCase):
         self.assertIn("02-mokata-build-status.md", arm)
         self.assertIn("handoff/STATUS.md", arm)
         self.assertIn("BRANCH-PROTECTION-DEGRADED-PASS", arm)
-        self.assertIn("0.0.19", arm)
+        # ⛔ MOVED AT 0.0.22 A1 (§7h — this pin encoded a false premise). It asserted the banner
+        # said "0.0.19", and for three releases the banner promised a restore in a release that had
+        # already shipped without one, green, because this line held it there. What is true after
+        # A1 is a BOUND, not a release: the pass rests on a last-read document at most 24h old.
+        self.assertNotIn("0.0.19", arm, "the banner promises a release that is long gone")
+        self.assertIn("24h", arm, "the banner must state the cache age limit that bounds the pass")
 
     def test_an_unexpected_exit_code_refuses_without_suggesting_a_write(self):
         arm = self.body[self.body.find("    *)"):]
@@ -619,12 +691,6 @@ class SyncBoundaryEnvHardening(unittest.TestCase):
     ARRAY literal, and strip `#` lines from both before asserting."""
 
     @staticmethod
-    def _code_only(block):
-        """`block` with every `#` comment line dropped. Load-bearing, not tidiness — see the
-        class docstring: the comments in this script name the exact literals under pin."""
-        return "\n".join(ln for ln in block.splitlines() if not ln.lstrip().startswith("#"))
-
-    @staticmethod
     def _slice(text, start_marker, end_marker, what):
         """`text` between the two markers. Raises (never returns a wrong slice) if either marker
         is gone — an explicit raise, not `assert`, so `python -O` cannot delete the check."""
@@ -642,12 +708,12 @@ class SyncBoundaryEnvHardening(unittest.TestCase):
         with open(_SYNC_SH, encoding="utf-8") as fh:
             cls.sh = fh.read()
         # The rsync ARGUMENT literal: `rsync -a --delete \` … `"$SRC"/ "$DEST"/`.
-        cls.rsync_args = cls._code_only(
+        cls.rsync_args = code_text(
             cls._slice(cls.sh, "rsync -a --delete", '"$SRC"/ "$DEST"/', "rsync invocation"))
         # The INTERNAL_PATHS ARRAY literal: `INTERNAL_PATHS=(` … `\n)`. Bounded on purpose —
         # "everything after `INTERNAL_PATHS=(`" swallows the enforcement loop and its commentary,
         # which discuss `.env` at length and satisfy the membership check on their own.
-        cls.guard_block = cls._code_only(
+        cls.guard_block = code_text(
             cls._slice(cls.sh, "INTERNAL_PATHS=(", "\n)", "INTERNAL_PATHS guard"))
 
     def test_env_example_is_included_before_env_exclude(self):

@@ -141,7 +141,25 @@ jobs:
           - os: "windows-latest"
             python: "3.10"
             jsonschema: "present"
+          # MACOS-IS-THE-CUT-MACHINE-AND-HAS-NO-LEG (0.0.22 B1). Every cut is taken on macOS, and
+          # until now nothing ran the suite there: two host-dependent reds surfaced in ONE day on
+          # 2026-10-04 (`git <cmd> --help` handing off to `man`; `/var` vs `/private/var`), both
+          # invisible on Linux. ONE leg, the primary Python and the fuller dependency surface —
+          # macOS runner minutes bill at 10x, so this is the cheapest leg that answers the row.
+          # BLOCKING, like every leg (POLICY_BLOCKING in tests/test_ci_matrix_floor.py). It runs on
+          # the MIRROR ONLY (ruling R5, the billing ruling): the guard step below refuses — loudly,
+          # never as a green skip — anywhere else.
+          - os: "macos-latest"
+            python: "3.12"
+            jsonschema: "present"
     steps:
+      - name: "macOS leg is mirror-only (0.0.22 ruling R5)"
+        # A red, not a skip: a skipped leg reads GREEN, and a green macOS tick that ran nothing is
+        # the exact false assurance this leg exists to remove. On the mirror this step is a no-op.
+        if: runner.os == 'macOS' && github.repository != 'JasGujral/mokata-oss'
+        run: |
+          echo "::error::the macOS leg runs on JasGujral/mokata-oss only (billing ruling R5). This repository is ${GITHUB_REPOSITORY}; nothing was tested here."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:

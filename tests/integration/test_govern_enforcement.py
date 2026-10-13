@@ -26,6 +26,13 @@ FAKE_SECRET = "AWS_KEY = 'AKIAIOSFODNN7EXAMPLE'"
 CLEAN = "print('hello world')"
 
 
+def _T(name):
+    """A placeholder target INSIDE the system temp dir. 0.0.22 D5 turned on WriteGate containment
+    for every agent write, so a bare `/app.py` is now refused as OUTSIDE the workspace before the
+    gate under test is reached; the temp dir is the one place outside a repo a write may land."""
+    return os.path.join(tempfile.gettempdir(), "mokata-integration", name)
+
+
 def _hook_main():
     """Load hooks/secret_guard.py by path and return its main()."""
     here = os.path.dirname(os.path.abspath(__file__))
@@ -39,7 +46,7 @@ def _hook_main():
 class TestSecretBlock(unittest.TestCase):
     def test_secret_is_blocked_even_with_approval(self):
         gate = WriteGate()
-        out = gate.submit(WriteRequest("code", "/app.py", FAKE_SECRET),
+        out = gate.submit(WriteRequest("code", _T("app.py"), FAKE_SECRET),
                           assume_yes=True)          # approval cannot override security
         self.assertFalse(out.committed)
         self.assertTrue(out.aborted)
@@ -48,7 +55,7 @@ class TestSecretBlock(unittest.TestCase):
     def test_clean_content_commits(self):
         committed = {}
         gate = WriteGate()
-        out = gate.submit(WriteRequest("code", "/app.py", CLEAN),
+        out = gate.submit(WriteRequest("code", _T("app.py"), CLEAN),
                           commit=lambda: committed.setdefault("done", True),
                           assume_yes=True)
         self.assertTrue(out.committed)
@@ -57,14 +64,14 @@ class TestSecretBlock(unittest.TestCase):
     def test_secret_guard_hook_exit_codes(self):
         main = _hook_main()
         with contextlib.redirect_stderr(io.StringIO()):     # hook logs blocks to stderr
-            self.assertEqual(main(["--text", FAKE_SECRET, "--path", "/app.py"]), 2)
+            self.assertEqual(main(["--text", FAKE_SECRET, "--path", _T("app.py")]), 2)
             self.assertEqual(main(["--text", CLEAN]), 0)
 
 
 class TestTrustDial(unittest.TestCase):
     def test_read_only_tool_cannot_write(self):
         gate = WriteGate(trust=TrustPolicy({"linter": READ_ONLY}))
-        out = gate.submit(WriteRequest("config", "/x.json", "value", tool="linter"),
+        out = gate.submit(WriteRequest("config", _T("x.json"), "value", tool="linter"),
                           assume_yes=True)
         self.assertFalse(out.committed)
         self.assertIn("read-only", out.reason)
@@ -72,17 +79,17 @@ class TestTrustDial(unittest.TestCase):
     def test_propose_only_tool_is_never_auto_approved(self):
         gate = WriteGate(trust=TrustPolicy({"agent": PROPOSE_ONLY}))
         # assume_yes is ignored for propose-only — an explicit decline blocks it
-        declined = gate.submit(WriteRequest("config", "/x.json", "value", tool="agent"),
+        declined = gate.submit(WriteRequest("config", _T("x.json"), "value", tool="agent"),
                                assume_yes=True, confirm=lambda _: False)
         self.assertFalse(declined.committed)
         # an explicit human yes lets it through
-        approved = gate.submit(WriteRequest("config", "/x.json", "value", tool="agent"),
+        approved = gate.submit(WriteRequest("config", _T("x.json"), "value", tool="agent"),
                                assume_yes=True, confirm=lambda _: True)
         self.assertTrue(approved.committed)
 
     def test_gated_write_tool_may_be_auto_approved(self):
         gate = WriteGate(trust=TrustPolicy({"agent": GATED_WRITE}))
-        out = gate.submit(WriteRequest("config", "/x.json", "value", tool="agent"),
+        out = gate.submit(WriteRequest("config", _T("x.json"), "value", tool="agent"),
                           assume_yes=True)
         self.assertTrue(out.committed)
 
@@ -91,11 +98,11 @@ class TestTrustDial(unittest.TestCase):
             ledger = AuditLedger.from_mokata_dir(d)
             gate = WriteGate(ledger=ledger,
                              trust=TrustPolicy({"linter": READ_ONLY}))
-            gate.submit(WriteRequest("config", "/x.json", "value", tool="linter"),
+            gate.submit(WriteRequest("config", _T("x.json"), "value", tool="linter"),
                         assume_yes=True)                                  # blocked
-            gate.submit(WriteRequest("code", "/app.py", FAKE_SECRET),
+            gate.submit(WriteRequest("code", _T("app.py"), FAKE_SECRET),
                         assume_yes=True)                                  # blocked: secret
-            gate.submit(WriteRequest("code", "/app.py", CLEAN),
+            gate.submit(WriteRequest("code", _T("app.py"), CLEAN),
                         assume_yes=True)                                  # approved
 
             decisions = [e.get("decision") for e in ledger.entries()

@@ -42,11 +42,26 @@ captured). Two sync `PreToolUse` hooks ship, and they differ in the **kind of bl
 | Sync hook | Matches | Kind of block |
 |---|---|---|
 | `mokata-hook secret-guard` | `Write` `Edit` `MultiEdit` `Bash` | **security** — **never** overridable |
-| `mokata-hook gate-guard` | `Write` `Edit` `MultiEdit` `NotebookEdit` | **methodology** (run-state) — **is** overridable: explicitly, re-confirmed, and on the ledger |
+| `mokata-hook gate-guard` | `Write` `Edit` `MultiEdit` `NotebookEdit` `Bash` (+ `Skill`, `Agent`/`Task`) | **methodology** (run-state) — **is** overridable: explicitly, re-confirmed, and on the ledger |
 
 Two **async** hooks ship alongside them: `mokata-hook session-start` (the SessionStart briefing)
 and `mokata-hook dirty-track` (a `PostToolUse` observability lane that records touched paths for
-the code graph's freshness check — it **always exits 0** and can never block). All four are wired
+the code graph's freshness check — it **always exits 0** and can never block). A third
+`PostToolUse` hook, `mokata-hook run-bind`, fires only after mokata's own `session_save` tool: it
+ties this Claude Code session to the run that call registered (also exit 0, never blocks). And
+`mokata-hook pre-compact` records this session's run position before Claude Code compacts the
+conversation; after the compaction the SessionStart briefing re-states that run, its phase and the
+gate that decides the next implementation write, and says whether anything moved — so a summarised
+session is told what still binds it instead of rediscovering it by being blocked. During a run,
+`mokata-hook subagent-start` and `mokata-hook subagent-stop` hold each subagent to a contract: a
+read-only subagent (`settings.subagents.read_only_types`, default `Explore` and `Plan`) is blocked
+from writing, a subagent may not start another past `settings.subagents.max_recursion_depth`, and
+the subagent must end with a `HANDBACK` report (status, summary, files, tests, open). One that
+does not is sent back once, then let go and recorded as `subagent_contract_unhonored` in the audit
+ledger. A session outside any run sees none of this. And `mokata-hook stop` / `session-end` (plus
+the pre-compact hook) draft one **session note** per session from mokata's record — never a memory
+until you accept it with `mokata memory harvest --approve <id>`. All of
+them are wired
 by `mokata setup claude` (on by default; `--no-hooks` opts out) or by the plugin — and **only
 Claude Code declares the `hooks` capability**, so on any other harness they are never wired and
 the run-state gates below enforce nothing.
@@ -134,12 +149,19 @@ mokata gate override no-code-without-failing-test --reason "<why>"
   arrest.
 - **Test files are always writable.** You must be able to write the failing test — RED is the
   *permission* to implement, not the prohibition.
-- **Ambiguity fails OPEN.** If two runs have state in one repo and neither is pinned, mokata will
-  not guess which window your edit belongs to, so **every run-state gate turns off** for that
-  window — and says so, once. Pin one with `MOKATA_SESSION_ID` to get enforcement back.
-- **A known hole, stated plainly:** the gate-guard matches `Write`/`Edit`/`MultiEdit`/
-  `NotebookEdit` but **not `Bash`** — a `sed -i` through the shell is not policed. (The
-  *secret*-guard does match `Bash`.)
+- **A pipeline you started waits for its run.** Typing `/mokata:brainstorm` (or Claude invoking the
+  brainstorm skill) tells mokata this session wants a tracked run. Until brainstorm registers it,
+  implementation writes in **that session** are blocked with the remedy (let brainstorm do its
+  step 1, or `/clear` to drop the pipeline). Other sessions are not affected, and the wait
+  expires after two hours.
+- **Parallel runs are policed separately.** Each session that started a pipeline is tied to the
+  run its own registration returned, so two windows running two pipelines in one repo each get
+  their own run's verdict.
+- **Ambiguity fails OPEN.** For a session that did *not* start a pipeline here, if two runs have
+  state in one repo and neither is pinned, mokata will not guess which window your edit belongs
+  to, so **every run-state gate turns off** for that window — and says so, once. Pin one with
+  `MOKATA_SESSION_ID` to get enforcement back.
+- **Shell writes, and their limit:** the gate-guard also reads `Bash`: every file a shell command writes that mokata can see (redirections, `sed -i`, `tee`, `cp`/`mv`, inline `python -c` writes, bare file names included) meets the same run-state gates as a `Write` to that file. During a run, a command whose writes mokata cannot read (`$VAR` or `$(…)` destinations, `eval`, `xargs`/`find -exec` running a writer, a heredoc into a shell, inline `node -e`-style code that writes) is refused with the reason; reads are never refused. What it does not police is a program it runs (`python -m unittest`, `make`): no command line says what those write.
 
 **The override (P14).** These are *methodology* gates, not security ones, so they are
 overridable — under exactly one discipline:

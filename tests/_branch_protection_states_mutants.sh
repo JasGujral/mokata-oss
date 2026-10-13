@@ -61,7 +61,7 @@ mutant() {
 # decorative and this file is the only thing that would have said so.
 
 mutant "A01 ★★ UNREADABLE collapses back into NOT PROTECTED — the §7g defect, restored" "$BP" \
-  '    return _corroborate(run, repo, branch, error)' \
+  '    return _corroborate(run, repo, branch, error, cache=cache, now=clock)' \
   '    return ProtectionVerdict(repo=repo, branch=branch, ok=False,
                              state=STATE_NOT_PROTECTED, failures=[error])' "$T"
 
@@ -132,9 +132,13 @@ mutant "C01 ★★ the unreadable refusal reuses the NOT-PROTECTED render — th
   '        return self._render_degraded() if self.ok else self._render_not_protected()' "$T"
 
 mutant "C02 ★ the degraded notice grows a PUT remedy" "$BP" \
-  '        lines.append(f"  This exemption EXPIRES with: {RESTORE_ROW}")' \
+  '        lines.append(f"  Bounded by the cache age limit ({PROTECTION_CACHE_MAX_AGE_HOURS}h): {RESTORE_ROW}")' \
   '        lines.append("  fix: gh api -X PUT repos/o/r/branches/main/protection --input -")
-        lines.append(f"  This exemption EXPIRES with: {RESTORE_ROW}")' "$T"
+        lines.append(f"  Bounded by the cache age limit ({PROTECTION_CACHE_MAX_AGE_HOURS}h): {RESTORE_ROW}")' "$T"
+# ⚠ A01 and C02 RE-QUOTED AT 0.0.22 A1 (option (b) — the last-read cache): `_corroborate` now takes
+# the cache and the clock, and the degraded notice's last line names the cache age bound instead of
+# an expiry. Same two properties graded; the four NEW cache refusals are graded by
+# tests/_a1_release_sh_converges_mutants.sh B01-B11.
 
 # ==== D. ★ THE DEGRADED PASS IS LOUD, DATED, AND DISTINGUISHABLE FROM A GREEN ==================
 

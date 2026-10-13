@@ -517,8 +517,8 @@ def unresolved_reason(res: RunResolution, *, flag: str = "--run") -> str:
 
 def _run_is_shipped(root: str, run_id: str) -> bool:
     """Whether `run_id` reached its terminal END-OF-RUN signal (`stage_enter: ship` in the progress-
-    event log — the strongest end-of-run evidence, since `STAGE_PASS`/a ship-completion event are
-    never written). B-LIFE keys retirement on SHIP, NOT the pipeline checkpoint: a complete
+    event log, or the ship-completion event `run_finished` that `/mokata:ship` records once the
+    human has landed the run — 0.0.22 C1). B-LIFE keys retirement on SHIP, NOT the pipeline checkpoint: a complete
     checkpoint means the spec emitted and the user is AT develop (active), which must keep its
     badge. Degrade-clean: any read problem reads as NOT shipped, so an unreadable run is shown
     (never wrongly retired).

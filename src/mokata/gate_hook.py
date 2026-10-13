@@ -138,6 +138,11 @@ GATE_SCOPE = "spec-scope"
 GATE_PHASE = "approach-approval"
 GATES: Tuple[str, ...] = (GATE_SPEC, GATE_TDD, GATE_SCOPE, GATE_PHASE)
 
+# RUN-REG (0.0.22 C1) — NOT one of the overridable `GATES`: it is the precondition that a session
+# which ASKED for a pipeline has a run to be checked against. There is no run to file an override
+# against yet, and the way out is to register (or `/clear` the pipeline), never to waive it.
+GATE_RUN_REG = "run-registration"
+
 # The run-scoped state keys this hook reads live on `run_resolver` (imported at the top of the
 # module), which is where RUN-ID-DRIFT put "what counts as a run" — the hook re-exports rather than
 # re-declares, so the candidate set the gate reasons about and the one the resolver scans cannot
@@ -202,6 +207,7 @@ class GateOutcome:
     gate: Optional[str] = None          # the gate that decided (None when nothing applied)
     overridden: bool = False            # allowed only because of a ledgered P14 override
     notice: Optional[str] = None        # a once-per-session note (never a block)
+    run_id: Optional[str] = None        # 0.0.22 C2 — the run whose state BLOCKED (blocks only)
 
     @property
     def exit_code(self) -> int:
@@ -335,10 +341,12 @@ def bash_command(tool_input: object) -> str:
 # the surface where disagreeing with the rest of mokata means enforcing one run's RED against
 # another run's editor.
 #
-# The hook deliberately does NOT pass a `session_id`. It has Claude Code's session id on stdin, but
-# the BOUND rung would then let a hook-written binding widen ENFORCEMENT beyond what the pin and the
-# registry can prove — a scope change this stage did not set out to make. Ambiguity still fails OPEN
-# with a once-per-session notice; that guarantee is untouched.
+# The hook still does NOT pass a `session_id` to THE resolver. It has Claude Code's session id on
+# stdin, but the general BOUND rung is written by SessionStart from a one-live-run GUESS, and letting
+# that widen ENFORCEMENT would police a second window by the first window's run. 0.0.22 C1 gives the
+# gate a narrower, PROVEN source instead: `run_intent.session_claim`, a binding only this session's
+# own registration can write (see `check_write`). Ambiguity without a claim still fails OPEN with a
+# once-per-session notice; that guarantee is untouched.
 
 
 def resolve_run(root: str, run_id: Optional[str] = None) -> "RunResolution":
@@ -495,7 +503,7 @@ def _pending_emit_proposals(root: str, run_id: str) -> list:
 
 
 def check_write(root: str, path: str, run_id: Optional[str] = None,
-                content: str = "") -> GateOutcome:
+                content: str = "", session_id: Optional[str] = None) -> GateOutcome:
     """THE decision: may this native write to `path` proceed? See the module docstring's table.
 
     Pure and total — it never raises and never writes. Every uncertainty (no root, no run, ambiguous
@@ -512,6 +520,24 @@ def check_write(root: str, path: str, run_id: Optional[str] = None,
                                  "failing test)")
     if not is_implementation_path(path):
         return GateOutcome(True, "not an implementation file")
+
+    # RUN-REG structural (0.0.22 C1, R-C1a option C) — THIS session's own claim comes first. A
+    # session that asked for a pipeline and whose registration came back is policed by exactly that
+    # run, whatever else the repo holds (parallel runs, Jas 2026-10-09); one that asked and has NOT
+    # registered waits. A session that never asked has no claim, and everything below is unchanged.
+    if session_id and run_id is None:
+        from .run_intent import CLAIM_BOUND, CLAIM_OPEN, session_claim
+        claim, claimed = session_claim(root, session_id)
+        if claim == CLAIM_OPEN:
+            return GateOutcome(
+                False,
+                f"{GATE_RUN_REG}: /mokata:brainstorm was started in this session, but no run is "
+                f"registered for it yet, so {os.path.basename(path)} has no run to be checked "
+                f"against. -> to unblock: let brainstorm do its step 1 (the `session_save` MCP "
+                f"tool with register=true), or /clear to drop the pipeline and edit by hand.",
+                gate=GATE_RUN_REG)
+        if claim == CLAIM_BOUND:
+            run_id = claimed
 
     run = resolve_run(root, run_id)
     if run.ambiguous:
@@ -543,6 +569,18 @@ def check_write(root: str, path: str, run_id: Optional[str] = None,
                 "turn enforcement on."),
         )
 
+    # SL.S3 (0.0.22 C2) — a BLOCK is stamped with the run whose state produced it, so the hook can
+    # record it as an IN-LOOP catch for that run. Allows are left untouched (nothing was caught).
+    out = _decide_for_run(root, path, run, content)
+    if not out.allowed:
+        from dataclasses import replace
+        out = replace(out, run_id=run.run_id)
+    return out
+
+
+def _decide_for_run(root: str, path: str, run: "RunResolution", content: str) -> GateOutcome:
+    """The run-state gates for a write in a RESOLVED run (split out of `check_write` at C2 so a
+    block can carry its run id). Same order, same verdicts."""
     store = StateStore(state_dir(root))
     has_approach = _exists(store, APPROACH_PREFIX, run.run_id)
     spec_data = _read(store, SPEC_PREFIX + run.run_id)
@@ -745,7 +783,7 @@ def notice_once(root: str, session_id: str, message: str) -> Optional[str]:
 
 
 __all__ = [
-    "BLOCK_EXIT", "GATES", "GATE_PHASE", "GATE_SCOPE", "GATE_SPEC", "GATE_TDD", "GateOutcome",
+    "BLOCK_EXIT", "GATES", "GATE_PHASE", "GATE_RUN_REG", "GATE_SCOPE", "GATE_SPEC", "GATE_TDD", "GateOutcome",
     "RunResolution", "APPROACH_PREFIX", "SPEC_PREFIX", "CHECKPOINT_PREFIX", "OVERRIDE_PREFIX",
     "MAX_SCAN_BYTES",
     "bash_command", "check_write", "find_mokata_root", "is_implementation_path", "is_test_path",

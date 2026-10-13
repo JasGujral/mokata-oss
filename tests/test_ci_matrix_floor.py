@@ -63,7 +63,13 @@ LEG_PROVENANCE = {
     ("windows-latest", "3.12", "present"): RUN_ON_THE_PR_GATE,
     ("ubuntu-latest", FLOOR, "present"): RUN_ON_THE_PR_GATE,      # added 0.0.16, cf2d265
     ("ubuntu-latest", FLOOR, "absent"): RUN_AT_TAG_ONLY,          # release.yml has always had it
-    ("windows-latest", FLOOR, "present"): NEVER_RUN,              # ★ added here, exercised nowhere
+    # Flipped at 0.0.22 B1, by decision and with the evidence: the mirror's first 0.0.21 CI run
+    # (PR #76, run 37310393789) executed all three Windows legs — they went RED, which is proof
+    # they ran — and PR #77's runs took them green. It has run on the PR gate since.
+    ("windows-latest", FLOOR, "present"): RUN_ON_THE_PR_GATE,
+    # ★ 0.0.22 B1 — MACOS-IS-THE-CUT-MACHINE-AND-HAS-NO-LEG. Added here, exercised nowhere: its
+    # first execution is on the mirror's next PR run, and a first red is the leg doing its job.
+    ("macos-latest", "3.12", "present"): NEVER_RUN,
 }
 
 #: Legs a human has run on a developer machine, via `scripts/floor-python.sh`. Kept SEPARATE from
@@ -308,11 +314,12 @@ class EveryLegSaysWhetherItHasEverRun(unittest.TestCase):
                          "a locally-exercised leg is not a leg ci.yml runs: %s"
                          % sorted(local - set(self.declared)))
 
-    def test_f_the_never_run_leg_is_the_windows_floor_leg(self):
+    def test_f_the_never_run_leg_is_the_macos_leg(self):
         """Named, so that a record which drifted into declaring everything safe reds. This is the
         one assertion here that would have to be EDITED the day the leg first goes green — which
-        is the point: the flip is a decision a human makes and records, not a state that decays."""
-        self.assertEqual([("windows-latest", self.floor, "present")],
+        is the point: the flip is a decision a human makes and records, not a state that decays.
+        (It was the Windows floor leg until 0.0.22 B1 flipped it with its run evidence.)"""
+        self.assertEqual([("macos-latest", "3.12", "present")],
                          [leg for leg, state in self.declared.items() if state == NEVER_RUN])
 
 

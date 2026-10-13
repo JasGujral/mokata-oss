@@ -178,9 +178,13 @@ def _run_one(task: Task, choice: ExecutionChoice, runner, reviewer, ledger,
         res = _execute(task, iso_task, runner, router, ledger)
     res.isolated = True
     if handback_cap is not None:
-        # F3: the parent receives a capped SUMMARY, not the sub-agent's raw context.
+        # F3: the parent receives a capped SUMMARY, not the sub-agent's raw context. H-3 (0.0.22
+        # D4): the HandbackReport when the subagent returned one; head+tail truncation otherwise.
         from ..govern import cap_summary
-        res.summary = cap_summary(res.output or res.summary, handback_cap).summary
+        from ..subagent_contract import parse_handback
+        report, _why = parse_handback(res.output)
+        text = report.line() if report is not None else (res.output or res.summary)
+        res.summary = cap_summary(text, handback_cap).summary
     if density is not None:
         # F4: density-compress the handback the parent absorbs — collapses blank-line
         # runs / duplicate lines / trailing whitespace, never content. OFF by default;

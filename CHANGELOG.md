@@ -10,6 +10,401 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.22] — 2026-10-11
+
+**The release where a run keeps one identity and its gates hold wherever the agent writes.** 0.0.22
+ships the half of the events programme that 0.0.21 named as missing — one run from registration to
+ship, a conversational run the phase gate binds, and review with a measured caught-at-review rate —
+and then closes the ways around the gates that this work exposed: a shell write now meets the same
+run-state gates as a `Write`, a gate's position is re-stated after compaction, a subagent works
+under a contract, and an agent can no longer delete or forge mokata's own run record. It adds
+`mokata ide`, a read-only review window. An independent verification pass ran against the built
+release and its findings are fixed under *Fixed*. **Several exit criteria are not met, or not yet
+demonstrated live**, and *Known limitations* names each one rather than rounding it up.
+
+⚠ **Claude Code 2.1.0 or newer is now the minimum.** Below it nothing fails loudly — the hook that
+would have fired simply does not — so `mokata doctor` names each feature that is off. See *Added*.
+
+⚠ **Two refusals are new and you may meet them.** A review recorded as passed while it raised a
+Blocking finding is refused, and in a session running a pipeline a shell command mokata cannot read
+is refused. See *Changed*.
+
+### Added
+
+- **One run identity from registration through ship.** `run_finished` is the ship-completion
+  event: `mokata progress finish --landing merged|pr|kept|discarded`, or the `run_finish` MCP tool.
+  It stamps `completed_at` and retires the run exactly as entering the ship stage does, and it
+  projects into the typed stream as `PhaseTransition(ship, finish)`. **It is never recorded
+  run-less:** with no run, or with several and none identifiably the caller's, it is refused
+  (`FinishRefused`, CLI exit 1) and nothing is written. The ship skill records the finish. The new
+  `progress_mark` MCP tool is the twin of `mokata progress mark`, with the same ambiguity refusal.
+- **A conversational run registers, and the gate waits for it — one claim per session, so parallel
+  runs each get their own gate.** When a session asks for `/mokata:brainstorm` — typed, or through
+  the model's own `Skill` call — mokata records a claim for that Claude Code session. Until the run
+  registers, an implementation write in that session is blocked as `run-registration`, with the way
+  out named. A new PostToolUse hook, `run-bind`, binds the session to the run id the MCP server
+  itself returned, so there is one identity, not two. A bound session is policed by exactly its own
+  run whatever else the repository holds. **Measured, parallel:** two sessions bound to two runs in
+  one repository got two different verdicts (`spec-persisted` and `no-code-without-failing-test`);
+  before this release the gate failed open for both. A session that never asked for a pipeline has
+  no claim and is not policed, as before. `run-registration` is not overridable.
+- **Review has a measured caught-at-review rate.** Every run-state gate block is now recorded as a
+  `gate_block` progress event keyed to the run whose state blocked, and as `GateDecision(block)` in
+  the typed stream — before this release no gate block was evented anywhere. A retried write counts
+  once. The review verdict carries its Blocking-finding count (`mokata progress record-review
+  --blocking N`, MCP `blocking=`), and `mokata progress review-status --caught` (MCP
+  `review_status`, field `caught`) prints what review caught against what the gates caught in the
+  loop, per run and across runs. ⚠ **A verdict without its count reads *not measured*, never 0**,
+  and "no review verdict", "nothing caught" and a percentage are three different lines. The figure
+  is informational: it never changes ship's exit code, and without `--caught` the output is
+  byte-identical.
+- **A gate's position survives compaction.** The gates were never at risk — every one reads
+  on-disk state — but the model was: after a summary it was not told which run it drives or what
+  will decide its next write. A `PreCompact` hook (`mokata-hook pre-compact`) now writes an anchor of
+  this session's run position, and on SessionStart `compact` or `resume` the briefing gains a
+  re-anchor block for **this session**: the run, the last stage entered, whether an approach, a spec
+  and a failing test are on record, **the verdict the gate gives the next implementation write**,
+  the overrides in force, and the rule to decide from the record rather than the summary. It says
+  whether anything moved since the anchor — unchanged, `MOVED (fields)`, or that no anchor was
+  recorded. An unclaimed session, `startup` and `clear` are byte-identical to before.
+- **A live repository block in the briefing, and a working set per run.** *"Repo now (live)"*
+  carries the branch, ahead/behind and modified/untracked files from one bounded `git status`
+  (1.5 s timeout); the configured test command, or *"no test command set — mokata will not guess"*;
+  and which of `CLAUDE.md`, `AGENTS.md` and `.claude/rules/` exist. At most 6 lines, and over
+  budget it is dropped **first**, with a notice, before anything could cut the gates or the rules.
+  `WorkingSet` derives every reference from its owner on each read and persists only what nothing
+  else holds — the files a session touched and its notes — keyed to the session's bound run. It is
+  surfaced on the `working_set` MCP tool, `mokata progress working-set [--note]`, the re-anchor
+  block and the session bundle.
+- **One context budget: `settings.context`.** `briefing_tokens` (default 2000, range 200..8000),
+  `turn_tokens` (300, 0..2000), `briefing_rules_lines` (12, 0..40), `turn_rules_lines` (4, 0..12),
+  `turn_top_k` (5, 1..50) and `live_lines` (6, 0..10; 0 turns the live block off). The defaults are
+  the constants that shipped before. **A bad value is refused, not clamped:** the default is used
+  and the briefing names the key, why, and the fix (`mokata config set settings.context.<key> <n>`).
+  The re-anchor block and the MCP reachability warning are now counted **inside** the briefing
+  budget; before this release they were appended after the budget had been checked.
+- **A subagent contract.** New SubagentStart and SubagentStop hooks. Each subagent started in a
+  pipeline session gets a contract: its session's own run, its type, whether it is read-only
+  (`settings.subagents.read_only_types`, default `Explore` and `Plan`) and a depth limit
+  (`settings.subagents.max_recursion_depth`, default 1, range 0..3; 0 means no subagents in a run).
+  The gate-guard enforces it on the subagent's own calls — a read-only subagent's write is blocked,
+  and so is a spawn past the depth — and every refusal is ledgered as `subagent_contract_unhonored`.
+  A subagent is asked to end with a **`HANDBACK` report** (status · summary · files · tests · open).
+  With no readable report it is sent back **once**; on the second stop it is let go and the gap is
+  ledgered, never a loop. A Claude Code that omits the final message has the gap recorded as the
+  harness's own and nothing is sent back. A session in no run sees none of this.
+- **Session notes, drafted and accepted by a person: `mokata memory harvest`.** Stop, PreCompact
+  and SessionEnd each rewrite one draft note per pipeline session from mokata's own record — the
+  stage reached, files touched, in-loop catches, subagent handbacks, the review verdict, notes, and
+  the model's last message, truncated. The note is bounded to 900 characters and no model is called
+  inside a hook. **A draft is not a memory:** `mokata memory harvest` lists the drafts, `--approve
+  <id>` saves one as an `episodic` memory through the human gate (it asks, scans for secrets and
+  ledgers the write) and `--reject <id>` drops it. A decided draft is not proposed again unless the
+  session did more. The briefing says when notes are waiting, inside the budget.
+- **`mokata ide`: a read-only review window** (`pip install "mokata[ide]"`, and `/mokata:review-window` from
+  inside a session). It shows the live diff of the working tree against `HEAD`, uncommitted and
+  untracked files included, updated as the record changes; the diff at **any point in time**, from
+  per-write snapshots in a content-addressed, deduplicated, capped store under
+  `.mokata/temp_local/snapshots/` (not git's object store) — the BEFORE taken at a session's first
+  allowed write to a file, the AFTER at every native write; what each **session** changed, one row
+  per session with its run; a branch compare; and a GitHub PR by URL, which refuses a foreign
+  `origin` before any fetch and fetches with your own git login, storing no token. `/mokata:review-window`
+  opens the window, or re-focuses the running one on the session that asked: one server per
+  repository. Started from a session, the server exits after 30 idle minutes; `--foreground` keeps
+  it in the terminal. Every section has an empty state, and `mokata ide --demo` serves a SAMPLE
+  dataset in which every payload carries `sample: true` and the page shows a SAMPLE banner, so the
+  sample can never pass for real data. **Security baseline, tested:** loopback only, with no bind
+  option; a per-launch token exchanged at `/pair` for an HttpOnly, SameSite=Strict cookie, compared
+  in constant time; the Host header checked on every request and Origin on every POST; a fixed
+  static file set under a strict CSP; realpath containment on every read, with `.mokata/` excluded;
+  and repository text inserted with `textContent` only. The `[ide]` extra declares `starlette`,
+  `uvicorn` and `sse-starlette`, all three of which already arrive with mokata's `mcp` dependency.
+- **The minimum Claude Code version is derived and checked.** **2.1.0**, the newest of the hook
+  features mokata depends on (tool hooks firing inside subagents). `mokata doctor` raises
+  `claude-code-too-old` naming each feature that is off below it, and stays silent when Claude Code
+  is absent or new enough.
+
+### Fixed
+
+- **One subagent is one finish, even when mokata's hooks are wired twice.** With the plugin
+  installed and `mokata init`'s project hooks also in place, Claude Code runs each hook twice; a
+  subagent's finish was recorded twice (measured in a live headless session). It is now recorded
+  once. Gate blocks were already counted once per blocked write.
+
+- **Every command-only slash command was missing in current Claude Code.** A plugin command file
+  named `skill.md` stops Claude Code from registering the plugin's other command files, so
+  `/mokata:version`, `/mokata:tour`, `/mokata:menu`, the review window and every other command
+  without a matching Agent Skill answered *Unknown command* (measured on Claude Code 2.1.296: with
+  the file present the plugin's commands are not invocable; renamed, they are). The authoring
+  command is now **`/mokata:skill-author`**. The review window's command is
+  **`/mokata:review-window`**, so it can never meet Claude Code's own built-in `/ide`.
+
+- **A shell write walked around every run-state gate.** The gates returned before reading a Bash
+  command, so `sed -i … src/app.py` passed where a `Write` to the same file was blocked. Every
+  destination the parser sees now meets **the same run-state gates as a `Write`**, with the same
+  verdict and the same message — bare file names and a literal `cd` included. `touch` now counts as
+  a write.
+- **The event publisher inferred where it left off from the team's table.** It now keeps its own
+  high-water mark per (namespace, DSN), keyed by a SHA-256 of the pair so **the DSN never reaches
+  disk**, and anchored to the local store's first event so a rebuilt `events.db` starts over rather
+  than reading new events as already sent. A team table already holding a higher sequence under
+  this actor name — a second machine — no longer hides this machine's events or refuses: the team's
+  rows are never asked where this machine got to. A missing, unreadable or foreign mark resumes from
+  the start **and says so**. ⚠ **So the first publish after upgrading re-sends from the start**;
+  the team table is idempotent on (namespace, event id), so a re-send is a deduplicated insert and
+  never a skip.
+- **Found by an independent verification of this release, and fixed before the cut.** Each is
+  pinned by a test that replays the verifier's own shape:
+  - **The shell lane had bypasses, and false refusals.** In two passes, 21 and then 23 command
+    shapes wrote `src/foo.py` while a `Write` to it was blocked — newlines and grouping,
+    `if`/`for`/`!`, functions, command and process substitution, wrappers (`timeout`, `nice`,
+    `busybox`, `bash -c`, `command -p`, `watch`, `uv run`), copying into a directory, `cp -t`,
+    `sort -o`, `curl -o`, `git checkout` and its relatives (`checkout-index`, `apply`, `am`,
+    `stash pop`, `reset --hard`), `patch`, `gawk -i inplace`, versioned interpreters and inline
+    Python, Perl and Deno. All are blocked now. In the other direction, 24 read-only commands were
+    refused during a run — `awk` comparisons, a computed `cd`, `xargs grep`, heredocs, `grep '>'`,
+    `--version`, a quoted `>` in a test expression — and all pass now.
+  - **mokata's own run record is no longer agent-writable, in any session.** An agent tool call
+    that would write, delete or move `.mokata/temp_local/state/` is blocked as `own-record`:
+    `rm -rf .mokata`, `git clean -fdx`, an appended event, and the same through a variable, a glob,
+    braces or another interpreter. Deleting that state removed the run and opened every run-state
+    gate; appending a `subagent_finished` event could forge an observed independent review. Reading
+    the record stays allowed, and the plans folder a skill writes stays writable.
+  - **Read-only subagents:** a delete and a tree-rewriting git command (`git checkout --`,
+    `git reset --hard`, the `git -C` and `git -c` forms, `git fetch`, `tar x`) are writes; read
+    forms such as `git branch -a`, `git stash list` and `git config user.name` pass.
+  - **The re-anchor's next-write line is the gate's own verdict.** It had been derived by a ladder
+    that got an open spec amendment, an override in force and a finished run wrong.
+  - **A small budget no longer cuts the re-anchor away.** At `briefing_tokens` 200 to 700 the whole
+    block was dropped; it now survives, and one larger than the budget keeps its head.
+  - **A gate block in a session holding no claim is not credited to another run.** It is still
+    policed by the repository's only run; it no longer counts as that run's in-loop catch.
+  - **The working set records repository paths only**; outside paths and control characters are
+    dropped.
+  - **`mokata ide`:** a symlink out of the repository or to a device is never read, and the "now"
+    side of a point-in-time diff does not follow a swapped-in symlink; a FIFO cannot hang the
+    reader; the PR `origin` check is exact, not a substring (`acme/widgets-evil` and
+    `github.com.evil.com` are refused, before any fetch); a ref can never be a git option
+    (`-O…`, `--output=`); the launcher's API requires a valid token header and the page cannot be
+    framed (`frame-ancestors 'none'`, `X-Frame-Options: DENY`); `/mokata:review-window` and
+    `/mokata:brainstorm` match only the whole command, so `/mokata:brainstorm-lite` opens no claim;
+    on Linux and macOS a launch takes a per-repository lock, so two at once start one server; and
+    switching between
+    `--demo` and real data leaves one server and hands out the right link.
+  - **The session harvest re-proposed a decided draft after a chat-only turn.** Its digest included
+    the model's last message, which changes every turn; it is now taken over the record alone.
+- **MCP `duration_ms` was measured with a ~15.6 ms clock on Windows.** Both ends now use
+  `time.perf_counter`.
+- **git and gh output was decoded with the locale.** Four readers now decode UTF-8, with
+  replacement. An AST sweep reds on any new git or gh call that sets
+  `text=True` without an encoding.
+
+### Changed
+
+- **An unobserved "independent" review is credited as inline.** `independent=true` on a verdict was
+  a claim nothing observed. The ship gate now derives `observed` — a subagent of the run finished
+  at or before the verdict — and exposes it on MCP `review_status`. A claim nobody observed still
+  ships, as an inline review does, with the message *"review passed (inline — independence claimed,
+  but no subagent of this run was observed)"*. A subagent finishing after the verdict does not
+  count. A harness that cannot observe subagents reads every review as inline.
+- **A review verdict cannot contradict its own Blocking count.** A PASS that raised a Blocking
+  finding, and a FAIL that names none, are refused on the library, the CLI and the MCP tool alike,
+  so ship can never accept a verdict its own count contradicts. With no count there is no check.
+  This was the one practice adopted from a survey of three review guides (Conventional Comments,
+  Google's engineering practices, Anthropic's `code-review` plugin, the last used for ideas only
+  because it carries no licence statement); the rest were declined with reasons.
+- **A shell command mokata cannot read is refused while a run is in progress.** In a session with
+  an open or bound claim, a command that may write somewhere mokata cannot place is refused as
+  `bash-unreadable`, with the reason and the way out (use Write/Edit, or name the file literally),
+  and the refusal counts as an in-loop catch. The shapes refused are the eight parser blind spots,
+  plus `find -delete`, `| sh`, `awk` writing and `cd "$D"`. **Reads are never refused.** A session
+  in no run sees nothing new here — the `own-record` guard above is the one rule that applies in
+  every session. A read-only subagent treats an unreadable command as a write.
+- **Containment is on for every gated write the agent makes.** With no workspace supplied, the
+  write gate now uses its own two — the process's working directory and the repository its ledger
+  lives in — and refuses a write outside both. A destination a person typed at the CLI is not
+  contained, so `--out ~/elsewhere.json` still works; the same flow through MCP is contained. One
+  named allowance covers writes to a harness's **configuration** (`~/.claude.json`, Claude Code's
+  settings, skills, commands and agents, and other harnesses' user directories) and nothing else.
+  **`mokata setup`'s config writes** (`.mcp.json`, `settings.json`, `~/.claude.json`) now pass
+  SELF-PROTECT and containment before writing; a refusal raises `ConfigWriteRefused` and nothing is
+  written.
+- **Output density is on by default.** `settings.governance.output_density: false` turns it off.
+- **More hooks are wired.** `mokata setup claude` and the plugin now wire `PreCompact`,
+  `SubagentStart`, `SubagentStop`, `Stop`, `SessionEnd` and the PostToolUse `run-bind` hook, and the
+  gate-guard matcher is `Write|Edit|MultiEdit|NotebookEdit|Bash|Skill|Agent|Task`.
+- **`mokata branch-protection-check`: the degraded pass needs corroboration, and four exit codes
+  are new.** When the protection endpoint cannot be fully read, the boolean alone no longer passes.
+  Exit **3** (degraded pass) now needs a cached full document, at most 24 h old, that agrees; a
+  cache MISS exits **4**, a cache that DISAGREES **5**, one TOO OLD **6** and one UNUSABLE
+  (corrupt, another repository, no or a future timestamp) **7** — and each of those refuses. The
+  cache lives under `$XDG_CACHE_HOME/mokata/branch-protection/` (default `~/.cache/…`), is written
+  only after a successful full read, and a `404 Branch not protected` clears it. Maintainer-facing.
+
+### Removed
+
+- `STAGE_PASS` — defined since 0.0.16 and written by nothing; `run_finished` replaces it.
+- `SharedEventLog.max_local_seq`, `pointer_is_ahead`, and the publisher's `pointer-ahead` and
+  `pointer-stuck` refusals — their cause is gone. `local-unreadable` stays.
+- The boolean-only branch-protection pass. Pre-1.0, scaffolding is deleted rather than deprecated.
+
+### For contributors
+
+None of this changes the published package.
+
+- **A release re-run converges from the remotes.** `release.sh` posts a `mokata/release-preflight`
+  commit status on the development repository at `HEAD` once all three preflights have passed there
+  and master is at origin, and a re-entry skips the preflights only when that status is `success`
+  and names exactly `HEAD`. Master already at origin, the release branch already on the mirror at
+  this commit, and all four tags already published each skip their confirm. There is no skip flag
+  and no environment override, and the cheap gates re-run every time. ⚠ A re-run stopped before
+  master was pushed still pays the preflight once: no remote fact can vouch for an unpushed commit.
+  Posting the status is a new credentialed write.
+- **A closed PR's reason is read from GitHub, not inferred** — branch deleted, closed by an actor,
+  or unreadable. A PR closed by a branch deletion whose branch is back now offers a **new** PR
+  behind a confirm (`CLOSED-BRANCH-REPUSHED`); an unreadable reason refuses
+  (`CLOSED-REASON-UNREADABLE`). The false *"re-push the branch, which re-opens the PR"* is gone.
+- **The mirror sync fast-forwards behind a typed yes.** On a diverged release branch,
+  `sync-public.sh` reads origin's live head and, when it is an ancestor, offers a commit and a
+  fast-forward push — never a force; anything else refuses. The delete-the-branch remedy, which
+  closed PR #76 at the 0.0.21 cut, is gone, and the CI wording is derived from the run's conclusion
+  (`GREEN`, `RED`, `UNKNOWN`) instead of asserting green.
+- **A blocking `macos-latest` leg on the public mirror**, which refuses with exit 1 anywhere else
+  (a red, never a skip). The Windows floor leg's record now says it runs on the PR gate, with the
+  0.0.21 runs as evidence.
+- **`scripts/internal_suite.py`, the internal-tooling suite's recorded local gate.** It derives the
+  guarded classes (62 classes, 291 tests on this tree), runs exactly those, refuses on any failure
+  **or skip**, and prints one record line for the cut checklist. It is a local gate, not a runner.
+- **A weekly order-independence seed on the mirror** (`order-seeds.yml`, Thursdays 04:43 UTC), its
+  seed derived from the ISO year and week so it replays, its log uploaded whatever the outcome.
+- **One comment-stripping reader** (`tests/_code_lines.py`) replaces ten private copies, and a sweep
+  reds on a new one.
+- **The mutant drivers' contract grew teeth.** Every windowed driver refuses a non-integer window
+  with exit 3 instead of grading everything; `mutate.sh` refuses with exit 8 when a snapshot already
+  exists rather than overwriting it, and a run that found the lock busy no longer touches the
+  holder's snapshot; a header that claims mutants it never writes reds (three did); and a mutant
+  label containing a backtick or `$(` reds, after eleven labels were found running a command
+  substitution.
+- **Every workflow job that runs the suite installs its requirements**, by a lint over all
+  workflows; `quality-at-scale`, both live-database jobs and `real-crg` were missing them. The
+  precut runs a touched integration test the way `release.sh` does, and a short file stem that
+  would select more than 20% of the suite is dropped for exact tokens. The idempotent-DDL predicate
+  had four holes, each closed.
+
+### Re-scheduled
+
+The v0.0.21 notes published three commitments naming **0.0.22**, each with a tracking key.
+`B-LIFE-FU` and `REVIEW-LIB-SWEEP` shipped (see *Added*). The third shipped in part:
+
+- **The CI ceiling re-derived from the public mirror.** The v0.0.21 notes said it was, with the
+  internal-tooling suite's recorded local gate, re-scheduled to **0.0.22** (tracked as `INTERNAL-ONLY-TESTS-RUN-ON-NO-RUNNER`).
+  The gate shipped (see *For contributors*); no stage of this release built the ceiling half.
+  **These notes name no new release for it.** Contributor-facing.
+
+### Not in this release
+
+Planned work that did not ship. None was promised in published notes. **These notes name no release
+for any of them**: each is tracked, and none has work booked against a release yet.
+
+- **A cross-turn read cache** (`ReadCache`, half of `HP.S6`). Not built, on evidence: it saves
+  tokens only if a PostToolUse hook can replace what the model sees, and Claude Code is reported to
+  ignore a hook's replacement output for its built-in tools. Building it would have shipped a cache
+  that saves nothing.
+- **The editing half of `mokata ide`.** This release's slice is read-only by decision
+  (2026-10-11). The editor, its go/no-go spikes, the approval-channel threat model and the question
+  to Anthropic about `claude -p` move with the editing work.
+- **Two Windows-only test skips** (`test_a28`'s symlink/mode case and the floor no-route case),
+  which need a Windows host to grade. Contributor-facing.
+
+### Known limitations
+
+- **After a run ships, its spec scope keeps applying.** A session bound to a finished run is still
+  policed by that run, and in a repository holding a single run every session is — so a write
+  outside the shipped spec's scope is refused as `spec-scope`. Start a new `/mokata:brainstorm` for
+  further work; it opens a new claim and binds the session to the new run. This is deliberate:
+  letting a finished run release the gates would let an agent end a run to escape them.
+- **Read-only subagents are not judged on MCP tool calls.** The gate-guard matcher covers
+  `Write|Edit|MultiEdit|NotebookEdit|Bash|Skill|Agent|Task`, so a third-party MCP server's write
+  tool can write from an `Explore` subagent.
+- **The shell lane reads commands; it does not run them.** A program mokata runs by design —
+  `python script.py`, `make`, `npm test` — is not inspected, because policing it would mean refusing
+  to run the tests; inline code is in scope, because there the agent is the author. A command mokata
+  cannot read is refused while a run is in progress, so a false refusal costs one rephrase. The
+  parser remains a heuristic over a Turing-complete language.
+- **An agent id outside `^[A-Za-z0-9_-]{1,80}$` gets no subagent contract**, so that subagent is
+  not policed as read-only and has no depth limit.
+- **A conversational run is bound only when a pipeline was asked for by name.** A brainstorm
+  protocol followed in chat with no `/mokata:brainstorm` and no `Skill` call opens no claim, so the
+  gate still reports *"no active mokata run — not policed"*. The `Skill` tool's input field name is
+  not documented; mokata reads `skill`, `command` and `name`, and an unreadable shape records no
+  intent — the old fail-open, never a block on a guess. **Edits made before any run is registered**
+  are still invisible to graph freshness's in-harness signal: the query process cannot see Claude
+  Code's session id (harness gap #25642), and closing it on mokata's side would mean reversing
+  per-session partitioning.
+- **`ReadCache` is blocked by the harness**, so per-turn reads are not de-duplicated (see *Not in
+  this release*).
+- **`mokata ide`'s bounds.** On Windows there is no launch lock (no `flock`), so two simultaneous
+  `/mokata:review-window` can start two servers. The snapshot store's first-write index is not locked under
+  concurrent writes, and pruning — once the timeline passes 22,000 entries it keeps the newest
+  20,000 — can drop a session's BEFORE. Shell writes are not snapshotted (no hook sees their
+  result), though the live diff still shows them. The window has not yet been run on a real Mac.
+- **The new hook surfaces have not been checked in a live Claude Code session.** The re-anchor after
+  a real `/compact`, the subagent contract with a real subagent, the shell lane, the session harvest
+  and `/mokata:review-window` are tested by driving the real hook entry points with the documented payloads.
+  That is not the same evidence as a session.
+- **This release's exit criteria are not all met, and the ones that are not are listed here rather
+  than rounded up.**
+  1. **A release re-run converging live is not yet demonstrated.** The mechanism is built and
+     graded against real git, local bare remotes and a stand-in for `gh`; four GitHub behaviours it
+     relies on are owed to the first real run, and this cut is that run.
+  2. **The events programme's last three clauses are built; one has a residue.** A ship-completion
+     event exists, and review has a caught-at-review rate. A conversational run registers so the
+     phase gate binds — when the pipeline was asked for by name (above).
+  3. **The `macos-latest` leg exists and blocks; it has not yet been seen to red** when the two
+     host-dependent fixes of 2026-10-04 are reverted. That reading needs a push to the mirror.
+  4. **Order-independence still stands at nine seeds of ten.** The tenth was run and its result
+     could not be read: the tool takes the first test-count line and sums every failure line, so a
+     failing test that embeds a whole inner run in its message pollutes the parse. Filed, not fixed.
+     The weekly seed job meets the same defect whenever a nested-suite test fails.
+  5. **Context discipline: two of four.** One context budget, with no second channel, is met and
+     tested. A gate surviving compaction is built and not yet checked in a live session.
+     **Per-turn context growth against a 0.0.21 baseline was not measured**, and no pass checked
+     that every degraded state names its remedy.
+  6. **The IDE criteria were written for an editing IDE and are not met as written.** The slice was
+     re-scoped to a read-only window on 2026-10-11. Its server-stack decision is recorded and not
+     signed; no performance medians were measured; the spikes moved with the editing work; no
+     400,000-line file was opened; there is no bundle to reproduce, because the page is hand-written
+     static files. The security cases are tested.
+  7. **CI did not run on the development repository during this release**, by the same decision as
+     0.0.21: its Actions minutes were not restored, so that criterion is **not meetable**. The
+     public mirror's CI runs on every push and every PR.
+- **Graph freshness: two classes of edit are still not detected before the answer**, unchanged from
+  0.0.21. A source file in no baseline that git will not name — a `.ts` file under an ignored
+  directory is the shape — on every platform; and, on Windows only, a same-size content write that
+  restores the mtime (`tar -xp`, `cp -p`, `rsync --times`, `touch -r`), because `st_ctime` there is
+  the creation time. **On Windows, rebuild the code graph yourself after a restore or a vendor
+  drop.** The Windows class is now pinned by a test that reds if it ever closes. Bounds unchanged:
+  at most **500** drifted paths hashed per query, at most **5000** deletion records kept.
+- **The token estimate has still been measured once.** One live session: **415** API responses,
+  **5** calibratable, real output tokens at **1.552×** the `chars/4` estimate — an under-count of
+  about 55% if it holds. The budgets are unchanged. Five responses from one session is not a
+  distribution.
+- **Carried, unchanged.** **TypeScript is an optional extra** (`pip install 'mokata[graph-ts]'`) and
+  **plain JavaScript is not covered at all**. **The PostgreSQL floor is enforced and one dimension
+  of its evidence is manual** — no live leg has run against a below-floor server, and **PostgreSQL
+  16.13** is not a PostgreSQL 14. **The embedder still costs ordering** (**−0.81pp** MRR@10 at
+  100,000 items). **The Windows notification sound is called, not verified**, and the Windows toast
+  does not exist. **On Linux, an MCP gated write with no audio player makes no sound**
+  (`settings.ux.notify_audio false` stops it asking). **`LISTEN`/`NOTIFY` does not survive a
+  transaction-mode pooler**; `mokata events` prints which state your DSN is in.
+- **The branch-protection degraded pass is bounded, not closed.** Inside its 24 h window, a
+  protection detail weakened while protection stays on is invisible — only an administrator can make
+  that change, and the window is printed. And a fresh machine cannot cut during a protection
+  endpoint outage until one full read has succeeded. Maintainer-facing.
+- **The PR gate still takes 26–31 minutes against a target of under 10, and was not measured
+  again.** The figures stand from the 0.0.18 cut, with the unit suite at **91%** of the binding leg.
+  This release added tests again, so the number has not fallen. Contributor-facing.
+
 ## [0.0.21] — 2026-10-05
 
 **The release where governance decisions go on the record — and only that half.** 0.0.21 was

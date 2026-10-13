@@ -36,6 +36,7 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _code_lines import code_lines
 
 from mokata.repo_walk import CHECKOUT_MARKER
 
@@ -72,16 +73,9 @@ _BOUNDARY_FIND = re.compile(r"done\s*<\s*<\(\s*find\b[^)]*?-name\s+(\S+)")
 BOUNDARY_WALKS = 2   # (1) the exclude computation over SRC · (2) the guard over DEST
 
 
-def _code_lines(script_text):
-    """The script with whole-line comments removed. The file has to be able to DESCRIBE the
-    marker in prose (it does, at length) without that prose counting as a boundary walk."""
-    return [(n, ln) for n, ln in enumerate(script_text.splitlines(), 1)
-            if not ln.lstrip().startswith("#")]
-
-
 def boundary_find_sites(script_text):
     """`[(lineno, marker_token)]` for every checkout-boundary walk in `script_text`."""
-    return [(n, m.group(1)) for n, ln in _code_lines(script_text)
+    return [(n, m.group(1)) for n, ln in code_lines(script_text)
             for m in [_BOUNDARY_FIND.search(ln)] if m]
 
 
@@ -368,8 +362,8 @@ class TheDeleterDoesNotForceAndProvesWhereItIsPointing(
         lines bash would execute."""
         with open(self.sync_script, encoding="utf-8") as fh:
             code = fh.readlines()
-        offenders = [(n, ln.rstrip()) for n, ln in enumerate(code, 1)
-                     if "rm -rf" in ln and not ln.lstrip().startswith("#")]
+        offenders = [(n, ln.rstrip()) for n, ln in code_lines("".join(code))
+                     if "rm -rf" in ln]
         self.assertEqual([], offenders,
                          "a recursive force-delete is back in the executable body of "
                          "sync-public.sh; Jas's 2026-10-02 ruling was that this script does not "

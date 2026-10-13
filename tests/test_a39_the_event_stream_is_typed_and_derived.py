@@ -861,15 +861,17 @@ class TheProgressLogIsAbsorbedAsASuperset(unittest.TestCase):
         return ProgressLog(os.path.join(root, ".mokata", "temp_local", "state",
                                         "progress-events.jsonl"))
 
-    def test_enter_and_pass_become_phase_transitions_carrying_the_run(self):
-        from mokata.progress_events import STAGE_ENTER, STAGE_PASS
+    def test_enter_and_finish_become_phase_transitions_carrying_the_run(self):
+        """0.0.22 C1: `stage_pass` was a dead constant and is gone; the run's last transition is
+        the ship-completion event `run_finished`, projected as `(ship, finish)`."""
+        from mokata.progress_events import RUN_FINISHED, STAGE_ENTER
         root = a_repo()
         log = self._log(root)
         log.append_event(STAGE_ENTER, "develop", run_id="r1")
-        log.append_event(STAGE_PASS, "develop", run_id="r1")
+        log.append_event(RUN_FINISHED, "ship", run_id="r1", data={"landing": "merged"})
         rows = query(root, types=["phase_transition"])
         self.assertEqual([(r.data["phase"], r.data["outcome"]) for r in rows],
-                         [("develop", "enter"), ("develop", "pass")])
+                         [("develop", "enter"), ("ship", "finish")])
         self.assertEqual({r.run_id for r in rows}, {"r1"})
 
     def test_a_review_verdict_becomes_a_GATE_DECISION_and_the_distinction_is_the_point(self):
@@ -969,6 +971,7 @@ _PRINT_REGISTER = {
     "degrade.py": "the ONE stderr sink for every classed degrade notice (D5)",
     "deprecation.py": "the ONE stderr sink for deprecation/removal notices",
     "notify.py": "the ONE stderr sink for attention notifications",
+    "ide/server.py": "`python -m mokata.ide.server`'s install line on stderr — a process entry point (0.0.22 E2)",
     "memory/_sqlite.py": "the WAL-declined notice — once per process, loud by design",
     "session_flow.py": "note_persist_failure's loud, secret-safe warning (D5 added it)",
     "prompt.py": "the fail-closed refusals: stdin is not a TTY / unreadable, defaulting to No. "

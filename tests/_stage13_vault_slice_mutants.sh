@@ -119,7 +119,7 @@ mutant "B02 ***  the artifact vault's integrity refusal starts selling the migra
   '                f"serve it. Nothing was written and the stored file is untouched at "' \
   '                f"serve it. The vault is deprecated; migrate vault. Untouched at "' "$T13"
 
-mutant "B03 ***  the artifact vault stops verifying its content hash — `team join --vault` then
+mutant "B03 ***  the artifact vault stops verifying its content hash — \`team join --vault\` then
        accepts a tampered artifact from an untrusted teammate's repo" "$VLT" \
   '        if actual != entry.content_hash:' \
   '        if False:' "$T13"
@@ -132,7 +132,7 @@ mutant "B04 **   the surviving base class loses its read — every FILE transpor
 
 # ==== C. the user's data — BOTH kinds, and neither is destroyed =================================
 
-mutant "C01 ***  THE DEFECT THIS SLICE WOULD HAVE SHIPPED — `session list` drops the vault leg and
+mutant "C01 ***  THE DEFECT THIS SLICE WOULD HAVE SHIPPED — \`session list\` drops the vault leg and
        says nothing, so a user whose bundles are all in that store reads 'no shared bundles'" \
   "$COL" \
   '        _announce_removed_bundles(root)' \
@@ -188,7 +188,7 @@ mutant "C07 ***  the artifact user is handed the SESSION channel's removal notic
 # surface and `collab.py` ONE shared helper (`deprecation.answerable_choices`) instead of two
 # hand-written copies of the same rule. ⭐ The sweep found this pattern the moment the refactor
 # landed, which is the whole reason the sweep exists.
-mutant "D01 ***  `mokata migrate` stops accepting the removed channels — every one of them answers
+mutant "D01 ***  \`mokata migrate\` stops accepting the removed channels — every one of them answers
        argparse's 'invalid choice', on the command a year of notices told users to run" "$MIG" \
   '    p.add_argument("channel", choices=_choices,' \
   '    p.add_argument("channel", choices=(),' "$T13"
@@ -210,8 +210,8 @@ mutant "D03 ***  the metavar advertises the LIVE registry instead of what the co
 # surface and `collab.py` ONE shared helper (`deprecation.answerable_choices`) instead of two
 # hand-written copies of the same rule. ⭐ The sweep found this pattern the moment the refactor
 # landed, which is the whole reason the sweep exists.
-mutant "D04 ***  THE SECOND SURFACE, AND THE FIRST DRAFT OF THIS SLICE GOT IT WRONG — `--to/--from`
-       derive from the LIVE registry only, so `--to vault` answers 'invalid choice'" "$COL" \
+mutant "D04 ***  THE SECOND SURFACE, AND THE FIRST DRAFT OF THIS SLICE GOT IT WRONG — \`--to/--from\`
+       derive from the LIVE registry only, so \`--to vault\` answers 'invalid choice'" "$COL" \
   'STX_KINDS, STX_METAVAR = answerable_choices(_LIVE_KINDS)' \
   'STX_KINDS, STX_METAVAR = tuple(_LIVE_KINDS), "{%s}" % ",".join(_LIVE_KINDS)' "$T13"
 
@@ -260,18 +260,18 @@ mutant "E02 ***  the removed channel is dropped from IMPLEMENTATIONS instead of 
 
 # ==== F. E7 — the ruling ========================================================================
 
-mutant "F01 ***  THE MARKER GOES BACK TO THE RELEASE — a slipping `at=` then re-fires every repo
+mutant "F01 ***  THE MARKER GOES BACK TO THE RELEASE — a slipping \`at=\` then re-fires every repo
        to re-announce removals that did not change (E7's whole subject)" "$DEP" \
   '    marker = _marker_path(mokata_dir, "%s@removed-%s" % (channel, REMOVAL_FILED))' \
   '    marker = _marker_path(mokata_dir, "%s@removed-%s" % (channel, notice.removed))' "$T13"
 
 mutant "F02 ***  the frozen release is defaulted off the live constant again — history starts
-       tracking a mutable promise, and a moved `at=` re-dates removals that already happened" \
+       tracking a mutable promise, and a moved \`at=\` re-dates removals that already happened" \
   "$DEP" \
   '        remedy=_one_last_migration("obsidian"), removed="0.0.18"),' \
   '        remedy=_one_last_migration("obsidian"), removed=REMOVAL_RELEASE),' "$T13"
 
-mutant "F03 **   an unreadable `filed=` silently defaults instead of raising — which SILENCES a
+mutant "F03 **   an unreadable \`filed=\` silently defaults instead of raising — which SILENCES a
        removal notice rather than printing a wrong one, the quieter half of the same defect" \
   "$DEP" \
   '    if not _FILED.match(filed):

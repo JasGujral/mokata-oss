@@ -580,3 +580,69 @@ DECLARED_NONCONFORMING = {
     "docs/build/handoff/07-assertion-weight.sh":
         frozenset(set(CONTRACT) - {TOTAL_MATCHES_CALL_SITES}),
 }
+
+
+# ---- MUTANT-DRIVER-HEADER-OVER-CLAIMED-BY-FOUR's structural remedy (0.0.22 B2) ---------------------
+# doc 84 :746 — a driver header DESCRIBED 29 mutants while the file held 25, and `TOTAL=25` agreed
+# with the FILE, so `ran == TOTAL` could never see it: both numbers came from the same side. The
+# header's own claimed ranges (`R01-R04`) are the third number, and they are derived here.
+# doc 84 :723 — and a mutant WITHDRAWN as equivalent is the one legitimate gap, so a claimed id that
+# is absent must be NAMED in a `WITHDRAWN` note; an unnamed gap is the over-claim.
+_HEADER_RANGE = re.compile(r"\b([A-Z]{1,2})(\d{2})[–-]([A-Z]{0,2})(\d{2})\b")
+_CALL_LABEL = re.compile(r"""^\s*(?:mutant|equivalent)\s+["']([A-Z]{1,2}\d{2})""", re.M)
+_HEADER_LINES = 80
+
+
+def claimed_ids(text):
+    """Every mutant id a driver's header comment CLAIMS through an `X01-X04` range."""
+    head = "\n".join(ln for ln in text.splitlines()[:_HEADER_LINES] if ln.startswith("#"))
+    out = set()
+    for pre, a, pre2, b in _HEADER_RANGE.findall(head):
+        if pre2 and pre2 != pre:
+            continue
+        out.update("%s%02d" % (pre, i) for i in range(int(a), int(b) + 1))
+    return out
+
+
+def header_overclaims(corpus):
+    """`{driver: [ids]}` — ids a header claims that no call site defines and no WITHDRAWN note names."""
+    out = {}
+    for name, text in corpus.items():
+        defined = set(_CALL_LABEL.findall(text))
+        withdrawn = {i for i in claimed_ids(text)
+                     if re.search(r"\b%s\b[^\n]*WITHDRAWN|WITHDRAWN[^\n]*\b%s\b" % (i, i), text)}
+        missing = sorted(claimed_ids(text) - defined - withdrawn)
+        if missing:
+            out[name] = missing
+    return out
+
+
+_LABEL_OPEN = re.compile(r'(?m)^(?:mutant|equivalent) "')
+
+
+def label_substitutions(corpus):
+    """`{driver: [line numbers]}` — call-site LABELS that contain an unescaped backtick or `$(`.
+
+    0.0.22 C1 found it by running a driver: a label is a DOUBLE-quoted shell word, so a name in
+    backticks is a command substitution. `A04 ★★★ \\`max_seq\\` swallows …` executed `max_seq`,
+    printed *"command not found"*, and graded the mutant under a label with the name cut out —
+    and a label naming a command that DOES exist would run it. Eleven label lines across three
+    drivers had the shape. Escape it (\\`) or say it without the backticks."""
+    out = {}
+    for name, text in corpus.items():
+        bad = []
+        for m in _LABEL_OPEN.finditer(text):
+            j = m.end()
+            while j < len(text):
+                c = text[j]
+                if c == "\\":
+                    j += 2
+                    continue
+                if c == '"':
+                    break
+                if c == "`" or text.startswith("$(", j):
+                    bad.append(text.count("\n", 0, j) + 1)
+                j += 1
+        if bad:
+            out[name] = sorted(set(bad))
+    return out

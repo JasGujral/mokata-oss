@@ -448,7 +448,7 @@ def render_refusal(outcome: ProtectOutcome) -> str:
 # the point — an overclaimed guard is worse than a stated partial one.
 
 # Operator tokens, once `shlex` is told to treat shell punctuation as punctuation (below).
-_SEGMENT_SEPS = frozenset({";", "&&", "||", "|", "|&", "&", "\n", "(", ")", ";;"})
+_SEGMENT_SEPS = frozenset({";", "&&", "||", "|", "|&", "&", "\n", "(", ")", ";;", "()"})
 _OUT_REDIRECTS = frozenset({">", ">>", ">|", ">>|", ">&", "&>", "&>>"})
 _IN_REDIRECTS = frozenset({"<", "<<", "<<<", "<&"})
 # Character devices that a redirection may name. Writing to one creates and modifies NOTHING —
@@ -471,13 +471,28 @@ _FD_REDIRECTS = frozenset({">&", "&>", "&>>"})
 # Flags that carry sed/perl's SCRIPT, so the first bare operand is a FILE rather than the script.
 _EXPR_FLAGS = frozenset({"-e", "--expression", "-f", "--file", "--script"})
 _IN_PLACE_VERBS = frozenset({"sed", "gsed", "perl", "ruby"})
-_ALL_OPERAND_VERBS = frozenset({"tee", "truncate", "patch", "sponge"})
+_ALL_OPERAND_VERBS = frozenset({"tee", "truncate", "patch", "sponge", "touch"})
 _LAST_OPERAND_VERBS = frozenset({"cp", "mv", "install", "rsync", "ln", "rename"})
 _PY_VERBS = frozenset({"python", "python3", "python2", "py", "pypy", "pypy3"})
 _SHELL_VERBS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 # Words that PRECEDE the real verb (`sudo tee /etc/x`), skipped alongside any `VAR=value` prefix so
 # the verb is found. `dd of=…` is unaffected: `dd` is neither a prefix word nor an assignment.
-_PREFIX_WORDS = frozenset({"env", "sudo", "command", "nohup", "time", "doas", "nice"})
+_PREFIX_WORDS = frozenset({"env", "sudo", "command", "nohup", "time", "doas", "nice", "timeout",
+                           "stdbuf", "ionice", "busybox", "exec", "builtin", "unbuffer",
+                           "chronic", "caffeinate", "setsid", "flock", "watch", "strace",
+                           "xvfb-run", "coproc", "ltrace", "valgrind"})
+# Shell grammar that PRECEDES a command inside one segment (`{ sed -i …; }`, `if …; then sed …`,
+# `! sed …`) — transparent, like a prefix word (0.0.22 verification, D5-B).
+_KEYWORDS = frozenset({"{", "}", "!", "if", "then", "elif", "else", "while", "until", "do",
+                       "done", "fi", "esac", "function"})
+# Environment runners whose `run`/`exec` hands the rest of the line to another program.
+_RUNNERS = frozenset({"uv", "poetry", "pipenv", "pdm", "hatch", "rye", "conda", "pixi"})
+# Prefix words' flags that take a VALUE (`nice -n 5`, `timeout -s KILL 5`, `sudo -u bob`).
+_PREFIX_VALUE_FLAGS = frozenset({"-n", "-s", "-k", "-c", "-u", "-g", "-p", "-C", "-o", "-e",
+                                 "--signal", "--kill-after", "--user", "--group", "--chdir",
+                                 "--adjustment", "--class", "--classdata"})
+# Prefix words followed by ONE positional before the command (`timeout 5 cmd`, `flock f cmd`).
+_PREFIX_POSITIONAL = frozenset({"timeout", "flock"})
 
 # Literal write forms inside a `python -c` payload. Modes are checked for w/a/x/+.
 _PY_OPEN_RE = re.compile(
@@ -490,11 +505,17 @@ _PY_OSMUT_RE = re.compile(
     r"os\.(?:rename|replace)\(\s*[^,()]+,\s*(?P<q>['\"])(?P<path>[^'\"]+)(?P=q)")
 
 
+_VERSIONED_PY = re.compile(r"(python[23]?)(?:\.\d+)+\Z")
+
+
 def _basename_command(token: str) -> str:
-    """The verb, stripped of any path (`/usr/bin/sed` -> `sed`) and of a `.exe` tail."""
+    """The verb, stripped of any path (`/usr/bin/sed` -> `sed`), of a `.exe` tail, and of a Python
+    version (`python3.11` -> `python3`)."""
     parts = split_path(token)
     base = parts[-1] if parts else ""
-    return base[:-4] if _norm(base).endswith(".exe") else base
+    base = base[:-4] if _norm(base).endswith(".exe") else base
+    m = _VERSIONED_PY.match(base)
+    return m.group(1) if m else base
 
 
 def _is_flag(token: str) -> bool:
@@ -523,6 +544,113 @@ def _python_targets(code: str) -> List[str]:
     return out
 
 
+_HEREDOC_RE = re.compile(r"<<(-?)[ \t]*(?:'([^'\n]*)'|\"([^\"\n]*)\"|\\?([^\s;&|<>()]+))")
+
+
+# Shell operator characters that appear QUOTED or ESCAPED are literal text, not operators — but
+# `shlex` hands `'>'` back as the same token `>` an operator gives (0.0.22 verification: `grep -n
+# '>' src/app.py` was judged a write to app.py). `shell_lines` swaps them for private-use stand-ins
+# and `_tokenize` swaps them back, so a token is an operator only when the shell would read one.
+_LITERAL_OPS = {c: chr(0xE000 + i) for i, c in enumerate("<>|&;()")}
+_RESTORE_OPS = {v: k for k, v in _LITERAL_OPS.items()}
+_OPERATOR_TOKENS = frozenset({";", "&&", "||", "|", "|&", "&", "(", ")", ";;", "()", ">", ">>",
+                              ">|", ">>|", ">&", "&>", "&>>", "<", "<<", "<<<", "<&", "<<-"})
+
+
+def _literal(c: str) -> str:
+    return _LITERAL_OPS.get(c, c)
+
+
+#: Marks a token that is a quoted operator (`'>'`), so no rule can mistake it for the operator.
+LITERAL_MARK = "\u200b"
+
+
+def restore_literals(token: str) -> str:
+    text = "".join(_RESTORE_OPS.get(c, c) for c in token)
+    if text != token and text in _OPERATOR_TOKENS:
+        return LITERAL_MARK + text
+    return text
+
+
+def shell_lines(command: str) -> Optional[str]:
+    r"""The command as ONE line the tokenizer can segment — 0.0.22 verification, D5-A.
+
+    `shlex` with `whitespace_split` eats a newline as whitespace, so `echo hi\nsed -i … f` was ONE
+    segment whose verb was `echo`, and every write after the first line went unseen. Here, outside
+    quotes:
+      * a newline becomes `;` (a command separator, which is what it is to the shell);
+      * a backslash-newline is a continuation and joins the lines;
+      * a `# comment` (at the start of a word) is dropped to the end of its line;
+      * a heredoc BODY is dropped — it is the command's stdin, never shell syntax, so an apostrophe
+        in it (`don't`) is not an unbalanced quote and `usage: tool > f` in it is not a redirect.
+        The `<<WORD` operator itself stays, so "fed on stdin" is still seen.
+    None when a quote is left open (the caller's "unparseable")."""
+    out: List[str] = []
+    i, n = 0, len(command)
+    quote = ""
+    pending: List[Tuple[str, bool]] = []          # heredocs opened on the current line
+    while i < n:
+        c = command[i]
+        if quote == "'":
+            out.append(_literal(c))
+            if c == "'":
+                quote = ""
+            i += 1
+            continue
+        if quote == '"':
+            if c == "\\" and i + 1 < n:
+                out.append(c + _literal(command[i + 1]))
+                i += 2
+                continue
+            if c == '"':
+                quote = ""
+            out.append(_literal(c))
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            if command[i + 1] == "\n":
+                i += 2                              # continuation
+                continue
+            out.append(c + _literal(command[i + 1]))
+            i += 2
+            continue
+        if c in "'\"":
+            quote = c
+            out.append(c)
+            i += 1
+            continue
+        if c == "#" and (not out or out[-1][-1:] in (" ", "\t", ";", "&", "|", "(", ")")):
+            while i < n and command[i] != "\n":
+                i += 1
+            continue
+        if c == "<" and command.startswith("<<", i) and not command.startswith("<<<", i):
+            m = _HEREDOC_RE.match(command, i)
+            if m:
+                word = m.group(2) if m.group(2) is not None else (
+                    m.group(3) if m.group(3) is not None else m.group(4))
+                pending.append((word, bool(m.group(1))))
+                out.append(f"<<{m.group(1)} {word} ")
+                i = m.end()
+                continue
+        if c == "\n":
+            out.append(" ; ")
+            i += 1
+            for word, dash in pending:
+                while i < n:
+                    j = command.find("\n", i)
+                    line = command[i:] if j < 0 else command[i:j]
+                    i = n if j < 0 else j + 1
+                    if (line.lstrip("\t") if dash else line) == word:
+                        break
+            pending = []
+            continue
+        out.append(c)
+        i += 1
+    if quote:
+        return None
+    return "".join(out)
+
+
 def _tokenize(command: str) -> Optional[List[str]]:
     r"""Shell-like tokens, with OPERATORS as their own tokens.
 
@@ -549,12 +677,16 @@ def _tokenize(command: str) -> Optional[List[str]]:
     splitting and operator grouping are untouched. POSIX is deliberately left alone — there `\`
     really is the shell's escape (`/tmp/a\ b.py` is ONE file) and changing it would break real
     quoting, so this is platform-gated and POSIX tokenization stays byte-identical."""
+    command = shell_lines(command)
+    if command is None:
+        return None
     lex = shlex.shlex(command, posix=True, punctuation_chars=True)
     lex.whitespace_split = True
+    lex.commenters = ""                 # comments are removed by `shell_lines`, line-aware
     if os.name == "nt":
         lex.escape = ""
     try:
-        return list(lex)
+        return [restore_literals(t) for t in lex]
     except ValueError:
         return None                     # unbalanced quotes -> nothing to judge
 
@@ -594,6 +726,9 @@ def _split_redirects(tokens: List[str]) -> Tuple[List[str], List[str]]:
     destination under any rule, so dropping it can cost no target."""
     dests: List[str] = []
     words: List[str] = []
+    head = next((t for t in tokens if t not in _KEYWORDS), "")
+    if head in ("[[", "(("):
+        return [], list(tokens)              # `[[ a > b ]]` / `(( a > b ))` compare, never write
     i = 0
     while i < len(tokens):
         tok = tokens[i]
@@ -628,7 +763,7 @@ def _expr_flag(token: str) -> bool:
     return "e" in token[1:] or "f" in token[1:]
 
 
-def _in_place_files(operands: List[str]) -> List[str]:
+def _in_place_files(operands: List[str], bare: bool = False) -> List[str]:
     """The FILES an in-place editor rewrites — the script expression excluded.
 
     Measured bug, twice over: `sed -i 's/a/b/' f` puts the script in the first BARE operand and
@@ -651,49 +786,169 @@ def _in_place_files(operands: List[str]) -> List[str]:
             files.append(tok)
     if not saw_expr:
         files = files[1:]                       # the bare script expression
-    return [t for t in files if _looks_like_path(t)]
+    return [t for t in files if _is_target(t, bare)]
 
 
-def _segment_targets(tokens: List[str], depth: int) -> List[str]:
+def _is_target(token: str, bare: bool) -> bool:
+    """`_looks_like_path`, or — with `bare` (0.0.22 D5, the run-state lane) — any operand that is not
+    a flag. SELF-PROTECT keeps the conservative rule (its blocked trees always arrive with a
+    separator); the run-state gates need the bare name, because `sed -i … notes.py` in the repo is
+    exactly the write a blocked `Write` would have made."""
+    if _looks_like_path(token):
+        return True
+    return bare and bool(token) and not _is_flag(token)
+
+
+def segment_verb(words: List[str]) -> Tuple[str, List[str]]:
+    """`(verb, operands)` of one segment's command words: a leading `env`/`sudo`/… and any
+    `VAR=value` prefix skipped, the verb's path and `.exe` tail stripped. `("", [])` when empty."""
+    idx = 0
+    while idx < len(words):
+        w = words[idx]
+        if w == "function":
+            idx += 2                               # `function NAME { … }` — the name is no verb
+        elif w in _KEYWORDS:
+            idx += 1
+        elif w == "command" and idx + 1 < len(words) and words[idx + 1] in ("-p", "--"):
+            idx += 2
+        elif w in _RUNNERS and idx + 1 < len(words) and words[idx + 1] in ("run", "exec"):
+            idx += 2                               # `uv run python -c …`, `poetry run …`
+        elif w in ("npx", "bunx", "pnpx"):
+            idx += 1
+        elif _basename_command(w) in _PREFIX_WORDS:
+            prefix = _basename_command(w)
+            idx += 1
+            while idx < len(words) and _is_flag(words[idx]):
+                flag = words[idx]
+                idx += 1
+                if flag in _PREFIX_VALUE_FLAGS and idx < len(words):
+                    idx += 1                       # the flag's value
+            if prefix in _PREFIX_POSITIONAL and idx < len(words):
+                idx += 1                           # `timeout 5`, `flock <file>`
+        elif "=" in w and not _is_flag(w) and "/" not in w.split("=")[0]:
+            idx += 1                               # VAR=value
+        else:
+            break
+    if idx >= len(words):
+        return "", []
+    return _basename_command(words[idx]), words[idx + 1:]
+
+
+def shell_code(operands: List[str], letter: str = "c") -> Optional[str]:
+    """The inline code of `sh -c CODE` — combined flags included (`bash -ec`, `bash -lc`), the
+    0.0.22 verification's D5-D: only an exact `-c` was seen, so `bash -ec '…'` ran unread."""
+    for i, o in enumerate(operands):
+        if o.startswith("-") and not o.startswith("--") and letter in o[1:] \
+                and o[1:].isalpha() and i + 1 < len(operands):
+            return operands[i + 1]
+    return None
+
+
+def _segment_targets(tokens: List[str], depth: int, bare: bool = False) -> List[str]:
     out, words = _split_redirects(tokens)
     if not words:
         return out
     # Skip a leading `env`/`sudo`/`command`/`nohup` and any VAR=value prefix so the real verb is
     # found (`sudo tee /etc/x`, `FOO=1 sed -i …`).
-    idx = 0
-    while idx < len(words) and (words[idx] in _PREFIX_WORDS
-                                or ("=" in words[idx] and not _is_flag(words[idx])
-                                    and "/" not in words[idx].split("=")[0])):
-        idx += 1
-    verb = _basename_command(words[idx]) if idx < len(words) else ""
-    operands = words[idx + 1:]
+    verb, operands = segment_verb(words)
 
     if verb in _IN_PLACE_VERBS:
         long_ok = any(t == "--in-place" or t.startswith("--in-place=") for t in operands)
         short_ok = any(t.startswith("-") and not t.startswith("--") and "i" in t[1:]
                        for t in operands)
         if long_ok or short_ok:
-            out.extend(_in_place_files(operands))
+            out.extend(_in_place_files(operands, bare))
     elif verb in _ALL_OPERAND_VERBS:
-        out.extend(t for t in operands if _looks_like_path(t))
+        out.extend(t for t in operands if _is_target(t, bare))
     elif verb == "dd":
         out.extend(t.split("=", 1)[1] for t in operands if t.startswith("of="))
+    elif verb in _LAST_OPERAND_VERBS and target_directory(operands) is not None:
+        tdir = target_directory(operands)
+        if _is_target(tdir, bare) or bare:
+            out.append(tdir)
     elif verb in _LAST_OPERAND_VERBS:
         tail = [t for t in operands if not _is_flag(t)]
-        if tail and _looks_like_path(tail[-1]):
+        # A bare-name tail must have a source beside it (`cp a b`); a lone operand is not a dest.
+        if tail and _is_target(tail[-1], bare) and (len(tail) > 1 or _looks_like_path(tail[-1])):
             out.append(tail[-1])
     elif verb in _PY_VERBS:
-        for j, tok in enumerate(operands):
-            if tok == "-c" and j + 1 < len(operands):
-                out.extend(_python_targets(operands[j + 1]))
+        code = shell_code(operands)
+        if code is not None:
+            out.extend(_python_targets(code))
     elif verb in _SHELL_VERBS and depth < 1:
-        for j, tok in enumerate(operands):
-            if tok == "-c" and j + 1 < len(operands):
-                out.extend(bash_write_targets(operands[j + 1], depth=depth + 1))
+        code = shell_code(operands)
+        if code is not None:
+            out.extend(bash_write_targets(code, depth=depth + 1, bare=bare))
+    elif verb in _OUTPUT_FLAG_VERBS:
+        out.extend(t for t in _output_flag_files(verb, operands) if _is_target(t, bare))
+    elif verb == "git":
+        out.extend(t for t in git_path_writes(operands) if _is_target(t, bare))
     return out
 
 
-def bash_write_targets(command: str, depth: int = 0) -> List[str]:
+# Writers whose destination is a FLAG's value (0.0.22 verification, D5-F).
+_OUTPUT_FLAG_VERBS = {"sort": ("-o", "--output"), "curl": ("-o", "--output"),
+                      "wget": ("-O", "--output-document")}
+
+
+def _output_flag_files(verb: str, operands: List[str]) -> List[str]:
+    short, long_ = _OUTPUT_FLAG_VERBS[verb]
+    out: List[str] = []
+    for i, o in enumerate(operands):
+        if o.startswith(long_ + "="):
+            out.append(o.split("=", 1)[1])
+        elif o == long_ and i + 1 < len(operands):
+            out.append(operands[i + 1])
+        elif o.startswith("-") and not o.startswith("--") and short[1] in o[1:]:
+            rest = o[o.index(short[1], 1) + 1:]
+            if rest:
+                out.append(rest)                 # `-ofile`
+            elif i + 1 < len(operands):
+                out.append(operands[i + 1])      # `-o file`, `-sSLo file`
+    return out
+
+
+def target_directory(operands: List[str]) -> Optional[str]:
+    """`cp -t DIR …` / `--target-directory=DIR` — the destination is a flag, not the last operand."""
+    for i, o in enumerate(operands):
+        if o.startswith("--target-directory="):
+            return o.split("=", 1)[1]
+        if o in ("-t", "--target-directory") and i + 1 < len(operands):
+            return operands[i + 1]
+    return None
+
+
+_GIT_GLOBAL_VALUE = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace",
+                               "--exec-path", "--config-env"})
+_PATHISH = re.compile(r"/|\.[A-Za-z][\w]{0,7}\Z")
+
+
+def git_subcommand(operands: List[str]) -> Tuple[str, List[str]]:
+    """`(subcommand, its operands)` with git's GLOBAL options skipped — `git -C . reset`, `git -c
+    k=v commit` (0.0.22 verification: `-C`/`-c` hid the subcommand from both lanes)."""
+    i = 0
+    while i < len(operands) and operands[i].startswith("-"):
+        i += 2 if operands[i] in _GIT_GLOBAL_VALUE else 1
+    if i >= len(operands):
+        return "", []
+    return operands[i], operands[i + 1:]
+
+
+def git_path_writes(operands: List[str]) -> List[str]:
+    """Files `git checkout [REV] [--] PATHS` / `git restore PATHS` overwrite in the working tree.
+    Without `--`, an operand that looks like a path (a separator, or a file extension) is one."""
+    sub, rest = git_subcommand(operands)
+    if sub == "checkout":
+        if "--" in rest:
+            return [t for t in rest[rest.index("--") + 1:] if t]
+        plain = [t for t in rest if not _is_flag(t)]
+        return [t for t in plain if _PATHISH.search(t)] if len(plain) >= 1 else []
+    if sub == "restore":
+        return [t for t in rest if t != "--" and not _is_flag(t)]
+    return []
+
+
+def bash_write_targets(command: str, depth: int = 0, bare: bool = False) -> List[str]:
     """Every write DESTINATION this parser can see in a shell command, in order, deduped.
 
     Never raises: an unparseable command (unbalanced quotes) yields `[]` — nothing to judge — which
@@ -706,7 +961,7 @@ def bash_write_targets(command: str, depth: int = 0) -> List[str]:
         return []
     seen, out = set(), []
     for seg in _segments(tokens):
-        for target in _segment_targets(seg, depth):
+        for target in _segment_targets(seg, depth, bare):
             if target and target not in seen:
                 seen.add(target)
                 out.append(target)
@@ -730,5 +985,7 @@ def check_command(command: str, workspace_root: Optional[str] = None,
 __all__ = [
     "GATE_SELF_PROTECT", "RULE_INSTALLED", "RULE_MOKATA_INSTALL", "RULE_OUT_OF_ROOT",
     "ProtectOutcome", "bash_write_targets", "check_command", "check_target", "in_installed_tree",
-    "mokata_package_root", "render_refusal", "resolve_target", "workspace_root_for",
+    "git_subcommand", "mokata_package_root", "render_refusal", "resolve_target", "restore_literals",
+    "shell_code", "shell_lines",
+    "workspace_root_for",
 ]

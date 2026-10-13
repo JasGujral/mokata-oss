@@ -92,9 +92,10 @@ mutant "S3 boundary walks never found" "$T" \
     "$PAT"
 
 # S4 — comment stripping dropped, so the script's own prose about the marker counts as a walk.
-mutant "S4 comment stripping dropped" "$T" \
-    'if not ln.lstrip().startswith("#")]' \
-    "if True]" \
+# S4 re-aimed at 0.0.22 B2: the stripping now lives in the ONE shared reader, tests/_code_lines.py.
+mutant "S4 comment stripping dropped" "tests/_code_lines.py" \
+    '    return line.lstrip().startswith("#")' \
+    '    return False' \
     "$PAT"
 
 # S5 — the deleted-arm half. `marker_drift` reports offenders and cannot see an ABSENCE; only the

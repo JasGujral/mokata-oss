@@ -88,6 +88,10 @@ HARD_ERRORS = {
     # believed it had made. The whole point of a closed set is that admitting a kind is a reviewed
     # schema change — so an unrecognised one propagates and the write does not happen.
     "EdgeKindError",
+    # 0.0.22 C1 — a run finish with no run to key it to, or no landing named. HARD: there is no
+    # floor to fall to — a finish recorded run-less is one no reader can attribute, so it is not
+    # written and the caller says so (the CLI exits 1, the MCP twin returns `recorded: false`).
+    "FinishRefused",
     "GraphDegradedError", "LockTimeout",
     "ManifestError",
     "ManifestShareError", "MeasureFirstError", "MemoryDisabledError", "MemoryDocTooNew",
@@ -107,7 +111,7 @@ HARD_ERRORS = {
     # keeps working, which is what makes routing a producer a one-line change.
     "NotARepoName",
     "ReproRequiredError", "RevertError", "RootCauseRequiredError",
-    "SessionBundleError", "SetupError", "SkillNotFound", "SkillSourceError", "StackError",
+    "SessionBundleError", "SetupError", "ConfigWriteRefused", "HarvestError", "SkillNotFound", "SkillSourceError", "StackError",
     # MCP-R.D1d — a caller-side bad ARGUMENT on the MCP surface. Hard, not degraded: nothing fell
     # back to a floor and no weaker answer was substituted, the call simply did not run. It
     # propagates to `_serve`, which converts it to a `status:"refused"` result.
@@ -498,6 +502,10 @@ def _live_classes():
     from mokata import netguard, oslock, skills, stacks, teamdb, team_audit, team_journal, vault
     # CM.S5 (0.0.21 stage 11) — `SharedEventsUnavailable`, the shared event store's degrade.
     from mokata import team_events
+    # 0.0.22 C1 — `FinishRefused`, the run finish's hard refusal.
+    from mokata import progress_events
+    # 0.0.22 D6 — `HarvestError`, the session-harvest CLI's usage refusal.
+    from mokata import harvest
     from mokata import config, config_cmd, brainstorm, dsn, manifest, pipeline, plans, refine
     from mokata import agent_skills, harness_setup, session_bundle, session_transport, share
     # SIMP.S3 (0.0.18 stage 10) — `RemovedChannelError` lives here, beside the REMOVED registry
@@ -521,7 +529,8 @@ def _live_classes():
             authoring,
             graph_required, revert, secret_ignore, tdd,
             crg_client, query, backends, edges, embed, item,
-            migrate, reembed, mshare, store, vector, bug, debug, optimize, mcp_validation)
+            migrate, reembed, mshare, store, vector, bug, debug, optimize, mcp_validation,
+            progress_events, harvest)
     live = {"MokataError": MokataError}
     for mod in mods:
         for name in dir(mod):

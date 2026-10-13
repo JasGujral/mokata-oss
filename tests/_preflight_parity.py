@@ -36,6 +36,7 @@ cannot read raises `MissingParser` rather than returning anything at all.
 import os
 import re
 
+from _code_lines import code_text
 from _workflow_pins import MissingParser, safe_load  # noqa: F401  (MissingParser re-exported)
 
 # ---- verdicts --------------------------------------------------------------------------------
@@ -258,17 +259,60 @@ def suite_jobs_missing(ci_text, required="requirements/ci.txt"):
     return out
 
 
+_IMPORTS_THE_SUITE = re.compile(r"\bunittest\b|\bimport\s+_support\b")
+
+
+def _job_imports_the_suite(job):
+    """Whether any step of `job` loads a module under tests/ — and therefore `_support`, whose
+    `_provisioning` refusal exits 2 on an interpreter without PyYAML.
+
+    Read off the steps themselves: a `run:` that names `unittest` or `import _support`, from any
+    working directory. Wider than `_DISCOVER` ON PURPOSE: `quality-at-scale.yml` runs
+    `python -m unittest -v <module>` and its preflight runs `import _support`, and neither is a
+    `discover` — which is exactly why the per-job pin, reading ci.yml's discovers only, never saw it."""
+    return any(_IMPORTS_THE_SUITE.search(run) for run in _step_runs(job))
+
+
+def workflow_jobs_missing(workflows, required="requirements/ci.txt"):
+    """`[(workflow_name, job_id)]` — every job in EVERY workflow that imports the suite yet never
+    installs `required`.
+
+    🔴 `QUALITY-AT-SCALE-REDS-EVERY-WEDNESDAY-ON-THE-MIRROR` (0.0.22 stage A2). That row blamed the
+    scale gate; the gate is set (`MOKATA_QUALITY_SCALE: "1"`). The job installed only
+    `pip install -e .`, so its preflight's `import _support` hit `_provisioning` and exited 2 before
+    any test ran — `THE-FIRST-CI-RUN-SINCE-THE-REFUSAL-WAS-THE-CUT` ① in a file `suite_jobs_missing`
+    never reads. `live-db-legs.yml` (both jobs) and `real-crg.yml` had the same shape.
+
+    `workflows` is `{name: text}`, so a test can hand it the real directory or a planted offender."""
+    out = []
+    for name in sorted(workflows):
+        doc = safe_load(workflows[name])
+        if not isinstance(doc, dict) or not isinstance(doc.get("jobs"), dict):
+            continue
+        for job_id, job in doc["jobs"].items():
+            if not isinstance(job, dict) or not _job_imports_the_suite(job):
+                continue
+            installed = {m.group(1)
+                         for run in _step_runs(job) for ln in run.splitlines() if "pip install" in ln
+                         for arg in _DASH_R.findall(ln)
+                         for m in [_REQ_FILE.search(arg)] if m}
+            if required not in installed:
+                out.append((name, job_id))
+    return out
+
+
+def read_workflows(root):
+    """`{name: text}` for every `.github/workflows/*.yml` under `root`."""
+    d = os.path.join(root, ".github", "workflows")
+    out = {}
+    for name in sorted(os.listdir(d)):
+        if name.endswith((".yml", ".yaml")):
+            with open(os.path.join(d, name), encoding="utf-8") as fh:
+                out[name] = fh.read()
+    return out
+
+
 # ---- the release.sh side: parsed too ---------------------------------------------------------
-
-def _code_only(text):
-    """`text` with every whole-line `#` comment dropped.
-
-    Load-bearing, not hygiene: `run_test_preflight`'s body is more comment than code, and its
-    comments name the very files under pin ("Hash-pinned ... requirements/README.md"). A reader
-    that did not strip them would report the install present exactly when the install was gone.
-    """
-    return "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
-
 
 def preflight_body(release_text, function=PREFLIGHT_FUNCTION):
     """The BODY of the preflight function, comments stripped — or None if it cannot be located.
@@ -277,7 +321,7 @@ def preflight_body(release_text, function=PREFLIGHT_FUNCTION):
     `"$sub/requirements/jsonschema.txt"` thirty lines below, so a whole-file read would credit the
     preflight with an install performed by a different function against a different venv.
     """
-    body = _code_only(release_text)
+    body = code_text(release_text)
     start = body.find("%s() {" % function)
     if start == -1:
         return None
@@ -361,7 +405,7 @@ def preflight_functions(release_text):
     """
     if release_text is None:
         return ()
-    body = _code_only(release_text)
+    body = code_text(release_text)
     found = []
     for m in _SHELL_FUNCTION.finditer(body):
         end = body.find("\n}", m.start())

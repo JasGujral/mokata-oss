@@ -1,10 +1,10 @@
 """F4 — context compression / output-density mode.
 
-An OPTIONAL terse-output + tool-output compressor, off by default and toggled via
-settings (`settings.governance.output_density`). Compression is lossless-ish structural
+A terse-output + tool-output compressor, ON by default since 0.0.22 D3 (HP.S6), toggled via
+settings (`settings.governance.output_density`; set it false to turn it off). Compression is lossless-ish structural
 trimming: drop trailing whitespace, collapse runs of blank lines, drop consecutive
 duplicate lines, and squeeze internal whitespace — cutting tokens on verbose/tool output
-without changing default behaviour. Dependency-free.
+without changing its meaning. Dependency-free.
 """
 
 from __future__ import annotations
@@ -19,9 +19,10 @@ _WS = re.compile(r"[ \t]+")
 
 
 def density_enabled(manifest: Any) -> bool:
-    """True when output-density mode is toggled on (default: off)."""
+    """True unless output-density mode is turned OFF (HP.S6, 0.0.22 D3: the default flipped to on —
+    the compression is structural and lossless-ish, so the safe default is the cheaper one)."""
     gov = manifest.setting(GOVERNANCE_SETTINGS_KEY, {}) or {}
-    return bool(gov.get(DENSITY_KEY, False))
+    return bool(gov.get(DENSITY_KEY, True))
 
 
 def compress_output(text: str) -> str:

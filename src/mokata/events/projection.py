@@ -63,6 +63,11 @@ KIND_REGISTER: Dict[str, Tuple[Optional[str], str]] = {
     "decompose_fanout_guard": (GATE_DECISION, "the fan-out ceiling refusing a decomposition"),
     "spec_conflict": (GATE_DECISION, "spec-awareness refusing or flagging a conflicting touch set"),
     "rule_block": (GATE_DECISION, "the Sentinel enforcement gate blocking an action"),
+    "harvest_decision": (APPROVAL_DECISION,
+                         "a person accepted or rejected a drafted session note (stage D6)"),
+    "subagent_contract_unhonored": (GATE_DECISION,
+                                    "a subagent's contract refused or missed: a read-only write, a "
+                                    "spawn past the depth limit, or no HandbackReport (stage D4)"),
     "hook": (GATE_DECISION,
              "a PreToolUse hook's verdict — it carries `blocked` and an exit code, which is a "
              "gate decision reached in a different process"),

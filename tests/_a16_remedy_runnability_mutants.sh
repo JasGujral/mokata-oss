@@ -10,7 +10,8 @@
 # 🔴 THE SUBJECT IS `_removable_tools`, AND IT IS MUTATED IN BOTH DIRECTIONS. The row's whole
 # history is a rule that was widened once and was still wrong; the risk on this repair is the
 # mirror image — a rule widened so far it eats the floors. R01-R03 restore the old defect,
-# R04-R06 overshoot it, and each has a named question.
+# R04-R05 overshoot it, and each has a named question. (Said R04 to R06 until 0.0.22 B2's header
+# check: no R06 was ever written — MUTANT-DRIVER-HEADER-OVER-CLAIMED, the 746 class.)
 #
 #   R01-R03 ★ THE SUBJECT. Each puts back a version of the bug: the floor set typed from the
 #     current profile instead of the default, the floor filter dropped so nothing is removable,

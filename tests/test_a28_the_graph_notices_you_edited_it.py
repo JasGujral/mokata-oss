@@ -435,9 +435,8 @@ class TheBaselineIsADDITIVENow(unittest.TestCase):
         self.assertTrue(self._pass().fresh, "a touch is not a change")
         self.assertTrue(self._pass().fresh, "and it must not re-drift on the next pass either")
 
-    @unittest.skipIf(os.name == "nt", "st_ctime is the CREATION time on Windows and does not move "
-                     "on a content write — this class is DISCLOSED open there (freshness.py, the "
-                     "ctime clause), not claimed closed, so it is not graded there")
+    @unittest.skipUnless(F.CTIME_CLAUSE_CATCHES_A_RESTORED_WRITE,
+                         "POSIX arm; the Windows arm below grades the disclosed-open behaviour")
     def test_4_1_a_SAME_SIZE_edit_that_RESTORES_the_mtime_is_still_caught(self):
         """🔴 REVIEW FINDING 4-1 — a REAL content edit to a tracked, indexed, non-ignored `.py` read
         `fresh=True` with an EMPTY note. §7g: the same representation as a genuinely clean tree.
@@ -477,6 +476,43 @@ class TheBaselineIsADDITIVENow(unittest.TestCase):
         self.assertIn("a.py", out.changed,
                       "a real content edit read as a clean tree — the worst shape this module has")
         self.assertTrue(self._pass().fresh, "and it settles")
+
+    def _restored_same_size_write(self):
+        """The 4_1_a attack, shared by both platform arms: a same-size write with the mtime
+        restored, against a git whose stat cache trusts mtime + size alone."""
+        ab = os.path.join(self.root, "a.py")
+        _git(self.root, "config", "core.trustctime", "false")
+        os.utime(ab, (1700000000, 1700000000))
+        _git(self.root, "add", "-A")
+        _git(self.root, "commit", "-qm", "round mtime")
+        _git(self.root, "status")
+        self._pass()
+        with open(ab, "w", encoding="utf-8") as fh:
+            fh.write("def helper(x):\n    return x + 9\n")
+        os.utime(ab, (1700000000, 1700000000))
+        return self._pass()
+
+    @unittest.skipIf(F.CTIME_CLAUSE_CATCHES_A_RESTORED_WRITE,
+                     "Windows arm; the POSIX arm above grades the closed behaviour")
+    def test_windows_ctime_is_creation_time_the_class_is_DISCLOSED_open(self):
+        """WINDOWS-CTIME-IS-CREATION-TIME — graded, not skipped. On Windows the ctime clause cannot
+        see this write, and the disclosure says so. If this ever starts catching it, the
+        disclosure is now an under-statement: update `CTIME_CLAUSE_CATCHES_A_RESTORED_WRITE`, the
+        product doc and this test together."""
+        out = self._restored_same_size_write()
+        self.assertNotIn("a.py", out.changed,
+                         "the Windows ctime gap closed — the disclosure is now false; update it")
+
+    def test_windows_ctime_disclosure_matches_the_mechanism(self):
+        """Every platform: the constant names the platform the clause is blind on, and the product
+        doc carries the disclosure while the constant says the gap is real somewhere."""
+        self.assertEqual(F.CTIME_CLAUSE_CATCHES_A_RESTORED_WRITE, os.name != "nt")
+        doc = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "docs", "concepts", "knowledge.md")
+        with open(doc, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("Known limitation (Windows)", text)
+        self.assertIn("st_ctime", text)
 
     def test_4_4_each_of_the_THREE_stat_fields_is_graded_on_its_own(self):
         """🔴 REVIEW FINDING 4-4, §7f. `baseline_drift`'s comparison is the thing the signal is named

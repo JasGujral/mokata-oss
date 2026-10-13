@@ -67,7 +67,8 @@ def _hook_commands():
                 cmd = h["command"]
                 # Derived from the declaration, never a hand-kept list: H-1a added a fifth hook
                 # and a literal tuple here would simply have raised StopIteration on it.
-                sub = next(s for s in _SUBCOMMANDS if s in cmd)
+                # TOKEN-exact, not substring: `stop` is inside `subagent-stop` (0.0.22 D6).
+                sub = next(t for t in cmd.replace('"', " ").split() if t in _SUBCOMMANDS)
                 out[sub] = cmd
     return out
 

@@ -46,6 +46,7 @@ from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _observed_review import observe_review_subagent
 
 from mokata import config_cmd, progress
 from mokata.run_resolver import bind_session_run
@@ -225,6 +226,7 @@ class TestReviewFixR2Regression(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _persist_run(d, "solo", passed=PHASES)
+            observe_review_subagent(d)  # D4 ruling
             record_review_verdict(surface, passed=True, independent=True)
             self.assertIsNotNone(_old_verdict_read(surface, "solo"))     # quiet repo: old was fine
             _flood(surface, run_id="solo")
@@ -274,6 +276,7 @@ class TestBoundedBackwardRead(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _persist_run(d, "solo", passed=PHASES)
+            observe_review_subagent(d)  # D4 ruling
             record_review_verdict(surface, passed=True, independent=True)
             _flood(surface, run_id="solo")
             rc, out = _cli(["progress", "review-status", "--path", d], d)
@@ -399,6 +402,7 @@ class TestVerdictFreshness(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _persist_run(d, "solo", passed=PHASES)
+            observe_review_subagent(d)  # D4 ruling
             record_review_verdict(surface, passed=True, independent=True)
             rc, out = _cli(["progress", "review-status", "--path", d], d)
             self.assertEqual(rc, 0, out)
@@ -530,6 +534,7 @@ class TestNoBehaviourChange(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _persist_run(d, "solo", passed=PHASES)
+            observe_review_subagent(d)  # D4 ruling
             event = record_review_verdict(surface, passed=True, independent=True)
             self.assertEqual(event["run_id"], "solo")
             self.assertEqual(event["data"], {"passed": True, "independent": True})

@@ -55,6 +55,7 @@ things follow, and all three are the point:
 read an internal path fails there instead of at the next cut.
 """
 
+from _code_lines import code_lines_blanked
 import os
 import re
 import unittest
@@ -76,20 +77,6 @@ def _read(path):
         return fh.read()
 
 
-def _strip_comments(text):
-    """Drop whole-line `#` comments, keeping line numbers stable via blank placeholders.
-
-    Whole-line only, deliberately: a trailing `#` inside a shell string is not a comment, and a
-    naive split would silently truncate the very `echo` lines this module inspects. The hazard
-    that bit TD-2 (doc 02) was a SIX-LINE COMMENT BLOCK documenting the control it guarded --
-    that is precisely what this removes.
-    """
-    out = []
-    for line in text.splitlines():
-        out.append("" if line.lstrip().startswith("#") else line)
-    return out
-
-
 # The refusal banner every fail-closed branch of wait_for_release must print AND abort on.
 _REFUSAL = "REFUSING TO FINISH"
 
@@ -101,7 +88,7 @@ def _wait_fn():
     an `echo` of the refusal followed by an `exit`, so splitting echo from non-echo first would
     drop every refusal banner and leave this reading a body with no refusals in it at all.
     """
-    body = "\n".join(_strip_comments(_read(RELEASE_SH)))
+    body = "\n".join(code_lines_blanked(_read(RELEASE_SH)))
     m = re.search(r"wait_for_release\(\)\s*\{(.*?)\n\}", body, re.S)
     assert m is not None, "wait_for_release() is not defined in scripts/release.sh"
     return m.group(1)
@@ -116,7 +103,7 @@ def _manual_runbook():
     pin stayed green on that unrelated message: the same too-wide-region defect as TD-2 (doc 02),
     where six lines of comment satisfied a check about an array literal.
     """
-    lines = _strip_comments(_read(RELEASE_SH))
+    lines = code_lines_blanked(_read(RELEASE_SH))
     start = end = None
     for i, line in enumerate(lines):
         if start is None and "finish the release MANUALLY" in line:
@@ -136,7 +123,7 @@ def _script_lines():
     A line that starts with `echo` is INSTRUCTION TO A HUMAN; anything else the shell runs.
     They fail differently and so are asserted separately.
     """
-    lines = _strip_comments(_read(RELEASE_SH))
+    lines = code_lines_blanked(_read(RELEASE_SH))
     printed, executed = [], []
     for line in lines:
         (printed if line.lstrip().startswith("echo ") else executed).append(line)
@@ -185,7 +172,7 @@ class TestExactlyOneWorkflowPublishes(unittest.TestCase):
         for name in sorted(os.listdir(WORKFLOWS)):
             if not name.endswith((".yml", ".yaml")):
                 continue
-            for i, line in enumerate(_strip_comments(_read(os.path.join(WORKFLOWS, name))), 1):
+            for i, line in enumerate(code_lines_blanked(_read(os.path.join(WORKFLOWS, name))), 1):
                 if RELEASE_ACTION in line:
                     hits.append("%s:%d" % (name, i))
         self.assertEqual(
@@ -238,7 +225,7 @@ class TestReleaseShVerifiesRatherThanPublishes(unittest.TestCase):
         release.sh that defines a perfect fail-closed wait and never invokes it would pass —
         dead code reading as an enforced gate. What ships the property is the call.
         """
-        body = "\n".join(_strip_comments(_read(RELEASE_SH)))
+        body = "\n".join(code_lines_blanked(_read(RELEASE_SH)))
         without_def = re.sub(r"wait_for_release\(\)\s*\{.*?\n\}", "", body, flags=re.S)
         self.assertIn(
             "wait_for_release", without_def,

@@ -133,6 +133,12 @@ re-indexes **only what changed**. When a query touches a file that changed since
 the result's `note` is annotated with a `STALE: …` warning — staleness is **surfaced,
 never served silently**.
 
+**Known limitation (Windows).** On Linux and macOS the stat check also compares `st_ctime`,
+which userspace cannot set, so a same-size write that restores the mtime (`tar -xp`, `cp -p`,
+`rsync --times`, `touch -r`) is still caught. On Windows `st_ctime` is the file's *creation*
+time and does not move on a write, so that one edit shape can read as unchanged there until
+the next `mokata index` rehashes the file.
+
 ```bash
 mokata index          # build/refresh; reports added/changed/removed + stale files
 ```

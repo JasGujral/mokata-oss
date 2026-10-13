@@ -74,8 +74,10 @@ def _default_git(args: List[str], cwd: Optional[str] = None) -> GitResult:
     """Shell out to `git` (the only place that touches a real git). Never raises — any
     failure (git absent, bad repo) becomes a non-zero GitResult so callers degrade clean."""
     try:
+        # UTF-8, NAMED (GIT-READERS-DECODE-WITH-THE-LOCALE): `text=True` alone decodes with the
+        # locale codec, cp1252 on Windows, and mojibakes every non-ASCII path git prints.
         p = subprocess.run(["git", *args], cwd=cwd, capture_output=True,
-                           text=True, timeout=60)
+                           text=True, encoding="utf-8", errors="replace", timeout=60)
         return GitResult(p.returncode, p.stdout, p.stderr)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:  # git missing / bad call
         return GitResult(127, "", str(exc))

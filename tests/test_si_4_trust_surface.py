@@ -70,6 +70,14 @@ from mokata.mcp import tools_write as TW                           # noqa: E402
 from mokata.memory import MemoryStore                              # noqa: E402
 
 
+# HP.S4 (0.0.22 D5): the gate's containment is on for every write, so a placeholder target
+# must be a real place a write may go — the system temp dir, the named scratch allowance.
+def _T(name):
+    import os as _os, tempfile as _tf
+    return _os.path.join(_tf.gettempdir(), "mokata-test-repo", name)
+
+
+
 def fake_secret() -> str:
     """The canonical AWS-docs example key, assembled at RUNTIME.
 
@@ -124,7 +132,7 @@ class _Repo:
 
 
 def req(tool, surface=None, content="value=1"):
-    return WriteRequest("config", "/repo/x.cfg", content, tool=tool, surface=surface)
+    return WriteRequest("config", _T("x.cfg"), content, tool=tool, surface=surface)
 
 
 def _never_ask(_text):
@@ -190,7 +198,7 @@ class TestGateSemantic(unittest.TestCase):
     def test_no_policy_at_all_is_byte_identical(self):
         gate = WriteGate()
         committed = []
-        out = gate.submit(WriteRequest("config", "/x", "v"),
+        out = gate.submit(WriteRequest("config", _T("x"), "v"),
                           commit=lambda: committed.append(1), assume_yes=True)
         self.assertTrue(out.committed)
 
