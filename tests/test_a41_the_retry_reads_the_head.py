@@ -71,10 +71,15 @@ SYNC_SH = os.path.join(ROOT, "scripts", "sync-public.sh")
 #: conservative (it refused a constant interpolated into a failure message for the same reason
 #: earlier this release), so the repetition stays and this note is why.
 
-# The seven names, typed ONCE here so the test and the script can be compared rather than agreeing
+# The NINE names, typed ONCE here so the test and the script can be compared rather than agreeing
 # with themselves. The script's own `pr_vocabulary` is asserted equal to this below.
+# ⚠ MOVED WITH THE VOCABULARY AT 0.0.22 A1 (`CLOSED-BRANCH-GONE-REMEDY-IS-FALSE`): the close
+# reason is now READ from gh's events, so a branch-deletion close whose branch came back is its own
+# state (CLOSED-BRANCH-REPUSHED, remedy: a NEW PR), and a reason gh could not give is its own
+# refusing state (CLOSED-REASON-UNREADABLE) rather than being folded into either neighbour (§7g).
 VOCABULARY = ("NONE", "OPEN-AT-THIS-COMMIT", "OPEN-ELSEWHERE", "MERGED",
-              "CLOSED-DECLINED", "CLOSED-BRANCH-GONE", "UNKNOWN")
+              "CLOSED-DECLINED", "CLOSED-BRANCH-GONE", "CLOSED-BRANCH-REPUSHED",
+              "CLOSED-REASON-UNREADABLE", "UNKNOWN")
 
 
 def script():
@@ -134,20 +139,28 @@ class ThePrStateFunctionIsPureAndTotal(unittest.TestCase):
         they match, in front of an `--admin` merge. `WANT_SHA` comes from a `git rev-parse` whose
         failure yields an empty string, so the row is reachable, not theoretical."""
         cases = (
-            # gh state, head, want,  branch-on-remote      expected
-            ("",        "",    "abc", "yes", "NONE"),
-            ("OPEN",    "abc", "abc", "yes", "OPEN-AT-THIS-COMMIT"),
-            ("OPEN",    "def", "abc", "yes", "OPEN-ELSEWHERE"),
-            ("OPEN",    "",    "abc", "yes", "OPEN-ELSEWHERE"),
-            ("OPEN",    "",    "",    "yes", "OPEN-ELSEWHERE"),   # ← the S02 survivor's row
-            ("MERGED",  "abc", "abc", "no",  "MERGED"),
-            ("CLOSED",  "abc", "abc", "yes", "CLOSED-DECLINED"),
-            ("CLOSED",  "abc", "abc", "no",  "CLOSED-BRANCH-GONE"),
-            ("SOMETHING-NEW", "abc", "abc", "yes", "UNKNOWN"),
+            # gh state, head, want,  branch-on-remote, close reason      expected
+            ("",        "",    "abc", "yes", "",               "NONE"),
+            ("OPEN",    "abc", "abc", "yes", "",               "OPEN-AT-THIS-COMMIT"),
+            ("OPEN",    "def", "abc", "yes", "",               "OPEN-ELSEWHERE"),
+            ("OPEN",    "",    "abc", "yes", "",               "OPEN-ELSEWHERE"),
+            ("OPEN",    "",    "",    "yes", "",               "OPEN-ELSEWHERE"),   # ← S02's row
+            ("MERGED",  "abc", "abc", "no",  "",               "MERGED"),
+            # ⚠ MOVED AT 0.0.22 A1: CLOSED is keyed on the close reason gh REPORTS, and branch
+            # presence only splits a branch-deletion close. The old pair — "yes" -> DECLINED,
+            # "no" -> GONE — inferred the reason from the branch, and the 0.0.21 cut's PR #76 was
+            # the "yes" row read wrong: closed by a deletion, branch re-pushed, called a decline.
+            ("CLOSED",  "abc", "abc", "yes", "BY-ACTOR",       "CLOSED-DECLINED"),
+            ("CLOSED",  "abc", "abc", "no",  "BY-ACTOR",       "CLOSED-DECLINED"),
+            ("CLOSED",  "abc", "abc", "no",  "BRANCH-DELETED", "CLOSED-BRANCH-GONE"),
+            ("CLOSED",  "abc", "abc", "yes", "BRANCH-DELETED", "CLOSED-BRANCH-REPUSHED"),
+            ("CLOSED",  "abc", "abc", "yes", "UNREADABLE",     "CLOSED-REASON-UNREADABLE"),
+            ("CLOSED",  "abc", "abc", "no",  "",               "CLOSED-REASON-UNREADABLE"),
+            ("SOMETHING-NEW", "abc", "abc", "yes", "",         "UNKNOWN"),
         )
-        for state, head, want, remote, expected in cases:
-            with self.subTest(state=state, head=head, remote=remote):
-                self.assertEqual(self.call(state, head, want, remote), expected)
+        for state, head, want, remote, reason, expected in cases:
+            with self.subTest(state=state, head=head, remote=remote, reason=reason):
+                self.assertEqual(self.call(state, head, want, remote, reason), expected)
 
     def test_an_UNREADABLE_head_fails_CLOSED_and_that_direction_is_the_point(self):
         """An empty `headRefOid` means gh could not tell us which commit the PR carries. Reading
@@ -178,7 +191,7 @@ class ThePrStateFunctionIsPureAndTotal(unittest.TestCase):
                      "release.sh and sync-public.sh are dev-only, excluded from the public mirror")
 class TheVocabularyIsClosedAndLivesInONEPlace(unittest.TestCase):
 
-    def test_pr_vocabulary_is_exactly_the_seven_names(self):
+    def test_pr_vocabulary_is_exactly_the_nine_names(self):
         import tempfile
         tmp = tempfile.mkdtemp()
         self.addCleanup(__import__("shutil").rmtree, tmp, True)
@@ -217,8 +230,14 @@ class TheVocabularyIsClosedAndLivesInONEPlace(unittest.TestCase):
         gone = text[text.index("CLOSED-BRANCH-GONE)"):text.index("    NONE)")]
         self.assertIn("bump the version", declined)
         self.assertIn("does not need bumping", gone)
-        self.assertIn("git push -u origin", gone,
-                      "the branch-gone arm must name the remedy that actually fixes it")
+        # ⚠ MOVED AT 0.0.22 A1. This asserted the arm named `git push -u origin` — the remedy
+        # *"Re-push the branch, which re-opens the PR"*, which is FALSE on GitHub: a PR closed by a
+        # branch deletion stays closed when the branch comes back (PR #76, 0.0.21 cut). The pin was
+        # protecting the false sentence (§7h). The true remedy is a re-run, which re-pushes the
+        # branch itself and then offers a NEW PR.
+        self.assertNotIn("re-opens the PR", text, "the false remedy sentence is back")
+        self.assertIn("Re-run this script", gone)
+        self.assertIn("NEW pull request", gone)
 
 
 @unittest.skipUnless(os.path.exists(RELEASE_SH) and os.path.exists(SYNC_SH),
@@ -377,7 +396,9 @@ class EveryRefusalNamesARemedyThatEXISTS(unittest.TestCase):
                 self.assertIn(cmd, known, f"`git {cmd}` is not in git's own command list")
         arms = self._new_arms()
         self.assertIn("git fetch origin", arms)
-        self.assertIn("git push -u origin", arms)
+        # ⚠ `git push -u origin` LEFT THE ARMS AT 0.0.22 A1 with the false re-open remedy it
+        # belonged to — see test_the_two_CLOSED_states_both_refuse_but_with_DIFFERENT_remedies.
+        self.assertNotIn("git push -u origin ${BRANCH})\" >&2", arms)
 
     def test_every_new_refusal_writes_to_STDERR(self):
         """A refusal on stdout is invisible in a piped release log, which is where this script is

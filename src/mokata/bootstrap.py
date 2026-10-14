@@ -98,7 +98,10 @@ class BootstrapResult:
         return self.token_estimate <= self.budget
 
 
-def _render(surface: Surface) -> str:
+def _render(surface: Surface, include_live: bool = True, cb: Any = None) -> str:
+    if cb is None:
+        from .context_budget import context_budget
+        cb = context_budget(surface.manifest)
     m = surface.manifest
     lines: List[str] = []
     lines.append(f"# mokata {m.mokata_version} · profile: {m.profile}")
@@ -161,6 +164,18 @@ def _render(surface: Surface) -> str:
     # (no second channel) inside the ≤2k budget; ABSENT (byte-identical) when the structural
     # floor can't summarise the repo. So a session opens knowing the real code structure, not a
     # memory of it.
+    # HP.S1 (0.0.22 D2) — the repo as it is NOW: git state, the test command, the instruction files
+    # present. ≤6 lines; the FIRST thing dropped when the briefing is over budget (see
+    # `build_bootstrap`), because each line is one command away and the gates are not.
+    if include_live:
+        try:
+            from .live_context import live_context_lines
+            live = live_context_lines(surface, max_lines=cb.live_lines)
+        except Exception:  # noqa: BLE001 — live context is a convenience, never a broken briefing
+            live = []
+        if live:
+            lines.extend(live)
+            lines.append("")
     structure_line = _graph_structure_line(surface)
     if structure_line:
         lines.append(structure_line)
@@ -190,7 +205,7 @@ def _render(surface: Surface) -> str:
 
     # Stage 36 — captured project rules/guardrails, honoured EVERY run. A small capped set
     # (P11); over-budget entries are flagged, not dumped. Degrade-clean if memory is off.
-    rules_lines = _always_on_rule_lines(surface)
+    rules_lines = _always_on_rule_lines(surface, cb.briefing_rules_lines)
     if rules_lines:
         lines.append("")
         lines.append("Project rules & guardrails (always honour):")
@@ -261,7 +276,8 @@ def _graph_structure_line(surface: Surface) -> Optional[str]:
         return None
 
 
-def _always_on_rule_lines(surface: Surface) -> List[str]:
+def _always_on_rule_lines(surface: Surface,
+                          max_lines: int = BRIEFING_RULES_MAX_LINES) -> List[str]:
     """The capped rule/guardrail lines for the briefing, or [] when the memory store can't be read.
 
     D5 — this was the WORST silent degrade in the codebase. It swallowed every error and returned
@@ -279,7 +295,7 @@ def _always_on_rule_lines(surface: Surface) -> List[str]:
     try:
         from .memory import MemoryStore, always_on_lines
         store = MemoryStore.from_surface(surface)
-        lines, _overflow = always_on_lines(store, BRIEFING_RULES_MAX_LINES)
+        lines, _overflow = always_on_lines(store, max_lines)
         return lines
     except (OSError, ImportError, sqlite3.Error) as exc:
         from .degrade import FAILURE_UNREACHABLE, note_degraded
@@ -364,14 +380,30 @@ _LIVE_BOUNDARY = "\n\n=== session (live) ===\n\n"
 
 
 def build_bootstrap(
-    surface: Surface, budget: int = BOOTSTRAP_TOKEN_BUDGET
+    surface: Surface, budget: "Optional[int]" = None,
+    reanchor: "Optional[str]" = None, footer: "Optional[str]" = None,
 ) -> BootstrapResult:
+    """The SessionStart briefing, inside ONE budget (H-8, 0.0.22 D3).
+
+    `budget` omitted reads `settings.context.briefing_tokens` (default 2000). `reanchor` (the D1
+    post-compaction block) is placed FIRST in the live section and `footer` (the MCP reachability
+    warning) last — and both are counted against the budget, where they used to be appended after
+    the check: a second, unmetered channel. Over budget, the live repo block drops first; the
+    defensive truncation then keeps the re-anchor block whole at the front and cuts the rest."""
     # Local import: govern imports bootstrap.estimate_tokens, so importing it at module
     # top would be circular. Resolved at call time, after both modules are loaded.
+    from .context_budget import context_budget
     from .govern import stable_prefix_for
+    cb = context_budget(surface.manifest)
+    if budget is None:
+        budget = cb.briefing_tokens
     prefix = stable_prefix_for(surface).text()      # F6: byte-stable across runs
-    text = prefix + _LIVE_BOUNDARY + _render(surface)
+    head = (reanchor.rstrip("\n") + "\n\n") if reanchor else ""
+    if cb.problems:
+        head += cb.problem_line() + "\n\n"
+    text = prefix + _LIVE_BOUNDARY + head + _render(surface, cb=cb)
     tokens = estimate_tokens(text)
+    offers: List[str] = []          # appended after the render; kept so a re-render can re-append
 
     # MS.S2 — SessionStart is a window's natural birth; register it in the live-session registry so
     # `mokata windows` can see it. Transient registry upkeep (ungated), degrade-clean, and does NOT
@@ -390,6 +422,7 @@ def build_bootstrap(
         offer = offer_text_once(surface)
         if offer:
             text = text.rstrip("\n") + "\n" + offer + "\n"
+            offers.append(offer)
             tokens = estimate_tokens(text)
     except (ImportError, OSError):
         # D5 — `offer_text_once` is already degrade-clean (it returns None on any registry
@@ -408,19 +441,44 @@ def build_bootstrap(
         offer = briefing_offer(surface.root)
         if offer:
             text = text.rstrip("\n") + "\n" + offer + "\n"
+            offers.append(offer)
             tokens = estimate_tokens(text)
     except Exception:
         # A briefing offer is an OFFER — its absence costs nothing and must never break the
         # briefing. The check itself never raises; this guards a half-installed package.
         pass
 
+    if footer:
+        text = text.rstrip("\n") + "\n\n" + footer + "\n"
+        offers.append("\n" + footer)
+        tokens = estimate_tokens(text)
+
+    if tokens > budget:
+        # HP.S1 — drop the live repo block FIRST (it is the most recoverable content), and say so,
+        # before the defensive truncation below is allowed anywhere near the gates or the rules.
+        from .live_context import DROPPED_NOTICE
+        slim = (prefix + _LIVE_BOUNDARY + head
+                + _render(surface, include_live=False, cb=cb)).rstrip("\n")
+        text = slim + "\n" + DROPPED_NOTICE + "\n" + "".join(o + "\n" for o in offers)
+        tokens = estimate_tokens(text)
     if tokens > budget:
         # Defensive truncation: keep the briefing inside budget no matter what, and
         # say so plainly rather than silently dropping context. Guaranteed to fit even
         # when the notice itself is larger than a (pathologically tiny) budget.
         max_chars = budget * 4
         notice = "\n[bootstrap truncated to fit the token budget]\n"
-        if len(notice) >= max_chars:
+        # The RE-ANCHOR is kept whole and moved to the front (0.0.22 verification, D-3): cut
+        # from the end, a 200–700 token budget dropped it entirely — after a compaction, the one
+        # block the model cannot recover from anywhere else.
+        keep = reanchor.rstrip("\n") + "\n\n" if reanchor else ""
+        rest = text.replace(keep, "", 1) if keep else text
+        if keep and len(keep) + len(notice) < max_chars:
+            text = keep + rest[: max_chars - len(keep) - len(notice)] + notice
+        elif keep and len(notice) < max_chars:
+            # Even the re-anchor alone is over budget: keep ITS head (the run and the next-write
+            # verdict are its first lines), never the stable prefix in its place.
+            text = keep[: max_chars - len(notice)] + notice
+        elif len(notice) >= max_chars:
             text = notice[:max_chars]
         else:
             text = text[: max_chars - len(notice)] + notice
@@ -527,7 +585,8 @@ def _fit_to_budget(header: str, reserved: List[str], ranked: List[str], budget: 
 
 
 def _ranked_injection_items(store: Any, query: str, exclude: "set",
-                            kinds: tuple, jit_recall: Any) -> list:
+                            kinds: tuple, jit_recall: Any,
+                            top_k: int = INJECTION_JIT_TOP_K) -> list:
     """The ranked half of the per-turn pack: the FULL tiered stack, degrading to the lexical floor.
 
     JIT-STAMP-SEAM. `recall_relevant(stamp=False, kinds=…)` is what makes this legal on a hook that
@@ -567,21 +626,21 @@ def _ranked_injection_items(store: Any, query: str, exclude: "set",
             # the identical notice would print every turn and what it would report is that one
             # turn got less context than it could have — never that a guarantee was broken. The
             # same degrade still announces loudly on every path a human actually invoked.
-            hits = recall(query, top_k=INJECTION_JIT_TOP_K + len(exclude),
+            hits = recall(query, top_k=top_k + len(exclude),
                           stamp=False, kinds=kinds, degrade_out=lambda _msg: None)
             items = [h.item for h in hits if h.item.id not in exclude
                      and injection_admits(query, h.item)]
-            return items[:INJECTION_JIT_TOP_K]
+            return items[:top_k]
         except Exception:  # noqa: BLE001
             # The tiered stack is an UPGRADE over a floor that still works. Falling back to it is
             # the designed outcome, and announcing it every turn would train the user to ignore
             # the channel (the same reasoning `build_injection`'s own handler carries).
             pass
-    return jit_recall(store, query, top_k=INJECTION_JIT_TOP_K, exclude_ids=exclude)
+    return jit_recall(store, query, top_k=top_k, exclude_ids=exclude)
 
 
 def build_injection(surface: Surface, query: str,
-                    budget: int = INJECTION_TOKEN_BUDGET,
+                    budget: "Optional[int]" = None,
                     exclude_ids: "Optional[set]" = None) -> InjectionResult:
     """The per-turn pack for `query`, guaranteed to fit `budget`.
 
@@ -591,7 +650,14 @@ def build_injection(surface: Surface, query: str,
     perfectly ordinary outcome and not a condition worth announcing every turn.
 
     `exclude_ids` is the S4 already-injected set (repeating an item the model was handed three
-    turns ago spends the budget on nothing)."""
+    turns ago spends the budget on nothing).
+
+    H-8 (0.0.22 D3) — `budget` omitted reads `settings.context.turn_tokens` (default 300), and the
+    reserved rule lines and the ranked top-k read their `settings.context` keys too: ONE budget."""
+    from .context_budget import context_budget
+    cb = context_budget(getattr(surface, "manifest", None))
+    if budget is None:
+        budget = cb.turn_tokens
     if not query or budget <= 0:
         return InjectionResult(text="", token_estimate=0, budget=budget)
 
@@ -601,7 +667,7 @@ def build_injection(surface: Surface, query: str,
         store = MemoryStore.from_surface(surface)
         # Both reads are NON-COUNTING and scope/readability filtered (H-1a C1) — a per-turn
         # injection must move no durable state and must never surface a teammate's private item.
-        reserved, _overflow = always_on_lines(store, INJECTION_RULES_MAX_LINES, query=query)
+        reserved, _overflow = always_on_lines(store, cb.turn_rules_lines, query=query)
         # `exclude_ids` goes INTO the recall, not around it: filtering the RESULT would leave the
         # already-seen items occupying the top k, so a session would fall silent while unseen
         # items sat at rank k+1. The whole point of the ledger is to promote what is new.
@@ -617,7 +683,8 @@ def build_injection(surface: Surface, query: str,
         #             R-1 removed from `recall_relevant` and left here (975 ms/turn at 100k).
         # `stamp=False` suppresses BOTH instrumentation writes (`record_usage` AND the read
         # counter), so the read-only guarantee H-1a pins by byte snapshot is unchanged.
-        hits = _ranked_injection_items(store, query, exclude, JIT_KINDS, jit_recall)
+        hits = _ranked_injection_items(store, query, exclude, JIT_KINDS, jit_recall,
+                                       top_k=cb.turn_top_k)
     except Exception:  # noqa: BLE001
         # (iv) SUPPRESS-OK, and the one place the usual "announce the degrade" answer is wrong:
         # see the D5 register entry for `hook_cli.user_prompt_submit_main`. This runs on EVERY
@@ -640,7 +707,7 @@ def build_injection(surface: Surface, query: str,
     # `budget * 4` chars and marks the cut — so the published number holds unconditionally rather
     # than "unless someone captured a 400-token guardrail".
     from .govern.compaction import cap_summary
-    handback = cap_summary(text, budget)
+    handback = cap_summary(text, budget, tail=False)   # ranked: the tail is the least relevant
     return InjectionResult(text=handback.summary, token_estimate=handback.tokens, budget=budget,
                            rules_shown=kept_rules, items_shown=kept, dropped=dropped,
                            item_ids=[i.id for i in hits[:kept]])

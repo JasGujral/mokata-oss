@@ -32,6 +32,55 @@ from mokata.init import init_repo
 
 
 # ------------------------------------------------------ a faithful in-memory Postgres fake
+
+def is_idempotent_statement(stmt):
+    """Whether a provisioning statement states the condition under which a re-run does nothing.
+
+    IDEMPOTENT-SHAPE-PREDICATE-HAS-NO-PLANTED-OFFENDER (0.0.22 A2): extracted from the loop in
+    `test_provision_sql_is_idempotent`, where it was graded ONLY by statements the tree already
+    holds. `TestTheIdempotencyPredicateConvictsItsOffenders` now feeds it the shapes that must fail.
+    """
+    import re
+    up = " ".join(stmt.upper().split())
+    set_cols = re.findall(r"SET\s+([A-Z_][A-Z0-9_]*)\s*=", up)
+    hole_fill = (up.startswith("UPDATE") and bool(set_cols)
+                 and all(re.search(rf"\b{col}\s+IS NULL\b", up) for col in set_cols))
+    guarded_update = up.startswith("UPDATE") and ("IS DISTINCT FROM" in up or hole_fill)
+    guarded_insert = (up.startswith("INSERT") and " SELECT " in up
+                      and "NOT EXISTS" in up)
+    # CM.S5 — a read-only refusal probe: writes NOTHING, so it is idempotent by
+    # construction. Qualifying on the VERBS it does not contain rather than on its `DO`
+    # prefix is what keeps this a check instead of a rubber-stamp.
+    # ⛔ WORD BOUNDARIES, NOT SPACES. The first version padded each verb with spaces
+    # (`" DROP "`), so `EXECUTE 'DROP COLUMN kind'` — a quote before the verb, not a
+    # space — passed this check while the docstring claimed *"a `DO` block that quietly
+    # UPDATEs or DROPs something inside itself still fails here"*. Review F10: the
+    # sentence was true of the intent and false of the predicate, which is exactly the
+    # shape §7h names.
+    write_verbs = ("INSERT", "UPDATE", "DELETE", "ALTER", "DROP",
+                   "CREATE", "TRUNCATE", "GRANT", "REVOKE")
+    writes_something = re.search(
+        r"(?<![A-Z0-9_])(?:%s)(?![A-Z0-9_])" % "|".join(write_verbs), up[3:])
+    read_only_probe = up.startswith("DO ") and not writes_something
+    # CM.S5 — the retirement half of the same guard. `IF EXISTS` on a DROP states the
+    # precondition exactly as `IF NOT EXISTS` does on a CREATE; an unguarded DROP does not
+    # and still fails below.
+    # ⛔ 0.0.22 A2 — THE SECOND HOLE, found by the stage-00 grading: `" DROP " … and "IF EXISTS"`
+    # anywhere in the statement accepted `DO $$ BEGIN IF EXISTS (SELECT …) THEN DROP TABLE t; …`,
+    # a block that WRITES. A guarded DROP is a DROP statement (never a `DO` block) in which EVERY
+    # `DROP <object>` carries its own `IF EXISTS`.
+    drops = re.findall(r"(?<![A-Z0-9_])DROP\s+(?:COLUMN|TABLE|INDEX|CONSTRAINT|VIEW|TRIGGER|"
+                       r"FUNCTION|SEQUENCE|TYPE|SCHEMA)\s+(IF\s+EXISTS)?", up)
+    guarded_drop = (not up.startswith("DO ")) and bool(drops) and all(drops)
+    if up.startswith("DO "):
+        # ⛔ AND A THIRD, found writing the second's offender: `IF NOT EXISTS` anywhere in the text
+        # also passed `DO $$ BEGIN IF NOT EXISTS (…) THEN DROP TABLE t; …`. A `DO` block qualifies
+        # ONLY as a read-only probe; no keyword inside one vouches for what it writes.
+        return read_only_probe
+    return (("IF NOT EXISTS" in up) or ("ON CONFLICT" in up)
+            or guarded_update or guarded_insert or guarded_drop)
+
+
 class _UndefinedTable(Exception):
     sqlstate = "42P01"
 
@@ -205,38 +254,9 @@ class TestProvisionSql(unittest.TestCase):
         block must contain NO write verb, so a `DO` block that quietly UPDATEs or DROPs something
         inside itself still fails here. A shape that qualified merely by starting with `DO` would
         be a keyword rubber-stamp — the thing this test refuses to be."""
-        import re
-
         from mokata import teamdb
         for stmt in teamdb.provision_sql():
-            up = " ".join(stmt.upper().split())
-            set_cols = re.findall(r"SET\s+([A-Z_][A-Z0-9_]*)\s*=", up)
-            hole_fill = (up.startswith("UPDATE") and bool(set_cols)
-                         and all(re.search(rf"\b{col}\s+IS NULL\b", up) for col in set_cols))
-            guarded_update = up.startswith("UPDATE") and ("IS DISTINCT FROM" in up or hole_fill)
-            guarded_insert = (up.startswith("INSERT") and " SELECT " in up
-                              and "NOT EXISTS" in up)
-            # CM.S5 — a read-only refusal probe: writes NOTHING, so it is idempotent by
-            # construction. Qualifying on the VERBS it does not contain rather than on its `DO`
-            # prefix is what keeps this a check instead of a rubber-stamp.
-            # ⛔ WORD BOUNDARIES, NOT SPACES. The first version padded each verb with spaces
-            # (`" DROP "`), so `EXECUTE 'DROP COLUMN kind'` — a quote before the verb, not a
-            # space — passed this check while the docstring claimed *"a `DO` block that quietly
-            # UPDATEs or DROPs something inside itself still fails here"*. Review F10: the
-            # sentence was true of the intent and false of the predicate, which is exactly the
-            # shape §7h names.
-            write_verbs = ("INSERT", "UPDATE", "DELETE", "ALTER", "DROP",
-                           "CREATE", "TRUNCATE", "GRANT", "REVOKE")
-            writes_something = re.search(
-                r"(?<![A-Z0-9_])(?:%s)(?![A-Z0-9_])" % "|".join(write_verbs), up[3:])
-            read_only_probe = up.startswith("DO ") and not writes_something
-            # CM.S5 — the retirement half of the same guard. `IF EXISTS` on a DROP states the
-            # precondition exactly as `IF NOT EXISTS` does on a CREATE; an unguarded DROP does not
-            # and still fails below.
-            guarded_drop = " DROP " in f" {up} " and "IF EXISTS" in up
-            ok = (("IF NOT EXISTS" in up) or ("ON CONFLICT" in up)
-                  or guarded_update or guarded_insert or read_only_probe or guarded_drop)
-            self.assertTrue(ok, f"non-idempotent DDL: {stmt}")
+            self.assertTrue(is_idempotent_statement(stmt), f"non-idempotent DDL: {stmt}")
 
     def test_no_extensions_on_the_golden_path(self):
         from mokata import teamdb
@@ -330,3 +350,36 @@ class TestTeamInit(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheIdempotencyPredicateConvictsItsOffenders(unittest.TestCase):
+    """The planted offenders `is_idempotent_statement` was never shown (0.0.22 A2)."""
+
+    def test_idempotent_shape_predicate_has_no_planted_offender_writing_do_blocks_fail(self):
+        for stmt in (
+            "DO $$ BEGIN IF EXISTS (SELECT 1 FROM t) THEN DROP TABLE t; END IF; END $$",
+            "DO $$ BEGIN EXECUTE 'DROP COLUMN kind'; END $$",
+            "DO $$ BEGIN UPDATE t SET a = 1; END $$",
+            "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM t) THEN DROP TABLE t; END IF; END $$",
+            "DO $$ BEGIN INSERT INTO t VALUES (1) ON CONFLICT DO NOTHING; END $$",
+            "ALTER TABLE t DROP COLUMN kind",
+            "ALTER TABLE t DROP COLUMN IF EXISTS a, DROP COLUMN b",
+            "CREATE TABLE t (a int)",
+            "UPDATE t SET a = 1",
+        ):
+            with self.subTest(stmt=stmt):
+                self.assertFalse(is_idempotent_statement(stmt))
+
+    def test_the_guarded_shapes_still_pass(self):
+        for stmt in (
+            "CREATE TABLE IF NOT EXISTS t (a int)",
+            "ALTER TABLE t DROP COLUMN IF EXISTS kind",
+            "DROP INDEX IF EXISTS ix_t_a",
+            "DO $$ BEGIN IF EXISTS (SELECT 1 FROM t WHERE kind IS NOT NULL) THEN "
+            "RAISE EXCEPTION 'old rows'; END IF; END $$",
+            "UPDATE t SET a = 1 WHERE a IS NULL",
+            "INSERT INTO t (a) SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM t)",
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT DO NOTHING",
+        ):
+            with self.subTest(stmt=stmt):
+                self.assertTrue(is_idempotent_statement(stmt))

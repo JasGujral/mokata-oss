@@ -108,10 +108,11 @@ def list_runs_by_recency(store: Any) -> List[str]:
 
 
 def _shipped_run_ids(store: Any, run_id: Optional[str] = None) -> set:
-    """Run ids whose most-recent logged user-stage is `ship` — the terminal END-OF-RUN signal in the
-    progress-event log. B-LIFE grounds "finished" here (not on the pipeline checkpoint): `STAGE_PASS`
-    is defined but never written and there is no ship-completion event, so entering `ship` (its
-    `stage_enter`) is the strongest end-of-run evidence the log records. Uses the LAST stage_enter
+    """Run ids whose most-recent logged user-stage is `ship`, or whose most-recent event of that
+    kind is `run_finished` — the terminal END-OF-RUN signals in the progress-event log. B-LIFE
+    grounds "finished" here (not on the pipeline checkpoint). 0.0.22 C1 (`B-LIFE-FU`) added the
+    ship-completion event `run_finished`, the record that the run is over; entering `ship` (its
+    `stage_enter`) still retires the run from the badge, as it did before. Uses the LAST stage_enter
     per run (matching the badge's forward-only view), so a run that re-entered develop after ship
     reads as active again. One bounded log read. Degrade-clean: no/broken log -> empty set (nothing
     is retired), so an unreadable log can never wrongly hide a run.
@@ -124,12 +125,16 @@ def _shipped_run_ids(store: Any, run_id: Optional[str] = None) -> set:
     resurrected it as "the current run". Passing `run_id` asks the single-run question
     (`run_resolver._run_is_shipped`) and stops the scan at that run's first match."""
     try:
-        from .progress_events import ProgressLog, STAGE_ENTER
+        from .progress_events import ProgressLog, RUN_FINISHED, STAGE_ENTER
         furthest: dict = {}
         for e in ProgressLog.from_state_dir(store.root).read_events_backward():
-            if e.get("type") != STAGE_ENTER:
+            etype = e.get("type")
+            if etype == RUN_FINISHED:
+                stage = "ship"             # the ship-completion event: terminal by definition
+            elif etype == STAGE_ENTER:
+                stage = e.get("stage")
+            else:
                 continue
-            stage = e.get("stage")
             if stage not in STAGE_BADGE_STAGES:
                 continue
             rid = e.get("run_id")

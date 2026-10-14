@@ -811,6 +811,13 @@ GATED = {
 
 # ---- register 2: UNGATED BY DESIGN. Not a governed durable write. Each carries its reason.
 UNGATED_BY_DESIGN = {
+    ("ide/snapshots.py", "_write_object"): "0.0.22 E2 — the review window's SNAPSHOT store under gitignored temp_local/snapshots/ (ADR doc 85 §1b): a content-addressed copy of a file mokata OBSERVED being written, for the diff at any point in time. Ungated by design: it records what the agent or the human already wrote (the write itself met its own gates), it touches no committed file, and routing an OBSERVATION of a write through the WriteGate would gate every write twice. Bounded (MAX_FILE_BYTES, MAX_ENTRIES); losing it loses history, not code.",
+    ("ide/snapshots.py", "_append"): "0.0.22 E2 — the review window's SNAPSHOT store under gitignored temp_local/snapshots/ (ADR doc 85 §1b): a content-addressed copy of a file mokata OBSERVED being written, for the diff at any point in time. Ungated by design: it records what the agent or the human already wrote (the write itself met its own gates), it touches no committed file, and routing an OBSERVATION of a write through the WriteGate would gate every write twice. Bounded (MAX_FILE_BYTES, MAX_ENTRIES); losing it loses history, not code.",
+    ("ide/snapshots.py", "_maybe_prune"): "0.0.22 E2 — the review window's SNAPSHOT store under gitignored temp_local/snapshots/ (ADR doc 85 §1b): a content-addressed copy of a file mokata OBSERVED being written, for the diff at any point in time. Ungated by design: it records what the agent or the human already wrote (the write itself met its own gates), it touches no committed file, and routing an OBSERVATION of a write through the WriteGate would gate every write twice. Bounded (MAX_FILE_BYTES, MAX_ENTRIES); losing it loses history, not code.",
+    ("ide/snapshots.py", "capture_before_first_write"): "0.0.22 E2 — the review window's SNAPSHOT store under gitignored temp_local/snapshots/ (ADR doc 85 §1b): a content-addressed copy of a file mokata OBSERVED being written, for the diff at any point in time. Ungated by design: it records what the agent or the human already wrote (the write itself met its own gates), it touches no committed file, and routing an OBSERVATION of a write through the WriteGate would gate every write twice. Bounded (MAX_FILE_BYTES, MAX_ENTRIES); losing it loses history, not code.",
+    ("ide/launch.py", "open_or_focus"): "0.0.22 E2 verification — the review-window LAUNCH LOCK (an empty file beside the server record under gitignored temp_local/ide/). It serialises two `/mokata:review-window` calls so only one server starts per repo; it holds no data and touches no committed file.",
+    ("ide/server.py", "_write_record"): '0.0.22 E2 — the review-window SERVER RECORD (port, pid, token) under gitignored temp_local/ide/, mode 0600, removed on exit. Transient run-state: it says whether a window is open so `/mokata:review-window` re-focuses it instead of starting another.',
+    ("ide/server.py", "_remove_record"): '0.0.22 E2 — the review-window SERVER RECORD (port, pid, token) under gitignored temp_local/ide/, mode 0600, removed on exit. Transient run-state: it says whether a window is open so `/mokata:review-window` re-focuses it instead of starting another.',
     ("notify.py", "_debounced"): "Lane F — the notification RATE LIMITER's stamp, under gitignored "
         "temp_local/. It DOES write (it creates the inode and stamps its mtime — see REFUSED in "
         "test_si_6_behavioural_write_freedom); what it does not write is CONTENT. Transient "
@@ -904,6 +911,11 @@ UNGATED_BY_DESIGN = {
     # above, which is where a reader chasing that call site now arrives.
     ("progress_events.py", "ProgressLog.append_event"): "append-only run telemetry under "
                                                         "temp_local/",
+    ("team_events.py", "save_mark"):
+        "0.0.22 C1 — the event publisher's OWN high-water mark per (namespace, hashed DSN), under "
+        "temp_local/events/. Machine-local bookkeeping that records what an already-GATED publish "
+        "sent (it runs inside that publish's commit, after the egress gate approved the batch); "
+        "it holds two numbers-and-ids per key, never content and never the DSN.",
     # R1.S1a — the typed event stream. FOUR sites, because the sweep sees SQL statements and not
     # just methods, and each one deserves its own answer rather than a shared wave.
     ("events/store.py", "EventStore.emit"):
@@ -994,6 +1006,12 @@ UNGATED_BY_DESIGN = {
     ("flush_liveness.py", "update_state"): "flush backoff/liveness state under temp_local/",
     ("flush_liveness.py", "clear_state"): "flush backoff/liveness state under temp_local/",
     ("team_health.py", "store"): "health verdict cache under temp_local/",
+    ("branch_protection.py", "ProtectionCache.store"): "0.0.22 A1 — the last-read branch-protection "
+        "CACHE under the user's XDG cache dir (never a repo): a copy of a document GitHub served, "
+        "with its read time. Not governed content and nothing a human approves; losing it costs a "
+        "refusal (cache MISS) at the next degraded cut, which is the safe direction.",
+    ("branch_protection.py", "ProtectionCache.forget"): "0.0.22 A1 — drops that same cache entry "
+        "when a successful read says the branch has NO protection; same file, same reasoning.",
     ("visibility.py", "capture_session_snapshot"): "session baseline snapshot under temp_local/",
     ("plans.py", "write_plan_file"): "plan drafts under temp_local/ (the PLAN is gated, not the "
                                      "draft file)",
@@ -1195,8 +1213,6 @@ UNGATED_BY_DESIGN = {
         "closure (`team_events.publish`), so the gate has already approved and scanned these exact "
         "bytes. Append-only and idempotent by `(namespace, event_id)`, so a re-publish adds "
         "nothing rather than duplicating.",
-    ("team_events.py", "SharedEventLog.max_local_seq"): "SI.6-DB — `SELECT MAX(local_seq) … WHERE "
-        "namespace=%s AND actor=%s`, so a re-publish sends only the tail. Read-only.",
     ("team_events.py", "SharedEventLog.notify"): "SI.6-DB — `SELECT pg_notify(…)`: the doorbell, "
         "sent AFTER the inserts commit, carrying identifiers and counts and never an event. It "
         "writes no row and persists nothing; a missed notification costs a reader one SELECT.",
@@ -1359,12 +1375,14 @@ DECLARED_CALLERS = {
     # `write_bundle`/`delete_bundle` calls — the same operation `gate_enclosure` performs — not
     # nudged until the sweep went quiet. Third time this arithmetic has been paid in this file,
     # which is what `CALLER-LIST-UNPINNED` (doc 84) exists to end.
+    # 0.0.22 D2 — all three RE-DERIVED (read at the new lines, not bumped): HP.S2 added six lines
+    # to `build_session_bundle` above them, so 695/1004/1005 moved to 701/1010/1011.
     ("session_transport.py", "_FileTransport.write_bundle"): (
-        ("session_bundle.py", 695), ("session_bundle.py", 1004)),
+        ("session_bundle.py", 701), ("session_bundle.py", 1010)),
     ("session_transport.py", "PostgresTransport.write_bundle"): (
-        ("session_bundle.py", 695), ("session_bundle.py", 1004)),
-    ("session_transport.py", "_FileTransport.delete_bundle"): (("session_bundle.py", 1005),),
-    ("session_transport.py", "PostgresTransport.delete_bundle"): (("session_bundle.py", 1005),),
+        ("session_bundle.py", 701), ("session_bundle.py", 1010)),
+    ("session_transport.py", "_FileTransport.delete_bundle"): (("session_bundle.py", 1011),),
+    ("session_transport.py", "PostgresTransport.delete_bundle"): (("session_bundle.py", 1011),),
     # ⚠ BOTH NUMBERS RE-DERIVED AT 0.0.18 LANE D SLICE 4, NOT ADJUSTED UNTIL THEY PASSED. This
     # slice edited the prose above both call sites (`tools_share.py`'s docstring had spent three
     # releases calling itself the deletion set; `collab.py` gained a removed-bundle announcer), so
@@ -1447,6 +1465,16 @@ GATED_CALLER_EXCEPTIONS = {
 # covers those is `DECLARED_CALLERS` above, checked by `gate_enclosure` instead of by the graph.
 # The 77 are counted and printed every run rather than left as an impression of completeness.
 CALLER_PINS = {
+    # 0.0.22 E2 — the review window's snapshot store and server record, derived from
+    # `_writegraph.derive_callers`. Each entry's justification is about WHAT it writes (an
+    # observation under temp_local/, or the server's own 0600 record), never about who calls it.
+    ("ide/launch.py", "open_or_focus"): (("cli_commands/ide.py", "cmd_ide"), ("hook_cli.py", "_ide_for_prompt")),
+    ("ide/server.py", "_remove_record"): (("ide/server.py", "serve"),),
+    ("ide/server.py", "_write_record"): (("ide/server.py", "serve"),),
+    ("ide/snapshots.py", "_append"): (("ide/snapshots.py", "capture"),),
+    ("ide/snapshots.py", "_maybe_prune"): (("ide/snapshots.py", "_append"),),
+    ("ide/snapshots.py", "_write_object"): (("ide/snapshots.py", "capture"),),
+    ("ide/snapshots.py", "capture_before_first_write"): (("hook_cli.py", "_snapshot_before"),),
     # Lane F — derived from `_writegraph.derive_callers`, not typed. The register entry for
     # `_debounced` justifies itself on WHAT it writes (zero bytes, run-state, nothing approved),
     # not on who calls it, so this single caller does not disturb that reasoning — but the pin is
@@ -1474,6 +1502,7 @@ CALLER_PINS = {
         ("events/store.py", "EventStore.emit"),
     ),
     ("atomicfile.py", "atomic_write_text"): (
+        ("branch_protection.py", "ProtectionCache.store"),
         ("config_cmd.py", "config_set._commit"),
         ("flush_liveness.py", "store_state"),
         ("flush_liveness.py", "update_state"),
@@ -1608,6 +1637,11 @@ CALLER_PINS = {
     ),
     ("memory/vector.py", "PgVectorBackend.read_stamp"): (
         ("memory/vector.py", "PgVectorBackend.verify_stamp"),
+    ),
+    # 0.0.22 C1 — the publisher's own high-water mark. Its one caller is the publish's commit
+    # callable, so it runs only AFTER the egress gate approved the batch it records.
+    ("team_events.py", "save_mark"): (
+        ("team_events.py", "publish._commit"),
     ),
     ("plans.py", "write_plan_file"): (
         ("brainstorm.py", "save_approach_plan"),
@@ -2118,7 +2152,7 @@ class TestZeroBypass(unittest.TestCase):
                           "than leaving a stale one in the report.")
 
     def test_rule_e_yield_is_stated_not_left_as_a_silent_ratio(self):
-        """RULE (e) RESOLVES 40 CALLS AND ADDS 3 DERIVED SITES, and the ratio is one a reader of
+        """RULE (e) RESOLVES 54 CALLS AND ADDS 6 DERIVED SITES, and the ratio is one a reader of
         a derived report is entitled to have explained rather than left to wonder at.
 
         THE EXPLANATION, and it is checkable, not a hand-wave: the rule's job is to resolve calls
@@ -2131,6 +2165,30 @@ class TestZeroBypass(unittest.TestCase):
         Both baselines were re-derived through `scripts/mutate.sh` with a measurement label rather
         than by hand (doc 85 §7b: "I am only measuring, not mutation-testing" is not an exemption):
         rule (e) ON gives 118 derived sites, the M05-shape mutation OFF gives 116.
+
+        53 -> 54 AT 0.0.22 E2, re-derived rather than bumped: `ide/sessions._claims` binds a local
+        `StateStore` and calls `.read` (a session's run-intent record, for the session list). Not
+        write-reaching — the review window only reads — so `productive` is unchanged.
+
+        46 -> 53 AT 0.0.22 D6, re-derived rather than bumped: `harvest.py` binds a local
+        `StateStore` in four functions — `_position_for_run` (`.exists` ×2), `harvest` (`.read`,
+        `.write`), `drafts` (`.read`), `decide` (`.read`, `.write`). The two `.write`s are
+        write-reaching — the session's DRAFT note, working state under temp_local/, never a memory
+        (a memory is written only by `decide`'s human-gated `MemoryStore.remember`) — so
+        `productive` gains `harvest` and `decide`: seven resolutions, two sites.
+
+        44 -> 46 AT 0.0.22 D2, re-derived rather than bumped: `working_set.working_set` binds a
+        local `PipelineCheckpoint` and calls `.resume_phase` and `.last_passed` (reads). Neither is
+        write-reaching, so `productive` is unchanged.
+
+        42 -> 44 AT 0.0.22 D1, re-derived rather than bumped: `reanchor.position` binds a local
+        `StateStore` and calls `.exists` twice (approach, spec). Neither is write-reaching, so
+        `productive` is unchanged — two resolutions, no site.
+
+        40 -> 42 AT 0.0.22 C1, re-derived rather than bumped, and both edges are nameable:
+        `run_intent.bind_registered` binds a local `StateStore` and calls `.read` and `.write` on it
+        (the session's run claim). The `.write` IS write-reaching, so `productive` gains
+        `bind_registered` and nothing else — two resolutions, one site, the `observe` shape again.
 
         39 -> 40 AT 0.0.21 STAGE 11, re-derived rather than bumped, and the ONE new edge is
         nameable: `team_events.publish` constructs a `WriteGate` locally and then calls
@@ -2161,18 +2219,19 @@ class TestZeroBypass(unittest.TestCase):
         self.assertEqual(len(graph.receiver_edges), graph.receiver_calls,
                          "the rule-(e) COUNT and the rule-(e) EDGE LIST disagree — a count with no "
                          "list can only be re-asserted, never re-graded")
-        self.assertEqual(graph.receiver_calls, 40,
+        self.assertEqual(graph.receiver_calls, 54,
                          "rule (e)'s resolution count moved; re-derive its yield before trusting "
                          "any number in the audit report that depends on it")
         productive = sorted({caller for caller, _ln, target in graph.receiver_edges
                              if target in reaching})
         self.assertEqual(
             productive,
-            [("govern/calibration.py", "observe"), ("mcp/tools_read.py", "session_save"),
-             ("team_journal.py", "_floor_rows")],
-            "of rule (e)'s 40 resolutions, exactly these reach a durable write — every other one "
+            [("govern/calibration.py", "observe"), ("harvest.py", "decide"),
+             ("harvest.py", "harvest"), ("mcp/tools_read.py", "session_save"),
+             ("run_intent.py", "bind_registered"), ("team_journal.py", "_floor_rows")],
+            "of rule (e)'s 54 resolutions, exactly these reach a durable write — every other one "
             "binds a receiver whose class writes nothing (or, since CM.S5, IS the WriteGate), "
-            "which is why 40 resolutions buy 3 sites rather than 39. If this list moved, the "
+            "which is why 54 resolutions buy 6 sites rather than 53. If this list moved, the "
             "ratio in the report is stale.")
         for site in productive:
             self.assertIn(site, closure.derived,

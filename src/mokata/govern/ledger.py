@@ -98,7 +98,7 @@ class _ReentrantFileLock:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _entry_hash(entry: Dict[str, Any]) -> str:
@@ -426,6 +426,8 @@ _WHY_WHAT = {
     "enforcement_change": "enforcement promotion", "scope_promotion": "scope promotion",
     "review_transition": "review workflow", "review_rollback": "review rollback",
     "model_route": "model routing", "phase": "pipeline phase", "subagent": "subagent",
+    "subagent_contract_unhonored": "subagent contract",
+    "harvest_decision": "session harvest",
     "sequential": "task", "finish": "ship", "spec_check": "spec-awareness",
     "revert": "revert", "reversible_write": "write",
 }

@@ -32,6 +32,7 @@ import unittest
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _observed_review import observe_review_subagent
 
 from mokata import progress, session_registry as SR
 from mokata.run_resolver import bind_session_run, resolve_badge_run, resolve_run_id
@@ -263,6 +264,7 @@ class TestSpecdCases(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _register_live_run(d, "solo", passed=PHASES)
+            observe_review_subagent(d)  # D4 ruling
             rc, out = _cli(["progress", "record-review", "--passed", "--independent",
                             "--path", d], d)
             self.assertEqual(rc, 0)
@@ -319,6 +321,7 @@ class TestCliRunFlag(_NoPinnedSession):
             _repo(d)
             _persist_run(d, "run-1", passed=PHASES)
             _persist_run(d, "run-2", passed=PHASES)
+            observe_review_subagent(d, "run-1")  # D4 ruling
             rc, out = _cli(["progress", "record-review", "--passed", "--independent",
                             "--run", "run-1", "--path", d], d)
             self.assertEqual(rc, 0)
@@ -376,6 +379,7 @@ class TestOrderingIrrelevant(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _register_live_run(d, "solo", passed=PHASES)
+            observe_review_subagent(d)  # D4 ruling
             record_review_verdict(surface, passed=True, independent=True)
             before = ship_review_gate(surface)
             _mark_ship(surface, "solo")                       # retires the run for the BADGE
@@ -443,6 +447,7 @@ class TestNoBehaviourChange(_NoPinnedSession):
             surface = _repo(d)
             _persist_run(d, "solo", passed=PHASES)
             blind = _old_find_active_run(surface.state)
+            observe_review_subagent(d)  # D4 ruling
             event = record_review_verdict(surface, passed=True, independent=True)
             self.assertEqual(event["run_id"], blind)
             self.assertEqual(event["data"], {"passed": True, "independent": True})

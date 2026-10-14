@@ -196,21 +196,99 @@ def has_standing_consent(data: dict) -> bool:
     return bool(_settings(data).get(STANDING_CONSENT_KEY))
 
 
-def pointer_is_ahead(mark: int, local_high: int) -> bool:
-    """The contradiction both the publisher and the preview refuse on, in ONE place.
+#: The publisher's OWN bookkeeping, beside the local event store it describes (0.0.22 C1,
+#: `PUBLISH-POINTER-IS-BORROWED-MEMORY`). Machine-local working state under `temp_local/`.
+PUBLISH_MARKS_FILENAME = "publish-marks.json"
 
-    The resume pointer is `MAX(local_seq)` for this (namespace, actor) in the TEAM's table — a
-    borrowed memory. When it sits ABOVE this machine's newest local event, either another machine
-    publishes under the same name or this store was rebuilt, and in both cases publishing from
-    that mark skips everything local AND reports success (review F2).
 
-    ⭐ `local_high > 0` is not slack: a machine with NO local events and a non-zero mark is a
-    publisher that is simply up to date, which is the ordinary case and must not be refused
-    (§7f — a guard that convicts the healthy case is a guard somebody deletes).
+def publish_marks_path(root: str) -> str:
+    from .events.store import events_dir
+    return os.path.join(events_dir(root), PUBLISH_MARKS_FILENAME)
 
-    ⚠ ONE function because two surfaces ask it. Two copies of this comparison is how the preview
-    comes to print a confident count over a state the publisher refuses."""
-    return local_high > 0 and mark > local_high
+
+def mark_key(ns: str, dsn: Optional[str]) -> str:
+    """The key one high-water mark is filed under: (namespace, DSN), HASHED.
+
+    ⛔ The DSN is a credential (it carries the password) and this module's contract is that it is
+    *"read from the environment and never stored"* — so the key is a one-way digest of it, never
+    the DSN. Keyed on the DSN at all because "where did I get to" is a fact about ONE team store:
+    point the same repo at a different team database and it has received nothing."""
+    import hashlib
+    raw = "mokata-publish-mark\0%s\0%s" % (ns, dsn or "")
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def _store_anchor(store: Any) -> str:
+    """The `event_id` of the local store's FIRST event — which store a mark was taken against.
+
+    `seq` restarts at 1 when `events.db` is deleted and rebuilt. A bare number would then read as
+    "already sent through N" over N brand-new events — the borrowed pointer's skip, rebuilt
+    locally. The first event's id changes with the store, so a mark from another store is seen."""
+    head = store.after_seq(0, limit=1)
+    return head[0].event_id if head else ""
+
+
+def resume_point(root: str, ns: str, dsn: Optional[str], store: Any,
+                 local_high: int) -> Tuple[int, str]:
+    """`(seq to publish after, note)` from THIS machine's own mark for (namespace, DSN).
+
+    ⭐ THE FIX `PUBLISH-POINTER-IS-BORROWED-MEMORY` OWED. The pointer used to be `MAX(local_seq)`
+    for this (namespace, actor) in the TEAM's table — an inference from rows another writer may
+    have put there, which reported success over a skipped store two different ways (review F2).
+    Now the publisher asks only itself.
+
+    Every way the mark can be missing or wrong resumes from the START, never from a guess: the
+    team table is idempotent on (namespace, event_id), so re-sending costs a deduplicated insert,
+    and skipping costs the events. `note` says which of those happened, so a resume from zero is
+    never silent:
+      * no mark yet for this (namespace, DSN) → 0, and the first publish says so;
+      * the marks file is unreadable → 0, said;
+      * the mark was taken against a DIFFERENT local store (rebuilt `events.db`) → 0, said;
+      * the mark is past this store's newest event → 0, said."""
+    try:
+        with open(publish_marks_path(root), encoding="utf-8") as fh:
+            marks = json.load(fh)
+        if not isinstance(marks, dict):
+            raise ValueError("not an object")
+    except FileNotFoundError:
+        marks = {}
+    except (OSError, ValueError):
+        return 0, ("this machine's publish mark could not be read, so this publish starts from "
+                   "the first local event (rows your team already has are skipped, not doubled)")
+    entry = marks.get(mark_key(ns, dsn))
+    if not isinstance(entry, dict):
+        return 0, "first publish from this machine to this team store"
+    try:
+        mark = int(entry.get("seq", 0))
+    except (TypeError, ValueError):
+        mark = -1
+    if mark < 0 or str(entry.get("anchor", "")) != _store_anchor(store) or mark > local_high:
+        return 0, ("this machine's event store is not the one its publish mark was taken "
+                   "against (it was rebuilt), so this publish starts from its first event")
+    return mark, ""
+
+
+def save_mark(root: str, ns: str, dsn: Optional[str], seq: int, anchor: str) -> None:
+    """Record that this machine has sent its local events through `seq` to (namespace, DSN).
+
+    Written AFTER the rows were inserted, whether or not any LANDED: a batch that was already in
+    the team's store under another name has still been sent, and holding the mark back is
+    precisely review F2's stalled publisher. Atomic (temp file + replace). Raises on failure — the
+    caller reports it, because an unsaved mark means the next publish re-sends."""
+    path = publish_marks_path(root)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            marks = json.load(fh)
+        if not isinstance(marks, dict):
+            marks = {}
+    except (OSError, ValueError):
+        marks = {}
+    marks[mark_key(ns, dsn)] = {"seq": int(seq), "anchor": anchor}
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(marks, fh, sort_keys=True)
+    os.replace(tmp, path)
 
 
 def namespace(root: str) -> str:
@@ -289,14 +367,6 @@ class SharedEventLog:
 
     # The B608 suppressions below interpolate ONLY the mokata-owned `self.TABLE`; every value
     # rides the driver's `%s` placeholders. Suppression markers only — no injection surface.
-    def max_local_seq(self, ns: str, who: str) -> int:
-        """Where this (namespace, actor) got to. See the v6 note in `teamdb`: this is the
-        PUBLISHER'S OWN append index and says nothing about another actor's."""
-        row = self._conn.execute(
-            f"SELECT MAX(local_seq) FROM {self.TABLE} "          # nosec B608
-            "WHERE namespace=%s AND actor=%s", (ns, who)).fetchone()
-        return int(row[0]) if row and row[0] is not None else 0
-
     def append_all(self, ns: str, who: str, events: List[Any], *, project: str = "") -> int:
         """INSERT a batch, oldest first, and return how many rows LANDED.
 
@@ -434,26 +504,22 @@ def pending_publish(root: str, surface: Any, *, client: Any = None
         ns, who = namespace(root), actor()
         from .events.store import store_for_root
         store = store_for_root(root)
-        mark = log.max_local_seq(ns, who)
         local_high = store.max_seq()
         if local_high is None:
             return (False, 0, env_name,
                     "the local event store exists and could not be read, so the pending count is "
                     "unknown — NOT zero. Check `.mokata/temp_local/events/events.db`.")
-        if pointer_is_ahead(mark, local_high):
-            # The same contradiction `publish` refuses on, reported here rather than printed as
-            # a confident "0 event(s) not yet published" (review F2/F4).
-            return (False, 0, env_name,
-                    f"your team's store records local sequence {mark} for '{who}', ahead of this "
-                    f"machine's newest event ({local_high}) — the pending count cannot be "
-                    f"derived. Set $MOKATA_ACTOR to a name unique to this machine.")
+        # The SAME resume point `publish` uses — one function, so the preview cannot print a count
+        # over a state the publisher would read differently.
+        mark, note = resume_point(root, ns, resolve_dsn(data=data), store, local_high)
         # ⭐ The EXACT backlog from the store's own gapless append index, not `len()` of a CAPPED
         # fetch: this printed "501 event(s) not yet published" as a fact with any larger number
         # queued (review F4).
         n = max(0, local_high - mark)
         more = "" if n <= PUBLISH_BATCH_CAP else f" (this batch would send {PUBLISH_BATCH_CAP})"
         return (True, n, env_name,
-                f"{n} event(s) not yet published to ${env_name} as {who}{more}.")
+                f"{n} event(s) not yet published to ${env_name} as {who}{more}"
+                + (f" ({note})." if note else "."))
     finally:
         if client is None:
             log.close()
@@ -491,46 +557,33 @@ def publish(root: str, surface: Any, *, assume_yes: bool = False,
         from .events.store import store_for_root
         store = store_for_root(root)
 
-        # ---- the RESUME POINTER, and the two ways it lies ------------------------------------
-        # ⛔ The pointer is `MAX(local_seq)` for THIS (namespace, actor) in the TEAM's table, and
-        # that is a borrowed memory: it assumes one producer per actor name and a local store
-        # whose seqs only ever go up. CM.S5's review (F2) broke both assumptions with a live
-        # server, and in each case the publisher answered `ok=True, "nothing new to publish"`,
-        # MCP `status: "in_sync"`, exit 0 — while every local event stayed unpublished. ⭐ A
-        # pointer that is WRONG is survivable; a pointer that is wrong and reports SUCCESS is the
-        # failure class this release is named for. Each contradiction below is now NAMED, and the
-        # remedy named with it is one that exists (`$MOKATA_ACTOR`).
-        #
-        # ⚠ THIS IS A REFUSAL, NOT THE FIX. The fix is a LOCAL high-water mark per
-        # (namespace, DSN) — the publisher's own bookkeeping, not an inference from somebody
-        # else's rows — and that is a stage, filed as `PUBLISH-POINTER-IS-BORROWED-MEMORY`
-        # (doc 84). Until then these three outcomes are honest and the silent one is gone.
-        mark = log.max_local_seq(ns, who)
+        # ---- the RESUME POINT: this machine's OWN high-water mark ----------------------------
+        # ⛔ It used to be `MAX(local_seq)` for this (namespace, actor) in the TEAM's table — a
+        # borrowed memory that assumed one producer per actor name and a local store whose seqs
+        # only rise. CM.S5's review (F2) broke both against a live server, and each time the
+        # publisher answered `ok=True, "nothing new to publish"` with every local event
+        # unpublished. 0.0.21 turned those into refusals; 0.0.22 C1 removed their cause: the mark
+        # is the publisher's own bookkeeping per (namespace, DSN), so another machine's rows under
+        # the same name can neither hide this machine's events nor stall its resume.
         local_high = store.max_seq()
         if local_high is None:
             msg = ("the local event store exists and could not be read, so there is nothing to "
-                   "compare against your team's. NOTHING was published and no high-water mark "
-                   "was recorded. Check `.mokata/temp_local/events/events.db`, then retry.")
+                   "publish from. NOTHING was published and no high-water mark was recorded. "
+                   "Check `.mokata/temp_local/events/events.db`, then retry.")
             emit(msg)
             return PublishResult(reason="local-unreadable", message=msg,
                                  notify_state=state, notify_why=why)
-        if pointer_is_ahead(mark, local_high):
-            msg = (f"REFUSING: your team's store already records local sequence {mark} for "
-                   f"'{who}', which is AHEAD of this machine's newest event ({local_high}). "
-                   f"Either another machine publishes under the same name, or this machine's "
-                   f"event store was rebuilt. Publishing now would skip every local event and "
-                   f"report success. Set $MOKATA_ACTOR to a name unique to this machine and "
-                   f"retry; nothing was published.")
-            emit(msg)
-            return PublishResult(reason="pointer-ahead", message=msg, high_water=mark,
-                                 notify_state=state, notify_why=why)
+        mark, note = resume_point(root, ns, dsn, store, local_high)
+        if note:
+            emit(note + ".")
 
         fetched = store.after_seq(mark, limit=PUBLISH_BATCH_CAP + 1)
         batch = fetched[:PUBLISH_BATCH_CAP]
         if not batch:
             msg = f"nothing new to publish (${env_name}, as {who})."
             emit(msg)
-            return PublishResult(ok=True, reason="nothing-new", message=msg,
+            return PublishResult(ok=True, reason="nothing-new",
+                                 message=(note + ". " if note else "") + msg,
                                  notify_state=state, notify_why=why)
         # ⭐ The EXACT backlog, not a flag. `fetched` is capped at `PUBLISH_BATCH_CAP + 1`, so
         # `len(fetched) - len(batch)` is 0 or 1 and NOTHING ELSE — it was printed as "1 more
@@ -558,9 +611,20 @@ def publish(root: str, surface: Any, *, assume_yes: bool = False,
 
         box: dict = {}
 
+        anchor = _store_anchor(store)
+
         def _commit() -> None:
             landed = log.append_all(ns, who, batch, project=ns)
             box["landed"] = landed
+            # The rows are in (or were already there) — record that THIS machine has sent them,
+            # landed or not (see `save_mark`). A failure to save is REPORTED below, never raised
+            # past the insert it describes: the rows are already in the team's store.
+            try:
+                save_mark(root, ns, dsn, int(batch[-1].seq), anchor)
+                box["mark_saved"] = True
+            except OSError as exc:
+                box["mark_saved"] = False
+                box["mark_error"] = str(exc)
             # ⛔ ONLY WHEN SOMETHING LANDED. `notify`'s own docstring argues the ORDER precisely
             # so a woken reader never finds an empty doorstep — and then rang unconditionally, so
             # a batch whose every row conflicted woke every listener in the team to SELECT nothing
@@ -589,21 +653,6 @@ def publish(root: str, surface: Any, *, assume_yes: bool = False,
 
         landed = int(box.get("landed", 0))
         already = max(0, len(batch) - landed)
-        if landed == 0 and remaining_after:
-            # ⛔ The whole head was already there under a DIFFERENT actor name, so `MAX(local_seq)`
-            # for THIS name did not move — and the next run will fetch this same head again, for
-            # ever, while the tail past it is never published (review F2, scenario b). Reporting
-            # `committed` here is a green over a stalled publisher.
-            msg = (f"REFUSING to report success: all {len(batch)} event(s) in this batch were "
-                   f"already in your team's store under another name, so the resume pointer for "
-                   f"'{who}' did not move and the {remaining_after} behind them can never be "
-                   f"reached. Set $MOKATA_ACTOR to the name those rows were published under and "
-                   f"retry. The rows in your team's store are unchanged.")
-            emit(msg)
-            return PublishResult(attempted=len(batch), already_there=already, own_trail=own,
-                                 high_water=mark, remaining=remaining_after,
-                                 reason="pointer-stuck", message=msg,
-                                 notify_state=state, notify_why=why)
         msg = (f"published {landed} event{'' if landed == 1 else 's'} to the team's shared store "
                f"as {who} (append-only, counts only)")
         if own and own == len(batch):
@@ -614,6 +663,10 @@ def publish(root: str, surface: Any, *, assume_yes: bool = False,
             msg += f"; {already} were already there"
         if remaining_after:
             msg += f"; {remaining_after} more queued for the next publish"
+        if not box.get("mark_saved", False):
+            msg += (f". ⚠ this machine's publish mark could NOT be saved "
+                    f"({box.get('mark_error', 'unknown')}), so the next publish re-sends this "
+                    f"batch — your team's store skips the duplicates")
         if state == NOTIFY_POOLED:
             msg += (". ⚠ the notification was sent but CANNOT be received over this DSN — " + why)
         emit(msg + ".")
@@ -622,7 +675,7 @@ def publish(root: str, surface: Any, *, assume_yes: bool = False,
                              high_water=int(batch[-1].seq),
                              remaining=remaining_after, notify_state=state, notify_why=why,
                              reason="only-own-trail" if own == len(batch) else "committed",
-                             message=msg)
+                             message=(note + ". " if note else "") + msg)
     finally:
         if client is None:
             log.close()

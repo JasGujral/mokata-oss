@@ -31,10 +31,21 @@ The three states:
                      * both of those reads actually SUCCEEDED — a failed corroborating read is not
                        a pass. Re-admitting "could not read ⇒ fine" one level down would be the
                        very bug being fixed, wearing a hat.
-                   With corroboration it is DEGRADED, not green: `ok` is True, `degraded` is True,
-                   and the render is a loud dated notice naming the four assurances that were NOT
-                   obtained. Without corroboration it REFUSES, and its remedy is retry/check-status
-                   — never a write.
+                     * the LAST SUCCESSFULLY READ protection document for this repo@branch is in
+                       the local cache, is younger than `PROTECTION_CACHE_MAX_AGE_HOURS`, and
+                       itself satisfies `evaluate_protection_payload`.
+                   With all of that it is DEGRADED, not green: `ok` is True, `degraded` is True,
+                   and the render is a loud dated notice naming the four assurances as verified
+                   only AS OF the cached read. Without it it REFUSES — and a cache MISS, a cached
+                   document that DISAGREES, one that is TOO OLD and one that cannot be USED are
+                   four different refusals with four different exit codes (doc-free: see
+                   `CACHE_OUTCOMES`). Every refusal's remedy is retry/check-status — never a write.
+
+THE LAST-READ CACHE (option (b) of BRANCH-PROTECTION-DEGRADED-PASS). The boolean-only pass that
+stood here passed on `protected: true` alone, which says protection EXISTS and nothing about what
+it forbids. The cache turns that into "we know what the full document said at <time>, and the live
+boolean says protection is still on". It is written ONLY after a successful full read of the
+document, and it is dated, so its age is a fact the verdict prints rather than an assumption.
 
 FAIL-CLOSED is still the posture everywhere except the one corroborated path above, and that path
 announces itself. It reads via the `gh` CLI (which supplies its own auth: a maintainer's login
@@ -47,9 +58,13 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import os
+import re
 import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Tuple
+
+from .atomicfile import atomic_write_text
 
 DEFAULT_REPO = "JasGujral/mokata-oss"
 DEFAULT_BRANCH = "main"
@@ -67,6 +82,43 @@ EXIT_PROTECTED = 0
 EXIT_NOT_PROTECTED = 1
 EXIT_UNREADABLE = 2
 EXIT_DEGRADED = 3
+# The degraded path's four ways NOT to corroborate, each its own exit so a caller can tell them
+# apart without parsing prose (doc 85 §7g). All four refuse; none of them suggests a write.
+EXIT_CACHE_MISS = 4
+EXIT_CACHE_DISAGREES = 5
+EXIT_CACHE_TOO_OLD = 6
+EXIT_CACHE_UNUSABLE = 7
+
+# ------------------------------------------------------------------------------ THE CACHE OUTCOMES
+# What the degraded path found when it consulted the last-read cache. `""` means the cache was never
+# consulted (states 1 and 2, and a state-3 refusal that failed before reaching it).
+CACHE_HIT_AGREES = "CACHE_HIT_AGREES"          # fresh, and the cached document is safe  -> exit 3
+CACHE_MISS = "CACHE_MISS"                      # nothing cached for this repo@branch     -> exit 4
+CACHE_HIT_DISAGREES = "CACHE_HIT_DISAGREES"    # fresh, but the cached document is NOT safe -> 5
+CACHE_HIT_TOO_OLD = "CACHE_HIT_TOO_OLD"        # cached, but older than the age limit    -> exit 6
+CACHE_UNUSABLE = "CACHE_UNUSABLE"              # a file is there and cannot be trusted   -> exit 7
+CACHE_OUTCOMES = (CACHE_HIT_AGREES, CACHE_MISS, CACHE_HIT_DISAGREES, CACHE_HIT_TOO_OLD,
+                  CACHE_UNUSABLE)
+_CACHE_REFUSAL_EXIT = {
+    CACHE_MISS: EXIT_CACHE_MISS,
+    CACHE_HIT_DISAGREES: EXIT_CACHE_DISAGREES,
+    CACHE_HIT_TOO_OLD: EXIT_CACHE_TOO_OLD,
+    CACHE_UNUSABLE: EXIT_CACHE_UNUSABLE,
+}
+
+# ⭐ THE AGE LIMIT, AND WHY IT IS 24 HOURS. The cached document is the protection detail AS OF its
+# read; the live `protected: true` says protection still exists NOW. What the pair cannot see is a
+# detail weakened in between — force-push or deletion switched on while protection stays on — and
+# only a repository admin can do that. The limit bounds how old that blind spot may be:
+#   * LONG ENOUGH FOR THE CASE IT EXISTS FOR. The measured outage (2026-08-17) kept the protection
+#     endpoint at 503 for over an hour, and `release.sh` reads protection at the cheap gates of
+#     EVERY run, so during a cut the cache is refreshed by every attempt that gets an answer. A
+#     same-day retry loop after an outage begins is inside the limit.
+#   * SHORT ENOUGH TO STAY A SAME-DAY FACT. Beyond a day the document describes an earlier working
+#     session, not this cut, and an outage that has outlasted a day is not a transient to release
+#     through — it is a reason to wait. The verdict prints the read time and the age either way.
+# A cut that spans days still works: any run on which the endpoint answers refreshes the cache.
+PROTECTION_CACHE_MAX_AGE_HOURS = 24
 
 # The four assurances that live ONLY in the `.../protection` document. When that document is
 # unreadable these are exactly what is not known — the degraded notice names them one by one rather
@@ -101,7 +153,7 @@ UNOBTAINED_ASSURANCES = (
 # promise was live and pointed at a release that would not keep it — which is exactly the defect B5
 # exists to catch, in `src/` rather than in the notes, and it is now the row's own regression test:
 # `mokata release-notes-check` reds on this constant if the release it names stops owning the item.
-RESTORE_ROW = "BRANCH-PROTECTION-DEGRADED-PASS — filed 2026-08-17, restore full verification in 0.0.22"
+RESTORE_ROW = "BRANCH-PROTECTION-DEGRADED-PASS — filed 2026-08-17; a 24h last-read cache replaces the boolean-only pass, lands in 0.0.22"
 
 # A gh runner is (api_path) -> (returncode, stdout, stderr). Injected in tests; the default below
 # shells out to `gh api`. It takes a PATH rather than (repo, branch) because state 3 has to read
@@ -113,7 +165,8 @@ GhRunner = Callable[[str], Tuple[int, str, str]]
 def _default_gh_runner(path: str) -> Tuple[int, str, str]:
     """Read `gh api <path>` — gh supplies auth (login locally / GH_TOKEN in CI).
     Returns (returncode, stdout, stderr); raises FileNotFoundError when `gh` is not installed."""
-    proc = subprocess.run(["gh", "api", path], capture_output=True, text=True)
+    proc = subprocess.run(["gh", "api", path], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
     return proc.returncode, proc.stdout, proc.stderr
 
 
@@ -205,6 +258,111 @@ def evaluate_rulesets_payload(payload: Any) -> Tuple[bool, List[str]]:
     return (not reasons), reasons
 
 
+def default_cache_dir() -> str:
+    """Where `mokata branch-protection-check` keeps the last-read documents.
+
+    `$XDG_CACHE_HOME/mokata/branch-protection`, else `~/.cache/mokata/branch-protection`. A cache
+    is a fact about THIS machine's reads, so it lives with the user's caches and never in a repo."""
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "mokata", "branch-protection")
+
+
+def _utc(value: _dt.datetime) -> _dt.datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=_dt.timezone.utc)
+
+
+def _now_utc() -> _dt.datetime:
+    return _dt.datetime.now(_dt.timezone.utc)
+
+
+@dataclass
+class CacheLookupResult:
+    """What the last-read cache said for one repo@branch — ONE of `CACHE_OUTCOMES`, with its dates."""
+
+    outcome: str
+    path: str = ""
+    read_at: str = ""
+    age_hours: float = 0.0
+    # Why the cached document is not safe (HIT-disagrees) or why the file is unusable.
+    failures: List[str] = field(default_factory=list)
+
+
+class ProtectionCache:
+    """The last SUCCESSFULLY READ protection document per repo@branch, with its read time.
+
+    One JSON file per repo@branch: `{"repo", "branch", "read_at", "document"}`. Writes go through
+    `atomicfile.atomic_write_text`, so a reader never sees half a document. Nothing here raises to the
+    caller: a cache that cannot be written is a later MISS, and a MISS refuses — the safe way round.
+    """
+
+    def __init__(self, directory: str):
+        self.directory = directory
+
+    def path_for(self, repo: str, branch: str) -> str:
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", f"{repo}@{branch}")
+        return os.path.join(self.directory, safe + ".json")
+
+    def store(self, repo: str, branch: str, document: Any, read_at: _dt.datetime) -> str:
+        """Record a document that was just READ IN FULL. Returns "" or why the write failed."""
+        path = self.path_for(repo, branch)
+        record = {"repo": repo, "branch": branch, "read_at": _utc(read_at).isoformat(),
+                  "document": document}
+        try:
+            atomic_write_text(path, json.dumps(record, sort_keys=True))
+        except (OSError, TypeError, ValueError) as exc:
+            return f"the protection cache could not be written at {path}: {exc}"
+        return ""
+
+    def forget(self, repo: str, branch: str) -> str:
+        """Drop the entry. Called when a SUCCESSFUL read said the branch has NO protection at all:
+        that 404 carries no document to cache, and leaving an older safe document behind would let a
+        later outage corroborate against protection that is known to be gone."""
+        path = self.path_for(repo, branch)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError as exc:
+            return f"the stale protection cache at {path} could not be removed: {exc}"
+        return ""
+
+    def lookup(self, repo: str, branch: str, now: _dt.datetime) -> CacheLookupResult:
+        path = self.path_for(repo, branch)
+        if not os.path.exists(path):
+            return CacheLookupResult(CACHE_MISS, path=path)
+
+        def unusable(why: str) -> CacheLookupResult:
+            return CacheLookupResult(CACHE_UNUSABLE, path=path, failures=[why])
+
+        try:
+            with open(path, encoding="utf-8") as fh:
+                record = json.load(fh)
+        except (OSError, ValueError) as exc:
+            return unusable(f"it could not be read as JSON ({exc})")
+        if not isinstance(record, dict) or "document" not in record:
+            return unusable("it is not a cache record (no `document`)")
+        if record.get("repo") != repo or record.get("branch") != branch:
+            return unusable(f"it records {record.get('repo')!r}@{record.get('branch')!r}, not "
+                            f"{repo!r}@{branch!r}")
+        try:
+            read_at = _utc(_dt.datetime.fromisoformat(str(record.get("read_at"))))
+        except (TypeError, ValueError):
+            return unusable(f"its read time {record.get('read_at')!r} is not a timestamp")
+        age = _utc(now) - read_at
+        read_iso = read_at.isoformat()
+        if age.total_seconds() < 0:
+            return unusable(f"its read time {read_iso} is in the FUTURE of this clock, so its age "
+                            "cannot be known")
+        hours = age.total_seconds() / 3600.0
+        if hours > PROTECTION_CACHE_MAX_AGE_HOURS:
+            return CacheLookupResult(CACHE_HIT_TOO_OLD, path=path, read_at=read_iso,
+                                     age_hours=hours)
+        safe, failures = evaluate_protection_payload(record["document"])
+        if not safe:
+            return CacheLookupResult(CACHE_HIT_DISAGREES, path=path, read_at=read_iso,
+                                     age_hours=hours, failures=failures)
+        return CacheLookupResult(CACHE_HIT_AGREES, path=path, read_at=read_iso, age_hours=hours)
+
+
 @dataclass
 class ProtectionVerdict:
     """Which of the THREE states the branch is in, and whether a release may proceed."""
@@ -222,6 +380,14 @@ class ProtectionVerdict:
     unreadable_because: str = ""
     # The DATE this verdict was formed. A degraded pass that is not dated cannot be aged out.
     observed_on: str = field(default_factory=lambda: _dt.date.today().isoformat())
+    # State 3 only: which of `CACHE_OUTCOMES` the degraded path found ("" = never consulted).
+    cache_outcome: str = ""
+    # State 3 only, on a HIT: when the cached document was read and how old it was.
+    cache_read_at: str = ""
+    cache_age_hours: float = 0.0
+    # Set when the cache could not be written or cleared. Not part of any render: it never changes
+    # the verdict (a failed write is a later MISS, which refuses), and the CLI prints it to stderr.
+    cache_note: str = ""
 
     @property
     def exit_code(self) -> int:
@@ -229,6 +395,8 @@ class ProtectionVerdict:
             return EXIT_PROTECTED
         if self.state == STATE_NOT_PROTECTED:
             return EXIT_NOT_PROTECTED
+        if not self.ok and self.cache_outcome in _CACHE_REFUSAL_EXIT:
+            return _CACHE_REFUSAL_EXIT[self.cache_outcome]
         return EXIT_DEGRADED if self.ok else EXIT_UNREADABLE
 
     # -------------------------------------------------------------------------------- rendering
@@ -256,8 +424,9 @@ class ProtectionVerdict:
         return "\n".join(lines)
 
     def _render_unreadable_refusal(self) -> str:
+        why = (f" — last-read cache: {self.cache_outcome}" if self.cache_outcome else "")
         lines = [f"branch-protection FAIL — {self.repo}@{self.branch}: the protection detail is "
-                 f"UNREADABLE and could NOT be corroborated ({self.observed_on}):"]
+                 f"UNREADABLE and could NOT be corroborated ({self.observed_on}){why}:"]
         for f in self.failures:
             lines.append(f"  ✗ {f}")
         # NO `PUT` HERE, EVER. This is a READ fault; a write suggested against a read fault is how
@@ -277,23 +446,25 @@ class ProtectionVerdict:
             "=" * 78,
             f"⚠⚠ branch-protection DEGRADED — {self.repo}@{self.branch} — {self.observed_on}",
             "=" * 78,
-            "THIS IS NOT A GREEN. The protection document could not be read, so the check passed on",
-            "CORROBORATING BOOLEANS ALONE.",
+            "THIS IS NOT A GREEN. The protection document could not be read LIVE, so the check",
+            "passed on the LAST SUCCESSFULLY READ DOCUMENT plus live corroborating reads.",
             "",
             f"  unreadable: {self.unreadable_because}",
+            f"  last read:  {self.cache_read_at} ({self.cache_age_hours:.1f}h ago; the limit is "
+            f"{PROTECTION_CACHE_MAX_AGE_HOURS}h)",
             "",
-            "  corroborated (both reads SUCCEEDED — a failed read would have refused):",
+            "  corroborated (every read SUCCEEDED — a failed read would have refused):",
         ]
         for c in self.corroboration:
             lines.append(f"    ✓ {c}")
         lines.append("")
-        lines.append("  NOT OBTAINED — these four assurances were NOT verified for this release:")
+        lines.append(f"  NOT OBTAINED LIVE — these four held at {self.cache_read_at}, not verified now:")
         for a in UNOBTAINED_ASSURANCES:
             lines.append(f"    ✗ {a}")
         lines.append("")
-        lines.append("  It proceeded on the corroborating boolean alone. Record this against the")
-        lines.append("  release it let through, with today's date, wherever that release is recorded.")
-        lines.append(f"  This exemption EXPIRES with: {RESTORE_ROW}")
+        lines.append("  It proceeded on the cached document and the live boolean. Record this against")
+        lines.append("  the release it let through, with today's date, wherever that release is recorded.")
+        lines.append(f"  Bounded by the cache age limit ({PROTECTION_CACHE_MAX_AGE_HOURS}h): {RESTORE_ROW}")
         lines.append("=" * 78)
         return "\n".join(lines)
 
@@ -305,18 +476,20 @@ class ProtectionVerdict:
         return self._render_degraded() if self.ok else self._render_unreadable_refusal()
 
 
-def _corroborate(run: GhRunner, repo: str, branch: str, unreadable_because: str) -> ProtectionVerdict:
+def _corroborate(run: GhRunner, repo: str, branch: str, unreadable_because: str,
+                 cache: Optional[ProtectionCache] = None,
+                 now: Optional[Callable[[], _dt.datetime]] = None) -> ProtectionVerdict:
     """STATE 3. The protection detail is unreadable — can it be positively corroborated?
 
     It passes ONLY on evidence that was actually READ. Every arm below that returns a refusal is
     the same rule stated once more: a read that did not succeed proves nothing, and must not be
     allowed to mean "fine" merely because it happened one level below the read that failed."""
 
-    def refuse(extra: List[str]) -> ProtectionVerdict:
+    def refuse(extra: List[str], cache_outcome: str = "") -> ProtectionVerdict:
         return ProtectionVerdict(
             repo=repo, branch=branch, ok=False, state=STATE_UNREADABLE,
             failures=[f"could not read the protection detail: {unreadable_because}"] + extra,
-            unreadable_because=unreadable_because)
+            unreadable_because=unreadable_because, cache_outcome=cache_outcome)
 
     branch_path = f"repos/{repo}/branches/{branch}"
     b_ok, b_payload, b_err = _read_json(run, branch_path)
@@ -339,14 +512,43 @@ def _corroborate(run: GhRunner, repo: str, branch: str, unreadable_because: str)
     if not consistent:
         return refuse([f"{rulesets_path} read but is not consistent: " + "; ".join(reasons)])
 
+    # ⭐ THE LAST-READ CACHE — what turns "protection exists" into "and here is what it said".
+    # Four ways not to corroborate, four refusals, four exits; only a fresh, safe document passes.
+    clock = now if now is not None else _now_utc
+    if cache is None:
+        hit = CacheLookupResult(CACHE_MISS, path="<no cache was supplied to this check>")
+    else:
+        hit = cache.lookup(repo, branch, clock())
+    limit = f"{PROTECTION_CACHE_MAX_AGE_HOURS}h"
+    if hit.outcome == CACHE_MISS:
+        return refuse([f"no protection document has been read successfully for {repo}@{branch} "
+                       f"on this machine ({hit.path}), so there is nothing to corroborate the "
+                       "boolean against — `protected: true` alone is not a pass"], CACHE_MISS)
+    if hit.outcome == CACHE_UNUSABLE:
+        return refuse([f"the last-read cache at {hit.path} cannot be used: "
+                       + "; ".join(hit.failures)], CACHE_UNUSABLE)
+    if hit.outcome == CACHE_HIT_TOO_OLD:
+        return refuse([f"the last successfully read protection document is {hit.age_hours:.1f}h "
+                       f"old (read {hit.read_at}); the limit is {limit}, so it no longer "
+                       "describes this cut"], CACHE_HIT_TOO_OLD)
+    if hit.outcome == CACHE_HIT_DISAGREES:
+        return refuse([f"the last successfully read protection document (read {hit.read_at}) "
+                       "does NOT show safe protection — " + "; ".join(hit.failures)
+                       + " — while the live boolean says protected: the two disagree"],
+                      CACHE_HIT_DISAGREES)
+
     count = len(r_payload)
     return ProtectionVerdict(
         repo=repo, branch=branch, ok=True, state=STATE_UNREADABLE, degraded=True,
         unreadable_because=unreadable_because,
+        cache_outcome=CACHE_HIT_AGREES, cache_read_at=hit.read_at,
+        cache_age_hours=hit.age_hours,
         corroboration=[
             f"{branch_path} → protected: true",
             f"{rulesets_path} → {count} ruleset(s), all consistent"
             + (" (empty — classic protection only)" if count == 0 else ""),
+            f"the last-read document (read {hit.read_at}, {hit.age_hours:.1f}h ago, limit "
+            f"{limit}) → force-push and deletion disabled, required status checks configured",
         ])
 
 
@@ -354,29 +556,40 @@ def check_branch_protection(
     repo: str = DEFAULT_REPO,
     branch: str = DEFAULT_BRANCH,
     runner: Optional[GhRunner] = None,
+    cache: Optional[ProtectionCache] = None,
+    now: Optional[Callable[[], _dt.datetime]] = None,
 ) -> ProtectionVerdict:
     """Classify `repo`@`branch` into one of the THREE states. NEVER raises.
 
-    A release proceeds only on `ok` — which is state 1, or state 3 with positive corroboration and
-    a loud dated notice. Everything else refuses. No token is hard-coded or accepted."""
+    A release proceeds only on `ok` — which is state 1, or state 3 corroborated by live reads AND a
+    fresh, safe last-read document, with a loud dated notice. Everything else refuses. No token is
+    hard-coded or accepted. With `cache=None` nothing is cached and state 3 is always a MISS."""
     run = runner if runner is not None else _default_gh_runner
+    clock = now if now is not None else _now_utc
 
     detail_path = f"repos/{repo}/branches/{branch}/protection"
     read_ok, payload, error = _read_json(run, detail_path)
 
     if read_ok:
+        # ⭐ THE ONLY CACHE WRITE: after a SUCCESSFUL FULL READ of the document, whatever it says.
+        # An unsafe document is cached too, so a later outage corroborates against what was really
+        # last seen (HIT-disagrees) instead of an older safe one.
+        note = cache.store(repo, branch, payload, clock()) if cache is not None else ""
         ok, failures = evaluate_protection_payload(payload)
         if ok:
-            return ProtectionVerdict(repo=repo, branch=branch, ok=True, state=STATE_PROTECTED)
+            return ProtectionVerdict(repo=repo, branch=branch, ok=True, state=STATE_PROTECTED,
+                                     cache_note=note)
         return ProtectionVerdict(repo=repo, branch=branch, ok=False,
-                                 state=STATE_NOT_PROTECTED, failures=failures)
+                                 state=STATE_NOT_PROTECTED, failures=failures, cache_note=note)
 
     if reads_as_unprotected(error):
+        note = cache.forget(repo, branch) if cache is not None else ""
         return ProtectionVerdict(
             repo=repo, branch=branch, ok=False, state=STATE_NOT_PROTECTED,
-            failures=[f"the branch has NO protection at all (GitHub answered: {error})"])
+            failures=[f"the branch has NO protection at all (GitHub answered: {error})"],
+            cache_note=note)
 
-    return _corroborate(run, repo, branch, error)
+    return _corroborate(run, repo, branch, error, cache=cache, now=clock)
 
 
 __all__ = [
@@ -389,6 +602,20 @@ __all__ = [
     "EXIT_NOT_PROTECTED",
     "EXIT_UNREADABLE",
     "EXIT_DEGRADED",
+    "EXIT_CACHE_MISS",
+    "EXIT_CACHE_DISAGREES",
+    "EXIT_CACHE_TOO_OLD",
+    "EXIT_CACHE_UNUSABLE",
+    "CACHE_HIT_AGREES",
+    "CACHE_MISS",
+    "CACHE_HIT_DISAGREES",
+    "CACHE_HIT_TOO_OLD",
+    "CACHE_UNUSABLE",
+    "CACHE_OUTCOMES",
+    "PROTECTION_CACHE_MAX_AGE_HOURS",
+    "CacheLookupResult",
+    "ProtectionCache",
+    "default_cache_dir",
     "UNOBTAINED_ASSURANCES",
     "RESTORE_ROW",
     "ProtectionVerdict",

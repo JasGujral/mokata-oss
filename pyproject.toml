@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mokata"
-version = "0.0.21"
+version = "0.0.22"
 description = "The memory + seatbelt for your AI coding agent. Spec-driven TDD for Claude Code — knowledge-aware, human-gated, local-first."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -40,6 +40,10 @@ dependencies = ['mcp>=1.2,<2']
 [project.optional-dependencies]
 # Optional upgrades. Absence is detected and degraded over, never fatal.
 schema = ["jsonschema>=4.0"]
+# `mokata ide` (0.0.22 E2, ADR doc 85 §1b) — the read-only review window. All three already arrive
+# with the `mcp` dependency (mcp 1.2 requires these floors); they are DECLARED here so mokata never
+# leans on a transitive. Without them `mokata ide` prints this install line.
+ide = ["starlette>=0.27", "uvicorn>=0.23.1", "sse-starlette>=1.6.1"]
 # `[mcp]` is a no-op ALIAS of the default MCP SDK dependency above (same spec), kept so an
 # existing `pip install "mokata[mcp]"` still resolves cleanly.
 mcp = ['mcp>=1.2,<2']
@@ -106,4 +110,6 @@ mokata = [
     "hooks/*",
     "skills/*",
     "skills/*/*",
+    # 0.0.22 E2 — the review window's static frontend (hand-written, no build step; doc 85 §1b).
+    "ide/static/*",
 ]

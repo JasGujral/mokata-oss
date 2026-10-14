@@ -84,7 +84,7 @@ def _surfaces() -> List[CommandSurface]:
                        note="running the full v1 story end-to-end is a workflow → slash"),
         CommandSurface("resume", slash=("resume",),
                        note="resuming a run (read-only preview, gates still apply) → slash"),
-        CommandSurface("skill", slash=("skill",),
+        CommandSurface("skill", slash=("skill-author",),
                        note="authoring a skill (RED-GREEN-for-docs, human-gated write) → "
                             "slash drives the gated author path"),
         CommandSurface("upgrade", slash=("upgrade",),
@@ -92,6 +92,10 @@ def _surfaces() -> List[CommandSurface]:
                             "drives the gated path"),
         CommandSurface("version", slash=("version",),
                        note="version + how-to-update (offline; opt-in check) → slash"),
+        CommandSurface("ide", slash=("review-window",),
+                       note="the read-only review window (stage E2) — `/mokata:review-window` is what "
+                            "opens it for THIS session: the prompt hook is the one surface that "
+                            "knows which session asked, so it opens or re-focuses the window"),
         CommandSurface("init", slash=("init",), mcp_write=("init",),
                        note="scaffold config — gated MCP write (preview→approve) + slash; the "
                             "interactive first-run wizard runs through this surface (Stage 56)"),
@@ -166,7 +170,8 @@ def _surfaces() -> List[CommandSurface]:
         CommandSurface("preview", mcp_read=("preview",),
                        note="pipeline dry-run → read tool"),
         CommandSurface("progress", slash=("progress",),
-                       mcp_read=("progress", "lanes", "review_status", "review_record"),
+                       mcp_read=("progress", "lanes", "review_status", "review_record",
+                                 "progress_mark", "run_finish", "working_set"),
                        note="run tracker + parallel lanes → read tools + slash (Stage 54d). "
                             "REVIEW-FIX.R3 adds the 6r REVIEW LOOP: `record-review` and "
                             "`review-status` are NESTED sub-actions of `progress` (runviews.py, "
@@ -183,7 +188,11 @@ def _surfaces() -> List[CommandSurface]:
                             "and the audit ledger — so it has no `approve`, no proposal and no "
                             "WriteGate, exactly like its CLI twin (the `session_save` precedent). "
                             "`mcp_write` here would claim a consent flow that does not exist and "
-                            "would give the ONE truth source two different trust postures"),
+                            "would give the ONE truth source two different trust postures. Stage C1 "
+                            "adds `progress_mark` (the twin of `progress mark`) and `run_finish` "
+                            "(the twin of `progress finish`, the ship-completion event) — the "
+                            "same nested-sub-action blindness, the same tier, the same reason "
+                            "they sit in mcp_read"),
         CommandSurface("rules", mcp_read=("rules",),
                        note="4-tier rules + budgets + gated proposals → read tool"),
         CommandSurface("skills", mcp_read=("skills",),

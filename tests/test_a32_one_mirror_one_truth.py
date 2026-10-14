@@ -33,6 +33,7 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _code_lines import code_line_texts
 
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _MISSING = [t for t in ("bash", "git") if shutil.which(t) is None]
@@ -370,7 +371,7 @@ class NothingGuessesTheDefaultBranch(_Mirrors, unittest.TestCase):
         may CALL this script — it may not derive the name itself."""
         with io.open(SYNC_SH, encoding="utf-8") as fh:
             sync = fh.read()
-        code = [ln for ln in sync.splitlines() if not ln.lstrip().startswith("#")]
+        code = code_line_texts(sync)
         guesses = [ln for ln in code
                    if 'DEFAULT_BRANCH="main"' in ln or 'DEFAULT_BRANCH="master"' in ln]
         self.assertEqual([], guesses,
@@ -382,7 +383,7 @@ class NothingGuessesTheDefaultBranch(_Mirrors, unittest.TestCase):
     def test_release_sh_does_not_hardcode_the_base_branch_anywhere_it_ACTS(self):
         with io.open(RELEASE_SH, encoding="utf-8") as fh:
             release = fh.read()
-        code = [ln for ln in release.splitlines() if not ln.lstrip().startswith("#")]
+        code = code_line_texts(release)
         offenders = [ln.strip() for ln in code
                      if ("--base main" in ln or "rev-parse main" in ln
                          or "checkout main " in ln or '"main..' in ln)]
@@ -430,7 +431,7 @@ class TheFastForwardFAILURE_IsARefusalAndNotANote(unittest.TestCase):
 
     def _code(self):
         with io.open(SYNC_SH, encoding="utf-8") as fh:
-            return [ln for ln in fh.read().splitlines() if not ln.lstrip().startswith("#")]
+            return code_line_texts(fh.read())
 
     def test_the_soft_note_that_carried_on_with_a_stale_base_is_GONE(self):
         offenders = [ln.strip() for ln in self._code()
@@ -469,7 +470,7 @@ class TheMaskedFallbackIsGone(unittest.TestCase):
 
     def _code(self, path):
         with io.open(path, encoding="utf-8") as fh:
-            return [ln for ln in fh.read().splitlines() if not ln.lstrip().startswith("#")]
+            return code_line_texts(fh.read())
 
     def test_the_checkout_fallback_to_a_SECOND_branch_name_no_longer_exists(self):
         # ⚠ `lstrip().startswith` and not `in`: the first version matched

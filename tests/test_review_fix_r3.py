@@ -47,6 +47,7 @@ from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _observed_review import observe_review_subagent
 
 from mokata import parity
 from mokata.run_resolver import bind_session_run
@@ -177,6 +178,7 @@ class TestReviewFixR3Regression(_NoPinnedSession):
             self.assertTrue(TR.review_status(path=d)["blocks"])
             self.assertTrue(ship_review_gate(surface, run_id="solo").blocks)
 
+            observe_review_subagent(d)  # D4 ruling
             rec = TR.review_record(path=d, passed=True, independent=True)
             self.assertTrue(rec["recorded"])
             self.assertEqual(rec["run"], "solo")
@@ -306,6 +308,7 @@ class TestMcpReviewStatus(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
             _persist_run(d, "solo")
+            observe_review_subagent(d)  # D4 ruling
             TR.review_record(path=d, passed=True, independent=True)
             st = TR.review_status(path=d)
             self.assertEqual(st["run"], "solo")
@@ -485,6 +488,7 @@ class TestMcpReviewRecord(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
             _persist_run(d, "solo")
+            observe_review_subagent(d)  # D4 ruling
             TR.review_record(path=d, passed=True, independent=True)
             rc, out = _cli(["progress", "review-status", "--path", d], d)
             self.assertEqual(rc, 0, out)
@@ -494,6 +498,7 @@ class TestMcpReviewRecord(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
             _persist_run(d, "solo")
+            observe_review_subagent(d)  # D4 ruling
             rc, _ = _cli(["progress", "record-review", "--passed", "--independent",
                           "--path", d], d)
             self.assertEqual(rc, 0)
@@ -632,7 +637,9 @@ class TestMcpReviewRecord(_NoPinnedSession):
         is no `approve`/`confirm`/`proposal_id` parameter to type, nothing is 'proposed', and the
         event lands on the first call."""
         sig = set(inspect.signature(TR.review_record).parameters)
-        self.assertEqual(sig, {"path", "passed", "failed", "independent", "findings", "run"})
+        # 0.0.22 C2 (SL.S3) adds `blocking` — a COUNT, not a consent: the posture is unchanged.
+        self.assertEqual(sig, {"path", "passed", "failed", "independent", "findings", "run",
+                               "blocking"})
         for banned in ("approve", "confirm", "proposal_id"):
             self.assertNotIn(banned, sig)
         with tempfile.TemporaryDirectory() as d:
@@ -762,7 +769,7 @@ class TestParityAndRegistry(unittest.TestCase):
         # added `worktree_list` (59), and M-4/R5 added `consolidate_proposals` + `consolidate`
         # (62, after CM.S5's `events_share`). R3's two tools are pinned by NAME above, which is
         # the property this class owns — the count is a tripwire for somebody else's addition.
-        self.assertEqual(len(REG.TOOLS), 62)   # 61 -> 62 at CM.S5: `events_share`
+        self.assertEqual(len(REG.TOOLS), 65)   # 61 -> 62 at CM.S5: `events_share`; -> 64 at C1; -> 65 at D2
         self.assertEqual(len(REG.tool_names()), len(set(REG.tool_names())))
 
     def test_annotations_are_projected_and_neither_is_open_world(self):
@@ -823,6 +830,7 @@ class TestNothingElseMoved(_NoPinnedSession):
                 (rc, out),
                 (2, "review hasn't run — run /mokata:review first"
                     "  → to unblock: run /mokata:review first\n"))
+            observe_review_subagent(d)  # D4 ruling
             _cli(["progress", "record-review", "--passed", "--independent", "--path", d], d)
             rc, out = _cli(["progress", "review-status", "--path", d], d)
             self.assertEqual((rc, out), (0, "review passed (independent ✓)\n"))

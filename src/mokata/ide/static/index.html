@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mokata ide · review</title>
+<link rel="icon" href="/static/mokata-icon.svg">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div id="sample-banner" class="sample-banner" hidden>SAMPLE DATA — nothing on this screen is from your repository (<code>mokata ide --demo</code>)</div>
+<header class="top">
+  <img class="mark mark-dark" src="/static/mokata-wordmark-dark.svg" alt="mokata">
+  <img class="mark mark-light" src="/static/mokata-wordmark-light.svg" alt="mokata">
+  <span class="product">review</span>
+  <span id="repo" class="repo"></span>
+  <span class="spacer"></span>
+  <span id="focus-chip" class="chip">all sessions</span>
+  <span id="live-dot" class="live" title="updates live as sessions write">● live</span>
+</header>
+<main class="layout">
+  <nav class="side">
+    <section class="panel" id="panel-sessions">
+      <h2>Sessions</h2>
+      <ul id="sessions" class="list"></ul>
+      <p class="empty" id="sessions-empty" hidden>
+        <b>No session has written anything yet.</b><br>
+        A session appears here the moment Claude Code writes a file in this repo — mokata keeps a
+        snapshot of every write. Run <code>/mokata:review-window</code> inside a session to focus the window on it.
+      </p>
+    </section>
+    <section class="panel" id="panel-views">
+      <h2>Changes</h2>
+      <ul class="list views">
+        <li><button data-view="live" class="view">Live — working tree vs HEAD</button></li>
+        <li><button data-view="session" class="view" id="view-session">What this session wrote</button></li>
+      </ul>
+    </section>
+    <section class="panel" id="panel-timeline">
+      <h2>Timeline <span class="hint">pick one to see that write · pick two to compare them</span></h2>
+      <ul id="timeline" class="list timeline"></ul>
+      <p class="empty" id="timeline-empty" hidden>
+        <b>No snapshots for this view yet.</b><br>
+        Every write a session makes is recorded here with the content before and after it, so you
+        can diff any two moments. Focus a session above, or wait for its first write.
+      </p>
+    </section>
+    <section class="panel" id="panel-compare">
+      <h2>Compare branches</h2>
+      <div class="row">
+        <select id="base" aria-label="base"></select><span>…</span>
+        <select id="head" aria-label="head"></select>
+        <button id="compare-go">Compare</button>
+      </div>
+      <p class="empty" id="compare-empty" hidden>
+        <b>No branches to compare.</b><br>This folder is not a git repository, or it has one branch.
+      </p>
+    </section>
+    <section class="panel" id="panel-pr">
+      <h2>Pull request</h2>
+      <div class="row">
+        <input id="pr-url" placeholder="https://github.com/owner/repo/pull/123" aria-label="PR URL">
+        <button id="pr-go">Open</button>
+      </div>
+      <p class="empty small">Paste a GitHub PR URL. It is fetched with <b>your</b> git login —
+        mokata stores no token.</p>
+    </section>
+  </nav>
+  <section class="main">
+    <div class="main-head">
+      <h1 id="diff-title">Loading…</h1>
+      <span id="diff-stats" class="stats"></span>
+    </div>
+    <p id="diff-note" class="note" hidden></p>
+    <div id="diff-empty" class="empty big" hidden>
+      <b>Nothing changed.</b><br>
+      <span id="diff-empty-why">The working tree matches HEAD. Changes appear here live as soon as
+      a session (or you) edits a file.</span>
+    </div>
+    <div id="diff"></div>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

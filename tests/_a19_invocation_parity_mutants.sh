@@ -69,9 +69,10 @@ mutant "A03 ★ the stdin redirect is never seen — the declared divergence van
   '_STDIN_REDIRECT = re.compile(r"<\s*/dev/null")' \
   '_STDIN_REDIRECT = re.compile(r"(?!x)x")' "$T"
 
-mutant "A04 comments are kept, so a redirect QUOTED in prose counts as one" "$I" \
-  '    code = "\n".join(ln for ln in (text or "").splitlines() if not ln.lstrip().startswith("#"))' \
-  '    code = text or ""' "$T"
+# A04 re-aimed at 0.0.22 B2: the stripping now lives in the ONE shared reader, tests/_code_lines.py.
+mutant "A04 comments are kept, so a redirect QUOTED in prose counts as one" "tests/_code_lines.py" \
+  '    return line.lstrip().startswith("#")' \
+  '    return False' "$T"
 
 # ==== D. the defaults — a check that cries wolf gets deleted ====================================
 

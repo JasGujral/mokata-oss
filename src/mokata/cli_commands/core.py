@@ -113,23 +113,33 @@ def cmd_branch_protection_check(args: argparse.Namespace) -> int:
 
         0  PROTECTED      the detail was read and is safe
         1  NOT PROTECTED  a read SUCCEEDED and shows protection absent/too weak
-        2  UNREADABLE     the detail could not be read AND could not be corroborated
-        3  DEGRADED       unreadable, but positively corroborated — a pass that says so
+        2  UNREADABLE     the detail could not be read AND the live reads could not corroborate
+        3  DEGRADED       unreadable, corroborated live AND by a fresh, safe last-read document
+        4  CACHE MISS     unreadable; nothing was ever read successfully on this machine
+        5  CACHE DISAGREES  unreadable; the last-read document was NOT safe
+        6  CACHE TOO OLD  unreadable; the last-read document is older than the age limit
+        7  CACHE UNUSABLE unreadable; the cache file is there and cannot be trusted
 
     3 is deliberately non-zero: only a caller taught what it means may proceed on it, and every
     caller that has not been taught reads it as a refusal. `release.sh` handles it explicitly.
-    No token hard-coded (gh supplies auth: login locally / GH_TOKEN in CI)."""
-    from ..branch_protection import check_branch_protection
+    The last-read cache lives under `branch_protection.default_cache_dir()` and is written only
+    after a successful full read. No token hard-coded (gh supplies auth: login locally / GH_TOKEN
+    in CI)."""
+    from ..branch_protection import ProtectionCache, check_branch_protection, default_cache_dir
     from ..degrade import FAILURE_UNREACHABLE, note_degraded
-    verdict = check_branch_protection(repo=args.repo, branch=args.branch)
+    verdict = check_branch_protection(repo=args.repo, branch=args.branch,
+                                      cache=ProtectionCache(default_cache_dir()))
     print(verdict.render())
+    if verdict.cache_note:
+        print(f"note: {verdict.cache_note}", file=sys.stderr)
     if verdict.degraded:
         # Also into the D5 register, so `mokata doctor` can answer "what degraded this session?"
         # after the block above has scrolled away.
         note_degraded(
             "branch-protection", FAILURE_UNREACHABLE,
-            fallback=f"passed on corroboration alone ({verdict.observed_on}); force-push, "
-                     "deletions, strict and contexts were NOT verified",
+            fallback=f"passed on the last-read document of {verdict.cache_read_at} and the live "
+                     f"boolean ({verdict.observed_on}); force-push, deletions, strict and "
+                     "contexts were NOT verified live",
             fix="Retry once GitHub's branch-protection endpoints answer; do NOT apply protection "
                 "to clear a read failure",
             detail=verdict.unreadable_because)
@@ -289,7 +299,9 @@ def register(sub, common):
     p_bpc = sub.add_parser(
         "branch-protection-check",
         help="verify the public mirror's default branch is protected (fail-closed; exit 0 "
-             "protected, 1 not protected, 2 unreadable+uncorroborated, 3 degraded pass)",
+             "protected, 1 not protected, 2 unreadable+uncorroborated, 3 degraded pass on a "
+             "fresh last-read document, 4-7 unreadable and the last-read cache cannot "
+             "corroborate: miss / disagrees / too old / unusable)",
     )
     p_bpc.add_argument(
         "--repo", default="JasGujral/mokata-oss",

@@ -17,6 +17,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -111,6 +112,33 @@ def harness_path_kind(path: str, home: Optional[str] = None) -> Optional[str]:
     if parts[0] == "hooks":
         return HARNESS_HOOKS
     return HARNESS_STATE
+
+
+#: HP.S4 (0.0.22 D5) — the user-level harness CONFIG a gated config write may land in from outside
+#: every workspace: `~/.claude.json` (user-scope MCP), Claude Code's settings / skills / commands /
+#: agents, and the other harnesses' per-user dirs that `mokata setup --scope user` writes. NOT the
+#: transcripts, the plugin cache or the harness's own state — those stay contained.
+_USER_CONFIG_FILES = (".claude.json",)
+_USER_CLAUDE_LEAVES = ("settings.json", "settings.local.json", "skills", "commands", "agents")
+_USER_HARNESS_DIRS = (".codex", ".cursor", ".windsurf", ".gemini")
+
+
+def is_user_harness_config(path: str, home: Optional[str] = None) -> bool:
+    """Is ``path`` one of the user-level harness config locations above? Decided by shape (the
+    file need not exist); total — never raises."""
+    try:
+        base = (Path(home) if home else Path.home()).resolve()
+        rel = Path(os.path.expanduser(str(path))).resolve().relative_to(base)
+    except (OSError, ValueError, RuntimeError):
+        return False
+    parts = rel.parts
+    if not parts:
+        return False
+    if len(parts) == 1 and parts[0] in _USER_CONFIG_FILES:
+        return True
+    if parts[0] == CLAUDE_DIR_NAME:
+        return len(parts) >= 2 and parts[1] in _USER_CLAUDE_LEAVES
+    return parts[0] in _USER_HARNESS_DIRS and len(parts) >= 2
 
 
 def harness_capability_label(kind: Optional[str]) -> Optional[str]:

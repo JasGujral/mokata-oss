@@ -13,9 +13,10 @@
 #     bytes, the batch cap's resume, and the borrowed connection not being closed.
 #   T01-T02 ★★★ the own-trail predicate: the shared prefix, and not keying on a substitutable tool.
 #   A01-A02 ★★★ the resume tail: oldest-first, and keyed on seq rather than a coarse timestamp.
-#   A03-A06 ★★★ the resume POINTER (review F2/F4/F7), which had NO mutant at all: the
-#     pointer-ahead refusal, the pointer-stuck refusal, the three-way `max_seq`, and the exact
-#     backlog count that used to be a 0/1 flag.
+#   A03-A07 ★★★ the resume POINTER (review F2/F4/F7), which had NO mutant at all — re-aimed at
+#     0.0.22 C1 when the borrowed pointer became this machine's own high-water mark: the mark is
+#     read back, it moves when a batch was SENT (not only when rows landed), the three-way
+#     `max_seq`, the exact backlog count that used to be a 0/1 flag, and the rebuilt-store anchor.
 #   X01     ★★★ the MCP status word (review F5): a deduplicated success is not a refusal.
 #   I01-I03 ★★★ the invariant guard: the derived owner set, the holder predicate itself, and the
 #     attribute-qualified constructor the first version could not see (review F3).
@@ -31,7 +32,7 @@ CE=src/mokata/cli_commands/events.py
 CL=src/mokata/cli.py
 T='test_a40_the_shared_stream_and_the_per_call_store.py'
 
-TOTAL=31
+TOTAL=32
 
 # ⚠ WHY THIS BATCH RUNS IN WINDOWS, AND WHY A WINDOW IS NOT A VERDICT. Each mutant re-runs the
 # whole of the subject module named in $T, and the harness this is driven from caps one call at
@@ -48,9 +49,20 @@ TOTAL=31
 #   MUTANT_LEDGER=$HOME/s11.ledger FROM=1  TO=8  tests/_stage11_cm_s5_mutants.sh
 #   MUTANT_LEDGER=$HOME/s11.ledger FROM=9  TO=16 tests/_stage11_cm_s5_mutants.sh
 #   MUTANT_LEDGER=$HOME/s11.ledger FROM=17 TO=24 tests/_stage11_cm_s5_mutants.sh
-#   MUTANT_LEDGER=$HOME/s11.ledger FROM=25 TO=31 tests/_stage11_cm_s5_mutants.sh
+#   MUTANT_LEDGER=$HOME/s11.ledger FROM=25 TO=32 tests/_stage11_cm_s5_mutants.sh
 FROM="${FROM:-1}"
 TO="${TO:-$TOTAL}"
+# MUTANT-DRIVER-WINDOW-FAILS-OPEN-ON-A-NON-INTEGER (0.0.22 A2). Driven from zsh, `set -- $w` did not
+# word-split, so FROM='1 10' and TO='' — `[ -lt ]` errored, every index fell INSIDE the window, and the
+# whole batch was graded under a window label. A window that cannot be read is refused, never widened.
+case "$FROM" in ''|*[!0-9]*) _bad_window=1 ;; esac
+case "$TO" in ''|*[!0-9]*) _bad_window=1 ;; esac
+if [ -n "${_bad_window:-}" ] || [ "$FROM" -lt 1 ] || [ "$FROM" -gt "$TO" ]; then
+    printf 'WINDOW REFUSED — FROM=%s TO=%s is not a window of 1..%s (two integers, 1 <= FROM <= TO).\n' \
+        "'$FROM'" "'$TO'" "$TOTAL" >&2
+    printf '  Nothing was graded. A malformed window would otherwise grade the WHOLE batch.\n' >&2
+    exit 3
+fi
 LEDGER="${MUTANT_LEDGER:-}"
 
 _sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1
@@ -193,11 +205,11 @@ mutant "P04 ★★★ the batch cap goes — one publish sends the whole store i
 # Anchored on the RETURN above it, because `if client is None: log.close()` appears twice (the
 # preview path has the same guard for the same reason) and a two-match pattern is exit 3.
 mutant "P05 ★★★ a BORROWED connection is closed by the callee that borrowed it" "$TE" \
-  '                             message=msg)
+  '                             message=(note + ". " if note else "") + msg)
     finally:
         if client is None:
             log.close()' \
-  '                             message=msg)
+  '                             message=(note + ". " if note else "") + msg)
     finally:
         log.close()' "$T"
 
@@ -259,29 +271,34 @@ mutant "S08 ★★★ an UNREADABLE schema version reads as PERMISSION — unkno
   '        if not present or version is None:' \
   '        if False:' "$T"
 
-# ==== A03-A06 · the RESUME POINTER — review F2, F4, F7 ========================================
+# ==== A03-A07 · the RESUME POINTER — review F2, F4, F7; a LOCAL mark since 0.0.22 C1 ============
 #
 # ⚠ A01/A02 mutate `after_seq`'s ORDERING and its KEY. Neither touches its ARGUMENT, which is
 # where the defect was: the pointer that decides what gets published had no mutant and no
 # behavioural test, and three separate report-success-over-a-skip paths ran through it.
 
-mutant "A03 ★★★ the POINTER-AHEAD predicate always says no — a skipped store reports in_sync" "$TE" \
-  '    return local_high > 0 and mark > local_high' \
-  '    return False' "$T"
+mutant "A03 ★★★ the local mark is never read back — every publish re-sends from the start" "$TE" \
+  '    return mark, ""' \
+  '    return 0, ""' "$T"
 
-mutant "A04 ★★★ `max_seq` swallows into 0 — an unreadable store reads as an empty one (§7g)" "$ST" \
+mutant "A04 ★★★ \`max_seq\` swallows into 0 — an unreadable store reads as an empty one (§7g)" "$ST" \
   '        except Exception:  # noqa: BLE001 — reported as None, NEVER as "empty"
             return None' \
   '        except Exception:  # noqa: BLE001 — reported as None, NEVER as "empty"
             return 0' "$T"
 
-mutant "A05 ★★★ the POINTER-STUCK refusal is deleted — a stalled publisher reports committed" "$TE" \
-  '        if landed == 0 and remaining_after:' \
-  '        if False and remaining_after:' "$T"
+mutant "A05 ★★★ the mark moves only when rows LAND — a head already there stalls it for ever" "$TE" \
+  '                save_mark(root, ns, dsn, int(batch[-1].seq), anchor)' \
+  '                if landed:
+                    save_mark(root, ns, dsn, int(batch[-1].seq), anchor)' "$T"
 
-mutant "A06 ★★★ `remaining` goes back to the CAPPED length — a count becomes a 0/1 flag" "$TE" \
+mutant "A06 ★★★ \`remaining\` goes back to the CAPPED length — a count becomes a 0/1 flag" "$TE" \
   '        remaining_after = max(0, local_high - int(batch[-1].seq))' \
   '        remaining_after = max(0, len(fetched) - len(batch))' "$T"
+
+mutant "A07 ★★★ the store ANCHOR is ignored — a rebuilt store's new events read as already sent" "$TE" \
+  '    if mark < 0 or str(entry.get("anchor", "")) != _store_anchor(store) or mark > local_high:' \
+  '    if mark < 0 or mark > local_high:' "$T"
 
 # ==== X01 · the MCP status word — review F5 ====================================================
 

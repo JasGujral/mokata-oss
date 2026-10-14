@@ -38,6 +38,10 @@ EXPECTED_READ = {"query", "recall", "doctor", "coverage", "budget", "audit",
                  # verdict event and is still a READ-kind tool: observability-tier, append-only +
                  # UNGATED, mirroring `mokata progress record-review` (the `session_save` shape).
                  "review_status", "review_record",
+                 # 0.0.22 C1 — the stage mark and the ship-completion event, in-harness. READ kind
+                 # for the same reason: append-only + UNGATED, like their CLI twins.
+                 "progress_mark", "run_finish",
+                 "working_set",                        # 0.0.22 D2 — HP.S2 (read; note appends)
                  "session_list",                       # Stage 55a — portable sessions (read)
                  "session_windows",                    # MS.S2 — live-window registry (read)
                  "worktree_list",                      # WT-LIST — worktree×session join (read)

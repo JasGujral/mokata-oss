@@ -8,6 +8,7 @@ import unittest
 from _support import sample_manifest_data  # noqa: F401  (path fix side-effect)
 
 from mokata.govern import (
+
     AuditLedger,
     RedBeforeGreenError,
     TddGuard,
@@ -21,6 +22,13 @@ from mokata.govern import (
 
 
 # --- I1: 4-layer secret protection ----------------------------------------------
+# HP.S4 (0.0.22 D5): the gate's containment is on for every write, so a placeholder target
+# must be a real place a write may go — the system temp dir, the named scratch allowance.
+def _T(name):
+    import os as _os, tempfile as _tf
+    return _os.path.join(_tf.gettempdir(), "mokata-test-repo", name)
+
+
 class TestSecretProtection(unittest.TestCase):
     def test_layer1_signature(self):
         findings = scan(text="aws = 'AKIAIOSFODNN7EXAMPLE'")
@@ -97,7 +105,7 @@ class TestWriteGate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             written = []
             out = self._gate(d).submit(
-                WriteRequest("config", "/repo/x.cfg", "value=1"),
+                WriteRequest("config", _T("x.cfg"), "value=1"),
                 commit=lambda: written.append(1),
                 confirm=lambda _t: False,
             )
@@ -109,7 +117,7 @@ class TestWriteGate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             written = []
             out = self._gate(d).submit(
-                WriteRequest("config", "/repo/x.cfg", "value=1"),
+                WriteRequest("config", _T("x.cfg"), "value=1"),
                 commit=lambda: written.append(1),
                 assume_yes=True,
             )
@@ -120,7 +128,7 @@ class TestWriteGate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             written = []
             out = self._gate(d).submit(
-                WriteRequest("code", "/repo/app.py", "KEY='AKIAIOSFODNN7EXAMPLE'"),
+                WriteRequest("code", _T("app.py"), "KEY='AKIAIOSFODNN7EXAMPLE'"),
                 commit=lambda: written.append(1),
                 assume_yes=True,                # human approved, but a secret is present
             )

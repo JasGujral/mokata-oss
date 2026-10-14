@@ -1296,11 +1296,11 @@ $$""",
         #
         # ⚠ AND IT IS NOT REDUNDANT WITH `local_seq`, which is the §7f question to ask of any
         # second guard. They catch different things and each catches something the other cannot:
-        #   * `local_seq` makes RESUME cheap — `MAX(local_seq)` per (namespace, actor) says where
-        #     this publisher got to, so a re-publish sends the tail instead of the whole store and
-        #     relying on the index to throw the rest away. It is the publisher's OWN append index
-        #     in its OWN local store: it is NOT a team-wide order and two actors' values say
-        #     nothing about each other.
+        #   * `local_seq` records each row's position in the publisher's OWN local store. It is NOT
+        #     a team-wide order and two actors' values say nothing about each other — which is why
+        #     0.0.22 C1 stopped reading `MAX(local_seq)` back as the resume pointer: where this
+        #     machine got to is now its own high-water mark (`team_events.resume_point`), never an
+        #     inference from rows another writer may have put here.
         #   * the unique index catches exactly the cases `local_seq` gets wrong — two machines
         #     publishing under ONE actor name, and a local store rebuilt so its seqs restart below
         #     a number already published. Both are real, and both would otherwise duplicate rows.

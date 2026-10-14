@@ -8,8 +8,8 @@ Ship-based completion (spec amendment #2, coordinator directive — ledgered doc
 complete pipeline CHECKPOINT means the spec emitted and the user is AT `develop` — a HEALTHY ACTIVE
 state, NOT a finished run (develop → review → ship are tracked in the progress-event LOG, not the
 checkpoint). "Finished" is therefore keyed on the terminal END-OF-RUN signal in the log —
-`stage_enter: ship` (the strongest evidence available: `STAGE_PASS` is defined but never written and
-there is no ship-completion event; see the report's Verified-from-code list).
+`stage_enter: ship` (the strongest evidence available when this was written; 0.0.22 C1 added the
+ship-completion event `run_finished`, which `test_c1_one_run_from_registration_to_ship` grades).
 
 The fix is DISPLAY-only (P17 — run state is NEVER deleted, pruned, or rewritten beyond one additive
 `completed_at` stamp):

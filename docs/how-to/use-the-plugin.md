@@ -82,7 +82,7 @@ governed fan-out **without leaving Claude Code**; nothing is written or gated.
 | `/mokata:chain` | Plan a manual chain of skills; each step keeps its own gate |
 | `/mokata:playbook` | Run the full v1 story end-to-end (integration check) |
 | `/mokata:resume` | Preview where a run resumes — the phase + the gate that still applies |
-| `/mokata:skill` | Author a new skill test-first (RED-GREEN-for-docs); the write is human-gated |
+| `/mokata:skill-author` | Author a new skill test-first (RED-GREEN-for-docs); the write is human-gated |
 | `/mokata:upgrade` | Update mokata — human-gated pip upgrade or the plugin-update steps |
 
 Everything else is reachable too: read-only inspection (`rules`, `skills`, `suggest`,

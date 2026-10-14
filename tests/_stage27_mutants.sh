@@ -102,9 +102,10 @@ mutant "C03 the test job stops installing requirements/ci.txt — one suite job 
 
 # ==== the derivation itself ====================================================================
 
-mutant "B01 comments are no longer stripped (a commented-out install counts as an install)" "$P" \
-  '    return "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))' \
-  '    return "\n".join(ln for ln in text.splitlines())' "$T"
+# B01 re-aimed at 0.0.22 B2: the stripping now lives in the ONE shared reader, tests/_code_lines.py.
+mutant "B01 comments are no longer stripped (a commented-out install counts as an install)" "tests/_code_lines.py" \
+  '    return line.lstrip().startswith("#")' \
+  '    return False' "$T"
 
 B02_OLD=$(cat <<'EOF'
     end = body.find("\n}", start)

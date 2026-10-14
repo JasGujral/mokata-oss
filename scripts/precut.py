@@ -209,7 +209,7 @@ def touched_modules():
     likely to be the one that breaks something: unstaged, staged, and untracked."""
     paths = set(_git("diff", "--name-only")) | set(_git("diff", "--cached", "--name-only"))
     paths |= set(_git("ls-files", "--others", "--exclude-standard"))
-    modules, stems, elsewhere = set(), set(), set()
+    modules, stems, exact, elsewhere = set(), set(), set(), set()
     for path in paths:
         name = os.path.basename(path)
         if path.startswith("tests/") and name.startswith("test_") and name.endswith(".py"):
@@ -232,7 +232,8 @@ def touched_modules():
         # tree's guards read YAML, Markdown and shell just as readily as source, so the token is
         # the FILE, by both its stem and its full name: `ci` finds a test that builds the path,
         # `ci.yml` finds one that names it outright.
-        stems.add(name)                              # `ci.yml` — exact, and never ambiguous
+        exact.add(name)                              # `ci.yml` — exact, and never ambiguous
+        exact.update(import_tokens(path))            # `mokata.govern.gate` — how importers name it
         stem = os.path.splitext(name)[0]
         # ⛔ A SHORT STEM IS NOT A TOKEN. `ci.yml` -> `ci` matched a substring of `decision`,
         # `explicit`, `specific` … and pulled in 338 modules — the whole suite, which is precisely
@@ -241,19 +242,84 @@ def touched_modules():
         if len(stem) >= 4:
             stems.add(stem)
     stems.discard("")
-    _report_skipped(elsewhere)
+    _report_skipped([p for p in elsewhere if not is_integration_module(p)])
+    _LAST_TOUCHED_INTEGRATION[:] = sorted(p for p in elsewhere if is_integration_module(p))
     # A changed `src/` module, a test HELPER (`_mutant_sweep.py`), a workflow or a tracker has no
     # test of its own name. Find its readers by the thing that cannot hide: they name it.
-    if stems:
+    if stems or exact:
+        bodies = {}
         for entry in sorted(os.listdir(TESTS)):
             if not (entry.startswith("test_") and entry.endswith(".py")):
                 continue
             with open(os.path.join(TESTS, entry), encoding="utf-8", errors="replace") as fh:
-                body = fh.read()
-            if any(re.search(r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % re.escape(stem), body)
-                   for stem in stems):
-                modules.add(entry)
+                bodies[entry] = fh.read()
+        hits = {tok: {e for e, body in bodies.items() if token_pattern(tok).search(body)}
+                for tok in stems | exact}
+        for tok in sorted(stems):
+            if too_wide(len(hits[tok]), len(bodies)):
+                print("PRE-CUT — the stem %r selects %d of %d test modules, so it is no token: "
+                      "matching the exact filename instead (PRECUT-TOUCHED-SET-EXPLODES-ON-A-SHORT-STEM)."
+                      % (tok, len(hits[tok]), len(bodies)), file=sys.stderr)
+                continue
+            modules |= hits[tok]
+        for tok in exact:
+            modules |= hits[tok]
     return sorted(modules)
+
+
+#: PRECUT-TOUCHED-SET-EXPLODES-ON-A-SHORT-STEM (0.0.22 A2). `release.sh` -> `release` pulled 200 of
+#: 338 modules at 0.0.21, including a nested suite. A stem that selects more than this share of the
+#: suite is a common word, not a token: the run falls back to the EXACT tokens — the filename, and
+#: for a `src/` module its dotted import path — which are what a reader of the file actually writes.
+#: MEASURED on the 0.0.22 tree (456 modules) before choosing it: `release` 105 (23%) -> `release.sh`
+#: 33; `gate` 241 (53%) -> `gate.py` + `mokata.govern.gate` 13; `config` 219 (48%) ->
+#: `mokata.config` 166. `sync-public` 56 (12%) and `freshness` 20 (4%) stay stems.
+MAX_STEM_SHARE = 0.20
+
+
+def import_tokens(path):
+    """For `src/mokata/a/b.py`: the dotted path `mokata.a.b`, which every importer spells, either as
+    `import mokata.a.b` / `from mokata.a.b import x` or as `from mokata.a import b` (matched by
+    `token_pattern`). Nothing for a file outside the package."""
+    if not (path.startswith("src/") and path.endswith(".py")):
+        return set()
+    mod = path[len("src/"):-len(".py")].replace("/", ".")
+    if mod.endswith(".__init__"):
+        mod = mod[:-len(".__init__")]
+    return {mod} if mod.count(".") >= 1 else set()
+
+
+def token_pattern(tok):
+    """A word-bounded match for `tok`; a dotted module path ALSO matches `from <pkg> import <leaf>`."""
+    pat = r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % re.escape(tok)
+    if "." in tok and "/" not in tok and not tok.rsplit(".", 1)[1] in ("py", "sh", "yml", "yaml", "md"):
+        pkg, leaf = tok.rsplit(".", 1)
+        pat += r"|from\s+%s\s+import\s+[^\n]*(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % (
+            re.escape(pkg), re.escape(leaf))
+    return re.compile(pat)
+
+
+def too_wide(selected, total):
+    """Whether a stem that selects `selected` of `total` modules is too common to be a token."""
+    return total > 0 and selected / total > MAX_STEM_SHARE
+
+
+_LAST_TOUCHED_INTEGRATION = []
+
+
+def is_integration_module(path):
+    """A test module of the integration suite, which has its own runner."""
+    return (path.startswith("tests/integration/") and path.count("/") == 2
+            and os.path.basename(path).startswith("test_") and path.endswith(".py"))
+
+
+def integration_argv(path):
+    """THE-FIRST-CI-RUN-SINCE-THE-REFUSAL-WAS-THE-CUT ③ (0.0.22 A2): run a touched integration module
+    EXACTLY the way `release.sh`'s preflight runs that suite — from the repo root, with
+    `-s tests/integration -t tests/integration` — so precut can no longer pass on a path the release
+    does not take. Narrowed to the one file by `-p`, which does not change the import arrangement."""
+    return [sys.executable, "-m", "unittest", "discover", "-s", "tests/integration",
+            "-t", "tests/integration", "-p", os.path.basename(path)]
 
 
 def main(argv):
@@ -265,7 +331,7 @@ def main(argv):
               "working one does — fix the derivation before trusting this tool."
               % (len(wide), MIN_TREE_WIDE_MODULES), file=sys.stderr)
         return 2
-    touched = touched_modules()
+    touched = [m for m in touched_modules() if m not in NESTED_SUITE_MODULES]
     modules = sorted(set(wide) | set(touched))
     names = [m[:-3] for m in modules]
 
@@ -283,6 +349,13 @@ def main(argv):
 
     proc = subprocess.run([sys.executable, "-m", "unittest"] + names + argv,
                           cwd=TESTS, check=False)
+    rc = proc.returncode
+    for path in _LAST_TOUCHED_INTEGRATION:
+        print("\nPRE-CUT — touched integration module %s, run the way release.sh runs it:" % path)
+        sys.stdout.flush()
+        ip = subprocess.run(integration_argv(path), cwd=REPO, stdin=subprocess.DEVNULL,
+                            check=False)
+        rc = rc or ip.returncode
     elapsed = time.time() - started
     print("\nPRE-CUT finished in %.1fs over %d module(s)." % (elapsed, len(modules)))
     if elapsed > SLOW_RUN_BUDGET_S:
@@ -293,7 +366,7 @@ def main(argv):
     print("⛔ THIS IS NOT THE RELEASE GATE. It ran a derived SUBSET: the tree-wide rules and the "
           "modules you touched. `scripts/release.sh` still decides whether a release may be cut, "
           "and only the full suite — both jsonschema legs — can say the tree is green.")
-    return proc.returncode
+    return rc
 
 
 if __name__ == "__main__":

@@ -233,6 +233,12 @@ def build_session_bundle(surface: Any, run_id: Optional[str] = None,
             data = store.read(key)
             if data is not None:
                 state[key] = data
+            # HP.S2 (0.0.22 D2) — the run's WorkingSet extras (touched files, notes) travel with
+            # its checkpoint. References are not carried: they are derived from their owners.
+            from .working_set import WORKING_SET_PREFIX
+            ws = store.read(WORKING_SET_PREFIX + rid)
+            if ws is not None:
+                state[WORKING_SET_PREFIX + rid] = ws
         for key in _SESSION_KEYS:
             data = store.read(key)
             if data is not None:

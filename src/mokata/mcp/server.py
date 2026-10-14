@@ -248,7 +248,10 @@ def _serve(fn: Callable[..., Any], name: Optional[str] = None,
         _spawn_registration(call_path)                    # R5 — concurrent, never gates the body
         budget = _mcp_timeout_for(op)                     # R1/R7 — per-tool wall-clock cap
         box: Dict[str, Any] = {}
-        started = time.monotonic()                        # R1.S1b — the event's real duration
+        # R1.S1b — the event's real duration. ⚠ `perf_counter`, NOT `monotonic` (0.0.21 cut, mirror
+        # run on PR #77): on Windows `monotonic` ticks at ~15.6 ms, so a 30 ms call was stamped
+        # `duration_ms=16`. A duration is an interval, and `perf_counter` is the interval clock.
+        started = time.perf_counter()
 
         def _run() -> None:
             try:
@@ -260,7 +263,7 @@ def _serve(fn: Callable[..., Any], name: Optional[str] = None,
         worker.start()
         worker.join(budget)
 
-        elapsed_ms = int((time.monotonic() - started) * 1000)
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
 
         # R1.S1b — ONE exit, so every outcome is evented. The four returns below used to be four
         # returns; a wrapper whose instrumentation sits on three of them is a wrapper that

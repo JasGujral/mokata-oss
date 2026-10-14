@@ -50,6 +50,12 @@ jobs:
       - name: Install mokata
         run: pip install -e .
 
+      - name: Install the suite's own requirements (PyYAML — `_support` refuses without it)
+        # QUALITY-AT-SCALE-REDS-EVERY-WEDNESDAY-ON-THE-MIRROR (0.0.22 A2): without this, the first
+        # `import _support` below exits 2 in `_provisioning` and no test runs. Pinned by
+        # `_preflight_parity.workflow_jobs_missing` over EVERY workflow, not only ci.yml.
+        run: pip install --require-hashes -r requirements/ci.txt
+
       - name: "Preflight — THE SCALE GATE MUST BE ON (a skipped leg reads GREEN)"
         working-directory: tests
         # LIVE-LEG-ORPHANS. The whole module is wrapped in `@unittest.skipUnless(_SCALE_LIVE, …)`,

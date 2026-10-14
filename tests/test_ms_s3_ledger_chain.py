@@ -30,6 +30,14 @@ import _support  # noqa: F401  (puts src/ on the path, and runs the stage-05 pro
 from mokata.govern.ledger import AuditLedger, verify_chain
 
 
+# HP.S4 (0.0.22 D5): the gate's containment is on for every write, so a placeholder target
+# must be a real place a write may go — the system temp dir, the named scratch allowance.
+def _T(name):
+    import os as _os, tempfile as _tf
+    return _os.path.join(_tf.gettempdir(), "mokata-test-repo", name)
+
+
+
 # A tiny worker run as a REAL separate process: append N ledger entries to the shared file.
 _WORKER = textwrap.dedent(
     """
@@ -85,8 +93,8 @@ class Test_B2_Attribution(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "ledger.jsonl")
             gate, WR = self._gate(path)
-            out1 = gate.submit(WR("config", "/a", "x"), assume_yes=True)
-            out2 = gate.submit(WR("config", "/b", "y"), assume_yes=True)
+            out1 = gate.submit(WR("config", _T("a"), "x"), assume_yes=True)
+            out2 = gate.submit(WR("config", _T("b"), "y"), assume_yes=True)
             entries = AuditLedger(path).entries()
             approved = [e["seq"] for e in entries if e.get("decision") == "approved"]
             self.assertEqual([out1.approval_seq, out2.approval_seq], approved)
@@ -226,6 +234,21 @@ class Test_O1_SelfHeal(unittest.TestCase):
             self.assertEqual([x["seq"] for x in led.entries()], [1, 2, 3, 4])
             self.assertTrue(led.verify().intact)
             self.assertNotEqual(e2["seq"], e["seq"])
+
+
+
+class TheTimestampIsFixedWidth(unittest.TestCase):
+    """0.0.22 cut — `isoformat()` drops the fraction when the microsecond is 0, so one entry in a
+    million was 7 bytes shorter. It reddened the MCP eval's byte measurement on the Mac precut."""
+
+    def test_a_whole_second_still_carries_its_microseconds(self):
+        from datetime import datetime, timezone
+        from unittest import mock
+        import mokata.govern.ledger as L
+        fixed = datetime(2026, 10, 11, 17, 0, 0, 0, tzinfo=timezone.utc)
+        with mock.patch.object(L, "datetime") as dt:
+            dt.now.return_value = fixed
+            self.assertEqual("2026-10-11T17:00:00.000000+00:00", L._now_iso())
 
 
 if __name__ == "__main__":

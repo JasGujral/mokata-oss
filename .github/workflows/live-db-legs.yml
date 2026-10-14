@@ -77,6 +77,12 @@ jobs:
         # `postgres` brings psycopg — the whole point of DB.S2a's leg is that psycopg is REAL here.
         run: pip install -e ".[postgres]"
 
+      - name: Install the suite's own requirements (PyYAML — `_support` refuses without it)
+        # QUALITY-AT-SCALE-REDS-EVERY-WEDNESDAY-ON-THE-MIRROR (0.0.22 A2): without this, the first
+        # `import _support` below exits 2 in `_provisioning` and no test runs. Pinned by
+        # `_preflight_parity.workflow_jobs_missing` over EVERY workflow, not only ci.yml.
+        run: pip install --require-hashes -r requirements/ci.txt
+
       - name: Preflight — the image must actually carry pgvector
         # A missing extension would otherwise surface as an opaque DDL error inside DB.S4's leg.
         # Fail here instead, naming the engine and the image.
@@ -437,6 +443,12 @@ jobs:
         # is a real cost paid for an editability this job does not use. The guard caught it the
         # moment the job landed — for the second time this release.
         run: pip install ".[postgres]"
+
+      - name: Install the suite's own requirements (PyYAML — `_support` refuses without it)
+        # QUALITY-AT-SCALE-REDS-EVERY-WEDNESDAY-ON-THE-MIRROR (0.0.22 A2): without this, the first
+        # `import _support` below exits 2 in `_provisioning` and no test runs. Pinned by
+        # `_preflight_parity.workflow_jobs_missing` over EVERY workflow, not only ci.yml.
+        run: pip install --require-hashes -r requirements/ci.txt
 
       - name: "Preflight — THE BELOW-FLOOR GATE MUST BE ON (a skipped arm reads GREEN)"
         working-directory: tests/integration

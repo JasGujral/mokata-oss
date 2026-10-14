@@ -120,7 +120,7 @@ def run_playbook(surface: Any, exec_choice: Optional[ExecutionChoice] = None,
     exec_choice = exec_choice or ExecutionChoice(SEQUENTIAL)
     led = AuditLedger.from_mokata_dir(surface.mokata_dir)
     # F4: output-density on the handback path. Gated by the manifest toggle
-    # (settings.governance.output_density, OFF by default) OR forced on via --dense.
+    # (settings.governance.output_density, ON by default since 0.0.22 D3) OR forced on via --dense.
     # An OutputDensity(False) is a pass-through no-op, so this is degrade-clean.
     density = OutputDensity(dense or density_enabled(surface.manifest))
     # E4: per-task model routing on the isolated/parallel path. OFF by default — wired only

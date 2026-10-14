@@ -27,6 +27,7 @@ import unittest
 from pathlib import Path
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _observed_review import observe_review_subagent
 
 from mokata import MOKATA_DIR
 from mokata.config import Surface
@@ -154,6 +155,7 @@ class TestShipReviewGate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _complete_run(surface)
+            observe_review_subagent(d)  # D4 ruling
             record_review_verdict(surface, passed=True, independent=True)
             gate = ship_review_gate(surface)
             self.assertFalse(gate.blocks)
@@ -258,6 +260,7 @@ class TestReviewCLI(unittest.TestCase):
     def test_review_status_passes_independent(self):
         with tempfile.TemporaryDirectory() as d:
             _complete_run(_repo(d))
+            observe_review_subagent(d)  # D4 ruling
             self._run(["progress", "record-review", "--passed", "--independent"], d)
             rc, out = self._run(["progress", "review-status"], d)
             self.assertEqual(rc, 0)

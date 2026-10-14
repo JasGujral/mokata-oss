@@ -95,6 +95,9 @@ abort() {
   RED, and credit the kill to a mutation that had nothing to do with it — and a batch of those
   reports a PERFECT SCORE. That is what 0.0.17 stage 28's clean sweep turned out to be.
   REMEDY: make the selected tests pass on an unmutated tree, then re-run the batch." ;;
+        8) meaning="A SNAPSHOT ALREADY EXISTS — <file>.bak was on disk before this run took one."
+           remedy="  Nothing was touched, and the existing .bak was left exactly as found.
+  REMEDY: find out whose it is, keep what you need, remove it, then re-run the batch." ;;
         *) meaning="UNKNOWN STATUS $rc — not in scripts/mutate.sh's EXIT CONTRACT."
            remedy="  Treat the tree as SUSPECT: check 'git status' and 'git diff' before doing anything
   else, and reconcile this status with the contract in scripts/mutate.sh's header." ;;

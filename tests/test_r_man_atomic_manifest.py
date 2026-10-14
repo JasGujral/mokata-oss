@@ -257,6 +257,18 @@ CONVERTED = [
 # "relpath:qualname", with the reason it is NOT a committed-config write. A site that is neither
 # converted nor registered here fails `test_r_man_no_bare_manifest_writes`.
 OUT_OF_SCOPE = {
+    ("ide/snapshots.py", "_write_object"):
+        "Already atomic (temp + os.replace). 0.0.22 E2 — a snapshot object under temp_local/snapshots/, not the manifest.",
+    ("ide/snapshots.py", "_maybe_prune"):
+        "Already atomic (temp + os.replace). 0.0.22 E2 — the capped snapshot timeline, not the manifest.",
+    ("ide/snapshots.py", "capture_before_first_write"):
+        "Already atomic (temp + os.replace). 0.0.22 E2 — the per-session first-write index, not the manifest.",
+    ("ide/server.py", "_write_record"):
+        "Already atomic (temp + os.replace), mode 0600. 0.0.22 E2 — the review-window server record, not the manifest.",
+    ("team_events.py", "save_mark"):
+        "Already atomic (temp + os.replace). The event publisher's own high-water mark under "
+        "gitignored temp_local/events/ (0.0.22 C1) — not the manifest; a lost write costs one "
+        "deduplicated re-send.",
     # --- ALREADY ATOMIC by its own hand (temp + os.replace). Not converted, because routing them
     #     would change behaviour beyond R-MAN's remit; each is pinned as atomic by its own suite.
     ("atomicfile.py", "atomic_write_text"):

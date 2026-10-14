@@ -109,11 +109,22 @@ HOOK_COMMAND = "mokata-hook"
 #                  destinations. `sed -i` was the known, documented hole this closes; the parser's
 #                  bounds are stated honestly in `selfprotect`'s Bash-lane note.
 HOOK_PRETOOL_MATCHER = "Write|Edit|MultiEdit|Bash"
-HOOK_GATE_MATCHER = "Write|Edit|MultiEdit|NotebookEdit|Bash"
+#                  0.0.22 C1 adds `Skill`: the model invoking the brainstorm skill records this
+#                  session's run INTENT (RUN-REG structural). A Skill call writes nothing, so the
+#                  gate lane returns 0 for it straight after recording.
+HOOK_GATE_MATCHER = "Write|Edit|MultiEdit|NotebookEdit|Bash|Skill|Agent|Task"
+#                  0.0.22 D4 adds `Agent|Task` (the tool that starts a subagent, under both of its
+#                  Claude Code names): the subagent contract's depth limit is judged on the spawn.
 #   dirty-track  — GR.S4 PostToolUse ASYNC OBSERVABILITY hook. File-mutation tools only (it
 #                  records the written PATH into the graph dirty-set). NEVER blocks (exit 0
 #                  always) — it is not a security lane; the sync PreToolUse blockers are untouched.
 HOOK_DIRTY_MATCHER = "Write|Edit|MultiEdit|NotebookEdit"
+#   run-bind     — 0.0.22 C1 PostToolUse on mokata's OWN `session_save`: reads the run id its
+#                  `register=true` returned and binds THIS Claude session to it — the one point where
+#                  Claude's session id and the MCP's run id meet without a guess (parallel runs).
+#                  NEVER blocks (exit 0 always). The matcher is `run_intent.REGISTER_TOOL_RE`, so
+#                  the two server names (`mcp install` and the plugin) cannot drift from the reader.
+from .run_intent import REGISTER_TOOL_RE as HOOK_RUN_BIND_MATCHER  # noqa: E402
 #   user-prompt-submit — H-1a UserPromptSubmit ASYNC CONTEXT-INJECTION hook. Like SessionStart it
 #                  takes NO matcher (the event carries no tool), only ADDS `additionalContext`,
 #                  and ALWAYS exits 0. Exit 2 on this event does not block a tool call — it eats
@@ -132,7 +143,19 @@ _EXPECTED_HOOK_WIRING: Dict[str, List[Dict[str, Optional[str]]]] = {
     "UserPromptSubmit": [{"script": "user_prompt_submit.py", "matcher": None}],
     "PreToolUse": [{"script": "secret_guard.py", "matcher": HOOK_PRETOOL_MATCHER},
                    {"script": "gate_guard.py", "matcher": HOOK_GATE_MATCHER}],
-    "PostToolUse": [{"script": "dirty_track.py", "matcher": HOOK_DIRTY_MATCHER}],
+    "PostToolUse": [{"script": "dirty_track.py", "matcher": HOOK_DIRTY_MATCHER},
+                    {"script": "run_bind.py", "matcher": HOOK_RUN_BIND_MATCHER}],
+    # H-1b (0.0.22 D1) — persist this session's run position before a compaction (no matcher:
+    # manual and auto compactions both lose the conversation).
+    "PreCompact": [{"script": "pre_compact.py", "matcher": None}],
+    # HP.S3 + H-3 (0.0.22 D4) — the subagent contract: recorded and said at start, its HandbackReport
+    # read at stop. No matcher: every agent type in a pipeline session is contracted.
+    "SubagentStart": [{"script": "subagent_start.py", "matcher": None}],
+    "SubagentStop": [{"script": "subagent_stop.py", "matcher": None}],
+    # H-1c (0.0.22 D6) — the session harvest: each rewrites this session's DRAFT note (never a
+    # memory; a person accepts it). No matcher; always exit 0, silent.
+    "Stop": [{"script": "stop.py", "matcher": None}],
+    "SessionEnd": [{"script": "session_end.py", "matcher": None}],
 }
 
 
@@ -260,7 +283,10 @@ class SetupPlan:
 # The hook scripts (kept as standalone shims) map to `mokata-hook` subcommands.
 _HOOK_SUBCOMMAND = {"session_start.py": "session-start", "secret_guard.py": "secret-guard",
                     "gate_guard.py": "gate-guard", "dirty_track.py": "dirty-track",
-                    "user_prompt_submit.py": "user-prompt-submit"}
+                    "user_prompt_submit.py": "user-prompt-submit", "run_bind.py": "run-bind",
+                    "pre_compact.py": "pre-compact", "subagent_start.py": "subagent-start",
+                    "subagent_stop.py": "subagent-stop", "stop.py": "stop",
+                    "session_end.py": "session-end"}
 
 
 def _hook_exec(script: str) -> Dict[str, Any]:
@@ -720,6 +746,14 @@ def _load_json(path: Path) -> Dict:
 
 
 def _write_json(path: Path, data: Dict) -> None:
+    # HP.S4 (0.0.22 D5) — these config writes (`.mcp.json`, `settings.json`, `~/.claude.json`) used
+    # to bypass the WriteGate entirely. They now pass its DESTINATION layers — SELF-PROTECT and
+    # containment, with the named user-harness-config allowance — before anything is written. The
+    # flow's own consent (the preview + y/N, or `--yes`) is the human gate, and `_record_setup_ledger`
+    # its record. ⚠ NOT the secret scan: the merged file is the USER's whole config (their other MCP
+    # servers' tokens included), so scanning it would refuse mokata's own setup on their secrets;
+    # mokata's fragment is its command path and args, which carry none.
+    _gate_config_destination(path)
     # ATOMIC write (P2): render to a temp file in the SAME directory, then `os.replace` it onto
     # the target — a crash mid-write leaves the old config intact rather than a truncated/
     # half-written one. Same-dir temp keeps the rename atomic (no cross-filesystem move).
@@ -741,6 +775,28 @@ def _write_json(path: Path, data: Dict) -> None:
         except OSError:
             pass
         raise
+
+
+class ConfigWriteRefused(SetupError):
+    """A setup config write refused by the WriteGate's destination layers (HP.S4)."""
+
+
+def _gate_config_destination(path: Path) -> None:
+    """Refuse a config write whose DESTINATION the WriteGate would refuse — raised, never skipped,
+    so a setup never half-applies silently."""
+    from .gate_hook import find_mokata_root
+    from .govern.gate import WriteGate, WriteRequest
+    # A project-scope file is judged against the mokata repo it sits in (setup may run from another
+    # cwd with `--path`); a user-scope one has no repo and meets the gate's own derivation, where
+    # only the named user-harness-config allowance lets it out.
+    root = find_mokata_root(str(path.parent))
+    # actor "setup", not "cli": mokata COMPUTED these destinations (nobody typed them), so they are
+    # contained — `govern.gate._human_named` exempts only a destination a person chose.
+    outcome = WriteGate().submit(WriteRequest(kind="config", target=str(path), actor="setup",
+                                              tool="setup"),
+                                 commit=lambda: None, assume_yes=True, workspace_root=root)
+    if not outcome.committed:
+        raise ConfigWriteRefused(outcome.reason)
 
 
 def _write_or_remove_json(path: Path, data: Dict) -> None:

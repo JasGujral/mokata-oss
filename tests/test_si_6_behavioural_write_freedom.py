@@ -325,6 +325,20 @@ _SHARED_DB_SUBSTRATE = "refused (a) — reads a shared Postgres/pgvector DB; its
                        "whatever it did. The SQLite twin of this read IS bound."
 
 REFUSED = {
+    ("ide/launch.py", "open_or_focus"):
+        "writes — 0.0.22 verification: the review window's launch LOCK file under temp_local/ide/ (it serialises two `/mokata:review-window` calls), so it cannot be bound as write-free",
+    ("ide/server.py", "_remove_record"):
+        "writes — 0.0.22 E2's review window: it is a writer by purpose (the snapshot store / the server record under temp_local/), so it cannot be bound as write-free",
+    ("ide/server.py", "_write_record"):
+        "writes — 0.0.22 E2's review window: it is a writer by purpose (the snapshot store / the server record under temp_local/), so it cannot be bound as write-free",
+    ("ide/snapshots.py", "_append"):
+        "writes — 0.0.22 E2's review window: it is a writer by purpose (the snapshot store / the server record under temp_local/), so it cannot be bound as write-free",
+    ("ide/snapshots.py", "_maybe_prune"):
+        "writes — 0.0.22 E2's review window: it is a writer by purpose (the snapshot store / the server record under temp_local/), so it cannot be bound as write-free",
+    ("ide/snapshots.py", "_write_object"):
+        "writes — 0.0.22 E2's review window: it is a writer by purpose (the snapshot store / the server record under temp_local/), so it cannot be bound as write-free",
+    ("ide/snapshots.py", "capture_before_first_write"):
+        "writes — 0.0.22 E2's review window: it is a writer by purpose (the snapshot store / the server record under temp_local/), so it cannot be bound as write-free",
     # Lane F. It WRITES — and saying so here is the point, because the register entry beside it
     # leads with "writes ZERO BYTES" and a reader could take that for write-freedom. It is not:
     # `_debounced` creates an inode under temp_local/ and stamps its mtime, because the mtime IS
@@ -404,7 +418,6 @@ REFUSED = {
         "writes — `SELECT pg_notify(…)`. It persists no row, which is exactly why it is listed "
         "rather than assumed: a reader could reasonably bind it as write-free, and the honest "
         "answer is that it sends a message over the shared connection (shared DB, so (a)).",
-    ("team_events.py", "SharedEventLog.max_local_seq"): _SHARED_DB_SUBSTRATE,
     ("team_events.py", "SharedEventLog.read"): _SHARED_DB_SUBSTRATE,
     ("team_audit.py", "SharedAuditLog.max_seq"): _SHARED_DB_SUBSTRATE,
     ("team_audit.py", "SharedAuditLog.read"): _SHARED_DB_SUBSTRATE,
@@ -477,6 +490,8 @@ REFUSED = {
     ("plugin_cache.py", "record_plugin_root"): "writes — the machine-local cache under ~/.mokata",
     ("progress_events.py", "ProgressLog.append_event"): "writes — appends a run-telemetry event "
         "under temp_local/",
+    ("team_events.py", "save_mark"): "writes — the publisher's own high-water mark under "
+        "temp_local/events/ (0.0.22 C1)",
     ("session_state.py", "SessionScopedStore.delete"): "writes — deletes session run-state",
     # 0.0.21 stage 10 review F3 added this third remover, and the honesty pin caught it the first
     # time the suite ran afterwards — which is the pin doing exactly its job: a new
@@ -492,6 +507,10 @@ REFUSED = {
     ("state.py", "StateStore._atomic_write"): "writes — process/run state under temp_local/",
     ("state.py", "StateStore.delete"): "writes — deletes process/run state",
     ("team_health.py", "store"): "writes — the health verdict cache under temp_local/",
+    ("branch_protection.py", "ProtectionCache.store"): "writes — the last-read protection cache "
+        "under the user's XDG cache dir (0.0.22 A1)",
+    ("branch_protection.py", "ProtectionCache.forget"): "writes — removes that cache entry "
+        "(0.0.22 A1)",
     ("team_journal.py", "TeamJournal._append_all"): "writes — the journal append funnel",
     ("team_journal.py", "TeamJournal.compact"): "writes — rewrites the journal with a subset",
     ("vault.py", "vault_pull"): "writes — copies the artifact out to an operator-named dest",

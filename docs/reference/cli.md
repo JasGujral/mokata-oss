@@ -231,12 +231,27 @@ and showed protection absent or too weak — the one state that prints the apply
 because it is the one state where applying it destroys nothing. Exit `2` means the protection
 detail could not be **obtained** at all (`gh` missing or unauthed, a `5xx`, an unparseable body)
 **and** could not be corroborated — a read failure, so its remedy is retry, never a write. Exit
-`3` is a **degraded pass**: the detail was unreadable but positively corroborated by reads that
+`3` is a **degraded pass**: the detail was unreadable live, but it was corroborated by reads that
 succeeded (`repos/<repo>/branches/<branch>` says `protected: true` and `repos/<repo>/rulesets`
-parses with every ruleset actively enforced). It is deliberately **non-zero** — a caller that has
-not been taught what `3` means reads it as a refusal, which is the safe way round — and it prints
-a dated notice naming the four assurances it did **not** obtain. A failed corroborating read does
-not buy a pass; it refuses.
+parses with every ruleset actively enforced) **and** by the last protection document this machine
+read in full, which must be at most 24 hours old and itself safe. It is deliberately
+**non-zero** — a caller that has not been taught what `3` means reads it as a refusal, which is the
+safe way round — and it prints a dated notice naming the read time of that document and the four
+assurances it did **not** obtain live. A failed corroborating read does not buy a pass; it refuses.
+
+**The last-read cache.** Every successful full read of the protection document is written, with
+its read time, under `$XDG_CACHE_HOME/mokata/branch-protection/` (default
+`~/.cache/mokata/branch-protection/`); a read that answers *no protection at all* clears it, and a
+read that fails never writes it. When the detail is unreadable and the live reads corroborate, the
+cache decides, and the four ways it cannot corroborate are four refusals with four exit codes:
+`4` nothing has been read in full on this machine (**miss**), `5` the last document read was **not**
+safe (**disagrees**), `6` it is older than 24 hours (**too old**), `7` a cache file is there but
+cannot be trusted — unparseable, for another repository, or dated in the future (**unusable**).
+None of them suggests applying protection: each is a read failure, and its remedy is to retry once
+GitHub answers.
+
+⚠ Before 0.0.22 exit `3` needed no cached document — the live boolean alone could pass. A caller
+that proceeds on `3` keeps working; one that dispatches on the code must add `4`–`7`, all refusals.
 
 ⚠ Before 0.0.18 this command had two codes and exit `1` covered *unprotected or unverifiable*.
 **A caller that special-cases exit `1` must be updated:** what `1` used to catch is now split
@@ -515,6 +530,15 @@ Walk a memory proposal through its review states — `Draft → In-Review → Ap
 prior published value. Approval requires **proposer ≠ approver**. With no flag it lists the
 pending proposals (read-only).
 
+### `mokata memory harvest [--approve ID | --reject ID] [--yes]`
+The **session notes** mokata drafts when a session in a run stops, compacts or ends: the stage it
+reached, the files it touched, what the gates caught, its subagents' handbacks, the review verdict
+and its notes — built from mokata's record, one note per session, bounded. **A draft is not a
+memory.** With no flag it lists the pending notes; `--approve <id>` saves one as an `episodic`
+memory through the normal human-gated write (it asks, unless `--yes`); `--reject <id>` drops it. A
+decided note is not proposed again unless the session did more work. The session briefing says
+when notes are waiting.
+
 ### `mokata memory consolidate`
 Surface **proposal-only** consolidations of the memory store — merges of duplicate facts,
 summaries, and prunes — one bounded line each (silent when there's nothing to propose).
@@ -665,9 +689,8 @@ A **test file is always writable** — you must be able to write the failing tes
 *permission* to implement, not the prohibition.
 
 A block is a single stderr line and **exit code 2** — `BLOCKED [<gate>] <reason>` — naming the file,
-what to do, and the override. Two honest limits: the `gate-guard` hook matches
-`Write|Edit|MultiEdit|NotebookEdit` and **not `Bash`**, so a shelled `sed -i` is *not* policed by the
-run-state gates (the `secret-guard` **does** match `Bash`); and only the **`claude`** harness declares
+what to do, and the override. Shell writes are policed too: the gate-guard also reads `Bash`: every file a shell command writes that mokata can see (redirections, `sed -i`, `tee`, `cp`/`mv`, inline `python -c` writes, bare file names included) meets the same run-state gates as a `Write` to that file. During a run, a command whose writes mokata cannot read (`$VAR` or `$(…)` destinations, `eval`, `xargs`/`find -exec` running a writer, a heredoc into a shell, inline `node -e`-style code that writes) is refused with the reason; reads are never refused. What it does not police is a program it runs (`python -m unittest`, `make`): no command line says what those write. One honest
+limit: only the **`claude`** harness declares
 the `hooks` capability, so on `cursor`/`gemini`/`cowork`/`windsurf` the gate-guard is never wired and
 the run-state gates enforce **nothing** (`mokata harness` shows the matrix).
 
@@ -927,6 +950,29 @@ non-zero so a release doc gate can act on it. With `--reconcile` it proposes the
 the diff, and writes ONLY on approval** through the universal write gate (`--yes` approves
 non-interactively); a decline writes nothing — there is no silent-write path, and it reconciles the
 **doc** to match the code, never the reverse. Backs `/mokata:docsync`.
+
+### `mokata ide [--session ID] [--demo] [--no-browser] [--foreground] [--port N]`
+Open the **review window** — a read-only page on `127.0.0.1` that shows the code difference at any
+point in time:
+
+- **Live** — the working tree against HEAD, uncommitted and untracked files included, updating as
+  sessions write.
+- **What a session wrote** — each file's content before the session first touched it against its
+  latest write. Parallel sessions are separate rows, each with its own run.
+- **Timeline** — every write a session made, with the content before and after it. Pick one to see
+  that write, or two to diff any two moments.
+- **Compare branches** (`base...head`) and **pull requests** by GitHub URL, fetched with *your* git
+  login (mokata stores no token).
+
+If a window is already open for the repo, `mokata ide` **re-focuses** it instead of starting a
+second one. Inside a Claude Code session, type **`/mokata:review-window`**: mokata's prompt hook opens the
+window, or points the open one at *that* session — its run, its worktree, its timeline. `--demo`
+shows a clearly labelled **SAMPLE** dataset so you can review the UI before any real data exists;
+every section shows what will appear there when it is empty. Security: loopback only, a per-launch
+pairing link that becomes an HttpOnly cookie, Host and Origin checks, nothing outside the repo is
+read. Started from a session it exits after 30 idle minutes; `--foreground` serves until Ctrl-C.
+Needs the `[ide]` extra (`pip install "mokata[ide]"`) — normally already present with mokata's MCP
+SDK. Requires Claude Code 2.1.0+ for the per-session features (`mokata doctor` checks).
 
 ### `mokata doctor [--wiring] [--matrix]`
 Diagnose the manifest/config: missing providers, broken adapters, role conflicts, bad

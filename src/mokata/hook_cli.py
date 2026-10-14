@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import threading
 from typing import Any, Callable, List, Optional
@@ -331,6 +332,7 @@ def gate_guard_main(argv: Optional[List[str]] = None) -> int:
         cwd, session_id, path = args.cwd or os.getcwd(), "", args.path
         command = args.command
         content = ""
+        tool_name, agent_id = "", None
         if args.path is None and args.command is None:
             raw = _read_stdin_bounded(_STDIN_READ_TIMEOUT_SECS)
             payload = {}
@@ -351,6 +353,15 @@ def gate_guard_main(argv: Optional[List[str]] = None) -> int:
             # markers only; never interpreted, never sent anywhere.
             content = target_content(tool_input)
             command = bash_command(tool_input)
+            tool_name = payload.get("tool_name") if isinstance(payload.get("tool_name"), str) else ""
+            # D4 — Claude Code puts `agent_id` on a tool call made INSIDE a subagent.
+            agent_id = payload.get("agent_id") if isinstance(payload.get("agent_id"), str) else None
+            # RUN-REG (0.0.22 C1) — the MODEL invoking the brainstorm skill is the second way a
+            # session asks for a pipeline (a typed `/mokata:brainstorm` is the first, recorded by
+            # user-prompt-submit). Record the intent and stop: a Skill call writes no file.
+            if payload.get("tool_name") == "Skill":
+                _record_skill_intent(cwd, session_id, tool_input)
+                return 0
 
         # ---- 1 · SELF-PROTECT. Target path only, BEFORE find_mokata_root and every run-state
         # gate. `_SOURCE_EXTS` is deliberately NOT consulted: that filter is what keeps a README
@@ -366,6 +377,40 @@ def gate_guard_main(argv: Optional[List[str]] = None) -> int:
                 sys.stderr.write(render_refusal(verdict) + "\n")
                 return BLOCK_EXIT
 
+        # ---- 1b · the SUBAGENT CONTRACT (HP.S3, 0.0.22 D4). Only a call made inside a subagent,
+        # or a call that STARTS one, is judged; everything else passes straight through.
+        bash = None
+        if command:
+            from .bash_lane import analyze
+            bash = analyze(command, cwd)          # D5 — bare names included, resolved against cwd
+        if agent_id is not None or tool_name in _SPAWN_TOOLS:
+            refusal = _subagent_contract_refusal(
+                cwd, session_id, agent_id, tool_name, path,
+                list(bash.targets) if bash else [],
+                (bash.unreadable + bash.mutates) if bash else ())
+            if refusal:
+                sys.stderr.write(refusal + "\n")
+                return BLOCK_EXIT
+
+        # ---- 1b' · MOKATA'S OWN RUN RECORD (0.0.22 verification, D4-forge). The state directory
+        # holds the evidence the gates trust — which subagent finished, which test failed, which
+        # run a session holds. mokata writes it; an agent tool call never does (no skill asks it
+        # to). A Write or a Bash redirect into it is refused in every session.
+        refusal = _own_record_refusal(cwd, ([path] if path else []) +
+                                      (list(bash.targets) if bash else []), command or "", bash)
+        if refusal:
+            sys.stderr.write(refusal + "\n")
+            return BLOCK_EXIT
+
+        # ---- 1c · the BASH WRITE SIDE DOOR (SP-BLIND + HP.S4's Bash half, 0.0.22 D5). Every write a
+        # command makes that mokata can SEE meets the same run-state gates as a native Write to that
+        # path; one it cannot see is refused, but only in a session that is in a pipeline.
+        if bash is not None and (bash.targets or bash.unreadable):
+            refusal = _bash_lane_refusal(cwd, session_id, bash)
+            if refusal:
+                sys.stderr.write(refusal + "\n")
+                return BLOCK_EXIT
+
         if not path:
             return 0                              # no file target (or no envelope) -> nothing to do
 
@@ -374,7 +419,7 @@ def gate_guard_main(argv: Optional[List[str]] = None) -> int:
         if root is None:
             return 0                              # not a mokata project -> zero cost, instant allow
 
-        outcome = check_write(root, path, content=content)
+        outcome = check_write(root, path, content=content, session_id=session_id or None)
 
         if outcome.notice:
             once = notice_once(root, session_id, outcome.notice)
@@ -382,7 +427,9 @@ def gate_guard_main(argv: Optional[List[str]] = None) -> int:
                 sys.stderr.write(once + "\n")
 
         if outcome.allowed:
+            _snapshot_before(root, path, session_id, cwd)
             return 0
+        _record_in_loop_catch(root, outcome, path, session_id)
         sys.stderr.write(f"BLOCKED [{outcome.gate}] {outcome.reason}\n")
         return BLOCK_EXIT
     except Exception as exc:
@@ -412,6 +459,300 @@ def gate_guard_main(argv: Optional[List[str]] = None) -> int:
         note_degraded("gate-guard", FAILURE_ENGINE,
                       fallback="the run-state gate is FAILING OPEN and enforcing nothing",
                       fix="Run `mokata doctor`", detail=str(exc))
+        return 0
+
+
+def _record_in_loop_catch(root: str, outcome: Any, path: str, session_id: str) -> None:
+    """SL.S3 (0.0.22 C2) — a block keyed to a run is an IN-LOOP catch for that run: mokata caught
+    it before review. Recorded so "caught at review vs in the loop" has a denominator. Silent and
+    total: a lost record makes the run's figure smaller, never the write allowed.
+
+    Credited ONLY when this session holds the run (its own bound claim) — 0.0.22 verification D-1:
+    a second window with no claim is still policed by the repo's only run (so `/clear` is not a
+    way around the gates), but its blocks are not that run's catches and must not inflate them."""
+    try:
+        rid = getattr(outcome, "run_id", None)
+        if not rid or not session_id:
+            return
+        from .run_intent import CLAIM_BOUND, session_claim
+        claim, claimed = session_claim(root, session_id)
+        if claim != CLAIM_BOUND or claimed != rid:
+            return
+        from .progress_events import record_gate_block
+        from .repo_paths import name_of
+        from .tdd_state import state_dir
+        try:
+            rel = name_of(path if os.path.isabs(path) else os.path.join(root, path), root)
+        except (ValueError, OSError):
+            rel = os.path.basename(path)
+        record_gate_block(state_dir(root), rid, outcome.gate or "", rel)
+    except Exception:  # noqa: BLE001 — the block stands whether or not it was counted
+        pass
+
+
+#: The tools that start a subagent (`subagent_contract.SPAWN_TOOLS`, restated so the hot path does
+#: not import the contract module for every write; a test pins the two equal).
+_SPAWN_TOOLS = ("Agent", "Task")
+
+
+GATE_OWN_RECORD = "own-record"
+
+
+def _own_record_refusal(cwd: str, targets: List[str], command: str = "", bash: Any = None) -> str:
+    """BLOCKED when an agent tool call would write, delete or move mokata's run record —
+    `.mokata/temp_local/state/`, the evidence the gates decide from — in ANY session. Deleting it
+    is the worst case: with no state there is no run, and every run-state gate opens (0.0.22
+    verification). Fail open on a fault, like every lane here."""
+    try:
+        from .gate_hook import find_mokata_root
+        from .tdd_state import state_dir
+        root = find_mokata_root(cwd)
+        if root is None:
+            return ""
+        from .bash_lane import own_record_hits
+        hit = own_record_hits(root, cwd, state_dir(root), targets, command, bash)
+        if hit:
+            return (f"BLOCKED [{GATE_OWN_RECORD}] {hit} — that is mokata's run record, the "
+                    f"evidence the gates decide from. mokata writes it; a tool call may not change "
+                    f"or remove it. Use the mokata command for what you meant (e.g. `mokata gate "
+                    f"override`, `mokata uninstall`).")
+        return ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _bash_lane_refusal(cwd: str, session_id: str, bash: Any) -> str:
+    """The BLOCKED line when a Bash command's writes break a run-state gate, or when — in a session
+    that is in a pipeline — mokata cannot tell what it writes. "" otherwise. Fail open on a fault,
+    like every lane here: the floor is the gate's, not this helper's."""
+    try:
+        from .gate_hook import check_write, find_mokata_root, notice_once
+        root = find_mokata_root(cwd)
+        if root is None:
+            return ""
+        if bash.unreadable and session_id:
+            from .run_intent import CLAIM_NONE, session_claim
+            claim, rid = session_claim(root, session_id)
+            if claim != CLAIM_NONE:
+                from .bash_lane import GATE_UNREADABLE, refusal
+                if rid:
+                    try:
+                        from .progress_events import record_gate_block
+                        from .tdd_state import state_dir
+                        record_gate_block(state_dir(root), rid, GATE_UNREADABLE, "(bash)")
+                    except Exception:  # noqa: BLE001 — the block stands whether or not counted
+                        pass
+                return refusal(bash.unreadable)
+        for target in bash.targets:
+            outcome = check_write(root, target, session_id=session_id or None)
+            if outcome.notice:
+                once = notice_once(root, session_id, outcome.notice)
+                if once:
+                    sys.stderr.write(once + "\n")
+            if not outcome.allowed:
+                _record_in_loop_catch(root, outcome, target, session_id)
+                return f"BLOCKED [{outcome.gate}] {outcome.reason}"
+        return ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _subagent_contract_refusal(cwd: str, session_id: str, agent_id: Optional[str], tool_name: str,
+                               path: Optional[str], bash_targets: List[str],
+                               bash_unreadable: Any = ()) -> str:
+    """The BLOCKED line when this call breaks its subagent's contract, else "". Ledgers the refusal.
+    Fail open on any fault: an unreadable contract is an unpoliced subagent, never a broken tool."""
+    try:
+        from .gate_hook import find_mokata_root
+        from .subagent_contract import check_tool, ledger_unhonored, read_contract
+        root = find_mokata_root(cwd)
+        if root is None:
+            return ""
+        verdict = check_tool(root, agent_id, tool_name, path, bash_targets,
+                             session_id=session_id or None, bash_unreadable=tuple(bash_unreadable))
+        if verdict.allowed:
+            return ""
+        contract = read_contract(root, agent_id) if agent_id else None
+        ledger_unhonored(root, contract, verdict.gate, tool=tool_name,
+                         target=path or (bash_targets[0] if bash_targets else ""))
+        return f"BLOCKED [{verdict.gate}] {verdict.reason}"
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _record_skill_intent(cwd: str, session_id: str, tool_input: Any) -> None:
+    """A `Skill` call that starts a registering pipeline records this session's intent. Silent and
+    total: an unrecorded intent leaves the gate exactly as it was before this stage (fail open)."""
+    try:
+        from .gate_hook import find_mokata_root
+        from .run_intent import pipeline_in_skill_call, record_intent
+        pipeline = pipeline_in_skill_call(tool_input)
+        root = find_mokata_root(cwd) if pipeline else None
+        if root and session_id:
+            record_intent(root, session_id, "skill:" + pipeline)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# ======================================================================================
+# pre-compact (PreCompact — H-1b, 0.0.22 D1)
+# ======================================================================================
+
+def pre_compact_main(argv: Optional[List[str]] = None) -> int:
+    """Persist THIS session's run position before Claude Code summarises the conversation, so the
+    re-anchor after compaction can say whether anything moved (H-1b). ALWAYS exits 0: a PreCompact
+    hook that blocks or crashes would cost the human their compaction."""
+    try:
+        raw = _read_stdin_bounded(_STDIN_READ_TIMEOUT_SECS)
+        payload: dict = {}
+        if raw and raw.strip():
+            try:
+                loaded = json.loads(raw)
+                payload = loaded if isinstance(loaded, dict) else {}
+            except (ValueError, TypeError):
+                payload = {}
+        sid = payload.get("session_id")
+        if not isinstance(sid, str) or not sid.strip():
+            return 0
+        from .gate_hook import find_mokata_root
+        root = find_mokata_root(payload.get("cwd") or os.getcwd())
+        if root:
+            from .reanchor import write_anchor
+            write_anchor(root, sid.strip())
+            # H-1b's episodic half (0.0.22 D6) — draft this session's note before the summary.
+            from .harvest import harvest
+            harvest(root, sid.strip(), "pre-compact")
+        return 0
+    except Exception:  # noqa: BLE001 — never cost the human their compaction
+        return 0
+
+
+# ======================================================================================
+# stop / session-end (Stop / SessionEnd — H-1c, 0.0.22 D6)
+# ======================================================================================
+
+def _harvest_main(event: str) -> int:
+    """Rewrite this session's DRAFT note from the record. ALWAYS exits 0 and prints NOTHING: exit 2
+    on Stop would send Claude back to work, and stdout on Stop is a decision channel — a harvest
+    must never be either. Nothing here writes memory; a person accepts a draft at the CLI."""
+    try:
+        payload = _hook_payload()
+        sid = payload.get("session_id")
+        if not isinstance(sid, str) or not sid.strip():
+            return 0
+        if payload.get("stop_hook_active"):
+            return 0                       # another Stop hook sent Claude back; not a real end
+        from .gate_hook import find_mokata_root
+        root = find_mokata_root(payload.get("cwd") or os.getcwd())
+        if root is None:
+            return 0
+        from .harvest import harvest
+        last = payload.get("last_assistant_message")
+        harvest(root, sid.strip(), event, last if isinstance(last, str) else None)
+        return 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def stop_main(argv: Optional[List[str]] = None) -> int:
+    return _harvest_main("stop")
+
+
+def session_end_main(argv: Optional[List[str]] = None) -> int:
+    return _harvest_main("session-end")
+
+
+# ======================================================================================
+# subagent-start / subagent-stop (SubagentStart / SubagentStop — HP.S3 + H-3, 0.0.22 D4)
+# ======================================================================================
+
+def _hook_payload() -> dict:
+    raw = _read_stdin_bounded(_STDIN_READ_TIMEOUT_SECS)
+    if not raw or not raw.strip():
+        return {}
+    try:
+        loaded = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def subagent_start_main(argv: Optional[List[str]] = None) -> int:
+    """Record this subagent's contract and tell the subagent what it is. Context only — SubagentStart
+    cannot block — and ALWAYS exits 0: a session in no pipeline sees nothing at all."""
+    try:
+        payload = _hook_payload()
+        sid = payload.get("session_id")
+        if not isinstance(sid, str) or not sid.strip():
+            return 0
+        from .gate_hook import find_mokata_root
+        root = find_mokata_root(payload.get("cwd") or os.getcwd())
+        if root is None:
+            return 0
+        from .subagent_contract import contract_context, start_contract
+        contract = start_contract(root, sid.strip(), payload.get("agent_id"),
+                                  payload.get("agent_type"))
+        if contract:
+            sys.stdout.write(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "SubagentStart",
+                "additionalContext": contract_context(contract)}}) + "\n")
+        return 0
+    except Exception:  # noqa: BLE001 — never cost the human their subagent
+        return 0
+
+
+def subagent_stop_main(argv: Optional[List[str]] = None) -> int:
+    """Read the subagent's HandbackReport; send it back ONCE when it has none (`decision: block`),
+    and record how it finished. ALWAYS exits 0 — the JSON decision is the only way it blocks, and a
+    crash here must never hold a subagent open."""
+    try:
+        payload = _hook_payload()
+        from .gate_hook import find_mokata_root
+        root = find_mokata_root(payload.get("cwd") or os.getcwd())
+        if root is None:
+            return 0
+        from .subagent_contract import finish_contract
+        verdict = finish_contract(root, payload)
+        if verdict.block:
+            sys.stdout.write(json.dumps({"decision": "block", "reason": verdict.reason}) + "\n")
+        return 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+# ======================================================================================
+# run-bind (PostToolUse on mokata's `session_save` — RUN-REG structural, 0.0.22 C1)
+# ======================================================================================
+
+def run_bind_main(argv: Optional[List[str]] = None) -> int:
+    """Bind this Claude Code session to the run ITS OWN `session_save(register=true)` registered.
+
+    The MCP process cannot see Claude Code's `session_id` (harness gap #25642); this hook sees both
+    the session id and the tool's response, so it is the one place the two identities meet without
+    a guess — which is what lets parallel runs each be policed by their own run. ALWAYS exits 0:
+    the tool already ran, and a missed binding only leaves the gate where it would have been."""
+    try:
+        raw = _read_stdin_bounded(_STDIN_READ_TIMEOUT_SECS)
+        payload: dict = {}
+        if raw and raw.strip():
+            try:
+                loaded = json.loads(raw)
+                payload = loaded if isinstance(loaded, dict) else {}
+            except (ValueError, TypeError):
+                payload = {}
+        sid = payload.get("session_id")
+        if not isinstance(sid, str) or not sid.strip():
+            return 0
+        from .run_intent import bind_registered, registered_run
+        rid = registered_run(payload.get("tool_name"), payload.get("tool_response"))
+        if not rid:
+            return 0
+        from .gate_hook import find_mokata_root
+        root = find_mokata_root(payload.get("cwd") or os.getcwd())
+        if root:
+            bind_registered(root, sid.strip(), rid)
+        return 0
+    except Exception:  # noqa: BLE001 — a PostToolUse hook never fails the call it follows
         return 0
 
 
@@ -520,9 +861,61 @@ def dirty_track_main(argv: Optional[List[str]] = None) -> int:
                 # lost that could have been used; the async lane stays silent either way.
                 continue
         mark_dirty(root, rels, session_id=session_id)
+        _record_working_set(root, session_id, rels)
+        _snapshot_after(root, session_id, rels)
         return 0
     except Exception:  # noqa: BLE001 — the async lane NEVER fails a tool call
         return 0
+
+
+def _session_run(root: str, session_id: Optional[str]) -> Optional[str]:
+    from .run_intent import CLAIM_BOUND, session_claim
+    claim, rid = session_claim(root, session_id)
+    return rid if claim == CLAIM_BOUND else None
+
+
+def _snapshot_before(root: str, path: str, session_id: str, cwd: str) -> None:
+    """E2 — the content BEFORE this session's first write to `path`, for the review window's diff at
+    any point in time. Only for an ALLOWED write (a blocked one changes nothing) and only with a
+    session id. Silent and total: a snapshot that cannot be taken never touches the write."""
+    try:
+        if not session_id:
+            return
+        from .ide.snapshots import capture_before_first_write
+        capture_before_first_write(root, path, session_id, _session_run(root, session_id), cwd)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _snapshot_after(root: Optional[str], session_id: Optional[str], rels: List[str]) -> None:
+    """E2 — the content AFTER each native write. The async observability lane: never fails."""
+    try:
+        if not root or not rels:
+            return
+        from .ide.snapshots import AFTER, capture
+        rid = _session_run(root, session_id) if session_id else None
+        for rel in rels:
+            capture(root, rel, AFTER, session_id, rid)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _record_working_set(root: Optional[str], session_id: Optional[str], rels: List[str]) -> None:
+    """HP.S2 (0.0.22 D2) — the written paths join the WorkingSet of the run THIS session is bound
+    to (C1's claim — never the repo's "active" run, so parallel runs keep their own files). A
+    session with no claim records nothing. Silent: this is the async observability lane."""
+    try:
+        if not root or not session_id or not rels:
+            return
+        from .run_intent import CLAIM_BOUND, session_claim
+        claim, rid = session_claim(root, session_id)
+        if claim != CLAIM_BOUND or not rid:
+            return
+        from .working_set import record_touched
+        for rel in rels:
+            record_touched(root, rid, rel)
+    except Exception:  # noqa: BLE001 — never fails the tool call it follows
+        pass
 
 
 # ======================================================================================
@@ -595,6 +988,15 @@ def _record_plugin_root(plugin_root: Optional[str]) -> None:
         # when it fails (`/mokata:init` re-derives the root), so there is no fallback to announce
         # and a notice here would be noise on a SessionStart that is working perfectly.
         pass
+
+
+def _harvest_waiting(root: str) -> Optional[str]:
+    """H-1c (0.0.22 D6) — one line when session notes are waiting for review; inside the budget."""
+    try:
+        from .harvest import briefing_line
+        return briefing_line(root)
+    except Exception:  # noqa: BLE001 — a briefing line is never worth a failed SessionStart
+        return None
 
 
 def _mcp_reachability_warning(root: str) -> Optional[str]:
@@ -671,7 +1073,18 @@ def session_start_main(argv: Optional[List[str]] = None) -> int:
         _emit(f"mokata: bootstrap skipped ({exc}).")
         return 0
 
-    briefing = build_bootstrap(surface)
+    # H-8 (0.0.22 D3) — the re-anchor block and the MCP reachability warning are built FIRST and
+    # handed to `build_bootstrap`, so they are counted inside the ONE briefing budget instead of
+    # being appended after it (a second, unmetered channel).
+    reanchor = None
+    try:
+        from .reanchor import build_reanchor
+        reanchor = build_reanchor(root, session_id, source)
+    except Exception:  # noqa: BLE001 — the briefing must start even if the re-anchor cannot
+        reanchor = None
+    footer = [f for f in (_mcp_reachability_warning(root), _harvest_waiting(root)) if f]
+    briefing = build_bootstrap(surface, reanchor=reanchor,
+                               footer="\n".join(footer) if footer else None)
     context = briefing.text
     # R11 — log the briefing's tokenizer-free chars/4 estimate so its safety margin is MEASURED.
     # Claude Code reports no real token count at inject time, so we log the ESTIMATE alone and
@@ -686,9 +1099,6 @@ def session_start_main(argv: Optional[List[str]] = None) -> int:
     # its command can't be resolved (a broken auto-start), append ONE warning line + the fix.
     # A fast LOCAL lookup only (no handshake subprocess): SessionStart is async/observability
     # and must never block or slow the session. Degrade-clean: any doubt → say nothing.
-    warning = _mcp_reachability_warning(root)
-    if warning:
-        context = context + "\n\n" + warning
     _emit(context)
 
     # Stage 60 — advance the "since last session" baseline at the session boundary. The briefing
@@ -739,6 +1149,24 @@ def session_start_main(argv: Optional[List[str]] = None) -> int:
 #     that coupling here would create it by accident rather than by decision.
 
 
+_IDE_PROMPT = re.compile(r"^\s*/(?:mokata:)?review-window(?=\s|$)")
+
+
+def _ide_for_prompt(root: str, prompt: str, session_id: Optional[str]) -> Optional[str]:
+    """E2 — the context line for a `/mokata:review-window` prompt (after opening / re-focusing), else None.
+    A failure is SAID (the command template falls back to `mokata ide --no-browser`)."""
+    if not _IDE_PROMPT.match(prompt or ""):
+        return None
+    try:
+        from .ide.launch import open_or_focus
+        return open_or_focus(root, session_id).line()
+    except ImportError:
+        from .ide.server import INSTALL_LINE
+        return "mokata ide could not start — " + INSTALL_LINE
+    except Exception as exc:  # noqa: BLE001 — a window that will not open is said, never raised
+        return f"mokata ide could not start ({type(exc).__name__}: {str(exc)[:160]})"
+
+
 def user_prompt_submit_main(argv: Optional[List[str]] = None) -> int:
     """Inject the per-turn recall pack (H-1a). ALWAYS exits 0; prints nothing when there is
     nothing to say (an uninitialized repo, an empty prompt, no relevant memory).
@@ -767,6 +1195,16 @@ def user_prompt_submit_main(argv: Optional[List[str]] = None) -> int:
         root = find_project_root(cwd)
         if not Surface.is_initialized(root):
             return 0                       # not a mokata project — zero cost, total silence
+        # RUN-REG (0.0.22 C1) — a typed `/mokata:brainstorm` is this session asking for a pipeline.
+        # Recorded BEFORE the recall work and outside its budget: it is one small write, and the
+        # gate's verdict for this session depends on it.
+        _record_prompt_intent(root, prompt, session_id)
+        # E2 (0.0.22) — `/mokata:review-window`: THIS hook is the one place that knows which session asked, so
+        # it opens the review window, or re-focuses the open one on this session, and says where.
+        ide_line = _ide_for_prompt(root, prompt, session_id)
+        if ide_line:
+            _emit(ide_line, event=USER_PROMPT_SUBMIT_EVENT)
+            return 0
         surface = Surface.load(root)
 
         # THE WALL-CLOCK BUDGET (OSS issue #43). Everything expensive lives past this point —
@@ -821,6 +1259,16 @@ def _build_injection_for(surface, prompt: str, root: str, session_id: str):
     # goes to what is NEW rather than re-handing the model turn 3's answer on turn 20.
     return build_injection(surface, prompt,
                            exclude_ids=already_injected(root, session_id=session_id))
+
+
+def _record_prompt_intent(root: str, prompt: str, session_id: str) -> None:
+    try:
+        from .run_intent import pipeline_in_prompt, record_intent
+        pipeline = pipeline_in_prompt(prompt)
+        if pipeline and session_id:
+            record_intent(root, session_id, "prompt:" + pipeline)
+    except Exception:  # noqa: BLE001 — an unrecorded intent is the gate as it was (fail open)
+        pass
 
 
 def _prompt_envelope(args) -> "tuple":
@@ -1006,6 +1454,12 @@ _SUBCOMMANDS = {
     "secret-guard": secret_guard_main,
     "gate-guard": gate_guard_main,
     "dirty-track": dirty_track_main,
+    "run-bind": run_bind_main,
+    "pre-compact": pre_compact_main,
+    "subagent-start": subagent_start_main,
+    "subagent-stop": subagent_stop_main,
+    "stop": stop_main,
+    "session-end": session_end_main,
     "user-prompt-submit": user_prompt_submit_main,
     "statusline": statusline_main,
 }

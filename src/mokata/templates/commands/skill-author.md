@@ -1,5 +1,5 @@
 ---
-name: skill
+name: skill-author
 description: mokata · Author a new mokata skill test-first (RED-GREEN-for-docs); the write is human-gated.
 argument-hint: "<name> --summary <s> --require <doc>:<must-contain> --content-file <f>"
 allowed-tools: Bash, Read, Write

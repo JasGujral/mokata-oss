@@ -37,5 +37,5 @@ open("src/mokata/templates/commands/clarify.md", "w").write(command_markdown(get
 Each skill runs standalone (`mokata run clarify`) and applies only its own gate. See the
 [skills reference](../reference/skills.md).
 
-> Authoring one **from inside Claude Code** is the same protocol, gated: `/skill` (or
+> Authoring one **from inside Claude Code** is the same protocol, gated: `/mokata:skill-author` (or
 > `mokata skill`) drives the RED-GREEN-for-docs loop and human-gates the write.

@@ -69,9 +69,10 @@ mutant "C02 sync-public.sh drops editors/vscode/out from INTERNAL_PATHS (doc sti
 
 # ==== the derivation itself ====================================================================
 
-mutant "B01 comments are no longer stripped (a commented-out entry counts as a control)" "$B" \
-  '        ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))' \
-  '        ln for ln in text.splitlines())' "$T"
+# B01 re-aimed at 0.0.22 B2: the stripping now lives in the ONE shared reader, tests/_code_lines.py.
+mutant "B01 comments are no longer stripped (a commented-out entry counts as a control)" "tests/_code_lines.py" \
+  '    return line.lstrip().startswith("#")' \
+  '    return False' "$T"
 
 B02_OLD=$(cat <<'EOF'
     end = body.find("\n)", start)

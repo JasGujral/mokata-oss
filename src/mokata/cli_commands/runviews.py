@@ -91,6 +91,56 @@ def cmd_progress_mark(args: argparse.Namespace) -> int:
         return 0
 
 
+def cmd_progress_working_set(args: argparse.Namespace) -> int:
+    from ..progress_events import _resolve_verdict_run
+    from ..working_set import add_note, working_set
+    surface = _load_surface(args.path)
+    rid = (args.run or "").strip() or _resolve_verdict_run(surface)
+    if not rid:
+        print("mokata working-set: no run could be resolved here — name it with --run "
+              "(`mokata sessions` lists them).")
+        return 1
+    if args.note:
+        add_note(surface.root, rid, args.note)
+    ws = working_set(surface.root, rid)
+    print(f"run {rid} · phase {ws.phase or '-'} (last passed {ws.last_passed or '-'}) · "
+          f"stage {ws.stage or '-'}")
+    print("  " + ws.line())
+    return 0
+
+
+def run_finished_line(run_id: str, landing: str) -> str:
+    """The one line a recorded finish reports — shared by `mokata progress finish` and the MCP
+    `run_finish` tool, so both surfaces say the same thing (the REVIEW-FIX.R3 rule)."""
+    return f"mokata progress: run {run_id} finished ({landing})."
+
+
+def run_finish_refused_line(reason: str) -> str:
+    """The one line a REFUSED or FAILED finish reports — nothing was written, and the remedy."""
+    return (f"mokata progress: did NOT record the finish — {reason}. Nothing was written; the run "
+            f"still reads as unfinished.")
+
+
+def cmd_progress_finish(args: argparse.Namespace) -> int:
+    # 0.0.22 C1 (`B-LIFE-FU`) — the ship-completion event. Unlike `mark`, a refusal EXITS 1: a
+    # stage mark moves a badge, but a finish is the record that the run is OVER, and a finish that
+    # silently did not land is the "accurate about the past, presented as the present" bug B-LIFE
+    # was filed for, one layer down.
+    from ..progress_events import FinishRefused, record_run_finished, _CURRENT_RUN
+    try:
+        surface = _load_surface(args.path)
+        event = record_run_finished(surface, landing=args.landing,
+                                    run_id=(args.run or "").strip() or _CURRENT_RUN)
+    except FinishRefused as exc:
+        print(run_finish_refused_line(str(exc)))
+        return 1
+    except Exception as exc:                 # noqa: BLE001
+        print(run_finish_refused_line(f"could not write it ({exc})"))
+        return 1
+    print(run_finished_line(event["run_id"], args.landing))
+    return 0
+
+
 def review_recorded_line(verdict: str, kind: str, run_id: str) -> str:
     """The one line a recorded verdict reports — lifted VERBATIM out of
     `cmd_progress_record_review` (no text change) so the MCP `review_record` tool says the SAME
@@ -154,6 +204,7 @@ def cmd_progress_record_review(args: argparse.Namespace) -> int:
         surface = _load_surface(args.path)
         event = record_review_verdict(surface, passed=passed, independent=args.independent,
                                       findings=args.findings,
+                                      blocking=getattr(args, "blocking", None),
                                       run_id=args.run if args.run else _CURRENT_RUN)
         kind = "independent" if args.independent else "inline"
         verdict = "passed" if passed else "failed"
@@ -209,7 +260,22 @@ def cmd_progress_review_status(args: argparse.Namespace) -> int:
         print(line)
         return 2
     print(gate.message)
+    if getattr(args, "caught", False):
+        _print_review_yield(surface, args.run or None)
     return 0
+
+
+def _print_review_yield(surface, run_id) -> None:
+    """SL.S3 (0.0.22 C2) — `review-status --caught`: the run's caught-at-review figure and the
+    repo's, after the gate line. Opt-in, so the gate's one-line answer — which ship and scripts
+    read — is byte-identical without it. Informational: never changes the exit code."""
+    try:
+        from ..progress_events import _resolve_verdict_run, review_yield, review_yield_all
+        rid = run_id or _resolve_verdict_run(surface)
+        print("  " + review_yield(surface, rid).line())
+        print("  across runs: " + review_yield_all(surface).line())
+    except Exception:  # noqa: BLE001 — a figure that cannot be read is omitted, never a block
+        pass
 
 
 def cmd_sessions(args: argparse.Namespace) -> int:
@@ -430,6 +496,33 @@ def register(sub, common):
                              "this session)")
     p_mark.set_defaults(func=cmd_progress_mark)
 
+    # 0.0.22 C1 — `mokata progress finish --landing <how>`: the ship-completion event, recorded by
+    # /mokata:ship once the human has chosen how to land the run. Observability tier (append-only,
+    # UNGATED) like `mark`, but it refuses — exit 1 — rather than record a finish keyed to no run.
+    from ..progress_events import LANDINGS
+    p_fin = prog_sub.add_parser(
+        "finish", parents=[common],
+        help="record that the run is over and how it was landed (merged/pr/kept/discarded) in "
+             "the append-only progress log; observability, never gated",
+    )
+    p_fin.add_argument("--landing", required=True, choices=list(LANDINGS),
+                       help="how the human chose to land the run")
+    p_fin.add_argument("--run", default=None,
+                       help="the run being finished (default: the run resolved for this session)")
+    p_fin.set_defaults(func=cmd_progress_finish)
+
+    # 0.0.22 D2 (HP.S2) — `mokata progress working-set [--note TEXT] [--run ID]`: the run's one
+    # keyed working-memory object (the CLI twin of the MCP `working_set` tool).
+    p_ws = prog_sub.add_parser(
+        "working-set", parents=[common],
+        help="show the run's working set (phase, spec/approach refs, touched files, notes); "
+             "--note appends a note for the next phase",
+    )
+    p_ws.add_argument("--note", default=None, help="append one short note first")
+    p_ws.add_argument("--run", default=None,
+                      help="the run (default: the run resolved for this session)")
+    p_ws.set_defaults(func=cmd_progress_working_set)
+
     # Stage 6r — `mokata progress record-review` / `review-status`: the closing review's
     # verdict is persisted as a `review_verdict` event in the SAME log (one persistence layer),
     # and ship reads it back. Both are nested sub-actions (like `mark`), so the top-level
@@ -447,6 +540,12 @@ def register(sub, common):
                             "two-pass)")
     p_rec.add_argument("--findings", default=None,
                        help="optional finding count / summary to record with the verdict")
+    # SL.S3 (0.0.22 C2) — the number that makes "caught at review" MEASURABLE. Omitted is not zero:
+    # the run's rate then reads "not measured".
+    p_rec.add_argument("--blocking", type=int, default=None,
+                       help="how many Blocking findings this review raised (0 if none) — what "
+                            "review caught that the loop did not; omitted leaves the run's "
+                            "caught-at-review rate unmeasured")
     # REVIEW-FIX.R1 — the record-key, mirrored on `review-status` (the read-key). Same spelling as
     # `progress --run` / `watch --run`.
     p_rec.add_argument("--run", default=None,
@@ -462,6 +561,9 @@ def register(sub, common):
     p_rs.add_argument("--run", default=None,
                       help="read THIS run's verdict (default: the run resolved for this session; "
                            "an unresolvable run BLOCKS rather than reading another run's verdict)")
+    p_rs.add_argument("--caught", action="store_true",
+                      help="also print what review caught vs what the gates caught in the loop, "
+                           "for this run and across runs (SL.S3)")
     p_rs.set_defaults(func=cmd_progress_review_status)
 
     p_sessions = sub.add_parser(

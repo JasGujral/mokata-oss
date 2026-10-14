@@ -52,6 +52,27 @@ class WriteOutcome:
     approval_seq: Optional[int] = None
 
 
+def _human_named(req: "WriteRequest") -> bool:
+    """HP.S4 — a write whose destination a PERSON chose at the CLI: the CLI surface, or no surface
+    and a `cli`/`human` actor. Anything reaching the gate through MCP is the agent's, and contained."""
+    if req.surface is not None:
+        return req.surface == "cli"
+    return req.actor in ("cli", "human")
+
+
+def _user_config_allowed(req: "WriteRequest") -> bool:
+    """HP.S4 — a CONFIG write that is out of every workspace is allowed only into the host harness's
+    own user-level config (`~/.claude.json`, `~/.claude/…`) — the one place mokata's setup and
+    user-scope installs legitimately write. Anything else outside the workspace stays refused."""
+    if req.kind != "config":
+        return False
+    try:
+        from ..harness_paths import is_user_harness_config
+        return is_user_harness_config(req.target)
+    except Exception:  # noqa: BLE001 — unsure means NOT allowed (containment holds)
+        return False
+
+
 def content_hash_for(req: "WriteRequest") -> str:
     """UX-CONFIRM (D7a) — the hash binding a gate decision to EXACTLY the write the human saw.
 
@@ -193,6 +214,26 @@ class WriteGate:
                 return seq if isinstance(seq, int) and not isinstance(seq, bool) else None
         return None
 
+    def _own_workspaces(self) -> List[str]:
+        """HP.S4 — the workspaces this gate may write into when its caller named none: the process
+        cwd's workspace and the repo the ledger lives in. Total: an unresolvable one is skipped."""
+        import os
+        from ..selfprotect import workspace_root_for
+        roots: List[str] = []
+        try:
+            here = workspace_root_for(os.getcwd())
+            if here:
+                roots.append(here)
+        except OSError:
+            pass
+        path = getattr(self.ledger, "path", None)
+        if isinstance(path, str):
+            from .ledger import AuditLedger
+            repo = AuditLedger.root_of_path(path)
+            if repo and repo not in roots:
+                roots.append(repo)
+        return roots
+
     @contextmanager
     def _ledger_hold(self) -> Iterator[None]:
         """Hold the ledger's cross-process append lock across commit() + the approved record, so the
@@ -236,8 +277,29 @@ class WriteGate:
         # be able to whitelist a blocked tree. Until now `target` was an OPAQUE LABEL to this gate —
         # no realpath existed anywhere in `govern/` — which is half of how the live incident (an
         # agent editing mokata's own code in site-packages) was possible at all.
-        from ..selfprotect import check_target, render_refusal
-        verdict = check_target(req.target, workspace_root=workspace_root)
+        from ..selfprotect import RULE_OUT_OF_ROOT, check_target, render_refusal
+        if workspace_root:
+            verdict = check_target(req.target, workspace_root=workspace_root)
+        else:
+            # HP.S4 (0.0.22 D5) — containment is no longer OFF for a caller that threads no root
+            # (that was ~26 of them). The gate knows two workspaces of its own: the one its process
+            # runs in, and the repo its ledger belongs to. A write outside BOTH is refused; one
+            # inside either is not (a linked worktree, `--path` from elsewhere). Rules (a)/(b)
+            # never needed a root and are unchanged.
+            # ⚠ What containment is FOR: the AGENT writing outside the workspace. A person at the
+            # CLI who typed `--out ~/elsewhere.json` chose that destination — they are the human
+            # gate — so a CLI-surface write is not contained (`_human_named`). The same flows
+            # reached through MCP (`surface="mcp"`) are.
+            verdict = check_target(req.target, workspace_root=None)
+            if not verdict.blocked and not _human_named(req):
+                roots = self._own_workspaces()
+                for i, root in enumerate(roots):
+                    verdict = check_target(req.target, workspace_root=root)
+                    if not (verdict.blocked and verdict.rule == RULE_OUT_OF_ROOT):
+                        break
+                if verdict.blocked and verdict.rule == RULE_OUT_OF_ROOT and \
+                        _user_config_allowed(req):
+                    verdict = check_target(req.target, workspace_root=None)
         if verdict.blocked:
             self._log(req, "blocked", f"self-protect: {verdict.rule}")
             return WriteOutcome(False, True, render_refusal(verdict), [])

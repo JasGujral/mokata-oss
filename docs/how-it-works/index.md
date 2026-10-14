@@ -190,7 +190,7 @@ mokata integrates with Claude Code through two harness surfaces:
   only harness that declares the `hooks` capability** — elsewhere the gate-guard is never wired and
   the run-state gates enforce nothing. Deep-dive:
   [the gate-guard](skills-and-gates.md#the-gate-guard-the-gates-enforced-on-native-edits).
-- **MCP.** mokata's `mokata-mcp` server exposes **62 tools** — **40 read** (`progress`, `lanes`,
+- **MCP.** mokata's `mokata-mcp` server exposes **65 tools** — **43 read** (`progress`, `lanes`,
   `watch`, `govern`, `query`, …), **21 write**, and **1 approve** — so the pipeline's state and the
   graph are reachable from inside the harness without leaving the chat. Every *write* tool is
   **propose-only**: it returns a `proposal_id` and commits nothing until a human mints the approval

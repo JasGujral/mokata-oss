@@ -63,6 +63,12 @@
 #      the next mutant would be graded against the same broken tree and would report the same
 #      unattributable failure, which a batch driver counts as a kill. See THE GREEN BASELINE.
 #
+#   8  ★ A SNAPSHOT ALREADY EXISTS. `<file>.bak` was on disk BEFORE this run took one — committed,
+#      left by a run killed outside its trap, or written by a person. Copying over it would
+#      silently destroy it, and restoring from it would put a stranger's bytes back. The run took
+#      no snapshot, did not touch the target, and LEFT THE .bak EXACTLY AS IT FOUND IT.
+#      (MUTATE-SH-OVERWRITES-A-PRE-EXISTING-SNAPSHOT-WITHOUT-LOOKING, 0.0.22 A2.)
+#
 #   6  NO VERDICT FROM THE TEST RUN. The mutation applied and the tree is RESTORED, but the run
 #      produced nothing to grade, in one of two shapes:
 #        (a) the test pattern matched no files — unittest prints "Ran 0 tests ... OK" (hole 5);
@@ -389,6 +395,7 @@ pristine_sha=""
 expected_sha=""
 restore_done=0
 refused=0
+snapshot_taken=0   # 1 only once THIS run's `cp` has written `<file>.bak` — the trap keys on it
 
 # True when the bytes on disk are a state this run put there (or left there).
 we_authored() {
@@ -404,7 +411,10 @@ restore() {
     if [ "$restore_done" = 1 ]; then return 0; fi   # the TERM trap and the EXIT trap both call it
     restore_done=1
 
-    if [ -f "$target.bak" ]; then
+    # Keyed on "this run TOOK the snapshot", not on "a .bak is present". Keyed on presence, a run
+    # that exited before its `cp` — LOCK BUSY (5), a pre-existing snapshot (8) — restored from (or
+    # displaced) a `.bak` that belonged to another run or a person (0.0.22 A2).
+    if [ "$snapshot_taken" = 1 ] && [ -f "$target.bak" ]; then
         found=""
         if [ -f "$target" ]; then found="$(sha256_of "$target")"; fi
         if we_authored "$found"; then
@@ -477,7 +487,20 @@ if ! acquire_lock; then
     exit 5
 fi
 
+if [ -e "$target.bak" ] || [ -L "$target.bak" ]; then
+    {
+        echo ""
+        echo "SNAPSHOT-EXISTS!!  $label"
+        echo "  $target.bak was already on disk before this run took a snapshot."
+        echo "  Copying over it would destroy it, and restoring from it would put back bytes this"
+        echo "  run never saw. This run has NOT touched $target and has taken no snapshot."
+        echo "  REMEDY: find out whose it is (git log -- '$target.bak', or a crashed run), keep what"
+        echo "  you need, remove it, then re-run."
+    } >&2
+    exit 8
+fi
 cp "$target" "$target.bak"
+snapshot_taken=1
 # Hash the SNAPSHOT, not the target: whatever else happens, the .bak is by definition the bytes
 # this run holds, so a write that lands between the cp and here is caught rather than adopted.
 pristine_sha="$(sha256_of "$target.bak")"

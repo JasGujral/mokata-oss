@@ -81,9 +81,9 @@ class TestHandbackDensityWiring(unittest.TestCase):
 
 # --- F4: the --dense surface (run_playbook) ------------------------------------
 class TestPlaybookDenseSurface(unittest.TestCase):
-    def test_default_resolves_to_manifest_toggle_off(self):
-        # Off by default: the sample manifest does not enable output_density.
-        self.assertFalse(density_enabled(make_surface().manifest))
+    def test_default_resolves_to_manifest_toggle_on(self):
+        # HP.S6 (0.0.22 D3): ON by default — the sample manifest does not set output_density.
+        self.assertTrue(density_enabled(make_surface().manifest))
 
     # These two build a REAL file-backed SQLite memory DB via run_playbook. They RUN + PASS on a
     # native fs (CI + dev); they skip CLEANLY only on the sandbox's broken-disk artifact (B4 /

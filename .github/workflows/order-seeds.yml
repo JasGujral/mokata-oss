@@ -1,0 +1,82 @@
+name: order-seeds (weekly)
+
+# THE-SUITE-IS-GREEN-IN-ONE-ARRANGEMENT-AND-NOBODY-HAS-SEARCHED-THE-OTHERS (doc 84), 0.0.22 B2.
+#
+# `scripts/shuffle-order.py` runs the unit suite twice — alphabetical, then in a SEEDED module order —
+# and reports any test whose verdict depends on what ran before it. 0.0.21 recorded nine seeds by
+# hand on the cut machine (criterion 3); the row's own ask was "not more code: SEEDS, ideally a
+# scheduled job that runs a handful per week and files what it finds". This is that job.
+#
+# THE SEED IS DERIVED, NOT RANDOM: the ISO year and week (`YYYYWW`), so every run's seed is in its
+# own log and title and replays with `python3 scripts/shuffle-order.py --seed <it>`. A seed you cannot
+# replay is not a seed (0.0.21 stage 04). A dispatch can name one explicitly.
+#
+# A FINDING TOOL, NOT A GATE: nothing depends on this job. A red is a bug report with the command
+# attached. The log is uploaded either way — 0.0.21 lost its tenth seed to a re-run overwriting it.
+#
+# Thursdays 04:43 UTC — off the hour, and a day clear of live-db-legs (Mon), embeddings-leg (Tue) and
+# quality-at-scale (Wed). ≈25 min per run (two full suites); mirror-only by the billing ruling.
+
+on:
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: "an explicit seed to replay (default: the ISO year+week)"
+        required: false
+  schedule:
+    - cron: "43 4 * * 4"
+
+permissions:
+  contents: read
+
+jobs:
+  order-seeds:
+    name: suite verdict under a seeded module order
+    if: github.repository == 'JasGujral/mokata-oss'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install mokata (NOT editable, and that is deliberate)
+        # `pip install .`, as tty-sweep does: the tests put `src/` on the path themselves via
+        # `_support`, so the TREE runs either way, and a tenth editable install would join the
+        # population `test_pinned_dependency_property` reconciles against Scorecard's alert list.
+        run: pip install .
+
+      - name: Install the suite's own requirements (PyYAML — `_support` refuses without it)
+        run: pip install --require-hashes -r requirements/ci.txt
+
+      - name: Derive the seed
+        id: seed
+        env:
+          SEED_INPUT: ${{ github.event.inputs.seed }}
+        run: |
+          set -euo pipefail
+          seed="${SEED_INPUT:-$(date -u +%G%V)}"
+          case "$seed" in ''|*[!0-9]*) echo "::error::seed '$seed' is not an integer"; exit 1 ;; esac
+          echo "seed=$seed" >> "$GITHUB_OUTPUT"
+          echo "seed $seed — replay with: python3 scripts/shuffle-order.py --seed $seed"
+
+      - name: Shuffle the module order and compare
+        env:
+          SEED: ${{ steps.seed.outputs.seed }}
+        run: |
+          set -o pipefail
+          python3 scripts/shuffle-order.py --seed "$SEED" < /dev/null 2>&1 | tee "seed-$SEED.log"
+
+      - name: Keep the log (a re-run must never erase a seed's evidence)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: order-seed-${{ steps.seed.outputs.seed }}
+          path: seed-*.log
+          if-no-files-found: error

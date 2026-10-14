@@ -157,8 +157,7 @@ draws no map is never a block.
   windows on one tree), mokata will not guess which run your edits belong to — every run-state gate
   turns **off** for that window, and says so once. Pin one with `MOKATA_SESSION_ID`, or give the
   window its own tree with `mokata worktree create` (see `mokata windows`).
-- **A known hole, stated plainly:** the gate-guard does **not** match `Bash`, so a shell edit
-  (`sed -i …`) is not policed by it. The *secret*-guard does match `Bash`.
+- **Shell writes, and their limit:** the gate-guard also reads `Bash`: every file a shell command writes that mokata can see (redirections, `sed -i`, `tee`, `cp`/`mv`, inline `python -c` writes, bare file names included) meets the same run-state gates as a `Write` to that file. During a run, a command whose writes mokata cannot read (`$VAR` or `$(…)` destinations, `eval`, `xargs`/`find -exec` running a writer, a heredoc into a shell, inline `node -e`-style code that writes) is refused with the reason; reads are never refused. What it does not police is a program it runs (`python -m unittest`, `make`): no command line says what those write.
 - **Only Claude Code wires it.** It is the one harness that declares the `hooks` capability; on
   Cursor, Gemini, Windsurf, Codex, Aider and Cowork the gate-guard is never wired and **the
   run-state gates enforce nothing** there. `mokata setup claude` wires both hooks by default

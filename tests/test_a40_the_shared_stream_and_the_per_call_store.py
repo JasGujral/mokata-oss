@@ -1098,14 +1098,15 @@ class ThePreV6StoreDeclinesByNameRatherThanTracebacking(unittest.TestCase):
         self.assertTrue(teamdb.compatibility(5, 3).compatible)
 
 
-class TheResumePointerCannotReportSuccessOverASkippedStore(unittest.TestCase):
-    """⛔ The pointer is `MAX(local_seq)` for this (namespace, actor) in the TEAM's table — a
-    borrowed memory that assumes one producer per name and a local store whose seqs only rise.
-    Review F2 broke both against a live server, and in every case the answer was `ok=True`,
-    *"nothing new to publish"*, MCP `in_sync`, exit 0, with everything local unpublished.
+class ThePublisherKeepsItsOwnHighWaterMark(unittest.TestCase):
+    """`PUBLISH-POINTER-IS-BORROWED-MEMORY` (doc 84), closed at 0.0.22 C1.
 
-    ⚠ These tests grade the REFUSALS, not a fix. The fix is a local high-water mark
-    (`PUBLISH-POINTER-IS-BORROWED-MEMORY`, doc 84). What they forbid is a GREEN over a skip."""
+    ⛔ The pointer was `MAX(local_seq)` for this (namespace, actor) in the TEAM's table — a
+    borrowed memory that assumed one producer per name and a local store whose seqs only rise.
+    Review F2 broke both against a live server, and each time the answer was `ok=True`, *"nothing
+    new to publish"*, with everything local unpublished. 0.0.21 made those REFUSALS; this class
+    grades the RESUME that replaced them: the mark is this machine's own, per (namespace, DSN),
+    and the team's rows are never asked where this machine got to."""
 
     def setUp(self):
         from mokata import config_cmd
@@ -1117,13 +1118,18 @@ class TheResumePointerCannotReportSuccessOverASkippedStore(unittest.TestCase):
                  session_id="s1", actor="alice")
         self.store = store_for_root(self.root)
         # ⭐ DERIVED, never typed: enabling the setting is itself a gated write and emits its own
-        # `gate_decision`, so the store holds MORE than the four events this fixture emits. A
-        # typed `4` passed when it was written and would red the day another emitter is added —
-        # and every assertion below is about an OFFSET from this number, not about the number.
+        # `gate_decision`, so the store holds MORE than the four events this fixture emits.
         self.high = self.store.max_seq()
 
     def tearDown(self):
         shutil.rmtree(self.root, ignore_errors=True)
+
+    def _publish(self, conn, cap=None):
+        from unittest import mock
+        if cap is None:
+            return TE.publish(self.root, a_surface(self.root), assume_yes=True, client=conn)
+        with mock.patch.object(TE, "PUBLISH_BATCH_CAP", cap):
+            return TE.publish(self.root, a_surface(self.root), assume_yes=True, client=conn)
 
     def test_the_local_store_reports_its_OWN_high_water(self):
         """The control. Without this, every assertion below could be passing on a zero."""
@@ -1131,58 +1137,98 @@ class TheResumePointerCannotReportSuccessOverASkippedStore(unittest.TestCase):
         self.assertEqual(self.high, self.store.count(),
                          "`seq` has a gap, so every `high - sent` subtraction below is wrong")
 
-    def test_a_pointer_AHEAD_of_the_local_store_REFUSES_instead_of_reporting_in_sync(self):
+    def test_publish_pointer_is_borrowed_memory_the_team_table_is_never_asked(self):
+        """The F2 arrangement: the team's table claims 5000 for this name. It used to hide every
+        local event (0.0.21: a refusal). Now it is not read at all, and everything is sent."""
         conn = _PointerConn(mark=5000)
-        res = TE.publish(self.root, a_surface(self.root), assume_yes=True, client=conn)
-        self.assertFalse(res.ok, "a publish that skipped every local event reported success")
-        self.assertEqual("pointer-ahead", res.reason)
-        self.assertEqual(0, conn.inserts)
-        self.assertIn("MOKATA_ACTOR", res.message, "the refusal names no remedy")
-        self.assertIn("5000", res.message)
+        res = self._publish(conn)
+        self.assertTrue(res.ok, res.message)
+        self.assertEqual(self.high, res.published)
+        self.assertFalse(hasattr(TE.SharedEventLog, "max_local_seq"),
+                         "the borrowed pointer is back")
+        from _code_lines import code_text
+        with io.open(os.path.join(SRC, "team_events.py"), encoding="utf-8") as fh:
+            code = code_text(fh.read())
+        self.assertNotIn('"SELECT MAX(local_seq)', code)
 
-    def test_a_pointer_LEVEL_WITH_the_store_is_the_ordinary_nothing_new(self):
-        """The other half of the same comparison: `mark == local_high` is a publisher that is up
-        to date, and it must NOT be caught by the guard above (§7f — a guard that convicts the
-        healthy case is one that gets deleted)."""
-        res = TE.publish(self.root, a_surface(self.root), assume_yes=True,
-                         client=_PointerConn(mark=self.high))
+    def test_a_second_publish_resumes_from_the_mark_and_is_nothing_new(self):
+        """⭐ A publish is itself gated egress, so it leaves its OWN trail event behind. The second
+        publish must send that trail and NOTHING of the first batch again."""
+        conn = _PointerConn()
+        first = self._publish(conn)
+        self.assertTrue(first.ok)
+        res = self._publish(conn)
         self.assertTrue(res.ok)
-        self.assertEqual("nothing-new", res.reason)
+        self.assertEqual("only-own-trail", res.reason, res.message)
+        self.assertEqual(first.high_water + res.attempted, res.high_water,
+                         "the second publish did not start where the first stopped")
+        self.assertEqual(res.attempted, res.own_trail, "the second publish re-sent work events")
+
+    def test_a_head_ALREADY_THERE_under_another_name_no_longer_stalls_the_resume(self):
+        """F2 scenario b: every row of the head conflicts, so nothing LANDS. The old pointer never
+        moved and the tail was unreachable for ever; the local mark moves because the batch was
+        SENT, so the next publish reaches the tail."""
+        conn = _PointerConn(conflict_all=True)
+        first = self._publish(conn, cap=2)
+        self.assertTrue(first.ok, first.message)
+        self.assertEqual(0, first.published)
+        self.assertEqual(2, first.already_there)
+        self.assertEqual(2, first.high_water)
+        second = self._publish(_PointerConn(), cap=2)
+        self.assertEqual(4, second.high_water, "the resume did not move past the stalled head")
+        self.assertEqual(2, second.published)
 
     def test_an_UNREADABLE_local_store_is_not_an_EMPTY_one(self):
-        """§7g, and review F7: `count()` and `after_seq` both swallow a corrupt store into
-        `0`/`[]`, so *"nothing to publish"* and *"I cannot see your events"* rendered identically
-        on the one surface a human checks. `max_seq()` answers `None` and the publisher refuses."""
+        """§7g, and review F7: `max_seq()` answers `None` for unreadable and the publisher
+        refuses, rather than *"nothing to publish"*."""
         with io.open(self.store.path, "wb") as fh:
             fh.write(b"this is not a sqlite database")
         self.assertIsNone(self.store.max_seq())
-        self.assertEqual(0, self.store.count(), "count() still answers 0 — that is its contract, "
-                                                "and the reason the publisher cannot read it")
         conn = _PointerConn()
-        res = TE.publish(self.root, a_surface(self.root), assume_yes=True, client=conn)
+        res = self._publish(conn)
         self.assertFalse(res.ok)
         self.assertEqual("local-unreadable", res.reason)
         self.assertEqual(0, conn.inserts)
 
-    def test_a_STUCK_pointer_refuses_rather_than_reporting_a_committed_publish(self):
-        """The head is already in the team's store under another name, so `MAX(local_seq)` for
-        THIS name never moves and the tail behind it can never be reached (F2, scenario b)."""
+    def test_a_REBUILT_local_store_starts_over_and_says_so(self):
+        """`seq` restarts at 1 when `events.db` is rebuilt. A bare number would read as "already
+        sent" over brand-new events; the mark carries the store it was taken against."""
+        self.assertTrue(self._publish(_PointerConn()).ok)
+        os.remove(self.store.path)
+        for i in range(self.high + 2):
+            emit(self.root, MemoryOp(op="read", item_id="new-%d" % i, count=1),
+                 session_id="s2", actor="alice")
+        before = store_for_root(self.root).max_seq()
+        res = self._publish(_PointerConn())
+        self.assertTrue(res.ok, res.message)
+        self.assertEqual(before, res.published,
+                         "events of a rebuilt store were skipped as 'already sent'")
+        self.assertIn("rebuilt", res.message)
+
+    def test_the_mark_is_per_DSN_and_never_stores_the_DSN(self):
         from unittest import mock
-        conn = _PointerConn(conflict_all=True)
-        with mock.patch.object(TE, "PUBLISH_BATCH_CAP", 2):
-            res = TE.publish(self.root, a_surface(self.root), assume_yes=True, client=conn)
-        self.assertFalse(res.ok, "a stalled publisher reported a committed publish")
-        self.assertEqual("pointer-stuck", res.reason)
-        self.assertEqual(2, res.attempted)
-        self.assertEqual(self.high - 2, res.remaining, "the unreachable tail is not counted")
-        self.assertIn("MOKATA_ACTOR", res.message)
+        dsn_a = "postgresql://alice:s3cret-a@db-a/team"
+        dsn_b = "postgresql://alice:s3cret-b@db-b/team"
+        with mock.patch.dict(os.environ, {TE.EVENTS_OVERRIDE_ENV: dsn_a}):
+            sent = self._publish(_PointerConn())
+            self.assertTrue(sent.ok)
+            ok, n, _env, _msg = TE.pending_publish(self.root, a_surface(self.root),
+                                                   client=_PointerConn())
+            self.assertEqual(store_for_root(self.root).max_seq() - sent.high_water, n,
+                             "only the publish's own trail is pending against store A")
+        with mock.patch.dict(os.environ, {TE.EVENTS_OVERRIDE_ENV: dsn_b}):
+            ok, n, _env, msg = TE.pending_publish(self.root, a_surface(self.root),
+                                                  client=_PointerConn())
+            self.assertTrue(ok)
+            self.assertEqual(store_for_root(self.root).max_seq(), n,
+                             "a different team store was treated as already having our events")
+        with io.open(TE.publish_marks_path(self.root), encoding="utf-8") as fh:
+            text = fh.read()
+        for secret in ("s3cret", "db-a", "postgresql"):
+            self.assertNotIn(secret, text, "the DSN reached disk")
 
     def test_the_SAME_arrangement_with_rows_LANDING_is_an_ordinary_publish(self):
-        """The control for the test above — same cap, same backlog, inserts that land."""
-        from unittest import mock
-        conn = _PointerConn(conflict_all=False)
-        with mock.patch.object(TE, "PUBLISH_BATCH_CAP", 2):
-            res = TE.publish(self.root, a_surface(self.root), assume_yes=True, client=conn)
+        res = self._publish(_PointerConn(), cap=2)
         self.assertTrue(res.ok, res.message)
         self.assertEqual("committed", res.reason)
         self.assertEqual(2, res.published)
@@ -1191,27 +1237,21 @@ class TheResumePointerCannotReportSuccessOverASkippedStore(unittest.TestCase):
     def test_REMAINING_is_a_COUNT_and_not_a_zero_or_one_FLAG(self):
         """Review F4. `fetched` is capped at `cap + 1`, so the old `len(fetched) - len(batch)` was
         0 or 1 and nothing else — printed as "1 more queued" with any backlog at all."""
-        from unittest import mock
-        with mock.patch.object(TE, "PUBLISH_BATCH_CAP", 1):
-            res = TE.publish(self.root, a_surface(self.root), assume_yes=True,
-                             client=_PointerConn())
-        self.assertEqual(self.high - 1, res.remaining,
-                         "one event was sent, so the rest are still queued and the result must "
-                         "say how many — a flag would say 1 whatever the backlog")
+        res = self._publish(_PointerConn(), cap=1)
+        self.assertEqual(self.high - 1, res.remaining)
         self.assertIn("%d more queued" % (self.high - 1), res.message)
 
-    def test_the_PREVIEW_agrees_with_the_publisher_on_every_one_of_those_answers(self):
-        """`pending_publish` read the same capped fetch and printed its length as an exact figure.
-        Two surfaces over one question must not disagree."""
-        ok, n, _env, msg = TE.pending_publish(self.root, a_surface(self.root),
-                                              client=_PointerConn())
+    def test_the_PREVIEW_agrees_with_the_publisher(self):
+        """One resume point, two surfaces: the preview's count is the publisher's backlog."""
+        ok, n, _env, _msg = TE.pending_publish(self.root, a_surface(self.root),
+                                               client=_PointerConn())
         self.assertTrue(ok)
         self.assertEqual(self.high, n)
-        ok, n, _env, msg = TE.pending_publish(self.root, a_surface(self.root),
-                                              client=_PointerConn(mark=5000))
-        self.assertFalse(ok, "the preview printed a confident count over a contradicted pointer")
-        self.assertEqual(0, n)
-        self.assertIn("MOKATA_ACTOR", msg)
+        res = self._publish(_PointerConn(), cap=1)
+        ok, n, _env, _msg = TE.pending_publish(self.root, a_surface(self.root),
+                                               client=_PointerConn())
+        self.assertEqual(self.store.max_seq() - res.high_water, n)
+        self.assertGreaterEqual(n, res.remaining, "the preview lost the publisher's backlog")
 
 
 class TheStatusWordTellsSuccessFromRefusal(unittest.TestCase):
@@ -1237,7 +1277,7 @@ class TheStatusWordTellsSuccessFromRefusal(unittest.TestCase):
 
     def test_a_REFUSAL_is_blocked_and_a_SUCCESS_never_is(self):
         from mokata.mcp.tools_team import publish_status
-        for refusal in ("pointer-ahead", "pointer-stuck", "shared-off"):
+        for refusal in ("shared-off",):
             with self.subTest(reason=refusal):
                 self.assertEqual("blocked", publish_status(
                     refusal, committed=False, in_sync=("nothing-new", "only-own-trail")))
@@ -1248,7 +1288,7 @@ class TheStatusWordTellsSuccessFromRefusal(unittest.TestCase):
         expected = {
             "committed": "committed", "only-own-trail": "in_sync", "nothing-new": "in_sync",
             "unavailable": "unavailable", "local-unreadable": "unavailable",
-            "pointer-ahead": "blocked", "pointer-stuck": "blocked", "shared-off": "blocked",
+            "shared-off": "blocked",
         }
         for reason in sorted(self._reasons_in("team_events.py", TE.PublishResult)):
             with self.subTest(reason=reason):

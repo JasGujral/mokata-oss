@@ -12,8 +12,9 @@
 #     (the live section reads as SPENT — the fail-open direction), and the unrecognised-heading
 #     degrade direction.
 #   R01-R02 ★★★ the reachable ceiling: hard-coded either way.
-#   G01-G04 ★★★ the collected cheap gates: the report, a gate going back to aborting alone, the
-#     mirror check moving back behind the test preflights, and the value-passing file.
+#   G01-G03 ★★★ the collected cheap gates: the report, a gate going back to aborting alone, and the
+#     value-passing file. (Said G01 to G04 until 0.0.22 B2's header check: the fourth — the mirror
+#     check moving back behind the test preflights — was described and never written.)
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"

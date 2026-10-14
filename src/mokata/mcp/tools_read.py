@@ -39,6 +39,8 @@ __all__ = [
     "session_windows", "worktree_list", "session_save",
     "config_get", "export_preview", "decompose", "spec_show",
     "review_status", "review_record",       # REVIEW-FIX.R3 — the 6r loop, in-harness
+    "progress_mark", "run_finish",          # 0.0.22 C1 — stage entry + ship completion, in-harness
+    "working_set",                          # 0.0.22 D2 — the run's one keyed working-memory object
     "vault_list", "vault_search",
     "vault_pull", "stacks_list", "stacks_search", "stacks_show", "plan_list", "plan_show",
 ]
@@ -893,8 +895,27 @@ def review_status(path: str = ".", run: str = "",
         "recorded_at": ts if isinstance(ts, str) and ts else None,
         "message": gate.message, "unblock": gate.unblock,
     }
+    # D4 — for an independent pass: was a subagent of this run SEEN to finish (True), only claimed
+    # (False), or not recorded (None)? Informational: the gate's decision above does not read it.
+    out["observed"] = gate.observed
+    out["caught"] = _caught_figures(surface, run_id)
     out["block"] = LazyRender(lambda: _render_review_status(gate))
     return apply_response_format(response_format, out)
+
+
+def _caught_figures(surface: Any, run_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """SL.S3 (0.0.22 C2) — what review caught vs what the loop caught: for this run, and summed over
+    every MEASURED run. `rate` is None when unmeasured or when nothing was caught — never a 0 that
+    nobody counted. None when the figures cannot be read (the verdict above still stands)."""
+    try:
+        from ..progress_events import review_yield, review_yield_all
+
+        def _d(y: Any) -> Dict[str, Any]:
+            return {"in_loop": y.in_loop, "at_review": y.at_review, "measured": y.measured,
+                    "rate": y.rate, "line": y.line()}
+        return {"run": _d(review_yield(surface, run_id)), "all_runs": _d(review_yield_all(surface))}
+    except Exception:  # noqa: BLE001 — informational; never turns a status read into a failure
+        return None
 
 
 def _render_review_status(gate: Any) -> str:
@@ -913,7 +934,7 @@ def _render_review_line(message: str, unblock: str) -> str:
 @_tool("review_record", "read")
 def review_record(path: str = ".", passed: bool = False, failed: bool = False,
                   independent: bool = False, findings: str = "",
-                  run: str = "") -> Dict[str, Any]:
+                  run: str = "", blocking: Optional[int] = None) -> Dict[str, Any]:
     """RECORD the closing review's verdict — the in-harness twin of `mokata progress
     record-review`, and the ONLY thing `review_status` / `/mokata:ship` will accept as evidence
     that review ran. Call it once, at the end of /mokata:review, with the outcome you actually
@@ -923,7 +944,9 @@ def review_record(path: str = ".", passed: bool = False, failed: bool = False,
     outcome). `independent` records that the review ran as a fresh-context subagent — omit it when
     it degraded to the inline two-pass; ship does not block on inline, it surfaces the weaker
     signal, so recording it honestly costs nothing and hiding it corrupts the record. `findings`
-    is an optional count/summary stored with the verdict. `run` names the run this verdict belongs
+    is an optional count/summary stored with the verdict. `blocking` is HOW MANY Blocking findings
+    this review raised (0 if none) — what review caught that the loop did not; omitted, the run's
+    caught-at-review rate stays "not measured" rather than reading as zero (SL.S3). `run` names the run this verdict belongs
     to; omitted, it resolves the SAME session-aware way `review_status` reads, so the record-key
     and the read-key are the same run by construction (REVIEW-FIX.R1).
 
@@ -948,10 +971,21 @@ def review_record(path: str = ".", passed: bool = False, failed: bool = False,
                 "reason": "name the outcome: exactly one of passed / failed",
                 "hint": ("call `review_record` with passed=true or failed=true — mokata records "
                          "what the review CONCLUDED and will not guess it.")}
+    if blocking is not None and (isinstance(blocking, bool) or not isinstance(blocking, int)
+                                 or blocking < 0):
+        return {"recorded": False, "status": "error", "run": None,
+                "reason": "blocking must be a whole number of Blocking findings (0 or more)",
+                "hint": "pass blocking=<count of Blocking findings>, or omit it."}
+    from ..progress_events import verdict_contradiction
+    contradiction = verdict_contradiction(bool(passed), blocking)
+    if contradiction:
+        return {"recorded": False, "status": "error", "run": None, "satisfies_gate": False,
+                "reason": contradiction,
+                "hint": "the verdict and its Blocking count must agree; nothing was recorded."}
     surface = _surface(path)
     try:
         event = record_review_verdict(surface, passed=passed, independent=independent,
-                                      findings=findings or None,
+                                      findings=findings or None, blocking=blocking,
                                       run_id=(run or "").strip() or _CURRENT_RUN)
     except Exception as exc:                 # noqa: BLE001
         # Same posture as the CLI's record path: a recording failure is REPORTED, not raised — the
@@ -1109,3 +1143,111 @@ def consolidate_proposals(path: str = ".") -> Dict[str, Any]:
         "enabled": True,
         "instruction": DRAFTING_INSTRUCTION,
         "drafting_requests": drafting_request(store.propose_consolidations(ledger=ledger))})
+
+
+# --------------------------------------------------------------------------------------
+# 0.0.22 C1 (`B-LIFE-FU`) — the stage mark and the ship-completion event, in-harness. APPENDED to
+# the tail of the READ block (registration order is the server's order, and the registry snapshot
+# protects every pre-existing position), not slotted beside `review_record` where they belong.
+# --------------------------------------------------------------------------------------
+@_tool("progress_mark", "read")
+def progress_mark(path: str = ".", stage: str = "", run: str = "") -> Dict[str, Any]:
+    """RECORD entering a user-stage (brainstorm / spec / develop / review / ship) — the in-harness
+    twin of `mokata progress mark <stage>`, which the develop/review/ship skills call on ENTRY so
+    the always-on badge shows the true current stage. `run` names the run; omitted, it resolves
+    the same session-aware way every other surface does.
+
+    UNGATED, exactly like its CLI twin: an append to the progress-event log is observability, not
+    a durable write, so there is no `approve` and nothing to confirm. Like the CLI it REFUSES when
+    several runs exist and none is identifiably yours — a stage stamped into the wrong run is a
+    false green a later reader trusts — and says which runs it saw. Degrade-clean: a failure is
+    reported in the result (`recorded: false`), never raised; it must never block the phase."""
+    from ..progress import STAGE_BADGE_STAGES
+    from ..progress_events import ProgressLog, STAGE_ENTER
+    from ..run_resolver import resolve_run, unresolved_reason
+    stage = (stage or "").strip()
+    if stage not in STAGE_BADGE_STAGES:
+        return {"recorded": False, "status": "error", "run": None,
+                "reason": "name the stage: one of " + ", ".join(STAGE_BADGE_STAGES)}
+    try:
+        surface = _surface(path)
+        res = resolve_run(surface.root, run_id=(run or "").strip() or None)
+        if res.ambiguous:
+            return {"recorded": False, "status": "refused", "run": None,
+                    "message": f"mokata progress: not recording '{stage}' — "
+                               + unresolved_reason(res)}
+        ProgressLog.from_surface(surface).append_event(STAGE_ENTER, stage, run_id=res.run_id)
+        if stage == "ship" and res.run_id:
+            try:
+                from ..govern.resume import PipelineCheckpoint
+                PipelineCheckpoint(surface.state, res.run_id).mark_completed()
+            except Exception:          # noqa: BLE001 — the CLI twin's best-effort stamp
+                pass
+    except Exception as exc:             # noqa: BLE001
+        return {"recorded": False, "status": "error", "run": None,
+                "reason": f"could not record '{stage}' ({exc})",
+                "hint": f"keep going — a stage mark never blocks the phase; or run "
+                        f"`mokata progress mark {stage}` from the terminal."}
+    where = f" (run {res.run_id})" if res.run_id else ""
+    return {"recorded": True, "status": "recorded", "run": res.run_id or None, "stage": stage,
+            "message": f"mokata progress: entered '{stage}'{where}."}
+
+
+@_tool("run_finish", "read")
+def run_finish(path: str = ".", landing: str = "", run: str = "") -> Dict[str, Any]:
+    """RECORD that the run is OVER and how the human landed it — the in-harness twin of
+    `mokata progress finish --landing <how>`. Call it ONCE, at the end of /mokata:ship, AFTER the
+    human chose a landing option: `landing` is one of merged / pr / kept / discarded.
+
+    It appends the ship-completion event (`run_finished`) and stamps the run's `completed_at`, so
+    the run reads as finished-THEN rather than current-NOW on every surface. UNGATED (the tier of
+    `progress_mark` and `review_record`): no `approve`, nothing to confirm. It is NEVER recorded
+    run-less — with no run, or several runs and none identifiably yours, it refuses
+    (`recorded: false`) and names `run` as the remedy. Degrade-clean: failure is reported, never
+    raised."""
+    from ..cli_commands.runviews import run_finish_refused_line, run_finished_line
+    from ..progress_events import FinishRefused, _CURRENT_RUN, record_run_finished
+    landing = (landing or "").strip()
+    try:
+        event = record_run_finished(_surface(path), landing=landing,
+                                    run_id=(run or "").strip() or _CURRENT_RUN)
+    except FinishRefused as exc:
+        return {"recorded": False, "status": "refused", "run": None,
+                "message": run_finish_refused_line(str(exc))}
+    except Exception as exc:             # noqa: BLE001
+        return {"recorded": False, "status": "error", "run": None,
+                "message": run_finish_refused_line(f"could not write it ({exc})")}
+    return {"recorded": True, "status": "recorded", "run": event["run_id"], "landing": landing,
+            "recorded_at": event.get("ts"),
+            "message": run_finished_line(event["run_id"], landing)}
+
+
+@_tool("working_set", "read")
+def working_set(path: str = ".", run: str = "", note: str = "") -> Dict[str, Any]:
+    """The run's WORKING SET (HP.S2) — ONE keyed object instead of N lookups: the next pipeline
+    `phase` and `last_passed` gate, the last `stage` entered, the `approach_key` / `spec_key` state
+    references (derived from their owners on every read, never copied), the brainstorm `plan_slug`,
+    the `touched_files` this run's sessions wrote (with `touched_dropped` when the cap trimmed the
+    oldest), and short `notes` left for the next phase.
+
+    `run` names the run; omitted, it resolves the same session-aware way `review_status` does.
+    `note` (optional) APPENDS one short note first — observability tier, like `progress_mark`:
+    run-state, ungated, nothing to approve. Degrade-clean: a failure is reported, never raised."""
+    from ..progress_events import _resolve_verdict_run
+    from ..working_set import add_note, working_set as _ws
+    surface = _surface(path)
+    rid = (run or "").strip() or _resolve_verdict_run(surface)
+    if not rid:
+        return {"run": None, "status": "unresolved",
+                "message": "no run could be resolved here — name it with `run` "
+                           "(`mokata sessions` lists them)."}
+    try:
+        if note.strip():
+            add_note(surface.root, rid, note)
+        out = _ws(surface.root, rid).to_dict()
+    except Exception as exc:                 # noqa: BLE001
+        return {"run": rid, "status": "error", "message": f"could not read the working set ({exc})"}
+    out["run"] = out.pop("run_id")
+    out["status"] = "ok"
+    return out
+

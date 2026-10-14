@@ -40,6 +40,7 @@ pins must be scoped FIRST." Hence two things here:
 import fnmatch
 import os
 import re
+from _code_lines import code_text
 
 # ---- verdicts: what a caller may do about it -------------------------------------------------
 GREEN = "green"
@@ -131,12 +132,6 @@ _RED_REASON = {
 }
 
 
-def _code_only(text):
-    """`text` with every whole-line `#` comment dropped — TD-2's lesson, applied to both reads."""
-    return "\n".join(
-        ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
-
-
 def exclude_entries(script):
     """Every LITERAL path inside an `--exclude=` clause, comments stripped, trailing `/` dropped.
 
@@ -147,7 +142,7 @@ def exclude_entries(script):
     return frozenset(
         _norm(v) for v in (
             m.group(1) or m.group(2) or m.group(3)
-            for m in _EXCLUDE.finditer(_code_only(script)))
+            for m in _EXCLUDE.finditer(code_text(script)))
         if "$" not in v)
 
 
@@ -158,7 +153,7 @@ def guard_entries(script):
     commentary, which name internal paths in prose and would satisfy a membership check on their
     own. Returns None when the array cannot be located — an absent answer, not an empty one.
     """
-    body = _code_only(script)
+    body = code_text(script)
     start = body.find("INTERNAL_PATHS=(")
     if start == -1:
         return None

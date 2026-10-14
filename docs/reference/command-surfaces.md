@@ -25,7 +25,7 @@ truth). A CI parity test derives the command set from the live CLI parser and **
 command lacks a Claude Code surface *or* an explicit exemption — so this can never silently
 regress.
 
-**The MCP surface today: 62 tools — 40 read, 21 write, and 1 approve** (the default-off in-chat
+**The MCP surface today: 65 tools — 43 read, 21 write, and 1 approve** (the default-off in-chat
 approval described below). The registry in `mokata.mcp.registry` is the single source of that
 count.
 
@@ -46,7 +46,7 @@ interactive phase → a `/mokata:…` **slash** command.
 | `chain` | `/mokata:chain` | — | — |
 | `playbook` | `/mokata:playbook` | — | — |
 | `resume` | `/mokata:resume` | — | — |
-| `skill` (author) | `/mokata:skill` | — | — (gated via slash) |
+| `skill` (author) | `/mokata:skill-author` | — | — (gated via slash) |
 | `upgrade` | `/mokata:upgrade` | — | — (gated via slash) |
 | `version` | `/mokata:version` | — | — |
 | `init` | `/mokata:init` | — | `init` |

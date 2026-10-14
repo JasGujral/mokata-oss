@@ -6,6 +6,7 @@ import unittest
 from _support import sample_manifest_data  # noqa: F401  (path fix side-effect)
 
 from mokata.govern import (
+
     GATED_WRITE,
     PROPOSE_ONLY,
     READ_ONLY,
@@ -15,8 +16,15 @@ from mokata.govern import (
 )
 
 
+# HP.S4 (0.0.22 D5): the gate's containment is on for every write, so a placeholder target
+# must be a real place a write may go — the system temp dir, the named scratch allowance.
+def _T(name):
+    import os as _os, tempfile as _tf
+    return _os.path.join(_tf.gettempdir(), "mokata-test-repo", name)
+
+
 def req(tool):
-    return WriteRequest("config", "/repo/x.cfg", "value=1", tool=tool)
+    return WriteRequest("config", _T("x.cfg"), "value=1", tool=tool)
 
 
 class TestTrustDial(unittest.TestCase):
@@ -56,7 +64,7 @@ class TestTrustDial(unittest.TestCase):
     def test_default_when_no_policy_is_unchanged(self):
         gate = WriteGate()
         committed = []
-        out = gate.submit(WriteRequest("config", "/x", "v"),
+        out = gate.submit(WriteRequest("config", _T("x"), "v"),
                           commit=lambda: committed.append(1), assume_yes=True)
         self.assertTrue(out.committed)
 

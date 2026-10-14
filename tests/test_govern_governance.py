@@ -70,12 +70,13 @@ class TestCompression(unittest.TestCase):
         self.assertLess(estimate_tokens(compress_output(VERBOSE)),
                         estimate_tokens(VERBOSE))
 
-    def test_density_toggle_defaults_off(self):
+    def test_density_toggle_defaults_ON_since_hp_s6(self):
+        """HP.S6 (0.0.22 D3) flipped the default: unset reads ON, and an explicit false turns it off."""
         m = Manifest.from_dict(build_manifest_data("standard", "0.1.0"))
-        self.assertFalse(density_enabled(m))
+        self.assertTrue(density_enabled(m))
         data = build_manifest_data("standard", "0.1.0")
-        data["settings"]["governance"] = {"output_density": True}
-        self.assertTrue(density_enabled(Manifest.from_dict(data)))
+        data["settings"]["governance"] = {"output_density": False}
+        self.assertFalse(density_enabled(Manifest.from_dict(data)))
 
     def test_output_density_passthrough_when_disabled(self):
         self.assertEqual(OutputDensity(False).compress(VERBOSE), VERBOSE)

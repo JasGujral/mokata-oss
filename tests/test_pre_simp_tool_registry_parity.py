@@ -34,6 +34,10 @@ SNAPSHOT_FULL = [
     # M-4/R5 (0.0.16) — the drafting-request read tool, appended to the tail of the READ block
     # (reads register before writes), so no pre-existing position moves.
     'consolidate_proposals',
+    # 0.0.22 C1 — `progress_mark` + `run_finish` (the stage mark and the ship-completion event,
+    # observability-tier READ kind like `review_record`), APPENDED to the READ block's tail.
+    'progress_mark', 'run_finish',
+    'working_set',                     # 0.0.22 D2 (HP.S2) — appended to the READ tail
     'remember', 'import_stack', 'reset', 'apply_proposal', 'memory_export', 'memory_import',
     'vault_push', 'session_push', 'session_pull', 'session_name', 'audit_share', 'spec_emit',
     'spec_amend', 'spec_check', 'init', 'reconfigure', 'config_set', 'export_stack',

@@ -43,7 +43,9 @@ GitRunner = Callable[[List[str], str], "tuple"]
 def _default_git(args: List[str], cwd: str) -> "tuple":
     import subprocess
     try:
-        p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=30)
+        # UTF-8, NAMED (GIT-READERS-DECODE-WITH-THE-LOCALE): never the locale codec.
+        p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=30)
         return (p.returncode, p.stdout)
     except (OSError, ValueError, subprocess.SubprocessError):
         return (127, "")

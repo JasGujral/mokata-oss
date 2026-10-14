@@ -70,6 +70,17 @@ TOTAL=40
 #   MUTANT_LEDGER=$HOME/s10.ledger FROM=31 TO=40 tests/_stage10_event_stream_mutants.sh
 FROM="${FROM:-1}"
 TO="${TO:-$TOTAL}"
+# MUTANT-DRIVER-WINDOW-FAILS-OPEN-ON-A-NON-INTEGER (0.0.22 A2). Driven from zsh, `set -- $w` did not
+# word-split, so FROM='1 10' and TO='' — `[ -lt ]` errored, every index fell INSIDE the window, and the
+# whole batch was graded under a window label. A window that cannot be read is refused, never widened.
+case "$FROM" in ''|*[!0-9]*) _bad_window=1 ;; esac
+case "$TO" in ''|*[!0-9]*) _bad_window=1 ;; esac
+if [ -n "${_bad_window:-}" ] || [ "$FROM" -lt 1 ] || [ "$FROM" -gt "$TO" ]; then
+    printf 'WINDOW REFUSED — FROM=%s TO=%s is not a window of 1..%s (two integers, 1 <= FROM <= TO).\n' \
+        "'$FROM'" "'$TO'" "$TOTAL" >&2
+    printf '  Nothing was graded. A malformed window would otherwise grade the WHOLE batch.\n' >&2
+    exit 3
+fi
 LEDGER="${MUTANT_LEDGER:-}"
 
 _sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1

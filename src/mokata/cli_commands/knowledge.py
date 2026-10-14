@@ -208,14 +208,14 @@ def _git_changed_files(root: str, base: str) -> list:
     reason to produce it.
 
     ⚠ `-c core.quotePath=false` was here too and is GONE (§7f, §7d): with `-z` git does not quote at
-    all, so no input distinguishes the two and nothing can grade the flag. See the deleted
-    `_no_quote_path` in `knowledge/freshness.py` for the full measurement."""
+    all, so no input distinguishes the two and nothing can grade the flag. (The measurement lived
+    in `freshness._no_quote_path`, since deleted; `git log -S _no_quote_path` finds it.)"""
     import subprocess
     for spec in (f"{base}...HEAD", base):
         try:
             out = subprocess.run(
                 ["git", "-C", root, "diff", "--name-only", "-z", spec],
-                capture_output=True, text=True, timeout=30)
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         except (OSError, subprocess.SubprocessError):
             return []
         if out.returncode == 0:

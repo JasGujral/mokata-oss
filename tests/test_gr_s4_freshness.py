@@ -20,6 +20,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 import os
 import shutil
+import sys
 import subprocess
 import tempfile
 import time
@@ -327,7 +328,8 @@ class TestPerfContract(unittest.TestCase):
 
         # Warm-path overhead is bounded (dirty-set read + one HEAD stat + one state read).
         # Generous CI margin; the SHAPE is the real assertion.
-        self.assertLess(t_large, 0.05, f"warm path too slow: {t_large*1000:.1f}ms")
+        self.assertLess(t_large, 0.10 if sys.platform == "win32" else 0.05,
+                        f"warm path too slow: {t_large*1000:.1f}ms")
         # SHAPE: a 30x larger repo does NOT cost 30x the warm-path time (cost ∝ churn, not size).
         self.assertLess(t_large, t_small * 5 + 0.01,
                         f"warm cost scales with repo size: {t_small*1000:.2f} vs {t_large*1000:.2f}ms")
