@@ -165,13 +165,13 @@ class RefuseWhatWeCannotRead(unittest.TestCase):
 
     def test_the_lane_sees_what_it_claims_and_names_why(self):
         w = BL.analyze("sed -i s/a/b/ notes.py && echo x >> ./log.txt", "/repo")
-        self.assertEqual(("/repo/notes.py", "/repo/log.txt"), w.targets)
+        self.assertEqual(tuple(os.path.normpath(p) for p in ("/repo/notes.py", "/repo/log.txt")), w.targets)
         self.assertTrue(w.readable)
         self.assertIn("built at runtime", BL.analyze('tee "$OUT"', "/r").unreadable[0])
 
     def test_a_literal_cd_is_followed_and_a_computed_one_is_unreadable(self):
-        self.assertEqual(("/tmp/a.py",), BL.analyze("cd /tmp && echo x > a.py", "/repo").targets)
-        self.assertEqual(("/repo/src/app.py",),
+        self.assertEqual(tuple(os.path.normpath(p) for p in ("/tmp/a.py",)), BL.analyze("cd /tmp && echo x > a.py", "/repo").targets)
+        self.assertEqual(tuple(os.path.normpath(p) for p in ("/repo/src/app.py",)),
                          BL.analyze("cd src; sed -i s/a/b/ app.py", "/repo").targets)
         self.assertIn("built at runtime",
                       BL.analyze('cd "$D" && echo x > a.py', "/repo").unreadable[0])
@@ -251,7 +251,7 @@ class HpS4ContainmentIsOnForEveryGatedWrite(unittest.TestCase):
     def test_user_harness_config_is_the_one_named_way_out_and_only_for_config(self):
         with tempfile.TemporaryDirectory() as repo, tempfile.TemporaryDirectory() as home:
             _repo(repo)
-            with mock.patch.dict(os.environ, {"HOME": home}), \
+            with mock.patch.dict(os.environ, {"HOME": home, "USERPROFILE": home}), \
                     mock.patch("os.getcwd", return_value=repo):
                 gate = self._gate(repo)
                 for target, kind, ok in (
@@ -270,7 +270,7 @@ class HpS4ContainmentIsOnForEveryGatedWrite(unittest.TestCase):
         with tempfile.TemporaryDirectory() as repo, tempfile.TemporaryDirectory() as home, \
                 tempfile.TemporaryDirectory() as elsewhere:
             _repo(repo)
-            with mock.patch.dict(os.environ, {"HOME": home}), \
+            with mock.patch.dict(os.environ, {"HOME": home, "USERPROFILE": home}), \
                     mock.patch("os.getcwd", return_value=repo):
                 HS._write_json(Path(home) / ".claude.json", {"mcpServers": {}})
                 HS._write_json(Path(repo) / ".mcp.json", {"mcpServers": {}})

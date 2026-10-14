@@ -31,6 +31,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 import os
 import shutil
+import sys
 import tempfile
 import time
 import unittest
@@ -342,7 +343,8 @@ class Cost(_Base):
         warm(cs, ls), warm(cl, ll)
         t_small = min(warm(cs, ls) for _ in range(5))
         t_large = min(warm(cl, ll) for _ in range(5))
-        self.assertLess(t_large, 0.05, f"warm path too slow: {t_large*1000:.1f}ms")
+        self.assertLess(t_large, 0.10 if sys.platform == "win32" else 0.05,
+                        f"warm path too slow: {t_large*1000:.1f}ms")
         self.assertLess(t_large, t_small * 5 + 0.01,
                         f"anchor pass scales with repo size: "
                         f"{t_small*1000:.2f} vs {t_large*1000:.2f}ms")

@@ -54,7 +54,7 @@ def _repo(d, *runs, git=False):
 
 
 def _write(d, rel, text):
-    with open(os.path.join(d, rel), "w", encoding="utf-8") as fh:
+    with open(os.path.join(d, rel), "w", encoding="utf-8", newline="") as fh:
         fh.write(text)
 
 
@@ -393,6 +393,7 @@ class VerificationFindingsStayFixed(unittest.TestCase):
                     self.assertIn("is not", D.pr(d, url).note)
             self.assertFalse(any("fetch" in c.args for c in g.call_args_list), "fetched")
 
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "no FIFOs on this platform (Windows)")
     def test_a_fifo_or_a_swapped_path_never_hangs_or_escapes_the_reader(self):
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
@@ -437,8 +438,9 @@ class VerificationFindingsStayFixed(unittest.TestCase):
                 self.assertNotEqual(old["pid"], rec["pid"])
                 self.assertIn(f":{rec['port']}/", real.url)
                 self.assertFalse(L._call(int(rec["port"]), rec["token"], "/api/ping")["demo"])
-                with self.assertRaises(OSError):
-                    os.kill(int(old["pid"]), 0)
+                # the OLD server is gone: its port no longer answers. (Not `os.kill(pid, 0)` — on
+                # Windows signal 0 is TerminateProcess, not a liveness probe.)
+                self.assertIsNone(L._call(int(old["port"]), old["token"], "/api/ping"))
             finally:
                 rec = L.running(d)
                 if rec:
