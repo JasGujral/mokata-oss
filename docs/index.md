@@ -30,6 +30,14 @@ four, `self-protect` refuses any write to an installed package tree or outside y
 all. And because no code path writes memory without a human-minted approval, mokata's memory
 **cannot be poisoned** by content you never approved.
 
+It keeps working when the session gets long or busy. Each Claude session is bound to its own
+run, so parallel sessions never police each other; after `/compact` the gate state is re-stated
+from the record; a shell command meets the same gates as a native edit; and a subagent works under
+a contract — read-only stays read-only, and it hands back a structured report. To see what any
+session actually wrote, `/mokata:review-window` opens the **review window** — a read-only page on
+your machine with the diff of each session, any point in time, branches and PRs
+([Review what your agent wrote](how-to/review-agent-work.md)).
+
 You don't have to adopt all of it at once — `mokata init --mode seatbelt` wires just the gates
 and the graph, `--mode memory` adds persistent memory, `--mode full` turns on everything.
 
@@ -58,6 +66,7 @@ This site follows the [Diátaxis](https://diataxis.fr/) model:
   [set the execution mode](how-to/set-execution-mode.md),
   [use & heal memory](how-to/use-memory.md),
   [write a skill](how-to/write-a-skill.md),
+  [review what your agent wrote](how-to/review-agent-work.md),
   [integrate other tools](how-to/integrate-other-ai-tools.md),
   [share a stack](how-to/share-a-stack.md),
   [run mokata as a team (setup & operations)](how-to/team-setup.md),
@@ -88,6 +97,8 @@ This site follows the [Diátaxis](https://diataxis.fr/) model:
 | K | Config | per-layer/tool toggles, profiles, local-first, committed config, trust dial, doctor (incl. the DSN deep-check and retrieval-stack line), reset |
 | L | Composability | standalone commands, mid-pipeline entry, direct skills, catalog, chaining, suggestions |
 | M | MCP surface | 65 tools (43 read · 21 write · 1 opt-in approve), every call bounded with a `timed_out` status that names the operation, typed annotations, structured `response_format`, cursor pagination, and a loud `AWAITING APPROVAL` head so waiting-on-a-human never reads as a hang |
+| + | Sessions & subagents | each Claude session bound to its own run (parallel-safe); the gate state re-anchored after compaction; one context budget; subagent contracts (read-only, depth, a structured hand-back); shell writes meet the same gates as native edits; session notes drafted from the record and kept only on approval |
+| + | Review window | `mokata ide` + `/mokata:review-window` — a read-only, localhost-only page: what each session wrote, the diff at any point in time from mokata's own write snapshots, the live tree, branch compare and GitHub PRs by URL; re-focuses on the asking session; `--demo` sample data ([guide](how-to/review-agent-work.md)) |
 
 Counts in the box today: **26 Agent Skills** (16 curated + 10 domain) · **38 slash commands** ·
 **71 CLI subcommands** · **65 MCP tools** · **9 backed gates** · **1 runtime dependency**.
