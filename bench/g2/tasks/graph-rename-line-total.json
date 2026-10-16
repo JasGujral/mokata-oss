@@ -1,0 +1,13 @@
+{
+  "id": "graph-rename-line-total",
+  "mechanism": "graph",
+  "repo": {"template": "fixtures/sample-repo"},
+  "prompt": "Rename the function `line_total` in shop/pricing.py to `price_line`, updating every caller in the package. Keep the tests green.",
+  "max_turns": 30,
+  "rubric": [
+    {"id": "renamed", "kind": "outcome", "text": "shop/pricing.py defines price_line and no longer defines line_total."},
+    {"id": "all-callers", "kind": "outcome", "text": "Every caller (shop/cart.py and shop/report.py) uses price_line; no reference to line_total remains in shop/."},
+    {"id": "tests-green", "kind": "outcome", "text": "The agent ran the test suite after the change and it passed."},
+    {"id": "impact-first", "kind": "process", "text": "The agent established the set of callers (graph query or search) BEFORE editing, rather than discovering them from failures."}
+  ]
+}

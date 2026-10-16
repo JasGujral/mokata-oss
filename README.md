@@ -20,6 +20,55 @@ stops the agent shipping the wrong thing.
 📖 **Full documentation:** **<https://mokata.ai/>** — quickstart, tutorials, concepts, and the complete CLI + plugin reference.
 ▶ **See it moving:** [the skills tour video](https://mokata.ai/assets/mokata-skills.mp4) · [the 60-second seatbelt demo](https://mokata.ai/tutorials/catches-a-bad-change/)
 
+## Install
+
+**One instruction — the same for a first setup and for every update.** Run it in your repo:
+
+```bash
+uv tool install --upgrade mokata       # installs mokata, or upgrades it (or: pipx install --force mokata)
+mokata setup claude                    # wires the repo: commands, skills, hooks, MCP — human-gated
+# restart Claude Code, then check:
+mokata doctor
+```
+
+`mokata setup claude` runs `mokata init` for you on a repo that has no `.mokata/` yet, and on a
+repo that has one it leaves your config, memory and ledger alone and refreshes only the wiring —
+new commands (e.g. `/review-window`) appear and stale ones are removed. Re-run it after every
+upgrade. Needs [`uv`](https://docs.astral.sh/uv/) (or `pipx`) and **Python ≥ 3.10**; mokata gets
+its own environment, never your project's, and works on your existing Claude Code sign-in — no
+API key.
+
+**Alternative · the Claude Code plugin** — two commands inside Claude Code, nothing installed into
+your project (the plugin starts its MCP server through `uvx`, so `uv` must be on PATH):
+
+```text
+/plugin marketplace add JasGujral/mokata-oss
+/plugin install mokata@mostack
+```
+
+Use one route per repo — the plugin *or* `mokata setup claude`, not both; both wire the same
+hooks. Plain `pip install mokata` also works, but inside a project venv this mixes mokata's deps
+into yours; `mokata doctor` warns when it finds that, or an older copy shadowing it on PATH.
+
+Every route, step by step: [Getting started](docs/getting-started.md) ·
+[Install mokata](docs/how-to/install-mokata.md) ·
+[Integrate with other AI tools](docs/how-to/integrate-other-ai-tools.md).
+
+<!-- mokata:directory-listing:start -->
+> **Installs today as a Claude Code plugin** from mokata's own marketplace — inside Claude
+> Code run `/plugin marketplace add JasGujral/mokata-oss`, then `/plugin install mokata@mostack`
+> (the plugin starts its MCP server through `uvx`, so [`uv`](https://docs.astral.sh/uv/) must be
+> on PATH).
+> ⏳ **Pending: the community-marketplace listing** (pending submission) — mokata is not yet
+> listed in Claude's community plugin marketplace; until it is, use the two commands above.
+> _(This notice auto-flips once the listing exists — single source:
+> `scripts/directory_listing.py`.)_
+<!-- mokata:directory-listing:end -->
+
+> **Contributing (developers).** Only clone if you're working on mokata itself — end users never
+> need to: `git clone https://github.com/JasGujral/mokata-oss.git && cd mokata-oss && pip install -e .`
+> (on Python ≥ 3.10 this also pulls the MCP SDK). See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ---
 
 ## See it catch a bad change (30 seconds)
@@ -77,54 +126,10 @@ https://github.com/user-attachments/assets/a6940119-1edb-4017-b935-cd48b80b4ea9
 - **Configurable & composable.** Toggle any layer/tool, pick a profile, run any capability standalone, and enter the pipeline from any phase.
 - **Meets you where you work, ships trustworthy.** Runs under Claude Code, Cursor, Copilot, Windsurf, Codex, Gemini CLI, and Aider (a VS Code extension is planned, not yet available); sessions travel between machines; teams share one governed backend safely; and releases carry an SBOM + Sigstore provenance — no telemetry, ever.
 
-## Install
-
-**Start here → [Getting started](docs/getting-started.md).** The canonical, pip-first path.
-
-**In Claude Code (recommended)** — one install, then one command wires the full workflow
-(slash commands + Agent Skills + MCP server + status line), on your existing Claude Code
-sign-in — no API key:
-
-```bash
-pip install mokata               # MCP server works out of the box (the SDK is a default dep)
-mokata setup claude              # wires commands + skills + MCP + statusline — human-gated
-# restart Claude Code, then:
-mokata mcp status                # expect: mokata-mcp: REGISTERED ✓ … connected ✓
-```
-
-> Requires **Python ≥ 3.10**.
->
-> On macOS/Linux you can install with Homebrew instead — `brew install JasGujral/mokata/mokata` — then
-> continue from `mokata setup claude`. Every route is listed in
-> [Install mokata](docs/how-to/install-mokata.md).
-
-**As a CLI, with any AI tool** — harness-agnostic (Gemini, Codex, scripts, CI). The CLI is the
-engine's mechanics (no LLM of its own); wire it into any shell- or MCP-capable assistant:
-
-```bash
-pip install mokata
-mokata init
-```
-
-See [Integrate with other AI tools](docs/how-to/integrate-other-ai-tools.md).
-
-<!-- mokata:directory-listing:start -->
-> ⏳ **Pending Claude plugin-directory approval.** A one-click Claude Code **plugin** is
-> **planned, not yet available** — mokata isn't registered on any Claude Code marketplace.
-> The supported way to run mokata inside Claude Code today is the pip-first path:
-> `pip install mokata` → `mokata setup claude`
-> (see [Getting started](https://mokata.ai/getting-started/)).
-> _(This notice auto-flips once the listing is approved — single source:
-> `scripts/directory_listing.py`.)_
-<!-- mokata:directory-listing:end -->
-
-> **Contributing (developers).** Only clone if you're working on mokata itself — end users never
-> need to: `git clone https://github.com/JasGujral/mokata-oss.git && cd mokata-oss && pip install -e .`
-> (on Python ≥ 3.10 this also pulls the MCP SDK). See [CONTRIBUTING.md](CONTRIBUTING.md).
-
 ## Quickstart
 
-**In Claude Code (primary)** — after `mokata setup claude`, drive the workflow with slash commands:
+**In Claude Code (primary)** — after `mokata setup claude`, drive the workflow with slash commands
+(installed as the plugin, the same commands are namespaced: `/mokata:<name>`):
 
 ```text
 /brainstorm        # Socratic pre-spec exploration (HARD-GATE before any spec)
@@ -155,8 +160,9 @@ axis. See [Getting started](docs/getting-started.md).
 >
 > `mokata init` = **your repo** (`.mokata/`). `mokata setup claude` = **your agent** (`.claude/`,
 > and it runs `init` for you). ⚠ Since 0.0.19 the non-interactive **`mokata init --yes`** does
-> both — it wires the harness too, which matters if you call it from CI. Upgrading? `mokata upgrade` does the pip install *and* refreshes
-> the harness wiring, both human-gated — a bare `pip install -U` leaves the old wiring in place.
+> both — it wires the harness too, which matters if you call it from CI. Upgrading? The same instruction as setup —
+> `uv tool install --upgrade mokata`, then `mokata setup claude`, which refreshes the wiring and
+> keeps your config; a package upgrade alone leaves the old wiring in place.
 > Decision table + upgrade runbook:
 > [Which setup command do I need?](https://mokata.ai/how-to/which-setup-command/)
 

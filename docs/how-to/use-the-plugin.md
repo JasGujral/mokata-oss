@@ -1,9 +1,9 @@
 # Using mokata in Claude Code (the plugin)
 
 mokata runs the whole spec-driven TDD workflow **inside Claude Code** — slash commands for the
-workflow and hooks that run automatically. Today you wire it in with the pip-first path
-([`mokata setup claude`](use-without-plugin.md)); a one-click Claude Code **plugin** is planned
-but **not yet available**. The [CLI](../reference/cli.md) comes last: it's the engine's
+workflow and hooks that run automatically. Install it as a Claude Code **plugin** (two in-app
+commands), or wire it in from an isolated CLI install with
+[`mokata setup claude`](use-without-plugin.md). The [CLI](../reference/cli.md) comes last: it's the engine's
 mechanics for scripting and inspection outside any harness, not the primary way to build.
 (Inside Claude Code, **Claude is the brain**; mokata never calls a model itself — see
 [How mokata uses an LLM](../concepts/execution-model.md).)
@@ -11,24 +11,31 @@ mechanics for scripting and inspection outside any harness, not the primary way 
 ## Install
 
 <!-- mokata:directory-listing:start -->
-> ⏳ **Pending Claude plugin-directory approval.** A one-click Claude Code **plugin** is
-> **planned, not yet available** — mokata isn't registered on any Claude Code marketplace.
-> The supported way to run mokata inside Claude Code today is the pip-first path:
-> `pip install mokata` → `mokata setup claude`
-> (see [Getting started](https://mokata.ai/getting-started/)).
-> _(This notice auto-flips once the listing is approved — single source:
+> **Installs today as a Claude Code plugin** from mokata's own marketplace — inside Claude
+> Code run `/plugin marketplace add JasGujral/mokata-oss`, then `/plugin install mokata@mostack`
+> (the plugin starts its MCP server through `uvx`, so [`uv`](https://docs.astral.sh/uv/) must be
+> on PATH).
+> ⏳ **Pending: the community-marketplace listing** (pending submission) — mokata is not yet
+> listed in Claude's community plugin marketplace; until it is, use the two commands above.
+> _(This notice auto-flips once the listing exists — single source:
 > `scripts/directory_listing.py`.)_
 <!-- mokata:directory-listing:end -->
 
+Details: [Install the plugin](install-plugin.md). **Or**, from the CLI — installed isolated, never
+into your project's venv:
+
 ```bash
-pip install mokata               # MCP server works out of the box on Python ≥ 3.10
+pipx install mokata              # or: uv tool install mokata
                                  # (or on macOS/Linux: brew install JasGujral/mokata/mokata)
+                                 # plain `pip install mokata` last: inside a project venv it mixes
+                                 # mokata's deps into yours
 mokata setup claude              # wires commands + skills + MCP + statusline — human-gated
 # restart Claude Code, then:
 mokata mcp status                # expect: mokata-mcp: REGISTERED ✓ … connected ✓
 ```
 
-This wires the *same* slash commands, Agent Skills, MCP tools, and hooks the plugin would. Full
+This wires the *same* slash commands, Agent Skills, MCP tools, and hooks the plugin does — use one
+route per repo, not both. Full
 narrative: **[Getting started](../getting-started.md)** · full detail:
 [Use mokata without the plugin](use-without-plugin.md).
 
@@ -40,9 +47,8 @@ narrative: **[Getting started](../getting-started.md)** · full detail:
 > **caches the skill list**, so **restart Claude Code** after the sync to see the change.
 
 > **Command form ↔ install route.** The tables below use the **plugin** render, `/mokata:<name>`.
-> Because the supported route today is the pip-first `mokata setup claude` path, the commands
-> actually appear **bare** in your `/` menu — `/<name>` (drop the `mokata:` prefix). The one-click
-> plugin (which would namespace them) is planned, not yet available.
+> Installed as the plugin, that is what your `/` menu shows. Via the `mokata setup claude` route
+> the commands appear **bare** — `/<name>` (drop the `mokata:` prefix).
 
 ## What you get
 

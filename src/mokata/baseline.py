@@ -13,9 +13,10 @@ no network call.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 # settings.baseline.test_command — the project's test command (mokata never guesses one).
 BASELINE_SETTINGS_KEY = "baseline"
@@ -44,6 +45,9 @@ class BaselineResult:
     command: Optional[str] = None
     detail: str = ""
     returncode: Optional[int] = None
+    # 0.0.23 B2 — WHICH Python the project's tests ran in (`project_env.describe`), named in the
+    # report so a RED caused by the wrong interpreter is visible as that, not as a failing suite.
+    env_line: str = ""
 
     @property
     def ok(self) -> bool:
@@ -51,12 +55,13 @@ class BaselineResult:
         return self.state != RED
 
     def render(self) -> str:
+        where = f"\n  tests ran in: {self.env_line}" if self.env_line else ""
         if self.state == GREEN:
-            return f"baseline: GREEN — `{self.command}` passed. New failures are yours."
+            return f"baseline: GREEN — `{self.command}` passed. New failures are yours." + where
         if self.state == RED:
             return (f"baseline: RED — `{self.command}` is already failing (rc "
                     f"{self.returncode}). Fix or acknowledge before starting, so new "
-                    "failures are attributable to your change.")
+                    "failures are attributable to your change." + where)
         return NO_COMMAND_MESSAGE
 
 
@@ -75,11 +80,21 @@ def baseline_command(manifest: Any = None, override: Optional[str] = None) -> Op
 
 
 def baseline_status(command: Optional[str], cwd: Optional[str] = None,
-                    timeout: int = BASELINE_TIMEOUT_SECONDS) -> BaselineResult:
+                    timeout: int = BASELINE_TIMEOUT_SECONDS, *,
+                    settings_python: Optional[str] = None,
+                    environ: Optional[Dict[str, str]] = None) -> BaselineResult:
     """Run the test command and report green/red; UNKNOWN (degrade-clean) when none given.
-    Never raises — a command that can't run reports red with the reason, not an exception."""
+    Never raises — a command that can't run reports red with the reason, not an exception.
+
+    0.0.23 B2: the command runs in the PROJECT's Python env (`project_env.resolve`), not in
+    whatever environment mokata's own process happened to inherit."""
     if not command:
         return BaselineResult(state=UNKNOWN, detail=NO_COMMAND_MESSAGE)
+    from . import project_env
+    base_env = os.environ if environ is None else environ
+    penv = project_env.resolve(cwd or os.getcwd(), settings_python, base_env)
+    env_line = project_env.describe(penv)
+    run_env = project_env.activated(base_env, penv)
     try:
         # Justification for the B602 suppression: `command` is the USER's OWN test command (their
         # `settings.baseline` config / CLI arg), run in their own shell exactly as they'd run it;
@@ -92,10 +107,11 @@ def baseline_status(command: Optional[str], cwd: Optional[str] = None,
         # (0.0.18 round 2: an inherited stdin on a shell subprocess is what wedged the Windows
         # unit leg for 54 minutes; the class is swept in `tests/_windows_portability.py`.)
         proc = subprocess.run(command, shell=True, cwd=cwd, capture_output=True,  # nosec B602
-                              stdin=subprocess.DEVNULL, text=True, timeout=timeout)
+                              stdin=subprocess.DEVNULL, text=True, timeout=timeout, env=run_env)
     except Exception as exc:  # missing binary, timeout, etc. — report, don't crash
         return BaselineResult(state=RED, command=command,
-                              detail=f"could not run test command: {exc}")
+                              detail=f"could not run test command: {exc}", env_line=env_line)
     state = GREEN if proc.returncode == 0 else RED
     return BaselineResult(state=state, command=command, returncode=proc.returncode,
-                          detail=(proc.stderr or proc.stdout or "").strip()[-500:])
+                          detail=(proc.stderr or proc.stdout or "").strip()[-500:],
+                          env_line=env_line)

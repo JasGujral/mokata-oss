@@ -55,7 +55,9 @@ def _make_repo(tmp, *, pyproject="0.0.4", plugin="0.0.4", mp_meta="0.0.4",
             fh.write(f'[project]\nname = "mokata"\nversion = "{pyproject}"\n')
     if "plugin" not in omit:
         with open(os.path.join(tmp, ".claude-plugin", "plugin.json"), "w", encoding="utf-8") as fh:
-            json.dump({"name": "mokata", "version": plugin}, fh)
+            json.dump({"name": "mokata", "version": plugin,
+                       "mcpServers": {"mokata": {"command": "uvx", "args": [
+                           "--from", f"mokata=={pyproject}", "mokata-mcp"]}}}, fh)
     if "marketplace" not in omit:
         with open(os.path.join(tmp, ".claude-plugin", "marketplace.json"), "w", encoding="utf-8") as fh:
             json.dump({"name": "mostack", "metadata": {"version": mp_meta},
@@ -84,8 +86,8 @@ class TestReleaseConsistency(unittest.TestCase):
         tmp = _make_repo(self.tmp())
         fields = read_version_fields(tmp)
         # five version fields (pyproject, plugin, marketplace×2, package __version__)
-        # + the two PIN-DRIFT action pins
-        self.assertEqual(len(fields), 5 + len(ACTION_PIN_PATHS))
+        # + the plugin's uvx MCP pin (0.0.23 B3) + the two PIN-DRIFT action pins
+        self.assertEqual(len(fields), 6 + len(ACTION_PIN_PATHS))
         self.assertTrue(all(v == "0.0.4" for v in fields.values()), fields)
 
     def test_passes_when_all_match_the_target(self):
@@ -119,7 +121,7 @@ class TestReleaseConsistency(unittest.TestCase):
                          mp_plugin="0.0.3", pkg="0.0.3")
         res = check_release_consistency("0.0.4", root=tmp)
         self.assertFalse(res.consistent)
-        self.assertEqual(len(res.mismatches), 5 + len(ACTION_PIN_PATHS))
+        self.assertEqual(len(res.mismatches), 6 + len(ACTION_PIN_PATHS))
 
     def test_missing_file_is_a_named_mismatch_not_a_crash(self):
         tmp = _make_repo(self.tmp(), omit=("plugin",))

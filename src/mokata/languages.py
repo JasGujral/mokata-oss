@@ -236,6 +236,10 @@ PYTHON = Language(
     _inherit=(r"^\s*class\s+(\w+)\s*\(([^)]*)\)", 1, 2),
     _defs=(r"^\s*(?:async\s+)?def\s+(\w+)\s*\(", r"^\s*class\s+(\w+)\s*[\(:]"),
     _test_def=r"^\s*def\s+(?P<name>test\w+)\s*\(",
+    # 0.0.23 B1: both are install targets BY DEFINITION — PEP 582's `__pypackages__` and the
+    # `site-packages` an env or `pip --target` writes. A whole environment is pruned by marker
+    # (`repo_walk.is_python_env`); these catch the two install dirs that can sit outside one.
+    vendor_dirs=("__pypackages__", "site-packages"),
 )
 
 JAVASCRIPT = Language(

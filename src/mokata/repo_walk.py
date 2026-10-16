@@ -46,6 +46,15 @@ from typing import List, Optional
 # The entry whose PRESENCE marks a checkout root, whichever shape it takes on disk.
 CHECKOUT_MARKER = ".git"
 
+#: The entries whose PRESENCE marks a Python ENVIRONMENT, whatever the directory is called
+#: (0.0.23 B1, `VENV-NOT-PRUNED`). `pyvenv.cfg` is written by every PEP 405 environment — `venv`,
+#: `virtualenv`, `uv venv`, Poetry's in-project env — and `conda-meta/` by conda, mamba and pixi.
+#: Keyed on STRUCTURE for the same reason the checkout rule is: a venv named `venv/`, `env/` or
+#: `py312/` has no leading dot, so the hidden-directory rule never saw it, and a name list would
+#: miss the next spelling. A source package that merely happens to be called `env/` carries no
+#: marker and is kept.
+ENV_MARKERS = ("pyvenv.cfg", "conda-meta")
+
 
 # ⚠ `posix_name` USED TO LIVE HERE AND IS GONE. It took an already-relative string and converted
 # it, which made the conversion a step a site could REMEMBER — and every site that remembered
@@ -68,13 +77,36 @@ def is_checkout_boundary(path: str) -> bool:
     return os.path.exists(os.path.join(path, CHECKOUT_MARKER))
 
 
+def is_python_env(path: str) -> bool:
+    """True when `path` is the root of a Python environment (`ENV_MARKERS`), whatever its name."""
+    return any(os.path.exists(os.path.join(path, m)) for m in ENV_MARKERS)
+
+
+def under_python_env(root: str, rel: str) -> bool:
+    """True when the repo-relative `rel` sits inside a Python environment below `root`.
+
+    For listings that do not come from an `os.walk` — `git ls-files --others` in the review
+    window — so an un-ignored `venv/` cannot flood them with site-packages either."""
+    cur = os.path.dirname(os.path.join(root, os.path.normpath(rel)))
+    root_abs = os.path.abspath(root)
+    cur = os.path.abspath(cur)
+    while cur.startswith(root_abs) and cur != root_abs:
+        if is_python_env(cur):
+            return True
+        cur = os.path.dirname(cur)
+    return False
+
+
 def prune_source_dirs(dirpath: str, dirnames: List[str], *,
                       skipped: Optional[List[str]] = None) -> None:
     """Prune `dirnames` IN PLACE (the `os.walk` contract) to this repo's own source.
 
     Dropped: hidden directories (`.git`, `.venv`, `.mokata`, `.mypy_cache` — config, state and
     caches, never source), nested checkouts (someone else's source, wherever it sits), and
-    package-manager INSTALL DIRECTORIES (`languages.VENDOR_DIRS`).
+    package-manager INSTALL DIRECTORIES (`languages.VENDOR_DIRS`), and Python ENVIRONMENTS of any
+    name (`is_python_env` — 0.0.23 B1: `venv/`, `env/`, conda envs were walked as source, so on a
+    Python repo every `defs`/`callers` answer could name site-packages). Not recorded in `skipped`,
+    for the reason install directories are not.
 
     🔴 THE THIRD CLAUSE IS NEW AT 0.0.20 AND IT CLOSES A LIVE DEFECT, not a hypothetical one.
     "Someone else's source" was already this function's stated subject, but the only detector was
@@ -106,6 +138,8 @@ def prune_source_dirs(dirpath: str, dirnames: List[str], *,
         if name in VENDOR_DIRS:
             continue
         full = os.path.join(dirpath, name)
+        if is_python_env(full):
+            continue
         if is_checkout_boundary(full):
             if skipped is not None:
                 skipped.append(full)
@@ -114,4 +148,5 @@ def prune_source_dirs(dirpath: str, dirnames: List[str], *,
     dirnames[:] = kept
 
 
-__all__ = ["CHECKOUT_MARKER", "is_checkout_boundary", "prune_source_dirs"]
+__all__ = ["CHECKOUT_MARKER", "ENV_MARKERS", "is_checkout_boundary", "is_python_env",
+           "prune_source_dirs", "under_python_env"]

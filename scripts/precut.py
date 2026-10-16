@@ -313,13 +313,23 @@ def is_integration_module(path):
             and os.path.basename(path).startswith("test_") and path.endswith(".py"))
 
 
-def integration_argv(path):
-    """THE-FIRST-CI-RUN-SINCE-THE-REFUSAL-WAS-THE-CUT ③ (0.0.22 A2): run a touched integration module
-    EXACTLY the way `release.sh`'s preflight runs that suite — from the repo root, with
+def integration_argv(path=None):
+    """THE-FIRST-CI-RUN-SINCE-THE-REFUSAL-WAS-THE-CUT ③ (0.0.22 A2): run the integration suite
+    EXACTLY the way `release.sh`'s preflight runs it — from the repo root, with
     `-s tests/integration -t tests/integration` — so precut can no longer pass on a path the release
-    does not take. Narrowed to the one file by `-p`, which does not change the import arrangement."""
-    return [sys.executable, "-m", "unittest", "discover", "-s", "tests/integration",
-            "-t", "tests/integration", "-p", os.path.basename(path)]
+    does not take. With a `path`, narrowed to that one file by `-p`, which does not change the
+    import arrangement.
+
+    ⭐ 0.0.23 A2 (`TESTS-INTEGRATION-OUTSIDE-THE-PRECUT-AND-DISCOVER`): `main` now calls this with NO
+    path, every time. Running only TOUCHED integration modules let the 0.0.22 cut's D5 containment
+    change — a `src/` edit, touching no integration file — reach `release.sh` with 6 integration reds
+    (`test_govern_enforcement`), because `unittest discover -s tests` does not recurse into
+    `tests/integration` and nothing else ran it. The whole suite is 166 tests (doc 84 measured ~2 s;
+    25 s on a loaded 0.0.23 sandbox, still well inside `SLOW_RUN_BUDGET_S`), so there is no budget
+    reason to derive a subset of it."""
+    argv = [sys.executable, "-m", "unittest", "discover", "-s", "tests/integration",
+            "-t", "tests/integration"]
+    return argv + ["-p", os.path.basename(path)] if path else argv
 
 
 def main(argv):
@@ -350,21 +360,26 @@ def main(argv):
     proc = subprocess.run([sys.executable, "-m", "unittest"] + names + argv,
                           cwd=TESTS, check=False)
     rc = proc.returncode
-    for path in _LAST_TOUCHED_INTEGRATION:
-        print("\nPRE-CUT — touched integration module %s, run the way release.sh runs it:" % path)
-        sys.stdout.flush()
-        ip = subprocess.run(integration_argv(path), cwd=REPO, stdin=subprocess.DEVNULL,
-                            check=False)
-        rc = rc or ip.returncode
+    # The WHOLE integration suite, every run, on release.sh's own argv (0.0.23 A2). A touched
+    # integration module is inside it, so it is named, not run twice.
+    print("\nPRE-CUT — the integration suite (tests/integration), run the way release.sh runs it%s:"
+          % ("; touched: " + ", ".join(_LAST_TOUCHED_INTEGRATION) if _LAST_TOUCHED_INTEGRATION else ""))
+    sys.stdout.flush()
+    ip = subprocess.run(integration_argv(), cwd=REPO, stdin=subprocess.DEVNULL, check=False)
+    if ip.returncode:
+        print("PRE-CUT — the integration suite is RED. `release.sh`'s preflight runs this exact "
+              "command and refuses on it.", file=sys.stderr)
+    rc = rc or ip.returncode
     elapsed = time.time() - started
-    print("\nPRE-CUT finished in %.1fs over %d module(s)." % (elapsed, len(modules)))
+    print("\nPRE-CUT finished in %.1fs over %d module(s) + the integration suite." % (elapsed, len(modules)))
     if elapsed > SLOW_RUN_BUDGET_S:
         print("⚠ THAT IS OVER THIS TOOL'S %ds BUDGET, so it is no longer clearly the fast half. "
               "Read the module list above: either the touched set pulled in a nested-suite module "
               "through a short stem, or a tree-wide module has become expensive and belongs in "
               "NESTED_SUITE_MODULES with its measurement." % SLOW_RUN_BUDGET_S, file=sys.stderr)
     print("⛔ THIS IS NOT THE RELEASE GATE. It ran a derived SUBSET: the tree-wide rules and the "
-          "modules you touched. `scripts/release.sh` still decides whether a release may be cut, "
+          "modules you touched, plus the integration suite in THIS environment only (release.sh runs it "
+          "with jsonschema present AND absent). `scripts/release.sh` still decides whether a release may be cut, "
           "and only the full suite — both jsonschema legs — can say the tree is green.")
     return rc
 

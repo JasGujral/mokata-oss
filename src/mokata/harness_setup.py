@@ -1076,16 +1076,59 @@ def _statusline_setting_on(root: str) -> bool:
 # Command-file materialization (per-harness native format — Stage 63)
 # --------------------------------------------------------------------------------------
 
+#: Claude Code BUILT-IN slash commands that share a name with a mokata command template
+#: (0.0.23 B3, `COMMAND-NAMES-COLLIDE-WITH-CLAUDE-CODE-BUILTINS`). A project-scope command is
+#: written BARE (`.claude/commands/<name>.md`) and Claude Code's built-in wins, so `/review` in a
+#: `mokata init`-ed repo silently ran Claude Code's review, not mokata's. These are written as
+#: `mokata-<name>.md` instead. The plugin's namespaced `/mokata:<name>` is unaffected.
+#: `tests/test_b3_the_plugin_stands_alone.py` reds when a template collides and is not listed.
+CLAUDE_CODE_BUILTIN_COMMANDS = frozenset({
+    "add-dir", "agents", "bashes", "bug", "clear", "code-review", "compact", "config", "context",
+    "cost", "doctor", "exit", "export", "feedback", "help", "hooks", "ide", "init", "login",
+    "logout", "mcp", "memory", "model", "output-style", "permissions", "plugin", "pr-comments",
+    "release-notes", "resume", "review", "rewind", "security-review", "status", "statusline",
+    "terminal-setup", "todos", "upgrade", "usage", "vim",
+})
+
+
 def _command_target_name(harness: str, name: str) -> str:
     """The native filename a `<name>.md` template materializes to for this harness, so setup
     and unsetup agree on exactly which file to write/remove (no residue)."""
     fmt = _HARNESS_COMMAND_FORMAT[harness]
     stem = name[:-3] if name.endswith(".md") else name
+    if harness == "claude" and stem in CLAUDE_CODE_BUILTIN_COMMANDS:
+        stem = f"mokata-{stem}"
+        name = f"{stem}.md"
     if fmt == "prompt.md":
         return f"{stem}.prompt.md"
     if fmt == "toml":
         return f"{stem}.toml"
     return name                          # "md" / "reference" keep the .md filename
+
+
+#: Every shipped command template opens with this description prefix — it is how a file in a
+#: harness's commands dir is recognised as MOKATA's (never a user's own `/review`).
+MOKATA_COMMAND_MARK = "mokata ·"
+
+
+def stale_command_files(harness: str, commands_dir: Path, command_files: List[str]) -> List[Path]:
+    """Files in `commands_dir` that are mokata's (description starts `mokata ·`) but are NOT among
+    the names this mokata writes. Claude Code's markdown commands only; a file whose frontmatter
+    cannot be read is left alone. A user's own command is never touched — it carries no mark."""
+    if harness != "claude" or not commands_dir.is_dir():
+        return []
+    current = {_command_target_name(harness, n) for n in command_files}
+    out: List[Path] = []
+    for p in sorted(commands_dir.glob("*.md")):
+        if p.name in current:
+            continue
+        try:
+            head = p.read_text(encoding="utf-8", errors="replace")[:600]
+        except OSError:
+            continue
+        if _frontmatter_description(head).startswith(MOKATA_COMMAND_MARK):
+            out.append(p)
+    return out
 
 
 def _frontmatter_description(md: str) -> str:
@@ -1180,6 +1223,17 @@ def apply_setup(plan: SetupPlan, *, assume_yes: bool = False, force: bool = Fals
     for name in plan.command_files:
         touched.append(_write_command_file(plan.harness, _templates_dir() / name,
                                             t.commands_dir, name))
+    # 2a. 0.0.23 — remove mokata's OWN command files that this mokata no longer writes under that
+    # name (`review.md` -> `mokata-review.md`, `ide.md` -> `review-window.md`). Without this an
+    # upgraded repo kept the old bare `/review` — still shadowed by Claude Code's built-in — beside
+    # the new one, and a renamed command lived on under its dead name. Pre-1.0: delete, don't keep.
+    for stale in stale_command_files(plan.harness, t.commands_dir, plan.command_files):
+        try:
+            stale.unlink()
+            emit(f"  removed stale mokata command {stale.name} (renamed or retired)")
+            touched.append(str(stale))
+        except OSError:
+            emit(f"  ⚠ could not remove stale mokata command {stale} — delete it by hand")
 
     # 2b. Agent Skills (claude only) — the model-invocable twin of the commands, rendered from
     # the SAME command templates so the two surfaces can't drift. One dir per skill:
@@ -1289,6 +1343,11 @@ def setup_harness(
     plan = plan_setup(harness, root, scope, profile, with_hooks, home, grant=grant)
 
     emit(render_setup_plan(plan))
+    # 0.0.23 B4 — INSTALL-ISOLATED-BY-DEFAULT: name an in-project or shadowed install BEFORE the
+    # user confirms, since the hooks about to be wired bind to this install. Silent when healthy.
+    from .install_isolation import warnings as _install_warnings
+    for _code, _text in _install_warnings(str(root)):
+        emit(f"\nwarning [{_code}]: {_text}")
 
     if not assume_yes:
         gate = confirm or _default_confirm

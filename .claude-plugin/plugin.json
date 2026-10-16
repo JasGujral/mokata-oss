@@ -1,6 +1,6 @@
 {
   "name": "mokata",
-  "version": "0.0.22",
+  "version": "0.0.23",
   "description": "Spec-driven TDD framework for Claude Code \u2014 Socratic brainstorm, provable completeness gate, codebase knowledge graph, persistent self-healing memory, token governance, and human-gated writes.",
   "author": {
     "name": "MoStack"
@@ -21,8 +21,12 @@
   "hooks": "./src/mokata/hooks/hooks.json",
   "mcpServers": {
     "mokata": {
-      "command": "mokata-mcp",
-      "args": []
+      "command": "uvx",
+      "args": [
+        "--from",
+        "mokata==0.0.23",
+        "mokata-mcp"
+      ]
     }
   }
 }

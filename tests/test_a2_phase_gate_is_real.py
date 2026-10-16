@@ -477,6 +477,7 @@ class AnInitSaysWhetherTheSeatbeltIsOn(unittest.TestCase):
         buf = io.StringIO()
         env = dict(os.environ)
         env["HOME"] = home
+        env["USERPROFILE"] = home          # `~` on Windows (0.0.23 A2 lint, CAUSE H)
         original = sys.stdin
         sys.stdin = _TtyStdin(answer)
         try:
@@ -628,7 +629,7 @@ class TheMcpInitToolAnswersTheSameQuestion(unittest.TestCase):
     def test_a2_the_committed_result_carries_the_gate_state(self):
         from mokata.mcp import tools_config
         with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as home:
-            with mock.patch.dict(os.environ, {**os.environ, "HOME": home}):
+            with mock.patch.dict(os.environ, {**os.environ, "HOME": home, "USERPROFILE": home}):
                 out = _support.mcp_commit(tools_config.init, path=d, profile="minimal")
         result = out.get("result") or {}
         self.assertEqual(result.get("gate_enforcement"), GATE_NOT_WIRED)

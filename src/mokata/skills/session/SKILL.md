@@ -52,6 +52,8 @@ after pull.
 
 ## 2. Pick the sub-action from `$ARGUMENTS`
 
+If `$ARGUMENTS` is empty, infer the sub-action from the conversation (save/share what was just worked on, or pick up a teammate's bundle); if it is still unclear, run `list` (read-only) and ask.
+
 - **`list`** — show the tagged bundles + their resume point, **spanning local (+ shared Postgres
   when a DSN is set)**, read-only. If this repo still holds bundles in the REMOVED `vault`
   transport's store, `list` says so and names them rather than quietly listing short:
@@ -106,6 +108,10 @@ After a pull, tell the user that `mokata resume` (or `/mokata:resume`) now conti
 bundle's resume point. After a push, remind them where the bundle lives for the other side to pull:
 `local` → `.mokata/session-bundles/<tag>.json`; `postgres` → the shared DB (the teammate runs
 `session pull <tag> --from postgres`).
+
+## If this appears stuck
+
+If a step appears stuck, or the harness stops it mid-run: run `mokata resume` (where the run stands and the gate that still applies) and `mokata approve --list` (anything waiting on a human). Nothing is lost — run state, approvals and the audit ledger are on disk — so re-invoke `/mokata:session` to continue. Where the harness limits foreground time, start a long test run in the background; `mokata doctor` names a hung MCP server or a hook that is not firing.
 
 ## Rationalizations — stop if you catch yourself thinking any of these
 

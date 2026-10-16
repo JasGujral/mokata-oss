@@ -9,8 +9,8 @@ separate questions, and you may need one, two, or all three.
 | You want… | Run | What it touches | What it does NOT do |
 |---|---|---|---|
 | **A governed config in this repo** — profile, capability chains, the constitution, the audit ledger | `mokata init` (interactive) | `.mokata/` in the current directory | Does **not** touch Claude Code. No slash commands, no Agent Skills, no MCP server, no hooks. Your agent is unchanged. ⚠ **`mokata init --yes` is the exception** — see below. |
-| **mokata inside Claude Code** — slash commands, Agent Skills, the MCP server, the gate hooks, the status line | `mokata setup claude` | `.claude/` (commands, skills, `settings.json`) + the MCP registration. Runs `init` for you if `.mokata/` is missing | Does **not** install the mokata package (`pip` already did that), and does **not** replace `pip install -U` when a new version ships. |
-| **One-click install from Claude Code's plugin directory** | `/plugin install mokata@mostack` | Claude Code's own plugin cache — a self-contained copy with its own hooks and MCP registration | Does **not** put the `mokata` CLI on your `PATH`, and is **not** rewired by `mokata setup claude`. *(Planned — mokata is not yet registered on a marketplace. Use the pip path today.)* |
+| **mokata inside Claude Code** — slash commands, Agent Skills, the MCP server, the gate hooks, the status line | `mokata setup claude` | `.claude/` (commands, skills, `settings.json`) + the MCP registration. Runs `init` for you if `.mokata/` is missing | Does **not** install the mokata package (pipx / uv tool / brew / pip already did that), and does **not** replace the upgrade when a new version ships. |
+| **The Claude Code plugin** (mokata's own marketplace) | `/plugin marketplace add JasGujral/mokata-oss` then `/plugin install mokata@mostack` | Claude Code's own plugin cache — a self-contained copy with its own hooks and MCP registration (the server starts through `uvx`, so `uv` must be on PATH) | Does **not** put the `mokata` CLI on your `PATH`, and is **not** rewired by `mokata setup claude`. Use it *or* `setup`, not both — both wire the same hooks. *(A community-marketplace listing is pending submission.)* |
 
 ### The one-line version
 
@@ -60,18 +60,28 @@ renderer the wiring uses, so the preview cannot drift from what lands.
 
 ## Upgrading mokata
 
-Installing the new package is **not** the whole upgrade. `pip install -U mokata` replaces the
+Installing the new package is **not** the whole upgrade. Upgrading the package replaces the
 code; it does not touch `.claude/settings.json`, which still carries the wiring the *previous*
 version wrote. A hook added — or a tool matcher widened — since your last `mokata setup claude`
 is simply not there. Nothing errors. The gate just never fires.
 
-### The one command
+### The one instruction — the same one you set up with
 
 ```bash
-mokata upgrade
+uv tool install --upgrade mokata   # or: pipx install --force mokata
+mokata setup claude                # refresh the wiring (previews, asks first); keeps config + memory
+# restart Claude Code, then:
+mokata doctor
 ```
 
-`mokata upgrade` finishes the job:
+It is the same instruction as a first setup: `mokata setup claude` runs `mokata init` only on a
+repo with no `.mokata/`, so on an existing repo it refreshes the wiring and nothing else — new
+commands appear and stale mokata commands are removed. Never use `mokata init --force` to
+update; it resets the repo's config to defaults.
+
+### `mokata upgrade` (plain pip installs)
+
+If mokata was installed with plain `pip`, `mokata upgrade` does both steps for you:
 
 1. it proposes `pip install -U mokata` and **asks** before running it;
 2. it then re-runs `mokata setup claude`, which **previews the change and asks again** before

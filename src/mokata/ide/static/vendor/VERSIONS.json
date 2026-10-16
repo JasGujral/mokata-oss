@@ -1,0 +1,26 @@
+{
+  "_what": "mokata ide graph views (0.0.23 C3, ruling R3): Cytoscape.js + fcose + dagre, MIT, vendored. Served from /static/vendor/ — never a CDN at runtime. Re-fetch and verify with: python scripts/vendor_ide_graph_libs.py (--check verifies the files here offline).",
+  "files": [
+    {"file": "cytoscape.min.js", "package": "cytoscape", "version": "3.34.3", "member": "package/dist/cytoscape.min.js", "license": "MIT", "license_file": "LICENSE.cytoscape.txt",
+     "tarball": "https://registry.npmjs.org/cytoscape/-/cytoscape-3.34.3.tgz", "integrity": "sha512-yfYGhRcGAntq6YBD583j4n0Eg3jIxvWmZtz/5uz9UYkeIStSlMxuUja+ec5j3iBD8nv1rwaOAYMW09tBdkSeaQ==",
+     "sha256": "5f3b5b529546d5af1fc5628590af033b74511a5b6f789f5f4682845863228b91"},
+    {"file": "layout-base.js", "package": "layout-base", "version": "2.0.1", "member": "package/layout-base.js", "license": "MIT", "license_file": "LICENSE.layout-base.txt",
+     "tarball": "https://registry.npmjs.org/layout-base/-/layout-base-2.0.1.tgz", "integrity": "sha512-dp3s92+uNI1hWIpPGH3jK2kxE2lMjdXdr+DH8ynZHpd6PUlH6x6cbuXnoMmiNumznqaNO31xu9e79F0uuZ0JFg==",
+     "sha256": "ec15ab5df9af3f20708f4faab994accf91cda71848cd5bb10a23432cc50b6745"},
+    {"file": "cose-base.js", "package": "cose-base", "version": "2.2.0", "member": "package/cose-base.js", "license": "MIT", "license_file": "LICENSE.cose-base.txt",
+     "tarball": "https://registry.npmjs.org/cose-base/-/cose-base-2.2.0.tgz", "integrity": "sha512-AzlgcsCbUMymkADOJtQm3wO9S3ltPfYOFD5033keQn9NJzIbtnZj+UdBJe7DYml/8TdbtHJW3j58SOnKhWY/5g==",
+     "sha256": "7cae9509bd36235a63a85e71c8d9fa2cd0bc1d0c1ecc5b5a737976f39d040ddf"},
+    {"file": "cytoscape-fcose.js", "package": "cytoscape-fcose", "version": "2.2.0", "member": "package/cytoscape-fcose.js", "license": "MIT", "license_file": "LICENSE.cytoscape-fcose.txt",
+     "tarball": "https://registry.npmjs.org/cytoscape-fcose/-/cytoscape-fcose-2.2.0.tgz", "integrity": "sha512-ki1/VuRIHFCzxWNrsshHYPs6L7TvLu3DL+TyIGEsRcvVERmxokbf5Gdk7mFxZnTdiGtnA4cfSmjZJMviqSuZrQ==",
+     "sha256": "4b1cab218d74996aa59cd8473f9239cc6398b8c1774d84d7e59ad9a68959cb57"},
+    {"file": "cytoscape-dagre.min.js", "package": "cytoscape-dagre", "version": "4.0.1", "member": "package/dist/cytoscape-dagre.min.js", "license": "MIT", "license_file": "LICENSE.cytoscape-dagre.txt",
+     "tarball": "https://registry.npmjs.org/cytoscape-dagre/-/cytoscape-dagre-4.0.1.tgz", "integrity": "sha512-hyNdh8Vp1nwzBcjHnM4c71G81bFhPmQYLXD2HM9AZIvl+8TrMzWEOPW45hF/XOBQiEguPcDQzi6VrXR1XBcXOA==",
+     "sha256": "ec671a41d2bfcac580352e2997797793949e3489cecaf347fc48670d4bd456b0",
+     "bundles": "@dagrejs/dagre 3.0.0 (MIT, Chris Pettitt — LICENSE.dagre.txt): cytoscape-dagre 4.x ships dagre INSIDE its build, so no separate dagre file is loaded"}
+  ],
+  "licenses_only": [
+    {"file": "LICENSE.dagre.txt", "package": "@dagrejs/dagre", "version": "3.1.1", "member": "package/LICENSE",
+     "tarball": "https://registry.npmjs.org/@dagrejs/dagre/-/dagre-3.1.1.tgz", "integrity": "sha512-zroZB1dFOFiGgv4Xcrn1DckB1o4aOikPqD2NDQPV0WM//CXGcS6xiD0rNkqHmw6FEg4tabt4nxPLwgCWT+Vb2A=="}
+  ],
+  "load_order": ["cytoscape.min.js", "layout-base.js", "cose-base.js", "cytoscape-fcose.js", "cytoscape-dagre.min.js"]
+}

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mokata"
-version = "0.0.22"
+version = "0.0.23"
 description = "The memory + seatbelt for your AI coding agent. Spec-driven TDD for Claude Code — knowledge-aware, human-gated, local-first."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -90,6 +90,11 @@ mokata-hook = "mokata.hook_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+# 0.0.23 D7 — the eval harnesses (`bench/`, top level, beside `src/`) are NEVER shipped: G2's judge
+# is the only API-key reader in the repo and must stay outside the product. `where = ["src"]`
+# already cannot see `bench/`; the exclude makes the intent explicit, and
+# `tests/test_g2_harness.py` builds a real wheel and asserts no `bench` file is in it.
+exclude = ["bench", "bench.*"]
 
 [tool.setuptools.package-data]
 # Stage 70 — the curated community-stack catalog (a versioned index.json + per-framework
@@ -112,4 +117,7 @@ mokata = [
     "skills/*/*",
     # 0.0.22 E2 — the review window's static frontend (hand-written, no build step; doc 85 §1b).
     "ide/static/*",
+    # 0.0.23 C3 — the vendored graph libraries (Cytoscape.js + fcose + dagre, MIT) with their
+    # LICENSE files and VERSIONS.json pins. Explicit depth, like every glob above.
+    "ide/static/vendor/*",
 ]

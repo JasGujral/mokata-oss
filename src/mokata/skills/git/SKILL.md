@@ -100,6 +100,10 @@ why, VERIFY it against the actual repo (read the diff, the log, the tags) and th
 the primary source (Pro Git, trunk-based development, Semantic Versioning) over memory or a blog, and
 CITE the URL. Flag anything you could not verify as **UNVERIFIED** rather than stating it as fact.
 
+## If this appears stuck
+
+This guidance runs inside a pipeline phase. If that phase appears stuck, or the harness stops it mid-run: run `mokata resume` (where the run stands and the gate that still applies) and `mokata approve --list` (anything waiting on a human). Nothing is lost — run state, approvals and the audit ledger are on disk — so re-invoke the phase to continue; `mokata doctor` names a hung MCP server or a hook that is not firing.
+
 ## Rationalizations — stop if you catch yourself thinking any of these
 
 | Excuse | Reality |

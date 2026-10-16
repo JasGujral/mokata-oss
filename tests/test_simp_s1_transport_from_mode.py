@@ -412,7 +412,8 @@ class TestCorruptManifestRefuses(unittest.TestCase):
             self.assertEqual(rc, 1, (out, err))
             self.assertTrue(_no_local_write(d, "auth"),
                             "a torn manifest must not silently write a local bundle, --file or not")
-            self.assertIn("manifest", err)
+            # 0.0.23 E2 (AXI-OUT 7) — `_load_surface`'s error moved to STDOUT; updated deliberately.
+            self.assertIn("manifest", out + err)
             self.assertNotIn(_SECRET_DSN, out + err)
 
     def test_simp_s1_corrupt_manifest_explicit_local_mcp_needs_readable_manifest(self):

@@ -6,7 +6,7 @@
 
 > Audience: developers who want to use mokata to its full capacity. This is a **hands-on tutorial** — you'll install the full stack with **every optional dependency wired**, verify each capability resolves to a real provider (not a fallback floor), then take a **guided power tour** that exercises every layer with the commands to run and the output to expect.
 >
-> **How you run mokata** (set up in §2): the canonical path is **`pip install mokata` → `mokata setup claude`**, which wires mokata into Claude Code — slash commands, the MCP server, and the three hooks that make the gates real. (A one-click Claude Code **plugin** is *planned, not yet available* — see §2.8.) The same install also gives you the **CLI**, and the guide is **CLI-led** because the CLI makes every gate visible step by step — but note a `pip` CLI install on its own is *terminal-only* (the engine with no LLM, and no hook enforcement on native file writes). Each step maps to its **`/<name>`** slash command. Follow it top to bottom with a terminal open; the later Parts double as deep reference. Verified against the **current batch** — spot-run the commands as you go to confirm.
+> **How you run mokata** (set up in §2): in Claude Code alone, the two-command **plugin** (`/plugin marketplace add JasGujral/mokata-oss` → `/plugin install mokata@mostack` — see §2.8); this guide uses an isolated CLI install (**`pipx install mokata`** → **`mokata setup claude`**), which wires the same slash commands, MCP server, and hooks into Claude Code. That install also gives you the **CLI**, and the guide is **CLI-led** because the CLI makes every gate visible step by step — but note a `pip` CLI install on its own is *terminal-only* (the engine with no LLM, and no hook enforcement on native file writes). Each step maps to its **`/<name>`** slash command. Follow it top to bottom with a terminal open; the later Parts double as deep reference. Verified against the **current batch** — spot-run the commands as you go to confirm.
 >
 > **How to read this:** §0–1 are orientation. **§2 is the guided full-stack install** — do every step. **§3–15 are the deep tour** of each layer (run the commands as you go). **§16 is a complete end-to-end story** that ties it all together. §17–19 are reference you'll come back to.
 
@@ -163,25 +163,28 @@ If Python is older than 3.10, install a newer one (`pyenv install 3.12`, `brew i
 
 ### 2.2 Step 2 — an isolated environment
 
-The end-user install is plain `pip install mokata` from PyPI — **no clone required**.
+mokata installs from PyPI — **no clone required** — into **its own** environment, never your
+project's venv (that would mix mokata's deps into yours and bind the hooks to a venv you may
+recreate). The isolating tool is [pipx](https://pipx.pypa.io) (or `uv tool`, or Homebrew):
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate   # isolate; keeps your global env clean
-pip install -U pip
+python3 -m pip install --user pipx && python3 -m pipx ensurepath   # once; or `brew install pipx`
 ```
 
 ### 2.3 Step 3 — install mokata
 
-`pip install mokata` also pulls the MCP SDK (a default dep), so the bundled `mokata-mcp` server works out of the box.
+The install also pulls the MCP SDK (a default dep), so the bundled `mokata-mcp` server works out of the box.
 
 ```bash
-pip install mokata                 # add "mokata[schema]" for richer manifest-validation messages
+pipx install mokata                # or: uv tool install mokata · add "mokata[schema]" for richer manifest-validation messages
 mokata --version                   # → prints the installed mokata version (confirms the console script is on PATH)
 ```
 
-> **Homebrew instead of pip.** On macOS/Linux, `brew install JasGujral/mokata/mokata` installs the
-> same CLI (and its own virtualenv with the MCP SDK), so §2.2's venv step is unnecessary on that
-> route. Every install route is listed in [Install mokata](../how-to/install-mokata.md).
+> **Homebrew instead.** On macOS/Linux, `brew install JasGujral/mokata/mokata` installs the
+> same CLI (and its own virtualenv with the MCP SDK), so §2.2's pipx step is unnecessary on that
+> route. Plain `pip install mokata` works too, last — inside a project venv this mixes mokata's
+> deps into yours — prefer the above. Every install route is listed in
+> [Install mokata](../how-to/install-mokata.md).
 
 > **Contributors only:** to hack on mokata itself, clone and install editable instead — `git clone https://github.com/JasGujral/mokata-oss.git && cd mokata-oss && pip install -e ".[schema]"`. End users never need this.
 
@@ -261,7 +264,7 @@ mokata doctor       # missing providers, broken adapters, role conflicts, bad tr
 
 ### 2.8 Step 8 — drive it from Claude Code (the primary surface)
 
-The CLI you just verified is the engine's mechanics. For day-to-day building you'll drive the same engine from **inside Claude Code**. (The canonical pip-first setup is in [Getting started](../getting-started.md); this section shows it in context.)
+The CLI you just verified is the engine's mechanics. For day-to-day building you'll drive the same engine from **inside Claude Code**. (Every install route is in [Getting started](../getting-started.md); this section shows the `setup claude` route in context.)
 
 **Recommended — wire it in with one command (`mokata setup claude`):** on your existing Claude Code sign-in, no API key:
 
@@ -281,16 +284,17 @@ Restart Claude Code. You now have the workflow slash commands (`/brainstorm`, `/
 > You don't even have to set up first: on a fresh repo mokata's SessionStart briefing **offers to initialize it for you** (once), and you can run **`/init full`** from inside Claude Code — human-gated, no terminal trip.
 
 <!-- mokata:directory-listing:start -->
-> ⏳ **Pending Claude plugin-directory approval.** A one-click Claude Code **plugin** is
-> **planned, not yet available** — mokata isn't registered on any Claude Code marketplace.
-> The supported way to run mokata inside Claude Code today is the pip-first path:
-> `pip install mokata` → `mokata setup claude`
-> (see [Getting started](https://mokata.ai/getting-started/)).
-> _(This notice auto-flips once the listing is approved — single source:
+> **Installs today as a Claude Code plugin** from mokata's own marketplace — inside Claude
+> Code run `/plugin marketplace add JasGujral/mokata-oss`, then `/plugin install mokata@mostack`
+> (the plugin starts its MCP server through `uvx`, so [`uv`](https://docs.astral.sh/uv/) must be
+> on PATH).
+> ⏳ **Pending: the community-marketplace listing** (pending submission) — mokata is not yet
+> listed in Claude's community plugin marketplace; until it is, use the two commands above.
+> _(This notice auto-flips once the listing exists — single source:
 > `scripts/directory_listing.py`.)_
 <!-- mokata:directory-listing:end -->
 
-(An experimental manual `/plugin marketplace add ~/path/to/mokata-oss` route from a local clone exists for advanced users — see [Install the plugin](../how-to/install-plugin.md).)
+(The plugin wires the same commands — namespaced `/mokata:<name>` — skills, MCP server and hooks; use it *or* `mokata setup claude` in a repo, not both. See [Install the plugin](../how-to/install-plugin.md).)
 
 **Any other harness, or none.** The `mokata` CLI is harness-agnostic and has **no LLM of its own** — invoke as `mokata <command>` or `python -m mokata <command>` from any shell, script, CI, or shell-capable assistant (Gemini, Codex). Almost every command accepts **`--path PATH`** (the repo root; defaults to cwd). Commands that need an initialized repo exit non-zero with a clear error if `.mokata/` is missing.
 
@@ -1223,7 +1227,7 @@ mokata mcp    # discover MCP servers from .mokata/mcp.json and map them to roles
 
 Drop a `.mokata/mcp.json` listing the servers you use (`{name, provides, command}`), and `mokata mcp` enumerates them and maps them to stack roles/capabilities — then mokata orchestrates them through its own gates and audit trail. Discovery is pluggable and **degrades cleanly**: with no config present, the registry is empty and nothing errors.
 
-> mokata both **ships its own MCP server and consumes external ones.** The bundled **`mokata-mcp`** server (registered by `mokata setup claude`) exposes mokata's operations to Claude Code as native tools: **43 read tools** (`query`, `recall`, `doctor`, `coverage`, `budget`, `audit`, `status`, `preview`, `progress`, `rules`, `govern`, `skills`, `session_save`, … — read-only, ungated) and **21 write tools** (`remember`, `apply_proposal`, `init`, `reset`, `config_set`, `import_stack`, `export_stack`, `memory_export`, `memory_import`, `vault_push`, `spec_check`, `spec_emit`, `spec_amend`, `session_push`, `session_pull`, `audit_share`, …), plus the single opt-in `approve` tool — **65 tools in all**. Separately, `mokata mcp` **discovers and routes to** the external MCP servers you list in `.mokata/mcp.json`.
+> mokata both **ships its own MCP server and consumes external ones.** The bundled **`mokata-mcp`** server (registered by `mokata setup claude`) exposes mokata's operations to Claude Code as native tools: **43 read tools** (`query`, `recall`, `doctor`, `coverage`, `budget`, `audit`, `status`, `preview`, `progress`, `rules`, `govern`, `skills`, `session_save`, … — read-only, ungated) and **23 write tools** (`remember`, `apply_proposal`, `init`, `reset`, `config_set`, `import_stack`, `export_stack`, `memory_export`, `memory_import`, `vault_push`, `spec_check`, `spec_emit`, `spec_amend`, `session_push`, `session_pull`, `audit_share`, …), plus the single opt-in `approve` tool — **67 tools in all**. Separately, `mokata mcp` **discovers and routes to** the external MCP servers you list in `.mokata/mcp.json`.
 >
 > **Every one of the 20 write tools is propose-only.** It hands back a `proposal_id` and writes nothing until *you* mint the approval out-of-band with `mokata approve <id>` — single-use, content-hashed, session-scoped, expiring, ledgered; the model can only ever *reference* it, never create it (§13.2). `approve=true` / `confirm=true` are still accepted but **commit nothing**. Secrets are a hard block even once approved. An in-chat `approve` tool (`mcp__mokata__approve`) exists but is **opt-in, default-OFF**, single-use and content-hash-bound; even opted-in it forces a per-call human prompt via a `permissions.ask` entry — so it never lets the model approve its own write.
 

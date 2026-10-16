@@ -109,7 +109,7 @@ suggestions), `playbook.py` (the end-to-end integration runner), `packaging.py`
 (plugin/marketplace validators), `team*.py` (the opt-in shared Postgres store).
 
 ### The MCP server (`mcp/`)
-`registry.py` is the single source of truth for the tool set — **65 tools: 43 read, 21 write, 1
+`registry.py` is the single source of truth for the tool set — **67 tools: 43 read, 23 write, 1
 approve** — and `server.py` builds the `mokata-mcp` server from it. Every write tool is
 propose-only; `tools_approve.py` is the default-off, opt-in in-chat approval
 (`settings.approvals.in_chat`). The robustness layer is shared by every tool rather than
@@ -125,7 +125,7 @@ git clone https://github.com/JasGujral/mokata-oss && cd mokata-oss
 pip install -e ".[schema]"     # editable install + jsonschema; the MCP SDK is a default dep
 ```
 
-*(End users never clone: `pip install mokata` → `mokata setup claude`.)*
+*(End users never clone: the two-command plugin, or `pipx install mokata` → `mokata setup claude`.)*
 
 ## Running the tests (BOTH jsonschema states)
 

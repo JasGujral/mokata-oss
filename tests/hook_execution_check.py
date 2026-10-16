@@ -85,7 +85,8 @@ def check_exec_form():
             [sys.executable, "-m", "mokata.cli", "setup", "claude",
              "--path", str(repo), "--scope", "project", "--yes", "--no-grant"],
             capture_output=True, text=True, cwd=str(ROOT),
-            env={**os.environ, "PYTHONPATH": str(ROOT / "src"), "HOME": d})
+            env={**os.environ, "PYTHONPATH": str(ROOT / "src"), "HOME": d,
+                 "USERPROFILE": d})
         settings = repo / ".claude" / "settings.json"
         if not settings.is_file():
             _say(False, "setup wrote settings.json",

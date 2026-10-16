@@ -24,11 +24,35 @@ class SkillNotFound(MokataError, KeyError):
     pass
 
 
+#: 0.0.23 D3 (GATE-HAS-NO-ENFORCEMENT-LADDER) — the enforcement ladder a `Gate` carries, the SAME
+#: three levels a governance rule carries (`memory/item.py:ENFORCEMENT_LEVELS`; pinned equal by
+#: test_d3_*). Spelled as literals here so `skills` keeps its cheap import surface:
+#:   advisory -> the gate is evaluated and LEDGERS what it would have blocked; it never blocks
+#:   soft     -> blocks; an explicit override clears it and is ledgered (`rule_override`)
+#:   hard     -> refuses; no runtime override
+#: Verdicts are decided by `govern/enforce.py:decide_gate` — the rule Sentinel, not a second one.
+GATE_ENFORCEMENT_LEVELS = ("advisory", "soft", "hard")
+
+#: The level a `Gate` is born with when it states none: HARD. The opposite of a rule (rules are
+#: born advisory) ON PURPOSE — every gate that existed before the ladder blocked, and an omitted
+#: field must never be the way one stops blocking (fail-closed: an unstated level is the most
+#: restrictive). A new gate that should earn its wall declares `enforcement="advisory"` explicitly.
+GATE_DEFAULT_ENFORCEMENT = "hard"
+
+
 @dataclass(frozen=True)
 class Gate:
     id: str
     description: str
     kind: str = "human"          # "human" (needs approval) | "check" (verifiable)
+    enforcement: str = GATE_DEFAULT_ENFORCEMENT   # advisory | soft | hard (0.0.23 D3)
+
+    def __post_init__(self) -> None:
+        # Fail LOUD at construction: a gate whose level is a typo must not reach a verdict, where
+        # the only honest treatment of doubt would be to block every run (fail-closed).
+        if self.enforcement not in GATE_ENFORCEMENT_LEVELS:
+            raise ValueError(f"gate {self.id!r}: enforcement {self.enforcement!r} is not one of "
+                             f"{GATE_ENFORCEMENT_LEVELS}")
 
 
 @dataclass(frozen=True)
@@ -58,6 +82,9 @@ class Skill:
     #            "stale" (doc 85 §7g). A reason is mandatory: a declaration nobody had to justify
     #            is an allow-list entry, and `tests/_skill_mirrors.py` grades it as an offender.
     hand_authored_template: Optional[str] = None
+    # SPEC-STANDALONE residual (1) (0.0.23 D6) — a skill-specific sentence appended to the shared
+    # `## Standalone` section (the section itself stays one string for every skill).
+    standalone_note: Optional[str] = None
 
 
 # Stage 32 — the precondition surfaced on implementation skills: a persisted, complete spec
@@ -174,6 +201,36 @@ SPEC_AWARENESS_CLAUSE = (
     "gate: the human confirms (amend/supersede the affected spec/decision) or you re-plan — never "
     "break a previously-approved spec silently. Degrade-clean: no saved specs yet ⇒ it's a no-op "
     "(no false alarm); no code graph ⇒ it falls back to a lexical/file-overlap check and says so."
+)
+
+
+# SPEC-STANDALONE residual (1) (0.0.23 D6) — the AGENT-layer STOP-and-ASK. The emit already SAYS a
+# spec is standalone (the approval preview leads with it); this catches the case BEFORE a proposal
+# is ever minted, by asking the person who can answer it. Asked once; the answer is theirs.
+SPEC_STANDALONE_ASK = (
+    "Before you draft: if NO approved brainstorm approach or refinement set is on record for this "
+    "run (the `progress` / `working_set` tools show it; `spec_emit` would report `standalone`), "
+    "STOP and ASK the user ONE question — run /mokata:brainstorm (or /mokata:refine) first, or "
+    "write this spec standalone? Proceed standalone only on their explicit answer, and say in the "
+    "spec's summary that it stands alone. Standalone is a supported path; choosing it silently is "
+    "not."
+)
+
+
+# SQ.S1 + SQ-REGRESS (0.0.23 D5) — RED-GREEN for the spec itself. The battery runs inside the emit;
+# this says what its findings bind the author to. Single source, own words.
+SPEC_QUALITY_LOOP = (
+    " Spec-quality loop: before a spec can reach the human, the emit runs a battery — structural "
+    "(every AC testable and mapped), rules (overlap with saved specs/decisions), coherence (the "
+    "approved approach, its deferrals, its design fit) and failure-mode (every declared downside of "
+    "the approach should be answered by an AC: name it, or cite its probe id, e.g. `P1` — reported "
+    "as an advisory this release; answer it anyway). A refusal with "
+    "`gate: spec-quality` is a list of FINDINGS: revise the spec to answer each one and emit again. "
+    "The loop is bounded — after 3 failing cycles it ESCALATES: stop revising and put the findings "
+    "to the human. If a finding's root cause is the APPROACH (the spec needs something the plan "
+    "deferred, or the plan was judged a misfit), the run is regressed to BRAINSTORM: re-open the "
+    "approach, update the plan, re-approve it, then return to spec — never paper over a wrong "
+    "plan with spec text."
 )
 
 
@@ -420,6 +477,30 @@ DEVELOP_AMEND_LOOP = (
 )
 
 
+# LIVE-EVIDENCE + DEV-CC passive (0.0.23 D1) — the code is the source of truth over a frozen list.
+# The per-turn pack carries the re-verification as FINDINGS; this clause says what a finding binds
+# the agent to. Single source, own words; it renders into develop's template + SKILL.md.
+DEVELOP_LIVE_EVIDENCE = (
+    "\n\n## Live evidence beats the frozen list\n"
+    "The approach's blast-radius list and the spec's anchors are ADVISORY starting points, frozen "
+    "when they were approved — never authoritative over the code in front of you. Before you touch "
+    "code for an AC, RE-VERIFY its consumers against LIVE code, graph-first (`mokata query "
+    "blast_radius|callers <symbol>`; grep only as the floor, and say so). In develop, mokata does "
+    "this for you each turn and prints `live-evidence:` lines: a consumer in LIVE code that the "
+    "list does not name, or a listed file nothing live references. Each one is a FINDING, not a "
+    "directive and not a block: handle it (the consumer is in scope — change it with the rest), or, "
+    "if it changes what was approved, STOP and run the ask→amend loop above. NEVER skip a live "
+    "consumer because it is \"not in the list\" — following the frozen list over the code is the "
+    "exact failure this exists to prevent. A blast radius marked `degraded — …` came from the "
+    "lexical floor: treat it as a keyword estimate and follow the remedy it names (adopt a graph, "
+    "repair the adopted one, or check the symbol) before relying on its completeness. "
+    "The `dev-cc:` lines name the approved decisions and the "
+    "existing guards on the files you have touched: a new condition that negates one of those "
+    "guards, or contradicts one of those decisions, is a deviation — surface it, never write it "
+    "silently."
+)
+
+
 # DK.S0 — develop engages EXACTLY the spec's domains, and routes a late-discovered one through the
 # ask→amend-spec loop above (never a silent apply, never a silent miss). Single source, own words;
 # it renders into develop's command template + SKILL.md, so the drift guards stay green.
@@ -616,6 +697,7 @@ _SKILLS: List[Skill] = [
             "Write down what you are NOT building, in the words the code would use — a deferral "
             "you do not declare is a deferral nothing can enforce."
             + SPEC_AWARENESS_CLAUSE
+            + SPEC_QUALITY_LOOP
         ),
         gate=Gate("completeness",
                   "No spec is complete until every acceptance criterion maps to a test "
@@ -624,6 +706,7 @@ _SKILLS: List[Skill] = [
                   "human"),
         phase="emit",
         show_progress=True,
+        standalone_note=SPEC_STANDALONE_ASK,
         when_to_use=(
             "Engage when an approach or refinement set has just been approved and needs "
             "turning into concrete acceptance criteria, when the user asks to write or define "
@@ -716,6 +799,7 @@ _SKILLS: List[Skill] = [
             + DEVELOP_SCOPE_BINDING
             + DEVELOP_AMEND_LOOP
             + DEVELOP_DOMAIN_ENGAGE
+            + DEVELOP_LIVE_EVIDENCE         # 0.0.23 D1 — LIVE-EVIDENCE + DEV-CC passive
             + WORKTREE_RUN_START_OFFER      # WT.S4 — layered ON TOP, disturbs no prior clause
         ),
         gate=Gate("no-code-without-failing-test",
@@ -1031,6 +1115,7 @@ def command_markdown(skill: Skill) -> str:
         f"This command runs on its own — no upstream pipeline phase is required. It "
         f"applies only its own gate above, and never silently skips a gate of a phase "
         f"you did run.\n"
+        f"{(skill.standalone_note + chr(10)) if skill.standalone_note else ''}"
         f"{grounding_section}"
         f"{precondition_section}"
         f"{progress_section}"

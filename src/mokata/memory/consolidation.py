@@ -22,7 +22,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Union
 
-from .item import ALWAYS_ON_KINDS, EPISODIC, MEMORY_KINDS, PERSISTENT, REFERENCE, MemoryItem
+from .item import (ALWAYS_ON_KINDS, EPISODIC, INTENTION, MEMORY_KINDS, PERSISTENT, REFERENCE,
+                   MemoryItem)
 from .lifecycle import coldest_over_budget
 
 MERGE = "merge"
@@ -84,7 +85,10 @@ an undrafted mechanical line has not earned a category."""
 # approving a paragraph is thereby approving a new hard rule). So an unknown or always-on kind is
 # clamped back to the drafted default rather than honoured or raised on: the summary still lands,
 # just as the fact it always was.
-_DRAFTABLE_KINDS = frozenset(k for k in MEMORY_KINDS if k not in ALWAYS_ON_KINDS)
+# PM.S1 — INTENTION is clamped too: a summary of past turns is not a commitment to act later, and a
+# drafted "reminder" with no due condition would surface as nothing (or, worse, as a fact).
+_DRAFTABLE_KINDS = frozenset(k for k in MEMORY_KINDS
+                             if k not in ALWAYS_ON_KINDS and k != INTENTION)
 
 
 @dataclass

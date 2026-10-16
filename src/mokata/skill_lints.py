@@ -38,9 +38,10 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, FrozenSet, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 from .agent_skills import CURATED_SKILLS, parse_frontmatter
 from .progress import SKILL_GLYPH
@@ -51,7 +52,11 @@ LINT_TRIGGER = "trigger-lint"
 LINT_ANATOMY = "anatomy-lint"
 LINT_CITATION = "citation-lint"
 LINT_SELF_EXEMPT = "anti-self-exempt"
-LINT_IDS: Tuple[str, ...] = (LINT_CONTRACT, LINT_TRIGGER, LINT_ANATOMY, LINT_CITATION)
+LINT_RESILIENCE = "resilience-lint"          # UX-STUCK (e), 0.0.23 E2
+LINT_CLI_PARITY = "cli-parity-lint"          # AXI-OUT (9), 0.0.23 E2
+LINT_EMPTY_ARGS = "empty-arguments-lint"     # AXI-OUT (9), 0.0.23 E2 — command templates
+LINT_IDS: Tuple[str, ...] = (LINT_CONTRACT, LINT_TRIGGER, LINT_ANATOMY, LINT_CITATION,
+                             LINT_RESILIENCE, LINT_CLI_PARITY)
 
 # The minimum trigger anatomy every skill must declare (proactive dispatch).
 MIN_TRIGGERS = 3
@@ -68,6 +73,8 @@ EXEMPTIONS: Dict[str, FrozenSet[str]] = {
     LINT_TRIGGER: frozenset(),
     LINT_ANATOMY: frozenset(),
     LINT_CITATION: frozenset(),
+    LINT_RESILIENCE: frozenset(),
+    LINT_CLI_PARITY: frozenset(),
 }
 
 # Frontmatter keys a skill might plant to try to exempt ITSELF from a lint. Their presence is
@@ -274,12 +281,120 @@ def _lint_citation(name: str, text: str) -> List[LintFinding]:
             for msg in domain_citation_findings(name, text)]
 
 
+# --------------------------------------------------------------- resilience-lint (UX-STUCK e)
+def _lint_resilience(name: str, text: str) -> List[LintFinding]:
+    """Every SKILL.md says what to run when a step appears stuck (or the harness kills it): the
+    `## If this appears stuck` section, carrying at least one runnable `mokata …` command."""
+    from .agent_skills import RESILIENCE_HEADING
+    if RESILIENCE_HEADING not in text:
+        return [LintFinding(LINT_RESILIENCE, name,
+                            f"missing the `{RESILIENCE_HEADING}` section — a long or waiting step "
+                            f"must name its recovery command (UX-STUCK e)")]
+    section = text.split(RESILIENCE_HEADING, 1)[1].split("\n## ", 1)[0]
+    if "`mokata " not in section:
+        return [LintFinding(LINT_RESILIENCE, name,
+                            "the stuck section names no runnable `mokata …` recovery command")]
+    return []
+
+
+# --------------------------------------------------------------- cli-parity-lint (AXI-OUT 9)
+# Skill guidance must match what the CLI actually accepts: every `mokata <cmd> [<sub>]` a skill or
+# command template tells the model to run must resolve in `cli.build_parser()`. docsync's
+# command-name check covers README/docs; this is the same class of check applied to the prompts.
+_CLI_REF = re.compile(r"(?:^|[\s(\"'])mokata ([a-z][a-z0-9-]*)(?: ([a-z][a-z0-9-]*))?(?=$|[\s`)\"'.,;<\[])")
+
+
+def _cli_tree() -> Dict[str, FrozenSet[str]]:
+    import argparse
+    from .cli import build_parser
+
+    def subs(parser: Any) -> Dict[str, Any]:
+        for action in parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                return dict(action.choices)
+        return {}
+    return {name: frozenset(subs(p)) for name, p in subs(build_parser()).items()}
+
+
+def _command_spans(text: str) -> List[str]:
+    """Inline code spans + fenced code lines (comment lines dropped) — where commands live."""
+    spans: List[str] = []
+    for block in re.findall(r"```[^\n]*\n(.*?)```", text, re.S):
+        spans += [ln for ln in block.splitlines() if not ln.lstrip().startswith("#")]
+    stripped = re.sub(r"```.*?```", "", text, flags=re.S)
+    spans += re.findall(r"`([^`\n]+)`", stripped)
+    return spans
+
+
+def cli_parity_findings(name: str, text: str,
+                        tree: Optional[Dict[str, FrozenSet[str]]] = None) -> List[str]:
+    """Messages for every `mokata <cmd> [<sub>]` in `text` the CLI does not accept. A word followed
+    by `:` is an OUTPUT line (`mokata review: FAILED …`), not an invocation, and is skipped."""
+    tree = tree if tree is not None else _cli_tree()
+    out: List[str] = []
+    for span in _command_spans(text):
+        for m in _CLI_REF.finditer(span):
+            cmd, sub = m.group(1), m.group(2)
+            if span[m.end(1):m.end(1) + 1] == ":":
+                continue
+            if cmd not in tree:
+                out.append(f"`mokata {cmd}` — no such CLI command")
+            elif sub and tree[cmd] and sub not in tree[cmd] \
+                    and span[m.end(2):m.end(2) + 1] != ":":
+                out.append(f"`mokata {cmd} {sub}` — `{cmd}` has no `{sub}` subcommand "
+                           f"(it takes: {', '.join(sorted(tree[cmd]))})")
+    return sorted(set(out))
+
+
+def _lint_cli_parity(name: str, text: str) -> List[LintFinding]:
+    return [LintFinding(LINT_CLI_PARITY, name, msg) for msg in cli_parity_findings(name, text)]
+
+
 _LINTS = {
     LINT_CONTRACT: _lint_contract,
     LINT_TRIGGER: _lint_triggers,
     LINT_ANATOMY: _lint_anatomy,
     LINT_CITATION: _lint_citation,
+    LINT_RESILIENCE: _lint_resilience,
+    LINT_CLI_PARITY: _lint_cli_parity,
 }
+
+
+# --------------------------------------------------------------- command templates (AXI-OUT 9)
+# A slash template that reads `$ARGUMENTS` must say, explicitly, what it does when they are EMPTY
+# (infer from the conversation, a read-only default, or ask) — an unstated branch is where a model
+# guesses. These phrasings are the accepted, explicit forms.
+_EMPTY_ARGS_MARKERS = (
+    re.compile(r"\$ARGUMENTS`?\s+is\s+empty", re.I),
+    re.compile(r"with no `?\$ARGUMENTS", re.I),
+    re.compile(r"with no guidance", re.I),
+)
+
+
+def _templates_dir() -> Path:
+    from . import package_data_root
+    return Path(package_data_root()) / "templates" / "commands"
+
+
+def load_command_templates(templates_dir: Optional[Path] = None) -> Dict[str, str]:
+    root = Path(templates_dir) if templates_dir is not None else _templates_dir()
+    return {p.stem: p.read_text(encoding="utf-8") for p in sorted(root.glob("*.md"))}
+
+
+def run_template_lints(texts: Optional[Dict[str, str]] = None) -> List[LintFinding]:
+    """The command-template lints: the explicit empty-`$ARGUMENTS` branch, and CLI parity."""
+    texts = texts if texts is not None else load_command_templates()
+    tree = _cli_tree()
+    findings: List[LintFinding] = []
+    for name, text in texts.items():
+        if "ARGUMENTS" in text and not any(m.search(text) for m in _EMPTY_ARGS_MARKERS):
+            findings.append(LintFinding(
+                LINT_EMPTY_ARGS, name,
+                "reads `$ARGUMENTS` but never says what to do when it is EMPTY — add an explicit "
+                "branch (\"If `$ARGUMENTS` is empty, infer … from the conversation; …\")"))
+        findings += [LintFinding(LINT_CLI_PARITY, name, msg)
+                     for msg in cli_parity_findings(name, text, tree)]
+    return findings
 
 
 # --------------------------------------------------------------- anti-self-exempt

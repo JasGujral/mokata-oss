@@ -500,6 +500,56 @@ def graph_structure_line(surface: Any, top_n: int = 5) -> Optional[str]:
         return None
 
 
+def impact_degrade(layer: Any, result: Any) -> Optional[Dict[str, Any]]:
+    """GRAPH-FIRST-IMPACT (d) (0.0.23 D2) — the ONE degraded wording + remedy for an IMPACT answer
+    that came from the lexical floor, or None when the answer is structural (or not an impact kind).
+
+    Every surface that hands a blast radius to a reader — `mokata query`, the MCP `query` tool and
+    develop's LIVE-EVIDENCE lines — reads THIS, so the three cannot disagree. The remedy is chosen by
+    `govern.graph_required.remedy_for` over the fix-D reason vocabulary, never re-derived here:
+
+      * floor found nothing          -> check-target (a graph would find nothing either)
+      * a graph is live and degraded -> repair       (`graph-failed`)
+      * a graph is pinned, not live  -> repair       (`graph-unavailable`)
+      * no graph in the chain        -> adopt        (`chain-lexical`)
+
+    Read-only and total: a layer that cannot say whether it is a graph is read as "not adopted" —
+    the harmless-wrong direction (`brainstorm_impact._reads_as_a_graph`)."""
+    from .query import IMPACT_KINDS, PREFERRED_GRAPH_TOOL
+    if result is None or getattr(result, "kind", "") not in IMPACT_KINDS:
+        return None
+    if not getattr(result, "degraded", False):
+        return None
+    from ..brainstorm_impact import (DEGRADE_CHAIN_IS_LEXICAL, DEGRADE_FLOOR_FOUND_NOTHING,
+                                     DEGRADE_GRAPH_FAILED, DEGRADE_GRAPH_UNAVAILABLE,
+                                     _pinned_graph_tool, _reads_as_a_graph)
+    from ..govern.graph_required import REMEDY_ADOPT, REMEDY_CHECK_TARGET, remedy_for
+    reasons: List[str] = []
+    if not getattr(result, "references", None):
+        reasons.append(DEGRADE_FLOOR_FOUND_NOTHING)
+    if _reads_as_a_graph(layer):
+        reasons.append(DEGRADE_GRAPH_FAILED)
+    elif _pinned_graph_tool(layer):
+        reasons.append(DEGRADE_GRAPH_UNAVAILABLE)
+    else:
+        reasons.append(DEGRADE_CHAIN_IS_LEXICAL)
+    remedy = remedy_for(reasons)
+    target = getattr(result, "target", "") or ""
+    if remedy == REMEDY_CHECK_TARGET:
+        message = (f"degraded — the lexical floor found NOTHING for `{target}`, which is no evidence "
+                   f"either way and a graph would find nothing either; check the symbol "
+                   f"(`mokata query defs {target}`)")
+    elif remedy == REMEDY_ADOPT:
+        message = (f"degraded — this blast radius is the lexical grep floor's keyword estimate, not "
+                   f"a structural answer; install {PREFERRED_GRAPH_TOOL} for full impact "
+                   f"(`mokata graph adopt`)")
+    else:
+        message = ("degraded — a code graph is adopted here and did not answer this blast radius "
+                   "(the lexical floor stood in); adopting again will not fix it — run "
+                   "`mokata doctor`")
+    return {"reasons": reasons, "remedy": remedy, "message": message}
+
+
 def run_query(layer: "KnowledgeLayer", kind: str, target: str, depth: int = 2) -> QueryResult:
     """The ONE typed-query router the MCP `query` tool and the CLI `query` command share
     (GR.S2). Routes `semantic` to the capability-gated semantic API, every structural kind to

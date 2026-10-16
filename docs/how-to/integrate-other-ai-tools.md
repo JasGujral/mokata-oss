@@ -1,8 +1,11 @@
 # Integrating mokata with other AI tools
 
-mokata is **Claude-Code-first** — start with the pip-first path, `pip install mokata` →
-[`mokata setup claude`](use-without-plugin.md) (a one-click Claude Code plugin is planned but
-**not yet available**; see [Using mokata in Claude Code](use-the-plugin.md)). But the engine is
+mokata is **Claude-Code-first** — start with the two-command Claude Code plugin
+(`/plugin marketplace add JasGujral/mokata-oss`, then `/plugin install mokata@mostack`), or an
+isolated CLI install (`pipx install mokata` / `uv tool install mokata` / brew) →
+[`mokata setup claude`](use-without-plugin.md); see [Using mokata in Claude Code](use-the-plugin.md).
+For other harnesses, install the CLI the same isolated way — plain `pip install mokata` last, since
+inside a project venv it mixes mokata's deps into yours. The engine is
 harness-agnostic: what `setup` wires is just a bundle of three portable artifacts (prompt
 templates, the `mokata-mcp` server, and hook scripts), so you can wire those into
 another harness or share a governed stack across a team. The paths below go from

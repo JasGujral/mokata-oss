@@ -65,6 +65,7 @@ from .completeness import run_completeness_gate, standalone_note
 from .spec import Spec, TestRef
 from .spec_awareness import SPEC_CORPUS_KEY
 from .spec_gate import SPEC_STATE_KEY
+from .spec_quality import GATE as SQ_GATE
 
 # The WriteGate identity of a spec emit — the `tool` the trust dial (K3/SI.4) and the audit ledger
 # see. Already the name `phases.py:_emit` used; now it is a real, registered surface too.
@@ -97,6 +98,19 @@ class EmitOutcome:
     # nothing to print and a supported path emitted in total silence. Carried as the note itself
     # rather than a bool so there is one truth and no surface re-words it.
     standalone_note: str = ""
+    # SPEC-ANCHOR S3 (0.0.23 D4) — the completeness gate's NON-blocking advisories (anchorless or
+    # unresolved anchors, a decision-less approach), carried so the surface can show them.
+    warnings: tuple = ()
+    # SQ.S1 (0.0.23 D5) — the spec-quality verdict (`engine/spec_quality.QualityVerdict`), on every
+    # outcome that reached the battery. None when the emit was refused before it.
+    quality: Any = None
+    # SPEC-STANDALONE residual (2) (0.0.23 D6) — the completeness `GateResult` itself, so a surface
+    # renders the gate's OWN `render()` rather than re-wording it (it had no production caller).
+    completeness: Any = None
+
+    @property
+    def blocked_by_quality(self) -> bool:
+        return not self.committed and self.gate == SQ_GATE
 
     @property
     def standalone(self) -> bool:
@@ -156,7 +170,21 @@ def preview_content(store: Any, spec: Spec) -> str:
     from ..brainstorm import load_decisions
     derived = derive_scope(spec.scope, load_decisions(store))
     shown = spec if derived is spec.scope else replace(spec, scope=derived)
+    # SPEC-ANCHOR S1 — the per-AC anchors `spec_commit` will derive, projected the same way, on a
+    # COPY (the preview must not mutate the spec it describes).
+    import copy
+    from .spec_anchor import derive_anchors
+    shown = derive_anchors(copy.deepcopy(shown), _approved(store))
     return json.dumps(shown.to_dict())
+
+
+def _approved(store: Any) -> Any:
+    """The run's approved approach Handoff, or None — never raises (anchors are advisory)."""
+    try:
+        from ..brainstorm import load_approved_approach
+        return load_approved_approach(store)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _corpus_after(current: Any, spec: Spec) -> List[Dict[str, Any]]:
@@ -475,6 +503,11 @@ def spec_commit(store: Any, spec: Spec, *, version: int = 0,
     # wiring binds them all. A no-op (byte-identical) when the approach records no deferrals.
     from ..brainstorm import load_decisions
     spec.scope = derive_scope(spec.scope, load_decisions(store))
+    # SPEC-ANCHOR S1 (0.0.23 D4) — per-AC anchors captured AT EMIT, in the one committer, from the
+    # brainstorm artifacts already on record (zero new exploration). After the scope, whose
+    # `authorized` globs are the coarse fallback. Idempotent; byte-identical when nothing derives.
+    from .spec_anchor import derive_anchors
+    derive_anchors(spec, _approved(store))
 
     data = dict(spec.to_dict())
     data["version"] = version
@@ -513,6 +546,50 @@ def commit_spec(store: Any, spec: Spec, *, gate: WriteGate,
 # the use-case — the REAL gates, re-invoked
 # ======================================================================================
 
+def structural_backend_available(surface: Any) -> bool:
+    """SPEC-ANCHOR S3 — can this repo answer structurally (an adopted graph, or the embedded AST
+    floor)? Only then is an anchorless AC worth a warning. Never raises; unknown reads as False (no
+    warning — the quiet direction for an advisory)."""
+    try:
+        from ..knowledge import KnowledgeLayer
+        from ..knowledge.ast_backend import AstBackend
+        layer = KnowledgeLayer.from_surface(surface)
+        return bool(layer.uses_graph or isinstance(layer.primary, AstBackend))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _new_warnings(gr: Any) -> tuple:
+    """The gate advisories a surface SHOWS on emit: SPEC-ANCHOR's S3 lines. The AP-SD
+    `WARN_NO_DECISIONS` keeps the disposition it shipped with (carried on the GateResult, not printed
+    by an emit surface — `test_spec_standalone` pins the attached CLI output byte for byte), and the
+    spec-quality advisories ride `EmitOutcome.quality` and the audit ledger, not the success text."""
+    from .completeness import WARN_NO_DECISIONS
+    return tuple(w for w in gr.warnings if w != WARN_NO_DECISIONS)
+
+
+def run_quality_gate(surface: Any, spec: Spec, tests: List[TestRef], *, store: Any,
+                     run_id: str = "", handoff: Any = None, ledger: Any = None) -> Any:
+    """SQ.S1 — one cycle of the spec-quality loop with the repo's own inputs: the saved spec corpus
+    and recorded decisions (rules), the approved approach (coherence + failure-mode), the repo root
+    (anchor resolve). Shared by `emit_spec` and the MCP `spec_emit`, so both run ONE battery."""
+    from .spec_awareness import load_decisions, load_spec_corpus
+    from .spec_quality import quality_gate
+    try:
+        corpus = load_spec_corpus(store)
+    except Exception:  # noqa: BLE001 — the rules member then says it could not run
+        corpus = []
+    decisions: list = []
+    try:
+        from ..memory import MemoryStore
+        decisions = load_decisions(MemoryStore.from_surface(surface))
+    except Exception:  # noqa: BLE001
+        decisions = []
+    return quality_gate(spec, tests, store=store, run_id=run_id, handoff=handoff, corpus=corpus,
+                        decisions=decisions, root=getattr(surface, "root", "") or "",
+                        ledger=ledger)
+
+
 def emit_spec(surface: Any, spec: Spec, tests: List[TestRef], *,
               handoff: Any = None, ledger: Any = None, store: Any = None,
               run_id: str = "", assume_yes: bool = False,
@@ -531,7 +608,19 @@ def emit_spec(surface: Any, spec: Spec, tests: List[TestRef], *,
     `cli_commands/spec.py:_run_scoped_store`). Defaulting to `surface.state` keeps every in-session
     caller unchanged."""
     store = surface.state if store is None else store
-    gr = run_completeness_gate(spec, tests, handoff=handoff, store=store)
+    # SPEC-ANCHOR — derive the anchors BEFORE the gate, so its S3 advisories judge the anchors that
+    # will actually land (the committer derives again; derivation is idempotent).
+    from .spec_anchor import derive_anchors
+    derive_anchors(spec, handoff if handoff is not None else _approved(store))
+    gr = run_completeness_gate(spec, tests, handoff=handoff, store=store,
+                               root=getattr(surface, "root", "") or "",
+                               graph_available=structural_backend_available(surface),
+                               ledger=ledger)
+    if run_id and gr.evidence is not None:
+        # 0.0.23 D8 — the gate outcome's typed evidence, kept under .mokata/temp_local/evidence/
+        # <run_id>/ (observability: append-only, ungated, never raises — None on failure).
+        from ..govern.evidence import evidence_root_for_state, record_evidence
+        record_evidence(evidence_root_for_state(store), run_id, gr.evidence)
     # SPEC-STANDALONE-SILENT — carried on EVERY outcome from here down, so the surface decides what
     # to SHOW and never has to re-derive WHETHER. Informational only: it is read off a verdict that
     # is already decided and changes none of the branches below.
@@ -539,7 +628,7 @@ def emit_spec(surface: Any, spec: Spec, tests: List[TestRef], *,
     if not gr.passed:
         return EmitOutcome(False, gr.reason, gate="completeness",
                            ac_count=len(spec.criteria), unmapped=tuple(gr.unmapped_ids),
-                           standalone_note=alone)
+                           standalone_note=alone, warnings=_new_warnings(gr), completeness=gr)
 
     # SPEC-REEMIT-CLOBBER — may this REPLACE the spec already on the run? Refused when there is work
     # in flight (a RED on record, or an amendment open): that is `spec_amend`'s ladder, and a
@@ -549,6 +638,17 @@ def emit_spec(surface: Any, spec: Spec, tests: List[TestRef], *,
     if verdict.refused:
         return EmitOutcome(False, verdict.reason, gate=REEMIT_GATE, ac_count=len(spec.criteria),
                            standalone_note=alone)
+
+    # SQ.S1 + SQ-REGRESS (0.0.23 D5) — RED-GREEN for the spec itself. Only a spec that passes the
+    # battery reaches the human; a failing one gets structured findings (a bounded, ledgered loop),
+    # and an approach-rooted one force-regresses the run to brainstorm. LAST of the pre-consent gates
+    # (a refusal above it writes nothing; this one may count a cycle) — and nothing here is
+    # something a human could approve their way past.
+    quality = run_quality_gate(surface, spec, tests, store=store, run_id=run_id, handoff=handoff,
+                               ledger=ledger)
+    if not quality.passed:
+        return EmitOutcome(False, quality.reason(), gate=SQ_GATE, ac_count=len(spec.criteria),
+                           standalone_note=alone, warnings=_new_warnings(gr), quality=quality)
 
     committed, reason, size = commit_spec(
         store, spec, gate=WriteGate(ledger=ledger),
@@ -560,7 +660,8 @@ def emit_spec(surface: Any, spec: Spec, tests: List[TestRef], *,
     return EmitOutcome(committed, reason, gate="" if committed else "write-gate",
                        ac_count=len(spec.criteria), corpus_size=size,
                        version=verdict.version, superseded=verdict.archive if verdict.replaces
-                       else "", standalone_note=alone)
+                       else "", standalone_note=alone, warnings=_new_warnings(gr),
+                       quality=quality)
 
 
 # ======================================================================================
@@ -571,14 +672,14 @@ def spec_from_payload(payload: Dict[str, Any]) -> "tuple[Spec, List[TestRef]]":
     """`(spec, tests)` out of the JSON shape both surfaces accept:
 
         {"title": str, "approach": str?, "domains": [str]?,
-         "criteria": [{"id": str, "text": str}],
+         "criteria": [{"id": str, "text": str, "anchors": [CodeAnchor]?}],
          "tests":    [{"name": str, "ac_ids": [str]}]}
 
     Raises `ValueError` with an actionable message on a shape the gates could not judge — an
     unparseable spec must fail LOUDLY at the surface, never reach a gate as an empty one (an
     empty spec would be refused by completeness for the wrong reason, and the human would be told
     "no acceptance criteria" when the truth is "your JSON was wrong")."""
-    from .spec import AcceptanceCriterion
+    from .spec import AcceptanceCriterion, CodeAnchor
 
     if not isinstance(payload, dict):
         raise ValueError("a spec must be a JSON object")
@@ -594,7 +695,12 @@ def spec_from_payload(payload: Dict[str, Any]) -> "tuple[Spec, List[TestRef]]":
     for c in raw_criteria:
         if not isinstance(c, dict) or not c.get("id"):
             raise ValueError("each acceptance criterion needs an `id` (and should carry `text`)")
-        criteria.append(AcceptanceCriterion(id=str(c["id"]), text=str(c.get("text", ""))))
+        anchors = c.get("anchors", [])
+        if not isinstance(anchors, list):
+            raise ValueError(f"criterion {c['id']}: `anchors` must be a list of "
+                             f"{{file, symbol?, kind, source, confidence}}")
+        criteria.append(AcceptanceCriterion(id=str(c["id"]), text=str(c.get("text", "")),
+                                            anchors=[CodeAnchor.from_dict(a) for a in anchors]))
 
     tests: List[TestRef] = []
     for t in payload.get("tests") or []:
@@ -622,5 +728,5 @@ __all__ = [
     "EMIT_KIND", "EMIT_TARGET", "EMIT_TOOL", "MAX_CORPUS", "REEMIT_GATE",
     "EmitOutcome", "ReemitVerdict", "commit_spec", "derive_scope", "emit_spec", "note_supersede",
     "preview_content", "reemit_verdict", "replacement_preview", "spec_commit",
-    "spec_from_payload", "spec_version",
+    "spec_from_payload", "spec_version", "structural_backend_available", "run_quality_gate",
 ]

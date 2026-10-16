@@ -12,33 +12,40 @@ parallel phase list. Each gated phase reuses the same `Gate` type as the skills 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .brainstorm import PIPELINE_PHASES
 from .skills import Gate
 from .errors import MokataError
 
-# Which phases carry a gate (others are advisory/no-gate). Reuses the same Gate type as
-# the skill registry so a phase-gate and a command-gate are one concept.
+# Which phases carry a gate (the others are UNGATED). Reuses the same Gate type as the skill
+# registry so a phase-gate and a command-gate are one concept.
+#
+# NAMING (0.0.23 D3, GATE-HAS-NO-ENFORCEMENT-LADDER): this comment used to call these "advisory",
+# i.e. *advisory* meaning UNGATED. Once `Gate` carries an enforcement ladder, *advisory* is a LEVEL
+# a gate is evaluated at (it runs and ledgers what it would have blocked) — the opposite of a phase
+# with no gate at all. The ruled resolution: the enforcement meaning wins; a phase with no gate is
+# *ungated*. Every gate below declares its level; all four were walls before the ladder and stay
+# HARD (pinned by test_d3_*).
 PHASE_GATES: Dict[str, Gate] = {
     "brainstorm": Gate(
         "approach-approval",
         "HARD-GATE: no spec until exactly one approach is explicitly approved.",
-        "human"),
+        "human", enforcement="hard"),
     "refine": Gate(
         "refinement-approval",
         "HARD-GATE: no spec until the user explicitly approves a scoped set of "
         "refinements; the approved set hands off to the existing spec skill.",
-        "human"),
+        "human", enforcement="hard"),
     "completeness_gate": Gate(
         "completeness",
         "Provable-completeness blocker: every acceptance criterion maps to a test "
         "before anything is emitted.",
-        "check"),
+        "check", enforcement="hard"),
     "emit": Gate(
         "emit-approval",
         "Emitting durable output (spec/code) is human-gated.",
-        "human"),
+        "human", enforcement="hard"),
 }
 
 # Front-end phases are alternative entry points that GATE and then hand off into the linear
@@ -51,6 +58,21 @@ ENTRY_PHASES = ("refine",) + tuple(PIPELINE_PHASES)
 
 class PhaseError(MokataError):
     pass
+
+
+def decide_phase_gate(phase: str, check_passed: bool, *, reason: str = "", ledger: Any = None,
+                      override: Optional[Callable[[Any], bool]] = None, actor: str = "agent",
+                      artifacts: Any = None, tested: Any = None):
+    """0.0.23 D3 — the ONE way a phase-gate's raw check result becomes a verdict: the phase's
+    `Gate` is decided by `govern/enforce.py:decide_gate` (the rule Sentinel — most-restrictive-wins,
+    fail-closed), never by a parallel evaluator here. Returns a `GateDecision`. A phase with no gate
+    is a `PhaseError` — an ungated phase has no verdict to decide."""
+    gate = PHASE_GATES.get(phase)
+    if gate is None:
+        raise PhaseError(f"phase '{phase}' is ungated — there is no gate verdict to decide")
+    from .govern.enforce import decide_gate      # lazy: keep `pipeline`'s import surface cheap
+    return decide_gate(gate, check_passed, reason=reason, ledger=ledger, override=override,
+                       actor=actor, artifacts=artifacts, tested=tested)
 
 
 @dataclass
@@ -112,9 +134,10 @@ def render_entry(plan: PipelinePlan) -> str:
     for p in plan.phases_run:
         gate = PHASE_GATES.get(p)
         if gate:
-            lines.append(f"  - {p}  [gate: {gate.id} ({gate.kind})] — {gate.description}")
+            lines.append(f"  - {p}  [gate: {gate.id} ({gate.kind}, {gate.enforcement})] — "
+                         f"{gate.description}")
         else:
-            lines.append(f"  - {p}  (no gate)")
+            lines.append(f"  - {p}  (ungated)")
     if plan.skipped_upstream:
         lines += [
             "",

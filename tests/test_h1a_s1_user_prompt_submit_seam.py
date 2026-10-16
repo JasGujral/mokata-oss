@@ -124,7 +124,7 @@ class TestBothWiringSitesCarryTheEvent(unittest.TestCase):
                                      "user gets no per-turn recall at all")
         hook = blocks[EVENT][0]["hooks"][0]
         self.assertIn("${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch", hook["command"])
-        self.assertTrue(hook["command"].rstrip().endswith(SUB))
+        self.assertTrue(hook["command"].rstrip().endswith(SUB + " --via-plugin"))   # 0.0.23 B3
         self.assertNotIn("matcher", blocks[EVENT][0])
 
     def test_the_plugin_block_names_its_shell(self):

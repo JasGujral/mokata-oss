@@ -430,8 +430,12 @@ class TestNegatives(unittest.TestCase):
             _repo(d, SAMPLE)
             res = GrepBackend(root=d).query("blast_radius", "target")
             self.assertNotIn(GREP_FLOOR_NAV_NOTE, res.note)
+            # 0.0.23 D2 (GRAPH-FIRST-IMPACT (d)) — the row this pin deferred to has now landed:
+            # impact carries ITS OWN floor note, never the navigation one. Moved deliberately.
+            from mokata.knowledge.query import GREP_FLOOR_IMPACT_NOTE
             self.assertEqual(res.note,
-                             "lexical fallback (no structural graph; results are approximate)")
+                             "lexical fallback (no structural graph; results are approximate)"
+                             " | " + GREP_FLOOR_IMPACT_NOTE)
 
     def test_existing_kinds_answer_exactly_as_before(self):
         with tempfile.TemporaryDirectory() as d:

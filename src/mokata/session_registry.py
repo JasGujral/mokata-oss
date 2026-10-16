@@ -70,13 +70,16 @@ def _now_iso() -> str:
 def pid_alive(pid: Any) -> bool:
     """True when a process with `pid` currently exists. Signal-0 probe: `ProcessLookupError` (ESRCH)
     means gone; `PermissionError` (EPERM) means it exists under another user. A non-int / non-positive
-    pid is never alive. (POSIX; the Windows probe lands with MS.S7's two-OS proof.)"""
+    pid is never alive. On Windows the probe is `_pid_alive_windows` — never `os.kill`, which
+    terminates there (0.0.23 verification B2)."""
     try:
         pid = int(pid)
     except (TypeError, ValueError):
         return False
     if pid <= 0:
         return False
+    if os.name == "nt":
+        return _pid_alive_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -86,6 +89,33 @@ def pid_alive(pid: Any) -> bool:
     except OSError:
         return False
     return True
+
+
+_STILL_ACTIVE = 259
+
+
+def _pid_alive_windows(pid: int) -> bool:
+    """Windows probe (0.0.23 verification B2). `os.kill(pid, 0)` on Windows is TerminateProcess —
+    it would END the process it asks about. OpenProcess + GetExitCodeProcess only looks. Any failure
+    to look answers False (gone), the same answer ESRCH gives on POSIX."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)          # type: ignore[attr-defined]
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        handle = k32.OpenProcess(0x1000, False, pid)                  # QUERY_LIMITED_INFORMATION
+        if not handle:
+            return ctypes.get_last_error() == 5                         # ACCESS_DENIED: exists
+        try:
+            code = wintypes.DWORD()
+            if not k32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == _STILL_ACTIVE
+        finally:
+            k32.CloseHandle(handle)
+    except Exception:  # noqa: BLE001 — no probe is "gone", never a crash
+        return False
 
 
 def _sticky_pid(prev_pid: Any, own_pid: int) -> int:

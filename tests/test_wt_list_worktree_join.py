@@ -719,7 +719,10 @@ class TestRegisteredTheSameWay(_Base):
         from mokata import parity
         surface = parity.SURFACE_MATRIX["worktree"]
         self.assertEqual(surface.mcp_read, ("worktree_list",))
-        self.assertEqual(surface.mcp_write, (), "the gated CREATE half stays out of the WriteGate")
+        # UPDATED at WT.S3 (0.0.23 E3), with cause: clean/remove are now gated MCP writes. The
+        # CREATE half is still not one (`git worktree add` stays on the CLI's fail-closed path).
+        self.assertEqual(surface.mcp_write, ("worktree_clean", "worktree_remove"))
+        self.assertNotIn("worktree_create", surface.mcp_write)
         self.assertFalse(surface.exempt, "a command with an in-harness surface is not exempt")
         self.assertTrue(surface.covered)
 

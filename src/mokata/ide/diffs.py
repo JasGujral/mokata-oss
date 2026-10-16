@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import snapshots as S
+from ..repo_walk import under_python_env
 
 GIT_TIMEOUT = 10.0
 FETCH_TIMEOUT = 60.0
@@ -219,6 +220,8 @@ def live(root: str) -> DiffSet:
     if code == 0:
         for rel in [u for u in untracked.split("\0") if u]:
             if rel.split("/", 1)[0] == ".mokata":
+                continue
+            if under_python_env(root, rel):          # 0.0.23 B1: an un-ignored venv/ is not a change
                 continue
             files.append(text_diff(rel, "", _read_text(root, rel), status="added"))
     return DiffSet("Live changes (working tree vs HEAD)", files)

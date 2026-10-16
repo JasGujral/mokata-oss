@@ -31,6 +31,8 @@ engine instead:
 
 ## 2. Pick the sub-action from `$ARGUMENTS`
 
+If `$ARGUMENTS` is empty, infer the sub-action from the conversation (what the user just asked to find, pull or publish); if it is still unclear, run `list` (read-only) and ask.
+
 - **`list`** — browse what's in the vault (read-only):
 
   ```bash

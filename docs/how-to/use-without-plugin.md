@@ -1,7 +1,7 @@
 # How-to: use mokata without the plugin
 
-The pip-first `mokata setup claude` path (below) is the supported way to run mokata inside
-Claude Code today — a one-click Claude Code plugin is planned but not yet available. Either
+`mokata setup claude` (below) wires mokata into Claude Code from an installed CLI — the
+alternative to the two-command [Claude Code plugin](install-plugin.md). Either
 way, what gets wired is just a **bundle** of three portable artifacts that mokata already
 ships:
 
@@ -18,10 +18,9 @@ mokata supplies the structure and the tools; the **harness supplies the LLM** (t
 This runs entirely on your machine using your existing Claude Code sign-in — **no API key,
 nothing leaves your computer.**
 
-> **The supported route today is `mokata setup claude`** (this page). A one-click Claude Code
-> plugin is planned but not yet registered on any marketplace; the manual `/plugin marketplace
-> add` route from a checkout is an experimental/advanced alternative (see
-> [Install the plugin](install-plugin.md)).
+> **Two routes, pick one per repo.** The plugin (`/plugin marketplace add JasGujral/mokata-oss`
+> then `/plugin install mokata@mostack` — see [Install the plugin](install-plugin.md)) or
+> `mokata setup claude` (this page). Not both: both wire the same hooks.
 
 > **`pip install` alone is not enough to use mokata *in* Claude Code.** The `mokata` CLI is
 > terminal-only (the engine without a brain). The **`mokata setup claude`** command on this
@@ -34,15 +33,16 @@ After installing the CLI, a single command wires all three pieces into Claude Co
 
 ```bash
 # 1. install the CLI once (puts `mokata` + `mokata-mcp` on PATH)
-pip install mokata               # on Python ≥ 3.10 the MCP SDK comes with it (default dep)
+pipx install mokata              # or: uv tool install mokata — isolated, never your project's venv
 # or, on macOS/Linux: brew install JasGujral/mokata/mokata
+# plain `pip install mokata` last: inside a project venv it mixes mokata's deps into yours
 
 # 2. in the project you want to use mokata on:
 cd /path/to/your/project
 mokata setup claude
 ```
 
-(New here? Start from [Getting started](../getting-started.md) for the full pip-first path.)
+(New here? Start from [Getting started](../getting-started.md) for every install route.)
 
 `mokata setup claude` is **human-gated** — it shows exactly what it will create and merge,
 then waits for your confirmation. It:

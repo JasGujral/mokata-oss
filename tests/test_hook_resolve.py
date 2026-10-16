@@ -201,9 +201,13 @@ class TestPluginMcpRegistration(unittest.TestCase):
     that completion was never the thing keeping the two routes apart. What actually separates
     them is that a direct spawn needs a real executable, which the sh shim is not on Windows."""
 
-    def test_manifest_mcp_command_is_unchanged(self):
+    def test_manifest_mcp_launches_through_uvx_pinned_to_the_plugin_version(self):
+        """0.0.23 B3 (`INSTALL-SELF-CONTAINED-PLUGIN`): a bare `mokata-mcp` existed only after a
+        `pip install`, so the two in-app `/plugin` commands alone yielded a dead server."""
         data = json.loads(PLUGIN_MANIFEST.read_text(encoding="utf-8"))
-        self.assertEqual(data["mcpServers"]["mokata"]["command"], "mokata-mcp")
+        spec = data["mcpServers"]["mokata"]
+        self.assertEqual(spec["command"], "uvx")
+        self.assertEqual(spec["args"], ["--from", "mokata==" + data["version"], "mokata-mcp"])
 
     def test_doctor_names_an_unresolvable_plugin_mcp_registration(self):
         with tempfile.TemporaryDirectory() as d:

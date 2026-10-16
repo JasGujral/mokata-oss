@@ -38,7 +38,7 @@ class TestSetupHarnessE2E(unittest.TestCase):
             # commands: all eight pipeline slash commands present
             cmds = sorted(os.listdir(os.path.join(d, ".claude", "commands")))
             for expected in ("brainstorm.md", "spec.md", "test.md", "develop.md",
-                             "review.md"):
+                             "mokata-review.md"):
                 self.assertIn(expected, cmds)
             # MCP server registered
             with open(os.path.join(d, ".mcp.json"), encoding="utf-8") as fh:

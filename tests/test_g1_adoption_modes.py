@@ -257,9 +257,17 @@ class TestG1Consent(unittest.TestCase):
                            for call in sp.call_args_list]
                 self.assertEqual([a for a in spawned if any("pip" in str(t) for t in a)], [],
                                  f"a --yes init reached pip: {spawned}")
+                # 0.0.23 B4: `setup_harness` also asks PATH's `mokata` its version when that
+                # copy lives outside a venv (`install_isolation.shadowed`) — a bounded
+                # read-only probe, present only on a machine with a stray `mokata` on PATH
+                # (a pyenv shim, found at the owner's cut). It is the SECOND named program;
+                # anything else still reds.
+                def _shadow_probe(a):
+                    return (len(a) == 2 and a[1] == "--version"
+                            and os.path.splitext(os.path.basename(str(a[0])))[0] == "mokata")
                 stray = [a for a in spawned
                          if not os.path.basename(str(a[0] if a else "")).startswith(
-                             harness_setup.MCP_COMMAND)]
+                             harness_setup.MCP_COMMAND) and not _shadow_probe(a)]
                 self.assertEqual(stray, [],
                                  f"a --yes init spawned something other than the "
                                  f"`{harness_setup.MCP_COMMAND}` probe: {stray}")

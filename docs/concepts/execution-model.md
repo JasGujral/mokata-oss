@@ -15,9 +15,9 @@ memory, and the audit trail. The harness's LLM supplies the **reasoning** — it
 approaches, drafts the spec, writes the tests and code, and reviews — all constrained by
 mokata's gates.
 
-- **Where:** inside **Claude Code** — `pip install mokata` then `mokata setup claude`, the
-  canonical route. (A Claude Code **plugin/marketplace** route is *planned, not yet
-  available*.) Here **Claude is the brain**, on your existing Claude Code sign-in. Nothing to
+- **Where:** inside **Claude Code** — the plugin (`/plugin marketplace add JasGujral/mokata-oss`
+  then `/plugin install mokata@mostack`), or an isolated CLI install (`pipx install mokata`) then
+  `mokata setup claude`. Here **Claude is the brain**, on your existing Claude Code sign-in. Nothing to
   configure, no API key.
 - **What only this approach gets:** the two `PreToolUse` hooks — the **secret-guard** and the
   **gate-guard** (the run-state gates on native `Write`/`Edit`). Only Claude Code declares the
@@ -45,17 +45,16 @@ graph + memory) — it does not reason about your problem; a brain would do that
 - **Why it exists:** it's dependency-light and runs anywhere, the "lowest common denominator"
   integration — the engine you can call from anything.
 
-> **The CLI alone does not give you mokata *inside* Claude Code.** A `pip install` puts the
+> **The CLI alone does not give you mokata *inside* Claude Code.** Installing the CLI puts the
 > `mokata` command in your terminal (Approach B). To drive the gated workflow *with Claude as
-> the brain* (Approach A), run [`mokata setup claude`](../how-to/use-without-plugin.md) — one
-> command, and the canonical route. (The [plugin](../how-to/install-plugin.md) route is
-> *planned, not yet available*.)
+> the brain* (Approach A), install the [plugin](../how-to/install-plugin.md) (two in-app
+> commands) or run [`mokata setup claude`](../how-to/use-without-plugin.md) — one command.
 
 ## Which should I use?
 
 | You want to… | Approach | How |
 |---|---|---|
-| Have features written *with* you, gated and memory-aware | A — harness | `pip install mokata` → `mokata setup claude` |
+| Have features written *with* you, gated and memory-aware | A — harness | the plugin, or `pipx install mokata` → `mokata setup claude` |
 | Inspect a repo, query structure, read the audit | B — CLI | `mokata query` / `audit` / `status` |
 | Run gates/checks in CI or a script | B — CLI | `mokata playbook`, `validate`, `coverage` |
 | Use mokata with Gemini / Codex / another agent | B — CLI (+ that harness's brain) | wire the CLI/MCP into that harness |

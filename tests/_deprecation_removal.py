@@ -570,7 +570,8 @@ SRC_RELEASE_EXEMPT = {
     # files have drifted under four consecutive stages. The fragment carries the release itself,
     # so a rewording that changes what is CLAIMED goes stale and reds, while a rewording elsewhere
     # in the same note does not.
-    "mokata/parity.py": frozenset({"FR-WT-2/3 (`clean`/`remove`, 0.0.17)"}),
+    # 0.0.23 E3 — the parity.py exemption (`FR-WT-2/3 (`clean`/`remove`, 0.0.17)`) is GONE, not
+    # re-pointed: WT.S3 shipped clean/remove and the note no longer names a release.
 }
 
 # The modules this function does NOT own, each because something else grades it STRICTLY MORE than

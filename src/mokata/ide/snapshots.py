@@ -147,26 +147,31 @@ def capture_before_first_write(root: str, path: str, session_id: Optional[str],
     if not session_id:
         return None
     try:
+        from ..oslock import file_lock
         rel = rel_path(root, path, cwd)
         if rel is None:
             return None
         idx_path = os.path.join(store_dir(root), "first", _safe_sid(session_id) + ".json")
-        seen: Dict[str, str] = {}
-        if os.path.exists(idx_path):
-            with open(idx_path, encoding="utf-8") as fh:
-                seen = json.load(fh) or {}
-        if rel in seen:
-            return None
-        snap = capture(root, rel, BEFORE, session_id, run_id)
-        if snap is None:
-            return None
-        seen[rel] = snap.id
         os.makedirs(os.path.dirname(idx_path), exist_ok=True)
-        tmp = idx_path + f".tmp-{os.getpid()}"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(seen, fh)
-        os.replace(tmp, idx_path)
-        return snap
+        # 0.0.23 C4 (VERIFICATION-MINORS-0022 "first-write index unlocked"): the read → check →
+        # capture → write is ONE step under the OS lock, so two hooks racing on one session's
+        # first write record ONE before, and neither overwrites the other's index entry.
+        with file_lock(idx_path + ".lock"):
+            seen: Dict[str, str] = {}
+            if os.path.exists(idx_path):
+                with open(idx_path, encoding="utf-8") as fh:
+                    seen = json.load(fh) or {}
+            if rel in seen:
+                return None
+            snap = capture(root, rel, BEFORE, session_id, run_id)
+            if snap is None:
+                return None
+            seen[rel] = snap.id
+            tmp = idx_path + f".tmp-{os.getpid()}"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(seen, fh)
+            os.replace(tmp, idx_path)
+            return snap
     except Exception:  # noqa: BLE001
         return None
 
@@ -195,6 +200,26 @@ def _maybe_prune(root: str, path: str) -> None:
     if len(lines) <= MAX_ENTRIES * 1.1:
         return
     keep = lines[-MAX_ENTRIES:]
+    # 0.0.23 C4 (VERIFICATION-MINORS-0022 "pruning can drop a BEFORE"): a session's diff is its
+    # FIRST write's BEFORE against its latest AFTER. Cutting by age alone dropped that BEFORE
+    # while the session's later lines survived, and its diff silently lost its baseline. A BEFORE
+    # whose (session, file) still has a surviving line is kept, ahead of the cut, in order.
+    alive = set()
+    for ln in keep:
+        try:
+            d = json.loads(ln)
+        except ValueError:
+            continue
+        alive.add((d.get("session"), d.get("path")))
+    pinned = []
+    for ln in lines[:-MAX_ENTRIES]:
+        try:
+            d = json.loads(ln)
+        except ValueError:
+            continue
+        if d.get("kind") == BEFORE and (d.get("session"), d.get("path")) in alive:
+            pinned.append(ln)
+    keep = pinned + keep
     tmp = path + f".tmp-{os.getpid()}"
     with open(tmp, "w", encoding="utf-8") as fh:
         fh.writelines(keep)

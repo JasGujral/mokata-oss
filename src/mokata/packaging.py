@@ -94,6 +94,10 @@ _VERSION_FIELDS = (
     "marketplace.json:metadata.version",
     "marketplace.json:plugins[0].version",
     "src/mokata/__init__.py:__version__",
+    # 0.0.23 B3 — the plugin launches its MCP server as `uvx --from mokata==<ver> mokata-mcp`, so
+    # the pin IS a version-bearing location: a plugin at 0.0.23 starting a 0.0.22 server is the
+    # exact mismatch `mcp_admin.version_parity` exists to catch, one step earlier.
+    "plugin.json:mcp-pin",
 ) + tuple(f"{rel}:action-pin" for rel in ACTION_PIN_PATHS)
 
 
@@ -145,6 +149,23 @@ def _json_get(root: str, rel: str, *path: Any) -> Optional[str]:
     return node if isinstance(node, str) else None
 
 
+_MCP_PIN_RE = re.compile(r"^mokata==(\d+\.\d+\.\d+\S*)$")
+
+
+def _mcp_pin(root: str) -> Optional[str]:
+    """The `mokata==X` pin in the plugin's `uvx --from` MCP launch, or None (a named mismatch)."""
+    text = _read_text(root, PLUGIN_MANIFEST_PATH)
+    try:
+        args = json.loads(text)["mcpServers"]["mokata"]["args"] if text else None
+    except (ValueError, KeyError, TypeError):
+        return None
+    for a in args or ():
+        m = _MCP_PIN_RE.match(str(a))
+        if m:
+            return m.group(1)
+    return None
+
+
 def read_version_fields(root: str = ".") -> "Dict[str, Optional[str]]":
     """The version string at each guarded location — the five canonical version fields plus
     the `action-pin` entries (None when the file or field is missing/unreadable). Keyed by
@@ -158,6 +179,7 @@ def read_version_fields(root: str = ".") -> "Dict[str, Optional[str]]":
             _json_get(root, MARKETPLACE_PATH, "plugins", 0, "version"),
         "src/mokata/__init__.py:__version__":
             _dunder_version(_read_text(root, PACKAGE_INIT_PATH)),
+        "plugin.json:mcp-pin": _mcp_pin(root),
     }
     for rel in ACTION_PIN_PATHS:
         fields[f"{rel}:action-pin"] = _action_pin(_read_text(root, rel))

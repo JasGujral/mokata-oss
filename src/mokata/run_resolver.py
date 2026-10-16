@@ -427,6 +427,12 @@ def _evidence_runs(root: str) -> Set[str]:
 # THE resolver
 # ======================================================================================
 
+def _pinned() -> str:
+    """The run-id PIN (`MOKATA_SESSION_ID`), or "" — the ONE env read on the hook path (SI.1's
+    grep-guard counts it): it selects WHICH run, it never disables enforcement."""
+    return os.environ.get(PIN_ENV, "").strip()
+
+
 def resolve_run(root: str, *, session_id: Optional[str] = None,
                 run_id: Optional[str] = None) -> RunResolution:
     """Which run the caller is in — the ONE answer every surface reads. See the module docstring for
@@ -441,7 +447,7 @@ def resolve_run(root: str, *, session_id: Optional[str] = None,
         if run_id:
             return RunResolution(run_id, BASIS_EXPLICIT)
 
-        pinned = os.environ.get(PIN_ENV, "").strip()
+        pinned = _pinned()
         if pinned:
             return RunResolution(pinned, BASIS_PINNED)
 
@@ -492,6 +498,73 @@ def resolve_run_id(root: str, *, session_id: Optional[str] = None,
     """The resolved run id, or None. The convenience form for surfaces that only need the id and
     treat both unresolved cases the same way — they must still not GUESS on None."""
     return resolve_run(root, session_id=session_id, run_id=run_id).run_id
+
+
+# ======================================================================================
+# SESSION-BIND-BY-ANCESTOR (0.0.23 F1) — the session id the MCP process could never see
+# ======================================================================================
+
+def _session_bound_run(root: str, claude_session_id: str) -> Optional[str]:
+    """The run THIS Claude session is bound to — its own registration's claim
+    (`run_intent.session_claim`, CLAIM_BOUND: proven by the session's own `session_save` call)
+    first, else the general session binding — and only while its checkpoint is still on record.
+
+    RE-ENTRY carve-out, deliberately: when that run is a BARE run (no approach / spec) and exactly
+    ONE other run holds the pipeline's evidence, this returns None so the ladder's EVIDENCE rung
+    answers, exactly as before this stage. That is the re-entry shape (`/brainstorm` again from a
+    new process registers a bare run; the spec being amended is the evidence run's), and RE-ENTRY
+    measured that "my own run" is the wrong answer there. A bound run that HOLDS evidence — the
+    two-live-pipelines shape this stage exists for — always wins."""
+    rid = None
+    try:
+        from .run_intent import CLAIM_BOUND, session_claim
+        claim, claimed = session_claim(root, claude_session_id)
+        if claim == CLAIM_BOUND and claimed:
+            rid = claimed
+    except Exception:  # noqa: BLE001 — an unreadable claim reads as none; the binding is next
+        rid = None
+    if not rid:
+        rid = read_binding(root, claude_session_id)
+    if not rid:
+        return None
+    try:
+        if not StateStore(state_dir(root)).exists(CHECKPOINT_PREFIX + rid):
+            return None
+    except Exception:  # noqa: BLE001 — unreadable: not bound (the strict direction)
+        return None
+    evidence = _evidence_runs(root)
+    if rid not in evidence and len(evidence) == 1:
+        return None
+    return rid
+
+
+def process_session_run(root: str, *, lookup=None, pid: Optional[int] = None) -> Optional[str]:
+    """The run bound to the Claude Code session THIS PROCESS serves, found by process ancestry
+    (`session_ancestry.session_for_process`), or None. None whenever the ancestry, the binding or
+    any guard is missing — the caller then resolves exactly as it did before. Never raises."""
+    try:
+        from .session_ancestry import session_for_process
+        sid = session_for_process(root, lookup=lookup, pid=pid)
+        return _session_bound_run(root, sid) if sid else None
+    except Exception:  # noqa: BLE001 — no answer is the strict answer
+        return None
+
+
+def resolve_run_for_process(root: str, *, run_id: Optional[str] = None,
+                            lookup=None, pid: Optional[int] = None) -> RunResolution:
+    """`resolve_run` for a caller that has NO Claude session id of its own — the MCP server.
+
+    EXPLICIT and PINNED keep their precedence (an outright answer is never second-guessed). Then
+    the session this process serves, found through process ancestry, answers at the BOUND rung —
+    the rung the MCP structurally could not reach before (#25642), and the one that tells two live
+    pipelines apart. Anything else is `resolve_run(root, run_id=run_id)` byte for byte, including
+    the fail-closed AMBIGUOUS answer. Never raises."""
+    if run_id or _pinned():
+        return resolve_run(root, run_id=run_id)
+    bound = process_session_run(root, lookup=lookup, pid=pid)
+    if bound is not None:
+        return RunResolution(bound, BASIS_BOUND)
+    return resolve_run(root)
 
 
 def unresolved_reason(res: RunResolution, *, flag: str = "--run") -> str:
@@ -592,6 +665,7 @@ __all__ = [
     "RunResolution", "resolve_run", "resolve_run_id", "unresolved_reason",
     "resolve_badge_run", "maybe_bind_on_session_start",
     "bind_session_run", "read_binding",
+    "resolve_run_for_process", "process_session_run",
     "run_ids", "live_runs",
     "BASIS_EXPLICIT", "BASIS_PINNED", "BASIS_OWN", "BASIS_BOUND", "BASIS_EVIDENCE",
     "BASIS_LIVE", "BASIS_SINGLE", "BASIS_UNSHIPPED", "BASIS_AMBIGUOUS", "BASIS_NONE",

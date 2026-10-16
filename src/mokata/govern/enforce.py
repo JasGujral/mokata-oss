@@ -256,3 +256,175 @@ class EnforcementGate:
         self._record(RULE_BLOCK_KIND, verdict.blocking, actor=actor, decision="blocked",
                      reason=reason)
         return EnforcementOutcome(False, False, verdict, message)
+
+
+# =====================================================================================================
+# 0.0.23 D3 — GATE-HAS-NO-ENFORCEMENT-LADDER: a `Gate` decided by THIS Sentinel, not a parallel one.
+#
+# `Gate` (`skills.py`) now carries the same advisory | soft | hard binding a rule carries. A gate's
+# verdict is decided here by adapting the gate into a rule-shaped item and running the EXISTING
+# `evaluate` / `EnforcementGate.check` over it — so most-restrictive-wins, fail-closed-on-doubt, the
+# soft override and the `rule_block` / `rule_override` ledger kinds are the rule path's own, byte for
+# byte. Gate entries are told apart in the ledger by `scope_level == "gate"` (no rule has that scope).
+#
+#   advisory -> evaluated; ledgers `gate_advisory` (decision "would-block" or "pass"); never blocks
+#   soft     -> a failed check blocks; an explicit override clears it and is ledgered
+#   hard     -> a failed check refuses; no runtime override
+#
+# The level IN FORCE is the declared level, RAISED (never lowered) by an approved promotion on the
+# ledger (`enforcement_change` with gkind "gate" — written only by `learning.apply_gate_promotion`,
+# human-gated). The declared level is a floor: a ledger can promote a gate, never demote it, so a gate
+# that is hard in code is hard no matter what the ledger says (most-restrictive-wins).
+# =====================================================================================================
+
+#: The scope stamped on a gate's ledger entries — no governance rule carries it, so `mokata audit`
+#: and the learner can tell a gate's block from a rule's without a new ledger kind.
+GATE_SCOPE = "gate"
+#: An advisory gate's evaluation — what it WOULD have blocked, or that it would have passed. The
+#: clean-run evidence a promotion proposal is earned from (`learning.gate_promotion_proposals`).
+GATE_ADVISORY_KIND = "gate_advisory"
+#: The governance kind stamped on a gate's `enforcement_change` (a rule's carries "rule").
+GATE_GKIND = "gate"
+#: The ledger kind a promotion is recorded under — the SAME kind rule promotion uses.
+ENFORCEMENT_CHANGE_KIND = "enforcement_change"
+
+
+@dataclass(frozen=True)
+class _GateAsRule:
+    """A `Gate` in the shape `evaluate` reads. `kind` is GUARDRAIL, not RULE: both normalize to the
+    governance `rule` kind (so it is in scope), but a guardrail's kind-default enforcement is HARD —
+    so if the level were ever unreadable, `effective_enforcement` itself leans to the wall."""
+
+    id: str
+    subject: str
+    enforcement: str
+    value: str
+    kind: str = "guardrail"
+    scope_level: str = GATE_SCOPE
+    scope_id: str = ""
+
+
+@dataclass
+class GateDecision:
+    """One gate's verdict. `allowed` is what the caller acts on; `check_passed` is the raw check.
+    `would_block` is the advisory case: the check failed, the gate is advisory, nothing was blocked —
+    and the ledger says so."""
+
+    gate_id: str
+    enforcement: str             # the level IN FORCE (declared, raised by approved promotions)
+    declared: str                # the level the code declares
+    check_passed: bool
+    allowed: bool
+    overridden: bool
+    would_block: bool
+    message: str
+    outcome: Optional[EnforcementOutcome] = None
+    evidence: Any = None         # 0.0.23 D8 — `govern.evidence.GateEvidence` for this outcome
+
+    @property
+    def blocked(self) -> bool:
+        return not self.allowed
+
+
+def promoted_gate_level(gate_id: str, ledger: Any) -> Optional[str]:
+    """The most recent APPROVED enforcement level the ledger records for `gate_id` (an
+    `enforcement_change` with gkind "gate"), or None. Read-only; an unreadable ledger reads None."""
+    if ledger is None:
+        return None
+    try:
+        entries = ledger.entries()
+    except Exception:
+        return None
+    level: Optional[str] = None
+    for e in entries:
+        if (e.get("kind") == ENFORCEMENT_CHANGE_KIND and e.get("gkind") == GATE_GKIND
+                and e.get("item_id") == gate_id):
+            level = e.get("new")
+    return level
+
+
+def effective_gate_enforcement(gate: Any, ledger: Any = None) -> str:
+    """The level in force for `gate`: its declared `enforcement`, raised to an approved promoted
+    level when the ledger holds one. Never lowered. A declared HARD gate never reads the ledger (it
+    cannot be raised further) — so today's gates pay nothing for the ladder. An unrecognized
+    promoted value is ignored here and the declared level stands; an unrecognized DECLARED value is
+    returned as-is so `decide_gate` fails closed on it."""
+    declared = getattr(gate, "enforcement", "") or ""
+    if declared == HARD or declared not in ENFORCEMENT_LEVELS:
+        return declared
+    from ..memory.item import enforcement_rank
+    promoted = promoted_gate_level(getattr(gate, "id", ""), ledger)
+    if promoted in ENFORCEMENT_LEVELS and enforcement_rank(promoted) > enforcement_rank(declared):
+        return promoted
+    return declared
+
+
+def decide_gate(gate: Any, check_passed: bool, *, reason: str = "", ledger: Any = None,
+                override: Optional[Callable[[EnforcementVerdict], bool]] = None,
+                actor: str = "agent", artifacts: Optional[Sequence[Any]] = None,
+                tested: Optional[Sequence[Any]] = None) -> GateDecision:
+    """Decide a gate's verdict from its raw check through the rule Sentinel (`EnforcementGate`).
+
+    The check's failure is the "violation": the gate is adapted to a rule-shaped item and the action
+    names it in `violates` only when the check FAILED. An undeterminable level makes the matcher
+    raise, which `evaluate` buckets as FAIL-CLOSED — a non-overridable block — exactly the doubt
+    path a rule takes. Advisory evaluations are ledgered as `gate_advisory`; soft/hard blocks and a
+    soft override are ledgered by `EnforcementGate` itself (`rule_block` / `rule_override`, scoped
+    "gate").
+
+    0.0.23 D8 — every decision carries `evidence` (`govern.evidence.GateEvidence`): the verdict, the
+    level, the typed `artifacts` and the `tested` check inventory the caller exercised. Pure — the
+    caller persists it (`evidence.record_evidence`), because only the caller knows the run."""
+    gate_id = getattr(gate, "id", "") or ""
+    declared = getattr(gate, "enforcement", "") or ""
+    level = effective_gate_enforcement(gate, ledger)
+    item = _GateAsRule(id=gate_id, subject=gate_id, enforcement=level,
+                       value=reason or (getattr(gate, "description", "") or ""))
+    action = PendingAction(kind="gate", target=gate_id, summary=reason,
+                           violates=frozenset() if check_passed else frozenset({gate_id}))
+
+    def _match(rule: Any, act: PendingAction) -> bool:
+        if getattr(rule, "enforcement", "") not in ENFORCEMENT_LEVELS:
+            # Doubt about the level → `evaluate` buckets it fail-closed. Only a FAILED check needs
+            # its level to be read: a passing check has nothing to treat, so it is not doubted.
+            if act.violates:
+                raise ValueError(f"gate {gate_id!r}: undeterminable enforcement")
+            return False
+        return _default_matcher(rule, act)
+
+    outcome = EnforcementGate(ledger=ledger).check(action, [item], matcher=_match,
+                                                   override=override, actor=actor, reason=reason)
+    verdict = outcome.verdict
+    would_block = bool(verdict.advisory) and not verdict.blocked
+    if level == ADVISORY and ledger is not None and not verdict.fail_closed:
+        ledger.record(GATE_ADVISORY_KIND, gate=gate_id, item_id=gate_id, subject=gate_id,
+                      enforcement=ADVISORY, scope_level=GATE_SCOPE, would_block=would_block,
+                      decision="would-block" if would_block else "pass", actor=actor,
+                      reason=reason)
+    if would_block:
+        message = gate_verdict(gate_id, True,
+                               f"advisory — would have blocked: {reason or 'check failed'}")
+    elif not verdict.blocked:
+        message = gate_verdict(gate_id, True, reason or "check passed")
+    else:
+        # The rule renderer's unblock line speaks of removing a RULE; a gate is cleared by
+        # satisfying it, so the gate names its own unblock action (same legible format).
+        fired = verdict.blocking
+        if fired is not None and fired.enforcement == SOFT and fired.determinable:
+            unblock = "approve an explicit override (recorded to the audit ledger) or satisfy the gate"
+        else:
+            unblock = "satisfy the gate — a hard gate has no runtime override"
+        why = fired.condition if fired is not None else reason
+        message = gate_verdict(gate_id, False, f"{fired.enforcement if fired else level} gate — "
+                               f"{why or 'check failed'}", action=unblock)
+    decision = GateDecision(gate_id=gate_id, enforcement=level, declared=declared,
+                            check_passed=bool(check_passed), allowed=outcome.allowed,
+                            overridden=outcome.overridden, would_block=would_block,
+                            message=message, outcome=outcome)
+    from .evidence import Artifact, GateEvidence, tested_from, verdict_of
+    decision.evidence = GateEvidence(
+        gate_id=gate_id, verdict=verdict_of(decision), enforcement=level,
+        artifacts=[a if isinstance(a, Artifact) else Artifact.from_dict(a)
+                   for a in (artifacts or ())],
+        tested=tested_from(tested or ()))
+    return decision

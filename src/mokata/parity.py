@@ -219,6 +219,7 @@ def _surfaces() -> List[CommandSurface]:
                             "ungated). Distinct from `sessions` (pipeline runs) and `session` "
                             "(shareable bundles)."),
         CommandSurface("worktree", mcp_read=("worktree_list",),
+                       mcp_write=("worktree_clean", "worktree_remove"),
                        note="WT-LIST (FR-WT-1) — `worktree list` is a READ: every git worktree of "
                             "this repo joined to its owning session with a staleness verdict → "
                             "read tool (creates/prunes/removes nothing, writes no registry row). "
@@ -229,8 +230,10 @@ def _surfaces() -> List[CommandSurface]:
                             "data model. So the command is no longer EXEMPT (its read half is "
                             "in-harness); the create half's gap stays disclosed here and by the "
                             "DETECT+OFFER that `session_windows` + the SessionStart briefing "
-                            "surface. FR-WT-2/3 (`clean`/`remove`, 0.0.17) bring the gated "
-                            "destructive half in-harness."),
+                            "surface. WT.S3 brings the destructive half in-harness: "
+                            "`worktree_clean` / `worktree_remove` are propose-only gated writes "
+                            "(a human mints the approval), re-checked at apply and routed through "
+                            "`WorktreeManager.remove` — the one remove path."),
         CommandSurface("decompose", slash=("decompose",), mcp_read=("decompose",),
                        note="propose an independent-subtask split of the spec ACs (read-only) "
                             "→ read tool + slash; the confirm + fan-out stay the human-gated "

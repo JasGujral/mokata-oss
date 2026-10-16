@@ -41,6 +41,15 @@ PREFERRED_GRAPH_TOOL = "code-review-graph"
 # degrade) without a second mechanism.
 GREP_FLOOR_NAV_NOTE = f"grep floor — install {PREFERRED_GRAPH_TOOL} for full navigation"
 
+# GRAPH-FIRST-IMPACT (d) (0.0.23 D2) — the IMPACT twin of the navigation note above: a blast radius
+# the lexical floor produced is DEGRADED and says so, with the one step that buys a structural one.
+# Attached at the floor itself for the same reason the nav note is (it rides every route there).
+# The layer-aware REMEDY — adopt vs repair vs check-the-target — is `layer.impact_degrade`, because
+# only the layer knows whether a graph is adopted (fix D's lesson: "install a graph" is the wrong
+# sentence to a user whose graph is adopted and broken).
+IMPACT_KINDS = ("blast_radius",)
+GREP_FLOOR_IMPACT_NOTE = f"degraded — install {PREFERRED_GRAPH_TOOL} for full impact"
+
 # ---------------------------------------------------------------------- the BASIS of an answer
 # D2 (BLAST-RADIUS-LEAF-DEGRADE) — WHICH RUNG ANSWERED, and the reason this is a named vocabulary
 # rather than a bool.

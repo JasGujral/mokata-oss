@@ -286,8 +286,16 @@ must map to a test, or the emit is refused and **nothing is written** — then t
 record is always a spec `spec-check` can see.
 
 This is what unblocks implementation: the `spec-persisted` run-state gate reads exactly the key this
-writes. `show` prints the run's persisted spec (read-only).
-(MCP: `spec_emit` — human-gated: propose → `mokata approve <id>` → commit.)
+writes. `show` prints the run's persisted spec (read-only) and names its version; `show --versions`
+lists every version of the run's spec with its archive key, and `show --version N` reads a superseded
+spec back from its archive (a re-emit or an amend archives the prior spec — it is never overwritten).
+(MCP: `spec_emit` — human-gated: propose → `mokata approve <id>` → commit. `spec_show` takes the
+same `version` / `list_versions` read selectors.)
+
+**The spec-quality battery (0.0.23).** Before consent, `emit` runs a battery — structural, rules,
+coherence, failure-mode. A failing battery refuses with its findings (revise and emit again; after 3
+failing cycles it escalates to a human), and a finding whose root cause is the approved APPROACH
+regresses the run back to brainstorm. Each cycle is on the audit ledger (`spec_quality`).
 
 **A spec with no approved approach behind it is SUPPORTED, and says so.** Emitting without a prior
 brainstorm approval or refinement set is a legitimate path, not an error — so the completeness gate
@@ -421,18 +429,29 @@ Works with no init (grounding degrades cleanly).
 ### `mokata chain <skill> [<skill> …]`
 Plan a manual chain of skills; each step keeps its own gate (gates are never bypassed).
 
-### `mokata suggest [flags]`
-Suggest a relevant command for the context — **suggest only, never runs**. Flags (all
+### `mokata suggest [flags] ["<intent>"]`
+Suggest a relevant command for the context. It **only suggests and never runs anything**. Flags (all
 boolean): `--fresh`, `--spec`, `--failing-test`, `--implementation`, `--diff`, `--bug`,
 `--stacktrace`, `--perf`.
 
+You can also describe what you want in plain words, for example
+`mokata suggest "flaky bug"` → `/debug`. The match is a fixed keyword table, not a model call, so
+the same words always give the same answer, and each suggestion shows the words that triggered it.
+If nothing matches, you get no suggestion. Any flags you pass are counted too. The MCP `suggest`
+tool takes the same text as its `intent` parameter.
+
+In Claude Code, a skill can also start on its own when the conversation matches the `when_to_use`
+line in its `SKILL.md`. `suggest` is the version you call yourself, and it works the same on every
+harness and before a session starts.
+
 ## Knowledge (Part B)
 
-### `mokata query <kind> <target> [--depth N]`
+### `mokata query <kind> <target> [--depth N] [--json]`
 Run a structural query. Navigation kinds — `defs` (where a symbol is defined) / `refs`
 (everywhere it is referenced) / `callers` / `callees` / `implementers` / `imports`; impact kind —
 `blast_radius`, to which `--depth` (default 2) applies. Uses the graph if present, else the AST
-floor, else the grep floor; the answer always names the backend that produced it.
+floor, else the grep floor; the answer always names the backend that produced it. `--json` prints
+the answer as one JSON line (backend, `basis`, references) — the same bytes `mokata ide` shows.
 
 ### `mokata index`
 Build/refresh the per-file freshness index (incremental); report added/changed/removed and

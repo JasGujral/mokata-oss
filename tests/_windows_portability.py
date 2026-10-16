@@ -920,3 +920,181 @@ def shadowed_name_anywhere_sites(sources):
                     and first.value in SYSTEM32_UNAMBIGUOUS:
                 found.append((name, node.lineno, first.value))
     return tuple(found)
+
+
+# =================================================================================================
+# CAUSES F, G, H — 0.0.23 A2 (`NEW-TESTS-MEET-WINDOWS-FIRST-ON-THE-MIRROR`)
+# =================================================================================================
+#
+# PR #79 (run 38340462833): all four Windows unit legs red, the same ten new tests. Three of their
+# shapes are mechanical enough to lint, and these are those three. The others (text-mode writes
+# compared byte-exact, POSIX path literals, a 50 ms timing) are B-class or judgement and stay with
+# the detectors above or with review.
+#
+#   CAUSE F — `os.kill(pid, 0)`. On POSIX, signal 0 is a liveness PROBE. On Windows `os.kill` with
+#     any signal other than CTRL_C_EVENT/CTRL_BREAK_EVENT calls `TerminateProcess(pid, 0)`, so the
+#     "probe" KILLS the process it was asking about.
+#   CAUSE G — `os.mkfifo` without a skip. Windows has no `os.mkfifo`; the test ERRORs with
+#     AttributeError instead of skipping.
+#   CAUSE H — an env that sets `HOME` and not `USERPROFILE`. On Windows `os.path.expanduser` and
+#     `Path.home()` read USERPROFILE. HOME alone leaves `~` at the runner's real profile, so the
+#     test writes outside its sandbox or reads the wrong one.
+#
+# F and G are cleared by a PLATFORM GUARD: a skip decorator on an enclosing function or class, an
+# enclosing `if`, or an earlier `if …: self.skipTest(…)` / `return` in the same function, any of
+# whose text names the platform (`os.name`, `sys.platform`, `platform.system`, `hasattr(os, …)`,
+# `win…`). Polarity is not checked. A guard that tests the platform at all is a human deciding
+# about Windows, and that is the decision this lint exists to force.
+#
+# SCOPE: `tests/` only, the files the row is about. ⚠ The same CAUSE F shape exists in the PRODUCT
+# (`src/mokata/session_registry.py` `pid_alive`, `src/mokata/ide/launch.py` `_stop`). It is reported
+# in the 0.0.23 A2 stage report and was not changed here, because fixing a product liveness probe is
+# not a lint.
+
+LINT_SCOPE = "tests/"
+
+_PLATFORM_TEXT = re.compile(r"os\.name|sys\.platform|platform\.system|hasattr\(\s*os\s*,"
+                            r"|\bwin(?:32|dows)\b|['\"]nt['\"]", re.IGNORECASE)
+
+
+def _parents(tree):
+    out = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            out[id(child)] = node
+    return out
+
+
+def _text(node):
+    try:
+        return ast.unparse(node)
+    except Exception:                       # pragma: no cover - unparse is total on parsed trees
+        return ""
+
+
+def _is_skip_exit(stmt):
+    """`self.skipTest(…)`, `raise unittest.SkipTest(…)`, or `return` — an early exit."""
+    if isinstance(stmt, ast.Return):
+        return True
+    text = _text(stmt)
+    return "skipTest" in text or "SkipTest" in text
+
+
+def _platform_guarded(node, parents):
+    """True when `node` sits behind a platform guard (see the block comment above)."""
+    child, cur = node, parents.get(id(node))
+    while cur is not None:
+        if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            for deco in cur.decorator_list:
+                text = _text(deco)
+                if "skip" in text.lower() and _PLATFORM_TEXT.search(text):
+                    return True
+            if not isinstance(cur, ast.ClassDef):
+                # an earlier `if <platform>: skipTest/return` in the same body
+                for stmt in cur.body:
+                    if getattr(stmt, "lineno", 0) >= getattr(node, "lineno", 0):
+                        break
+                    if isinstance(stmt, ast.If) and _PLATFORM_TEXT.search(_text(stmt.test)) \
+                            and any(_is_skip_exit(s) for s in stmt.body):
+                        return True
+        if isinstance(cur, (ast.If, ast.IfExp)) and child is not cur.test \
+                and _PLATFORM_TEXT.search(_text(cur.test)):
+            return True
+        child, cur = cur, parents.get(id(cur))
+    return False
+
+
+def _os_call(node, attr, from_os):
+    """Is `node` a call to `os.<attr>` (or to a bare `<attr>` imported from os)?"""
+    if not isinstance(node, ast.Call):
+        return False
+    mod, name = _callee(node)
+    return name == attr and (mod == "os" or (mod is None and attr in from_os))
+
+
+def _from_os_names(tree):
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "os":
+            names.update(a.asname or a.name for a in node.names)
+    return names
+
+
+def _in_scope(name):
+    return name.startswith(LINT_SCOPE)
+
+
+def kill_zero_probe_sites(sources):
+    """CAUSE F — every unguarded `os.kill(<x>, 0)` under `tests/`. `(name, lineno)`."""
+    found = []
+    for name, source in sorted(sources.items()):
+        tree = _parse(source) if _in_scope(name) else None
+        if tree is None:
+            continue
+        parents, from_os = _parents(tree), _from_os_names(tree)
+        for node in ast.walk(tree):
+            if not _os_call(node, "kill", from_os) or len(node.args) < 2:
+                continue
+            sig = node.args[1]
+            if isinstance(sig, ast.Constant) and sig.value == 0 \
+                    and not _platform_guarded(node, parents):
+                found.append((name, node.lineno))
+    return tuple(found)
+
+
+def mkfifo_without_skip_sites(sources):
+    """CAUSE G — every `os.mkfifo(…)` under `tests/` with no platform guard. `(name, lineno)`."""
+    found = []
+    for name, source in sorted(sources.items()):
+        tree = _parse(source) if _in_scope(name) else None
+        if tree is None:
+            continue
+        parents, from_os = _parents(tree), _from_os_names(tree)
+        for node in ast.walk(tree):
+            if _os_call(node, "mkfifo", from_os) and not _platform_guarded(node, parents):
+                found.append((name, node.lineno))
+    return tuple(found)
+
+
+def _sets_home(node):
+    """Does this node SET `HOME` in an environment? A dict key, a subscript store, a `HOME=`
+    keyword, or `setenv`/`putenv("HOME", …)`."""
+    if isinstance(node, ast.Dict):
+        return any(isinstance(k, ast.Constant) and k.value == "HOME" for k in node.keys)
+    if isinstance(node, ast.Assign):
+        return any(isinstance(t, ast.Subscript) and isinstance(t.slice, ast.Constant)
+                   and t.slice.value == "HOME" for t in node.targets)
+    if isinstance(node, ast.Call):
+        if any(k.arg == "HOME" for k in node.keywords):
+            return True
+        _mod, attr = _callee(node)
+        return attr in ("setenv", "putenv") and bool(node.args) \
+            and isinstance(node.args[0], ast.Constant) and node.args[0].value == "HOME"
+    return False
+
+
+def _names_userprofile(scope):
+    return any(isinstance(n, ast.Constant) and n.value == "USERPROFILE" for n in ast.walk(scope)) \
+        or any(isinstance(n, ast.keyword) and n.arg == "USERPROFILE" for n in ast.walk(scope))
+
+
+def home_without_userprofile_sites(sources):
+    """CAUSE H — under `tests/`, an env that sets `HOME` in a function (or module) that never
+    names `USERPROFILE`. `(name, lineno)`. The scope is the innermost enclosing function, so
+    `env["HOME"] = h` with `env["USERPROFILE"] = h` on the next line is acquitted."""
+    found = []
+    for name, source in sorted(sources.items()):
+        tree = _parse(source) if _in_scope(name) else None
+        if tree is None:
+            continue
+        parents = _parents(tree)
+        for node in ast.walk(tree):
+            if not _sets_home(node):
+                continue
+            scope = parents.get(id(node))
+            while scope is not None and not isinstance(scope, (ast.FunctionDef,
+                                                                 ast.AsyncFunctionDef)):
+                scope = parents.get(id(scope))
+            if not _names_userprofile(scope if scope is not None else tree):
+                found.append((name, node.lineno))
+    return tuple(found)

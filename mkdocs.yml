@@ -73,7 +73,7 @@ nav:
       - The Complete Guide: tutorials/mokata-complete-guide.md
   - How-to guides:
       - Your first run (quickstart): how-to/first-run.md
-      - Install mokata (pip/pipx/uv/brew): how-to/install-mokata.md
+      - Install mokata (plugin/pipx/uv/brew/pip): how-to/install-mokata.md
       - Which setup command? (init vs setup vs plugin) + upgrading: how-to/which-setup-command.md
       - "Fix: `mokata-hook: command not found`": how-to/fix-mokata-hook-command-not-found.md
       - mokata as a PR check: how-to/mokata-as-a-pr-check.md
@@ -125,6 +125,7 @@ nav:
       - Platform support (Windows/macOS/Linux): reference/platform-support.md
       - Performance / latency budget: reference/performance-budget.md
       - Supply-chain & security: reference/supply-chain.md
+      - Harness certification (mokata-mcp on other agents): reference/harness-certification.md
   - Developer guide: developer-guide.md
   - Changelog: changelog.md
   - Security: security.md

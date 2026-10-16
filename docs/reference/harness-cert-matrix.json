@@ -1,0 +1,93 @@
+{
+  "clients": {
+    "codex": {
+      "C1": {
+        "result": "untested"
+      },
+      "C2": {
+        "result": "untested"
+      },
+      "C3": {
+        "result": "untested"
+      },
+      "C4": {
+        "result": "untested"
+      },
+      "C5": {
+        "result": "untested"
+      },
+      "C6": {
+        "result": "untested"
+      }
+    },
+    "copilot": {
+      "C1": {
+        "result": "untested"
+      },
+      "C2": {
+        "result": "untested"
+      },
+      "C3": {
+        "result": "untested"
+      },
+      "C4": {
+        "result": "untested"
+      },
+      "C5": {
+        "result": "untested"
+      },
+      "C6": {
+        "result": "untested"
+      }
+    },
+    "cursor": {
+      "C1": {
+        "result": "untested"
+      },
+      "C2": {
+        "result": "untested"
+      },
+      "C3": {
+        "result": "untested"
+      },
+      "C4": {
+        "result": "untested"
+      },
+      "C5": {
+        "result": "untested"
+      },
+      "C6": {
+        "result": "untested"
+      }
+    },
+    "gemini": {
+      "C1": {
+        "result": "untested"
+      },
+      "C2": {
+        "result": "untested"
+      },
+      "C3": {
+        "result": "untested"
+      },
+      "C4": {
+        "result": "untested"
+      },
+      "C5": {
+        "result": "untested"
+      },
+      "C6": {
+        "result": "untested"
+      }
+    }
+  },
+  "criteria": {
+    "C1": "`mokata setup <harness>` writes an MCP config entry for server `mokata` into the client's own config file",
+    "C2": "the server launched from that entry completes MCP `initialize` over stdio",
+    "C3": "`tools/list` returns the server's tool set, including the probe tools, equal to the tool set this mokata registers",
+    "C4": "a read tool (`status`) answers without error with this mokata's version",
+    "C5": "a gated write (`remember`) refuses to commit without a human-minted approval (no id / model-typed approve=true / forged id)",
+    "C6": "memory round-trip: propose -> human mints `mokata approve <id>` -> redeem commits -> `recall` returns it -> the approval cannot be reused"
+  },
+  "version": 1
+}

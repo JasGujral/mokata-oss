@@ -72,18 +72,25 @@ def _verify(ctx: KarpathyContext) -> Tuple[bool, str]:
     return (ok, f"success_criteria={ctx.has_success_criteria}, verified={ctx.verified}")
 
 
+# 0.0.23 D3 — these four DECLARE `advisory` because that is what they already do: each fire is
+# ledgered (`karpathy_gate`, passed true/false) and nothing consumes a failure to block. The default
+# for an unstated `Gate` is HARD, so leaving them unstated would have claimed a wall that does not
+# exist. They are NOT routed through `enforce.decide_gate` (no blocking consumer reads a fire), so a
+# ledgered promotion would not make them block — routing them is the follow-up, not this label.
 KARPATHY_GATES = {
     "think-first": KarpathyGate(
         Gate("think-first", "Think before coding: a plan/approach exists first.",
-             "check"), "analysis", _think_first),
+             "check", enforcement="advisory"), "analysis", _think_first),
     "simplicity": KarpathyGate(
-        Gate("simplicity", "Prefer the simplest approach that works.", "check"),
+        Gate("simplicity", "Prefer the simplest approach that works.", "check",
+             enforcement="advisory"),
         "strawman", _simplicity),
     "surgical-scope": KarpathyGate(
         Gate("surgical-scope", "Change only what's needed; keep the diff scoped.",
-             "check"), "emit", _surgical_scope),
+             "check", enforcement="advisory"), "emit", _surgical_scope),
     "verify": KarpathyGate(
-        Gate("verify", "Define success criteria and verify against them.", "check"),
+        Gate("verify", "Define success criteria and verify against them.", "check",
+             enforcement="advisory"),
         "completeness_gate", _verify),
 }
 

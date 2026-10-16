@@ -308,11 +308,15 @@ class TestTriggerCorpus(unittest.TestCase):
         gained `prompt` — a pin reporting that the human gate's reach had SHRUNK, on a change that
         did not move a single prompt. The corpus follows the one hop (`YES_NO_ENTRY_POINTS`), so
         the membership below still means *these modules can block on a human*."""
+        # 0.0.23 E3 (WT.S3) — TWENTY-TWO: `cli_commands.runviews` joins, deliberately. `mokata
+        # worktree clean` / `worktree remove` are human-gated removals and ask through the same
+        # fail-closed `read_yes_no`.
         mods = _modules_reaching_yes_no()
         self.assertEqual(
             mods,
             {"cli_commands.approve", "cli_commands.core", "cli_commands.docsync",
-             "cli_commands.gate", "cli_commands.knowledge", "cli_commands.spec",
+             "cli_commands.gate", "cli_commands.knowledge", "cli_commands.runviews",
+             "cli_commands.spec",
              "extras_install", "govern.deviation", "govern.gate", "govern.lifecycle",
              "govern.trifecta", "harness_setup", "init", "knowledge.graph_adopt",
              "memory.migrate", "memory.reembed", "memory.store", "onboarding",

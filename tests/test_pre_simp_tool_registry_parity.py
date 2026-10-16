@@ -52,6 +52,9 @@ SNAPSHOT_FULL = [
     # position must be unchanged. (The first draft DID slot it by domain, and this snapshot caught
     # it — which is the whole value of recording an order rather than a set.)
     'events_share',
+    # WT.S3 (0.0.23 E3) — `worktree_clean` + `worktree_remove`, the gated destructive half of the
+    # worktree surface. APPENDED to the WRITE tail (same rule as the notes above).
+    'worktree_clean', 'worktree_remove',
     'approve',
 ]
 SNAPSHOT_WRITE = [
@@ -61,6 +64,7 @@ SNAPSHOT_WRITE = [
     'stacks_install',
     'consolidate',                     # M-4/R5 — appended, see SNAPSHOT_FULL
     'events_share',                    # CM.S5 — appended, see SNAPSHOT_FULL
+    'worktree_clean', 'worktree_remove',  # WT.S3 (0.0.23 E3) — appended, see SNAPSHOT_FULL
 ]
 
 

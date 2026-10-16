@@ -6,7 +6,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" session-start --plugin-root \"${CLAUDE_PLUGIN_ROOT}\""
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" session-start --plugin-root \"${CLAUDE_PLUGIN_ROOT}\" --via-plugin"
           }
         ]
       }
@@ -17,7 +17,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" user-prompt-submit"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" user-prompt-submit --via-plugin"
           }
         ]
       }
@@ -29,7 +29,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" secret-guard"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" secret-guard --via-plugin"
           }
         ]
       },
@@ -39,7 +39,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" gate-guard"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" gate-guard --via-plugin"
           }
         ]
       }
@@ -51,7 +51,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" dirty-track"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" dirty-track --via-plugin"
           }
         ]
       },
@@ -61,7 +61,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" run-bind"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" run-bind --via-plugin"
           }
         ]
       }
@@ -72,7 +72,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" pre-compact"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" pre-compact --via-plugin"
           }
         ]
       }
@@ -83,7 +83,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" subagent-start"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" subagent-start --via-plugin"
           }
         ]
       }
@@ -94,7 +94,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" subagent-stop"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" subagent-stop --via-plugin"
           }
         ]
       }
@@ -105,7 +105,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" stop"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" stop --via-plugin"
           }
         ]
       }
@@ -116,7 +116,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" session-end"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/src/mokata/hooks/mokata-hook-launch\" session-end --via-plugin"
           }
         ]
       }

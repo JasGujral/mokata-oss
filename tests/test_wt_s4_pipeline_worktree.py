@@ -510,12 +510,14 @@ class TestNegatives(_Base):
         names = tool_names()
         self.assertNotIn("worktree_create", names)
         self.assertNotIn("worktree_bind", names)
-        self.assertNotIn("worktree_clean", names)          # FR-WT-2/3 — still 0.0.17
-        self.assertNotIn("worktree_remove", names)
-        # the ONE worktree tool that now exists is WT-LIST's, and it is read-kind.
+        # UPDATED at WT.S3 (0.0.23 E3), with cause: FR-WT-2/3 shipped `worktree_clean` and
+        # `worktree_remove` as GATED WRITES. The intent pinned here is intact: no create/bind tool.
+        self.assertIn("worktree_clean", write_tool_names())
+        self.assertIn("worktree_remove", write_tool_names())
         self.assertIn("worktree_list", read_tool_names())
         self.assertNotIn("worktree_list", write_tool_names())
-        self.assertEqual([n for n in names if n.startswith("worktree")], ["worktree_list"])
+        self.assertEqual(sorted(n for n in names if n.startswith("worktree")),
+                         ["worktree_clean", "worktree_list", "worktree_remove"])
 
     def test_there_is_exactly_one_worktree_create_path(self):
         """`create_worktree` stays the single gated creator — no second `git worktree add -b`."""

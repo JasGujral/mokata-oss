@@ -131,6 +131,29 @@ for p in store.detect_issues():          # read-only: detects, writes nothing
 `detect_issues()` finds contradictions and stale facts; nothing changes until you apply,
 and the default is no change.
 
+## Intentions — "remind me when X"
+
+An **intention** is a memory of something you mean to do later. Unlike a fact, it has a
+**due condition**:
+
+- a date, which is due on or after that day;
+- a keyword, which is due when the word appears in the branch name or in a path you've changed;
+- a path, which is due when a matching file changes.
+
+Over MCP you record one with `remember`, using `kind="intention"` and `due_at="2026-11-01"`,
+`when_keyword="auth"` or `when_path="src/auth"`. The write is human-gated like any other, and the
+due condition is part of what you approve.
+
+There is no background process. mokata checks intentions in two places:
+
+- **When a session starts.** The briefing shows *"N intention(s) due"*.
+- **During `detect_issues()`.** Each due intention becomes an `intention_due` proposal.
+  - **approve** marks it done. The intention is archived, not deleted.
+  - **defer** leaves it, and it shows up again next time.
+
+If an intention's due condition can't be read, the briefing reports it as **UNREADABLE**, and
+mokata leaves it untouched.
+
 ## Consolidation (C7) — proposal-only
 
 ```python

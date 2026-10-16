@@ -38,10 +38,13 @@ def _curated_command_names() -> List[str]:
     name). Single-sourced to the shipped templates so the check can't drift from what setup writes.
     Degrade-clean: a missing templates dir yields an empty list (nothing to check)."""
     from . import package_data_root
+    from .harness_setup import _command_target_name
     tdir = package_data_root() / "templates" / "commands"
     if not tdir.is_dir():
         return []
-    return sorted(p.name for p in tdir.glob("*.md"))
+    # 0.0.23 B3: a template that collides with a Claude Code built-in is written `mokata-<name>.md`
+    # — ask the same function setup asks, so the check can't drift from what setup writes.
+    return sorted(_command_target_name("claude", p.name) for p in tdir.glob("*.md"))
 
 
 def _present_missing_skills(skills_dir: Optional[Path], names) -> tuple:

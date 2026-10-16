@@ -424,6 +424,7 @@ _WHY_WHAT = {
     "rule_promotion_decision": "rule promotion", "outbound": "outbound gate",
     "rule_override": "rule override", "rule_block": "rule enforcement",
     "enforcement_change": "enforcement promotion", "scope_promotion": "scope promotion",
+    "gate_advisory": "advisory gate",   # 0.0.23 D3 — what an advisory gate would have blocked
     "review_transition": "review workflow", "review_rollback": "review rollback",
     "model_route": "model routing", "phase": "pipeline phase", "subagent": "subagent",
     "subagent_contract_unhonored": "subagent contract",

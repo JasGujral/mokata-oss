@@ -125,7 +125,7 @@ class TheSetIsDERIVEDFromTheLanguageTable(unittest.TestCase):
         self.assertIn("node_modules", union, "the union lost the language it already had")
 
     def test_a_language_declaring_NOTHING_contributes_nothing(self):
-        only_empty = {"py": languages.PYTHON, "go": languages.GO}
+        only_empty = {"rust": languages.RUST, "go": languages.GO}   # PYTHON declares since 0.0.23 B1
         self.assertEqual(languages.vendor_dirs_of(only_empty), frozenset())
 
     def test_the_set_is_NOT_EMPTY(self):

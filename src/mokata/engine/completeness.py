@@ -12,7 +12,7 @@ The gate BLOCKS on any unmapped AC (and on an empty spec); it never silently pas
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 
 from ..brainstorm import load_approved_approach
 from ..pipeline import PHASE_GATES
@@ -66,6 +66,19 @@ class GateResult:
     # AP-SD — non-blocking advisories that do NOT flip `passed` (e.g. the approved approach carries
     # no decisions[]). Empty on the happy path; named so a warning is legible, never a silent gap.
     warnings: List[str] = field(default_factory=list)
+    # 0.0.23 D3 — the ladder. `passed` is the VERDICT (what every caller acts on), decided by
+    # `pipeline.decide_phase_gate` → `govern/enforce.py`. `check_passed` is the raw AC→test check.
+    # They differ only when the gate is not HARD: advisory (check failed, nothing blocked,
+    # `would_block`) or a soft gate cleared by a ledgered `overridden`. The gate ships HARD.
+    check_passed: Optional[bool] = None
+    enforcement: str = GATE.enforcement
+    would_block: bool = False
+    overridden: bool = False
+    # 0.0.23 D8 (EV-GATE a–c) — the outcome's typed evidence (`govern.evidence.GateEvidence`:
+    # artifacts[] = the mapped tests, tested[] = one `ac-maps-to-test:<id>` check per AC) and the
+    # "evidence covers the stated ACs" FINDING. Reported beside the verdict; never flips it.
+    evidence: Any = None
+    evidence_finding: Any = None
 
     @property
     def standalone(self) -> bool:
@@ -106,10 +119,49 @@ class GateResult:
         return verdict(self, ascii_only=ascii_only)
 
 
+def _completeness_evidence(spec: Spec, map_result: MapResult):
+    """(tested[], artifacts[]) for the completeness gate — the checks it ACTUALLY ran. One
+    `spec-has-criteria` check, then one `ac-maps-to-test:<id>` per AC (pass when a test maps to it).
+    Artifacts are the mapped tests: a `path` (`file:line`) when the ref carries a path, otherwise the
+    test's name as `content`. Deterministic order, de-duplicated."""
+    from ..govern.evidence import CONTENT, FAIL, PASS, PATH, Artifact, TestedCheck
+    tested = [TestedCheck("spec-has-criteria", PASS if spec.criteria else FAIL,
+                          detail=f"{len(spec.criteria)} acceptance criterion/criteria")]
+    artifacts: List[Artifact] = []
+    seen = set()
+    for m in map_result.mappings:
+        names = [t.name for t in m.tests]
+        tested.append(TestedCheck(f"ac-maps-to-test:{m.ac.id}", PASS if m.mapped else FAIL,
+                                  ac_ids=(m.ac.id,),
+                                  detail=", ".join(names) if names else "no test maps to it"))
+        for t in m.tests:
+            if t.path:
+                ref, typ = (f"{t.path}:{t.line}" if t.line else t.path), PATH
+            else:
+                ref, typ = t.name, CONTENT
+            if (typ, ref) in seen or not ref:
+                continue
+            seen.add((typ, ref))
+            artifacts.append(Artifact(typ, ref, label=t.name))
+    return tested, artifacts
+
+
 def run_completeness_gate(spec: Spec, tests: List[TestRef],
-                          handoff: Any = None, store: Any = None) -> GateResult:
+                          handoff: Any = None, store: Any = None, *,
+                          root: str = "", graph_available: bool = False, ledger: Any = None,
+                          override: Optional[Callable[[Any], bool]] = None,
+                          actor: str = "agent") -> GateResult:
     """Block emit unless every AC maps to a test. Reads the brainstorm handoff
-    (directly, or from a state store) so the approved approach is in view."""
+    (directly, or from a state store) so the approved approach is in view.
+
+    SPEC-ANCHOR S3 (0.0.23 D4) — `root` / `graph_available` turn on the anchor advisories: an
+    anchorless AC when a structural backend is available, and an anchor that does not resolve under
+    `root`. WARNINGS ONLY — they never flip `passed`. Omitted, the gate is exactly as before.
+
+    0.0.23 D3 — the raw check's result is turned into the verdict by the gate's enforcement level
+    through `pipeline.decide_phase_gate` (the rule Sentinel in `govern/enforce.py`). With `ledger`,
+    a block is recorded (`rule_block`, scope "gate"), as is an advisory evaluation. The gate is
+    declared HARD, so the verdict equals the check — exactly the behaviour before the ladder."""
     refinements = None
     if handoff is None and store is not None:
         handoff = load_approved_approach(store)
@@ -139,9 +191,26 @@ def run_completeness_gate(spec: Spec, tests: List[TestRef],
     warnings: List[str] = []
     if approach_present and not getattr(handoff.approach, "decisions", None):
         warnings.append(WARN_NO_DECISIONS)
+    if root or graph_available:
+        from .spec_anchor import anchor_warnings
+        warnings.extend(anchor_warnings(spec, root=root, graph_available=graph_available))
+
+    from ..govern.evidence import evidence_covers_acs
+    tested, artifacts = _completeness_evidence(spec, map_result)
+    from ..pipeline import decide_phase_gate
+    decision = decide_phase_gate(COMPLETENESS_PHASE, passed, reason=reason, ledger=ledger,
+                                 override=override, actor=actor, artifacts=artifacts,
+                                 tested=tested)
+    if decision.would_block:
+        warnings.append(f"advisory gate — would have blocked: {reason}")
 
     return GateResult(
-        passed=passed, reason=reason, map_result=map_result,
+        passed=decision.allowed, reason=reason, map_result=map_result,
+        check_passed=passed, enforcement=decision.enforcement,
+        would_block=decision.would_block, overridden=decision.overridden,
+        evidence=decision.evidence,
+        evidence_finding=evidence_covers_acs(decision.evidence,
+                                             [ac.id for ac in spec.criteria]),
         approach=approach, approach_present=approach_present,
         unmapped_ids=list(map_result.unmapped_ids),
         refinements_present=refinements is not None,

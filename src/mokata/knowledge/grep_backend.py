@@ -16,18 +16,31 @@ from __future__ import annotations
 
 import os
 import re
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from .. import languages
 from ..repo_paths import RepoName, name_of
 from ..repo_walk import prune_source_dirs
-from .query import (BASIS_LEXICAL, GREP_FLOOR_NAV_NOTE, NAVIGATION_KINDS, QUERY_KINDS,
+from .query import (BASIS_LEXICAL, GREP_FLOOR_IMPACT_NOTE, GREP_FLOOR_NAV_NOTE,
+                    IMPACT_KINDS, NAVIGATION_KINDS, QUERY_KINDS,
                     GraphBackend, QueryResult, Reference)
 
 LEXICAL_NOTE = "lexical fallback (no structural graph; results are approximate)"
 
 # Kept as a module symbol for back-compat; the default walk now spans every known language.
 SOURCE_EXTENSIONS = languages.SOURCE_EXTENSIONS
+
+
+_CALL_RE_CACHE: Dict[str, "re.Pattern"] = {}
+
+
+def _calls(line: str, sym: str) -> bool:
+    pat = _CALL_RE_CACHE.get(sym)
+    if pat is None:
+        if len(_CALL_RE_CACHE) > 4096:
+            _CALL_RE_CACHE.clear()
+        pat = _CALL_RE_CACHE[sym] = re.compile(r"(?<![\w.])" + re.escape(sym) + r"\s*\(")
+    return bool(pat.search(line))
 
 
 class GrepBackend(GraphBackend):
@@ -41,6 +54,18 @@ class GrepBackend(GraphBackend):
 
     # --- public API ----------------------------------------------------------
     def query(self, kind: str, target: str, depth: int = 1) -> QueryResult:
+        # 0.0.23 `BLAST-RADIUS-WALKS-THE-CORPUS-PER-SYMBOL` — every helper used to re-walk and
+        # re-read the whole tree, so a depth-2 blast radius read the corpus once PER CALLER found
+        # at hop 1 (31 full reads for 30 callers) and `spec amend`'s 20 s lens timed out on an
+        # ordinary repo. The corpus is now read ONCE per query and held only for that query —
+        # never across calls, so an edit between two queries is always seen.
+        self._corpus_cache = {}
+        try:
+            return self._query(kind, target, depth)
+        finally:
+            self._corpus_cache = None
+
+    def _query(self, kind: str, target: str, depth: int = 1) -> QueryResult:
         if kind not in QUERY_KINDS:
             raise ValueError(
                 f"unknown query kind '{kind}'; one of {QUERY_KINDS}"
@@ -67,6 +92,9 @@ class GrepBackend(GraphBackend):
         note = LEXICAL_NOTE
         if kind in NAVIGATION_KINDS:
             note = f"{note} | {GREP_FLOOR_NAV_NOTE}"
+        elif kind in IMPACT_KINDS:
+            # GRAPH-FIRST-IMPACT (d) — the impact twin: a lexical blast radius says it is degraded.
+            note = f"{note} | {GREP_FLOOR_IMPACT_NOTE}"
         return QueryResult(
             kind=kind, target=target, references=refs, backend=self.name,
             basis=BASIS_LEXICAL, note=note,
@@ -74,6 +102,24 @@ class GrepBackend(GraphBackend):
 
     # --- file helpers --------------------------------------------------------
     def _files(self):
+        cache = getattr(self, "_corpus_cache", None)
+        if cache is not None:
+            files = cache.get(None)
+            if files is None:
+                files = cache[None] = list(self._walk_files())
+            return files
+        return self._walk_files()
+
+    def _read(self, path: str) -> List[str]:
+        cache = getattr(self, "_corpus_cache", None)
+        if cache is None:
+            return self._read_file(path)
+        lines = cache.get(path)
+        if lines is None:
+            lines = cache[path] = self._read_file(path)
+        return lines
+
+    def _walk_files(self):
         for dirpath, dirnames, filenames in os.walk(self.root):
             # Skip hidden dirs (e.g. .mokata, .git) so config/state isn't scanned, AND nested
             # checkouts — a vendored dependency or a worktree is somebody else's source, and
@@ -84,7 +130,7 @@ class GrepBackend(GraphBackend):
                     yield os.path.join(dirpath, fn)
 
     @staticmethod
-    def _read(path: str) -> List[str]:
+    def _read_file(path: str) -> List[str]:
         try:
             with open(path, encoding="utf-8", errors="replace") as fh:
                 return fh.read().splitlines()
@@ -118,6 +164,8 @@ class GrepBackend(GraphBackend):
 
     # --- query implementations ----------------------------------------------
     def _callers(self, target: str) -> List[Reference]:
+        if not target or any(c.isspace() for c in target):
+            return []                    # not a symbol: no call site can spell it (see above)
         call = re.compile(r"(?<![\w.])" + re.escape(target) + r"\s*\(")
         out: List[Reference] = []
         for path in self._files():
@@ -129,6 +177,34 @@ class GrepBackend(GraphBackend):
                 if call.search(line):
                     out.append(Reference(self._rel(path), i + 1, line.strip(),
                                          self._enclosing(lang, lines, i)))
+        return out
+
+    def _callers_of_many(self, targets: List[str]) -> Dict[str, List[Reference]]:
+        """`_callers` for every target in ONE pass over the corpus — the same references, in the
+        same per-target (file, line) order, as calling `_callers` once per target."""
+        out: Dict[str, List[Reference]] = {t: [] for t in targets}
+        # A target with whitespace in it is not a symbol (an acceptance-criterion sentence handed
+        # to the impact lens by `spec amend`), and no call site spells one — skip the walk for it.
+        targets = [t for t in targets if t and not any(c.isspace() for c in t)]
+        if not targets:
+            return out
+        alts = "|".join(re.escape(t) for t in sorted(set(targets), key=len, reverse=True))
+        call = re.compile(r"(?<![\w.])(" + alts + r")\s*\(")
+        for path in self._files():
+            lang = self._lang(path)
+            lines = self._read(path)
+            for i, line in enumerate(lines):
+                hit = {m.group(1) for m in call.finditer(line)}
+                if not hit:
+                    continue
+                # `hit` only PREFILTERS lines: each target is then judged by its own pattern, so
+                # overlapping names (`foo` / `foobar`) answer exactly as `_callers` would
+                for sym in targets:
+                    if _calls(line, sym):
+                        if lang.defines(line, sym):
+                            continue
+                        out[sym].append(Reference(self._rel(path), i + 1, line.strip(),
+                                                  self._enclosing(lang, lines, i)))
         return out
 
     def _callees(self, target: str) -> List[Reference]:
@@ -211,8 +287,9 @@ class GrepBackend(GraphBackend):
         frontier = [target]
         for _ in range(max(1, depth)):
             nxt: List[str] = []
+            by_sym = self._callers_of_many(frontier)
             for sym in frontier:
-                for r in self._callers(sym):
+                for r in by_sym.get(sym, ()):
                     key = (r.path, r.line)
                     if key not in seen_refs:
                         seen_refs.add(key)

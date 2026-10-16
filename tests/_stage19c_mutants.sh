@@ -27,7 +27,8 @@ T='test_hook_work_budget.py'
 # than `mutant`, which INVERTS the grading: GREEN is expected, and a RED means the reasoning below
 # has stopped being true and needs re-deriving. An undeclared survivor is still a batch failure.
 #
-#   M05 — dropping the `pack is None` guard lets None reach `pack.text`, which raises
+#   M05 — (re-anchored at 0.0.23 E1, which folded the empty-pack check into the same line)
+#         dropping the `pack is None` guard lets None reach `pack.text`, which raises
 #         AttributeError, which the documented broad fail-open floor at the end of
 #         `user_prompt_submit_main` catches -> return 0, no emit. Identical observable behaviour;
 #         the guard is there so the silence is INTENDED rather than an absorbed crash.
@@ -83,9 +84,9 @@ mutant() {
 # ---- the bound itself --------------------------------------------------------------------------
 
 mutant "M01 the budget is removed — the body is unbounded again (the shipped bug)" "$H" \
-  '        pack = _bounded(lambda: _build_injection_for(surface, prompt, root, session_id),
+  '        pack = _bounded(lambda: _build_injection_for(surface, prompt, root, session_id, budget),
                         _HOOK_WORK_BUDGET_SECS)' \
-  '        pack = _build_injection_for(surface, prompt, root, session_id)' "$T"
+  '        pack = _build_injection_for(surface, prompt, root, session_id, budget)' "$T"
 
 mutant "M02 the budget is set AT the harness kill — it can never fire in time" "$H" \
   '_HOOK_WORK_BUDGET_SECS = 5.0' \
@@ -102,10 +103,8 @@ mutant "M04 the budget is so tight it trips a healthy turn" "$H" \
 # ---- the timeout never returns a partial ---------------------------------------------------------
 
 equivalent "M05 [EQUIVALENT] the no-result check is dropped — an empty/absent pack flows on to the emit" "$H" \
-  '        if pack is None:
-            return 0                       # over budget / unreadable — silence, never a partial' \
-  '        if False:
-            return 0                       # over budget / unreadable — silence, never a partial' "$T"
+  '        if pack is None or not pack.text:' \
+  '        if not pack.text:' "$T"
 
 equivalent "M06 [EQUIVALENT] _bounded reads the holder unconditionally — a LATE pack is handed back and emitted" "$H" \
   '    if thread.is_alive():
@@ -115,12 +114,15 @@ equivalent "M06 [EQUIVALENT] _bounded reads the holder unconditionally — a LAT
 
 # ---- the abandoned worker must not record ---------------------------------------------------------
 
+# 0.0.23 D1 — the anchor gained the `evidence_lines=` argument (LIVE-EVIDENCE); same mutation.
 mutant "M07 the ledger write moves INSIDE the bounded worker — a dropped pack is recorded" "$H" \
-  '    return build_injection(surface, prompt,
-                           exclude_ids=already_injected(root, session_id=session_id))' \
+  '    return build_injection(surface, prompt, budget=budget,
+                           exclude_ids=already_injected(root, session_id=session_id),
+                           evidence_lines=evidence)' \
   '    from .injection_ledger import record_injected
-    pack = build_injection(surface, prompt,
-                           exclude_ids=already_injected(root, session_id=session_id))
+    pack = build_injection(surface, prompt, budget=budget,
+                           exclude_ids=already_injected(root, session_id=session_id),
+                           evidence_lines=evidence)
     record_injected(root, pack.item_ids, session_id=session_id)
     return pack' "$T"
 

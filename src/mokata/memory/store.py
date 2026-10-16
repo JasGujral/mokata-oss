@@ -40,8 +40,8 @@ from .consolidation import (
     propose_consolidations,
     render_consolidation,
 )
-from .healing import (CONTRADICTION, CROSS_WRITER, HealingProposal, detect_issues,
-                      render_proposal)
+from .healing import (CONTRADICTION, CROSS_WRITER, INTENTION_DUE, HealingProposal,
+                      detect_issues, render_proposal)
 from .item import ACTIVE, ARCHIVED, DECISION, DEFAULT_TOP_K, MEMORY_TYPES, STALE as STATUS_STALE
 from .item import SUPERSEDED, MemoryItem, approval_ledger_id_of, downgrade_refusal, now_iso
 from . import lifecycle
@@ -1592,7 +1592,23 @@ class MemoryStore:
         active = [i for i in self.backend.all(statuses=(ACTIVE,))
                   if i.mtype in self.enabled_types]
         return detect_issues(active, now=now, conflicts=self._cross_writer_conflicts(),
-                             anchor_staleness=self._moved_code_anchors(active))
+                             anchor_staleness=self._moved_code_anchors(active),
+                             intentions_due=self._due_intentions(active, now))
+
+    def _due_intentions(self, active: List[MemoryItem], now: Optional[str]) -> List[Any]:
+        """PM.S1 — the healing sweep's intention arm. Session signals (git branch + changed paths)
+        are gathered ONLY when an intention has a keyword/path trigger, so a store without one
+        pays nothing. Unreadable envelopes are not proposals — the briefing counts them, loudly."""
+        from .item import INTENTION
+        from .intentions import due_intentions, has_signal_triggers, session_signals
+        mine = [i for i in active if i.kind == INTENTION]
+        if not mine:
+            return []
+        signals = None
+        root = getattr(self._surface, "root", "") if self._surface is not None else ""
+        if root and has_signal_triggers(mine):
+            signals = session_signals(root)
+        return due_intentions(mine, now=now, signals=signals)[0]
 
     def _moved_code_anchors(self, active: List[MemoryItem]) -> List[Any]:
         """H-6 S3 — the MOVED `about_code` anchors as plain `AnchorStaleness` records.
@@ -1846,11 +1862,17 @@ class MemoryStore:
                                     backend_call=lambda: self.backend.update(p.new), team=team)
                 self._bump_write(2)
         else:   # STALE approve — marks an existing item stale; no new untrusted value
+            # PM.S1 (0.0.23 D15) — an INTENTION_DUE approve rides this same single-item closure:
+            # approve = DONE, i.e. ARCHIVED with its window closed — never deleted, so what was
+            # promised and when it was discharged stay readable. One closure, not a fourth `_commit`.
+            done = p.kind == INTENTION_DUE
             content = p.old.subject
-            result_item, result_msg = None, "approved"
+            result_item, result_msg = None, ("done" if done else "approved")
 
             def _commit() -> None:
-                p.old.status = STATUS_STALE
+                if done:
+                    lifecycle.close_window(p.old, now_iso())
+                p.old.status = ARCHIVED if done else STATUS_STALE
                 self._durable_write(p.old, op=_OP_UPDATE, base_revision=self._base_revision(p.old),
                                     backend_call=lambda: self.backend.update(p.old), team=team)
                 self._bump_write()

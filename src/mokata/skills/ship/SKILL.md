@@ -39,6 +39,10 @@ At the START and END of this phase, show where the run is: print the mokata run-
 ## Record stage entry
 On ENTRY to this phase — before anything else — record the stage transition so the always-on mokata badge can tell develop/review/ship apart: call the `progress_mark` MCP tool with stage `ship` (its CLI fallback is `mokata progress mark ship`). This appends a single `stage_enter` event to the append-only progress-event log — OBSERVABILITY, like the audit ledger: it is UNGATED (it writes no durable code/memory/config, so it never prompts for approval) and best-effort (if it fails, keep going — it must never block the phase). It exists so the badge shows the true current stage instead of guessing; it fabricates nothing.
 
+## If this appears stuck
+
+If a step appears stuck, or the harness stops it mid-run: run `mokata resume` (where the run stands and the gate that still applies) and `mokata approve --list` (anything waiting on a human). Nothing is lost — run state, approvals and the audit ledger are on disk — so re-invoke `/mokata:ship` to continue. Where the harness limits foreground time, start a long test run in the background; `mokata doctor` names a hung MCP server or a hook that is not firing.
+
 ## Rationalizations — stop if you catch yourself thinking any of these
 
 | Excuse | Reality |

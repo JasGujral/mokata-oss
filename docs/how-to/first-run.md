@@ -5,7 +5,7 @@ nothing to a wired, personalized setup — and a 60-second demo if you'd rather 
 leap.
 
 > Already have mokata installed? If not, start with [Getting started](../getting-started.md)
-> (`pip install mokata` → `mokata setup claude`), then come back here.
+> (the two-command plugin, or `pipx install mokata` → `mokata setup claude`), then come back here.
 
 ## See it work first — `mokata tour` (read-only)
 

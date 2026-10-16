@@ -81,6 +81,27 @@ _SKILL_BANNER = (
 )
 
 
+# UX-STUCK (e) (0.0.23 E2) — the RESILIENCE section every SKILL.md carries: what to run when a
+# step appears stuck or the harness kills it, and the promise that state is not lost. ONE source:
+# rendered here for every curated skill, and `skill_lints` (resilience-lint) requires the heading +
+# a runnable `mokata` command in every shipped SKILL.md, domain skills included.
+RESILIENCE_HEADING = "## If this appears stuck"
+_RESILIENCE = (
+    RESILIENCE_HEADING + "\n\n"
+    "If a step appears stuck, or the harness stops it mid-run: run `mokata resume` (where the run "
+    "stands and the gate that still applies) and `mokata approve --list` (anything waiting on a "
+    "human). Nothing is lost — run state, approvals and the audit ledger are on disk — so "
+    "re-invoke `/mokata:{name}` to continue. Where the harness limits foreground time, start a "
+    "long test run in the background; `mokata doctor` names a hung MCP server or a hook that is "
+    "not firing."
+)
+
+
+def render_resilience_md(name: str) -> str:
+    """The `## If this appears stuck` section for one curated skill (single source)."""
+    return _RESILIENCE.format(name=name)
+
+
 class SkillSourceError(MokataError, RuntimeError):
     """A curated skill's source template is missing or malformed."""
 
@@ -163,6 +184,7 @@ def render_skill_md(src: SkillSource) -> str:
     body = expand_grounding(src.body.rstrip())
     anatomy = render_anatomy_md(src.name)                       # single source (skill_anatomy.py)
     contract = render_contract_md(src.name)                     # single source (skill_contracts.py)
+    resilience = render_resilience_md(src.name)                 # UX-STUCK (e), single source
     return (
         f"---\n"
         f"name: {src.name}\n"
@@ -172,6 +194,7 @@ def render_skill_md(src: SkillSource) -> str:
         f"{_SKILL_BANNER.format(name=src.name)}\n\n"
         f"{activation}\n\n"
         f"{body}\n\n"
+        f"{resilience}\n\n"
         f"{anatomy}\n\n"
         f"{contract}\n"
     )

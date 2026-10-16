@@ -29,7 +29,7 @@ mokata init --mode full       # everything
 
 ### From inside Claude Code
 
-Once mokata is wired (`pip install mokata` → `mokata setup claude`), you don't need the terminal —
+Once mokata is wired (the plugin, or `pipx install mokata` → `mokata setup claude`), you don't need the terminal —
 type **`/init full`** (or `standard` / `minimal`). It previews exactly what it will write, asks you
 to approve, then sets the profile. You can also just say *"set up mokata here"* and Claude will run
 the gated `init` MCP tool; on a brand-new project mokata even offers to initialize it for you

@@ -141,6 +141,7 @@ class TestSessionStartOffer(unittest.TestCase):
         with tempfile.TemporaryDirectory() as home:
             env = dict(os.environ)
             env["HOME"] = home
+            env["USERPROFILE"] = home      # `~` on Windows (0.0.23 A2 lint, CAUSE H)
             env.pop("CLAUDE_PLUGIN_ROOT", None)
             proc = subprocess.run(
                 [sys.executable, HOOK], input=json.dumps({"cwd": cwd}),

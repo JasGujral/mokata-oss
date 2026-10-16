@@ -29,6 +29,9 @@ _KIND_ALIASES = {
     "context": "context", "domain": "context", "formula": "context",
     "reference": "reference", "ref": "reference", "doc": "reference", "document": "reference",
     "decision": "decision", "episodic": "episodic",
+    # PM.S1 — the prospective kind ("remind me when X").
+    "intention": "intention", "intentions": "intention", "reminder": "intention",
+    "reminders": "intention",
 }
 
 
