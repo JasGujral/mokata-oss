@@ -47,7 +47,10 @@ def _plant_runner(env_dir, exit_code=0):
 
 
 def _make_env(parent, name, exit_code=0):
-    d = os.path.join(parent, name)
+    # normpath: `name` may be a POSIX-style relative path ("tools/py"); joined on Windows that is
+    # `...\\tools/py`, while mokata reports the platform's own spelling `...\\tools\\py`
+    # (0.0.23 cut, Windows CI legs). The expectation must be spelled the same way.
+    d = os.path.normpath(os.path.join(parent, name))
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, "pyvenv.cfg"), "wb") as fh:
         fh.write(b"home = /usr/bin\n")
