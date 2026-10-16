@@ -74,7 +74,7 @@ mutant "M03 BOUND goes inert — the session binding stops meaning anything" "$R
   '        bound = _bound_run(root, session_id)' '        bound = None' "$R1"
 
 mutant "M04 the PIN stops short-circuiting — an explicit human instruction is ignored" "$R" \
-  '        pinned = os.environ.get(PIN_ENV, "").strip()' '        pinned = ""' "$RE"
+  '    return os.environ.get(PIN_ENV, "").strip()' '    return ""' "$RE"
 
 mutant "M05 SINGLE drops below LIVE — the gate hook's no-extra-registry-read budget is spent" "$R" \
   '        if len(candidates) == 1:' '        if False:' "$MC"

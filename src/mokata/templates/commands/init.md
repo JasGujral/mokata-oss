@@ -31,7 +31,8 @@ engine instead:
 
 ## 2. Resolve the profile
 
-Take the profile from `$ARGUMENTS` (one of `minimal` / `standard` / `full`). If empty, ask
+Take the profile from `$ARGUMENTS` (one of `minimal` / `standard` / `full`). If `$ARGUMENTS` is
+empty, use the profile the user already named in the conversation; if they named none, ask
 the user which they want, briefly explaining the trade-off:
 
 - **minimal** — engine only; no external capabilities; zero network egress.

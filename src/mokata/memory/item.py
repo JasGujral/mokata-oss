@@ -38,8 +38,15 @@ BEST_PRACTICE = "best-practice" # recommended pattern/convention (JIT)
 CONTEXT = "context"             # domain fact/formula/constraint (JIT)
 REFERENCE = "reference"         # distilled key points from a document, + a source pointer (JIT)
 
-# The full taxonomy (parts + the existing decision/episodic), in display order.
-MEMORY_KINDS = (RULE, GUARDRAIL, BEST_PRACTICE, CONTEXT, REFERENCE, DECISION, EPISODIC)
+# PM.S1 (0.0.23 D15) — the PROSPECTIVE kind: a commitment to act LATER ("remind me when X"). It
+# carries a due condition (a date and/or a keyword/path trigger) in `applicability` — the item's
+# existing "when it applies" envelope, so no doc key and no DDL were added (see memory/intentions.py
+# for the envelope, the due check, and why that keeps every existing store readable). Stored as
+# PERSISTENT, so it rides the persistent toggle; written ONLY through the human-gated remember path.
+INTENTION = "intention"
+
+# The full taxonomy (parts + the existing decision/episodic + intention), in display order.
+MEMORY_KINDS = (RULE, GUARDRAIL, BEST_PRACTICE, CONTEXT, REFERENCE, DECISION, EPISODIC, INTENTION)
 
 # The "parts" captured by /mokata:onboard — all persisted as PERSISTENT, keyed by `kind`.
 PART_KINDS = (RULE, GUARDRAIL, BEST_PRACTICE, CONTEXT, REFERENCE)

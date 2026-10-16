@@ -26,6 +26,7 @@ from typing import Optional
 from .server import TOKEN_HEADER, read_record
 
 START_TIMEOUT = 8.0
+LOCK_SLACK = 12.0
 
 
 @dataclass(frozen=True)
@@ -73,15 +74,14 @@ def open_or_focus(root: str, session: Optional[str] = None, demo: bool = False,
                   browser: bool = True, idle_secs: Optional[float] = None) -> Launched:
     """Open the window, or re-focus the running one. Serialised per repo by a lock file, so two
     `/mokata:review-window` at once cannot both start a server (0.0.22 verification)."""
+    from ..oslock import file_lock
     from .server import record_path
     lock = record_path(root) + ".lock"
     os.makedirs(os.path.dirname(lock), exist_ok=True)
-    with open(lock, "a", encoding="utf-8") as fh:
-        try:
-            import fcntl
-            fcntl.flock(fh, fcntl.LOCK_EX)
-        except ImportError:                 # Windows: no flock — the race stays, stated
-            pass
+    # 0.0.23 C4 (VERIFICATION-MINORS-0022 "Windows has no launch lock") — the shared OS lock:
+    # `fcntl.flock` on POSIX, `msvcrt.locking` on Windows, released if the holder dies, and a
+    # BOUNDED wait (a stuck launcher is named, never waited on forever).
+    with file_lock(lock, timeout=START_TIMEOUT + LOCK_SLACK):
         return _open_or_focus(root, session, demo, browser, idle_secs)
 
 
@@ -97,7 +97,7 @@ def _open_or_focus(root: str, session: Optional[str], demo: bool, browser: bool,
     if old_pid:
         # ONE server per repo: the running one is the other mode (demo vs real) — stop it, so the
         # link printed below can only ever be the new server's, never the old one's.
-        _stop(old_pid)
+        _stop(old_pid, root)
     cmd = [sys.executable, "-m", "mokata.ide.server", "--root", root]
     if session:
         cmd += ["--focus", session]
@@ -109,7 +109,7 @@ def _open_or_focus(root: str, session: Optional[str], demo: bool, browser: bool,
     src = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     env["PYTHONPATH"] = src + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                     stderr=subprocess.DEVNULL, env=env, start_new_session=True)
+                     stderr=subprocess.DEVNULL, env=env, **_detach_kwargs())
     deadline = time.time() + START_TIMEOUT
     while time.time() < deadline:
         rec = running(root)
@@ -132,17 +132,32 @@ def _pinged_pid(rec: dict) -> int:
         return 0
 
 
-def _stop(pid: int, wait: float = 3.0) -> None:
+def _detach_kwargs() -> dict:
+    """The child outlives this command on every OS: a new session on POSIX; on Windows a new
+    process group with no console (`start_new_session` is POSIX-only and silently ignored there,
+    so the child would die with the terminal that started it)."""
+    if os.name == "nt":
+        flags = (getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                 | getattr(subprocess, "DETACHED_PROCESS", 0)
+                 | getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return {"creationflags": flags}
+    return {"start_new_session": True}
+
+
+def _stop(pid: int, root: str, wait: float = 3.0) -> None:
+    """Stop the server we pinged, then wait until it stops ANSWERING.
+
+    0.0.23 C4: the wait used to poll `os.kill(pid, 0)`. On Windows that call is not a probe — any
+    signal other than CTRL_C/CTRL_BREAK is `TerminateProcess` — and on POSIX a recycled pid
+    answers it too. The server's own ping is the liveness signal on every OS."""
     import signal
     try:
-        os.kill(pid, signal.SIGTERM)
+        os.kill(pid, signal.SIGTERM)       # POSIX: SIGTERM · Windows: TerminateProcess
     except OSError:
         return
     deadline = time.time() + wait
     while time.time() < deadline:
-        try:
-            os.kill(pid, 0)
-        except OSError:
+        if running(root) is None:
             return
         time.sleep(0.05)
 

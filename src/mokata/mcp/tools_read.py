@@ -20,6 +20,7 @@ from ..engine import preview_pipeline
 from ..govern import AuditLedger, BudgetReport, diagnose
 from ..knowledge import QUERY_KINDS, KnowledgeLayer
 from ..memory import MemoryStore
+from ..axi_out import with_count
 from .pagination import DEFAULT_PAGE_LIMIT, paginate
 from .registry import _mokata_dir, _surface, _tool
 from .response_format import LazyRender, apply_response_format
@@ -62,7 +63,15 @@ def query(path: str = ".", kind: str = "callers", target: str = "",
     # load and backend selection. It is a caller typo, so it refuses here, up front, for free.
     validate_enum(kind, QUERY_TOOL_KINDS, "kind")
     layer = KnowledgeLayer.from_surface(_surface(path))
-    return run_query(layer, kind, target, depth=depth).to_dict()
+    result = run_query(layer, kind, target, depth=depth)
+    out = result.to_dict()
+    # GRAPH-FIRST-IMPACT (d) (0.0.23 D2) — the SAME degraded wording + remedy the CLI prints; absent
+    # on a structural answer, so a graph-backed response is byte-identical.
+    from ..knowledge.layer import impact_degrade
+    deg = impact_degrade(layer, result)
+    if deg:
+        out["impact_degraded"] = deg
+    return out
 
 
 @_tool("recall", "read")
@@ -75,24 +84,37 @@ def recall(path: str = ".", subject: str = "", query: str = "",
     is a DEPRECATED alias. Read-only — surfaces nothing disabled, writes nothing."""
     store = MemoryStore.from_surface(_surface(path))
     if not store.enabled_types:
-        return {"enabled": False, "items": []}
+        return {"enabled": False, "items": [], "count": 0,
+                "message": "memory is disabled in this repo's profile — nothing to recall."}
     if query:
         # Stage 59 — explainable retrieval: each hit names WHY it surfaced (frugal, top-k).
         from ..memory.intelligence import explain_recall
         hits = store.recall_relevant(query)
-        return _with_degrade(store, {
+        return _with_degrade(store, _empty_says(with_count({
             "enabled": True, "backend": store.backend.name, "query": query,
             "items": [{"memory_type": e.item.mtype, "kind": e.item.effective_kind,
                        "subject": e.item.subject, "value": e.item.value, "why": e.why}
-                      for e in explain_recall(query, hits)]})
+                      for e in explain_recall(query, hits)]}, "items"),
+            "items", f"no active memory is relevant to '{query}'."))
     mt = memory_type or mtype
     items = store.recall(subject, mtype=mt) if subject else store.all_active(mtype=mt)
-    return _with_degrade(store, {
+    return _with_degrade(store, _empty_says(with_count({
         "enabled": True, "backend": store.backend.name,
         "items": [{"memory_type": i.mtype, "kind": i.effective_kind,
                    "mtype": i.mtype,  # deprecated alias, kept for back-compat
                    "subject": i.subject, "value": i.value}
-                  for i in items]})
+                  for i in items]}, "items"),
+        "items", (f"no active memory with subject '{subject}'." if subject
+                  else "no active memory yet — capture some with `/mokata:onboard` or the "
+                  "`remember` tool.")))
+
+
+def _empty_says(resp: Dict[str, Any], list_key: str, message: str) -> Dict[str, Any]:
+    """AXI-OUT (3) — an EMPTY list says why, so "0 results" never reads like a broken read.
+    Non-empty results are untouched."""
+    if not resp.get(list_key) and "message" not in resp:
+        resp["message"] = message
+    return resp
 
 
 def _with_degrade(store: Any, resp: Dict[str, Any]) -> Dict[str, Any]:
@@ -341,7 +363,8 @@ def rules(path: str = ".") -> Dict[str, Any]:
                              "within_cap": rs.within_cap}
                       for tier, rs in by_tier.items()},
             "cap_errors": validate_caps(by_tier),
-            "proposals": [p.proposed_rule for p in proposals]}
+            "proposals": [p.proposed_rule for p in proposals],
+            "proposal_count": len(proposals)}
 
 
 @_tool("skills", "read")
@@ -364,22 +387,35 @@ def skills(path: str = ".", name: str = "", query: str = "") -> Dict[str, Any]:
     if query:
         q = query.lower()
         catalog = [(n, sm) for n, sm in catalog if q in n.lower() or q in sm.lower()]
-    return {"skills": [{"name": n, "summary": sm} for n, sm in catalog]}
+    return _empty_says(with_count({"skills": [{"name": n, "summary": sm} for n, sm in catalog]},
+                                  "skills"),
+                       "skills", f"no skill matches '{query}' — call `skills` with no query "
+                                 f"for the full catalog.")
 
 
 @_tool("suggest", "read")
 def suggest(path: str = ".", fresh: bool = False, spec: bool = False,
             failing_test: bool = False, implementation: bool = False, diff: bool = False,
-            bug: bool = False, stacktrace: bool = False, perf: bool = False) -> Dict[str, Any]:
+            bug: bool = False, stacktrace: bool = False, perf: bool = False,
+            intent: str = "") -> Dict[str, Any]:
     """Suggest a relevant /mokata command for the current context (L6) — SUGGEST ONLY, it
     never runs anything. Pass the booleans that describe your state (fresh/spec/failing_test/
-    implementation/diff/bug/stacktrace/perf). Read-only."""
-    from ..compose import SuggestionContext, suggest as _suggest
+    implementation/diff/bug/stacktrace/perf), and/or `intent` — free text such as "flaky bug"
+    (G-3: a deterministic keyword match, each hit naming the words that produced it; an
+    unmatched intent returns no suggestions rather than a guess). Read-only."""
+    from ..compose import SuggestionContext, recommend, suggest as _suggest
     ctx = SuggestionContext(starting_fresh=fresh, has_spec=spec,
                             has_failing_test=failing_test, has_implementation=implementation,
                             has_diff=diff, has_bug_report=bug, has_stacktrace=stacktrace,
                             has_perf_issue=perf)
-    return {"suggestions": [{"skill": s.skill, "reason": s.reason} for s in _suggest(ctx)]}
+    if intent and intent.strip():
+        return {"intent": intent,
+                "suggestions": [{"skill": r.skill, "reason": r.reason, "score": r.score,
+                                 "matched": r.matched} for r in recommend(intent, ctx)]}
+    return _empty_says(with_count(
+        {"suggestions": [{"skill": s.skill, "reason": s.reason} for s in _suggest(ctx)]},
+        "suggestions"), "suggestions", "no command fits the state you described — pass the "
+                                       "booleans that describe it (fresh/spec/diff/bug/…).")
 
 
 @_tool("lat_check", "read")
@@ -467,8 +503,10 @@ def baseline(path: str = ".", cmd: str = "", response_format: str = "concise") -
     # MCP-R.D0 · R7 — cap the subprocess far below its 600s terminal bound: on the MCP surface a
     # read tool must never block stdio for 10 minutes of silence (the `_serve` wall-clock backstops
     # it too). The CLI/`mokata baseline` path keeps the longer default.
+    from ..project_env import settings_python
     result = baseline_status(baseline_command(manifest, override=cmd or None), cwd=path,
-                             timeout=BASELINE_MCP_TIMEOUT_SECONDS)
+                             timeout=BASELINE_MCP_TIMEOUT_SECONDS,
+                             settings_python=settings_python(manifest))
     return apply_response_format(response_format,
                                  {"ok": result.ok, "report": LazyRender(result.render)})
 
@@ -482,10 +520,11 @@ def sessions(path: str = ".", limit: int = DEFAULT_PAGE_LIMIT, offset: int = 0) 
     pipeline)."""
     from ..progress import list_sessions
     rows = list_sessions(_surface(path).state)
-    return paginate([{"run_id": s.run_id, "done": s.done, "total": s.total,
-                      "complete": s.complete, "active": s.active,
-                      "resume_phase": s.resume_phase, "last_passed": s.last_passed}
-                     for s in rows], key="sessions", limit=limit, offset=offset)
+    return _empty_says(paginate([{"run_id": s.run_id, "done": s.done, "total": s.total,
+                                  "complete": s.complete, "active": s.active,
+                                  "resume_phase": s.resume_phase, "last_passed": s.last_passed}
+                                 for s in rows], key="sessions", limit=limit, offset=offset),
+                       "sessions", "no runs in this repo yet — `/mokata:brainstorm` starts one.")
 
 
 @_tool("session_windows", "read")
@@ -615,7 +654,9 @@ def plan_list(path: str = ".") -> Dict[str, Any]:
     with the user-initiated `mokata plan export`."""
     from .. import plans as P
     slugs = P.list_plans(_surface(path).plans_dir)
-    return {"count": len(slugs), "plans": slugs}
+    return _empty_says({"count": len(slugs), "plans": slugs}, "plans",
+                       "no saved plans — a plan file is written when a brainstorm approach is "
+                       "approved.")
 
 
 @_tool("plan_show", "read")
@@ -685,7 +726,8 @@ def session_list(path: str = ".", transport: str = "", limit: int = DEFAULT_PAGE
         result["removed_channel"] = {
             "channel": "vault", "stranded": len(stranded),
             "message": deprecation.removal_answer("vault", path, True)}
-    return result
+    return _empty_says(result, "bundles", "no session bundles on this transport — "
+                                          "`mokata session save` writes one.")
 
 
 @_tool("config_get", "read")
@@ -746,7 +788,7 @@ def decompose(path: str = ".", response_format: str = "concise") -> Dict[str, An
 
 
 @_tool("spec_show", "read")
-def spec_show(path: str = ".", run: str = "",
+def spec_show(path: str = ".", run: str = "", version: int = 0, list_versions: bool = False,
               response_format: str = "concise") -> Dict[str, Any]:
     """The RUN'S OWN persisted, gate-passed spec — title, approach, domains, every acceptance
     criterion, and the declared scope when one is set. This is how a phase FETCHES the approved
@@ -758,7 +800,9 @@ def spec_show(path: str = ".", run: str = "",
     Read-only. Degrades clean: no tracked run / no spec / a spec that is present but unreadable each
     come back as an `available:false` answer naming the recovery — never an exception, and never a
     byte of spec content. `response_format` {concise (default), detailed}: detailed adds the
-    rendered `block`."""
+    rendered `block`. SPEC-HISTORY: every answer names the spec's `version`; `version=N` reads a
+    SUPERSEDED spec back from its archive, and `list_versions=true` returns the run's history
+    (`versions`: version, archive key, title, AC count) instead of a spec."""
     from ..cli_commands.spec import (NO_SPEC_RECOVERY, NO_TRACKED_RUN_RECOVERY,
                                      _run_scoped_store)
     from ..engine.spec_gate import SPEC_MALFORMED_MESSAGE, read_emitted_spec
@@ -767,7 +811,12 @@ def spec_show(path: str = ".", run: str = "",
     # Resolve the run the way `mokata spec show` does — the SAME `_run_scoped_store`, not a second
     # resolution path. A tool that answered "the spec" from a run other than the one the gates
     # enforce would hand the reviewer a foreign spec, which is the very failure G1 exists to close.
-    store, run_id, err = _run_scoped_store(surface, (run or "").strip() or None)
+    # SESSION-BIND-BY-ANCESTOR (0.0.23 F1) — with no `run`, the run bound to the Claude session
+    # this MCP serves (process ancestry) is named EXPLICITLY into the same seam; no ancestry match
+    # leaves the argument None and the resolution byte-identical.
+    from ..run_resolver import process_session_run
+    named = (run or "").strip() or process_session_run(surface.root)
+    store, run_id, err = _run_scoped_store(surface, named or None)
     if err:
         return {"available": False, "reason": "ambiguous-run", "run": None,
                 "criteria": [], "note": err}
@@ -777,7 +826,25 @@ def spec_show(path: str = ".", run: str = "",
     # D5's distinction, carried onto this surface: "no spec" and "a spec that cannot be read" are
     # different facts with different remedies. Collapsing them would send a caller to rewrite a spec
     # they already have while the real fault (a torn write, a hand-edit) goes uninvestigated.
-    spec, malformed = read_emitted_spec(store)
+    from ..engine import spec_history as SH
+    current = SH.current_version(store)
+    if list_versions:
+        rows = SH.spec_versions(store, run_id)
+        return {"available": bool(rows), "run": run_id, "current_version": current,
+                "versions": rows, "criteria": [],
+                **({} if rows else {"reason": "no-spec", "note": NO_SPEC_RECOVERY})}
+    if version and version != current:
+        row = SH.spec_at_version(store, run_id, int(version))
+        spec, malformed = row["spec"], row["malformed"]
+        if spec is None and not malformed:
+            return {"available": False, "reason": "no-such-version", "run": run_id,
+                    "version": int(version), "current_version": current, "criteria": [],
+                    "note": (f"this run has no spec v{version} (current is v{current}); call "
+                             f"with list_versions=true to see what exists")}
+        shown = int(version)
+    else:
+        spec, malformed = read_emitted_spec(store)
+        shown = current
     if malformed:
         return {"available": False, "reason": "malformed", "run": run_id,
                 "criteria": [], "note": SPEC_MALFORMED_MESSAGE}
@@ -785,26 +852,30 @@ def spec_show(path: str = ".", run: str = "",
         return {"available": False, "reason": "no-spec", "run": run_id,
                 "criteria": [], "note": NO_SPEC_RECOVERY}
     out: Dict[str, Any] = {
-        "available": True, "run": run_id, "title": spec.title,
+        "available": True, "run": run_id, "version": shown or 1, "current_version": current,
+        "superseded": bool(shown and shown != current), "title": spec.title,
         "approach": spec.approach, "domains": list(spec.domains),
-        "criteria": [{"id": c.id, "text": c.text} for c in spec.criteria],
+        "criteria": [c.to_dict() for c in spec.criteria],     # SPEC-ANCHOR: anchors when set
     }
     if spec.scope is not None:
         out["scope"] = spec.scope.to_dict()
-    out["block"] = LazyRender(lambda: _render_spec_show(spec))
+    out["block"] = LazyRender(lambda: _render_spec_show(spec, shown, current))
     return apply_response_format(response_format, out)
 
 
-def _render_spec_show(spec: Any) -> str:
-    """The human view — the SAME lines `cmd_spec_show` prints, in the same order (title, approach,
-    domains, then each AC). Built lazily, so `concise` never pays for the string it drops."""
-    lines = [f"spec: {spec.title}"]
+def _render_spec_show(spec: Any, version: int = 0, current: int = 0) -> str:
+    """The human view — the SAME lines `cmd_spec_show` prints, in the same order (title, version,
+    approach, domains, then each AC). Built lazily, so `concise` never pays for the string it drops."""
+    from ..cli_commands.spec import _version_line
+    lines = [f"spec: {spec.title}", _version_line(version, current)]
     if spec.approach:
         lines.append(f"approach: {spec.approach}")
     if spec.domains:
         lines.append(f"domains: {', '.join(spec.domains)}")
     for c in spec.criteria:
         lines.append(f"  {c.id}: {c.text}")
+    from ..engine.spec_anchor import ac_anchor_lines
+    lines.extend(f"  → {ln}" for ln in ac_anchor_lines(spec))       # SPEC-ANCHOR S2
     return "\n".join(lines)
 
 
@@ -1164,14 +1235,15 @@ def progress_mark(path: str = ".", stage: str = "", run: str = "") -> Dict[str, 
     reported in the result (`recorded: false`), never raised; it must never block the phase."""
     from ..progress import STAGE_BADGE_STAGES
     from ..progress_events import ProgressLog, STAGE_ENTER
-    from ..run_resolver import resolve_run, unresolved_reason
+    from ..run_resolver import resolve_run_for_process, unresolved_reason
     stage = (stage or "").strip()
     if stage not in STAGE_BADGE_STAGES:
         return {"recorded": False, "status": "error", "run": None,
                 "reason": "name the stage: one of " + ", ".join(STAGE_BADGE_STAGES)}
     try:
         surface = _surface(path)
-        res = resolve_run(surface.root, run_id=(run or "").strip() or None)
+        # SESSION-BIND-BY-ANCESTOR (0.0.23 F1): the session this MCP serves, via process ancestry.
+        res = resolve_run_for_process(surface.root, run_id=(run or "").strip() or None)
         if res.ambiguous:
             return {"recorded": False, "status": "refused", "run": None,
                     "message": f"mokata progress: not recording '{stage}' — "

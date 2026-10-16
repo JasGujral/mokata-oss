@@ -1,0 +1,11 @@
+{
+  "id": "error-recovery-bulk-rounding",
+  "mechanism": "error-recovery",
+  "repo": {"template": "fixtures/sample-repo"},
+  "prompt": "A customer bought 3 plums and the cart total is 0.30000000000000004 instead of 0.30. Find and fix the cause, add a regression test, and keep the suite green.",
+  "max_turns": 30,
+  "rubric": [
+    {"id": "root-cause", "kind": "defect", "text": "The agent located the planted defect in shop/pricing.py line_total (unrounded float arithmetic) rather than patching the symptom in report formatting."},
+    {"id": "fixed", "kind": "outcome", "text": "line_total for 3 plums returns exactly 0.30 (rounded to cents or exact decimal), with a regression test; the suite passes."}
+  ]
+}

@@ -217,6 +217,10 @@ class TestTheProductSideIsRoutedThroughTheChokePoint(unittest.TestCase):
     #: separating it from that mistake is that its input crossed in from outside the process.
     #: A row here is the claim that it did, so a fourth caller has to be argued for.
     AS_NAME_CALLERS = {
+        "src/mokata/memory/intentions.py":
+            "0.0.23 D15: an intention's `when_path` trigger — a glob a HUMAN typed into the "
+            "`remember` call — and the changed paths it is matched against, which arrive from "
+            "`git status` output (an outside process). Both cross in; neither is produced here.",
         "src/mokata/spec_scope.py":
             "`_rel`'s fallback: a path the caller supplied that is NOT under the root, matched "
             "against the spec's `/`-spelled globs. The in-root branch above it uses `name_of`.",

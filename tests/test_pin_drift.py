@@ -62,7 +62,9 @@ def _make_repo(tmp, *, version="0.0.4", doc_pin=None, yml_pin=None, omit=()):
     with open(os.path.join(tmp, "pyproject.toml"), "w", encoding="utf-8") as fh:
         fh.write(f'[project]\nname = "mokata"\nversion = "{version}"\n')
     with open(os.path.join(tmp, ".claude-plugin", "plugin.json"), "w", encoding="utf-8") as fh:
-        json.dump({"name": "mokata", "version": version}, fh)
+        json.dump({"name": "mokata", "version": version,
+                   "mcpServers": {"mokata": {"command": "uvx", "args": [
+                       "--from", f"mokata=={version}", "mokata-mcp"]}}}, fh)
     with open(os.path.join(tmp, ".claude-plugin", "marketplace.json"), "w", encoding="utf-8") as fh:
         json.dump({"name": "mostack", "metadata": {"version": version},
                    "plugins": [{"name": "mokata", "source": ".", "version": version}]}, fh)

@@ -124,6 +124,18 @@ def cmd_suggest(args: argparse.Namespace) -> int:
         has_failing_test=args.failing_test, has_implementation=args.implementation,
         has_diff=args.diff, has_bug_report=args.bug,
         has_stacktrace=args.stacktrace, has_perf_issue=args.perf)
+    intent = " ".join(getattr(args, "intent", None) or []).strip()
+    if intent:
+        # G-3 — free-text intent ("flaky bug") on top of the flags. Deterministic, never runs.
+        from ..compose import recommend
+        recs = recommend(intent, ctx)
+        if not recs:
+            print(f"no skill matched \"{intent}\" — see `mokata skills` for the full list.")
+            return 0
+        print("recommended (not run — your call):")
+        for r in recs:
+            print(f"  /{r.skill} — {r.reason}")
+        return 0
     suggestions = suggest(ctx)
     if not suggestions:
         print("no suggestions for this context.")
@@ -155,6 +167,9 @@ def register(sub, common):
         p_sug.add_argument(f"--{flag}", action="store_true")
     p_sug.add_argument("--failing-test", dest="failing_test", action="store_true")
     p_sug.add_argument("--implementation", action="store_true")
+    p_sug.add_argument("intent", nargs="*",
+                       help='optional free-text intent, e.g. "flaky bug" -> /debug '
+                            "(deterministic keyword match; never runs anything)")
     p_sug.set_defaults(func=cmd_suggest)
 
     p_chain = sub.add_parser(

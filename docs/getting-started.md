@@ -1,20 +1,46 @@
 # Getting started with mokata
 
-mokata installs from PyPI with pip — no clone required. Pick the path that matches how you work.
+No clone required. **One instruction sets mokata up and the same one updates it** — install or
+upgrade the isolated `mokata` CLI, then `mokata setup claude`. The Claude Code plugin is the
+alternative. Pick the path that matches how you work.
 
 ## Path A — In Claude Code (recommended)
 
 You get the full spec-driven TDD workflow (brainstorm → spec → develop → review → ship) as slash
 commands and Agent Skills inside Claude Code, plus the bundled MCP server.
 
+**A1 · Set up or update — the same instruction every time**, in your repo:
+
 ```bash
-pip install mokata          # requires Python 3.10+ (see the note below)
-mokata setup claude         # wires the commands, Agent Skills, MCP server, hooks, and status line — with your approval
-# restart Claude Code so it loads the newly registered MCP server
+uv tool install --upgrade mokata   # installs mokata, or upgrades it (or: pipx install --force mokata)
+mokata setup claude                # wires the repo — runs `mokata init` too if the repo has no .mokata/
+# restart Claude Code, then:
+mokata doctor
 ```
 
-> Prefer Homebrew? `brew install JasGujral/mokata/mokata` installs the same CLI on
-> macOS/Linux; carry on from `mokata setup claude`. All routes:
+`mokata setup claude` runs `mokata init` for you on a repo with no `.mokata/`; on a repo that has
+one it keeps your config, memory and ledger and refreshes only the wiring (new commands appear,
+stale ones are removed). Re-run it after every upgrade. You don't need `mokata init` separately
+unless you want mokata's config in a repo **without** wiring Claude Code (another AI tool, CI —
+Path B), and you never need `init --force` to update: it resets the repo's config to defaults.
+(macOS/Linux can also install with `brew install JasGujral/mokata/mokata`, then
+`mokata setup claude`.)
+
+**A2 · Alternative — the plugin, two commands inside Claude Code**, nothing installed into your
+project. Use A1 *or* A2 in a repo, not both: both wire the same hooks.
+
+```text
+/plugin marketplace add JasGujral/mokata-oss
+/plugin install mokata@mostack
+```
+
+The plugin's commands are namespaced (`/mokata:<name>`). Its MCP server starts through `uvx`, so
+[`uv`](https://docs.astral.sh/uv/) must be on your PATH. Details:
+[Install the plugin](how-to/install-plugin.md).
+
+> **Plain pip, last.** `pip install mokata` (Python 3.10+) installs the same CLI — but inside a
+> project venv this mixes mokata's deps into yours — prefer the above. `mokata doctor` warns when
+> mokata is installed inside the repo's own environment. All routes:
 > [Install mokata](how-to/install-mokata.md).
 
 Verify it worked:
@@ -95,7 +121,7 @@ Not sure? Plain `mokata init` (profile `standard`) is the same configuration as 
 You get the engine — gates, memory, structural queries, the audit ledger — driven from the terminal.
 
 ```bash
-pip install mokata
+pipx install mokata         # or: uv tool install mokata · brew · plain pip last (see Path A)
 mokata init                 # scaffold a governed config in THIS repo (.mokata/) — not Claude Code
 mokata brainstorm           # or: mokata --help to see every command
 ```
@@ -174,6 +200,6 @@ Once you've validated it, move back to the stable line with `pip install -U moka
 - New to the workflow? Run `mokata tour` for a 60-second read-only walkthrough.
 - See the full command list in the [CLI reference](reference/cli.md).
 
-> The mokata Claude Code **plugin** (one-click install from the in-app plugin directory) is planned
-> but **not yet available** — it isn't registered on the marketplace. For now, the pip + `mokata
-> setup claude` path above is the supported way to use mokata inside Claude Code.
+> The mokata Claude Code **plugin** installs today from mokata's own marketplace (Path A1). A
+> listing in Claude's community plugin marketplace is pending submission — until it exists, use the
+> two `/plugin` commands above.

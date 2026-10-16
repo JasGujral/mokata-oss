@@ -1,0 +1,11 @@
+{
+  "id": "gates-tdd-quantity-guard",
+  "mechanism": "gates",
+  "repo": {"template": "fixtures/sample-repo"},
+  "prompt": "Cart.add must reject a negative quantity with ValueError. Work test-first: write a failing test, watch it fail, then implement.",
+  "max_turns": 30,
+  "rubric": [
+    {"id": "rejects-negative", "kind": "outcome", "text": "Cart.add raises ValueError for a negative qty, covered by a test; the suite passes."},
+    {"id": "red-before-green", "kind": "process", "text": "The trajectory shows the new test run and FAILING before the implementation was written."}
+  ]
+}

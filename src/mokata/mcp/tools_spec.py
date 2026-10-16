@@ -246,7 +246,17 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
     # boundary on purpose: an incomplete spec is not a write awaiting permission, it is a spec that
     # is wrong, and proposing it would walk a human to a terminal to approve something no approval
     # could fix. (It reads the approved approach + refinements — run-scoped evidence, hence `store`.)
-    gr = run_completeness_gate(spec, test_refs, store=store)
+    # SPEC-ANCHOR (0.0.23 D4) — derive the per-AC anchors BEFORE the gate so its S3 advisories
+    # judge the anchors that will land (the committer derives again; derivation is idempotent).
+    from ..brainstorm import load_approved_approach
+    from ..engine.emit import structural_backend_available
+    from ..engine.spec_anchor import derive_anchors
+    try:
+        derive_anchors(spec, load_approved_approach(store))
+    except Exception:  # noqa: BLE001 — anchors are advisory; they never fail an emit
+        pass
+    gr = run_completeness_gate(spec, test_refs, store=store, root=surface.root,
+                               graph_available=structural_backend_available(surface))
     if not gr.passed:
         return {"status": "blocked", "committed": False, "gate": "completeness",
                 "reason": gr.reason, "unmapped": list(gr.unmapped_ids),
@@ -321,6 +331,26 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
                         "Nothing was written and there is nothing to approve — this is the wrong "
                         "tool for this moment, not a missing approval."}
 
+    # Gate 1e — SQ.S1 + SQ-REGRESS (0.0.23 D5). The SAME battery `mokata spec emit` runs
+    # (`engine/emit.run_quality_gate`): structural · rules · coherence · failure-mode, one ledgered
+    # cycle per call, ≤3 before it escalates to the human, and an approach-rooted finding force-
+    # regresses the run spec → brainstorm. LAST pre-consent gate (a refusal above writes nothing; this
+    # one may count a cycle). Only a PASSING spec reaches a human.
+    from ..engine.emit import run_quality_gate
+    quality = run_quality_gate(surface, spec, test_refs, store=store, run_id=run_id,
+                               ledger=AuditLedger.from_mokata_dir(surface.mokata_dir))
+    if not quality.passed:
+        hint = {"regress": ("the root cause is the APPROACH — the run is back at brainstorm: "
+                            "re-open the approach, update the plan, re-approve it, then emit."),
+                "escalate": ("the revise loop is exhausted — STOP and put these findings to the "
+                             "human; do not revise again on your own.")
+                }.get(quality.status, "revise the spec to answer each finding, then re-call.")
+        return {"status": "blocked", "committed": False, "gate": "spec-quality",
+                "reason": quality.reason(), "quality": quality.to_dict(),
+                "ac_count": len(spec.criteria),
+                "hint": hint + (" No spec was written and there is nothing to approve (this "
+                                "cycle is on the audit ledger).")}
+
     # Gate 2 — the human. Same consent boundary as every other durable write (SI.3/SI.4).
     args = {"path": path, "title": title, "criteria": criteria or [], "tests": tests or [],
             "approach": approach, "domains": domains or [], "scope": scope or {}}
@@ -339,6 +369,10 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
         payload: Dict[str, Any] = {"standalone": alone} if alone else {}
         payload.update({"ac_count": len(spec.criteria), "test_count": len(test_refs),
                         "gate": "completeness", "completeness": gr.reason})
+        from ..engine.emit import _new_warnings
+        warns = list(_new_warnings(gr))
+        if warns:
+            payload["warnings"] = warns                  # SPEC-ANCHOR S3 — advisories, never a block
         if verdict.replaces:
             payload.update({"replaces_version": verdict.from_version,
                             "to_version": verdict.version, "superseded": verdict.archive})

@@ -46,6 +46,9 @@ reported.
 eval "$ENGINE sync ${ARGUMENTS}"
 ```
 
+If `$ARGUMENTS` is empty, run the bare `sync` (interactive — it asks per conflict); pass `--yes`
+only when the user asked for a non-interactive flush in the conversation.
+
 Show the output **verbatim** — it leads with the connection **health** verdict (the SAME one the
 badge / `mokata mode` / `mokata doctor` show), then the flush + reconcile summary. If a conflict is
 **deferred**, tell the user to re-run `mokata sync` interactively to decide it — do **not**

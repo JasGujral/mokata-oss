@@ -209,8 +209,10 @@ class EmittedCommandRoundTrip(unittest.TestCase):
         # inherits the `--list` pointer from `description_for`, which is exactly what this count is
         # here to keep true. ⭐ The count is a TRIPWIRE, not bookkeeping: adding a tool that can
         # write on a human's behalf should require coming here and saying which tool and why.
-        self.assertEqual(len(described), 22,
-                         f"all twenty-two gated writes must still name the listing: {described}")
+        # 22 -> 24 at WT.S3 (0.0.23 E3): `worktree_clean` + `worktree_remove` — they REMOVE git
+        # worktrees on a human's behalf, which is exactly why they are gated writes and here.
+        self.assertEqual(len(described), 24,
+                         f"all twenty-four gated writes must still name the listing: {described}")
         with _Repo() as r:
             r.propose()
             code, _out = _run(shlex.split(A.LIST_CMD)[1:] + ["--path", r.path])

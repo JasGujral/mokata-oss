@@ -87,11 +87,19 @@ def _approval_run(path: str) -> str:
     a redemption that a guess would have granted, never the reverse. Nothing on this path can let a
     write through without a human-minted record; the key decides only WHICH id a content maps to,
     never whether it commits.
+
+    SESSION-BIND-BY-ANCESTOR (0.0.23 F1) — the "2+ pipelines" case above was the live amend wedge
+    (2026-10-15: several sessions brought back with `/resume`, `spec_amend` blocked at
+    `spec-persisted` or keyed to the wrong run), because this call could never pass the session id
+    the BOUND rung needs. `resolve_run_for_process` now finds that session through PROCESS
+    ANCESTRY (the hooks record it per ancestor pid; this server shares the Claude process with
+    them) and answers at the BOUND rung. No ancestry match is `resolve_run(path)` byte for byte, so
+    the fail-closed fallback above is untouched.
     """
     from ..session import current_run_id
     try:
-        from ..run_resolver import resolve_run_id
-        return resolve_run_id(path) or current_run_id()
+        from ..run_resolver import resolve_run_for_process
+        return resolve_run_for_process(path).run_id or current_run_id()
     except Exception:                    # noqa: BLE001 — resolution is never worth failing a call
         return current_run_id()
 

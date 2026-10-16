@@ -34,3 +34,8 @@
 *.zip binary
 *.gz binary
 *.whl binary
+
+# 0.0.23 C3 — the IDE's vendored graph libraries are BYTE-PINNED (sha256 in VERSIONS.json, checked
+# by tests/test_c3_ide_visuals.py). Upstream ships one of them with CRLF lines; normalising it
+# would change the bytes the pin names, so these files are never touched.
+src/mokata/ide/static/vendor/* -text

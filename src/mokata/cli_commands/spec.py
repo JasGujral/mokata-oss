@@ -181,6 +181,23 @@ def _await_a_human(surface, spec, store, run_id: "str | None", emit_args: dict) 
     return EMIT_AWAITING_EXIT
 
 
+def _consent_criteria(spec: "object", payload: "object") -> list:
+    """The criteria as the CONSENT identity hashes them — `{id, text}`, plus the author's `anchors`
+    EXACTLY as sent when the payload carried any (SPEC-ANCHOR, 0.0.23 D4). The MCP `spec_emit` hashes
+    its raw `criteria` argument, so carrying the raw anchors here keeps one spec one write across
+    both surfaces; an anchorless spec hashes byte-identically to before."""
+    raw = payload.get("criteria") if isinstance(payload, dict) else None
+    raw = raw if isinstance(raw, list) else []
+    out = []
+    for i, c in enumerate(spec.criteria):
+        d = {"id": c.id, "text": c.text}
+        src = raw[i] if i < len(raw) and isinstance(raw[i], dict) else {}
+        if src.get("anchors"):
+            d["anchors"] = src["anchors"]
+        out.append(d)
+    return out
+
+
 def cmd_spec_emit(args: argparse.Namespace) -> int:
     """Emit the spec through the real gates — completeness, then the human write gate."""
     from .. import approval
@@ -243,7 +260,7 @@ def cmd_spec_emit(args: argparse.Namespace) -> int:
     # The proposal id is DERIVED from (run, content), so the re-run that redeems needs no new flag
     # and no id to retype: running the same command against the same spec resolves to the same id.
     emit_args = {"path": surface.root, "title": spec.title,
-                 "criteria": [{"id": c.id, "text": c.text} for c in spec.criteria],
+                 "criteria": _consent_criteria(spec, payload),
                  "tests": [{"name": t.name, "ac_ids": list(t.ac_ids)} for t in tests],
                  "approach": spec.approach, "domains": list(spec.domains),
                  "scope": payload.get("scope") or {}}
@@ -281,10 +298,23 @@ def cmd_spec_emit(args: argparse.Namespace) -> int:
                     assume_yes=args.yes, confirm=None if args.yes else _confirm)
 
     if out.blocked_by_completeness:
-        print(f"[BLOCK] completeness — {out.reason}")
-        for ac in out.unmapped:
-            print(f"  unmapped: {ac} — no test covers it")
+        # SPEC-STANDALONE residual (2) (0.0.23 D6) — the gate's OWN rendering (`GateResult.render`:
+        # verdict, coverage, unmapped ids, advisories, the approved direction or the standalone
+        # note, and the one action that unblocks it), not a second hand-worded copy of it.
+        print(out.completeness.render())
         print("\nMap every acceptance criterion to a test, then emit again. Nothing was written.")
+        return 1
+    # SQ.S1 + SQ-REGRESS (0.0.23 D5) — the spec-quality battery refused: its findings, and the road.
+    if out.blocked_by_quality:
+        print(out.quality.render())
+        if out.quality.status == "regress":
+            print("\nThe run is back at BRAINSTORM: re-open the approach, update the plan, "
+                  "re-approve it, then emit the spec again. No spec was written.")
+        elif out.quality.status == "escalate":
+            print("\nThe revise loop is exhausted — these findings need a HUMAN decision before "
+                  "the spec can be emitted. No spec was written.")
+        else:
+            print("\nRevise the spec to answer each finding, then emit again. No spec was written.")
         return 1
     # SPEC-REEMIT-CLOBBER — a re-emit onto a run with work in flight is refused and routed to
     # `mokata spec amend`. Its own branch, not the write-gate one below: "declined at the write
@@ -324,6 +354,9 @@ def cmd_spec_emit(args: argparse.Namespace) -> int:
     # when it applies, so a brainstorm-attached emit's output is byte-identical to 0.0.15.
     if out.standalone:
         print(f"  {out.standalone_note}")
+    # SPEC-ANCHOR S3 — the gate's advisories (never a block), printed only when there are any.
+    for w in out.warnings:
+        print(f"  ⚠ {w}")
     if out.superseded:
         print(f"  this is v{out.version}: v{out.version - 1} was superseded, not overwritten — "
               f"it is kept at {out.superseded} and named on the audit ledger.")
@@ -331,6 +364,13 @@ def cmd_spec_emit(args: argparse.Namespace) -> int:
           f"({out.corpus_size} spec(s)).")
     print("  implementation is unblocked once a failing test is on record (/mokata:test).")
     return 0
+
+
+def _version_line(version: int, current: int) -> str:
+    """SPEC-HISTORY rider — WHICH spec this is. Shared with the MCP `spec_show` block."""
+    if version and version != current:
+        return f"version: v{version} (superseded — current is v{current})"
+    return f"version: v{version or 1} (current)"
 
 
 def cmd_spec_show(args: argparse.Namespace) -> int:
@@ -349,17 +389,48 @@ def cmd_spec_show(args: argparse.Namespace) -> int:
     if run_id is None:
         print(NO_TRACKED_RUN_RECOVERY)
         return 0
-    spec = load_emitted_spec(store)
+    # SPEC-HISTORY (0.0.23 D6) — `--versions` lists the run's spec history; `--version N` reads a
+    # superseded spec back from its archive. Same reader as the MCP `spec_show` (engine/spec_history).
+    from ..engine import spec_history as SH
+    if getattr(args, "versions", False):
+        rows = SH.spec_versions(store, run_id)
+        if not rows:
+            print(NO_SPEC_RECOVERY)
+            return 0
+        print(f"spec history (run {run_id[:8]}):")
+        for line in SH.render_versions(rows):
+            print(line)
+        return 0
+    want = getattr(args, "version", None)
+    version = SH.current_version(store)
+    if want:
+        row = SH.spec_at_version(store, run_id, int(want))
+        if row["malformed"]:
+            print(f"error: v{want} of this run's spec is present but unreadable at {row['key']} — "
+                  f"it is kept, not lost; inspect or restore it by hand.", file=sys.stderr)
+            return 1
+        if row["spec"] is None:
+            print(f"error: this run has no spec v{want} (current is v{version}; "
+                  f"`mokata spec show --versions` lists what exists).", file=sys.stderr)
+            return 1
+        spec, version = row["spec"], int(want)
+    else:
+        spec = load_emitted_spec(store)
     if spec is None:
         print(NO_SPEC_RECOVERY)
         return 0
     print(f"spec: {spec.title}")
+    print(_version_line(version, SH.current_version(store)))
     if spec.approach:
         print(f"approach: {spec.approach}")
     if spec.domains:
         print(f"domains: {', '.join(spec.domains)}")
     for c in spec.criteria:
         print(f"  {c.id}: {c.text}")
+    # SPEC-ANCHOR S2 — where each AC lives, so a test is placed without exploring for it.
+    from ..engine.spec_anchor import ac_anchor_lines
+    for line in ac_anchor_lines(spec):
+        print(f"  → {line}")
     return 0
 
 
@@ -496,6 +567,11 @@ def register(sub, common):
 
     p_show = ssub.add_parser("show", parents=[common],
                              help="show this run's persisted spec (read-only)")
+    p_show.add_argument("--version", type=int, default=None, metavar="N",
+                        help="show version N of this run's spec (a superseded one is read back "
+                             "from its archive)")
+    p_show.add_argument("--versions", action="store_true",
+                        help="list every version of this run's spec with its archive key")
     p_show.set_defaults(func=cmd_spec_show)
 
 

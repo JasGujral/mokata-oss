@@ -74,6 +74,8 @@ class TestToolsWriteAggregatorShim(unittest.TestCase):
             "stacks_install",
             "consolidate",     # M-4/R5 (0.0.16) — APPENDED; every pre-existing position unchanged
             "events_share",    # CM.S5 (0.0.21) — APPENDED, same discipline
+            "worktree_clean",  # WT.S3 (0.0.23 E3) — APPENDED, same discipline
+            "worktree_remove",
         ])
 
     def test_spec_emit_amend_are_attributes_even_though_not_in_all(self):

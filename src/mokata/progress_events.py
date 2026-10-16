@@ -334,12 +334,17 @@ def _resolve_verdict_run(surface: Any) -> Optional[str]:
     FAILS CLOSED (mokata refuses rather than reading a foreign run's verdict), and ship RETIREMENT
     is not applied, so the verdict key survives `mokata progress mark ship` — otherwise ship's own
     entry mark would re-key the read away from the run whose verdict was recorded.
-    Total: a surface with no readable `root` resolves to None rather than raising."""
+    Total: a surface with no readable `root` resolves to None rather than raising.
+
+    SESSION-BIND-BY-ANCESTOR (0.0.23 F1) — `resolve_run_for_process`: the same ladder, plus the
+    Claude session this process serves when process ancestry can name it (the MCP `review_record` /
+    `review_status` pair, which cannot see a session id). Record and read both come through HERE, so
+    record-key == read-key still holds by construction. No ancestry match is `resolve_run` exactly."""
     root = getattr(surface, "root", None)
     if not isinstance(root, str) or not root:
         return None
-    from .run_resolver import resolve_run_id
-    return resolve_run_id(root)
+    from .run_resolver import resolve_run_for_process
+    return resolve_run_for_process(root).run_id
 
 
 def record_review_verdict(surface: Any, *, passed: bool, independent: bool,
@@ -398,6 +403,23 @@ def verdict_contradiction(passed: bool, blocking: Optional[int]) -> str:
     return ""
 
 
+def current_stage(state_root: str, run_id: Optional[str], default: str = "develop") -> str:
+    """The stage `run_id` is in: its latest `stage_enter`, read newest-first and bounded.
+
+    0.0.23 B3 (`STAGE-LABEL-DEVELOP-ON-EVERY-EVENT`): `gate_block` and `subagent_finished` were
+    stamped `develop` whatever the run's stage — seen on a run still in brainstorm. `default` only
+    when the run has no `stage_enter` yet (the pre-0.0.23 label, so nothing that read it moves)."""
+    if not run_id:
+        return default
+    try:
+        for e in ProgressLog.from_state_dir(state_root).read_events_backward():
+            if e.get("type") == STAGE_ENTER and e.get("run_id") == run_id and e.get("stage"):
+                return str(e["stage"])
+    except Exception:
+        return default
+    return default
+
+
 def record_gate_block(state_root: str, run_id: str, gate: str, path: str) -> Optional[Dict]:
     """An in-loop catch: a run-state gate blocked `path` in `run_id`. Written by the gate-guard
     hook. Observability tier (append-only, UNGATED). Returns the event, or None when there is no
@@ -405,7 +427,8 @@ def record_gate_block(state_root: str, run_id: str, gate: str, path: str) -> Opt
     if not run_id or not gate:
         return None
     return ProgressLog.from_state_dir(state_root).append_event(
-        GATE_BLOCK, "develop", run_id=run_id, data={"gate": gate, "path": path})
+        GATE_BLOCK, current_stage(state_root, run_id), run_id=run_id,
+        data={"gate": gate, "path": path})
 
 
 def record_subagent_finished(state_root: str, run_id: str, contract: Dict[str, Any],
@@ -428,7 +451,7 @@ def record_subagent_finished(state_root: str, run_id: str, contract: Dict[str, A
         # hook fires twice — one subagent is one finish, so the second firing records nothing.
         return None
     return ProgressLog.from_state_dir(state_root).append_event(
-        SUBAGENT_FINISHED, "develop", run_id=run_id, data=data)
+        SUBAGENT_FINISHED, current_stage(state_root, run_id), run_id=run_id, data=data)
 
 
 def subagents_finished(state_root: str, run_id: Optional[str],

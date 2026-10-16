@@ -133,8 +133,9 @@ def cmd_baseline(args: argparse.Namespace) -> int:
             manifest = Surface.load(args.path).manifest
         except (ConfigError, ManifestError):
             manifest = None
+    from ..project_env import settings_python
     cmd = baseline_command(manifest, override=args.cmd)
-    result = baseline_status(cmd, cwd=args.path)
+    result = baseline_status(cmd, cwd=args.path, settings_python=settings_python(manifest))
     print(result.render())
     # green/unknown don't hard-block (unknown degrades clean); only red is non-zero.
     return 0 if result.ok else 1

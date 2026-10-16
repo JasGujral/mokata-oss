@@ -190,8 +190,8 @@ mokata integrates with Claude Code through two harness surfaces:
   only harness that declares the `hooks` capability** — elsewhere the gate-guard is never wired and
   the run-state gates enforce nothing. Deep-dive:
   [the gate-guard](skills-and-gates.md#the-gate-guard-the-gates-enforced-on-native-edits).
-- **MCP.** mokata's `mokata-mcp` server exposes **65 tools** — **43 read** (`progress`, `lanes`,
-  `watch`, `govern`, `query`, …), **21 write**, and **1 approve** — so the pipeline's state and the
+- **MCP.** mokata's `mokata-mcp` server exposes **67 tools** — **43 read** (`progress`, `lanes`,
+  `watch`, `govern`, `query`, …), **23 write**, and **1 approve** — so the pipeline's state and the
   graph are reachable from inside the harness without leaving the chat. Every *write* tool is
   **propose-only**: it returns a `proposal_id` and commits nothing until a human mints the approval
   out-of-band with `mokata approve <id>` (bare `mokata approve` lists what is awaiting one). See
@@ -220,5 +220,5 @@ touches a symbol a doc references, and it backs brainstorm's doc-freshness check
 - Understand the two skills layers: [Skills & gate map](skills-and-gates.md) →
   [Domain skills](domain-skills.md).
 - See the guarantees: [Governance & audit](../concepts/governance.md).
-- Get it running: [Get started](../getting-started.md) (`pip install mokata` →
-  `mokata setup claude`).
+- Get it running: [Get started](../getting-started.md) (the two-command plugin, or
+  `pipx install mokata` → `mokata setup claude`).

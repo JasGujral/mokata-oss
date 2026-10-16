@@ -118,8 +118,14 @@ def _probes(ctx: PhaseContext) -> PhaseRecord:
                        f"{addressed}/{len(ctx.probes)} probe(s) addressed by the spec")
 
 
-def _completeness(ctx: PhaseContext) -> PhaseRecord:
-    gr = run_completeness_gate(ctx.spec, ctx.tests, handoff=ctx.handoff)
+def _completeness(ctx: PhaseContext, store: Any = None, ledger: Any = None) -> PhaseRecord:
+    # SPEC-STANDALONE residual (3) (0.0.23 D6) — the STORE travels with the handoff, as on the MCP
+    # and CLI paths. Without it a refine-front-ended run (no brainstorm handoff, an approved
+    # refinement set on record) was read as STANDALONE by the engine pipeline: a wrong answer.
+    # 0.0.23 D3 — the verdict is the gate's enforcement level applied to the check (through
+    # `govern/enforce.py`); with a ledger the block / advisory evaluation is recorded.
+    gr = run_completeness_gate(ctx.spec, ctx.tests, handoff=ctx.handoff, store=store,
+                               ledger=ledger)
     ctx.gate_result = gr
     return PhaseRecord("completeness_gate", gr.passed, gr.reason,
                        gate_id="completeness", gate_passed=gr.passed)
@@ -172,6 +178,17 @@ def _mark_gate_passed(store: Any, phase: str) -> None:
         note_persist_failure("gate:" + phase, error=exc)
 
 
+def _record_gate_evidence(store: Any, result: Any) -> None:
+    """0.0.23 D8 — persist the completeness outcome's typed evidence under
+    `.mokata/temp_local/evidence/<run_id>/` (observability tier: append-only, ungated). Never blocks
+    and never raises — `record_evidence` returns None on any failure."""
+    from ..govern.evidence import evidence_root_for_state, record_evidence
+    from ..session import current_run_id
+    ev = getattr(result, "evidence", None)
+    if ev is not None:
+        record_evidence(evidence_root_for_state(store), current_run_id(), ev)
+
+
 def _karpathy_context(ctx: PhaseContext) -> KarpathyContext:
     """Read the Karpathy-gate signals (G3) off the current pipeline state."""
     return KarpathyContext(
@@ -212,7 +229,9 @@ def run_pipeline(handoff: Any, spec: Spec, tests: List[TestRef],
         elif phase == "probes":
             rec = _probes(ctx)
         elif phase == "completeness_gate":
-            rec = _completeness(ctx)
+            rec = _completeness(ctx, store, ledger)
+            if store is not None:
+                _record_gate_evidence(store, ctx.gate_result)
         else:  # emit
             rec = _emit(ctx, store, gate, approve)
         if ledger is not None:

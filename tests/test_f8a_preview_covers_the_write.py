@@ -157,7 +157,8 @@ def template_drift(template_text):
 def _preview(argv, root, home):
     """The real CLI, stdout captured. Returns `(rc, text)` and asserts nothing itself."""
     buf = io.StringIO()
-    with mock.patch.dict(os.environ, {**os.environ, "HOME": home}), redirect_stdout(buf):
+    with mock.patch.dict(os.environ, {**os.environ, "HOME": home, "USERPROFILE": home}), \
+            redirect_stdout(buf):
         rc = main(list(argv) + ["--path", root])
     return rc, buf.getvalue()
 

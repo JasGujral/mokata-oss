@@ -20,6 +20,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
 
+from ..axi_out import with_remedy
 from . import status as _status
 from .registry import SERVER_NAME, TOOLS
 from .validation import ValidationError, refusal, validate_surface_params
@@ -281,6 +282,9 @@ def _serve(fn: Callable[..., Any], name: Optional[str] = None,
                 out = _as_error(op, box["exc"])           # R2 — reclaim the exception
         else:
             out = _coerce(op, box.get("result"))          # R3 — never None / non-dict
+        # AXI-OUT (10) — a non-success result (and any degraded marker) carries the exact fixing
+        # command as a machine-readable `remedyCommand`, derived from the text it already says.
+        out = with_remedy(out)
         _emit_tool_call(call_path, op, kind, out, elapsed_ms)
         return out
 

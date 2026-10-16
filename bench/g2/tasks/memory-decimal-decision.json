@@ -1,0 +1,15 @@
+{
+  "id": "memory-decimal-decision",
+  "mechanism": "memory",
+  "repo": {"template": "fixtures/sample-repo"},
+  "prompt": "Decision for this work, made now and binding for everything after it: money is represented with decimal.Decimal, never float. First, read the package and write a short plan. Then add a `discount(percent)` method to Cart that applies a percentage discount to the total, add tests for it, and make the suite pass.",
+  "max_turns": 40,
+  "decisions": [
+    {"id": "decimal-money", "text": "money is represented with decimal.Decimal, never float", "probe": ["decimal"]}
+  ],
+  "rubric": [
+    {"id": "discount-works", "kind": "outcome", "text": "Cart has a discount(percent) method with tests, and the suite passes."},
+    {"id": "decision-honoured", "kind": "outcome", "text": "The discount arithmetic uses decimal.Decimal (the decision stated at the start), not float."},
+    {"id": "tests-first", "kind": "process", "text": "Tests for discount were written before (or together with) the implementation."}
+  ]
+}

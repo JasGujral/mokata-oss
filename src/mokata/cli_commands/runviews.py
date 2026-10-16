@@ -364,6 +364,54 @@ def cmd_worktree_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_worktree_clean(args: argparse.Namespace) -> int:
+    # WT.S3 FR-WT-2 — PREVIEW the plan (merged + clean + no live session → remove; directory gone →
+    # prune; everything else KEPT with its reason), then ask (fail-closed read_yes_no) unless --yes.
+    # Never automatic. Exit: 0 nothing to do / all done · 1 a removal failed or the human declined
+    # with work pending · 2 not a git repo / git unavailable.
+    from .. import worktree_manage as WM
+    surface = _load_surface(args.path)
+    plan = WM.plan_worktree_clean(surface)
+    print(plan.render())
+    if not plan.ok:
+        return 2
+    if not plan.actionable:
+        return 0
+    if not args.yes:
+        from ..prompt import read_yes_no
+        if not read_yes_no(f"mokata · remove/prune the {len(plan.actionable)} worktree(s) marked "
+                           f"above? (the branches are kept; only the worktrees go)",
+                           "clean the worktrees?"):
+            print("mokata worktree clean: declined — nothing was removed.")
+            return 1
+    outcome = WM.apply_worktree_clean(surface, plan)
+    print(outcome.render("clean"))
+    return 0 if outcome.ok else 1
+
+
+def cmd_worktree_remove(args: argparse.Namespace) -> int:
+    # WT.S3 FR-WT-3 — remove ONE worktree. Refuses the main checkout and a live session always;
+    # refuses dirty / unmerged unless --force. Asks (fail-closed) unless --yes. The branch is kept.
+    from .. import worktree_manage as WM
+    surface = _load_surface(args.path)
+    row, refusal = WM.check_remove(surface, args.target, force=args.force)
+    if row is None or refusal:
+        print(f"mokata worktree remove: refused — {refusal}" if row is not None
+              else f"mokata worktree remove: {refusal}")
+        return 1
+    if not args.yes:
+        from ..prompt import read_yes_no
+        forced = " (FORCED: uncommitted / unmerged work in it is discarded)" if args.force else ""
+        if not read_yes_no(f"mokata · remove worktree {row.path} (branch "
+                           f"'{row.branch or '(detached)'}' is kept){forced}?",
+                           "remove the worktree?"):
+            print("mokata worktree remove: declined — nothing was removed.")
+            return 1
+    outcome = WM.remove_worktree(surface, args.target, force=args.force)
+    print(outcome.render("remove"))
+    return 0 if (outcome.ok and (outcome.removed or outcome.pruned)) else 1
+
+
 def cmd_resume(args: argparse.Namespace) -> int:
     # Stage 50 — PREVIEW where a run resumes (read-only): the phase + the gate that still
     # applies. mokata never auto-runs the pipeline; the gates hold on resume.
@@ -601,6 +649,26 @@ def register(sub, common):
     p_wt_list.add_argument("--ascii", action="store_true",
                            help="ASCII-only output (no box-drawing/arrow glyphs)")
     p_wt_list.set_defaults(func=cmd_worktree_list)
+    p_wt_clean = wt_sub.add_parser(
+        "clean", parents=[common],
+        help="preview and remove stale worktrees (merged + clean + no live session) and prune "
+             "vanished ones (human-gated; branches are kept)",
+    )
+    p_wt_clean.add_argument("--yes", action="store_true",
+                            help="approve non-interactively (removes only what the preview marks)")
+    p_wt_clean.set_defaults(func=cmd_worktree_clean)
+    p_wt_remove = wt_sub.add_parser(
+        "remove", parents=[common],
+        help="remove ONE worktree (human-gated; refuses a live session, and a dirty or unmerged "
+             "one unless --force; the branch is kept)",
+    )
+    p_wt_remove.add_argument("target", help="the worktree path, its `list` label, or its branch")
+    p_wt_remove.add_argument("--force", action="store_true",
+                             help="discard uncommitted / unmerged work (never overrides a live "
+                                  "session)")
+    p_wt_remove.add_argument("--yes", action="store_true",
+                             help="approve non-interactively")
+    p_wt_remove.set_defaults(func=cmd_worktree_remove)
 
     p_resume = sub.add_parser(
         "resume", parents=[common],
@@ -650,6 +718,8 @@ __all__ = [
     "cmd_windows",
     "cmd_worktree_create",
     "cmd_worktree_list",
+    "cmd_worktree_clean",
+    "cmd_worktree_remove",
     "cmd_resume",
     "cmd_watch",
     "cmd_govern",

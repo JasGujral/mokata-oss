@@ -361,8 +361,11 @@ class TestSpecShowPayload(unittest.TestCase):
                                       criteria=(("AC1", "one"),)))
             self.assertNotIn("block", spec_show(path=d))                    # concise default
             block = spec_show(path=d, response_format="detailed")["block"]
+            # 0.0.23 D6 (SPEC-HISTORY rider) — the block now names WHICH spec it is. Moved
+            # deliberately: "which spec am I looking at" must be answerable on both surfaces.
             self.assertEqual(block.splitlines(),
-                             ["spec: T", "approach: A", "domains: api", "  AC1: one"])
+                             ["spec: T", "version: v1 (current)", "approach: A", "domains: api",
+                              "  AC1: one"])
 
     def test_detailed_block_matches_the_cli_render_line_for_line(self):
         """One spec, two surfaces: the `detailed` block is the same text `mokata spec show` prints
@@ -412,7 +415,10 @@ class TestSpecShowIsRegisteredCorrectly(unittest.TestCase):
         and must not grow one — pinned so a later edit can't quietly make the spec read gated."""
         import inspect
         params = inspect.signature(spec_show).parameters
-        self.assertEqual(list(params), ["path", "run", "response_format"])
+        # 0.0.23 D6 (SPEC-HISTORY) — `version` / `list_versions` are READ selectors, moved
+        # deliberately; the consent ban below is what this pin exists for and is unchanged.
+        self.assertEqual(list(params), ["path", "run", "version", "list_versions",
+                                        "response_format"])
         for banned in ("approve", "confirm", "proposal_id"):
             self.assertNotIn(banned, params)
 
@@ -597,8 +603,10 @@ class TestNegativesUnchanged(unittest.TestCase):
                                          criteria=(("AC1", "one"), ("AC2", "two"))))
             rc, out = run(d)
             self.assertEqual(rc, 0)
-            self.assertEqual(out, "spec: T\napproach: A\ndomains: api, git\n"
-                                  "  AC1: one\n  AC2: two\n")
+            # 0.0.23 D6 (SPEC-HISTORY rider) — the one deliberate move: the spec names its
+            # version, so "which spec am I looking at" is answerable. Everything else is unchanged.
+            self.assertEqual(out, "spec: T\nversion: v1 (current)\napproach: A\n"
+                                  "domains: api, git\n  AC1: one\n  AC2: two\n")
 
     def test_run_scoped_store_default_is_unchanged_for_every_cli_caller(self):
         """The seam gained an OPTIONAL `run_id`; no CLI surface passes it, and omitted it resolves

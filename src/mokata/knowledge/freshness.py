@@ -56,7 +56,7 @@ from __future__ import annotations
 import os
 import subprocess
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from ..repo_paths import name_of
 
 # --- layout (transient run-state under temp_local — ungated, GR.S1-cache precedent) -------
@@ -666,7 +666,29 @@ def git_untracked(root: str, *, run: Optional[Callable[[str, List[str]], Any]] =
         return []
     if rc != 0:
         return []
-    return _git_paths(out)          # 4-5 — see `_git_paths`
+    return _drop_python_envs(root, _git_paths(out))          # 4-5 — see `_git_paths`
+
+
+def _drop_python_envs(root: str, names: List[str]) -> List[str]:
+    """0.0.23 verification M4 — a venv that is NOT gitignored is untracked, so every one of its
+    files came back here and the freshness check saw tens of thousands of "changed" files on every
+    query (6.5 s of the amend lens at 60k files). The walker already prunes environments by marker
+    (`repo_walk.is_python_env`); this applies the same rule to git's list. One stat per DIRECTORY,
+    memoised, so the cost is the number of directories, not files."""
+    from ..repo_walk import is_python_env
+    memo: Dict[str, bool] = {}
+
+    def in_env(rel_dir: str) -> bool:
+        if not rel_dir:
+            return False
+        hit = memo.get(rel_dir)
+        if hit is None:
+            parent = rel_dir.rsplit("/", 1)[0] if "/" in rel_dir else ""
+            hit = in_env(parent) or is_python_env(os.path.join(root, *rel_dir.split("/")))
+            memo[rel_dir] = hit
+        return hit
+
+    return [n for n in names if not in_env(n.rsplit("/", 1)[0] if "/" in n else "")]
 
 
 # ==========================================================================================

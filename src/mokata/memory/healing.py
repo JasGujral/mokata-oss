@@ -55,6 +55,10 @@ CROSS_WRITER = "cross_writer"
 # valid, and the CODE underneath it changed. Folding them together would tell a human their
 # decision expired when nothing of the sort happened.
 CODE_ANCHOR_STALE = "code_anchor_stale"
+# PM.S1 (0.0.23 D15) — an INTENTION whose due condition fired (memory/intentions.py). Its own kind:
+# nothing about the item is wrong or expired; it is ASKING to be acted on. Approve = done (the item
+# is archived, never deleted); reject/defer = leave it, and it comes back on the next sweep.
+INTENTION_DUE = "intention_due"
 
 # R5 — the near-dup bar, deliberately CONSERVATIVE. Cosine over the embedding the gated write
 # already stamped; 0.97 is close to identity for a normalized embedding, so paraphrases of one fact
@@ -219,6 +223,8 @@ class HealingProposal:
     subgraph: Optional[ConflictSubgraph] = None
 
     def diff(self) -> str:
+        if self.kind == INTENTION_DUE:
+            return f"{self.old.value!r} (due: {self.rationale}) -> done"
         if self.kind == CODE_ANCHOR_STALE:
             # NOT the `-> stale` line the TTL arm renders. Nothing about the FACT changed, so a
             # diff that showed the value going stale would be describing a change that did not
@@ -289,7 +295,8 @@ def _is_near_dup(a: MemoryItem, b: MemoryItem) -> bool:
 def detect_issues(active_items: List[MemoryItem],
                   now: Optional[str] = None,
                   conflicts: Optional[Sequence[ConflictRecord]] = None,
-                  anchor_staleness: Optional[Sequence["AnchorStaleness"]] = None
+                  anchor_staleness: Optional[Sequence["AnchorStaleness"]] = None,
+                  intentions_due: Optional[Sequence[Any]] = None
                   ) -> List[HealingProposal]:
     """Return healing proposals for the given ACTIVE items (and cross-writer conflicts, DB.S6, and
     moved code anchors, H-6).
@@ -341,6 +348,11 @@ def detect_issues(active_items: List[MemoryItem],
 
     proposals.extend(detect_cross_writer(conflicts or ()))
     proposals.extend(detect_code_anchor_staleness(anchor_staleness or ()))
+    # PM.S1 — the store gathers due-ness (it owns the session signals); this only renders it.
+    for d in intentions_due or ():
+        proposals.append(HealingProposal(
+            kind=INTENTION_DUE, subject=d.item.subject, mtype=d.item.mtype, old=d.item, new=None,
+            rationale=d.reason))
     return proposals
 
 
@@ -458,6 +470,13 @@ def render_proposal(p: HealingProposal) -> str:
             "  defer   — decide later (the write stays conflicted, nothing is lost)",
             "Default is DEFER — a conflict is never resolved by silence, and 'discard' is a "
             "word you have to say: it throws away a write you already approved.",
+        ]
+    elif p.kind == INTENTION_DUE:
+        lines += [
+            "Nothing changes unless you act. Choose:",
+            "  approve — DONE (the intention is archived, never deleted)",
+            "  defer   — not yet (it comes back on the next check)",
+            "Default is DEFER — a reminder is never dismissed by silence.",
         ]
     else:
         lines += [

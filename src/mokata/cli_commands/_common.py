@@ -75,7 +75,10 @@ def _load_surface(root: str) -> Surface:
     try:
         return Surface.load(root)
     except (ConfigError, ManifestError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        # AXI-OUT (7) — the agent-facing error, which already names its fix (`mokata init`, or the
+        # main-checkout repair), goes to STDOUT where the caller reads results; stderr is reserved
+        # for diagnostics. Exit stays 1.
+        print(f"error: {exc}")
         raise SystemExit(1)
 
 

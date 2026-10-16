@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
-"""Single source of truth for the Claude plugin-DIRECTORY listing notice.
+"""Single source of truth for the plugin MARKETPLACE-LISTING notice.
 
-The "pending directory approval" notice appears in several user docs (README + the docs site).
-Rather than hand-edit each one when the listing is approved, THIS file owns it:
+The notice appears in several user docs (README + the docs site). Rather than hand-edit each one
+when the listing lands, THIS file owns it:
 
-  * ``LISTED`` — the one flag the user flips to ``True`` after the directory approves the listing;
+  * ``LISTED`` — the one flag the user flips to ``True`` once the community marketplace lists mokata;
   * the PENDING / LIVE notice texts (the only two states);
   * ``apply()`` rewrites the marker-delimited region in every target file to match ``LISTED``.
 
-**The directory APPROVAL itself is external** (a Claude/GitHub plugin-directory action the user
-performs — mokata cannot self-approve). So we never *claim* the listing is live while ``LISTED``
-is ``False``. To go live AFTER approval:
+**Which channel (0.0.23 B4 — `PLUGIN-DIRECTORY-WRONG-CHANNEL`).** The notice used to wait on
+*"Claude plugin-directory approval"* — but the official marketplace (``claude-plugins-official``)
+is partner-contact only. Individual authors submit to the **community** marketplace
+(platform.claude.com/plugins/submit). Meanwhile the plugin installs TODAY from mokata's own
+self-hosted marketplace (``.claude-plugin/marketplace.json``, name ``mostack``), which needs no
+approval — so both states lead with those two commands, and only the community listing is pending.
+
+**The listing itself is external** (a credentialed submission the user performs — mokata cannot
+list itself). So we never *claim* a listing while ``LISTED`` is ``False``. To go live AFTER the
+community marketplace lists mokata:
 
   1. set ``LISTED = True`` below;
   2. run ``python3 scripts/directory_listing.py --apply``;
@@ -27,29 +34,33 @@ import re
 import sys
 
 # ─── the single flag the user controls ──────────────────────────────────────────────────────
-# Flip to True ONLY after Claude's plugin directory approves the mokata listing, then run
-# `python3 scripts/directory_listing.py --apply`. While False, the docs say "pending" — we never
-# claim a listing that isn't approved.
+# Flip to True ONLY after the Claude community plugin marketplace lists mokata, then run
+# `python3 scripts/directory_listing.py --apply`. While False, the docs say the listing is pending
+# submission — we never claim a listing that does not exist.
 LISTED = False
 
 START = "<!-- mokata:directory-listing:start -->"
 END = "<!-- mokata:directory-listing:end -->"
 
+#: The two in-app commands — the self-hosted marketplace (`.claude-plugin/marketplace.json`).
+INSTALL_COMMANDS = ("/plugin marketplace add JasGujral/mokata-oss", "/plugin install mokata@mostack")
+
 PENDING = (
-    "> ⏳ **Pending Claude plugin-directory approval.** A one-click Claude Code **plugin** is\n"
-    "> **planned, not yet available** — mokata isn't registered on any Claude Code marketplace.\n"
-    "> The supported way to run mokata inside Claude Code today is the pip-first path:\n"
-    "> `pip install mokata` → `mokata setup claude`\n"
-    "> (see [Getting started](https://mokata.ai/getting-started/)).\n"
-    "> _(This notice auto-flips once the listing is approved — single source:\n"
+    "> **Installs today as a Claude Code plugin** from mokata's own marketplace — inside Claude\n"
+    "> Code run `/plugin marketplace add JasGujral/mokata-oss`, then `/plugin install mokata@mostack`\n"
+    "> (the plugin starts its MCP server through `uvx`, so [`uv`](https://docs.astral.sh/uv/) must be\n"
+    "> on PATH).\n"
+    "> ⏳ **Pending: the community-marketplace listing** (pending submission) — mokata is not yet\n"
+    "> listed in Claude's community plugin marketplace; until it is, use the two commands above.\n"
+    "> _(This notice auto-flips once the listing exists — single source:\n"
     "> `scripts/directory_listing.py`.)_"
 )
 
 LIVE = (
-    "> ✅ **mokata is in the Claude plugin directory.** Install it straight from Claude Code's\n"
-    "> in-app **\"Browse plugins\"** — or use the pip-first path (`pip install mokata` →\n"
-    "> `mokata setup claude`), which still works and wires the same commands, skills, MCP\n"
-    "> tools, and hooks."
+    "> ✅ **mokata is listed in the Claude community plugin marketplace.** Install it from Claude\n"
+    "> Code's in-app plugin browser — or from mokata's own marketplace with\n"
+    "> `/plugin marketplace add JasGujral/mokata-oss` then `/plugin install mokata@mostack`\n"
+    "> (either way the MCP server starts through `uvx`, so `uv` must be on PATH)."
 )
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

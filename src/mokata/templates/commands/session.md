@@ -46,6 +46,8 @@ after pull.
 
 ## 2. Pick the sub-action from `$ARGUMENTS`
 
+If `$ARGUMENTS` is empty, infer the sub-action from the conversation (save/share what was just worked on, or pick up a teammate's bundle); if it is still unclear, run `list` (read-only) and ask.
+
 - **`list`** — show the tagged bundles + their resume point, **spanning local (+ shared Postgres
   when a DSN is set)**, read-only. If this repo still holds bundles in the REMOVED `vault`
   transport's store, `list` says so and names them rather than quietly listing short:

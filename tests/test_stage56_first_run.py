@@ -77,13 +77,15 @@ class TestDidYouMean(unittest.TestCase):
 
     def test_cli_main_unknown_command_returns_2_with_hint(self):
         from mokata import cli
+        # 0.0.23 E2 (AXI-OUT 7) — the agent-facing error + its fix moved to STDOUT (stderr is for
+        # diagnostics). Updated deliberately; the exit code and the content are unchanged.
         err = io.StringIO()
-        so = sys.stderr
-        sys.stderr = err
+        so = sys.stdout
+        sys.stdout = err
         try:
             rc = cli.main(["statuss", "--path", "."])     # a realistic typo of `status`
         finally:
-            sys.stderr = so
+            sys.stdout = so
         self.assertEqual(rc, 2)
         text = err.getvalue()
         self.assertIn("not a mokata command", text)
@@ -92,12 +94,12 @@ class TestDidYouMean(unittest.TestCase):
     def test_cli_main_far_typo_still_degrades_clean(self):
         from mokata import cli
         err = io.StringIO()
-        so = sys.stderr
-        sys.stderr = err
+        so = sys.stdout
+        sys.stdout = err
         try:
             rc = cli.main(["frobnicate", "--path", "."])   # no close match — still a clean hint
         finally:
-            sys.stderr = so
+            sys.stdout = so
         self.assertEqual(rc, 2)
         self.assertIn("not a mokata command", err.getvalue())
         self.assertIn("Next:", err.getvalue())
@@ -117,6 +119,19 @@ class TestDidYouMean(unittest.TestCase):
 
 # ============================================================ the first-run wizard
 class TestWizard(unittest.TestCase):
+    def setUp(self):
+        # The wizard ends with the embeddings OFFER (DB.S4), which ASKS on a real terminal when
+        # the model is not installed. These tests grade the profile/detect/wire steps, not the
+        # offer (test_g1_adoption_modes grades that), so a TTY run — a developer's
+        # interactive shell on macOS, Linux or Windows — must not block on a stdin nobody feeds.
+        # Found at the 0.0.23 cut: the suite hung here under a pseudo-terminal.
+        from unittest import mock
+        from mokata import extras_install
+        patcher = mock.patch.object(extras_install, "offer_embeddings",
+                                    return_value=extras_install.OfferResult(declined=True))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_decline_writes_nothing(self):
         with tempfile.TemporaryDirectory() as d:
             res = OB.run_wizard(d, ask=_Asker("standard"), confirm=lambda p: False,

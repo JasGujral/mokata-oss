@@ -641,7 +641,8 @@ def _ranked_injection_items(store: Any, query: str, exclude: "set",
 
 def build_injection(surface: Surface, query: str,
                     budget: "Optional[int]" = None,
-                    exclude_ids: "Optional[set]" = None) -> InjectionResult:
+                    exclude_ids: "Optional[set]" = None,
+                    evidence_lines: "Optional[List[str]]" = None) -> InjectionResult:
     """The per-turn pack for `query`, guaranteed to fit `budget`.
 
     Never raises: every failure (an unreadable store, a half-installed package, a store that
@@ -653,7 +654,13 @@ def build_injection(surface: Surface, query: str,
     turns ago spends the budget on nothing).
 
     H-8 (0.0.22 D3) — `budget` omitted reads `settings.context.turn_tokens` (default 300), and the
-    reserved rule lines and the ranked top-k read their `settings.context` keys too: ONE budget."""
+    reserved rule lines and the ranked top-k read their `settings.context` keys too: ONE budget.
+
+    LIVE-EVIDENCE + DEV-CC (0.0.23 D1) — `evidence_lines` are the develop-time passive findings
+    (`engine/live_evidence.develop_turn_lines`). They ride THIS pack, inside THIS budget: placed at
+    the head of the ranked half, so they outrank recalled memory (they are about the code this turn
+    touches) but never the always-on guardrails, and the ranked tail — memory first — is what the
+    budget drops. No second channel and no second budget."""
     from .context_budget import context_budget
     cb = context_budget(getattr(surface, "manifest", None))
     if budget is None:
@@ -662,6 +669,7 @@ def build_injection(surface: Surface, query: str,
         return InjectionResult(text="", token_estimate=0, budget=budget)
 
     exclude = exclude_ids or set()
+    evidence = [ln for ln in (evidence_lines or []) if isinstance(ln, str) and ln.strip()]
     try:
         from .memory import JIT_KINDS, MemoryStore, always_on_lines, jit_recall, render_item_line
         store = MemoryStore.from_surface(surface)
@@ -693,13 +701,20 @@ def build_injection(surface: Surface, query: str,
         # the always-on set still reached the SessionStart briefing, which DOES announce a broken
         # memory read loudly (`_briefing_rule_lines`). Saying it again every turn buys nothing
         # and trains the user to ignore the channel.
-        return InjectionResult(text="", token_estimate=0, budget=budget)
+        #
+        # D1 — the develop-time evidence does not depend on the memory store, so a broken store
+        # costs the turn its memory, not its live-evidence findings.
+        if not evidence:
+            return InjectionResult(text="", token_estimate=0, budget=budget)
+        reserved, hits, render_item_line = [], [], str
 
-    ranked = [render_item_line(i) for i in hits]
+    ranked = evidence + [render_item_line(i) for i in hits]
     if not reserved and not ranked:
         return InjectionResult(text="", token_estimate=0, budget=budget)
 
-    text, kept_rules, kept, dropped = _fit_to_budget(_INJECTION_HEADER, reserved, ranked, budget)
+    text, kept_rules, kept_ranked, dropped = _fit_to_budget(_INJECTION_HEADER, reserved, ranked,
+                                                            budget)
+    kept = max(0, kept_ranked - len(evidence))      # memory items shown (evidence leads the half)
 
     # The closing ARITHMETIC backstop. `_fit_to_budget` drops whole lines and can therefore fail
     # in one shape it cannot fix: a single line longer than the entire budget (a very long rule,

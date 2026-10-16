@@ -110,3 +110,132 @@ def learn_from_ledger(ledger: Any, *, threshold: int = 3,
         learner.observe(key, rule_text=f"Recurring correction '{key}' — consider "
                                        f"promoting a guardrail rule.")
     return list(learner.promotions)
+
+
+# =====================================================================================================
+# 0.0.23 D3 — gate promotion on evidence: the SAME threshold → proposal → human gate as a rule.
+#
+# An ADVISORY gate (`Gate.enforcement == "advisory"`, decided by `enforce.decide_gate`) ledgers every
+# evaluation as `gate_advisory` (decision "pass" or "would-block"). A CLEAN advisory run is one that
+# would NOT have blocked. Once a gate's trailing streak of clean runs since its last enforcement change
+# reaches the threshold, the `RulesLearner` threshold machinery PROPOSES promoting it — proposal-only.
+# Promotion itself is `apply_gate_promotion`: `RulesLearner.apply_promotion`'s human gate (default
+# declines), then an `enforcement_change` (gkind "gate") on the ledger — the record
+# `enforce.effective_gate_enforcement` raises the gate's level from. A would-block resets the streak:
+# a gate that would have walled legitimate work is not evidence it is ready to be a wall.
+#
+# PROMOTION TARGET — ruled 2026-10-16 (doc 84 GATE-HAS-NO-ENFORCEMENT-LADDER): an earned promotion
+# goes advisory → SOFT. A promoted gate blocks, but a human can override and the override is ledgered
+# (`rule_override`), so a gate that misfires after promotion never walls work with no way through.
+# HARD stays a level a gate is DECLARED at (every backed pipeline gate is); it is never the automatic
+# landing of a learned promotion.
+# =====================================================================================================
+
+#: Clean advisory runs a gate must string together before a promotion is proposed.
+DEFAULT_GATE_PROMOTION_THRESHOLD = 5
+#: Where an earned promotion lands (ruled 2026-10-16, see the block above).
+GATE_PROMOTION_TARGET = "soft"
+#: The learner's pattern-key prefix for a gate, so a gate never coalesces with a correction key.
+GATE_PATTERN_PREFIX = "gate:"
+
+
+@dataclass
+class GateAdvisoryStats:
+    """One gate's advisory record, for `mokata govern`-style surfacing (the doc-84 risk: advisory
+    gates that are never promoted accumulate, and one that would-block constantly is a FALSE-POSITIVE
+    problem to look at, not a gate to keep)."""
+
+    gate_id: str
+    level: str
+    evaluations: int
+    would_block: int
+    clean_streak: int
+
+
+def _gate_entries_since_change(entries: List[Dict[str, Any]], gate_id: str) -> List[Dict[str, Any]]:
+    from .enforce import ENFORCEMENT_CHANGE_KIND, GATE_ADVISORY_KIND, GATE_GKIND
+    out: List[Dict[str, Any]] = []
+    for e in entries:
+        if (e.get("kind") == ENFORCEMENT_CHANGE_KIND and e.get("gkind") == GATE_GKIND
+                and e.get("item_id") == gate_id):
+            out = []                       # a level change starts the evidence over
+        elif e.get("kind") == GATE_ADVISORY_KIND and e.get("gate") == gate_id:
+            out.append(e)
+    return out
+
+
+def _clean_streak(evals: List[Dict[str, Any]]) -> int:
+    n = 0
+    for e in reversed(evals):
+        if e.get("would_block"):
+            break
+        n += 1
+    return n
+
+
+def advisory_gate_report(ledger: Any, gates: Any) -> List[GateAdvisoryStats]:
+    """Per-gate advisory evidence for every gate whose level IN FORCE is advisory. Read-only."""
+    from .enforce import effective_gate_enforcement
+    entries = ledger.entries() if ledger is not None else []
+    rows: List[GateAdvisoryStats] = []
+    for gate in gates:
+        level = effective_gate_enforcement(gate, ledger)
+        if level != "advisory":
+            continue
+        evals = _gate_entries_since_change(entries, gate.id)
+        rows.append(GateAdvisoryStats(
+            gate_id=gate.id, level=level, evaluations=len(evals),
+            would_block=sum(1 for e in evals if e.get("would_block")),
+            clean_streak=_clean_streak(evals)))
+    return rows
+
+
+def gate_promotion_proposals(ledger: Any, gates: Any, *,
+                             threshold: int = DEFAULT_GATE_PROMOTION_THRESHOLD,
+                             learner: Optional[RulesLearner] = None) -> List[RulePromotion]:
+    """PROPOSE promoting each advisory gate whose clean streak has reached `threshold` — through the
+    `RulesLearner` threshold machinery, proposal-only. A pure read by default (the default learner
+    carries no ledger, mirroring `learn_from_ledger`); pass a learner WITH a ledger to record the
+    proposals (`rule_promotion_proposed`). Never changes a gate's level."""
+    learner = learner or RulesLearner(threshold=threshold)
+    for row in advisory_gate_report(ledger, gates):
+        key = GATE_PATTERN_PREFIX + row.gate_id
+        text = (f"Promote gate '{row.gate_id}' advisory → {GATE_PROMOTION_TARGET}: "
+                f"{row.clean_streak} consecutive clean advisory run(s) would not have blocked.")
+        for _ in range(row.clean_streak):
+            if learner.observe(key, rule_text=text) is not None:
+                break
+    return [p for p in learner.promotions if p.pattern_key.startswith(GATE_PATTERN_PREFIX)]
+
+
+def apply_gate_promotion(promotion: RulePromotion, gate: Any, ledger: Any, decision: str, *,
+                         confirm: Optional[Callable[[str], bool]] = None,
+                         assume_yes: bool = False, actor: str = "user") -> bool:
+    """Human-gated application of a gate promotion proposal — `RulesLearner.apply_promotion`'s own
+    gate (default DECLINES; reject/defer add nothing), then, only on approval, an
+    `enforcement_change` (gkind "gate", old → GATE_PROMOTION_TARGET, the approving entry's seq) on the
+    ledger. Returns True only if the gate was promoted. A ledger is required: the ledger IS where a
+    promotion lives, so a promotion with nowhere to be recorded is refused rather than lost."""
+    from .enforce import GATE_GKIND, effective_gate_enforcement
+    if ledger is None:
+        return False
+    if promotion.pattern_key != GATE_PATTERN_PREFIX + gate.id:
+        raise ValueError(f"promotion {promotion.pattern_key!r} is not for gate {gate.id!r}")
+    old = effective_gate_enforcement(gate, ledger)
+    if old == GATE_PROMOTION_TARGET:
+        return False
+    if not RulesLearner(ledger=ledger).apply_promotion(promotion, decision, confirm=confirm,
+                                                      assume_yes=assume_yes):
+        return False
+    approval_seq = None
+    for e in reversed(ledger.entries()):
+        if e.get("kind") == "rule_promotion_decision" and e.get("pattern") == promotion.pattern_key:
+            approval_seq = e.get("seq")
+            break
+    # The kind is spelled as a literal (== enforce.ENFORCEMENT_CHANGE_KIND, pinned by test_d3_*) so
+    # the ledger-kind sweep (`tests/_ledger_kinds.py`) can resolve it — the same literal the rule
+    # path writes in `memory/store.py`.
+    ledger.record("enforcement_change", subject=gate.id, item_id=gate.id, gkind=GATE_GKIND,
+                  direction="promote", old=old, new=GATE_PROMOTION_TARGET, actor=actor,
+                  approval_seq=approval_seq)
+    return True

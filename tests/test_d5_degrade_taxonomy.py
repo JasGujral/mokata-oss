@@ -81,6 +81,13 @@ DEGRADE_FAMILY = {
 # so that adding a class forces a decision about which side of the line it is on.
 HARD_ERRORS = {
     "MokataError", "AuthoringError", "BrainstormError", "BrainstormGateError", "BugError",
+    # 0.0.23 D15 — an intention's due condition that cannot be STORED (no condition, a date that
+    # is not a date). HARD: the remember call returns an error and writes nothing — there is no
+    # floor, since a reminder stored with a guessed due date is a wrong reminder.
+    "IntentionError",
+    # 0.0.23 D12 — the certification rig's stdio client lost its server (no answer, exit, non-JSON).
+    # HARD: the criterion it was grading is reported FAIL with this message; nothing falls back.
+    "McpClientError",
     "ConfigCommandError", "ConfigError", "DebugError",
     # DB.S7a — an edge kind outside the CLOSED typed set. HARD, and deliberately not a degrade:
     # there is no floor to fall to. Coercing an unknown kind to a default would store a relation no
@@ -136,6 +143,15 @@ HARD_ERRORS = {
     # the refusal exists to refuse. So there is nothing to fall back to, `failure_class` is ""
     # and honest, and it propagates.
     "RemovedChannelError",
+    # 0.0.23 C1 — `mokata ide` refuses a path from the page that is not a plain repo-relative name
+    # inside the repository (traversal, absolute, drive, symlink out). HARD: answered 400, nothing
+    # is opened, and there is no weaker-but-true answer to fall back to.
+    "PathRefused",
+    # 0.0.23 C2 — a regex the user typed that does not compile. HARD: the reason is shown; a silent
+    # switch to a literal search would answer a question nobody asked.
+    "BadPattern",
+    # 0.0.23 C3 — a graph-view request with a missing or unknown parameter. HARD: answered 400.
+    "BadRequest",
 }
 
 # Hard errors that fail CLOSED (nothing degrades to a floor) but are still ABOUT a schema, so
@@ -506,6 +522,9 @@ def _live_classes():
     from mokata import progress_events
     # 0.0.22 D6 — `HarvestError`, the session-harvest CLI's usage refusal.
     from mokata import harvest
+    # 0.0.23 D12/D15 — `McpClientError` (the cert rig's stdio client), `IntentionError` (PM.S1).
+    from mokata import harness_cert
+    from mokata.memory import intentions
     from mokata import config, config_cmd, brainstorm, dsn, manifest, pipeline, plans, refine
     from mokata import agent_skills, harness_setup, session_bundle, session_transport, share
     # SIMP.S3 (0.0.18 stage 10) — `RemovedChannelError` lives here, beside the REMOVED registry
@@ -521,6 +540,12 @@ def _live_classes():
     from mokata.modes import bug, debug, optimize
     # MCP-R.D1d — the MCP surface's input-validation fault (SDK-free to import).
     from mokata.mcp import validation as mcp_validation
+    # 0.0.23 C1 — `PathRefused`, the IDE's path containment refusal.
+    from mokata.ide import nav as ide_nav
+    # 0.0.23 C2 — `BadPattern`, the IDE search's bad-regex refusal.
+    from mokata.ide import search as ide_search
+    # 0.0.23 C3 — `BadRequest`, the IDE server's bad-parameter refusal.
+    from mokata.ide import server as ide_server
 
     mods = (netguard, oslock, skills, stacks, teamdb, team_audit, team_events, team_journal,
             vault, config,
@@ -530,7 +555,10 @@ def _live_classes():
             graph_required, revert, secret_ignore, tdd,
             crg_client, query, backends, edges, embed, item,
             migrate, reembed, mshare, store, vector, bug, debug, optimize, mcp_validation,
-            progress_events, harvest)
+            progress_events, harvest, harness_cert, intentions)
+    mods += (ide_nav,)
+    mods += (ide_search,)
+    mods += (ide_server,)
     live = {"MokataError": MokataError}
     for mod in mods:
         for name in dir(mod):

@@ -87,6 +87,10 @@ In one short block, tell the user plainly:
 If the re-check still fails after a good `install`, do NOT loop — report the exact failure code and
 the one-line fix the command gave, and let the user act on it.
 
+## If this appears stuck
+
+If a step appears stuck, or the harness stops it mid-run: run `mokata resume` (where the run stands and the gate that still applies) and `mokata approve --list` (anything waiting on a human). Nothing is lost — run state, approvals and the audit ledger are on disk — so re-invoke `/mokata:mcp-repair` to continue. Where the harness limits foreground time, start a long test run in the background; `mokata doctor` names a hung MCP server or a hook that is not firing.
+
 ## Rationalizations — stop if you catch yourself thinking any of these
 
 | Excuse | Reality |

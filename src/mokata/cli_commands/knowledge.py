@@ -89,6 +89,12 @@ def cmd_query(args: argparse.Namespace) -> int:
     surface = _load_surface(args.path)
     layer = KnowledgeLayer.from_surface(surface)
     result = run_query(layer, args.kind, args.target, depth=args.depth)
+    if getattr(args, "json", False):
+        # 0.0.23 C1 — the machine form. The IDE's `/api/query` answers these exact bytes, through
+        # the one serialiser both share, so the review window and the CLI cannot disagree.
+        from ..ide.nav import query_payload
+        print(query_payload(result))
+        return 0
     # D2 — THREE modes, because there are three answers. A leaf used to print
     # `via grep [grep fallback] — 0 result(s)`, which reads as "I could not find out" when the
     # truth is "I looked, and the answer is none". The gate stopped conflating them at the
@@ -108,6 +114,11 @@ def cmd_query(args: argparse.Namespace) -> int:
         print(f"  {ref.path}:{ref.line}{sym}  {ref.snippet}")
     if result.note:
         print(f"  ({result.note})")
+    # GRAPH-FIRST-IMPACT (d) — a lexical blast radius names itself degraded, with ITS remedy.
+    from ..knowledge.layer import impact_degrade
+    deg = impact_degrade(layer, result)
+    if deg:
+        print(f"  ⚠ {deg['message']}")
     return 0
 
 
@@ -256,6 +267,11 @@ def register(sub, common):
     p_query.add_argument(
         "--depth", type=int, default=2,
         help="hops for blast_radius (default: 2; ignored by other kinds)",
+    )
+    p_query.add_argument(
+        "--json", action="store_true",
+        help="print the answer as one JSON line (kind, target, backend, basis, references) — "
+             "the same bytes `mokata ide` shows",
     )
     p_query.set_defaults(func=cmd_query)
 

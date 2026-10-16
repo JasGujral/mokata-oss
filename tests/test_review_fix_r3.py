@@ -769,7 +769,7 @@ class TestParityAndRegistry(unittest.TestCase):
         # added `worktree_list` (59), and M-4/R5 added `consolidate_proposals` + `consolidate`
         # (62, after CM.S5's `events_share`). R3's two tools are pinned by NAME above, which is
         # the property this class owns — the count is a tripwire for somebody else's addition.
-        self.assertEqual(len(REG.TOOLS), 65)   # 61 -> 62 at CM.S5: `events_share`; -> 64 at C1; -> 65 at D2
+        self.assertEqual(len(REG.TOOLS), 67)   # 61 -> 62 at CM.S5: `events_share`; -> 64 at C1; -> 65 at D2; -> 67 at 0.0.23 E3: `worktree_clean` + `worktree_remove`
         self.assertEqual(len(REG.tool_names()), len(set(REG.tool_names())))
 
     def test_annotations_are_projected_and_neither_is_open_world(self):

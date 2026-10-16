@@ -257,6 +257,8 @@ CONVERTED = [
 # "relpath:qualname", with the reason it is NOT a committed-config write. A site that is neither
 # converted nor registered here fails `test_r_man_no_bare_manifest_writes`.
 OUT_OF_SCOPE = {
+    ("ide/search.py", "build_index"):
+        "Already atomic (temp + os.replace). 0.0.23 C2 — the IDE's local semantic index under temp_local/ide/semantic/, a derived artifact, not the manifest.",
     ("ide/snapshots.py", "_write_object"):
         "Already atomic (temp + os.replace). 0.0.22 E2 — a snapshot object under temp_local/snapshots/, not the manifest.",
     ("ide/snapshots.py", "_maybe_prune"):
@@ -324,6 +326,13 @@ OUT_OF_SCOPE = {
         "repeated question, never a corrupted repo.",
     ("knowledge/user_prefs.py", "record_graph_decline"):
         "USER-profile decline record — same class as record_extra_decline.",
+    ("govern/cache.py", "_record_observation"):
+        "0.0.23 E1 — the cache-prefix fingerprint state + bounded observation log under "
+        "temp_local/cache_prefix/ (state via temp + os.replace); derived, a loss costs one "
+        "re-baseline.",
+    ("worktree_manage.py", "_write_seen"):
+        "0.0.23 E3 — the last-seen worktree path set under temp_local/ (temp + os.replace); a "
+        "loss costs one silent re-baseline of the new-worktree notice.",
 }
 
 

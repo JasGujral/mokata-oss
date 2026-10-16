@@ -46,6 +46,7 @@ from .tools_session import session_name, session_pull, session_push
 from .tools_share import vault_push
 from .tools_spec import spec_amend, spec_check, spec_emit
 from .tools_team import audit_share, events_share
+from .tools_worktree import worktree_clean, worktree_remove
 
 __all__ = [
     "remember", "import_stack", "reset", "apply_proposal", "memory_export",
@@ -54,6 +55,8 @@ __all__ = [
     "stacks_install",
     "consolidate",          # M-4/R5 — appended, matching the registration discipline below
     "events_share",         # CM.S5 — appended, same discipline
+    "worktree_clean",       # WT.S3 (0.0.23 E3) — appended, same discipline
+    "worktree_remove",      # WT.S3 (0.0.23 E3) — appended, same discipline
 ]
 
 # ---- registration: registry-driven, in the EXACT historical order (parity with the pre-split
@@ -88,3 +91,6 @@ _tool("consolidate", "write")(consolidate)      # submit an agent-DRAFTED summar
 # (`test_pre_simp_tool_registry_parity`) is append-only on purpose: slotting it by domain
 # moves every position after it, and that ordering is a public surface.
 _tool("events_share", "write")(events_share)    # publish the typed stream (human-gated)
+# WT.S3 (0.0.23 E3) — the gated, destructive half of the worktree surface. APPENDED (same rule).
+_tool("worktree_clean", "write")(worktree_clean)    # remove merged/vanished worktrees (gated)
+_tool("worktree_remove", "write")(worktree_remove)  # remove ONE worktree (gated)

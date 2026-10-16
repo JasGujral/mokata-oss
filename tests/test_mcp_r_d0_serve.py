@@ -198,7 +198,7 @@ class TestBaselinePosterChild(_Base):
         # the MCP baseline TOOL bounds its subprocess at the MCP cap (never 600s)
         captured = {}
 
-        def fake_status(command, cwd=None, timeout=B.BASELINE_TIMEOUT_SECONDS):
+        def fake_status(command, cwd=None, timeout=B.BASELINE_TIMEOUT_SECONDS, **_kw):
             captured["timeout"] = timeout
             return B.BaselineResult(state=B.UNKNOWN, detail="stub")
 

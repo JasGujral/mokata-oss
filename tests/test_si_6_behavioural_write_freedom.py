@@ -48,7 +48,7 @@ parking and every window test went green without entering the window (doc 85 §7
 leak test would have passed on an empty ledger had it not asserted the record existed first.
 
 WHY THE BOUND SET IS SMALL, AND WHY THAT IS THE HONEST OUTCOME. `UNGATED_BY_DESIGN` holds 85 entries.
-Nine are bound. The rest are refused IN WRITING in `REFUSED` below, one line each, and
+Ten are bound (0.0.23 D12 added the cert client's stdout pump). The rest are refused IN WRITING in `REFUSED` below, one line each, and
 `test_every_register_entry_is_either_bound_or_refused_in_writing` makes the split TOTAL — a new
 register entry that lands in neither REDs this suite and forces a human to say which it is. The
 three reasons a charter cannot be bound are worth stating up front, because each is a real limit of
@@ -91,6 +91,7 @@ import _support  # noqa: F401  (puts src/ on the path)
 import _writegraph
 import test_si_6_writegate_side_doors as sweep
 
+from mokata.harness_cert import StdioMcpClient
 from mokata.memory import _sqlite
 from mokata.memory.backends import SQLiteBackend
 from mokata.memory.item import MemoryItem
@@ -235,7 +236,7 @@ def assert_write_free(case, binding):
 
 
 # ======================================================================================
-# THE BOUND SET. Nine charters, derived from UNGATED_BY_DESIGN — see the module docstring for
+# THE BOUND SET. Ten charters, derived from UNGATED_BY_DESIGN — see the module docstring for
 # why the other 76 are refused, and `REFUSED` below for the per-entry reason.
 # ======================================================================================
 
@@ -302,7 +303,29 @@ def _bindings():
             run=lambda fx: fx.backend.usage_stats([fx.source.id]),
             evidence=lambda fx, r: fx.source.id in r,
             neuter=(SQLiteBackend, "usage_stats")),
+
+        # ---- harness_cert.py (0.0.23 D12) — the cert client's stdout pump. Its only `.put` is an
+        #      in-process queue; bound so that claim is MEASURED, not just written down.
+        Binding(
+            ("harness_cert.py", "StdioMcpClient._pump"),
+            run=_run_cert_pump,
+            # it really ran iff the server's line came through the queue, followed by the EOF mark
+            evidence=lambda fx, r: r == [b'{"jsonrpc": "2.0"}\n', None],
+            neuter=(StdioMcpClient, "_pump")),
     ]
+
+
+def _run_cert_pump(fx):
+    """Drive `_pump` over a fake server stdout; return what it queued. Touches no file."""
+    import io
+    import types
+    client = StdioMcpClient(["unused"], cwd=".")
+    client.proc = types.SimpleNamespace(stdout=io.BytesIO(b'{"jsonrpc": "2.0"}\n'))
+    client._pump()
+    out = []
+    while not client._q.empty():
+        out.append(client._q.get_nowait())
+    return out
 
 
 def _run_with_conn(fx, work):
@@ -325,8 +348,10 @@ _SHARED_DB_SUBSTRATE = "refused (a) — reads a shared Postgres/pgvector DB; its
                        "whatever it did. The SQLite twin of this read IS bound."
 
 REFUSED = {
-    ("ide/launch.py", "open_or_focus"):
-        "writes — 0.0.22 verification: the review window's launch LOCK file under temp_local/ide/ (it serialises two `/mokata:review-window` calls), so it cannot be bound as write-free",
+    ("ide/search.py", "build_index"):
+        "writes — 0.0.23 C2: the IDE's local semantic index under temp_local/ide/semantic/ is its whole purpose, so it cannot be bound as write-free",
+    ("harness_cert.py", "record_result"):
+        "writes — 0.0.23 D12: the owner's `record` action writes the certification matrix doc by purpose (atomic tmp + replace), so it cannot be bound as write-free",
     ("ide/server.py", "_remove_record"):
         "writes — 0.0.22 E2's review window: it is a writer by purpose (the snapshot store / the server record under temp_local/), so it cannot be bound as write-free",
     ("ide/server.py", "_write_record"):
@@ -463,6 +488,8 @@ REFUSED = {
     ("govern/lifecycle.py", "_write_tombstone"): "writes — the removal tombstone in ~/.mokata",
     ("govern/revert.py", "ReversibleStateStore.revert"): "writes — undoes a state write under temp_local/",
     ("injection_ledger.py", "record_injected"): "writes — the per-session injected ledger under temp_local/",
+    ("govern/cache.py", "_record_observation"): "writes — the cache-prefix fingerprint state + log under temp_local/",
+    ("worktree_manage.py", "_write_seen"): "writes — the last-seen worktree path set under temp_local/",
     ("knowledge/anchor_fingerprints.py", "_write_record"): "writes — the anchor→fingerprint record",
     ("knowledge/ast_backend.py", "AstBackend._save_cache"): "writes — the incremental AST edge cache",
     ("knowledge/freshness.py", "drain_dirty"): "writes — consume-and-CLEAR of the dirty-set",
@@ -490,6 +517,8 @@ REFUSED = {
     ("plugin_cache.py", "record_plugin_root"): "writes — the machine-local cache under ~/.mokata",
     ("progress_events.py", "ProgressLog.append_event"): "writes — appends a run-telemetry event "
         "under temp_local/",
+    ("govern/evidence.py", "record_evidence"): "writes — appends gate-outcome evidence under "
+        "temp_local/evidence/ (0.0.23 D8)",
     ("team_events.py", "save_mark"): "writes — the publisher's own high-water mark under "
         "temp_local/events/ (0.0.22 C1)",
     ("session_state.py", "SessionScopedStore.delete"): "writes — deletes session run-state",

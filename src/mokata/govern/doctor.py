@@ -411,8 +411,14 @@ def hook_resolution_findings(surface: Any, home: Any = None, *,
             "warning", "plugin-mcp-unresolvable",
             f"plugin manifest: the MCP server '{s.name}' is registered as {s.command!r}, which "
             f"does NOT resolve on this PATH — the mokata MCP tools will not start from the "
-            f"plugin route ({s.where}). Fix: run `{SETUP_REMEDY}` (it registers the server at an "
-            f"absolute path), then restart Claude Code"))
+            f"plugin route ({s.where}). Fix: "
+            + (f"install uv (https://docs.astral.sh/uv/ — the plugin starts its server with "
+               f"`uvx`, so no `pip install` is needed), or run `{SETUP_REMEDY}` to register an "
+               f"installed mokata-mcp at an absolute path; then restart Claude Code"
+               if os.path.basename(s.command.split()[0] if s.command else "").lower()
+               in ("uvx", "uvx.exe") else
+               f"run `{SETUP_REMEDY}` (it registers the server at an absolute path), then "
+               f"restart Claude Code")))
     return out
 
 
@@ -613,6 +619,37 @@ def ts_parser_findings(surface: Any, available=None) -> List[DoctorFinding]:
         "the majority who never open a .ts file. Fix: run `pip install 'mokata[graph-ts]'`, then "
         "`mokata index`. No configuration and no flag: with it present the files are simply in "
         "the graph." % (count,))]
+
+
+_PYTHON_PROJECT_FILES = ("pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile")
+
+
+def project_python_findings(surface: Any, environ: Any = None) -> List[DoctorFinding]:
+    """0.0.23 B2 — name the Python the project's tests run in (`VENV-TEST-INTERPRETER`).
+
+    Only on a Python project (a packaging/requirements file at the root): every other repo gets no
+    line, so doctor's output is unchanged there. An `info`, never a warning — finding no env is a
+    fact to state, not a fault: the tests then run on system Python, and doctor says so."""
+    from .. import project_env
+    root = getattr(surface, "root", ".")
+    if not any(os.path.exists(os.path.join(root, f)) for f in _PYTHON_PROJECT_FILES):
+        return []
+    env = project_env.resolve(root, project_env.settings_python(getattr(surface, "manifest", None)),
+                              environ, ask_tools=False)
+    return [DoctorFinding("info", "project-python",
+                          "Project Python: %s — `mokata baseline` and the TDD gates run the "
+                          "project's tests there, whether or not a venv is activated. Override "
+                          "with `settings.python`." % project_env.describe(env))]
+
+
+def install_isolation_findings(surface: Any, **kw) -> List[DoctorFinding]:
+    """0.0.23 B4 — `INSTALL-ISOLATED-BY-DEFAULT`: warn when mokata is installed inside this repo's
+    own environment, or when PATH's `mokata` is a different-version install shadowing this one.
+    Silent when healthy; never raises (see :mod:`mokata.install_isolation`)."""
+    from .. import install_isolation
+    root = getattr(surface, "root", ".")
+    return [DoctorFinding("warning", code, text)
+            for code, text in install_isolation.warnings(str(root), **kw)]
 
 
 def graph_floor_findings(surface: Any, need: str = "code_graph",
@@ -838,6 +875,12 @@ def diagnose(surface: Any) -> DoctorReport:
     # This is the only place that difference is visible.
     findings.extend(hook_resolution_findings(surface))
 
+    # 0.0.23 B2 — which Python the project's own tests run in (Python projects only).
+    findings.extend(project_python_findings(surface))
+
+    # 0.0.23 B4 — is mokata itself installed where it should be (isolated, not shadowed)?
+    findings.extend(install_isolation_findings(surface))
+
     # 6b-iii-b) DOC-ONBOARD — is that wiring the wiring THIS mokata writes? A pip upgrade leaves
     # settings.json exactly as the previous version wrote it, so a hook added (or a matcher
     # widened) since the user's last `mokata setup claude` is silently absent. Warning-level:
@@ -860,6 +903,12 @@ def diagnose(surface: Any) -> DoctorReport:
     # 6b-iv) SECRET-IGNORE — the active suppression count (and a tampered store as an error), so
     # entropy-layer ignores stay VISIBLE rather than accumulating unseen.
     findings.extend(secret_ignore_findings(surface))
+
+    # 6b-v) WT.S3 FR-WT-6 (0.0.23 E3) — worktree state: vanished (prunable), merged-but-still-
+    # present and session-exited worktrees, each with the command that tidies it. Warning/info
+    # only (never fails doctor); silent for a non-git repo or a healthy set; never raises.
+    from ..worktree_manage import worktree_findings
+    findings.extend(worktree_findings(surface))
 
     # 6c) TM.S1 — run mode. Flag a hand-edited invalid `settings.mode` (read_mode stays safe/
     # local, but doctor must SEE it); the local default is never an error.

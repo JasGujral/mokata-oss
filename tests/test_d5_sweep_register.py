@@ -501,6 +501,11 @@ _register("hook_cli.py", {
     "_harvest_main": (SUPPRESS_OK,
         "0.0.22 D6 (H-1c) — Stop / SessionEnd ALWAYS exit 0 and print nothing: exit 2 on Stop would "
         "send Claude back to work. A fault drafts no note and costs nothing else."),
+    "_intentions_due": (DEGRADES_LOUD,
+        "0.0.23 D15 (PM.S1) — the 'N intentions due' briefing line. A fault must not make a "
+        "reminder vanish: it is classed `note_degraded('memory-intentions', LOCAL_IO)` and the "
+        "briefing SAYS the check did not run. The outer guard (the second handler) keeps the "
+        "notice itself from failing a SessionStart."),
     "_harvest_waiting": (SUPPRESS_OK,
         "0.0.22 D6 — the 'notes are waiting' briefing line is informational; a fault omits it and "
         "the briefing starts as before."),
@@ -1391,6 +1396,39 @@ _register("ide/server.py", {
     "build_app._json.handler": (DEGRADES_LOUD,
         "0.0.22 E2 — a read that fails returns a JSON error the page SHOWS ('could not read: …'), "
         "never a blank view that reads as 'nothing changed' (§7g)."),
+    "build_app.quick": (DEGRADES_LOUD,
+        "0.0.23 C1 — ⌘P that fails returns a JSON error the dialog SHOWS ('could not search: …'), "
+        "never an empty list that reads as 'no match'."),
+    "build_app.query": (DEGRADES_LOUD,
+        "0.0.23 C1 — a structural question mokata cannot answer here (e.g. the folder is not a "
+        "mokata repo) returns a 409 JSON error the references panel shows; never an empty answer."),
+    "build_app.caps": (DEGRADES_LOUD,
+        "0.0.23 C1 — the status bar's 'graph: …' (and, from C2, 'semantic: …') says "
+        "'unavailable (<class>)' when the probe fails, instead of naming a backend it never reached."),
+    "build_app.search_text": (DEGRADES_LOUD,
+        "0.0.23 C2 — a word/regex search that fails returns a JSON error the search pane shows; "
+        "a bad regex is a 400 with its reason. Never an empty result that reads as 'no match'."),
+    "build_app.search_meaning": (DEGRADES_LOUD,
+        "0.0.23 C2 — a meaning search that fails returns `available: false` with the error the "
+        "Meaning pane shows — never word results, never an empty 'nothing found'."),
+})
+_register("ide/search.py", {
+    "_model_dir": (DEGRADES_LOUD,
+        "0.0.23 C2 — the embeddings model cannot be found offline or fetched: re-raised as "
+        "`ModelUnavailable`, which the Meaning pane shows as `semantic unavailable` with the reason "
+        "and the fix. Never a silent fall to word search or to the hashing embedder."),
+    "_load_embedder": (DEGRADES_LOUD,
+        "0.0.23 C2 — a local model that will not load is re-raised as `ModelUnavailable`, shown the "
+        "same way; nothing is cached, so the next request tries again."),
+})
+_register("ide/plans.py", {
+    "team_runs": (DEGRADES_LOUD,
+        "0.0.23 C5 — the team store (shared session bundles over the Postgres transport) could not "
+        "be listed — no DSN, no driver, a refused connection, any driver error: answered as the "
+        "explicit `team-unreachable` state the Plan view shows. Never local runs labelled team."),
+    "_team_plan": (DEGRADES_LOUD,
+        "0.0.23 C5 — the same, for one run's plan + spec: `team-unreachable` with the reason; the "
+        "local plan stays under the Local source and is never substituted."),
 })
 _register("harvest.py", {
     "build_note": (SUPPRESS_OK,
@@ -1477,12 +1515,87 @@ _register("run_intent.py", {
         "decided, and a failing notice must not turn a degrade into a raise inside a hook."),
 })
 
+
+# 0.0.23 F1 SESSION-BIND-BY-ANCESTOR — the hooks record the Claude session per ancestor pid; the MCP
+# server walks its own ancestors to find it. EVERY failure here lands on "no ancestry answer", and
+# the caller then resolves through `run_resolver.resolve_run` exactly as before this stage — the
+# AMBIGUOUS-and-refuse outcome, the strictest there is. So silence is correct throughout: nothing a
+# real failure could hide can let a write through or pick a foreign run (the guards only ever turn
+# an answer into NO answer). A notice per tool call would be noise on the hottest MCP path.
+_register("session_ancestry.py", {
+    "system_lookup": (SUPPRESS_OK,
+        "Platform probe for the process lookup. Any fault -> None -> no chain -> today's "
+        "resolution byte for byte."),
+    "ancestors": (SUPPRESS_OK,
+        "The chain walk over an (injectable) lookup. A lookup that throws ends the walk with the "
+        "chain so far; a shorter chain can only match LESS, never a foreign session."),
+    "_alive_as": (SUPPRESS_OK,
+        "Guard 2's liveness probe. An unreadable process reads as ALIVE, which makes the guard "
+        "REFUSE the match — the fail-closed direction."),
+    "record_session": (SUPPRESS_OK,
+        "The hook-side write (SessionStart / UserPromptSubmit, which must exit 0). On failure the "
+        "map is simply not refreshed and the MCP side resolves exactly as it did before."),
+    "record_session.merge": (SUPPRESS_OK,
+        "Prune-time liveness read inside the locked merge. Unreadable -> KEEP the entry; the reader "
+        "re-checks every guard on its own fresh lookup, so a kept stale entry cannot match."),
+    "session_for_process": (SUPPRESS_OK,
+        "The MCP-side read. Any fault -> None -> the unchanged ladder (fail-closed)."),
+})
+_register("run_resolver.py", {
+    "_session_bound_run": (SUPPRESS_OK,
+        "F1 — an unreadable claim falls to the general binding; an unreadable checkpoint reads as "
+        "NOT bound. Both fall to the unchanged ladder — never a guessed run."),
+    "process_session_run": (SUPPRESS_OK,
+        "F1 — any fault in the ancestry lookup -> None -> `resolve_run` exactly as before."),
+})
+_register("hook_cli.py", {
+    "_record_session_ancestry": (SUPPRESS_OK,
+        "F1 — wraps `session_ancestry.record_session` (itself never-raising) inside SessionStart / "
+        "UserPromptSubmit, which must always exit 0; a missed write only means the MCP side "
+        "resolves as before."),
+})
+
 _register("progress_events.py", {
     "record_run_finished": (SUPPRESS_OK,
         "0.0.22 C1 — ONE handler, around the `completed_at` stamp AFTER the `run_finished` event "
         "is already on disk. The event is the record (every reader keys on it); the stamp is a "
         "display aid for `build_progress`. A stamp failure loses no signal the event does not "
         "carry, and must not turn a recorded finish into a reported failure."),
+})
+
+_register("hook_cli.py", {
+    "_settings_route_owns": (SUPPRESS_OK,
+        "0.0.23 B3 — answers \"does the settings route own this hook?\" and ANY doubt answers "
+        "False, so the PLUGIN hook runs. The failure direction is a duplicate firing (the 0.0.22 "
+        "behaviour), never a silenced gate — a gate that silently does not run is worse than one "
+        "that runs twice."),
+})
+
+_register("progress_events.py", {
+    "current_stage": (SUPPRESS_OK,
+        "0.0.23 B3 — a display LABEL on an observability event. An unreadable log answers the "
+        "pre-0.0.23 label (`develop`); the event itself is still written, so no signal is lost."),
+})
+
+_register("govern/enforce.py", {
+    "promoted_gate_level": (SUPPRESS_OK,
+        "0.0.23 D3 — reads the ledger for an APPROVED promotion. An unreadable ledger answers None, "
+        "which means the gate's DECLARED level — and the ledger can only ever RAISE a level, so the "
+        "failure direction is never a weaker gate."),
+})
+
+_register("install_isolation.py", {
+    "warnings": (SUPPRESS_OK,
+        "0.0.23 B4 — two ADVISORY install checks (in-project env, shadowed install) printed by "
+        "doctor and setup. A diagnostic must never take its host down; a failed check prints "
+        "nothing, which is the healthy-install output, and decides no exit code."),
+})
+
+_register("session_registry.py", {
+    "_pid_alive_windows": (SUPPRESS_OK,
+        "0.0.23 verification B2 — the Windows liveness probe (OpenProcess + GetExitCodeProcess). "
+        "Failing to look answers 'gone', exactly as ESRCH does on POSIX; the callers treat a gone "
+        "owner as reclaimable, which is the pre-existing semantics, never a security decision."),
 })
 
 _register("visibility.py", {
@@ -1556,6 +1669,13 @@ _register("mcp/tools_read.py", {
         "text is the CALLER'S OWN argument on this call."),
 })
 
+_register("hook_cli.py", {
+    "_prefix_notice": (SUPPRESS_OK,
+        "0.0.23 E1 — the per-turn caller of `observe_prefix` (itself a never-raiser). On the "
+        "UserPromptSubmit lane an exception would eat the human's turn; the only thing withheld "
+        "on failure is the optional one-line cache-prefix notice."),
+})
+
 _register("worktree_list.py", {
     "build_worktree_report": (DEGRADE_CLEAN,
         "The registry read behind the session half of the join. Where the signal comes out: this "
@@ -1574,6 +1694,58 @@ _register("worktree_list.py", {
         "handled explicitly below it; it can promote nothing and hide no verdict. Broad because "
         "the callee reaches the session registry + repo identity across three OSes, and a "
         "read-only lister must never traceback into the surface it is rendering."),
+})
+
+_register("govern/cache.py", {
+    "_session_key": (SUPPRESS_OK,
+        "0.0.23 E1 — mirrors `injection_ledger._sid`: the session-identity fallback for the "
+        "prefix-watch bucket. Every failure lands in the ONE stable `default` bucket, whose worst "
+        "case is two windows sharing a baseline (a spurious or missed one-line notice) — nothing "
+        "is hidden, nothing is gated on it."),
+    "observe_prefix": (SUPPRESS_OK,
+        "0.0.23 E1 (HP.S5) — the cache-prefix observation runs on the SessionStart and "
+        "UserPromptSubmit async lanes. Its ONLY output is an optional observability line; a "
+        "failure returns None = no line, the briefing and the pack are byte-identical, and no "
+        "gate reads it. Broad because it spans the rules/constitution read, hashing and "
+        "temp_local IO; announcing a failed OBSERVATION every turn would be the louder harm "
+        "(the user_prompt_submit_main reasoning)."),
+})
+
+_register("worktree_manage.py", {
+    "new_worktree_notice": (SUPPRESS_OK,
+        "0.0.23 E3 (WT.S3 FR-WT-4) — the SessionStart 'new git worktree(s)' line. Its ONLY output "
+        "is an optional informational line inside the briefing; a failure yields no line and the "
+        "briefing is byte-identical to a repo with no new worktree. Broad because it spans git's "
+        "admin-file reads, the label resolver and temp_local IO, and the briefing must start."),
+    "worktree_findings": (SUPPRESS_OK,
+        "0.0.23 E3 (WT.S3 FR-WT-6) — guards `build_worktree_report`, itself documented "
+        "never-raising, so an UNEXPECTED fault in the lister cannot take `mokata doctor` down. "
+        "The only thing withheld is the warning-level worktree section; `mokata worktree list` "
+        "renders the same report and states its own failure there."),
+})
+
+_register("axi_out.py", {
+    "with_remedy": (SUPPRESS_OK,
+        "0.0.23 E2 (AXI-OUT 10) — adds an OPTIONAL `remedyCommand` field to an MCP result on its "
+        "way out of `_serve`. A failure returns the payload UNCHANGED — the same answer the tool "
+        "gave, minus one convenience field; it can hide no verdict and promote nothing. Broad "
+        "because the payload is any dict a tool returned, and an ergonomics field must never "
+        "cost a tool its answer."),
+})
+
+_register("home.py", {
+    "_line": (DEGRADE_CLEAN,
+        "0.0.23 E2 (MOK-HOME) — one fact on the bare-`mokata` home screen. Where the signal comes "
+        "out: the failed fact is REPLACED by its own named 'could not be read' line (with the "
+        "command that checks it), so an unreadable fact is printed as unreadable, never as a "
+        "healthy value. Broad because each fact reaches a different subsystem."),
+    "_run": (DEGRADE_CLEAN,
+        "0.0.23 E2 (MOK-HOME) — the active-run line. A failure prints 'run: could not be read' "
+        "and points at `mokata progress`; it never claims 'none active'."),
+    "build_home": (DEGRADE_CLEAN,
+        "0.0.23 E2 (MOK-HOME) — an unloadable config is PRINTED with its exception text and the "
+        "`mokata doctor` next step; the home screen never tracebacks on the first command a "
+        "person types. Broad because Surface.load spans manifest parse, schema and IO."),
 })
 
 _register("schema.py", {
@@ -2483,6 +2655,77 @@ _register("mcp/tools_memory.py", {
         "(P2 untouched) — silence here degrades to exactly the pre-GR.S4 proposal."),
 })
 
+
+# 0.0.23 lane D (D1/D4) — the develop-time per-turn evidence and the advisory spec anchors. Every one
+# of these sits on a path that only ever ADDS context or an ADVISORY: none guards a write, a gate
+# verdict, or a durable read a human relies on.
+_register("engine/live_evidence.py", {
+    "reverify_consumers": (SUPPRESS_OK,
+        "0.0.23 D1 (LIVE-EVIDENCE) — one live blast_radius query (and its remedy) per target on the "
+        "per-turn hook. A query that raises is omitted AND marks the STALE half undecidable for the "
+        "turn (`complete = False`), so a failure can only remove findings, never invent one."),
+    "run_in_develop": (DEGRADE_CLEAN,
+        "0.0.23 D1 — the emitted-spec existence probe; unreadable reads as 'not in develop', which "
+        "means no evidence lines this turn (the pre-D1 pack), never a wrong one."),
+    "develop_turn_lines": (SUPPRESS_OK,
+        "0.0.23 D1 — the per-turn develop evidence (approach/spec reads, lazy layer build, the "
+        "`extra` hook, the outer floor). The UserPromptSubmit lane only ever adds context and must "
+        "never eat the human's turn (H-1a's own floor, same reasoning)."),
+})
+_register("engine/spec_anchor.py", {
+    "derive_anchors": (SUPPRESS_OK,
+        "0.0.23 D4 (SPEC-ANCHOR S1) — anchors are ADVISORY locations derived from brainstorm "
+        "artifacts; an unreadable handoff contributes none and the spec emits exactly as before. "
+        "Anchors never gate an emit (the row's non-goal)."),
+})
+_register("engine/emit.py", {
+    "_approved": (DEGRADE_CLEAN,
+        "0.0.23 D4 — the approved-approach read that feeds anchor derivation ONLY. None means no "
+        "approach-derived anchors; every gate that needs the approach reads it itself."),
+    "structural_backend_available": (DEGRADE_CLEAN,
+        "0.0.23 D4 (S3) — whether to WARN on an anchorless AC. Unknown reads as False: the quiet "
+        "direction for an advisory that can never block."),
+})
+_register("hook_cli.py", {
+    "_develop_evidence": (SUPPRESS_OK,
+        "0.0.23 D1 — the session→run claim + develop evidence on the per-turn hook. Fail-open to "
+        "no evidence lines; the memory pack is unaffected (bounded separately)."),
+})
+_register("mcp/tools_spec.py", {
+    "spec_emit": (SUPPRESS_OK,
+        "0.0.23 D4 — the advisory anchor derivation before the completeness gate. A failure leaves "
+        "the author's anchors as sent; the gate, the consent boundary and the commit are untouched "
+        "(the committer derives again)."),
+})
+
+# 0.0.23 D5 (SQ.S1 + SQ-REGRESS) — the spec-quality battery and its loop bookkeeping.
+_register("engine/spec_quality.py", {
+    "_rules": (DEGRADES_LOUD,
+        "0.0.23 D5 — the rules member could not run: it returns an ADVISORY finding that says so "
+        "('not verified') on the battery's own output, never a silent all-clear."),
+    "_failure_modes": (DEGRADE_CLEAN,
+        "0.0.23 D5 — a handoff the pre-mortem cannot read has no probes; the structural and "
+        "coherence members still run against it."),
+    "cycles_so_far": (DEGRADE_CLEAN,
+        "0.0.23 D5 — an unreadable loop counter reads as 0 cycles (a read-only view)."),
+    "_record_quality": (DEGRADES_LOUD,
+        "0.0.23 D5 — the cycle's audit row; a failure goes through `note_persist_failure` (the "
+        "same channel as `mark_emitted`), and the verdict stands."),
+    "_record_regress": (DEGRADES_LOUD,
+        "0.0.23 D5 — the regression's audit row; the checkpoint roll-back already landed, and a "
+        "lost row is said through `note_persist_failure`."),
+    "quality_gate": (DEGRADE_CLEAN,
+        "0.0.23 D5 — the approved-approach read; none on record means the battery runs as for a "
+        "standalone spec (structural + rules), exactly the supported standalone path."),
+    "_bump": (SUPPRESS_OK,
+        "0.0.23 D5 — the loop counter write (observability). Unwritable means the loop never "
+        "escalates on its own; the blocking findings still block, so nothing is let through."),
+})
+_register("engine/emit.py", {
+    "run_quality_gate": (DEGRADE_CLEAN,
+        "0.0.23 D5 — the rules member's inputs (spec corpus, memory decisions). Unreadable means "
+        "an empty input to an ADVISORY member; no blocking member depends on them."),
+})
 
 class TestTheSweepIsComplete(unittest.TestCase):
     """Every broad handler in src/ is classified. A new one that nobody classified FAILS."""

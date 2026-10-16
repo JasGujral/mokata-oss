@@ -492,7 +492,7 @@ def register(sub, common):
                             "the item id to promote")
     p_mem.add_argument("--kind", default=None,
                        help="filter the view to one kind (rule/guardrail/best-practice/"
-                            "context/reference/decision), or retype an entry on `edit`")
+                            "context/reference/decision/intention), or retype an entry on `edit`")
     p_mem.add_argument("--value", default=None,
                        help="new value (with `edit`), or the summary you drafted (with "
                             "`consolidate --draft`)")

@@ -228,6 +228,10 @@ what's next) and a one-line banner naming what's running now — e.g. `mokata ·
 (`mokata progress` / the `progress` MCP tool) — surface it, don't invent it. So the user
 never wonders whether mokata is running or which part.
 
+## If this appears stuck
+
+If a step appears stuck, or the harness stops it mid-run: run `mokata resume` (where the run stands and the gate that still applies) and `mokata approve --list` (anything waiting on a human). Nothing is lost — run state, approvals and the audit ledger are on disk — so re-invoke `/mokata:brainstorm` to continue. Where the harness limits foreground time, start a long test run in the background; `mokata doctor` names a hung MCP server or a hook that is not firing.
+
 ## Rationalizations — stop if you catch yourself thinking any of these
 
 | Excuse | Reality |

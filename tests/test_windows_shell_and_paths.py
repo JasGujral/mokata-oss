@@ -190,7 +190,9 @@ class TestNoSpawnResolvesThroughSystem32(unittest.TestCase):
         introducing any new bare name reds here and its author has to say which it is — and if it
         is shadowed, the two assertions above red as well."""
         names = WP.all_spawned_bare_names(_sources())
-        self.assertEqual({"git", "gh", "grep", "notify-send", "osascript"}, set(names),
+        # `ps` (0.0.23 F1, `session_ancestry._ps_lookup`): spawned ONLY on darwin/BSD — Windows takes
+        # the ctypes Toolhelp path and never reaches it — and System32 ships no `ps.exe` anyway.
+        self.assertEqual({"git", "gh", "grep", "notify-send", "osascript", "ps"}, set(names),
                          "the set of bare program names this tree spawns has changed; if the new "
                          "one is shadowed by System32 it must be resolved through shutil.which "
                          "(see `_support.bash_argv`), and if it is not, add it here with a reason")
@@ -623,6 +625,117 @@ class TestRepoRelativePathsAreSpelledPosix(unittest.TestCase):
 
 
 # =================================================================================================
+# CAUSES F, G, H — new tests meet Windows first (0.0.23 A2, NEW-TESTS-MEET-WINDOWS-FIRST-ON-THE-MIRROR)
+# =================================================================================================
+
+class TestNewTestsMeetWindowsFirst(unittest.TestCase):
+    """PR #79 / run 38340462833: ten new tests red on all four Windows legs. Three of the shapes
+    are mechanical — `os.kill(pid, 0)`, an unguarded `os.mkfifo`, `HOME` without `USERPROFILE` —
+    and are linted over `tests/` here. Each detector is pure, so each is graded on a planted
+    offender and on the near-misses it must acquit before it is trusted on the tree."""
+
+    T = "tests/test_planted.py"
+
+    def test_a2_kill_zero_convicts_the_probe_and_acquits_a_guarded_one(self):
+        self.assertEqual(1, len(WP.kill_zero_probe_sites({self.T: "os.kill(pid, 0)\n"})))
+        self.assertEqual(1, len(WP.kill_zero_probe_sites(
+            {self.T: "from os import kill\nkill(pid, 0)\n"})))
+        acquitted = {
+            "a real signal": "os.kill(pid, 15)\n",
+            "a skip decorator": textwrap.dedent("""\
+                @unittest.skipIf(os.name == "nt", "signal 0 terminates on Windows")
+                def test_x(self):
+                    os.kill(pid, 0)
+                """),
+            "a skipped class": textwrap.dedent("""\
+                @unittest.skipIf(sys.platform == "win32", "posix only")
+                class C:
+                    def test_x(self):
+                        os.kill(pid, 0)
+                """),
+            "an enclosing if": 'if os.name != "nt":\n    os.kill(pid, 0)\n',
+            "an earlier skipTest": textwrap.dedent("""\
+                def test_x(self):
+                    if sys.platform.startswith("win"):
+                        self.skipTest("posix only")
+                    os.kill(pid, 0)
+                """),
+        }
+        for why, source in acquitted.items():
+            with self.subTest(why=why):
+                self.assertEqual((), WP.kill_zero_probe_sites({self.T: source}))
+
+    def test_a2_mkfifo_convicts_a_bare_one_and_not_a_guarded_one(self):
+        self.assertEqual(1, len(WP.mkfifo_without_skip_sites({self.T: "os.mkfifo(p)\n"})))
+        guarded = textwrap.dedent("""\
+            @unittest.skipUnless(hasattr(os, "mkfifo"), "no FIFOs on this platform (Windows)")
+            def test_x(self):
+                os.mkfifo(p)
+            """)
+        self.assertEqual((), WP.mkfifo_without_skip_sites({self.T: guarded}))
+
+    def test_a2_a_skip_that_is_not_about_the_platform_does_not_guard(self):
+        """NEAR-MISS: a skip decorator is not a platform guard because it is a skip. This one is
+        about a missing feature, and its message happens to contain "window"."""
+        source = textwrap.dedent("""\
+            @unittest.skipUnless(HAVE_IDE, "needs the review window")
+            def test_x(self):
+                os.mkfifo(p)
+                os.kill(pid, 0)
+            """)
+        self.assertEqual(1, len(WP.mkfifo_without_skip_sites({self.T: source})))
+        self.assertEqual(1, len(WP.kill_zero_probe_sites({self.T: source})))
+
+    def test_a2_home_without_userprofile_convicts_every_spelling(self):
+        for source in ('mock.patch.dict(os.environ, {"HOME": h})\n',
+                       'mock.patch.dict(os.environ, {**os.environ, "HOME": h})\n',
+                       'def f():\n    env = dict(os.environ)\n    env["HOME"] = h\n',
+                       'mock.patch.dict(os.environ, HOME=h)\n',
+                       'monkeypatch.setenv("HOME", h)\n',
+                       'subprocess.run(argv, env={"PATH": p, "HOME": h})\n'):
+            with self.subTest(source=source):
+                self.assertEqual(1, len(WP.home_without_userprofile_sites({self.T: source})))
+
+    def test_a2_home_with_userprofile_is_acquitted(self):
+        for source in ('mock.patch.dict(os.environ, {"HOME": h, "USERPROFILE": h})\n',
+                       'def f():\n    env["HOME"] = h\n    env["USERPROFILE"] = h\n',
+                       'mock.patch.dict(os.environ, HOME=h, USERPROFILE=h)\n',
+                       '_ENV_ALLOW = ("PATH", "HOME", "TMPDIR")\n',     # names, not a set env
+                       'print(os.environ["HOME"])\n'):                   # a READ
+            with self.subTest(source=source):
+                self.assertEqual((), WP.home_without_userprofile_sites({self.T: source}))
+
+    def test_a2_the_lint_is_scoped_to_tests(self):
+        """The row is about tests. `src/` is out of scope by declaration (`LINT_SCOPE`), and the
+        product's own `os.kill(pid, 0)` sites are reported in the stage report, not silently
+        acquitted by an exemption row."""
+        for detector, source in ((WP.kill_zero_probe_sites, "os.kill(pid, 0)\n"),
+                                 (WP.mkfifo_without_skip_sites, "os.mkfifo(p)\n"),
+                                 (WP.home_without_userprofile_sites, 'e = {"HOME": h}\n')):
+            self.assertEqual((), detector({"src/mokata/x.py": source}))
+        self.assertTrue(WP.kill_zero_probe_sites({"tests/integration/test_x.py": "os.kill(p, 0)\n"}),
+                        "tests/integration is under tests/ and must be reached")
+
+    def test_a2_no_test_in_the_tree_kills_with_signal_0_unguarded(self):
+        sites = _outstanding("kill_zero_probe", WP.kill_zero_probe_sites(_sources()))
+        self.assertEqual((), sites, "os.kill(pid, 0) TERMINATES the process on Windows — guard "
+                         "it with a platform skip, or probe another way: %r" % (sites,))
+
+    def test_a2_no_test_in_the_tree_makes_a_fifo_without_a_skip(self):
+        sites = _outstanding("mkfifo_without_skip", WP.mkfifo_without_skip_sites(_sources()))
+        self.assertEqual((), sites, "os.mkfifo does not exist on Windows — add "
+                         "@unittest.skipUnless(hasattr(os, \"mkfifo\"), ...): %r" % (sites,))
+
+    def test_a2_no_test_in_the_tree_sets_HOME_without_USERPROFILE(self):
+        """FAIL-ON-OLD: five sites on the base tree (hook_execution_check, test_a2_phase_gate_is_real
+        x2, test_f8a_preview_covers_the_write, test_stage23_plugin_init)."""
+        sites = _outstanding("home_without_userprofile",
+                             WP.home_without_userprofile_sites(_sources()))
+        self.assertEqual((), sites, "`~` resolves via USERPROFILE on Windows — set it beside "
+                         "HOME: %r" % (sites,))
+
+
+# =================================================================================================
 # THE EXEMPTION TABLE — every row still points at something
 # =================================================================================================
 
@@ -650,7 +763,10 @@ class TestNoExemptionOutlivesItsSite(unittest.TestCase):
                      "welded_slash": WP.welded_slash_sites,
                      "one_sided_posix": WP.one_sided_posix_sites,
                      "native_name_expectation": WP.native_name_expectation_sites,
-                     "native_sep_comparison": WP.native_sep_comparison_sites}
+                     "native_sep_comparison": WP.native_sep_comparison_sites,
+                     "kill_zero_probe": WP.kill_zero_probe_sites,
+                     "mkfifo_without_skip": WP.mkfifo_without_skip_sites,
+                     "home_without_userprofile": WP.home_without_userprofile_sites}
         for (detector, path) in sorted(WP.EXEMPT):
             with self.subTest(detector=detector, path=path):
                 self.assertIn(detector, detectors, "exemption names an unknown detector")

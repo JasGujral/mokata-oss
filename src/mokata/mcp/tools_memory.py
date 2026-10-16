@@ -27,7 +27,8 @@ from .registry import _surface
 def remember(path: str = ".", subject: str = "", value: str = "",
              memory_type: str = DECISION, kind: str = "", approve: bool = False,
              confirm: Optional[bool] = None, mtype: Optional[str] = None,
-             proposal_id: str = "", about_code: Optional[list] = None) -> Dict[str, Any]:
+             proposal_id: str = "", about_code: Optional[list] = None, due_at: str = "",
+             when_keyword: str = "", when_path: str = "") -> Dict[str, Any]:
     """Remember a fact/decision in memory. `memory_type` is the storage tier
     (persistent/decision/episodic); `kind` is the typed project part (rule/guardrail/
     best-practice/context/reference) captured by /mokata:onboard; `mtype` is a DEPRECATED alias
@@ -35,8 +36,14 @@ def remember(path: str = ".", subject: str = "", value: str = "",
     nothing. Only an approval a HUMAN minted with `mokata approve <id>` — then referenced back here
     as `proposal_id` — commits it, once. `approve=true` does NOT commit (it never really did: it was
     a flag the model typed). A secret in `subject` OR `value` is blocked even when approved. A part
-    kind is stored as persistent project knowledge."""
-    from ..memory import PART_KINDS, PERSISTENT, normalize_kind
+    kind is stored as persistent project knowledge.
+
+    PM.S1 — `kind="intention"` is a PROSPECTIVE memory ("remind me when X"): give it a due
+    condition with `due_at` (YYYY-MM-DD or ISO instant) and/or `when_keyword` / `when_path`
+    (comma-separated). It is surfaced at SessionStart ("N intentions due") and by the healing
+    sweep; mark it done with the gated `apply_proposal` (approve). Same human gate as any write."""
+    from ..memory import INTENTION, PART_KINDS, PERSISTENT, normalize_kind
+    from ..memory.intentions import IntentionError, make_envelope
     surface = _surface(path)
     store = MemoryStore.from_surface(surface)
     if not store.enabled_types:
@@ -45,10 +52,25 @@ def remember(path: str = ".", subject: str = "", value: str = "",
     norm = normalize_kind(kind)
     if norm in PART_KINDS:
         mtype = PERSISTENT          # the captured "parts" are persistent project knowledge
+    applicability = None
+    due_given = any((v or "").strip() for v in (due_at, when_keyword, when_path))
+    if norm == INTENTION:
+        try:
+            applicability = make_envelope(due_at, when_keyword, when_path)
+        except IntentionError as exc:
+            return {"status": "error", "committed": False, "message": str(exc)}
+        mtype = PERSISTENT          # an intention rides the persistent toggle
+    elif due_given:
+        # Never silently drop a due condition the caller thought it was setting.
+        return {"status": "error", "committed": False,
+                "message": "due_at / when_keyword / when_path apply only to kind='intention'"}
     item = MemoryItem.create(subject, value, mtype=mtype, kind=norm or kind,
-                             about_code=about_code)
+                             about_code=about_code, applicability=applicability)
 
     args = {"path": path, "subject": subject, "value": value, "memory_type": mtype, "kind": norm}
+    if applicability is not None:
+        # The due condition is part of WHAT the human approves — so it is part of the hash.
+        args["due"] = applicability["due"]
     gate = _consent(path, "remember", args, proposal_id, surface=surface)
     if gate.refused:
         return _refused(gate)

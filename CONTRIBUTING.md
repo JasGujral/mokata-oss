@@ -95,6 +95,22 @@ plan and succeeding.
   validate with `validate_adapter`; wire it through the capability router — there is one
   detection path, never a second.
 
+### Trying a plugin change locally — the cache keys on the version
+
+Claude Code keeps one cached copy of an installed plugin **per `version`** (the `version` in
+`.claude-plugin/plugin.json`). If you edit a command, skill or hook in your checkout and leave the
+version unchanged, the copy you installed earlier is still the one served. Your change looks as if
+it did nothing. This is what happened to renames made under 0.0.22. To test a working tree,
+**disable the installed copy** (`/plugin` → mokata → Disable) and start Claude Code on the checkout:
+
+```bash
+claude --plugin-dir /path/to/your/mokata-oss-checkout
+```
+
+`--plugin-dir` loads the plugin from that directory for the session, so every edit is picked up on
+the next start. Re-enable the installed copy when you are done.
+([Plugin manifest reference: `version`](https://code.claude.com/docs/en/plugins-reference#version).)
+
 ## Code style
 
 Match the surrounding code: clear names, terse docstrings stating the feature ID, small

@@ -229,6 +229,33 @@ def _survive_a_narrow_stdio() -> None:
             continue
 
 
+def _without_path(raw: List[str]) -> List[str]:
+    """raw argv minus any `--path X` / `--path=X` (what is left decides "bare `mokata`")."""
+    out: List[str] = []
+    skip = False
+    for i, tok in enumerate(raw):
+        if skip:
+            skip = False
+            continue
+        if tok == "--path":
+            skip = i + 1 < len(raw)
+            continue
+        if tok.startswith("--path="):
+            continue
+        out.append(tok)
+    return out
+
+
+def _path_arg(raw: List[str]) -> str:
+    """The `--path X` value from raw argv (also `--path=X`), else "."."""
+    for i, tok in enumerate(raw):
+        if tok == "--path" and i + 1 < len(raw):
+            return raw[i + 1]
+        if tok.startswith("--path="):
+            return tok.split("=", 1)[1] or "."
+    return "."
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     _survive_a_narrow_stdio()
     parser = build_parser()
@@ -237,15 +264,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     # argparse exits with its terse error.
     token = _first_command_token(raw)
     known = _subcommand_set(parser)
+    if not _without_path(raw):
+        # MOK-HOME (0.0.23 E2) — bare `mokata` (optionally `--path X`) is the home screen: live
+        # state + the next step, exit 0. Help stays at `--help`.
+        from .home import build_home
+        print(build_home(_path_arg(raw))[0])
+        return 0
     if token is not None and token not in known:
         from . import onboarding
-        try:
-            pi = raw.index("--path")
-            root = raw[pi + 1]
-        except (ValueError, IndexError):
-            root = "."
+        root = _path_arg(raw)
+        # AXI-OUT (7) — an agent-facing error with its fix goes to STDOUT (stderr is for
+        # diagnostics); the exit stays 2 (usage).
         print(onboarding.unknown_command_message(
-            token, known=known, initialized=Surface.is_initialized(root)), file=sys.stderr)
+            token, known=known, initialized=Surface.is_initialized(root)))
         return 2
     args = parser.parse_args(raw)
     # argparse stores --path before the subcommand; subcommands read args.path.

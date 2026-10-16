@@ -8,7 +8,9 @@ GUARDS, every one tested (doc 109 §6 — designed from px0's failures):
   * HOST CHECKED on every request (DNS rebinding): only `127.0.0.1:<port>` / `localhost:<port>`.
   * ORIGIN CHECKED on every non-GET: a page on another origin cannot drive it.
   * CONTAINED. Every path it reads goes through `snapshots.rel_path` (realpath inside the repo).
-  * READ-ONLY. No route writes the repo. The one network call is a PR fetch the user asked for.
+  * READ-ONLY. No route writes the repo (the semantic index lives under `.mokata/`). The network
+    calls are the ones the user asks for: a PR fetch, and (0.0.23 C2) the one-time embeddings-model
+    fetch behind the Meaning tab's button — meaning search otherwise loads its model offline.
 
 LIFETIME. Started from a terminal it lives as long as its command (`--foreground`). Started from a
 Claude session (`/mokata:review-window`) it is a child that exits after `IDLE_SECS` with no page attached —
@@ -29,6 +31,7 @@ import sys
 import time
 from typing import Any, Dict, Optional
 
+from ..errors import MokataError
 from ..tdd_state import state_dir
 
 IDLE_SECS = 30 * 60
@@ -36,13 +39,22 @@ POLL_SECS = 1.0
 COOKIE = "mokata_ide"
 TOKEN_HEADER = "x-mokata-token"
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-STATIC_FILES = ("index.html", "app.js", "app.css", "mokata-wordmark-dark.svg",
-                "mokata-wordmark-light.svg", "mokata-icon.svg")
+STATIC_FILES = ("index.html", "app.js", "combo.js", "nav.js", "search.js", "graph.js", "plan.js",
+                "boot.js", "app.css",
+                "mokata-wordmark-dark.svg", "mokata-wordmark-light.svg", "mokata-icon.svg")
+# 0.0.23 C3 — the vendored graph libraries (MIT; pins + sha256 in static/vendor/VERSIONS.json).
+VENDOR_FILES = ("cytoscape.min.js", "layout-base.js", "cose-base.js", "cytoscape-fcose.js",
+                "cytoscape-dagre.min.js")
 _TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
           ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml"}
 
 INSTALL_LINE = ('mokata ide needs its web dependencies: pip install "mokata[ide]" '
                 "(starlette, uvicorn, sse-starlette — normally already present with mokata's MCP SDK)")
+
+
+class BadRequest(MokataError, ValueError):
+    """A request the page should not have made (a missing or unknown parameter) — a HARD refusal
+    answered 400 (D5); nothing is attempted."""
 
 
 def record_path(root: str) -> str:
@@ -173,8 +185,14 @@ def build_app(state: AppState):
             return PlainTextResponse("not found", status_code=404)
         return _static(name)
 
+    async def vendor(request: Request):
+        name = request.path_params["name"]
+        if name not in VENDOR_FILES:
+            return PlainTextResponse("not found", status_code=404)
+        return _static("vendor/" + name)
+
     def _static(name: str) -> Response:
-        with open(os.path.join(STATIC_DIR, name), "rb") as fh:
+        with open(os.path.join(STATIC_DIR, *name.split("/")), "rb") as fh:
             body = fh.read()
         return Response(body, media_type=_TYPES.get(os.path.splitext(name)[1], "text/plain"),
                         headers={"Cache-Control": "no-store",
@@ -185,8 +203,12 @@ def build_app(state: AppState):
 
     def _json(fn):
         async def handler(request: Request):
+            from .nav import PathRefused
             try:
                 return JSONResponse(await asyncio.to_thread(fn, request))
+            except (PathRefused, BadRequest) as exc:
+                return JSONResponse({"error": type(exc).__name__, "note": str(exc)},
+                                    status_code=400)
             except Exception as exc:  # noqa: BLE001 — a failed read is an answer, not a 500 page
                 return JSONResponse({"error": type(exc).__name__, "note": str(exc)[:300]},
                                     status_code=500)
@@ -205,6 +227,123 @@ def build_app(state: AppState):
         body = await request.json()
         url = body.get("url", "") if isinstance(body, dict) else ""
         return JSONResponse(await asyncio.to_thread(state.source.pr, url))
+
+    async def quick(request: Request):
+        body = await request.json()
+        body = body if isinstance(body, dict) else {}
+        q_ = body.get("q") if isinstance(body.get("q"), str) else ""
+        changed = body.get("changed") if isinstance(body.get("changed"), list) else []
+        try:
+            return JSONResponse(await asyncio.to_thread(state.source.quick, q_[:200],
+                                                        [c for c in changed[:5000]
+                                                         if isinstance(c, str)]))
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": type(exc).__name__, "note": str(exc)[:300]},
+                                status_code=500)
+
+    async def query(request: Request):
+        """The structural answer as the EXACT bytes `mokata query --json` prints (C1)."""
+        from ..knowledge.query import QUERY_KINDS
+        kind, target = q(request, "kind"), q(request, "target")
+        if kind not in QUERY_KINDS or not target:
+            return JSONResponse({"error": "BadQuery",
+                                 "note": f"kind must be one of {list(QUERY_KINDS)}, with a target"},
+                                status_code=400)
+        try:
+            depth = max(1, min(6, int(q(request, "depth") or 2)))
+        except ValueError:
+            depth = 2
+        try:
+            body = await asyncio.to_thread(state.source.query, kind, target[:300], depth)
+        except Exception as exc:  # noqa: BLE001 — e.g. the repo is not a mokata repo
+            return JSONResponse({"error": type(exc).__name__, "note": str(exc)[:300]},
+                                status_code=409)
+        return Response(body.encode("utf-8"), media_type="application/json")
+
+    async def _body(request: Request) -> Dict[str, Any]:
+        try:
+            b = await request.json()
+        except ValueError:
+            return {}
+        return b if isinstance(b, dict) else {}
+
+    def _only(b: Dict[str, Any]):
+        only = b.get("only")
+        return [p for p in only[:5000] if isinstance(p, str)] if isinstance(only, list) else None
+
+    async def search_text(request: Request):
+        from .search import BadPattern
+        b = await _body(request)
+        q_ = b.get("q") if isinstance(b.get("q"), str) else ""
+        mode = "regex" if b.get("mode") == "regex" else "word"
+        try:
+            return JSONResponse(await asyncio.to_thread(state.source.search, q_[:500], mode,
+                                                        bool(b.get("case")), _only(b)))
+        except BadPattern as exc:
+            return JSONResponse({"error": "BadPattern", "note": str(exc)}, status_code=400)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": type(exc).__name__, "note": str(exc)[:300]},
+                                status_code=500)
+
+    async def search_meaning(request: Request):
+        b = await _body(request)
+        q_ = b.get("q") if isinstance(b.get("q"), str) else ""
+        try:
+            return JSONResponse(await asyncio.to_thread(state.source.meaning, q_[:500], _only(b)))
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": type(exc).__name__, "note": str(exc)[:300],
+                                 "available": False}, status_code=500)
+
+    async def semantic_fetch(request: Request):
+        return JSONResponse(await asyncio.to_thread(state.source.semantic_fetch))
+
+    def graph(request: Request) -> Dict[str, Any]:
+        view = q(request, "view") or "ripple"
+        if view not in ("ripple", "focus", "path", "untested"):
+            raise BadRequest("view must be ripple, focus, path or untested")
+        symbol, to = q(request, "symbol")[:300], q(request, "to")[:300]
+        if not symbol or (view == "path" and not to):
+            raise BadRequest("a symbol is required (and `to` for a path)")
+        try:
+            depth = int(q(request, "depth") or 2)
+        except ValueError:
+            depth = 2
+        return state.source.graph(view, symbol, to, depth)
+
+    # 0.0.23 C5 — the plan + spec of a run, and its lifecycle. Every run id is validated (shape,
+    # then existence) inside `plans` before anything is read; a bad one is a BadRequest (400).
+    def runs(request: Request) -> Dict[str, Any]:
+        return state.source.runs(q(request, "source") or "local")
+
+    def plan(request: Request) -> Dict[str, Any]:
+        raw = q(request, "version") or "0"
+        if not raw.isdigit() or len(raw) > 4:
+            raise BadRequest("version must be a spec version number")
+        return state.source.plan(q(request, "run"), q(request, "source") or "local", int(raw))
+
+    def lifecycle(request: Request) -> Dict[str, Any]:
+        return state.source.lifecycle(q(request, "run"))
+
+    def caps(_request: Request) -> Dict[str, Any]:
+        """What answers here — named, so the status bar never shows a floor as an accelerator."""
+        from . import nav
+        from . import search
+        out: Dict[str, Any] = {"sample": state.demo, "matcher": nav.matcher_name(),
+                               "more": {"search": search.engine_name()}}
+        try:
+            sem = state.source.semantic_status()
+            out["more"]["semantic"] = ("local model" if sem.get("available") else
+                                       "unavailable (" + str(sem.get("state")) + ")")
+        except Exception:  # noqa: BLE001
+            out["more"]["semantic"] = "unavailable"
+        if state.demo:
+            out["graph"] = "none (SAMPLE)"
+            return out
+        try:
+            out["graph"] = nav._layer(state.root).backend_name
+        except Exception as exc:  # noqa: BLE001 — not a mokata repo: say so, do not 500
+            out["graph"] = f"unavailable ({type(exc).__name__})"
+        return out
 
     async def ping(request: Request):
         return JSONResponse({"ok": True, "root": state.root, "focus": state.focus,
@@ -244,6 +383,26 @@ def build_app(state: AppState):
         Route("/api/compare", guard(_json(lambda r: state.source.compare(q(r, "base"),
                                                                          q(r, "head"))))),
         Route("/api/pr", guard(pr), methods=["POST"]),
+        # 0.0.23 C1 — navigation. Every path-taking route contains its path (nav.contained_rel).
+        Route("/api/tree", guard(_json(lambda r: state.source.tree()))),
+        Route("/api/file", guard(_json(lambda r: state.source.file(q(r, "path"))))),
+        Route("/api/outline", guard(_json(lambda r: state.source.outline(q(r, "path"))))),
+        Route("/api/impact", guard(_json(lambda r: state.source.impact(q(r, "path"),
+                                                                       q(r, "lines"))))),
+        Route("/api/quickopen", guard(quick), methods=["POST"]),
+        Route("/api/query", guard(query)),
+        Route("/api/caps", guard(_json(caps))),
+        # 0.0.23 C2 — search: word / regex (rg or the floor, named) and meaning (R2).
+        Route("/api/search", guard(search_text), methods=["POST"]),
+        Route("/api/meaning", guard(search_meaning), methods=["POST"]),
+        Route("/api/semantic", guard(_json(lambda r: state.source.semantic_status()))),
+        Route("/api/semantic/fetch", guard(semantic_fetch), methods=["POST"]),
+        # 0.0.23 C3 — the graph views, as data drawn by the vendored Cytoscape.js.
+        Route("/api/graph", guard(_json(graph))),
+        Route("/static/vendor/{name}", guard(vendor)),
+        Route("/api/runs", guard(_json(runs))),
+        Route("/api/plan", guard(_json(plan))),
+        Route("/api/lifecycle", guard(_json(lifecycle))),
         Route("/api/focus", guard(focus), methods=["POST"]),
         Route("/api/events", guard(events)),
     ]

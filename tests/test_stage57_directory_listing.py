@@ -33,14 +33,46 @@ class TestNotSilentlyClaimingLive(unittest.TestCase):
         self.assertIn("Pending", pending)
         self.assertIn("yet", pending)
         self.assertNotIn("✅", pending)
-        self.assertNotIn("is in the Claude plugin directory", pending)
+        # 0.0.23 B4 (PLUGIN-DIRECTORY-WRONG-CHANNEL): the live claim moved from the partner-only
+        # "plugin directory" to the community marketplace; the intent — pending never claims a
+        # listing — is unchanged.
+        self.assertNotIn("is listed in the Claude community plugin marketplace", pending)
 
     def test_live_text_says_live_not_pending(self):
         live = DL.notice(True)
         self.assertIn("✅", live)
-        self.assertIn("is in the Claude plugin directory", live)
+        self.assertIn("is listed in the Claude community plugin marketplace", live)
         self.assertNotIn("Pending", live)
         self.assertNotIn("yet", live)
+
+
+class TestRightChannel(unittest.TestCase):
+    """0.0.23 B4 — PLUGIN-DIRECTORY-WRONG-CHANNEL: the notice no longer waits on the partner-only
+    directory; it says the plugin installs today from the self-hosted marketplace and that only the
+    community-marketplace listing is pending."""
+
+    def test_pending_leads_with_the_two_in_app_commands(self):
+        pending = DL.notice(False)
+        self.assertIn("/plugin marketplace add JasGujral/mokata-oss", pending)
+        self.assertIn("/plugin install mokata@mostack", pending)
+        self.assertIn("uv", pending)                         # the MCP server needs uv on PATH
+
+    def test_pending_names_the_community_listing_as_pending_submission(self):
+        pending = DL.notice(False)
+        self.assertIn("pending submission", pending)
+        self.assertIn("community", pending)
+
+    def test_wrong_channel_wording_is_gone(self):
+        for text in (DL.notice(False), DL.notice(True)):
+            self.assertNotIn("plugin-directory approval", text)
+            self.assertNotIn("isn't registered on any", text)
+            self.assertNotIn("planned, not yet available", text)
+
+    def test_marketplace_name_matches_the_manifest(self):
+        import json
+        with open(os.path.join(ROOT, ".claude-plugin", "marketplace.json"), encoding="utf-8") as fh:
+            name = json.load(fh)["name"]
+        self.assertIn("/plugin install mokata@%s" % name, DL.INSTALL_COMMANDS)
 
 
 class TestDriftGuard(unittest.TestCase):

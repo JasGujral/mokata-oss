@@ -999,6 +999,26 @@ def _harvest_waiting(root: str) -> Optional[str]:
         return None
 
 
+def _intentions_due(surface: Any) -> Optional[str]:
+    """PM.S1 (0.0.23 D15) — "N intentions due" (and any UNREADABLE ones), inside the budget."""
+    try:
+        from .memory import MemoryStore
+        from .memory.intentions import briefing_line as _line
+        return _line(MemoryStore.from_surface(surface), root=getattr(surface, "root", ""))
+    except Exception as exc:  # noqa: BLE001 — a briefing line is never worth a failed SessionStart
+        # LOUD, not silent: a reminder the user is counting on must not vanish without a word. The
+        # briefing still starts; it says the check did not run, and the degrade is classed.
+        try:
+            from .degrade import FAILURE_LOCAL_IO, note_degraded
+            note_degraded("memory-intentions", FAILURE_LOCAL_IO, detail=str(exc),
+                          fallback="due intentions were NOT checked this session",
+                          fix="run `mokata memory --kind intention` to see them; `mokata doctor`")
+        except Exception:  # noqa: BLE001
+            pass
+        return ("mokata: intentions could NOT be checked this session — run "
+                "`mokata memory --kind intention`.")
+
+
 def _mcp_reachability_warning(root: str) -> Optional[str]:
     """One-line SessionStart warning when mokata's MCP server is registered but its command
     can't be resolved. Fast local lookup (no subprocess); None (silent) on reachable/absent
@@ -1011,6 +1031,13 @@ def _mcp_reachability_warning(root: str) -> Optional[str]:
                 "run `mokata mcp install` to repair, then restart Claude Code.")
     except Exception:
         return None
+
+
+def _new_worktree_notice(surface) -> Optional[str]:
+    """WT.S3 FR-WT-4 — the one-line "new git worktree(s) since the last session" notice, or None.
+    Zero subprocess (git's admin files only); `new_worktree_notice` never raises."""
+    from .worktree_manage import new_worktree_notice
+    return new_worktree_notice(surface)
 
 
 def session_start_main(argv: Optional[List[str]] = None) -> int:
@@ -1064,6 +1091,11 @@ def session_start_main(argv: Optional[List[str]] = None) -> int:
         _emit(build_setup_offer().text)
         return 0
 
+    # SESSION-BIND-BY-ANCESTOR (0.0.23 F1) — tell the MCP server (a sibling descendant of this
+    # Claude process, which can never see `session_id` — #25642) which session this process now
+    # serves. On `resume` this is what re-points a process whose session `/resume` just switched.
+    _record_session_ancestry(root, session_id)
+
     try:
         surface = Surface.load(root)
     except ConfigError:
@@ -1082,7 +1114,8 @@ def session_start_main(argv: Optional[List[str]] = None) -> int:
         reanchor = build_reanchor(root, session_id, source)
     except Exception:  # noqa: BLE001 — the briefing must start even if the re-anchor cannot
         reanchor = None
-    footer = [f for f in (_mcp_reachability_warning(root), _harvest_waiting(root)) if f]
+    footer = [f for f in (_mcp_reachability_warning(root), _harvest_waiting(root),
+                          _intentions_due(surface), _new_worktree_notice(surface)) if f]
     briefing = build_bootstrap(surface, reanchor=reanchor,
                                footer="\n".join(footer) if footer else None)
     context = briefing.text
@@ -1100,6 +1133,12 @@ def session_start_main(argv: Optional[List[str]] = None) -> int:
     # A fast LOCAL lookup only (no handshake subprocess): SessionStart is async/observability
     # and must never block or slow the session. Degrade-clean: any doubt → say nothing.
     _emit(context)
+
+    # HP.S5 (0.0.23 E1) — record this session's prefix fingerprint (its baseline for the per-turn
+    # comparison, and a data point for PIPE-TOKEN-AUDIT). After the emit: it never touches the
+    # briefing. `observe_prefix` never raises.
+    from .govern.cache import observe_prefix
+    observe_prefix(surface, root, session_id, event="session-start")
 
     # Stage 60 — advance the "since last session" baseline at the session boundary. The briefing
     # above already DERIVED its diff against the OLD snapshot (read-only); now capture the new
@@ -1199,6 +1238,9 @@ def user_prompt_submit_main(argv: Optional[List[str]] = None) -> int:
         # Recorded BEFORE the recall work and outside its budget: it is one small write, and the
         # gate's verdict for this session depends on it.
         _record_prompt_intent(root, prompt, session_id)
+        # SESSION-BIND-BY-ANCESTOR (0.0.23 F1) — refresh this process's session for the MCP side
+        # on every prompt (newest write wins), so a `/resume` switch is followed by the next turn.
+        _record_session_ancestry(root, session_id)
         # E2 (0.0.22) — `/mokata:review-window`: THIS hook is the one place that knows which session asked, so
         # it opens the review window, or re-focuses the open one on this session, and says where.
         ide_line = _ide_for_prompt(root, prompt, session_id)
@@ -1206,6 +1248,10 @@ def user_prompt_submit_main(argv: Optional[List[str]] = None) -> int:
             _emit(ide_line, event=USER_PROMPT_SUBMIT_EVENT)
             return 0
         surface = Surface.load(root)
+        # HP.S5 (0.0.23 E1) — the cache-prefix fingerprint, compared with this session's last
+        # record. A change is ONE line, costed against the turn budget; unchanged is silent and
+        # writes nothing. Before the bounded work: it is a hash of three short strings.
+        notice = _prefix_notice(surface, root, session_id)
 
         # THE WALL-CLOCK BUDGET (OSS issue #43). Everything expensive lives past this point —
         # opening the store, resolving the embedder, the ranked recall — and until now none of it
@@ -1219,13 +1265,17 @@ def user_prompt_submit_main(argv: Optional[List[str]] = None) -> int:
         # saw (see `record_injected` below — the S4 ledger suppresses an item for the rest of the
         # session, so recording a dropped pack loses that memory in the name of not repeating it).
         from .injection_ledger import record_injected
-        pack = _bounded(lambda: _build_injection_for(surface, prompt, root, session_id),
+        budget = _turn_budget_after(surface, notice)
+        pack = _bounded(lambda: _build_injection_for(surface, prompt, root, session_id, budget),
                         _HOOK_WORK_BUDGET_SECS)
-        if pack is None:
-            return 0                       # over budget / unreadable — silence, never a partial
-        if not pack.text:
-            return 0                       # nothing relevant this turn — emit NO channel at all
-        _emit(pack.text, event=USER_PROMPT_SUBMIT_EVENT)
+        if pack is None or not pack.text:
+            # over budget / unreadable / nothing relevant — emit NO channel at all, unless the
+            # prefix moved, which is said on its own.
+            if notice:
+                _emit(notice, event=USER_PROMPT_SUBMIT_EVENT)
+            return 0
+        _emit((notice + "\n" + pack.text) if notice else pack.text,
+              event=USER_PROMPT_SUBMIT_EVENT)
         # AFTER the emit, and only the ids that actually SURVIVED the budget (`pack.item_ids` is
         # what was rendered, not what was retrieved). Recording a dropped item would suppress it
         # for the rest of the session without the model ever having seen it — losing memory in
@@ -1242,7 +1292,30 @@ def user_prompt_submit_main(argv: Optional[List[str]] = None) -> int:
         return 0
 
 
-def _build_injection_for(surface, prompt: str, root: str, session_id: str):
+def _prefix_notice(surface, root: str, session_id: Optional[str]) -> str:
+    """HP.S5 — the one-line "cache prefix changed" notice, or "" (unchanged, first sighting, or
+    any failure: observability that cannot observe says nothing)."""
+    try:
+        from .govern.cache import observe_prefix
+        obs = observe_prefix(surface, root, session_id, event="turn")
+        return obs.notice() if obs is not None else ""
+    except Exception:  # noqa: BLE001 — the async lane never fails a turn over a notice
+        return ""
+
+
+def _turn_budget_after(surface, notice: str) -> Optional[int]:
+    """The pack's budget with the notice's own cost taken out — ONE budget, never a notice
+    appended past it. None (the pack's own default) when there is no notice."""
+    if not notice:
+        return None
+    from .bootstrap import estimate_tokens
+    from .context_budget import context_budget
+    return max(context_budget(getattr(surface, "manifest", None)).turn_tokens
+               - estimate_tokens(notice) - 1, 0)
+
+
+def _build_injection_for(surface, prompt: str, root: str, session_id: str,
+                         budget: Optional[int] = None):
     """The hook's WORK, in one callable so it can be bounded as a unit.
 
     Extracted for `_bounded` rather than inlined: the budget is on the hook's work, not on one
@@ -1257,8 +1330,53 @@ def _build_injection_for(surface, prompt: str, root: str, session_id: str):
     from .injection_ledger import already_injected
     # S4 — what this session has already been handed. Excluded from the ranking, so the budget
     # goes to what is NEW rather than re-handing the model turn 3's answer on turn 20.
-    return build_injection(surface, prompt,
-                           exclude_ids=already_injected(root, session_id=session_id))
+    # LIVE-EVIDENCE + DEV-CC (0.0.23 D1) — the develop-time passive findings for the run THIS
+    # session is bound to. Bounded on its own clock INSIDE this worker's, so a slow graph costs the
+    # turn its evidence lines and never its memory pack.
+    evidence = _bounded(lambda: _develop_evidence(surface, root, session_id),
+                        _EVIDENCE_BUDGET_SECS) or []
+    return build_injection(surface, prompt, budget=budget,
+                           exclude_ids=already_injected(root, session_id=session_id),
+                           evidence_lines=evidence)
+
+
+#: D1 — the develop-time evidence's own share of the hook's wall clock (≤3 live graph queries).
+_EVIDENCE_BUDGET_SECS = 2.0
+
+
+def _develop_evidence(surface, root: str, session_id: str) -> List[str]:
+    """D1 — `engine/live_evidence.develop_turn_lines` for the run this session is BOUND to (C1's
+    claim — never the repo's "active" run). An unbound session, a run outside develop, or any
+    failure is `[]`: the per-turn lane only ever adds context."""
+    try:
+        if not session_id:
+            return []
+        from .run_intent import CLAIM_BOUND, session_claim
+        claim, rid = session_claim(root, session_id)
+        if claim != CLAIM_BOUND or not rid:
+            return []
+        from .engine.live_evidence import develop_turn_lines
+        from .engine.spec_anchor import develop_anchor_lines
+        from .knowledge import KnowledgeLayer
+        # D4 (SPEC-ANCHOR S2) — the per-AC placement lines and the stale-anchor findings ride the
+        # SAME lines, through the `extra` hook: one channel, one budget.
+        return develop_turn_lines(root, rid,
+                                  layer_factory=lambda: KnowledgeLayer.from_surface(surface),
+                                  extra=lambda h, s, lay: develop_anchor_lines(h, s, lay,
+                                                                               root=root))
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _record_session_ancestry(root: str, session_id: Optional[str]) -> None:
+    """SESSION-BIND-BY-ANCESTOR — record `session_id` against this hook's ancestor pids (see
+    `session_ancestry`). SessionStart/UserPromptSubmit only, never PreToolUse. Bounded; never
+    raises: an unrecorded map only means the MCP side resolves exactly as it did before."""
+    try:
+        from .session_ancestry import record_session
+        record_session(root, session_id)
+    except Exception:  # noqa: BLE001 — observability-class write in a hook that must exit 0
+        pass
 
 
 def _record_prompt_intent(root: str, prompt: str, session_id: str) -> None:
@@ -1470,6 +1588,67 @@ _SUBCOMMANDS = {
 _SUBCOMMAND_LIST = " | ".join(_SUBCOMMANDS)
 
 
+#: Appended by the PLUGIN's `hooks.json` to every command (0.0.23 B3,
+#: `HOOKS-FIRE-TWICE-WITH-PLUGIN-AND-PROJECT-WIRING`). Stripped before dispatch — no subcommand
+#: ever sees it.
+VIA_PLUGIN_FLAG = "--via-plugin"
+
+
+def _plugin_wiring(sub: str) -> List[tuple]:
+    """(event, matcher) for every PLUGIN hook that runs `sub`, read from the packaged hooks.json."""
+    import json as _json
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hooks", "hooks.json")
+    with open(path, encoding="utf-8") as fh:
+        data = _json.load(fh)
+    out = []
+    for event, blocks in (data.get("hooks") or {}).items():
+        for block in blocks or []:
+            for h in block.get("hooks") or []:
+                words = str(h.get("command", "")).split()
+                if len(words) >= 2 and words[1] == sub:
+                    out.append((event, block.get("matcher")))
+    return out
+
+
+def _matcher_covers(settings_matcher: Optional[str], plugin_matcher: Optional[str]) -> bool:
+    """True when the settings hook sees AT LEAST every tool the plugin hook sees. A plain `A|B|C`
+    tool list is compared as a set; anything else (a regex) must be identical."""
+    if not plugin_matcher:
+        return not settings_matcher
+    if not settings_matcher:
+        return False
+    plain = lambda m: all(part.isidentifier() for part in m.split("|"))   # noqa: E731
+    if plain(settings_matcher) and plain(plugin_matcher):
+        return set(plugin_matcher.split("|")) <= set(settings_matcher.split("|"))
+    return settings_matcher == plugin_matcher
+
+
+def _settings_route_owns(sub: str) -> bool:
+    """True when `mokata setup`/`init` wired this SAME hook in settings.json — same subcommand, same
+    EVENT, a matcher that covers at least the plugin's — and it resolves.
+
+    With the plugin installed AND project/user wiring present, Claude Code runs every hook twice —
+    two `gate_block` events 20 ms apart, the review window launched then re-focused. The settings
+    route is the one the user wired explicitly, at an absolute path, so the PLUGIN invocation
+    stands down — but ONLY where the settings hook does everything the plugin hook would. A 0.0.21
+    wiring's gate-guard matcher has no `Skill|Agent|Task`; standing down for it would have switched
+    the gate off for those tools (0.0.23 verification B1). ⛔ A dead settings hook never silences
+    the live plugin one, and any doubt — unreadable settings or hooks.json — answers False, so the
+    plugin hook runs: a gate that silently does not run is worse than a duplicate."""
+    try:
+        from .hook_wiring import _settings_hooks, _wired_subcommand
+        root = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+        mine = _plugin_wiring(sub)
+        if not mine:
+            return False
+        theirs = [h for h in _settings_hooks(root, None)
+                  if _wired_subcommand(h) == sub and h.resolves]
+        return all(any(h.event == event and _matcher_covers(h.matcher, matcher) for h in theirs)
+                   for event, matcher in mine)
+    except Exception:
+        return False
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     """`mokata-hook <subcommand> [args…]`. A missing or unknown subcommand is a
     MISCONFIGURATION (a mis-wired hook command), so it fails VISIBLY with exit 1 rather than
@@ -1483,11 +1662,22 @@ def main(argv: Optional[List[str]] = None) -> int:
             f"mokata-hook: missing subcommand ({_SUBCOMMAND_LIST})\n")
         return 1  # misconfiguration → visible exit 1 (NOT 0=silent, NOT 2=security-block)
     sub, rest = argv[0], argv[1:]
+    via_plugin = VIA_PLUGIN_FLAG in rest
+    rest = [a for a in rest if a != VIA_PLUGIN_FLAG]
     handler = _SUBCOMMANDS.get(sub)
     if handler is None:
         sys.stderr.write(
             f"mokata-hook: unknown subcommand {sub!r} (expected {_SUBCOMMAND_LIST})\n")
         return 1  # misconfiguration → visible exit 1 (NOT 0=silent, NOT 2=security-block)
+    if via_plugin and _settings_route_owns(sub):
+        if sub == "session-start":
+            # the plugin root is still recorded — `/mokata:init` finds the bundled engine by it
+            root = None
+            if "--plugin-root" in rest:
+                i = rest.index("--plugin-root")
+                root = rest[i + 1] if i + 1 < len(rest) else None
+            _record_plugin_root(root)
+        return 0
     return handler(rest)
 
 

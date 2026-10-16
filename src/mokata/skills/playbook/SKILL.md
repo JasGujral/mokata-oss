@@ -34,6 +34,10 @@ eval "$ENGINE playbook --parallel --fanout --dense --path ."
 It announces the active stage (banner) at the start and on completion, and reports each
 phase's result. Watch a parallel run live with `/mokata:progress --lanes` or `/mokata:watch`.
 
+## If this appears stuck
+
+If a step appears stuck, or the harness stops it mid-run: run `mokata resume` (where the run stands and the gate that still applies) and `mokata approve --list` (anything waiting on a human). Nothing is lost — run state, approvals and the audit ledger are on disk — so re-invoke `/mokata:playbook` to continue. Where the harness limits foreground time, start a long test run in the background; `mokata doctor` names a hung MCP server or a hook that is not firing.
+
 ## Rationalizations — stop if you catch yourself thinking any of these
 
 | Excuse | Reality |

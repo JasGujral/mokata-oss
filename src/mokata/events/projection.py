@@ -63,6 +63,8 @@ KIND_REGISTER: Dict[str, Tuple[Optional[str], str]] = {
     "decompose_fanout_guard": (GATE_DECISION, "the fan-out ceiling refusing a decomposition"),
     "spec_conflict": (GATE_DECISION, "spec-awareness refusing or flagging a conflicting touch set"),
     "rule_block": (GATE_DECISION, "the Sentinel enforcement gate blocking an action"),
+    "gate_advisory": (GATE_DECISION, "an ADVISORY gate's evaluation (the gate ladder): what it would "
+                      "have blocked, or that it would have passed — decided, never blocking"),
     "harvest_decision": (APPROVAL_DECISION,
                          "a person accepted or rejected a drafted session note (stage D6)"),
     "subagent_contract_unhonored": (GATE_DECISION,
@@ -143,6 +145,11 @@ KIND_REGISTER: Dict[str, Tuple[Optional[str], str]] = {
     "spec_amend": (UNMAPPED, "a spec document edit. It passes a gate, and THAT gate's own entry "
                              "is the governance event; this row is the artifact change"),
     "spec_reemit": (UNMAPPED, "the same, for a re-emitted spec version"),
+    "spec_quality": (UNMAPPED, "SQ.S1 — one cycle of the spec-quality fix loop (findings → "
+                               "revise). Bookkeeping of an AUTHOR's revision loop before any "
+                               "human is asked; the human's decision is the emit's own gate entry"),
+    "spec_regress": (UNMAPPED, "SQ-REGRESS — a forced spec → brainstorm regression. A checkpoint "
+                               "roll-back computed from the approach, not a decision anyone made"),
     "reversible_write": (UNMAPPED, "the undo-buffer's bookkeeping for a write whose gate entry "
                                    "is already a GateDecision — mapping it would double-count "
                                    "one decision"),

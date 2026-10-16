@@ -1,260 +1,246 @@
-mokata **0.0.22**. Upgrade with `mokata upgrade` (or `pip install -U mokata`, then
-`mokata upgrade`). Requires **Python ≥ 3.10**, and for the Claude Code integration
-**Claude Code ≥ 2.1.0**.
+mokata **0.0.23**. Set up or upgrade with the same instruction, in your repo:
+`uv tool install --upgrade mokata` (or `pipx install --force mokata`), then `mokata setup claude`. Requires **Python ≥ 3.10**, and for the Claude Code integration
+**Claude Code ≥ 2.1.0**. The plugin route needs **[`uv`](https://docs.astral.sh/uv/) on your PATH**.
 
 ---
 
-## 0.0.22 — "One run, and the gates hold wherever the agent writes."
+## 0.0.23 — "Install it in two commands, read your code and not your venv, and navigate what changed."
 
-0.0.21 shipped the record of every governance decision and named what it did not ship: one identity
-per run from registration through ship, a conversational run the phase gate binds, and review as a
-measurable gate. **0.0.22 ships those three.** Building them showed how many ways an agent could
-write around a gate, so this release also closes them: a shell write now meets the same run-state
-gates as a `Write`, a gate's position is re-stated after compaction, a subagent works under a
-contract, and an agent can no longer delete or forge mokata's own run record.
+0.0.22 made a run keep one identity and its gates hold wherever the agent writes. **0.0.23 is about
+what a stranger meets first.** The plugin now stands alone: its MCP server starts through `uvx` with
+no pip step, each hook fires once when the plugin and `mokata init` are both wired, and no project
+command is shadowed by a Claude Code built-in. A Python repository is read as your code — not your
+virtualenv's — and its tests run in its own Python. `mokata ide` grows from a review window into a
+place to navigate: changed files, symbols, search by word or by meaning, the call graph, and the
+plan and spec behind a run.
 
-It also adds `mokata ide`, a read-only review window for what your sessions changed. An independent
-verification pass ran against the built release, and what it found is fixed. **Several exit
-criteria are not met, or not yet demonstrated live** — *Known limitations* names each one rather
-than rounding it up.
+It also builds the machinery the "Proof" programme needs — a gate enforcement ladder, code anchors
+on acceptance criteria, a spec-quality battery, typed gate evidence, and an eval harness kept outside
+the product. **None of the proof measurements has been run**: the harness exists, its numbers do
+not. **Several exit criteria are not met, or not yet demonstrated live** — *Known limitations* names
+each one rather than rounding it up.
 
-Two refusals are new and you may meet them: a review recorded as passed while it raised a Blocking
-finding is refused, and in a session running a pipeline a shell command mokata cannot read is
-refused.
+Three things you may meet:
+
+- **Five project-scope commands are renamed** to `/mokata-review`, `/mokata-init`, `/mokata-bug`,
+  `/mokata-resume` and `/mokata-upgrade`, because Claude Code's own `/review`, `/init`, `/bug`,
+  `/resume` and `/upgrade` shadowed them. The plugin's `/mokata:review` and the rest are unchanged.
+- **The plugin's MCP server needs `uv`.** It is launched as `uvx --from mokata==0.0.23 mokata-mcp`;
+  without `uv` it does not start, and `mokata doctor` says so (`plugin-mcp-unresolvable`).
+- **Spec emit has a new refusal, and doctor has new warnings.** `mokata spec emit` and `spec_emit`
+  refuse a spec the new spec-quality battery finds structurally broken or untestable; its
+  approach-coherence findings are advisory in this release. `mokata doctor` warns about an
+  in-project or shadowed mokata install and about stale worktrees; none changes its exit code.
 
 ---
 
-## One run, from registration to ship
+## Install it in two commands
 
-**A run now has a finish.** `run_finished` is the ship-completion event, recorded by
-`mokata progress finish --landing merged|pr|kept|discarded` or the `run_finish` MCP tool, and the
-ship skill records it. It stamps `completed_at`, retires the run exactly as entering the ship stage
-does, and lands in the typed stream as `PhaseTransition(ship, finish)`. It is **never recorded
-run-less**: with no run, or with several and none identifiably yours, it is refused
-(`FinishRefused`, CLI exit 1) and nothing is written. The new `progress_mark` MCP tool is the twin
-of `mokata progress mark`. The old `STAGE_PASS` event, defined since 0.0.16 and written by nothing,
-is deleted.
+Inside Claude Code:
 
-**A conversational run registers, and the gate waits for it.** When a session asks for
-`/mokata:brainstorm` — typed, or through the model's own `Skill` call — mokata records a claim for
-that Claude Code session. Until the run registers, an implementation write in that session is
-blocked as `run-registration`, and the message names the way out. A new PostToolUse hook,
-`run-bind`, then binds the session to the run id the MCP server itself returned, so there is one
-identity, not two. `run-registration` is not overridable.
+    /plugin marketplace add JasGujral/mokata-oss
+    /plugin install mokata@mostack
 
-**Parallel runs each get their own gate.** A bound session is policed by exactly its own run,
-whatever else the repository holds. Measured: two sessions bound to two runs in one repository got
-two different verdicts (`spec-persisted` and `no-code-without-failing-test`); before this release
-the gate failed open for both. A session that never asked for a pipeline has no claim, and
-hand-editing stays unpoliced, as before.
+That is the whole install. The plugin starts its MCP server as
+`uvx --from mokata==<plugin version> mokata-mcp`, so there is **no prior pip step** — you only need
+`uv` on your PATH. The pin is a guarded version field (`plugin.json:mcp-pin`): `release-check`
+refuses a plugin that would start a different mokata than its own version.
 
-## Review, measured
+**Each hook fires once.** With the plugin installed and `mokata init`'s project hooks also in place,
+Claude Code ran every hook twice. Every plugin hook now carries `--via-plugin` and stands down when
+`settings.json` wires the same hook *and that hook resolves* — a dead settings hook never silences
+the plugin's, because a gate that silently does not run is worse than a duplicate.
 
-Every run-state gate block is now recorded as a `gate_block` event against the run whose state
-blocked — and as `GateDecision(block)` in the typed stream, where no gate block had ever been
-evented. A retried write counts once. The review verdict carries its Blocking-finding count
-(`mokata progress record-review --blocking N`, or `blocking=` on MCP), and
+**No command is shadowed.** Project-scope commands that collide with Claude Code built-ins are
+written as `mokata-<name>.md`. Re-running `mokata setup claude` (which `mokata upgrade` runs) removes
+mokata's own renamed or retired command files — those marked `description: mokata ·` — and never a
+file of yours.
 
-    mokata progress review-status --caught
+**The install docs lead with one instruction that both sets mokata up and updates it** —
+`uv tool install --upgrade mokata` (or `pipx install --force mokata`), then `mokata setup claude`,
+which runs `mokata init` for you on a new repo and only refreshes the wiring on an existing one.
+The plugin is the documented alternative, and plain `pip` comes last, with the reason: inside a project's virtualenv it mixes mokata's dependencies into yours. `mokata doctor` and
+`mokata setup claude` now warn when mokata is installed inside the project's own virtualenv
+(`install-in-project-env`) or when another `mokata` on PATH is a different version
+(`install-shadowed`). A source checkout of mokata itself does not warn.
 
-prints what review caught against what the gates caught in the loop, for the run and across runs
-(`caught` on the `review_status` MCP tool). **A verdict without its count reads *not measured*,
-never 0** — and "no review verdict", "nothing caught" and a percentage are three different lines.
-The figure is informational: it never changes ship's exit code, and without `--caught` the output is
-byte-identical.
+## Your code, not your virtualenv
 
-Two rules tighten what a verdict can say. **A verdict cannot contradict its own Blocking count:** a
-PASS that raised a Blocking finding and a FAIL that names none are refused, on the library, the CLI
-and MCP alike — the one practice adopted from a survey of three review guides (Conventional
-Comments, Google's engineering practices, and Anthropic's `code-review` plugin, the last for ideas
-only because it carries no licence statement). And **an unobserved "independent" review is credited
-as inline.** `independent=true` used to be a claim nothing checked; ship now derives `observed` — a
-subagent of the run finished at or before the verdict — and a claim nobody observed ships with
-*"review passed (inline — independence claimed, but no subagent of this run was observed)"*.
+**Virtualenvs were read as source.** Only `node_modules` was pruned, so `venv/`, `env/`, any-named
+venvs and in-repo conda environments filled the graph, the index, the IDE tree and search with
+third-party code, and `defs` and `callers` named it. Environments are now pruned by **what they are,
+not what they are called** — any directory carrying `pyvenv.cfg` or `conda-meta/`, plus
+`__pypackages__` and `site-packages`. A real package named `env/` with no marker is still read.
 
-## The gates hold where the agent writes
+**That fixes the blast-radius timeouts that broke `spec amend`.** The grep floor re-read the whole
+tree for every symbol at every hop; on a repository whose virtualenv was walked as source, the amend
+impact lens refused every widening as `blast-radius-timeout`. The corpus is now read **once per
+query**, with an identical answer, and an acceptance criterion handed to the lens costs no walk.
+**Measured:** 300 source files beside a 15,000-file un-dotted virtualenv — 0.0.22 did not answer in
+300 s; 0.0.23 answers in 0.1 s.
 
-**A shell write meets the same gates as a `Write`.** The run-state gates used to return before
-reading a Bash command, so `sed -i … src/app.py` passed where a `Write` to the same file was
-blocked. Every destination mokata's parser sees now gets the same verdict and the same message —
-bare file names and a literal `cd` included — and `touch` counts as a write.
+**Tests run in the project's Python, activated or not.** The baseline and TDD gates used to inherit
+mokata's own environment — from the MCP server, a hook or the IDE, whatever Claude Code was launched
+with — so `pytest` was missing or ran without your dependencies, and the baseline read a false RED.
+The environment is now resolved in order:
 
-**What mokata cannot read is refused while a run is in progress.** In a session with an open or
-bound claim, a command that may write somewhere mokata cannot place is refused as `bash-unreadable`,
-with the reason and the way out: use Write/Edit, or name the file literally. The refusal counts as
-an in-loop catch. Refused: the eight parser blind spots, plus `find -delete`, `| sh`, `awk` writing
-and `cd "$D"`. **Reads are never refused.** A session in no run sees nothing new.
+    settings.python  >  $VIRTUAL_ENV / $CONDA_PREFIX  >  an in-repo env found by its marker
+                     >  poetry / pipenv  >  the system Python
 
-**mokata's own run record is not agent-writable, in any session.** An agent tool call that would
-write, delete or move `.mokata/temp_local/state/` is blocked as `own-record` — `rm -rf .mokata`,
-`git clean -fdx`, an appended event, and the same through a variable, a glob, braces or another
-interpreter. Deleting that state removed the run and opened every run-state gate; appending a
-`subagent_finished` event could forge an observed independent review. Reading it stays allowed.
+**and the one used is named**, in the baseline report and in a `mokata doctor` info line
+(`project-python`).
 
-**Containment is on for every gated write the agent makes.** With no workspace supplied, the write
-gate uses its own two — the process's working directory and the repository its ledger lives in —
-and refuses a write outside both. A destination **you** typed at the CLI is not contained, so
-`--out ~/elsewhere.json` still works. One named allowance covers writes to a harness's
-configuration, and nothing else. `mokata setup`'s own config writes (`.mcp.json`, `settings.json`,
-`~/.claude.json`) now pass SELF-PROTECT and containment first; a refusal raises `ConfigWriteRefused`
-and writes nothing.
-
-## Subagents work under a contract
-
-New SubagentStart and SubagentStop hooks give each subagent started in a pipeline session a
-contract: its session's own run, its type, whether it is read-only, and a depth limit.
-
-    settings.subagents.read_only_types       default ["Explore", "Plan"]
-    settings.subagents.max_recursion_depth   default 1, range 0..3 (0 = no subagents in a run)
-
-The gate-guard enforces the contract on the subagent's own calls — a read-only subagent's write is
-blocked, a delete or a tree-rewriting git command counts as a write, and so does a spawn past the
-depth — and every refusal is ledgered as `subagent_contract_unhonored`. A subagent is asked to end
-with a **`HANDBACK` report** (status · summary · files · tests · open). With no readable report it is
-sent back **once**, then let go with the gap ledgered — never a loop. A Claude Code that omits the
-final message has that recorded as the harness's own gap. A session in no run sees none of this.
-
-## Context that survives compaction, on one budget
-
-**A gate's position survives compaction.** The gates were never at risk — every one reads on-disk
-state — but the model was: after a summary it was not told which run it drives or what would decide
-its next write. A `PreCompact` hook now writes an anchor of the session's run position, and on
-SessionStart `compact` or `resume` the briefing carries a re-anchor block for **this session**: the
-run, the last stage, whether an approach, a spec and a failing test are on record, **the verdict the
-gate gives your next implementation write**, the overrides in force, and the rule to decide from the
-record, not the summary. It says whether anything moved since the anchor, or that no anchor was
-recorded.
-
-**The briefing shows the repository now.** A *"Repo now (live)"* block carries the branch,
-ahead/behind and changed files from one bounded `git status` (1.5 s timeout), the configured test
-command — or *"no test command set — mokata will not guess"* — and which of `CLAUDE.md`, `AGENTS.md`
-and `.claude/rules/` exist. At most 6 lines, and over budget it is dropped first, with a notice. A
-**working set** per run derives every reference from its owner and persists only the files the
-session touched and its notes; read it with `mokata progress working-set` or the `working_set` MCP
-tool.
-
-**One context budget: `settings.context`.** `briefing_tokens` (default 2000), `turn_tokens` (300),
-`briefing_rules_lines` (12), `turn_rules_lines` (4), `turn_top_k` (5) and `live_lines` (6). The
-defaults are the constants that shipped before. A bad value is refused, not clamped: the default is
-used and the briefing names the key and the fix. The re-anchor and the MCP reachability warning are
-now counted **inside** the budget; they used to be appended after it was checked. **Output density
-is on by default** (`settings.governance.output_density: false` turns it off).
-
-**Session notes, accepted by a person.** Stop, PreCompact and SessionEnd each rewrite one draft note
-per pipeline session from mokata's record — the stage reached, files touched, in-loop catches,
-handbacks, the review verdict, and the model's last message, truncated — bounded to 900 characters,
-with no model called inside a hook. **A draft is not a memory.** `mokata memory harvest` lists the
-drafts; `--approve <id>` saves one through the human gate (it asks, scans for secrets and ledgers
-the write) and `--reject <id>` drops it. A decided draft is not proposed again unless the session
-did more.
-
-## `mokata ide`: a read-only review window
+## `mokata ide`: navigate, search, see the graph
 
     pip install "mokata[ide]"
     mokata ide            # or /mokata:review-window from inside a Claude Code session
 
-It shows the **live diff** of the working tree against `HEAD`, uncommitted and untracked files
-included; the diff at **any point in time**, from per-write snapshots mokata keeps under
-`.mokata/temp_local/snapshots/` (never in your `.git`); what each **session** changed, one row per
-session with its run; a **branch compare**; and a **GitHub PR by URL**, which refuses a foreign
-`origin` before any fetch and fetches with your own git login, storing no token. `/mokata:review-window` opens
-the window, or re-focuses the running one on the session that asked — one server per repository.
-Started from a session, the server exits after 30 idle minutes; `--foreground` keeps it in the
-terminal.
+- **Navigate.** A changed-files navigator — `]` / `[` for the next or previous file, `j` / `k` for
+  the next or previous hunk, unseen-since-last-look marks — ⌘P over changed files, files and
+  symbols, an outline, and defs / callers / callees / refs / implementers / blast radius / history
+  for any symbol, each with a `basis` badge. **Every answer is the graph's own:** the IDE returns
+  the same bytes as `mokata query … --json`, which is new. ⌘P ranks with `rapidfuzz` when it is
+  installed and with a pure-Python floor otherwise, and says which.
+- **Search** by word or regex (`rg` when present, a labelled pure-Python floor otherwise), and by
+  **Meaning**: semantic code search on mokata's own local embeddings
+  (`pip install 'mokata[embeddings]'`) — no code-review-graph, no API key. Without the extra it
+  says "unavailable" and shows nothing. The model is never downloaded on its own; one **Fetch**
+  button is the one network call you start.
+- **Graph.** A blast-radius ripple, a symbol focus view, a call-path tracer and an untested-path
+  finder, on **vendored** Cytoscape.js (MIT, licences and a sha256 per file shipped) — no CDN, it
+  renders offline. Every edge shows its `basis`; a lexical edge is drawn dashed and never claims
+  coverage. Sub-graphs are capped at **2,000** nodes, past which the answer says `truncated`.
+- **Plan.** The approved approach and the spec for a run, every archived spec version, an open
+  amendment, and a lifecycle strip from brainstorm to ship with gate blocks and amendments on their
+  stage. In team mode it reads the team store; an unreachable store says so and never shows local
+  data in its place.
+- Every chooser is a searchable, keyboard-driven combobox, each column scrolls on its own, and the
+  view you left — mode, panel, file, line — comes back per repository.
 
-Every section has an empty state, and `mokata ide --demo` serves a SAMPLE dataset — every payload
-carries `sample: true` and the page shows a SAMPLE banner — so you can review the UI without the
-sample ever passing for real data.
+**0.0.22's window bounds are closed:** the launch takes a per-repository lock on Windows too, so two
+launches start one server; stopping a server no longer probes it with `os.kill(pid, 0)`; the
+first-write snapshot index is locked; and pruning keeps every BEFORE a surviving session diff needs.
 
-It only reads, and it is still built as though it could leak: **loopback only**, with no bind
-option; a per-launch token exchanged at `/pair` for an HttpOnly, SameSite=Strict cookie; Host checked
-on every request and Origin on every POST; a fixed static file set under a strict CSP that forbids
-framing; realpath containment on every read, with `.mokata/` excluded; and repository text inserted
-with `textContent` only. The `[ide]` extra declares `starlette`, `uvicorn` and `sse-starlette`, which
-already arrive with mokata's `mcp` dependency.
+## The machinery for proof
 
-## Claude Code 2.1.0 is the minimum
+**A gate enforcement ladder.** A gate declares `enforcement`: `advisory`, `soft` or `hard`. An
+advisory gate never blocks and ledgers what it would have blocked (`gate_advisory`); soft blocks
+with a ledgered override; hard refuses. **All 9 backed gates are hard**, and an omitted level
+defaults to hard, so a missing field can never be how a gate stops blocking. Promotion is
+proposal-only, through the human gate: an advisory gate with a clean streak (default **5**
+evaluations that would not have blocked) is proposed, never promoted on its own; an approved
+promotion lands on **soft** (it blocks, and a human override gets through and is ledgered), never
+straight to hard. The four Karpathy gates, which never blocked, are labelled `advisory`.
 
-Every enforcement mokata runs inside Claude Code rides a hook event, and the newest it depends on —
-tool hooks firing inside subagents — arrived in **2.1.0**. Below it nothing fails loudly: the hook
-that would have fired simply does not. So `mokata doctor` raises `claude-code-too-old` and names each
-feature that is off, and stays silent when Claude Code is absent or new enough.
+**A spec-quality battery before consent.** `mokata spec emit` and `spec_emit` judge the spec last,
+after every earlier refusal: structure, untestable criteria, consistency with the approved approach
+and its deferred decisions, overlap with saved specs and decisions, unresolved anchors and
+failure-mode coverage. Revise is counted per run; after **3** cycles it escalates. Approach
+coherence, overlap, anchors and failure-mode coverage are advisory in this release, so nothing is
+refused or sent back to brainstorm on them; switched on, an approach-rooted finding regresses the
+run (`spec_regress`, ledgered).
+
+**Acceptance criteria carry code anchors** — up to **5** each, from the approach's decisions, its
+impact lens and the spec scope. An anchor that does not resolve is a warning, never a block, and a
+spec without anchors is byte-identical. **Spec history is readable:** `mokata spec show --versions`
+and `--version N` (MCP `spec_show(version=, list_versions=)`), and every answer says which version it
+is and whether it is superseded. The spec skill now asks one question — refine first, or
+standalone? — before drafting with no approved direction on record.
+
+**Develop turns carry live evidence.** In a bound run's develop stage, each turn re-checks the
+approach's consumer list against a live blast radius (MISSING / STALE), names decisions recorded on
+the files you touched, and lists guard clauses in touched Python files — inside the 300-token turn
+budget, ahead of recalled memory. A blast radius answered from the grep floor now **says it is
+degraded**, with the remedy (`mokata query` prints a `⚠` line; MCP `query` adds `impact_degraded`).
+
+**Typed evidence per gate outcome.** A gate decision carries `artifacts[]` and `tested[]`; the
+completeness gate records one check per acceptance criterion under
+`.mokata/temp_local/evidence/<run>/`. It sits beside the verdict and never changes it.
+
+**The eval harness lives outside the product.** `bench/` is excluded from the wheel, and a new
+`NO-API-KEY-GUARD` test sweeps `src/mokata/` for LLM SDK imports, API-key names, credential reads,
+`claude -p` spawns and provider hosts — allow-list empty, baseline 0 findings. mokata itself still
+never needs an API key.
+
+## Also new
+
+- **Intentions: memory that comes due.** `kind=intention` records a commitment with a due date, a
+  keyword or a path, checked at SessionStart and in the healing sweep — no daemon — and the briefing
+  says how many are due. Approve one to archive it; defer to let it resurface. Create one through MCP
+  `remember` (`due_at`, `when_keyword`, `when_path`), behind the same human gate. No schema change.
+- **`mokata suggest "<intent>"`** recommends pipeline skills from plain words ("flaky test" →
+  debug) with a fixed, whole-word table; an unmatched intent returns nothing rather than a guess.
+- **Worktree housekeeping.** `mokata worktree clean [--yes]` previews, then removes worktrees that
+  are merged, clean and idle, and prunes vanished ones; `mokata worktree remove <path|label|branch>
+  [--force]` refuses the main checkout, a live session and a locked worktree, and dirty or unmerged
+  work without `--force`. Branches are never deleted. MCP `worktree_clean` / `worktree_remove` are
+  propose-only. The briefing names new worktrees once, and `mokata doctor` raises
+  `worktree-prunable`, `worktree-merged`, `worktree-registry` and an info `worktree-idle`.
+- **`mokata` on its own is a home screen** — version, mode, profile, the active run and stage,
+  approvals waiting on you, whether the gate hook resolves, and what to run next.
+- **A cache-prefix notice:** when mokata's stable briefing prefix changes mid-session, one line says
+  the next briefing will miss the prompt cache once, and names the segment.
+- **MCP failures carry `remedyCommand`**, list reads carry a `count`, an empty list says why, and
+  every curated skill has an *If this appears stuck* section with a runnable command.
+- **A certification rig for `mokata-mcp`** on Cursor, Codex CLI, Gemini CLI and Copilot CLI — six
+  criteria, a stdio contract suite, an owner checklist and a matrix. It certifies nothing yet.
 
 ## Also fixed
 
-- **One subagent is one finish, even when mokata's hooks are wired twice.** With the plugin
-  installed and `mokata init`'s project hooks also in place, Claude Code runs each hook twice; a
-  subagent's finish was recorded twice (measured in a live headless session). It is now recorded
-  once. Gate blocks were already counted once per blocked write.
-
-- **Slash commands that only existed as commands were invisible.** In current Claude Code, a plugin
-  command file named `skill.md` stops the plugin's other command files from registering, so
-  `/mokata:version`, `/mokata:tour`, `/mokata:menu` and the rest answered *Unknown command*. The
-  authoring command is now **`/mokata:skill-author`**, and the review window's is
-  **`/mokata:review-window`** (it can no longer meet Claude Code's own `/ide`).
-
-**What the independent verification found.** In two passes, 21 and then 23 shell shapes wrote a
-source file while a `Write` to it was blocked — grouping, functions, command and process
-substitution, wrappers such as `timeout` and `bash -c`, `git checkout` and its relatives, `patch`,
-`sort -o`, `curl -o`, inline Python, Perl and Deno — and 24 read-only commands were refused during a
-run. All are fixed, each pinned by the verifier's own shape. The verification also produced the
-`own-record` guard above; made the re-anchor's next-write line the gate's own verdict (a hand-built
-ladder had an open spec amendment, an override and a finished run wrong); kept the re-anchor whole
-at `briefing_tokens` 200 to 700, where it had been cut away; stopped crediting a block in an
-unclaimed session to another run's in-loop count; and kept outside paths out of the working set. In
-`mokata ide` it closed a symlink out of the repository or to a device, a swapped-in symlink on a
-point-in-time diff, a FIFO that could hang the reader, a substring match on the PR `origin`
-(`acme/widgets-evil`, `github.com.evil.com`), a ref that could be read as a git option, an
-unauthenticated launcher call, and a page that could be framed; on Linux and macOS a launch now takes
-a per-repository lock, and switching between `--demo` and real data leaves one server. And the
-session harvest stopped re-proposing a decided draft after a chat-only turn.
-
-**The event publisher keeps its own high-water mark.** It used to infer where it left off from the
-team's table. Now the mark is this machine's own, per (namespace, DSN), keyed by a SHA-256 of the
-pair so **the DSN never reaches disk**, and anchored so a rebuilt `events.db` starts over. A missing
-or unreadable mark resumes from the start and says so. ⚠ **The first publish after upgrading
-re-sends from the start**; the team table de-duplicates it, so nothing is skipped or doubled.
-
-**On Windows**, MCP `duration_ms` was measured with a ~15.6 ms clock and now uses
-`time.perf_counter`, and git and gh output is decoded as UTF-8 rather than with the locale.
+- **`spec_amend` in a resumed session picked the wrong run.** With two or more pipelines in one
+  repository, the MCP server could not tell which Claude session it served, fell back to its own id
+  and refused with `spec-persisted` — the symptom after `/resume`. The hooks now record each session
+  against its Claude process, and the server walks its own process ancestry to find the session it
+  serves, refusing a recycled pid, a shared ancestor (tmux, an IDE host) or a stale writer.
+- **Hooks fire once, and never fewer.** A plugin hook stands down only for a `settings.json` hook on
+  the same event whose tool matcher covers the plugin's and that resolves — an older, narrower
+  wiring never switches a gate off.
+- **On Windows the session registry's liveness probe no longer ends the process it asks about.**
+- **An un-ignored venv no longer slows every graph query** (git's untracked list is filtered too).
+- **Events carry the run's real stage.** `gate_block` and `subagent_finished` said `develop`
+  whatever the stage.
+- **An unknown subcommand's error prints to stdout**, with the remedy.
 
 ## For contributors
 
-None of this changes the published package. **A release re-run converges from the remotes:**
-`release.sh` records a `mokata/release-preflight` commit status once the preflights pass at a pushed
-`HEAD`, and a re-entry at that commit skips them and every confirm whose outcome is already published
-— with no skip flag and no override. A closed PR's reason is read from GitHub rather than inferred,
-the mirror sync fast-forwards behind a typed yes instead of offering only a branch delete, and
-`mokata branch-protection-check` needs a fresh cached document to pass degraded (exits 4–7 are new
-refusals). A blocking `macos-latest` leg runs on the public mirror; `scripts/internal_suite.py`
-records the internal-tooling suite's local gate (62 classes, 291 tests), refusing on any failure or
-skip; a weekly seed job searches test order on the mirror; one shared comment-stripping reader
-replaces ten copies; and the mutant drivers refuse a malformed window, an existing snapshot, an
-over-claiming header and a label that runs a command.
+None of this changes the published package. **The release waits are three-state:** a dropped CI
+watch reads the run's conclusion, so a network reset is UNREADABLE (exit 4, retried) and never a
+red, and a release held at the `pypi` approval is PENDING (exit 3, with the approve URL) — re-running
+the same command finishes the tail. **precut runs the whole integration suite**, as `release.sh`
+does. A lint makes **new tests meet Windows first** (`os.kill(x, 0)`, unguarded `mkfifo`, `HOME`
+without `USERPROFILE`). CONTRIBUTING explains the plugin cache (`claude --plugin-dir <checkout>`).
+The G2 harness (`python -m bench.g2`: plan, run, validate, study, page, continuity, lean, audit) and
+the LOCOMO harness (`python -m bench.locomo`) live in `bench/`; the only key either reads is
+`MOKATA_G2_JUDGE_API_KEY`, for an opt-in API judge.
 
 ---
 
 ## Re-scheduled
 
-The v0.0.21 notes published three commitments naming **0.0.22**, each with a tracking key.
-`B-LIFE-FU` and `REVIEW-LIB-SWEEP` shipped. The third shipped in part:
+No published commitment named **0.0.23**, so nothing slipped from this release. One item from an
+earlier release's notes is still open, and is restated so it is not lost:
 
 - **The CI ceiling re-derived from the public mirror.** The v0.0.21 notes said it was, with the
   internal-tooling suite's recorded local gate, re-scheduled to **0.0.22** (tracked as `INTERNAL-ONLY-TESTS-RUN-ON-NO-RUNNER`).
-  The gate shipped; no stage of this release built the ceiling half. **These notes name no new
-  release for it.** Contributor-facing.
+  The gate shipped at 0.0.22; no stage of 0.0.22 or 0.0.23 built the ceiling half. **These notes
+  name no new release for it.** Contributor-facing.
 
 ## Not in this release
 
 Planned work that did not ship. None was promised in published notes. **These notes name no release
 for any of them**: each is tracked, and none has work booked against a release yet.
 
-- **A cross-turn read cache** (`ReadCache`). Not built, on evidence: it saves tokens only if a
-  PostToolUse hook can replace what the model sees, and Claude Code is reported to ignore a hook's
-  replacement output for its built-in tools.
-- **The editing half of `mokata ide`.** This release's slice is read-only by decision. The editor,
-  its go/no-go spikes, the approval-channel threat model and the question to Anthropic about
-  `claude -p` move with the editing work.
+- **Any real run of the proof engine** — no G2 run, no proof page, no audit report, no LOCOMO
+  number. Each needs paid runs on the owner's account.
+- **A lean MCP surface.** `settings.surface.lean` is an unadopted stub in `bench/`; nothing in the
+  product reads it.
+- **`mokata setup` writing MCP config for Codex CLI and Copilot CLI.**
+- **A `mokata search` CLI**, retired by ruling.
+- **The rest of the IDE's px0 parity rows:** a file-system watcher, explorer/`.gitignore` parity,
+  and a crash-safe restart beyond the existing stale-record handling.
+- **The editing half of `mokata ide`** and **a cross-turn read cache** (`ReadCache`), as at 0.0.22.
+- **The community-marketplace and awesome-claude-code submissions**, which need the owner's
+  credentials.
 - **Two Windows-only test skips** that need a Windows host to grade. Contributor-facing.
 
 ---
@@ -263,126 +249,144 @@ for any of them**: each is tracked, and none has work booked against a release y
 
 Everything below is shipped as-is, with the cost stated.
 
-**After a run ships, its spec scope keeps applying.** A session bound to a finished run is still
-policed by that run — and in a repository holding a single run, every session is — so a write
-outside the shipped spec's scope is refused as `spec-scope`. **Start a new `/mokata:brainstorm` for
-further work**: it opens a new claim and binds the session to the new run. This is deliberate:
-letting a finished run release the gates would let an agent end a run to escape them.
+**The proof machinery is built and has not been run, so there are no proof numbers.** The G2 eval
+harness, the public proof page, context continuity (CTX-CONT), the lean-MCP comparison (AXI-LEAN)
+and PIPE-TOKEN-AUDIT exist and are tested against fixtures; **no real G2 run has been made, and every
+counter is unmeasured.** The proof page refuses to render without a complete real run; the audit
+renders only a template marked "FIXTURE RUN — NOT THE AUDIT"; continuity will report *UNTESTED* until
+a seeded task long enough to compact exists; lean adopts nothing even on a win. The `claude` CLI
+flags and stream-json shapes the harness relies on were written from the documented interface and
+not exercised against a live binary; headless runs leave mokata's human-gated writes unanswered, so
+G2 measures mokata with its gates waiting; and the four tasks are starter tasks the owner has not
+ratified.
 
-**Read-only subagents are not judged on MCP tool calls.** The gate-guard matcher covers
-`Write|Edit|MultiEdit|NotebookEdit|Bash|Skill|Agent|Task`, so a third-party MCP server's write tool
-can write from an `Explore` subagent.
+**`mokata-mcp` is certified on no client.** The rig passes all six criteria locally for Cursor and
+Gemini, and C2–C6 for Codex and Copilot — the server half only; no real client was run and every
+cell of the matrix is `untested`. C1 cannot pass for Codex CLI or Copilot CLI, because `mokata setup`
+writes no MCP config for them; the checklist gives the snippets to verify by hand. The server's
+`initialize` reports the MCP SDK's version (1.30.0) rather than mokata's, and `mokata setup` writes a
+bare `mokata-mcp` that depends on PATH.
 
-**The shell lane reads commands; it does not run them.** A program mokata runs by design —
-`python script.py`, `make`, `npm test` — is not inspected, because policing it would mean refusing
-to run the tests; inline code is in scope, because there the agent is the author. A command mokata
-cannot read is refused while a run is in progress, so a false refusal costs one rephrase. The parser
-remains a heuristic over a Turing-complete language.
+**The LOCOMO benchmark cannot publish.** Its stop condition refuses publication while a ranker it
+measures is disclosed as regressed — arm D's MRR divergence (**−2.75pp** at 100,000 items) is open,
+and the vector tier's **−0.81pp** was retired unfixed — and the field figure it would be compared
+against is recorded as unverified. No run has been made.
 
-**An agent id outside `^[A-Za-z0-9_-]{1,80}$` gets no subagent contract**, so that subagent is not
-policed as read-only and has no depth limit.
+**Spec-quality failure-mode coverage and approach coherence are advisory in this release, by
+decision.** Enforcing failure-mode coverage refused
+about 60 existing emit paths across 7 suites, so it ships computed, returned and ledgered on every
+verdict, behind `ENFORCE_FAILURE_MODES` = off. The "rules" member is overlap with saved specs and
+decisions only, and the battery does not run on `run_pipeline`'s emit.
 
-**A conversational run is bound only when a pipeline was asked for by name.** A brainstorm protocol
-followed in chat with no `/mokata:brainstorm` and no `Skill` call opens no claim, and the gate still
-reports *"no active mokata run — not policed"*. The `Skill` tool's input field name is not
-documented; mokata reads `skill`, `command` and `name`, and an unreadable shape records no intent —
-the old fail-open, never a block on a guess. **Edits made before any run is registered** are still
-invisible to graph freshness's in-harness signal: the query process cannot see Claude Code's
-session id (harness gap #25642), and closing it on mokata's side would mean reversing per-session
-partitioning.
+**An earned gate promotion lands on `soft`, not `hard`.** A promoted gate can still be overridden
+by a human, ledgered; hard remains a declared level only. No gate
+ships `advisory` except the Karpathy four, so nothing has been promoted. `advisory_gate_report` is
+not yet wired into `mokata govern`. The gate hook's gates are not routed through the ladder and are
+pinned hard by a test; MCP `spec_emit` and spec amend reach the completeness gate without a ledger,
+so they leave no `rule_block` entry and persist no evidence. In 26 shipped SKILL.md files
+`(advisory)` still means *prose-only*, not the enforcement level.
 
-**`ReadCache` is blocked by the harness**, so per-turn reads are not de-duplicated (see *Not in this
-release*).
+**Binding a resumed session to its run** needs the resumed session to keep its session id: if
+Claude Code gives it a new one, nothing is bound and resolution falls back exactly as before. It has
+**not been run on real Windows**; the first turn after the MCP server starts or restarts falls back
+until the next prompt refreshes the record; on macOS each resolution costs one `ps` call, roughly
+20–50 ms, uncached; and when a sibling Claude under the same tmux or IDE ancestor wrote and exited
+while yours has no mokata hooks, the shared ancestor can be accepted.
 
-**`mokata ide`'s bounds.** On Windows there is no launch lock (no `flock`), so two simultaneous
-`/mokata:review-window` can start two servers. The snapshot store's first-write index is not locked under
-concurrent writes, and pruning — once the timeline passes 22,000 entries it keeps the newest
-20,000 — can drop a session's BEFORE. Shell writes are not snapshotted, though the live diff still
-shows them. The window has not yet been run on a real Mac.
+**`mokata ide`'s new bounds.** **Meaning** search has not ranked with the real model here — the model
+host was unreachable from the build sandbox — only with a deterministic stand-in. The **team-mode**
+plan viewer was tested with a fake transport carrying a real bundle, never a live PostgreSQL, and a
+team bundle carries the current spec only. ⌘P over 100,000 files measured a median per-query p50 of
+**38.3 ms** with `rapidfuzz` and **41.5 ms** on the floor, against a target of under 30 ms; the walk
+took **555 ms**. Windows and macOS were not executed; parity is by construction and the mirror's
+legs. There is no file-system watcher — an edit outside a session shows on the next git or snapshot
+event, or a reload — the explorer does not read `.gitignore`, shell writes are not snapshotted, and
+the window has not been run on a real Mac.
 
-**The new hook surfaces have not been checked in a live Claude Code session.** The re-anchor after a
-real `/compact`, the subagent contract with a real subagent, the shell lane, the session harvest and
-`/mokata:review-window` are tested by driving the real hook entry points with the documented payloads. That
-is not the same evidence as a session.
+**A reported failure installing mokata into a project virtualenv is not closed.** It cannot be
+reproduced without the owner's command, error text and venv tool; `requires-python >= 3.10` is
+enforced, and the isolated-install docs and the self-contained plugin may already cover it.
+
+**Install routes.** `mokata upgrade` still proposes `pip install -U mokata` whatever the install
+route — after `pipx`, `uv tool` or `brew`, use that tool's upgrade. The shadowing check compares
+versions only, so a second install of the same version is silent. The Homebrew tap's currency was
+not checked.
+
+**The plugin's pinned `uvx` launch needs the version on PyPI.** Between a release reaching the
+mirror's main branch and PyPI publishing it, a fresh `/plugin install` gets an MCP server that cannot
+start; it starts once PyPI has the version.
+
+**The review window serves any file in the repository** it is pointed at, `.env` included, to the
+paired localhost page; semantic search writes an index under `.mokata/` and downloads a model only
+on your click. **The `review` and `bug` Agent Skills share a name with Claude Code built-ins**; only
+the command files were renamed.
+
+**The Proof plumbing has narrow edges.** Spec anchors are checked lexically — a name present in a
+file — and are not graph-queried at emit. Develop-turn guards cover Python files only, and the
+evidence is recomputed each develop turn (up to three blast-radius queries). Only the completeness
+gate produces typed evidence, and "proven" there means mapped to a test, not a test that passed.
+Intention keywords see the branch name and changed paths, not your prompt; there is no CLI verb to
+create an intention, and a sweep with keyword or path triggers adds a bounded `git` call.
+`mokata suggest` matches a hand-tuned table and does not parse negation. The cache-prefix notice
+fingerprints mokata's briefing prefix only, not MCP tool definitions. `remedyCommand` is MCP-only,
+`consolidate_proposals` still fails the empty-state lint, and other subcommands still print some
+errors to stderr.
 
 **This release's exit criteria are not all met, and the ones that are not are listed here rather than
 rounded up.**
 
-1. **A release re-run converging live is not yet demonstrated.** The mechanism is built and graded
-   against real git, local bare remotes and a stand-in for `gh`; four GitHub behaviours it relies on
-   are owed to the first real run, and this cut is that run.
-2. **The events programme's last three clauses are built; one has a residue.** A ship-completion
-   event exists, and review has a caught-at-review rate. A conversational run registers so the phase
-   gate binds — when the pipeline was asked for by name (above).
-3. **The `macos-latest` leg exists and blocks; it has not yet been seen to red** when the two
-   host-dependent fixes of 2026-10-04 are reverted. That reading needs a push to the mirror.
-4. **Order-independence still stands at nine seeds of ten.** The tenth was run and its result could
-   not be read: the tool takes the first test-count line and sums every failure line, so a failing
-   test that embeds a whole inner run in its message pollutes the parse. Filed, not fixed. The
-   weekly seed job meets the same defect whenever a nested-suite test fails.
-5. **Context discipline: two of four.** One context budget, with no second channel, is met and
-   tested. A gate surviving compaction is built and not yet checked in a live session. **Per-turn
-   context growth against a 0.0.21 baseline was not measured**, and no pass checked that every
-   degraded state names its remedy.
-6. **The IDE criteria were written for an editing IDE and are not met as written.** The slice was
-   re-scoped to a read-only window on 2026-10-11. Its server-stack decision is recorded and not
-   signed; no performance medians were measured; the spikes moved with the editing work; no
-   400,000-line file was opened; there is no bundle to reproduce, because the page is hand-written
-   static files. The security cases are tested.
-7. **CI did not run on the development repository during this release**, by the same decision as
-   0.0.21: its Actions minutes were not restored, so that criterion is **not meetable**. The public
-   mirror's CI runs on every push and every PR.
+1. **A release converging through the `pypi` approval is not yet demonstrated live.** The PENDING and
+   UNREADABLE states are graded against fakes; that GitHub reports an approval hold as
+   `status: waiting` is owed to the first cut that runs this code.
+2. **A stranger's install is not demonstrated on a clean machine.** The plugin's `uvx` launch and
+   each-hook-once are tested through the real entry points, not in a live Claude Code session.
+3. **Python repositories: met by the tests** — the walker the index and the IDE tree share, and
+   `defs`, return project files only; the baseline runs the repository's environment from an
+   un-activated parent and names it.
+4. **The IDE criterion is not met as written.** ⌘P's p50 is above 30 ms (above); IDE answers equal
+   `mokata query`'s byte for byte; Meaning answers without code-review-graph and says "unavailable"
+   without the extra; the four visuals render offline; the Windows and macOS legs were not seen.
+5. **Proof: not met.** No real run, so no counters, no reproduced study, no compliance table, no
+   per-turn context reading and no certified harness. `NO-API-KEY-GUARD` is green over `src/mokata/`
+   with the harness present.
+6. **The gate ladder is built:** a gate can ship advisory and ledger what it would have blocked, and
+   is promoted only through a human-gated proposal — landing on soft.
+7. **Order-independence still stands at nine seeds of ten.** No stage of this release recorded the
+   tenth.
 
-**Graph freshness: two classes of edit are still not detected before the answer**, unchanged from
-0.0.21. A source file in no baseline that git will not name — a `.ts` file under an ignored
-directory is the shape — on every platform; and, on Windows only, a same-size content write that
-restores the mtime (`tar -xp`, `cp -p`, `rsync --times`, `touch -r`), because `st_ctime` there is the
-creation time. **On Windows, rebuild the code graph yourself after a restore or a vendor drop.** The
-Windows class is now pinned by a test that reds if it ever closes. The bounds are unchanged: at most
-**500** drifted paths hashed per query, at most **5000** deletion records kept.
-
-**The token estimate has still been measured once.** One live session: **415** API responses, **5**
-calibratable, real output tokens at **1.552×** the `chars/4` estimate — an under-count of about 55%
-if it holds. The budgets are unchanged. Five responses from one session is not a distribution.
-
-**Carried, unchanged.** TypeScript is an optional extra (`pip install 'mokata[graph-ts]'`), and
-**plain JavaScript is not covered at all**. The PostgreSQL floor is enforced and one dimension of
-its evidence is manual — no live leg has run against a below-floor server, and PostgreSQL 16.13 is
-not a PostgreSQL 14. The embedder still costs ordering (**−0.81pp** MRR@10 at 100,000 items). The
-Windows notification sound is called, not verified, and the Windows toast does not exist. On Linux,
-an MCP gated write with no audio player makes no sound (`settings.ux.notify_audio false` stops it
-asking). `LISTEN`/`NOTIFY` does not survive a transaction-mode pooler; `mokata events` prints which
-state your DSN is in.
-
-**The branch-protection degraded pass is bounded, not closed.** Inside its 24 h window, a protection
-detail weakened while protection stays on is invisible — only an administrator can make that
-change, and the window is printed. And a fresh machine cannot cut during a protection-endpoint
-outage until one full read has succeeded. Maintainer-facing; it does not affect the published
-package.
-
-**The PR gate still takes 26–31 minutes against a target of under 10, and was not measured again.**
-The figures stand from the **0.0.18** cut, with the unit suite at **91%** of the binding leg. This
-release added tests again, so the number has not fallen. Contributor-facing only.
+**Carried from 0.0.22, unchanged.** After a run ships its spec scope keeps applying — start a new
+`/mokata:brainstorm` for further work. Read-only subagents are not judged on MCP tool calls. The
+shell lane reads commands and does not run them; the parser remains a heuristic. An agent id outside
+`^[A-Za-z0-9_-]{1,80}$` gets no subagent contract. A conversational run is bound only when a pipeline
+was asked for by name. `ReadCache` is blocked by the harness. Graph freshness still misses a source
+file in no baseline that git will not name, and on Windows a same-size write that restores the
+mtime — rebuild the code graph yourself after a restore or a vendor drop; at most **500** drifted
+paths are hashed per query and **5000** deletion records kept. The token estimate has been measured
+once: real output tokens at **1.552×** the `chars/4` estimate over **5** calibratable responses.
+TypeScript is an optional extra and **plain JavaScript is not covered at all**. The PostgreSQL floor
+is enforced and one dimension of its evidence is manual (**PostgreSQL 16.13** is not a PostgreSQL
+14). The Windows notification sound is called, not verified; on Linux an MCP gated write with no
+audio player makes no sound; `LISTEN`/`NOTIFY` does not survive a transaction-mode pooler. The
+branch-protection degraded pass is bounded, not closed (maintainer-facing). The PR gate still takes
+26–31 minutes against a target of under 10, last measured at the **0.0.18** cut (contributor-facing
+only).
 
 ---
 
 ## Upgrading
 
-    pip install -U mokata
+    pip install -U mokata          # or: pipx upgrade mokata · uv tool upgrade mokata · brew upgrade mokata
     mokata upgrade
 
-`mokata upgrade` is the part that matters: it refreshes the commands, skills and hooks in your
-checkout to match the installed version — and this release wires new ones (`PreCompact`,
-`SubagentStart`, `SubagentStop`, `Stop`, `SessionEnd`, and the PostToolUse `run-bind`). `mokata
-doctor` will tell you if anything is out of step, including a Claude Code older than **2.1.0**
-(`claude update`).
+`mokata upgrade` refreshes the commands, skills and hooks in your checkout. **This is the release
+where five project commands are renamed** — `/review` becomes `/mokata-review`, and likewise `init`,
+`bug`, `resume` and `upgrade` — and the old files mokata wrote are removed; your own command files are
+never touched. `mokata doctor` names anything out of step, including the Python your tests will run
+in.
 
-**For the review window**, install the extra: `pip install "mokata[ide]"`. Without it, `mokata ide`
-prints that install line.
+**On the plugin route**, install [`uv`](https://docs.astral.sh/uv/) if you do not have it; the
+plugin's MCP server will not start without it. If you also ran `mokata init` in the repository, the
+hooks now fire once.
 
-**If you use team mode**, the first `mokata events --share` after upgrading re-sends your local
-events from the start, because the publisher now keeps its own mark; the team table de-duplicates
-them. Nothing else in team mode changes.
-
-**If you run a pipeline**, two refusals are new: a passed review that raised a Blocking finding,
-and, during a run, a shell command mokata cannot read. Each names its way out.
+**For the IDE's new views**, `pip install "mokata[ide]"`; for Meaning search, also
+`pip install 'mokata[embeddings]'` and press **Fetch** once to download the model.
