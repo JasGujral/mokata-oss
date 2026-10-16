@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
+from typing import Optional
 
 
 def lock_path_for(path: str) -> str:
@@ -40,6 +42,31 @@ def lock_path_for(path: str) -> str:
     written — it is a rendezvous handle only, released by the OS on close AND on process death."""
     directory, base = os.path.split(path)
     return os.path.join(directory, f".{base}.lock")
+
+
+#: Windows only: how many times, and how long apart, `os.replace` is retried when the target is
+#: momentarily held open by another process (a concurrent reader). ~1 s in total.
+REPLACE_RETRIES = 20
+REPLACE_RETRY_SECS = 0.05
+
+
+def _replace(tmp: str, path: str, *, retries: Optional[int] = None,
+             delay: float = REPLACE_RETRY_SECS, is_windows: Optional[bool] = None) -> None:
+    """`os.replace`, made robust on Windows. There, replacing a file that another process has open
+    fails with `PermissionError` (WinError 5 / 32) — POSIX has no such window. Found at the 0.0.23
+    cut: two processes bumping memory stats lost a write on the Windows CI legs. The rename is
+    retried briefly; anything still failing after the budget is raised unchanged, and POSIX never
+    retries (a PermissionError there is real)."""
+    win = os.name == "nt" if is_windows is None else is_windows
+    attempts = (REPLACE_RETRIES if retries is None else retries) if win else 0
+    for n in range(attempts + 1):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if n >= attempts:
+                raise
+            time.sleep(delay)
 
 
 def atomic_write_text(path: str, text: str, *, tmp_prefix: str = ".tmp-",
@@ -61,7 +88,7 @@ def atomic_write_text(path: str, text: str, *, tmp_prefix: str = ".tmp-",
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp, path)
+        _replace(tmp, path)
     except BaseException:
         # D5 type-(iv) LEGITIMATE-SUPPRESS — and the one place `BaseException` is the RIGHT width:
         # a KeyboardInterrupt/SystemExit mid-write must still remove the temp file, or a Ctrl-C

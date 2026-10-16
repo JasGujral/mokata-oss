@@ -476,6 +476,8 @@ REFUSED = {
     #      derived index). There is no write-free charter here to bind. One line each names the
     #      write, so "it does not claim write-freedom" stays checkable rather than asserted.
     ("atomicfile.py", "atomic_write_text"): "writes — it IS the write primitive, no target of its own",
+    ("atomicfile.py", "_replace"): "writes — the primitive's own rename (Windows retry), no target "
+                                   "of its own",
     ("cli_commands/knowledge.py", "cmd_ci_check"): "writes — the CI PR-comment body at --comment-file",
     ("dashboard.py", "write_dashboard"): "writes — derived HTML under temp_local/",
     ("dashboard.py", "write_governance_dashboard"): "writes — derived HTML under temp_local/",

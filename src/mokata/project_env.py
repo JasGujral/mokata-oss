@@ -128,8 +128,11 @@ def resolve(root: str, settings_value: Optional[str] = None,
     environ = os.environ if environ is None else environ
     root = os.path.abspath(root or ".")
     if settings_value:
-        found = _env_root_of(settings_value if os.path.isabs(os.path.expanduser(settings_value))
-                             else os.path.join(root, settings_value))
+        # normpath: a relative `tools/py` from settings is joined onto a Windows root as
+        # `...\\tools/py` — normalise so the path named in reports is the platform's own spelling.
+        given = os.path.expanduser(settings_value)
+        found = _env_root_of(os.path.normpath(given if os.path.isabs(given)
+                                              else os.path.join(root, given)))
         if found:
             return ProjectEnv(found, "settings.python", conda=_is_conda(found))
     for var in ("VIRTUAL_ENV", "CONDA_PREFIX"):

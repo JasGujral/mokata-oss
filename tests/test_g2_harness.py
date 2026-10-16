@@ -33,6 +33,23 @@ from bench.g2.workspace import GitCloner
 ROOT = FX.ROOT
 
 
+
+def _can_build_wheels():
+    """`pip wheel --no-build-isolation` uses THIS interpreter's setuptools. setuptools < 70.1 has
+    no `bdist_wheel` of its own and needs the `wheel` package — absent on e.g. the Windows
+    py3.10 runner image (found at the 0.0.23 cut). Without either, the build cannot run here."""
+    import importlib.util
+    if importlib.util.find_spec("setuptools") is None:
+        return False
+    if importlib.util.find_spec("wheel") is not None:
+        return True
+    try:
+        from importlib.metadata import version
+        parts = [int(x) for x in version("setuptools").split(".")[:2]]
+    except Exception:  # noqa: BLE001 — unknown version: cannot promise a build
+        return False
+    return tuple(parts) >= (70, 1)
+
 class TestStreamParse(unittest.TestCase):
     def test_turns_group_by_message_id_and_context_is_summed_usage(self):
         ev = [FX.init_event("bare"),
@@ -326,8 +343,9 @@ class TestNotShippedInTheWheel(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(ROOT, "MANIFEST.in"))
                          and "bench" in open(os.path.join(ROOT, "MANIFEST.in"), encoding="utf-8").read())
 
-    @unittest.skipUnless(__import__("importlib").util.find_spec("setuptools"),
-                         "setuptools not installed in this interpreter")
+    @unittest.skipUnless(_can_build_wheels(),
+                         "this interpreter cannot build a wheel without isolation (setuptools "
+                         "missing, or older than 70.1 without the `wheel` package)")
     def test_a_built_wheel_contains_no_bench_file(self):
         import zipfile
         tmp = tempfile.mkdtemp()
@@ -335,9 +353,11 @@ class TestNotShippedInTheWheel(unittest.TestCase):
             src = os.path.join(tmp, "src")
             shutil.copytree(ROOT, src, ignore=shutil.ignore_patterns(
                 ".git", "__pycache__", "build", "dist", "*.egg-info", "site"))
-            subprocess.run([sys.executable, "-m", "pip", "wheel", src, "--no-deps",
-                            "--no-build-isolation", "-q", "-w", os.path.join(tmp, "whl")],
-                           check=True, capture_output=True, timeout=600)
+            proc = subprocess.run([sys.executable, "-m", "pip", "wheel", src, "--no-deps",
+                                   "--no-build-isolation", "-q", "-w", os.path.join(tmp, "whl")],
+                                  capture_output=True, text=True, timeout=600)
+            self.assertEqual(proc.returncode, 0,
+                             "pip wheel failed:\n%s" % (proc.stderr or proc.stdout)[-3000:])
             whl = [f for f in os.listdir(os.path.join(tmp, "whl")) if f.endswith(".whl")][0]
             names = zipfile.ZipFile(os.path.join(tmp, "whl", whl)).namelist()
             self.assertTrue(any(n.startswith("mokata/") for n in names))

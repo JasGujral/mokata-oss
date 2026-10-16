@@ -848,6 +848,9 @@ UNGATED_BY_DESIGN = {
         "mode — a monotonic counter has no CAS conflict to resolve, and un-approved rows do not "
         "belong in an approval ledger.",
     ("atomicfile.py", "atomic_write_text"): "the write PRIMITIVE itself — no target of its own",
+    ("atomicfile.py", "_replace"): "0.0.23 cut — the primitive's own rename, retried on Windows "
+        "while another process holds the target; called only by `atomic_write_text`, no target "
+        "of its own",
     ("knowledge/user_prefs.py", "record_graph_decline"): "GR.S2 — the USER's own standing "
         "preference (a graph-adoption decline) recorded in ~/.mokata, NOT a governed PROJECT "
         "durable write. Recording the human's explicit 'no' is like temp_local run-state, not a "
@@ -1525,6 +1528,9 @@ CALLER_PINS = {
     # R1.S1a — the event store's schema DDL has exactly one caller, its own writer.
     ("events/store.py", "EventStore._connect"): (
         ("events/store.py", "EventStore.emit"),
+    ),
+    ("atomicfile.py", "_replace"): (
+        ("atomicfile.py", "atomic_write_text"),
     ),
     ("atomicfile.py", "atomic_write_text"): (
         ("branch_protection.py", "ProtectionCache.store"),
