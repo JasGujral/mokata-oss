@@ -28,6 +28,35 @@ BASELINE_TIMEOUT_SECONDS = 600
 # subprocess far below 600s so a client sees a bounded report, not dead air. Only the MCP surface is
 # capped — the CLI/terminal path above keeps its longer bound.
 BASELINE_MCP_TIMEOUT_SECONDS = 120
+#: 0.0.24 (OSS #82) — a repo whose suite takes longer than the default can raise the MCP budget:
+#: `mokata config set settings.mcp.test_timeout_seconds 300`. Clamped to the terminal bound, so the
+#: MCP surface can never wait longer than `mokata baseline` itself would.
+MCP_TEST_TIMEOUT_SETTING = "mcp.test_timeout_seconds"
+
+
+def mcp_test_timeout(manifest=None) -> float:
+    """The MCP-surface budget for a tool that runs the test suite: the repo's
+    `settings.mcp.test_timeout_seconds` when it is a positive number, else the default — and never
+    above the terminal bound (`BASELINE_TIMEOUT_SECONDS`). A bad value is ignored, never fatal."""
+    value = None
+    try:
+        if manifest is not None:
+            # `mokata config set settings.mcp.test_timeout_seconds N` stores it NESTED
+            # ({"mcp": {"test_timeout_seconds": N}}); a hand-edited flat key is honoured too.
+            value = manifest.setting(MCP_TEST_TIMEOUT_SETTING)
+            if value is None:
+                group, _, leaf = MCP_TEST_TIMEOUT_SETTING.partition(".")
+                nested = manifest.setting(group)
+                value = nested.get(leaf) if isinstance(nested, dict) else None
+    except Exception:  # noqa: BLE001 — a settings read must never take the tool down
+        value = None
+    try:
+        seconds = float(value) if value is not None and not isinstance(value, bool) else None
+    except (TypeError, ValueError):
+        seconds = None
+    if not seconds or seconds <= 0:
+        return float(BASELINE_MCP_TIMEOUT_SECONDS)
+    return float(min(seconds, BASELINE_TIMEOUT_SECONDS))
 
 GREEN = "green"
 RED = "red"

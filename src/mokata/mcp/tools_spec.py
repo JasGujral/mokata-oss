@@ -186,6 +186,36 @@ def _prior_art_emit_refusal(store: Any) -> Optional[Dict[str, Any]]:
         return None
 
 
+#: 0.0.24 (OSS #82) — where a spec_emit proposal keeps the exact args it hashed, so the redeeming
+#: call may send `proposal_id` alone. Transient run-state (temp_local), never the spec itself.
+EMIT_ARGS_PREFIX = "spec_emit_args__"
+
+
+def _save_emit_args(surface: Any, proposal_id: Any, args: Dict[str, Any]) -> None:
+    """Best-effort: a failed save only means the redeeming call must resend the payload."""
+    if not isinstance(proposal_id, str) or not proposal_id:
+        return
+    try:
+        keep = {k: args.get(k) for k in ("title", "criteria", "tests", "approach", "domains",
+                                          "scope")}
+        surface.state.write(EMIT_ARGS_PREFIX + proposal_id, keep)
+    except Exception:  # noqa: BLE001 — never fail the proposal over a convenience copy
+        pass
+
+
+def _saved_emit_args(surface: Any, proposal_id: str) -> Optional[Dict[str, Any]]:
+    """The args a spec_emit proposal saved, or None (unknown id, or nothing readable)."""
+    try:
+        data = surface.state.read(EMIT_ARGS_PREFIX + proposal_id)
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(data, dict) or not data.get("title"):
+        return None
+    return {"title": data.get("title") or "", "criteria": data.get("criteria") or [],
+            "tests": data.get("tests") or [], "approach": data.get("approach") or "",
+            "domains": data.get("domains") or [], "scope": data.get("scope") or {}}
+
+
 def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
               tests: Optional[list] = None, approach: str = "", domains: Optional[list] = None,
               scope: Optional[dict] = None, approve: bool = False,
@@ -199,7 +229,9 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
     refuses the emit outright (no proposal: a human approving an incomplete spec could not make it
     complete). A passing gate then goes through the normal human gate: no `proposal_id` -> a
     proposal and NOTHING written; a human mints the approval with `mokata approve <id>`; re-call
-    with that id to commit it, once.
+    with that id to commit it, once. The re-call may carry `proposal_id` ALONE: the approved
+    payload is reloaded from where the proposal saved it, and the content hash still proves it is
+    exactly what the human approved (OSS #82). Re-sending the full payload works too.
 
     Emitting is what unblocks implementation: the `spec-persisted` run-state gate reads exactly the
     key this writes, and `spec-check`'s regression guard reads exactly the corpus this appends to.
@@ -225,6 +257,18 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
     from ..engine.completeness import run_completeness_gate, standalone_note
 
     surface = _surface(path)
+    # 0.0.24 (OSS #82, item 4) — `proposal_id` alone redeems the proposal it names: reload the
+    # exact args that proposal hashed. Nothing is trusted from the reload — `_consent` below still
+    # re-hashes them and refuses on any mismatch, expiry, reuse or wrong run.
+    if proposal_id and not (title or criteria or tests):
+        saved = _saved_emit_args(surface, proposal_id)
+        if saved is None:
+            return {"status": "error", "committed": False,
+                    "reason": f"no saved spec payload for proposal {proposal_id}",
+                    "hint": ("re-call spec_emit with the same title + criteria + tests (+ approach, "
+                             "domains, scope) and this proposal_id.")}
+        title, criteria, tests = saved["title"], saved["criteria"], saved["tests"]
+        approach, domains, scope = saved["approach"], saved["domains"], saved["scope"] or None
     payload = {"title": title, "criteria": criteria or [], "tests": tests or [],
                "approach": approach, "domains": domains or [], "scope": scope}
     try:
@@ -389,10 +433,12 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
         # hardening of it. Empty blocks drop out, so a first, attached emit's preview is byte-
         # identical to what it was.
         preview = "\n\n".join(b for b in (alone, replaces, _spec_preview(spec, test_refs)) if b)
-        return _propose(
+        proposed = _propose(
             path, EMIT_TOOL, args, payload,
             target="state/emitted_spec.json", summary=summary, preview=preview,
             approve=approve, confirm=confirm)
+        _save_emit_args(surface, proposed.get("proposal_id"), args)
+        return proposed
 
     out = _gated_write(_mokata_dir(path), EMIT_KIND, EMIT_TARGET,
                        preview_content(store, spec),

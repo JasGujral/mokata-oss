@@ -1,28 +1,18 @@
-"""THE CI FLOOR GAP — the PR gate must exercise the interpreter version the package DECLARES.
+"""THE CI PYTHON AXIS — every workflow leg runs Python 3.12, and the declared floor is UNTESTED.
 
-The finding this file guards, stated plainly: `pyproject.toml` promises `requires-python =
-">=3.10"`, but until 0.0.16 the only job that ever ran 3.10 was `release.yml`. The declared floor
-was therefore first exercised at TAG time — after review, after the work was called done, and at
-the one moment when a red is most expensive. That is not a testing gap in the abstract; it is the
-mechanism by which the ISO-dialect split shipped green. `datetime.fromisoformat` learned the Zulu
-designator in 3.11, so the fault existed ONLY below the CI floor, and a 3.12-only gate cannot see
-any bug of that shape by construction.
+0.0.24 (owner ruling 2026-10-17): the PR gate (`ci.yml`) and the tag-time gate (`release.yml`)
+run Python 3.12 ONLY. The 3.10 "floor" legs that 0.0.16 and 0.0.18 stage 17 added to close
+`CI-MATRIX-FLOOR-GAP` were removed to cut the gate's wall-clock — the Windows legs dominate it.
 
-Fixing one such bug does not close the hole. Pinning the floor into the PR gate does, which is
-what this file is for.
+`pyproject.toml` still declares `requires-python = ">=3.10"`. That promise is now exercised by NO
+workflow, which reopens exactly the gap that let the ISO-dialect split ship green
+(`datetime.fromisoformat` learned the Zulu designator in 3.11, so a 3.12-only gate cannot see a
+bug of that shape). The owner chose that trade knowingly; this file's job is to keep it VISIBLE:
+it pins that no leg runs the floor, so the day someone believes the floor is tested, a red says
+otherwise — and the day a floor leg returns, this file is edited deliberately, not drifted past.
 
-WHAT IS AND IS NOT CLAIMED — REWRITTEN AT 0.0.18 STAGE 17, AND THE OLD SENTENCE WAS THE POINT.
-Until this stage the paragraph here read "one leg is not full matrix coverage of the floor, and
-this file does not pretend otherwise". Honest, and it stayed true for two releases, which is how a
-declared shortfall becomes furniture. Stage 17 closes the breadth `CI-MATRIX-FLOOR-GAP` names: the
-floor now runs on the PR gate across BOTH operating systems and BOTH jsonschema dispositions.
-
-⚠ AND ONE OF THE THREE FLOOR LEGS HAS NEVER RUN ANYWHERE. `windows-latest × floor` is configured
-in no workflow before this stage — not in `ci.yml`, not in `release.yml` — so unlike every other
-leg here it is a promise with no evidence behind it, and its first execution will be at the cut.
-That is the same shape the row exists to end, so it is not left implied: `LEG_PROVENANCE` below
-records the state of every leg in three values, never two (doc 85 §7g), and the two states that
-are DERIVABLE are derived rather than declared.
+Kept from the earlier file: per-leg provenance, graded against the workflow in both directions,
+and the failure policy — every leg BLOCKS; nothing swallows its own failure.
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
@@ -54,32 +44,19 @@ RUN_AT_TAG_ONLY = "run at tag time only"       # it HAS run — first at a tag, 
 NEVER_RUN = "never run anywhere"               # configured in no workflow before this stage
 
 #: Every leg of `ci.yml`'s `test` job, keyed (os, python, jsonschema), with what is actually known
-#: about it. Graded for EXACTNESS against the workflow in both directions below — a leg missing
-#: here and a leg here that the workflow does not configure are different failures and both red.
+#: about it. Graded for EXACTNESS against the workflow in both directions below.
 LEG_PROVENANCE = {
     ("ubuntu-latest", "3.12", "absent"): RUN_ON_THE_PR_GATE,
     ("ubuntu-latest", "3.12", "present"): RUN_ON_THE_PR_GATE,
     ("windows-latest", "3.12", "absent"): RUN_ON_THE_PR_GATE,
     ("windows-latest", "3.12", "present"): RUN_ON_THE_PR_GATE,
-    ("ubuntu-latest", FLOOR, "present"): RUN_ON_THE_PR_GATE,      # added 0.0.16, cf2d265
-    ("ubuntu-latest", FLOOR, "absent"): RUN_AT_TAG_ONLY,          # release.yml has always had it
-    # Flipped at 0.0.22 B1, by decision and with the evidence: the mirror's first 0.0.21 CI run
-    # (PR #76, run 37310393789) executed all three Windows legs — they went RED, which is proof
-    # they ran — and PR #77's runs took them green. It has run on the PR gate since.
-    ("windows-latest", FLOOR, "present"): RUN_ON_THE_PR_GATE,
-    # ★ 0.0.22 B1 — MACOS-IS-THE-CUT-MACHINE-AND-HAS-NO-LEG. Added here, exercised nowhere: its
-    # first execution is on the mirror's next PR run, and a first red is the leg doing its job.
-    ("macos-latest", "3.12", "present"): NEVER_RUN,
+    # 0.0.22 B1 added it NEVER_RUN; flipped at 0.0.24 with the evidence — the mirror's 0.0.23
+    # release PR #81 ran it green (CI run 38898749296).
+    ("macos-latest", "3.12", "present"): RUN_ON_THE_PR_GATE,
 }
 
-#: Legs a human has run on a developer machine, via `scripts/floor-python.sh`. Kept SEPARATE from
-#: the states above rather than folded into them: a local run is evidence about the interpreter and
-#: the dependency set, and none at all about the runner OS. The one rule that binds the two is
-#: below — nothing may be claimed both NEVER_RUN and locally exercised.
-EXERCISED_LOCALLY = frozenset({
-    ("ubuntu-latest", FLOOR, "present"),
-    ("ubuntu-latest", FLOOR, "absent"),
-})
+#: The one Python every workflow leg runs.
+GATE_PYTHON = "3.12"
 
 #: ★ THE FAILURE POLICY for the leg that has never run, decided at stage 17 and pinned by
 #: `TheNeverRunLegBlocksLikeEveryOtherLeg` rather than left in prose.
@@ -164,85 +141,42 @@ def _resolved_provenance(floor):
             for leg, state in LEG_PROVENANCE.items()}
 
 
-class TheDeclaredFloorRunsOnThePRGate(unittest.TestCase):
+class EveryLegRunsOnePython(unittest.TestCase):
     def setUp(self) -> None:
-        # A text `assertIn("3.10", ci_yml)` would match the EXPLANATORY COMMENT in that file and
-        # pass with no such leg configured. A guard that can be satisfied by prose is worse than
-        # no guard — and so is a SKIP, which reports OK for a floor nobody checked. `safe_load`
-        # raises `MissingParser`: the parser is a test dependency, and its absence is a broken
-        # environment, not a supported mode (PYYAML-SKIP-CLUSTER, 0.0.18 stage 2).
-        self.doc = safe_load(_read(CI_YML), "assert the PR gate runs the declared Python floor")
+        # Parsed, never text-matched: a comment naming "3.10" must not satisfy or break this.
+        self.ci = safe_load(_read(CI_YML), "assert the PR gate runs one Python")
+        self.release = safe_load(_read(RELEASE_YML), "assert the tag gate runs one Python")
         self.floor = _declared_floor()
 
-    def test_a_the_floor_is_a_real_version_and_is_not_the_ci_default(self):
-        # Non-degeneracy for every test below: if the floor stopped parsing, or the project
-        # raised its floor to the version CI already ran, these assertions would pass for the
-        # wrong reason. Fail loudly on that day instead.
-        self.assertRegex(self.floor, r"^3\.\d+$")
+    def test_a_the_pr_gate_runs_only_the_gate_python(self):
+        self.assertEqual({GATE_PYTHON}, set(_python_legs(self.ci)),
+                         "ci.yml runs a Python other than %s" % GATE_PYTHON)
+        self.assertEqual({GATE_PYTHON}, {p for _o, p, _j in _expand(self.ci["jobs"]["test"])})
+
+    def test_b_the_tag_gate_runs_only_the_gate_python(self):
+        versions = [str(v) for v in self.release["jobs"]["test"]["strategy"]["matrix"]["python"]]
+        self.assertEqual([GATE_PYTHON], versions)
+
+    def test_c_the_declared_floor_is_UNTESTED_and_that_is_pinned(self):
+        """★ The disclosed trade. If a floor leg comes back, edit this test on purpose."""
         self.assertEqual(self.floor, "3.10",
                          "the declared floor moved — re-read this file's premise before editing it")
+        everywhere = ({p for _o, p, _j in _expand(self.ci["jobs"]["test"])}
+                      | {str(v) for v in self.release["jobs"]["test"]["strategy"]["matrix"]["python"]})
+        self.assertNotIn(self.floor, everywhere)
 
-    def test_b_the_pr_gate_runs_the_declared_floor(self):
-        legs = _python_legs(self.doc)
-        self.assertIn(self.floor, legs,
-                      f"ci.yml never runs py{self.floor}, the version pyproject.toml promises — "
-                      f"the floor would first be exercised at tag time. Legs found: {legs}")
+    def test_d_both_operating_systems_still_run_both_jsonschema_states(self):
+        legs = _expand(self.ci["jobs"]["test"])
+        for os_name in ("ubuntu-latest", "windows-latest"):
+            self.assertEqual({"absent", "present"},
+                             {j for o, p, j in legs if o == os_name and p == GATE_PYTHON},
+                             "%s stopped running both jsonschema legs" % os_name)
 
-    def test_c_every_floor_leg_is_fully_specified(self):
-        # An `include` leg that omits `jsonschema` leaves every `if: matrix.jsonschema == …` step
-        # unmatched, so the leg would run a HOLLOW subset of the gate and still report green.
-        matrix = self.doc["jobs"]["test"]["strategy"]["matrix"]
-        floor_legs = [e for e in (matrix.get("include") or [])
-                      if str(e.get("python")) == self.floor]
-        self.assertTrue(floor_legs, "no floor leg at all")
-        for leg in floor_legs:
-            for key in ("os", "jsonschema"):
-                self.assertIn(key, leg,
-                              f"a floor leg pins no `{key}` — its `if:` steps would skip: {leg}")
-
-    def test_c2_the_floor_covers_BOTH_operating_systems_and_BOTH_jsonschema_states(self):
-        """★ THE BREADTH, and it is stated as a SET rather than as a count.
-
-        `CI-MATRIX-FLOOR-GAP`'s two open axes were the floor on Windows and the floor with
-        jsonschema absent. Asserting "three floor legs" would be satisfied by three copies of the
-        cheap one; asserting the set is satisfied only by the coverage the row asked for.
-        """
-        floor_legs = {(o, j) for o, p, j in _expand(self.doc["jobs"]["test"])
-                      if p == self.floor}
-        self.assertEqual(
-            {("ubuntu-latest", "present"),
-             ("ubuntu-latest", "absent"),
-             ("windows-latest", "present")},
-            floor_legs,
-            "the floor's coverage on the PR gate changed. `CI-MATRIX-FLOOR-GAP` is closed by "
-            "these three legs and by no other set; dropping one reopens the axis it names.")
-
-    def test_d_the_floor_did_not_REPLACE_the_primary_version(self):
-        # The cheap wrong fix: swap 3.12 for 3.10 and call the floor covered. Both must run.
-        legs = _python_legs(self.doc)
-        self.assertIn("3.12", legs, "the primary Python leg was dropped")
-
-    def test_e_the_floor_legs_are_INCLUDES_not_a_cross_product(self):
-        # The gate is already slow. Adding the floor to the `python:` axis would cross-product
-        # with os × jsonschema to 8 legs and roughly double it; three targeted `include` entries
-        # buy the coverage for three. This pins the cheap shape against being "fixed" into the
-        # expensive one — the constraint is the SHAPE, so it is asserted as the axis staying
-        # single-valued rather than as a leg count that grows every time the gate widens.
-        matrix = self.doc["jobs"]["test"]["strategy"]["matrix"]
-        self.assertEqual([str(v) for v in matrix["python"]], ["3.12"],
-                         "the floor belongs in `include`, not on the `python` axis")
-        self.assertNotIn(self.floor, [str(v) for v in matrix["python"]])
-
-    def test_f_windows_still_runs_the_primary_version_too(self):
-        """The floor leg on Windows ADDS to the 3.12 Windows legs; it must not have replaced them.
-
-        Same wrong fix as `test_d`, one axis over — and the one this stage could plausibly have
-        made, since "Windows now runs the floor" reads like coverage either way.
-        """
-        legs = _expand(self.doc["jobs"]["test"])
-        self.assertEqual({"absent", "present"},
-                         {j for o, p, j in legs if o == "windows-latest" and p == "3.12"},
-                         "Windows stopped running both jsonschema legs at 3.12")
+    def test_e_the_untested_floor_is_disclosed_in_the_changelog(self):
+        text = _read(os.path.join(_ROOT, "CHANGELOG.md"))
+        top = text[:text.index("\n## [", text.index("## [") + 1)] if text.count("## [") > 1 else text
+        self.assertIn("Python 3.12 only", top,
+                      "the newest CHANGELOG section must disclose that CI runs Python 3.12 only")
 
 
 class EveryLegSaysWhetherItHasEverRun(unittest.TestCase):
@@ -274,12 +208,10 @@ class EveryLegSaysWhetherItHasEverRun(unittest.TestCase):
                             sorted(configured - set(self.declared))))
 
     def test_b_the_three_states_are_three_distinct_values(self):
-        """§7g's whole content. Two of these collapsing into one is the failure, not a typo."""
+        """§7g's content: the three facts stay three values, even when one is currently unused."""
         self.assertEqual(3, len({RUN_ON_THE_PR_GATE, RUN_AT_TAG_ONLY, NEVER_RUN}))
-        self.assertEqual({RUN_ON_THE_PR_GATE, RUN_AT_TAG_ONLY, NEVER_RUN},
-                         set(self.declared.values()),
-                         "a state went unused — either a leg is mis-declared, or the record has "
-                         "quietly become a two-state one")
+        self.assertTrue(set(self.declared.values()) <= {RUN_ON_THE_PR_GATE, RUN_AT_TAG_ONLY,
+                                                        NEVER_RUN})
 
     def test_c_a_leg_declared_NEVER_RUN_is_not_covered_by_the_release_matrix(self):
         """★ THE EXPIRY, and it is derived. `release.yml` is the other place a leg could have run,
@@ -301,26 +233,10 @@ class EveryLegSaysWhetherItHasEverRun(unittest.TestCase):
         self.assertEqual([], wrong,
                          "declared run-at-tag, but release.yml does not run it: %s" % wrong)
 
-    def test_e_nothing_is_both_never_run_and_exercised_locally(self):
-        """The §7g companion. `scripts/floor-python.sh` makes "I ran the floor here" a claim
-        anyone can re-run, which makes it tempting to let a local run stand in for a runner. It
-        cannot: a local run says nothing whatever about the runner OS, and the one leg that has
-        never executed is the one where that distinction is the entire finding."""
-        local = {tuple(self.floor if part == FLOOR else part for part in leg)
-                 for leg in EXERCISED_LOCALLY}
-        self.assertEqual(set(), {leg for leg in local if self.declared.get(leg) == NEVER_RUN},
-                         "a leg is claimed both never-run and locally exercised")
-        self.assertEqual(set(), local - set(self.declared),
-                         "a locally-exercised leg is not a leg ci.yml runs: %s"
-                         % sorted(local - set(self.declared)))
-
-    def test_f_the_never_run_leg_is_the_macos_leg(self):
-        """Named, so that a record which drifted into declaring everything safe reds. This is the
-        one assertion here that would have to be EDITED the day the leg first goes green — which
-        is the point: the flip is a decision a human makes and records, not a state that decays.
-        (It was the Windows floor leg until 0.0.22 B1 flipped it with its run evidence.)"""
-        self.assertEqual([("macos-latest", "3.12", "present")],
-                         [leg for leg, state in self.declared.items() if state == NEVER_RUN])
+    def test_f_no_leg_is_currently_never_run(self):
+        """Named, so a NEW leg added without run evidence has to be declared NEVER_RUN on purpose.
+        (The macOS leg was the last one; PR #81 ran it green at 0.0.23.)"""
+        self.assertEqual([], [leg for leg, state in self.declared.items() if state == NEVER_RUN])
 
 
 class TheNeverRunLegBlocksLikeEveryOtherLeg(unittest.TestCase):
@@ -373,18 +289,6 @@ class TheNeverRunLegBlocksLikeEveryOtherLeg(unittest.TestCase):
         on = self.release.get("on", self.release.get(True))
         self.assertNotIn("workflow_run", on if isinstance(on, dict) else {on: None},
                          "release.yml now triggers off another workflow's run")
-
-
-class TheReleaseGateStillCoversTheFloor(unittest.TestCase):
-    """The floor leg on the PR gate ADDS to release.yml; it must not have moved coverage."""
-
-    def test_a_release_still_runs_the_floor(self):
-        doc = safe_load(_read(RELEASE_YML), "assert release.yml still covers the declared floor")
-        floor = _declared_floor()
-        versions = [str(v) for v in doc["jobs"]["test"]["strategy"]["matrix"]["python"]]
-        self.assertIn(floor, versions,
-                      "release.yml stopped running the declared floor")
-        self.assertGreater(len(versions), 1, "the release matrix collapsed to one version")
 
 
 if __name__ == "__main__":

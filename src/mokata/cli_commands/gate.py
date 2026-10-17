@@ -23,6 +23,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 from __future__ import annotations
 
 import argparse
+import os
 from datetime import datetime, timezone
 
 from ._common import AuditLedger, _load_surface
@@ -99,6 +100,15 @@ def cmd_gate_override(args: argparse.Namespace) -> int:
             f"  Scope: THIS session only — a new session enforces again.\n"
             f"  Reason (recorded to the audit ledger): {args.reason}\n"
             f"  The secret-guard is unaffected — security blocks are never overridable.")
+    # 0.0.24 (OSS #82, item 3) — inside an agent's shell (Claude Code sets CLAUDECODE=1) no human
+    # can answer this prompt, and on Windows that shell's stdin can CLAIM to be a terminal, so the
+    # no-TTY guard in `prompt.read_yes_no` does not fire and the call is wasted on an EOF. Say so up
+    # front, before asking, and name the one flag that answers it.
+    if not args.yes and os.environ.get("CLAUDECODE") == "1":
+        print(plan)
+        print(f"the gate stays enforced — this is an agent's shell, so nobody can answer the "
+              f"question here. Re-run with `--yes` once the user has approved the override.")
+        return 1
     decision = confirmed(args.yes, plan, f"Override '{gate}' for this session?")
     if not decision:
         # OSS #66: this said "aborted — the gate stays enforced." for BOTH a human's no and a run

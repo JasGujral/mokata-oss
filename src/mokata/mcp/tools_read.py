@@ -488,7 +488,7 @@ def baseline(path: str = ".", cmd: str = "", response_format: str = "concise") -
     guesses a framework). Read-only — runs the existing suite, writes nothing. `response_format`
     {concise (default), detailed}: concise answers with `ok`; detailed adds the rendered
     `report` (P22)."""
-    from ..baseline import BASELINE_MCP_TIMEOUT_SECONDS, baseline_command, baseline_status
+    from ..baseline import baseline_command, baseline_status, mcp_test_timeout
     from ..config import ConfigError
     manifest = None
     if Surface.is_initialized(path):
@@ -505,7 +505,7 @@ def baseline(path: str = ".", cmd: str = "", response_format: str = "concise") -
     # it too). The CLI/`mokata baseline` path keeps the longer default.
     from ..project_env import settings_python
     result = baseline_status(baseline_command(manifest, override=cmd or None), cwd=path,
-                             timeout=BASELINE_MCP_TIMEOUT_SECONDS,
+                             timeout=mcp_test_timeout(manifest),
                              settings_python=settings_python(manifest))
     return apply_response_format(response_format,
                                  {"ok": result.ok, "report": LazyRender(result.render)})
@@ -638,6 +638,21 @@ def session_save(path: str = ".", brainstorm: Optional[Dict[str, Any]] = None,
         out = {"ok": True, "empty": True, "degraded": True,
                "message": "local state persist degraded (see the warning) — your work is not "
                           "blocked; retry once the disk/permissions recover"}
+        # 0.0.24 (OSS #82/#83) — an MCP client never sees the stderr warning, so the result names
+        # the failure itself: the exception TYPE and errno/winerror, never its text (secret-safe,
+        # as `note_persist_failure`).
+        err = getattr(flow, "last_error", None)
+        if err is not None:
+            out["error"] = type(err).__name__
+            for attr in ("winerror", "errno"):
+                code = getattr(err, attr, None)
+                if isinstance(code, int):
+                    out["error"] += f" [{attr} {code}]"
+                    break
+            if isinstance(err, PermissionError):
+                out["message"] += (". On Windows a PermissionError here was another mokata process "
+                                   "holding the state file; current mokata retries that — upgrade "
+                                   "(`uv tool install --upgrade mokata`) if this persists")
         if registered:
             out["registered"] = registered
         return out

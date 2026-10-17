@@ -141,14 +141,28 @@ def _await_registrations(timeout: float = 5.0) -> None:
         t.join(timeout)
 
 
-def _mcp_timeout_for(op: str) -> float:
+def _mcp_timeout_for(op: str, path: str = ".") -> float:
     """The wall-clock MCP-surface budget for `op` (R1). `baseline` — a READ tool that runs the whole
     test suite — gets its own named cap far below its 600s terminal bound (R7); everything else gets
     the interactive default. Read at CALL time so the budget is patchable/tunable."""
     if op == "baseline":
-        from ..baseline import BASELINE_MCP_TIMEOUT_SECONDS
-        return BASELINE_MCP_TIMEOUT_SECONDS
+        # 0.0.24 (OSS #82) — the repo's `settings.mcp.test_timeout_seconds` raises it (clamped to
+        # the 600s terminal bound); the subprocess in `tools_read.baseline` reads the same value.
+        from ..baseline import mcp_test_timeout
+        return mcp_test_timeout(_manifest_or_none(path))
     return MCP_SURFACE_TIMEOUT_SECONDS
+
+
+def _manifest_or_none(path: str):
+    """The repo's manifest for a budget read, or None — never raises (an unreadable repo gets the
+    default budget, and the tool body reports the real problem)."""
+    try:
+        from ..config import Surface
+        if Surface.is_initialized(path):
+            return Surface.load(path).manifest
+    except Exception:  # noqa: BLE001
+        return None
+    return None
 
 
 def _timed_out(op: str, budget: float) -> Dict[str, Any]:
@@ -159,7 +173,10 @@ def _timed_out(op: str, budget: float) -> Dict[str, Any]:
         "reason": (f"the '{op}' operation did not finish within mokata's {int(budget)}s MCP "
                    f"surface budget"),
         "hint": (f"nothing was half-committed by this; run it from your terminal with "
-                 f"`mokata {op}` (no MCP time budget) or retry."),
+                 f"`mokata {op}` (no MCP time budget) or retry."
+                 + (" A suite that needs longer: `mokata config set "
+                    "settings.mcp.test_timeout_seconds <seconds>` (up to 600)."
+                    if op == "baseline" else "")),
     }
 
 
@@ -247,7 +264,7 @@ def _serve(fn: Callable[..., Any], name: Optional[str] = None,
 
         call_path = _call_path(args, kwargs)
         _spawn_registration(call_path)                    # R5 — concurrent, never gates the body
-        budget = _mcp_timeout_for(op)                     # R1/R7 — per-tool wall-clock cap
+        budget = _mcp_timeout_for(op, call_path)          # R1/R7 — per-tool wall-clock cap
         box: Dict[str, Any] = {}
         # R1.S1b — the event's real duration. ⚠ `perf_counter`, NOT `monotonic` (0.0.21 cut, mirror
         # run on PR #77): on Windows `monotonic` ticks at ~15.6 ms, so a 30 ms call was stamped
