@@ -189,6 +189,9 @@ class SessionFlow:
     def __init__(self, surface: Any, warn: Optional[Callable[[str], None]] = None) -> None:
         self.surface = surface
         self._warn = warn                      # injectable notice sink (tests); None -> stderr
+        # 0.0.24 (OSS #82/#83) — the last persist failure, so a surface whose user never sees
+        # stderr (an MCP client) can still name its TYPE and errno. Never its text (secret-safe).
+        self.last_error: Optional[BaseException] = None
 
     def checkpoint(self, *, brainstorm: Optional[Dict[str, Any]] = None,
                    passed: Optional[List[str]] = None, run_id: Optional[str] = None,
@@ -203,6 +206,7 @@ class SessionFlow:
             # threw away the one fact that identifies the failure, and the notice then guessed —
             # see `note_persist_failure`, and OSS #67/#68 for what the guess cost.
             note_persist_failure(moment, self._warn, error=exc)
+            self.last_error = exc
             return None
 
     # --- (c) brainstorm milestones + (a) approval — coarse moments, NOT per-turn ----------------

@@ -2239,6 +2239,23 @@ _register("atomicfile.py", {
 _register("baseline.py", {
     "baseline_status": (DEGRADE_CLEAN,
         "Reports RED *with the reason* — the loudest possible in-band signal."),
+    "mcp_test_timeout": (DEGRADE_CLEAN,
+        "0.0.24 (OSS #82) — an unreadable `settings.mcp.test_timeout_seconds` falls back to the "
+        "documented default budget; the setting is an optional raise, never a reason to fail."),
+})
+_register("mcp/server.py", {
+    "_manifest_or_none": (DEGRADE_CLEAN,
+        "0.0.24 — reading the repo's budget setting before the call: an unloadable repo gets the "
+        "default budget, and the tool body itself then reports the real problem in-band."),
+})
+_register("mcp/tools_spec.py", {
+    "_save_emit_args": (SUPPRESS_OK,
+        "0.0.24 (OSS #82) — a convenience copy so `spec_emit` can redeem by `proposal_id` alone. "
+        "Losing it only means the redeeming call resends the payload, which the not-found reply "
+        "says; the proposal and its content hash are untouched."),
+    "_saved_emit_args": (DEGRADE_CLEAN,
+        "0.0.24 — an unreadable saved copy reads as absent, and `spec_emit` then replies with the "
+        "exact payload to resend. The content hash still decides whether anything commits."),
 })
 _register("brainstorm_impact.py", {
     "compute_impact": (DEGRADE_CLEAN,

@@ -96,51 +96,13 @@ jobs:
         os: ["ubuntu-latest", "windows-latest"]
         python: ["3.12"]
         jsonschema: ["absent", "present"]
-        # THE DECLARED FLOOR, exercised on the PR gate. `requires-python = ">=3.10"` in
-        # pyproject.toml is a promise to users, and until 0.0.16 the ONLY job that ever ran 3.10
-        # was release.yml — so the floor was first exercised at TAG time, after the code was
-        # already declared done. That is how the ISO-dialect split shipped green: `fromisoformat`
-        # learned '…Z' in 3.11, the fault only exists BELOW the CI floor, and a 3.12-only gate is
-        # structurally blind to every such gap.
-        #
-        # Deliberately TARGETED legs via `include`, not a Python axis: adding "3.10" to `python:`
-        # above would cross-product to 8 legs and roughly double a gate that is already slow.
-        # Three `include` entries buy the coverage CI-MATRIX-FLOOR-GAP asked for at the price of
-        # three legs, and `tests/test_ci_matrix_floor.py` pins the shape against being "fixed"
-        # into the cross-product.
-        #
-        # THE THREE FLOOR LEGS, and they are not equivalent — see `LEG_PROVENANCE` in that test
-        # file, which records the state of every leg of this job in three values, not two:
-        #
-        #   ubuntu  × present  added 0.0.16 (cf2d265). Has run on every PR since.
-        #   ubuntu  × absent   added 0.0.18 stage 17. release.yml has ALWAYS run this combination,
-        #                      so it has executed — first at TAG time, which is precisely the
-        #                      defect this row exists to end. Moving it before the tag is the fix.
-        #   windows × present  added 0.0.18 stage 17. ★ CONFIGURED IN NO WORKFLOW BEFORE NOW —
-        #                      not here, not in release.yml, which is ubuntu-only. Its FIRST
-        #                      EXECUTION ANYWHERE will be on the public mirror at the cut, and
-        #                      that is recorded here in advance rather than discovered there.
-        #
-        # FAILURE POLICY FOR THAT LAST LEG: BLOCKING, from its first run. No `continue-on-error`,
-        # deliberately. This workflow gates nothing in the publish path — release.yml's `pypi` and
-        # `github-release` need `build`, which needs `test` + `validate`, all declared inside
-        # release.yml — so a red here costs a red check, not a blocked tag. And `continue-on-error`
-        # would make a failing leg and a passing leg produce the same workflow conclusion, which
-        # is the one thing a leg nobody has ever run must not be allowed to do.
-        #
-        # `jsonschema: present` on the Windows floor leg rather than `absent`: the two open axes
-        # are covered one apiece, and `present` is the fuller dependency surface (it is the leg
-        # that demands a usable MCP SDK and runs the two-process stress).
+        # PY312-ONLY (0.0.24, owner ruling 2026-10-17): every leg runs Python 3.12. The three
+        # 3.10 "floor" legs (added 0.0.16 / 0.0.18 stage 17) are gone — they doubled the Windows
+        # wall-clock of the PR gate. `requires-python = ">=3.10"` is KEPT and is now a promise
+        # that NO workflow exercises; that is a deliberate, disclosed trade (CHANGELOG known
+        # limitations), and `tests/test_ci_matrix_floor.py` pins it so nobody believes the floor
+        # is tested. The macOS leg below is 3.12 too.
         include:
-          - os: "ubuntu-latest"
-            python: "3.10"
-            jsonschema: "present"
-          - os: "ubuntu-latest"
-            python: "3.10"
-            jsonschema: "absent"
-          - os: "windows-latest"
-            python: "3.10"
-            jsonschema: "present"
           # MACOS-IS-THE-CUT-MACHINE-AND-HAS-NO-LEG (0.0.22 B1). Every cut is taken on macOS, and
           # until now nothing ran the suite there: two host-dependent reds surfaced in ONE day on
           # 2026-10-04 (`git <cmd> --help` handing off to `man`; `/var` vs `/private/var`), both

@@ -10,6 +10,45 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.24] — 2026-10-17
+
+**A patch for two Windows reports against 0.0.22 (OSS #82, #83) and a lighter CI gate.** Long test
+suites can now be baselined over MCP, an agent's `gate override` stops wasting a call, an approved
+spec commits from its `proposal_id` alone, and a degraded `session_save` says what failed.
+
+**0.0.23 was tagged but never published to PyPI**: its release workflow's test legs were cancelled
+at their 22-minute ceiling (no test failed), so `build` and `pypi` never ran. 0.0.24 carries every
+0.0.23 change and is the first published release since 0.0.22.
+
+### Fixed
+- **`baseline` over MCP can wait for a slow suite (#82).** The 120 s MCP budget is now a repo
+  setting: `mokata config set settings.mcp.test_timeout_seconds 300` (clamped to the 600 s terminal
+  bound; a bad value falls back to the default). The timeout message names the setting.
+  `spec_check`'s 60 s timeouts in the report came from 0.0.22's per-symbol corpus walk, fixed in
+  0.0.23.
+- **`mokata gate override` inside an agent's shell refuses up front (#82).** Claude Code marks its
+  shells with `CLAUDECODE=1`; there, without `--yes`, the command prints the plan and names `--yes`
+  instead of asking a question nobody can answer (on Windows those shells claim to be a terminal).
+- **`spec_emit` with only `proposal_id` commits the approved spec (#82).** The proposal saves the
+  exact payload it hashed; the redeeming call reloads it, and the content hash still refuses any
+  change. Re-sending the full payload keeps working.
+- **A degraded `session_save` names its cause in the MCP result (#82, #83).** The result carries
+  the error type and errno (never the message text). The Windows `PermissionError` behind both
+  reports was another mokata process holding the state file — retried since 0.0.23.
+
+### Changed
+- **The release workflow's test ceiling is 32 minutes (was 22).** The 0.0.23 suite outgrew the old
+  ceiling — re-derived from the slowest completed leg (1240.6 s) x 1.5.
+- **CI runs Python 3.12 only.** The three Python 3.10 legs are gone from the PR gate and the tag-time
+  matrix is 3.12 only (it was 3.10–3.13).
+
+### Known limitations
+- **The declared `requires-python = ">=3.10"` is untested.** No workflow runs Python 3.10 or 3.11
+  any more — a bug that exists only below 3.12 (like 0.0.15's ISO-date split) would reach users
+  first. `tests/test_ci_matrix_floor.py` pins this so it is never mistaken for coverage.
+- **Recording RED still runs the whole suite.** A suite slower than the 600 s cap cannot be
+  baselined over MCP even with the setting; run `mokata baseline` from a terminal.
+
 ## [0.0.23] — 2026-10-16
 
 **The release where a stranger can install mokata, a Python repository is read as the user's own

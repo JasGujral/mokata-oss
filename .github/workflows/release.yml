@@ -85,13 +85,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read        # checkout only (explicit least-privilege, not the inherited default)
-    # CI-JOBS-WITHOUT-A-TIMEOUT (0.0.19 stage 09). Slowest leg that has ever COMPLETED x 1.5:
-    # 865s (`test (3.10, absent)`, run 32210447005; n=248 completed leg-runs) -> 1297.5s -> **22**.
-    timeout-minutes: 22
+    # CI-JOBS-WITHOUT-A-TIMEOUT (0.0.19 stage 09). Slowest leg that has ever COMPLETED x 1.5.
+    # RE-DERIVED at 0.0.24: the 0.0.23 suite grew past the old 22-minute ceiling — the v0.0.23
+    # release run 38966278058 had its 3.10/3.11/3.13 legs CANCELLED at 22m with no test failing,
+    # so nothing published. Its slowest completed leg: 1240.6s (`test (3.12, present)`) -> 1861s
+    # -> **32**. Re-derive again whenever the suite grows; a ceiling the suite can reach is a red
+    # that says nothing about the code.
+    timeout-minutes: 32
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.10", "3.11", "3.12", "3.13"]
+        # PY312-ONLY (0.0.24, owner ruling 2026-10-17): the tag-time gate runs the same single
+        # Python as the PR gate. `requires-python = ">=3.10"` is kept and is untested — disclosed.
+        python: ["3.12"]
         jsonschema: ["absent", "present"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
