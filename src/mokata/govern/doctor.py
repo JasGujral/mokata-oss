@@ -328,6 +328,52 @@ def secret_ignore_findings(surface: Any) -> List[DoctorFinding]:
     return [DoctorFinding("info", "secret-ignores", detail)]
 
 
+def windows_shim_findings(root: str, home: Any, hooks: List[Any]) -> List[DoctorFinding]:
+    """0.0.25 `WIN-SHIM-WIRED` — mokata's harness commands wired to a `.bat`/`.cmd` SHIM.
+
+    pyenv-win puts `shims\\mokata-hook.bat` first on PATH, and setup before 0.0.25 wired whatever
+    `which` returned. Every launch of a `.bat` goes through `cmd.exe`, so the statusLine (re-run
+    on every UI refresh), each hook and the MCP server open a visible cmd window — continuously,
+    whether or not the IDE is open (reported by Jas, 2026-10-19). The commands DO resolve and the
+    gates DO fire, so this is a warning, not an error; the one fix is re-running setup, which now
+    wires the real `.exe`. Reads files only; spawns nothing."""
+    import json as _json
+    from ..harness_setup import is_windows_shim
+    from ..hook_wiring import SETUP_REMEDY
+    hits: List[str] = []
+    for h in hooks:
+        if is_windows_shim(h.program):
+            hits.append(f"{h.event} hook → {h.program}")
+    home_dir = str(home) if home else os.path.expanduser("~")
+    for path in (os.path.join(root, ".claude", "settings.json"),
+                 os.path.join(root, ".claude", "settings.local.json"),
+                 os.path.join(home_dir, ".claude", "settings.json")):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                cmd = ((_json.load(fh).get("statusLine") or {}).get("command") or "")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if "mokata" in cmd and any(t.strip('"').lower().endswith((".bat", ".cmd"))
+                                   for t in cmd.split()):
+            hits.append(f"statusLine → {cmd} ({path})")
+    try:
+        with open(os.path.join(root, ".mcp.json"), encoding="utf-8") as fh:
+            srv = ((_json.load(fh).get("mcpServers") or {}).get("mokata") or {})
+        if is_windows_shim(str(srv.get("command") or "")):
+            hits.append(f"MCP server → {srv.get('command')} (.mcp.json)")
+    except (OSError, ValueError, AttributeError):
+        pass
+    if not hits:
+        return []
+    hits = sorted(set(hits))
+    return [DoctorFinding(
+        "warning", "windows-shim-wired",
+        "mokata is wired through a Windows script shim (.bat/.cmd — e.g. pyenv-win's), so every "
+        "statusLine refresh, hook and MCP start runs through cmd.exe and flashes a cmd window: "
+        + "; ".join(hits[:4]) + (f" (+{len(hits) - 4} more)" if len(hits) > 4 else "")
+        + f". Fix: run `{SETUP_REMEDY}` (it now wires the real .exe), then restart Claude Code")]
+
+
 def hook_resolution_findings(surface: Any, home: Any = None, *,
                              windows: Any = None, git_bash: Any = None) -> List[DoctorFinding]:
     """HOOK-RESOLVE — the HARD check that mokata's enforcement plane can actually LAUNCH.
@@ -400,6 +446,10 @@ def hook_resolution_findings(surface: Any, home: Any = None, *,
     for level, code, detail in shell_findings(
             [h for h in report.hooks if h.resolves], windows=windows, git_bash=git_bash):
         out.append(DoctorFinding(level, code, detail))
+
+    if windows:
+        out.extend(windows_shim_findings(getattr(surface, "root", "."), home,
+                                         [h for h in report.hooks if h.resolves]))
 
     for s in report.dead_servers:
         # A static plugin `mcpServers` entry is spawned DIRECTLY (no shell, one command string,
@@ -788,6 +838,57 @@ def _repeat_lines() -> List[str]:
     return out
 
 
+def _port_listening(port: int) -> bool:
+    import socket
+    if not port:
+        return False
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+            return True
+    except OSError:
+        return False
+
+
+def http_gate_findings(surface: Any, *, listening: Any = None,
+                       version: Any = None) -> List[DoctorFinding]:
+    """U8 — `mokata setup claude --http-gates` wired a PreToolUse http hook with `onFailure: "block"`
+    to the local IDE server. Silent when it is not wired. `listening` / `version` are the test seams
+    for "is the server up" and "which Claude Code is installed"."""
+    from pathlib import Path
+    from ..harness_setup import HTTP_GATES_MIN_CLAUDE_CODE, LOCAL_SETTINGS, http_gates_wired
+    local = Path(surface.root) / ".claude" / LOCAL_SETTINGS
+    if not http_gates_wired(local):
+        return []
+    from ..claude_code_version import fmt, installed_version
+    from ..ide.bus import read_bridge
+    rec = read_bridge(surface.root) or {}
+    try:
+        port = int(rec.get("port") or 0)
+    except (TypeError, ValueError):
+        port = 0
+    up = (listening or _port_listening)(port)
+    out = [DoctorFinding(
+        "info", "http-gates-on",
+        f"FAIL-CLOSED http gate hooks are wired in {local}: while the mokata IDE server is not "
+        "running, Claude Code BLOCKS every gated tool call. The `mokata-hook` command gates still "
+        "run. Turn it off by re-running `mokata setup claude` without `--http-gates`.")]
+    if not up:
+        out.append(DoctorFinding(
+            "error", "http-gates-server-down",
+            f"the mokata IDE server is NOT running (port {port or 'unknown'}), so Claude Code is "
+            "refusing every gated tool call in this repo right now. Start it with "
+            "`mokata ide --foreground`, or remove the flag with `mokata setup claude`."))
+    v = version if version is not None else installed_version()
+    if v is not None and tuple(v) < HTTP_GATES_MIN_CLAUDE_CODE:
+        out.append(DoctorFinding(
+            "warning", "http-gates-claude-code-too-old",
+            f"Claude Code {fmt(tuple(v))} predates `onFailure: \"block\"` "
+            f"({fmt(HTTP_GATES_MIN_CLAUDE_CODE)}): an unreachable http gate is a NON-blocking "
+            "error there, so the http lane fails OPEN (the command gates still run). Update Claude "
+            "Code (`claude update`)."))
+    return out
+
+
 def diagnose(surface: Any) -> DoctorReport:
     findings: List[DoctorFinding] = []
     m = surface.manifest
@@ -909,6 +1010,11 @@ def diagnose(surface: Any) -> DoctorReport:
     # only (never fails doctor); silent for a non-git repo or a healthy set; never raises.
     from ..worktree_manage import worktree_findings
     findings.extend(worktree_findings(surface))
+
+    # 6b-u8) 0.0.25 Lane HB — the opt-in FAIL-CLOSED http gate hooks: while they are wired, say so,
+    # and say it LOUDLY when the IDE server they need is down (Claude Code is refusing every gated
+    # tool call) or Claude Code is too old to honour `onFailure: "block"`.
+    findings.extend(http_gate_findings(surface))
 
     # 6c) TM.S1 — run mode. Flag a hand-edited invalid `settings.mode` (read_mode stays safe/
     # local, but doctor must SEE it); the local default is never an error.

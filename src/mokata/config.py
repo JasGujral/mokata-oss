@@ -28,6 +28,7 @@ from . import (
 from .detect import Detector
 from .manifest import Manifest, ManifestError
 from .router import Router
+from .repo_identity import find_project_root, is_initialized  # noqa: F401 — re-exported
 from .state import StateStore
 from .errors import MokataError
 
@@ -40,36 +41,6 @@ STATE_DIRNAME = "state"
 
 class ConfigError(MokataError):
     """Raised when the unified surface cannot be loaded (e.g. not initialized)."""
-
-
-def find_project_root(start: str = ".") -> str:
-    """Resolve the real project root from any directory inside it (Stage 23).
-
-    Walks up from `start` and returns the nearest ancestor that already holds an
-    initialized `.mokata/manifest.json`; failing that, the nearest VCS root (`.git`);
-    failing that, `start` itself. This is what lets `init`/`status`/the MCP tools and the
-    SessionStart offer all agree on whether the project is set up — so an already-init
-    repo is recognized from a subdirectory and never re-offered init (the "asks every
-    time" bug).
-
-    WT-ROOT — both tiers were blind to git worktrees, in the two different ways a path-walk can be.
-    The manifest tier is now `repo_identity.resolve_mokata_root` (shared with
-    `gate_hook.find_mokata_root`, so the two cannot disagree). The VCS tier tested
-    `os.path.isdir(".git")`, and a linked worktree's `.git` is a FILE — so it walked straight past
-    the worktree it was standing in and answered `start`, which is how `mokata init` came to be
-    offered INSIDE a worktree. It now resolves through `canonical_repo_root`, the same primitive
-    `repo_identity` already uses for the registry."""
-    cur = os.path.abspath(start)
-
-    from .repo_identity import _common_dir, canonical_repo_root, resolve_mokata_root
-    resolved = resolve_mokata_root(cur).root
-    if resolved is not None:
-        return resolved
-
-    if _common_dir(cur) is not None:
-        return canonical_repo_root(cur)
-
-    return cur
 
 
 @dataclass
@@ -165,7 +136,7 @@ class Surface:
 
     @classmethod
     def is_initialized(cls, root: str = ".") -> bool:
-        return os.path.exists(os.path.join(root, MOKATA_DIR, MANIFEST_FILENAME))
+        return is_initialized(root)
 
     @classmethod
     def load(cls, root: str = ".", detector: Optional[Detector] = None) -> "Surface":

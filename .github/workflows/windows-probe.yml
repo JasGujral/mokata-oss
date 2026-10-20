@@ -55,9 +55,10 @@ env:
   # Point it at the modules whose Windows behaviour you are trying to observe; everything else
   # in this file stays put. Keep it SHORT — the value of this workflow is its wall clock.
   #
-  # Currently: the two modules holding all 11 failures on mirror run 32144708930's three Windows
-  # legs (identical failure set on `py3.12 absent`, `py3.12 present` and `py3.10 present`).
-  PROBE_MODULES: "test_stage18_notify_and_attention"
+  # Currently (0.0.25 B-01): the Windows cmd-window fix, observed on a real desktop —
+  # `test_win_no_console_windows` (control-gated: it SKIPS, saying why, on a runner that cannot
+  # show a console window), plus the flag/shim/server-light modules it stands on.
+  PROBE_MODULES: "test_win_no_console_windows test_win_cmd_flash test_ide_server_light"
 
 jobs:
   probe:

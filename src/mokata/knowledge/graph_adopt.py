@@ -162,7 +162,7 @@ def adopt_graph(
                     emit("provisioned code-review-graph's local semantic index.")
             except Exception:
                 emit("note: semantic index not provisioned (install "
-                     "code-review-graph[embeddings]); structural queries still work.")
+                     f"{CRG_SEMANTIC_SPEC}); structural queries still work.")
     return AdoptResult(outcome.committed, outcome.reason, tool)
 
 
@@ -215,15 +215,19 @@ def offer_graph_at_setup(
         install_fn()
     else:
         from ..extras_install import install_extra
-        res = install_extra("code-review-graph[embeddings]",
-                            verify=_crg_importable, out=emit)
+        res = install_extra(CRG_SPEC, verify=_crg_importable, out=emit)
         if not res.ok:
-            emit(f"note: {res.message}. Install manually with:  "
-                 f"pip install 'code-review-graph[embeddings]'   "
-                 f"(bundled local embedding; no API key)")
+            emit(f"note: {res.message}. Install manually with:  {res.fix}")
     res = adopt_graph(root, tool="code-review-graph", assume_yes=assume_yes,
                       out=out, ledger=ledger, client=client)
     return OfferResult(adopted=res.committed, message=res.message)
+
+
+#: 0.0.25 I-01 — the STRUCTURAL CRG only. `code-review-graph[embeddings]` pulls
+#: sentence-transformers → torch (+ CUDA wheels on Linux): measured 5.8 GB vs 364 MB for the whole
+#: lean full set, 2026-10-18. CRG's own semantic index stays an explicit opt-in.
+CRG_SPEC = "code-review-graph"
+CRG_SEMANTIC_SPEC = "code-review-graph[embeddings]"
 
 
 def _crg_importable() -> bool:

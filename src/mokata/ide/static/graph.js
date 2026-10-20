@@ -37,7 +37,10 @@
       { selector: "node", style: {
         label: "data(label)", "font-family": "JetBrains Mono, ui-monospace, monospace", "font-size": 11,
         color: c.text, "text-valign": "center", "text-halign": "center", shape: "round-rectangle",
-        width: "label", height: 24, padding: "7px", "background-color": c.panel, "border-width": 1, "border-color": c.line2 } },
+        // Width from the label length (monospace), not the deprecated label-sized width: that value is
+        // only resolved when a layout measures the nodes, so a node placed by position (the ring
+        // layout) stayed zero-width — invisible — and the ripple showed the centre alone.
+        width: (n) => Math.max(18, String(n.data("label") || "").length * (n.data("kind") === "center" ? 7.9 : 6.7)), height: 24, padding: "7px", "background-color": c.panel, "border-width": 1, "border-color": c.line2 } },
       { selector: "node[kind = 'center']", style: { "border-width": 2, "border-color": c.accent, "background-color": c.sel, "font-size": 13 } },
       { selector: "node[kind = 'test']", style: { shape: "round-rectangle", "border-color": c.add, "corner-radius": 12 } },
       { selector: "node[kind = 'module']", style: { "border-style": "dashed" } },
@@ -53,8 +56,35 @@
     ];
   }
 
+  // Rings around the symbol, each ring turned a little from the last: with a plain concentric
+  // layout a lone node per ring lined up on one ray, so an edge that skips a ring (a test calling
+  // the symbol directly) ran straight THROUGH the node between and read as that node's edge.
+  function ringPositions(data) {
+    const byRing = {};
+    for (const n of data.nodes) (byRing[n.ring || 0] = byRing[n.ring || 0] || []).push(n.id);
+    const pos = {};
+    // Circles are spaced by RANK, not by hop count: tests carry an outer ring number, and an empty
+    // ring between them and the callers only shrank the picture.
+    const rings = Object.keys(byRing).map(Number).sort((a, b) => a - b);
+    let last = 0;
+    for (const ring of rings) {
+      const ids = byRing[ring];
+      const rank = rings.indexOf(ring);
+      const radius = rank === 0 ? 0 : Math.max(last + 110, (ids.length * 110) / (2 * Math.PI));
+      last = radius;
+      const base = Math.PI + rank * 0.7;
+      ids.forEach((id, i) => {
+        const a = base + (2 * Math.PI * i) / ids.length;
+        pos[id] = { x: radius * Math.cos(a), y: radius * Math.sin(a) };
+      });
+    }
+    return pos;
+  }
+  const RINGED = (data) => !$("g-organic").checked && (data.view === "ripple" || data.view === "untested");
+
   function elements(data) {
-    const nodes = data.nodes.map((n) => ({ data: { ...n } }));
+    const pos = RINGED(data) ? ringPositions(data) : {};
+    const nodes = data.nodes.map((n) => (pos[n.id] ? { data: { ...n }, position: pos[n.id] } : { data: { ...n } }));
     const cov = {};
     for (const n of data.nodes) cov[n.id] = n.coverage;
     const edges = data.edges.map((e) => ({ data: { ...e, risk: cov[e.source] === "untested" ? 1 : 0 } }));
@@ -63,16 +93,128 @@
 
   function layoutFor(data) {
     if ($("g-organic").checked) return { name: "fcose", animate: false, randomize: true, nodeSeparation: 90, idealEdgeLength: 110 };
-    if (data.view === "ripple" || data.view === "untested") {
-      const maxRing = Math.max(0, ...data.nodes.map((n) => n.ring || 0));
-      return { name: "concentric", animate: false, minNodeSpacing: 34, startAngle: Math.PI,
-               concentric: (n) => maxRing - (n.data("ring") || 0), levelWidth: () => 1 };
-    }
+    if (RINGED(data)) return { name: "preset", animate: false, fit: false };
     return { name: "dagre", rankDir: "LR", nodeSep: 26, rankSep: 90, animate: false };
+  }
+
+  // What each view answers, in the user's words — shown under the bar so the picture is never a puzzle.
+  const VIEW_HINT = {
+    ripple: "Ripple — what is affected if this symbol changes: callers ring by ring (ring 1 = calls it directly), tests on the outer ring, amber = no test reaches it.",
+    focus: "Focus — one step each way: who calls this symbol (left) and what it calls (right).",
+    path: "Path to… — the shortest chain of calls from the first symbol to the second. Fill in both names.",
+    untested: "Untested paths — the caller chains into this symbol that no test runs: where a change could break something unnoticed.",
+  };
+  const EMPTY_TEXT = {
+    ripple: "Ripple then shows everything that would be affected if you changed it.",
+    focus: "Focus then shows who calls it and what it calls.",
+    path: "Path to… needs two: pick the start in the first box and the end in the second — the shortest chain of calls between them appears here.",
+    untested: "Untested paths then shows the callers of it that no test runs.",
+  };
+  function hint() {
+    $("g-hint").textContent = VIEW_HINT[G.view] || "";
+    $("g-empty-text").textContent = EMPTY_TEXT[G.view] || "";
+  }
+
+  // --- the symbol picker: type a few letters, choose a real symbol (name · kind · file:line) ----
+  const SUG = { gen: 0, rows: [], at: -1, input: null, timer: 0 };
+  function sugHide() { $("g-sug").hidden = true; SUG.rows = []; SUG.at = -1; }
+  function sugPlace(input) {
+    const box = $("g-sug");
+    const r = input.getBoundingClientRect();
+    const host = box.parentElement.getBoundingClientRect();
+    box.style.left = Math.max(0, r.left - host.left) + "px";
+    box.style.top = "0px";
+    box.style.minWidth = Math.max(280, r.width) + "px";
+  }
+  function sugRender(syms, input) {
+    const box = $("g-sug");
+    box.replaceChildren();
+    SUG.rows = syms;
+    SUG.at = syms.length ? 0 : -1;
+    if (!syms.length) {
+      box.append(el("li", "g-sug-empty dim small", input.value.trim()
+        ? "No function or class by that name — check the spelling, or try part of it."
+        : "Start typing a function or class name."));
+    }
+    syms.forEach((sy, i) => {
+      const li = el("li", "g-sug-row" + (i === SUG.at ? " active" : ""));
+      li.setAttribute("role", "option");
+      li.append(el("span", "mono", sy.name), el("span", "g-kind", sy.kind || "symbol"),
+                el("span", "dim small mono", `${sy.path}${sy.line ? ":" + sy.line : ""}`));
+      li.onmousedown = (ev) => { ev.preventDefault(); sugPick(i); };
+      box.append(li);
+    });
+    sugPlace(input);
+    box.hidden = false;
+  }
+  function sugMove(d) {
+    if (!SUG.rows.length) return;
+    SUG.at = (SUG.at + d + SUG.rows.length) % SUG.rows.length;
+    [...$("g-sug").children].forEach((li, i) => li.classList.toggle("active", i === SUG.at));
+  }
+  function sugPick(i) {
+    const sy = SUG.rows[i];
+    if (!sy || !SUG.input) return;
+    SUG.input.value = sy.name;
+    sugHide();
+    if (G.view === "path" && SUG.input.id === "g-symbol" && !$("g-to").value.trim()) { $("g-to").focus(); return; }
+    show();
+  }
+  function sugQuery(input) {
+    SUG.input = input;
+    clearTimeout(SUG.timer);
+    SUG.timer = setTimeout(async () => {
+      const gen = ++SUG.gen;
+      const q = input.value.trim();
+      if (!q) { sugRender([], input); return; }
+      const res = await api("/api/quickopen", { q, changed: [] }).catch(() => null);
+      if (gen !== SUG.gen || document.activeElement !== input) return;
+      sugRender(((res && res.symbols) || []).slice(0, 8), input);
+    }, 120);
+  }
+
+  // --- suggestions on the empty stage: the functions/classes in the files changed in this tree ---
+  async function suggest() {
+    const box = $("g-suggest");
+    if (!box || box.dataset.done) return;
+    box.dataset.done = "1";
+    const files = ((MK.ui && MK.ui.files) || []).filter((f) => f.status !== "deleted" && !f.binary).slice(0, 6);
+    const picks = [];
+    for (const f of files) {
+      // The definitions this change TOUCHED (from the Review page's impact answer) come first.
+      const im = (MK.ui.impact || {})[f.path];
+      const touched = im ? (im.symbols || []).concat(im.pending || []) : [];
+      if (touched.length) {
+        for (const sy of touched.slice(0, 3)) picks.push({ name: sy.name, kind: sy.kind || "function", line: sy.line, path: f.path });
+        if (picks.length >= 12) break;
+        continue;
+      }
+      const o = await api("/api/outline?path=" + encodeURIComponent(f.path)).catch(() => null);
+      let fromFile = 0;                     // a few per file, so one big file cannot crowd out the rest
+      for (const sy of (o && o.symbols) || []) {
+        if (["function", "class", "method"].includes(sy.kind)) { picks.push({ ...sy, path: f.path }); fromFile++; }
+        if (picks.length >= 12 || fromFile >= 3) break;
+      }
+      if (picks.length >= 12) break;
+    }
+    box.replaceChildren();
+    if (!picks.length) return;
+    box.append(el("p", "small", "Changed here:"));
+    const wrap = el("div", "chips");
+    for (const sy of picks) {
+      const b = el("button", "chip g-chip");
+      b.type = "button";
+      b.title = `${sy.kind} in ${sy.path}:${sy.line} — show it`;
+      b.append(el("span", "mono", sy.name), el("span", "dim small", " " + sy.kind));
+      b.onclick = () => show(G.view === "path" ? "ripple" : G.view, sy.name);
+      wrap.append(b);
+    }
+    box.append(wrap);
   }
 
   async function show(view, symbol, to) {
     G.view = view || G.view;
+    hint();
     for (const b of document.querySelectorAll("button[data-gview]")) b.classList.toggle("active", b.dataset.gview === G.view);
     $("g-to-wrap").hidden = G.view !== "path";
     if (symbol !== undefined) $("g-symbol").value = symbol;
@@ -80,7 +222,16 @@
     const sym = $("g-symbol").value.trim();
     const dst = $("g-to").value.trim();
     $("g-sel").hidden = true;
-    if (!sym || (G.view === "path" && !dst)) { $("g-empty").hidden = false; if (G.cy) G.cy.elements().remove(); return; }
+    if (!sym || (G.view === "path" && !dst)) {
+      $("g-empty").hidden = false;
+      if (G.cy) G.cy.elements().remove();
+      G.data = null;
+      for (const id of ["g-title", "g-summary", "g-note"]) $(id).textContent = "";
+      $("g-chains").replaceChildren(); $("g-chains-h").hidden = true;
+      $("g-guide").open = true;
+      suggest();
+      return;
+    }
     $("g-empty").hidden = true;
     $("g-title").textContent = "asking the graph…";
     const depth = G.view === "path" ? Math.max(3, +$("g-depth").value) : +$("g-depth").value;
@@ -88,13 +239,14 @@
     const [data] = await Promise.all([api(url).catch(() => null), loadLibs().catch((e) => { G.libError = e; })]);
     if (G.libError) { $("g-title").textContent = "graph view unavailable"; $("g-note").textContent = String(G.libError.message); return; }
     if (!data || data.error || data.sample) {
-      $("g-title").textContent = "no graph";
+      $("g-title").textContent = data && data.timed_out ? "timed out" : "no graph";
       $("g-summary").textContent = data ? (data.note || data.error) : "the server did not answer";
       if (data) MK.markSample(data);
       if (G.cy) G.cy.elements().remove();
       return;
     }
     G.data = data;
+    if (!G.guidePinned) $("g-guide").open = false;     // the picture gets the room; ? reopens it
     draw(data);
     summarize(data);
   }
@@ -142,19 +294,25 @@
       for (const n of data.nodes) if (n.kind !== "test" && n.kind !== "center") byRing[n.ring] = (byRing[n.ring] || 0) + 1;
       const tests = data.nodes.filter((n) => n.kind === "test").length;
       title.textContent = `If ${sym} changes`;
-      const rings = Object.keys(byRing).sort().map((r) => `${byRing[r]} at ${r} hop(s)`).join(", ") || "nothing calls it";
+      const rings = Object.keys(byRing).sort().map((r) => `${byRing[r]} at ${r} hop(s)`).join(", ")
+        || `nothing in this repo calls ${sym} yet (new, unused, or only called from outside) — Focus shows what it calls`;
       sum.textContent = data.defs === 0
         ? `The graph holds no definition of ${sym} — nothing here is claimed about it.`
         : `${rings}; ${tests} test node(s). Edges: ${bases}.`;
       const ch = data.untested_chains || [];
       if (ch.length) {
         chainsH.hidden = false;
-        chainsH.textContent = `${ch.length} path(s) reach no test`;
+        // lane S: the list is capped — say so, with the count (or a floor of it) behind it.
+        const total = data.untested_chains_total || ch.length;
+        chainsH.textContent = total > ch.length
+          ? `showing ${ch.length} of ${data.untested_chains_exact === false ? "at least " : ""}${total} path(s) that reach no test`
+          : `${ch.length} path(s) reach no test`;
         for (const c of ch) chains.append(el("li", "", c.join(" → ")));
       }
     }
     const notes = [];
-    if (data.truncated) notes.push(`stopped at ${data.max_nodes} nodes — lower the depth`);
+    if (data.graph_note) { notes.push(data.graph_note); if (MK.noteGraph) MK.noteGraph(data.graph_note); }
+    if (data.truncated) notes.push(data.truncation_note || `stopped at ${data.max_nodes} nodes — lower the depth`);
     if ((data.bases || {}).lexical) notes.push("dashed edges are lexical (a name match, not a graph edge): they never mark anything untested");
     else if ((data.answer_bases || []).includes("lexical")) notes.push("at least one question had no structural answer (it fell to the lexical floor), so an empty part of this picture is not a verified zero");
     $("g-note").textContent = notes.join(" · ");
@@ -204,13 +362,43 @@
   MK.wireGraph = function wireGraph() {
     for (const b of document.querySelectorAll("button[data-gview]")) b.onclick = () => show(b.dataset.gview);
     $("g-go").onclick = () => show();
-    for (const id of ["g-symbol", "g-to"]) $(id).onkeydown = (ev) => { if (ev.key === "Enter") { ev.preventDefault(); show(); } };
+    for (const id of ["g-symbol", "g-to"]) {
+      const input = $(id);
+      input.oninput = () => sugQuery(input);
+      input.onfocus = () => { if (input.value.trim()) sugQuery(input); };
+      input.onblur = () => setTimeout(sugHide, 120);
+      input.onkeydown = (ev) => {
+        const open = !$("g-sug").hidden && SUG.input === input;
+        if (open && ev.key === "ArrowDown") { ev.preventDefault(); sugMove(1); }
+        else if (open && ev.key === "ArrowUp") { ev.preventDefault(); sugMove(-1); }
+        else if (open && ev.key === "Escape") { sugHide(); }
+        else if (ev.key === "Enter") {
+          ev.preventDefault();
+          if (open && SUG.at >= 0) sugPick(SUG.at); else { sugHide(); show(); }
+        }
+      };
+    }
     $("g-depth").onchange = () => show();
     $("g-organic").onchange = () => { if (G.data) draw(G.data); };
     for (const b of document.querySelectorAll("button[data-gview]")) b.classList.toggle("active", b.dataset.gview === G.view);
+    const guide = $("g-guide");
+    $("g-help").onclick = () => {
+      guide.open = !guide.open;
+      G.guidePinned = guide.open;
+      if (guide.open) guide.scrollIntoView({ block: "start" });
+    };
+    guide.querySelector("summary").addEventListener("click", () => setTimeout(() => { G.guidePinned = guide.open; }, 0));
+    hint();
   };
   MK.onModeGraph = (mode) => {
     if (mode !== "graph") return;
+    const eng = ($("st-graph").textContent || "").trim();
+    const FULL = "install the code graph for proven, multi-language edges: mokata setup claude --mode full";
+    $("g-engine").textContent = !eng || eng === "…" ? "checking…"
+      : /code-review-graph|crg/i.test(eng) ? `${eng} — the full code graph`
+      : eng === "ast" ? `ast — mokata's built-in Python reader (Python files only; ${FULL})`
+      : eng === "grep" ? `grep — text search only, so arrows are name matches (${FULL})`
+      : /none|unavailable/i.test(eng) ? `${eng} — ${FULL}` : eng;
     if (!$("g-symbol").value && MK.ui.inspSym) show(G.view, MK.ui.inspSym);
     if (G.cy) setTimeout(() => { G.cy.resize(); fit(); }, 0);
   };

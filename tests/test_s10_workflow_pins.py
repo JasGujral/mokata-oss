@@ -59,6 +59,12 @@ THE_WORKFLOWS = (
     # suite's own relationship to a terminal — CI cannot catch that class by running the suite,
     # because CI is never a TTY and therefore takes the same branch the defective tests take.
     "tty-sweep.yml",
+    # 0.0.25 I-03 — INSTALL-CLEAN-MACHINE-E2E: the real installers (uv tool / pipx / pip) on fresh
+    # runners, then `mokata doctor`. Path-filtered PR + weekly + manual (each leg pulls ~360 MB).
+    "install-e2e.yml",
+    # 0.0.25 Lane C — the declared Python floor, weekly + manual (ruling U2 as recommended), with
+    # the G4 harness-cert server half on the same interpreter.
+    "python-floor.yml",
 )
 
 GOOD_SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1"

@@ -33,6 +33,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..repo_paths import name_of
 from .server import BadRequest
 
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
@@ -225,9 +226,28 @@ def _recency(root: str, rid: str) -> float:
     return best
 
 
+def _tier(sd: str, rid: str, drafts: Dict[str, Any]) -> int:
+    """2 = the run has a spec (emitted, or drafted and awaiting approval); 1 = an approved
+    approach only; 0 = nothing to show yet (a TDD phase / checkpoint). Two stats, no read."""
+    from ..run_resolver import APPROACH_PREFIX, SPEC_PREFIX
+    if rid in drafts or os.path.isfile(os.path.join(sd, SPEC_PREFIX + rid + ".json")):
+        return 2
+    return 1 if os.path.isfile(os.path.join(sd, APPROACH_PREFIX + rid + ".json")) else 0
+
+
 def local_runs(root: str) -> Dict[str, Any]:
+    """The run chooser. PLAN-VISIBLE (0.0.25): runs that hold a plan or a spec come FIRST, then
+    the rest by recency — and a run with a spec (emitted, or drafted and awaiting approval)
+    ahead of a run with only an approach. A long-lived repo collects thousands of runs; ordered
+    by recency alone the run with the spec fell past the `MAX_RUNS` cut and the newest run with
+    nothing on it became the default, so the plan and spec never showed in the Plan view."""
     from ..engine.spec_gate import read_emitted_spec
-    ids = sorted(local_run_ids(root), key=lambda r: _recency(root, r), reverse=True)[:MAX_RUNS]
+    sd = _state_dir(root)
+    every = local_run_ids(root)
+    drafts = pending_specs(root)
+    tier = {r: _tier(sd, r, drafts) for r in every}
+    planned = {r for r, t in tier.items() if t}
+    ids = sorted(every, key=lambda r: (tier[r], _recency(root, r)), reverse=True)[:MAX_RUNS]
     by_run = _sessions_by_run(root)
     rows = []
     for rid in ids:
@@ -237,19 +257,137 @@ def local_runs(root: str) -> Dict[str, Any]:
         title = (spec.title if spec is not None else "") or ap.get("topic") or ""
         rows.append({"id": rid, "short": rid[:8], "title": _clip(title)[:200],
                      "approach": ap["state"], "spec": "malformed" if malformed else
-                     ("ok" if spec is not None else "absent"),
+                     ("ok" if spec is not None else
+                      "awaiting approval" if drafts.get(rid) else "absent"),
+                     "has_plan": rid in planned,
                      "sessions": by_run.get(rid, []), "updated": _recency(root, rid)})
-    return {"sample": False, "source": "local", "runs": rows, "default": _default_run(root, ids),
+    return {"sample": False, "source": "local", "runs": rows,
+            "default": _default_run(root, ids, planned),
+            "counts": {"total": len(every), "with_plan": len(planned),
+                       "with_spec": sum(1 for t in tier.values() if t == 2), "listed": len(ids)},
             "team": team_mode(root)}
 
 
-def _default_run(root: str, ids: List[str]) -> Optional[str]:
-    """THE resolver's run when it names one this store holds; else the most recently active."""
+def _default_run(root: str, ids: List[str], planned: "set | None" = None) -> Optional[str]:
+    """THE resolver's run when this store holds it AND it has a plan or spec; else the first
+    listed run (the list is already best-first: spec, then plan, then recency); else the
+    resolver's run. A run with nothing to show is never preferred over one with a plan — that
+    was the 'plan not visible' report."""
     from ..run_resolver import resolve_run
+    planned = planned or set()
     rid = resolve_run(root).run_id
+    if rid in ids and rid in planned:
+        return rid
+    for r in ids:
+        if r in planned:
+            return r
     if rid in ids:
         return rid
     return ids[0] if ids else None
+
+
+# ----------------------------------------------------------------------------- saved plan files
+SAVED_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+SAVED_WHERE = ("internal", "exported")
+MAX_SAVED_PLANS = 200
+MAX_PLAN_BYTES = 256 * 1024
+
+
+def _saved_dirs(root: str) -> Dict[str, str]:
+    """`internal` = `.mokata/temp_local/plans` (written at approval), `exported` = the repo's
+    `plans/` (`mokata plan export`) — the two places `mokata plan` itself reads and writes."""
+    from ..plans import PLANS_DIRNAME
+    return {"internal": os.path.join(os.path.dirname(_state_dir(root)), PLANS_DIRNAME),
+            "exported": os.path.join(root, PLANS_DIRNAME)}
+
+
+def _saved_file(root: str, where: str, slug: str) -> Optional[str]:
+    """The plan file's path, or None — never a symlink, never outside its folder."""
+    base = _saved_dirs(root)[where]
+    path = os.path.join(base, slug + ".md")
+    try:
+        if os.path.islink(path) or not os.path.isfile(path):
+            return None
+        if os.path.dirname(os.path.realpath(path)) != os.path.realpath(base):
+            return None
+    except OSError:
+        return None
+    return path
+
+
+def saved_plans(root: str) -> Dict[str, Any]:
+    """Every saved plan file, newest first — READ-ONLY (names + mtimes, no content)."""
+    from ..plans import list_plans
+    rows: List[Dict[str, Any]] = []
+    for where, base in _saved_dirs(root).items():
+        for slug in list_plans(base):
+            if not SAVED_SLUG_RE.match(slug):
+                continue
+            path = _saved_file(root, where, slug)
+            if path is None:
+                continue
+            try:
+                mt = os.path.getmtime(path)
+            except OSError:
+                continue
+            rows.append({"slug": slug, "where": where, "updated": mt,
+                         "path": str(name_of(path, root))})
+    rows.sort(key=lambda r: r["updated"], reverse=True)
+    return {"plans": rows[:MAX_SAVED_PLANS], "total": len(rows),
+            "dirs": {w: str(name_of(d, root))
+                     for w, d in _saved_dirs(root).items()}}
+
+
+def saved_plan(root: str, slug: str, where: str) -> Dict[str, Any]:
+    """One saved plan file's text (bounded). 400 on a bad name/place or a missing file."""
+    w = (where or "internal").strip()
+    if w not in SAVED_WHERE:
+        raise BadRequest("where must be internal or exported")
+    s = (slug or "").strip()
+    if not SAVED_SLUG_RE.match(s):
+        raise BadRequest("plan must be a saved plan name (no path)")
+    path = _saved_file(root, w, s)
+    if path is None:
+        raise BadRequest(f"no saved plan {s} in this repository")
+    with open(path, "rb") as fh:
+        raw = fh.read(MAX_PLAN_BYTES + 1)
+    return {"slug": s, "where": w, "path": str(name_of(path, root)),
+            "updated": os.path.getmtime(path), "truncated": len(raw) > MAX_PLAN_BYTES,
+            "text": raw[:MAX_PLAN_BYTES].decode("utf-8", errors="replace")}
+
+
+SPEC_TOOLS = ("spec_emit", "spec_amend")
+
+
+def pending_specs(root: str) -> Dict[str, List[Dict[str, Any]]]:
+    """Spec writes PROPOSED but not committed, by run: `spec_emit` stages a proposal and writes
+    nothing until a human runs `mokata approve <id>` AND the agent re-calls with that id. Until
+    then the run has no spec — and the Plan view used to say only "no spec", so a drafted spec
+    looked lost. Read-only over `approval.pending` (live = unexpired and unused)."""
+    from .. import approval
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    try:
+        live = approval.pending(root)
+    except (OSError, ValueError, TypeError):
+        return out
+    for p in live:
+        if p.tool not in SPEC_TOOLS:
+            continue
+        out.setdefault(p.run_id, []).append({
+            "proposal_id": p.proposal_id, "tool": p.tool, "status": p.status,
+            "summary": _clip(p.summary)[:300], "preview": str(p.preview or "")[:8000],
+            "expires_in": p.expires_in(), "approve": f"mokata approve {p.proposal_id}"})
+    return out
+
+
+def plan_files_for(root: str, topic: str) -> List[Dict[str, str]]:
+    """The saved plan file(s) a run's approved topic was written to (same slug rule)."""
+    if not topic:
+        return []
+    from ..plans import plan_slug
+    slug = plan_slug(topic)
+    return [{"slug": slug, "where": w, "path": str(name_of(p, root))}
+            for w in SAVED_WHERE for p in [_saved_file(root, w, slug)] if p]
 
 
 # ----------------------------------------------------------------------------- team
@@ -342,8 +480,10 @@ def plan(root: str, run_id: str, source: str = "local", version: int = 0) -> Dic
     except (OSError, ValueError, TypeError):
         tests = None
     versions = SH.spec_versions(store, rid)
+    approach = _approach_view(store)
     return {"sample": False, "source": "local", "label": "local state", "run": rid,
-            "approach": _approach_view(store),
+            "approach": approach, "plan_files": plan_files_for(root, approach.get("topic", "")),
+            "pending_spec": pending_specs(root).get(rid, []),
             "spec": _spec_view(store, rid, version, history=True, tests=tests),
             "versions": versions, "amendment": _amendment(store, rid)}
 

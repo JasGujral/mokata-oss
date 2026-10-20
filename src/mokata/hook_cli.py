@@ -33,24 +33,32 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
-import re
+import re          # free: `json.decoder` imports it anyway
 import sys
-import threading
-from typing import Any, Callable, List, Optional
 
-# Stage 3d.1: with the mcp_admin ↔ harness_setup cycle broken (shared pieces extracted to
-# harness_paths), this import — previously lazy inside `_mcp_reachability_warning` — is top-level.
-from .mcp_admin import unreachable_registration
+# ⚡ HOOK-BUDGET (0.0.25 Lane HB, doc 109 §17.2: an observability hook ≤ 50 ms p95). Python runs
+# this module's top level for EVERY `mokata-hook` call, so it imports only json/os/re/sys. `typing` is
+# for readers (the annotations are strings under `from __future__ import annotations`), and
+# `threading` and `degrade` (→ dataclasses → inspect) are imported where they are used. The
+# observability hooks that have nothing to do outside a mokata repo answer from `main` on stdlib
+# alone (`_surely_not_mokata`); measured before/after in the HB report.
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from typing import Any, Callable, List, Optional
 
-# D5 — the degrade notice. TOP-LEVEL on purpose, even though both users are inside an `except`:
-# an import that lives in the handler for "the engine could not be imported" is an import that can
-# fail exactly when it is needed, turning a swallow into a traceback. `degrade` is stdlib-only at
-# module scope (its `team_health`/`dsn` imports are lazy), so it costs the SI.2 hot path nothing —
-# and if it cannot import, `hook_cli` itself never loaded and the hook was already dead.
-from .degrade import FAILURE_ENGINE, note_degraded
+# `mcp_admin` (≈20 ms: dataclasses, inspect, subprocess, urllib) is imported INSIDE
+# `_mcp_reachability_warning`, its only user. Not a cycle workaround — Stage 3d.1 broke that cycle via
+# `harness_paths` — but HOOK-BUDGET (0.0.25 Lane HB): every `mokata-hook` subcommand imports this
+# module, and only session-start needs the MCP registration check.
+
+# D5 — the degrade notice is imported at the TOP of each of its two users (`secret_guard_main`,
+# `gate_guard_main`), never inside their `except`: an import that lives in the handler for "the
+# engine could not be imported" is an import that can fail exactly when it is needed, turning a
+# swallow into a traceback. It used to be module-level; HOOK-BUDGET moved it to the function top,
+# which keeps that guarantee (if `degrade` cannot import, the gate hook fails loud before its try,
+# exactly as a failed module import did) while the observability hooks stop paying for it.
 
 # Security-block exit code (PreToolUse): a non-zero exit blocks the tool call.
 BLOCK_EXIT = 2
@@ -95,6 +103,30 @@ _STDIN_READ_TIMEOUT_SECS = 2.0
 # cut wherever the clock stopped. A turn with no pack is a correct turn.
 _HOOK_WORK_BUDGET_SECS = 5.0
 
+# The raw stdin `main` read for its fast path (`_surely_not_mokata`), handed to the handler's own
+# `_read_stdin_bounded` call — stdin can be consumed only once. Set and cleared by `main` around ONE
+# invocation, so nothing leaks between in-process calls.
+_STDIN_MEMO: list = []
+
+# U8 (0.0.25 Lane HB) — the I/O seam that lets `pretooluse_verdict` run the SAME gate mains in a
+# long-lived process (the IDE's `/api/gate`): stdin text in, stderr text out, per call. A
+# `contextvars.ContextVar` (per thread / per task, so concurrent requests never share a buffer),
+# created on first use so a command hook never imports `contextvars`. None ⇒ real stdin/stderr.
+_HOOK_IO = None
+
+
+def _injected() -> "Optional[dict]":
+    return _HOOK_IO.get() if _HOOK_IO is not None else None
+
+
+def _err(text: str) -> None:
+    """The gate hooks' stderr — the message Claude Code shows on a block (exit 2)."""
+    io = _injected()
+    if io is not None:
+        io["err"].append(text)
+    else:
+        sys.stderr.write(text)
+
 
 def _read_stdin_bounded(timeout: float = _STDIN_READ_TIMEOUT_SECS) -> Optional[str]:
     """Read all of stdin, but never block a session longer than ``timeout`` seconds.
@@ -105,9 +137,15 @@ def _read_stdin_bounded(timeout: float = _STDIN_READ_TIMEOUT_SECS) -> Optional[s
     ``timeout``, returning None (the caller falls back to its own default). Reuses the
     ``mcp_admin.handshake`` bounded-reader pattern: cross-platform (no SIGALRM), Windows-safe.
     Never raises. The normal path (payload + EOF) returns instantly, well inside ``timeout``."""
+    if _STDIN_MEMO:
+        return _STDIN_MEMO[0]          # `main` already read it once for its fast path
+    io = _injected()
+    if io is not None:
+        return io["stdin"]
     stream = sys.stdin
     if stream is None:
         return None
+    import threading
     holder: dict = {}
 
     def _reader() -> None:
@@ -145,6 +183,7 @@ def _bounded(work: "Callable[[], Any]", timeout: float) -> Any:
     the work is READ-ONLY (`build_injection` runs the ranked recall with `stamp=False`, precisely
     so a per-prompt hook moves no durable state) — the worst a late worker can do is finish a
     computation nobody reads."""
+    import threading
     holder: dict = {}
 
     def _run() -> None:
@@ -159,6 +198,85 @@ def _bounded(work: "Callable[[], Any]", timeout: float) -> Any:
     if thread.is_alive():
         return None                  # over budget — refuse it for RUNNING, not for being empty
     return holder.get("value")
+
+
+def _parse_flags(argv: Optional[List[str]], description: str, flags: "List[tuple]",
+                 known: bool = True) -> Any:
+    """The hook's flags, parsed — with `argparse` imported only when there IS a flag to parse.
+
+    HOOK-BUDGET (0.0.25 Lane HB): Claude Code launches every hook with NO flags (the payload
+    arrives on stdin), and `argparse` costs ~5 ms of a 50 ms observability budget to import and
+    build. So an EMPTY argv answers with each flag's default directly; anything else — including
+    `argv=None`, which means "read `sys.argv`" — goes through the real parser, unchanged. `flags`
+    is the ONE declaration both branches read: `(option, add_argument kwargs)`. `known` picks
+    `parse_known_args` (unknown flags ignored) over `parse_args`."""
+    if argv is not None and not argv:
+        from types import SimpleNamespace
+        values = {}
+        for option, kw in flags:
+            dest = kw.get("dest") or option.lstrip("-").replace("-", "_")
+            values[dest] = kw.get("default", False if kw.get("action") == "store_true" else None)
+        return SimpleNamespace(**values)
+    import argparse
+    parser = argparse.ArgumentParser(description=description)
+    for option, kw in flags:
+        parser.add_argument(option, **kw)
+    if known:
+        return parser.parse_known_args(argv)[0]
+    return parser.parse_args(argv)
+
+
+def _mokata_root(start: str) -> Optional[str]:
+    """`gate_hook.find_mokata_root`, for the hooks that only need the ROOT — without importing
+    `gate_hook`, whose run-state machinery (run_resolver, spec_scope, awaiting) costs an
+    observability hook ~10 ms it never uses (HOOK-BUDGET, 0.0.25 Lane HB). Both are the same one
+    resolver, `repo_identity.resolve_mokata_root`, so they cannot disagree."""
+    from .repo_identity import resolve_mokata_root
+    return resolve_mokata_root(start).root
+
+
+def _surely_not_mokata(start: str) -> bool:
+    """True only when `repo_identity.resolve_mokata_root(start).root` is PROVABLY None — answered on
+    `os.path` alone, with no mokata or `dataclasses` import (HOOK-BUDGET, 0.0.25 Lane HB).
+
+    It is the resolver's own walk for the ONLY case it can prove cheaply, and it says False
+    ("ask the real resolver") for everything else:
+      1. no ancestor of `start` holds `.mokata/manifest.json` — the resolver's first walk;
+      2. the nearest `.git` above `start` is absent or a real DIRECTORY (not a file, not a symlink),
+         so `canonical_repo_root` is that directory's realpath and the resolver's second walk, from
+         there, finds nothing either. A `.git` FILE (a linked worktree or a submodule, whose main
+         checkout the resolver consults) or a symlinked `.git` is never decided here.
+    False is always safe — it only means the hook takes its normal path.
+    `tests/test_hb_hook_budget.py` pins it to the resolver: True ⇒ the resolver says None, across
+    plain dirs, repos, worktrees (manifest committed or not), submodules and symlinked paths."""
+    try:
+        cur = os.path.abspath(start)
+        git_dir = None
+        while True:
+            if os.path.exists(os.path.join(cur, ".mokata", "manifest.json")):
+                return False
+            if git_dir is None:
+                gp = os.path.join(cur, ".git")
+                if os.path.lexists(gp):
+                    if os.path.islink(gp) or not os.path.isdir(gp):
+                        return False
+                    git_dir = gp
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+        if git_dir is None:
+            return True                  # no git: the resolver's canon is `start` itself
+        cur = os.path.dirname(os.path.realpath(git_dir))
+        while True:                       # the resolver's second walk, from canonical_repo_root
+            if os.path.exists(os.path.join(cur, ".mokata", "manifest.json")):
+                return False
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                return True
+            cur = parent
+    except (OSError, ValueError, TypeError):
+        return False
 
 
 # ======================================================================================
@@ -220,11 +338,12 @@ def secret_guard_main(argv: Optional[List[str]] = None) -> int:
 
     Input resolution (priority): ``--text`` (+ optional ``--path``); else stdin as a
     PreToolUse JSON envelope (scan only ``tool_input``); else stdin as raw text."""
-    parser = argparse.ArgumentParser(description="mokata secret guard (sync security hook)")
-    parser.add_argument("--text", default=None, help="content to scan")
-    parser.add_argument("--path", default=None, help="target path being written/sent")
-    parser.add_argument("--send", action="store_true", help="content is leaving the machine")
-    args = parser.parse_args(argv)
+    args = _parse_flags(argv, "mokata secret guard (sync security hook)", [
+        ("--text", dict(default=None, help="content to scan")),
+        ("--path", dict(default=None, help="target path being written/sent")),
+        ("--send", dict(action="store_true", help="content is leaving the machine")),
+    ], known=False)
+    from .degrade import FAILURE_ENGINE, note_degraded     # D5: at the top, never in the handler
 
     # Imported lazily so a half-installed environment degrades to a clean no-op (exit 0)
     # rather than crashing a hook — a missing engine must never block a session/tool call.
@@ -251,7 +370,8 @@ def secret_guard_main(argv: Optional[List[str]] = None) -> int:
     if args.text is not None:
         text, path = args.text, args.path
     else:
-        raw = sys.stdin.read()
+        io = _injected()
+        raw = io["stdin"] if io is not None else sys.stdin.read()
         envelope = _from_envelope(raw)
         if envelope is not None:
             text, path = envelope
@@ -263,11 +383,10 @@ def secret_guard_main(argv: Optional[List[str]] = None) -> int:
     # target path, then the envelope cwd, then this process's cwd: a hook is launched by the
     # harness, so its own cwd is the least reliable of the three. Every failure mode lands on
     # `store=None`, which suppresses NOTHING — fail-closed, exactly as before the feature existed.
-    from .gate_hook import find_mokata_root
     from .govern.secret_ignore import load_for_scan, render_block
     store = None
     ignore_notice = ""
-    root = find_mokata_root(os.path.dirname(os.path.abspath(path)) if path else os.getcwd())
+    root = _mokata_root(os.path.dirname(os.path.abspath(path)) if path else os.getcwd())
     if root is not None:
         store, ignore_notice = load_for_scan(root)
 
@@ -275,10 +394,10 @@ def secret_guard_main(argv: Optional[List[str]] = None) -> int:
     if ignore_notice:
         # A suppression list that cannot be trusted is not a quiet condition: the user believes
         # their recorded false positives are honoured, and they are not.
-        sys.stderr.write(ignore_notice + "\n")
+        _err(ignore_notice + "\n")
     if findings:
         # ONE shared builder for the wording (R3/R4) — the MCP WriteGate renders the SAME text.
-        sys.stderr.write(render_block(findings, path=path, root=root) + "\n")
+        _err(render_block(findings, path=path, root=root) + "\n")
         return BLOCK_EXIT
     return 0
 
@@ -313,12 +432,13 @@ def gate_guard_main(argv: Optional[List[str]] = None) -> int:
          `site-packages` edit was never examined: it is never inside a mokata repo, and never
          inside a run. Security class, never overridable.
       2. the SI.1 run-state gates — unchanged, in their existing order, on their existing signals."""
-    parser = argparse.ArgumentParser(description="mokata run-state gate (sync gate hook)")
-    parser.add_argument("--path", default=None, help="target path (bypasses stdin; for testing)")
-    parser.add_argument("--cwd", default=None, help="repo dir (bypasses stdin; for testing)")
-    parser.add_argument("--command", default=None,
-                        help="Bash command (bypasses stdin; for testing the self-protect lane)")
-    args, _unknown = parser.parse_known_args(argv)
+    args = _parse_flags(argv, "mokata run-state gate (sync gate hook)", [
+        ("--path", dict(default=None, help="target path (bypasses stdin; for testing)")),
+        ("--cwd", dict(default=None, help="repo dir (bypasses stdin; for testing)")),
+        ("--command", dict(default=None,
+                           help="Bash command (bypasses stdin; for testing the self-protect lane)")),
+    ])
+    from .degrade import FAILURE_ENGINE, note_degraded     # D5: at the top, never in the handler
 
     try:
         # Imported lazily (like secret-guard's engine import) so a half-installed environment
@@ -374,7 +494,7 @@ def gate_guard_main(argv: Optional[List[str]] = None) -> int:
             # envelope's), never to this hook process's own cwd — see `resolve_target`.
             verdict = check_target(target, workspace_root=protect_root, base_dir=cwd)
             if verdict.blocked:
-                sys.stderr.write(render_refusal(verdict) + "\n")
+                _err(render_refusal(verdict) + "\n")
                 return BLOCK_EXIT
 
         # ---- 1b · the SUBAGENT CONTRACT (HP.S3, 0.0.22 D4). Only a call made inside a subagent,
@@ -389,7 +509,7 @@ def gate_guard_main(argv: Optional[List[str]] = None) -> int:
                 list(bash.targets) if bash else [],
                 (bash.unreadable + bash.mutates) if bash else ())
             if refusal:
-                sys.stderr.write(refusal + "\n")
+                _err(refusal + "\n")
                 return BLOCK_EXIT
 
         # ---- 1b' · MOKATA'S OWN RUN RECORD (0.0.22 verification, D4-forge). The state directory
@@ -399,7 +519,7 @@ def gate_guard_main(argv: Optional[List[str]] = None) -> int:
         refusal = _own_record_refusal(cwd, ([path] if path else []) +
                                       (list(bash.targets) if bash else []), command or "", bash)
         if refusal:
-            sys.stderr.write(refusal + "\n")
+            _err(refusal + "\n")
             return BLOCK_EXIT
 
         # ---- 1c · the BASH WRITE SIDE DOOR (SP-BLIND + HP.S4's Bash half, 0.0.22 D5). Every write a
@@ -408,7 +528,7 @@ def gate_guard_main(argv: Optional[List[str]] = None) -> int:
         if bash is not None and (bash.targets or bash.unreadable):
             refusal = _bash_lane_refusal(cwd, session_id, bash)
             if refusal:
-                sys.stderr.write(refusal + "\n")
+                _err(refusal + "\n")
                 return BLOCK_EXIT
 
         if not path:
@@ -424,13 +544,13 @@ def gate_guard_main(argv: Optional[List[str]] = None) -> int:
         if outcome.notice:
             once = notice_once(root, session_id, outcome.notice)
             if once:
-                sys.stderr.write(once + "\n")
+                _err(once + "\n")
 
         if outcome.allowed:
             _snapshot_before(root, path, session_id, cwd)
             return 0
         _record_in_loop_catch(root, outcome, path, session_id)
-        sys.stderr.write(f"BLOCKED [{outcome.gate}] {outcome.reason}\n")
+        _err(f"BLOCKED [{outcome.gate}] {outcome.reason}\n")
         return BLOCK_EXIT
     except Exception as exc:
         # FAIL OPEN. A gate that breaks the harness is worse than a gate that misses one write:
@@ -548,7 +668,7 @@ def _bash_lane_refusal(cwd: str, session_id: str, bash: Any) -> str:
             if outcome.notice:
                 once = notice_once(root, session_id, outcome.notice)
                 if once:
-                    sys.stderr.write(once + "\n")
+                    _err(once + "\n")
             if not outcome.allowed:
                 _record_in_loop_catch(root, outcome, target, session_id)
                 return f"BLOCKED [{outcome.gate}] {outcome.reason}"
@@ -595,6 +715,45 @@ def _record_skill_intent(cwd: str, session_id: str, tool_input: Any) -> None:
 
 
 # ======================================================================================
+# the PreToolUse verdict as a function (U8 — the http gate's decision IS the command gates')
+# ======================================================================================
+
+def pretooluse_verdict(payload: dict) -> "tuple":
+    """`(exit code, message)` for ONE Claude Code PreToolUse payload — running `secret_guard_main`
+    and `gate_guard_main` exactly as the two command hooks would, in-process, each only when its
+    `mokata setup` matcher covers the tool (`harness_setup.HOOK_PRETOOL_MATCHER` /
+    `HOOK_GATE_MATCHER`). Both run when both match — Claude Code runs matching hooks in parallel
+    and either one's exit 2 blocks — so their side effects (notices, recorded intent, in-loop
+    catches) are the command route's too. 2 when either blocked (the message is what each blocking
+    hook wrote), else 0. Never touches the process's real stdin/stderr: the payload goes in and the
+    messages come out through `_HOOK_IO`, per call."""
+    global _HOOK_IO
+    import contextvars
+    import re
+    from .harness_setup import HOOK_GATE_MATCHER, HOOK_PRETOOL_MATCHER
+    if _HOOK_IO is None:
+        _HOOK_IO = contextvars.ContextVar("mokata_hook_io", default=None)
+    tool = payload.get("tool_name")
+    tool = tool if isinstance(tool, str) else ""
+    raw = json.dumps(payload)
+    code, blocks = 0, []
+    for matcher, run in ((HOOK_PRETOOL_MATCHER, secret_guard_main),
+                         (HOOK_GATE_MATCHER, gate_guard_main)):
+        if not re.fullmatch(matcher, tool):
+            continue
+        io = {"stdin": raw, "err": []}
+        token = _HOOK_IO.set(io)
+        try:
+            rc = run([])
+        finally:
+            _HOOK_IO.reset(token)
+        if rc == BLOCK_EXIT:
+            code = BLOCK_EXIT
+            blocks.append("".join(io["err"]).strip())
+    return code, "\n".join(b for b in blocks if b)
+
+
+# ======================================================================================
 # pre-compact (PreCompact — H-1b, 0.0.22 D1)
 # ======================================================================================
 
@@ -614,8 +773,7 @@ def pre_compact_main(argv: Optional[List[str]] = None) -> int:
         sid = payload.get("session_id")
         if not isinstance(sid, str) or not sid.strip():
             return 0
-        from .gate_hook import find_mokata_root
-        root = find_mokata_root(payload.get("cwd") or os.getcwd())
+        root = _mokata_root(payload.get("cwd") or os.getcwd())
         if root:
             from .reanchor import write_anchor
             write_anchor(root, sid.strip())
@@ -642,8 +800,7 @@ def _harvest_main(event: str) -> int:
             return 0
         if payload.get("stop_hook_active"):
             return 0                       # another Stop hook sent Claude back; not a real end
-        from .gate_hook import find_mokata_root
-        root = find_mokata_root(payload.get("cwd") or os.getcwd())
+        root = _mokata_root(payload.get("cwd") or os.getcwd())
         if root is None:
             return 0
         from .harvest import harvest
@@ -685,8 +842,7 @@ def subagent_start_main(argv: Optional[List[str]] = None) -> int:
         sid = payload.get("session_id")
         if not isinstance(sid, str) or not sid.strip():
             return 0
-        from .gate_hook import find_mokata_root
-        root = find_mokata_root(payload.get("cwd") or os.getcwd())
+        root = _mokata_root(payload.get("cwd") or os.getcwd())
         if root is None:
             return 0
         from .subagent_contract import contract_context, start_contract
@@ -707,8 +863,7 @@ def subagent_stop_main(argv: Optional[List[str]] = None) -> int:
     crash here must never hold a subagent open."""
     try:
         payload = _hook_payload()
-        from .gate_hook import find_mokata_root
-        root = find_mokata_root(payload.get("cwd") or os.getcwd())
+        root = _mokata_root(payload.get("cwd") or os.getcwd())
         if root is None:
             return 0
         from .subagent_contract import finish_contract
@@ -747,8 +902,7 @@ def run_bind_main(argv: Optional[List[str]] = None) -> int:
         rid = registered_run(payload.get("tool_name"), payload.get("tool_response"))
         if not rid:
             return 0
-        from .gate_hook import find_mokata_root
-        root = find_mokata_root(payload.get("cwd") or os.getcwd())
+        root = _mokata_root(payload.get("cwd") or os.getcwd())
         if root:
             bind_registered(root, sid.strip(), rid)
         return 0
@@ -774,8 +928,8 @@ def _calibrate_from_transcript(root: str, payload: dict, session_id: Optional[st
         transcript_path = payload.get("transcript_path")
         if not isinstance(transcript_path, str) or not transcript_path.strip():
             return
-        from .config import Surface
-        if not Surface.is_initialized(root):
+        from .repo_identity import is_initialized   # not `config`: HOOK-BUDGET
+        if not is_initialized(root):
             return
         from .govern.calibration import observe
         observe(root, transcript_path=transcript_path.strip(), session_id=session_id or "")
@@ -795,11 +949,11 @@ def dirty_track_main(argv: Optional[List[str]] = None) -> int:
     Input: the PostToolUse JSON envelope on stdin (`tool_input` + `cwd` + `session_id`), or the
     `--path`/`--cwd`/`--session-id` argv escape (for tests / manual wiring)."""
     try:
-        parser = argparse.ArgumentParser(description="mokata graph dirty-track (async observability hook)")
-        parser.add_argument("--path", default=None)
-        parser.add_argument("--cwd", default=None)
-        parser.add_argument("--session-id", default=None)
-        args, _unknown = parser.parse_known_args(argv)
+        args = _parse_flags(argv, "mokata graph dirty-track (async observability hook)", [
+            ("--path", dict(default=None)),
+            ("--cwd", dict(default=None)),
+            ("--session-id", dict(default=None)),
+        ])
 
         payload: dict = {}
         if args.path is None:
@@ -825,7 +979,7 @@ def dirty_track_main(argv: Optional[List[str]] = None) -> int:
             if p:
                 paths = [p]
 
-        from .config import find_project_root
+        from .repo_identity import find_project_root   # not `config`: HOOK-BUDGET
         root = find_project_root(cwd)
 
         # H-2 — close R11's calibration loop while we are already in this envelope. EVERY hook
@@ -1024,12 +1178,25 @@ def _mcp_reachability_warning(root: str) -> Optional[str]:
     can't be resolved. Fast local lookup (no subprocess); None (silent) on reachable/absent
     or any error — never blocks or breaks the session."""
     try:
+        from .mcp_admin import unreachable_registration
         reg = unreachable_registration(root=root)
         if reg is None:
             return None
         return (f"⚠ mokata-mcp: registered but its command isn't reachable ({reg.command}) — "
                 "run `mokata mcp install` to repair, then restart Claude Code.")
     except Exception:
+        return None
+
+
+def _mode_dependencies_missing(root: str, via_plugin: bool = False) -> Optional[str]:
+    """0.0.25 I-04 — check on miss. Claude Code has no plugin install hook, so the plugin route
+    reaches the CLI route's end state by being TOLD, once per session, the one command that gets
+    there. Policy lives in `adoption_modes.first_session_check`; this only renders it. Never
+    installs (P2 / DB.S4), never raises: a check that cannot run says nothing."""
+    try:
+        from .adoption_modes import first_session_check
+        return first_session_check(root, via_plugin=via_plugin).line
+    except (ImportError, OSError, ValueError, KeyError):
         return None
 
 
@@ -1044,10 +1211,13 @@ def session_start_main(argv: Optional[List[str]] = None) -> int:
     """Inject mokata's sub-2k-token bootstrap (A4). Async/observability hook: only adds
     context and ALWAYS exits 0 — a broken config degrades to a one-line note, never blocks
     the session."""
-    parser = argparse.ArgumentParser(description="mokata SessionStart briefing hook")
-    parser.add_argument("--plugin-root", default=None,
-                        help="the plugin/clone root holding the bundled engine")
-    args, _unknown = parser.parse_known_args(argv)
+    args = _parse_flags(argv, "mokata SessionStart briefing hook", [
+        ("--plugin-root", dict(default=None,
+                               help="the plugin/clone root holding the bundled engine")),
+        (VIA_PLUGIN_FLAG, dict(dest="via_plugin", action="store_true",
+                               help="served by the plugin's hooks.json (I-04: the route decides "
+                                    "the check-on-miss wording)")),
+    ])
 
     # B-BADGE — one stdin read yields cwd AND the session identity (`session_id` + `source`) the
     # badge binding needs; stdin can only be consumed once.
@@ -1114,8 +1284,9 @@ def session_start_main(argv: Optional[List[str]] = None) -> int:
         reanchor = build_reanchor(root, session_id, source)
     except Exception:  # noqa: BLE001 — the briefing must start even if the re-anchor cannot
         reanchor = None
-    footer = [f for f in (_mcp_reachability_warning(root), _harvest_waiting(root),
-                          _intentions_due(surface), _new_worktree_notice(surface)) if f]
+    footer = [f for f in (_mcp_reachability_warning(root), _mode_dependencies_missing(root, args.via_plugin),
+                          _harvest_waiting(root), _intentions_due(surface),
+                          _new_worktree_notice(surface)) if f]
     briefing = build_bootstrap(surface, reanchor=reanchor,
                                footer="\n".join(footer) if footer else None)
     context = briefing.text
@@ -1213,11 +1384,11 @@ def user_prompt_submit_main(argv: Optional[List[str]] = None) -> int:
     NOTHING is the normal quiet outcome: an empty prompt, a repo mokata isn't set up in, or a
     turn with no relevant memory all emit NO `hookSpecificOutput` at all — not an empty
     `additionalContext`, which is still a channel and still says "mokata spoke and had nothing"."""
-    parser = argparse.ArgumentParser(description="mokata per-turn recall injection hook")
-    parser.add_argument("--prompt", default=None,
-                        help="the submitted prompt (bypasses stdin; for testing)")
-    parser.add_argument("--cwd", default=None, help="repo dir (bypasses stdin; for testing)")
-    args, _unknown = parser.parse_known_args(argv)
+    args = _parse_flags(argv, "mokata per-turn recall injection hook", [
+        ("--prompt", dict(default=None,
+                          help="the submitted prompt (bypasses stdin; for testing)")),
+        ("--cwd", dict(default=None, help="repo dir (bypasses stdin; for testing)")),
+    ])
 
     try:
         prompt, cwd, session_id = _prompt_envelope(args)
@@ -1265,17 +1436,24 @@ def user_prompt_submit_main(argv: Optional[List[str]] = None) -> int:
         # saw (see `record_injected` below — the S4 ledger suppresses an item for the rest of the
         # session, so recording a dropped pack loses that memory in the name of not repeating it).
         from .injection_ledger import record_injected
-        budget = _turn_budget_after(surface, notice)
+        # ID.S3 (doc 109 §4.2 item 1) — context the HUMAN sent from the IDE rides THIS channel and
+        # THIS budget (doc 85 §6: no second injection channel). It is costed first, after the
+        # notice: the human's explicit action outranks recall. Drained only after the emit.
+        ide_block, ide_ids = _ide_context_for(surface, root, session_id, notice)
+        head = "\n".join(x for x in (notice, ide_block) if x)
+        budget = _turn_budget_after(surface, head)
         pack = _bounded(lambda: _build_injection_for(surface, prompt, root, session_id, budget),
                         _HOOK_WORK_BUDGET_SECS)
         if pack is None or not pack.text:
             # over budget / unreadable / nothing relevant — emit NO channel at all, unless the
-            # prefix moved, which is said on its own.
-            if notice:
-                _emit(notice, event=USER_PROMPT_SUBMIT_EVENT)
+            # prefix moved or the human sent IDE context, which are said on their own.
+            if head:
+                _emit(head, event=USER_PROMPT_SUBMIT_EVENT)
+                _ide_context_delivered(root, ide_ids)
             return 0
-        _emit((notice + "\n" + pack.text) if notice else pack.text,
+        _emit((head + "\n" + pack.text) if head else pack.text,
               event=USER_PROMPT_SUBMIT_EVENT)
+        _ide_context_delivered(root, ide_ids)
         # AFTER the emit, and only the ids that actually SURVIVED the budget (`pack.item_ids` is
         # what was rendered, not what was retrieved). Recording a dropped item would suppress it
         # for the rest of the session without the model ever having seen it — losing memory in
@@ -1301,6 +1479,29 @@ def _prefix_notice(surface, root: str, session_id: Optional[str]) -> str:
         return obs.notice() if obs is not None else ""
     except Exception:  # noqa: BLE001 — the async lane never fails a turn over a notice
         return ""
+
+
+def _ide_context_for(surface, root: str, session_id: Optional[str], notice: str):
+    """ID.S3 — the bounded IDE-context block for this session's turn and the ids it carries, or
+    ("", []). Its budget is the SAME per-turn ceiling as the recall pack, less the notice."""
+    try:
+        from .bootstrap import estimate_tokens
+        from .context_budget import context_budget
+        from .ide.context import pending_block
+        turn = context_budget(getattr(surface, "manifest", None)).turn_tokens
+        return pending_block(root, session_id, max(turn - estimate_tokens(notice), 0))
+    except (ImportError, OSError, ValueError):
+        return "", []                       # never fail a turn over IDE context; it stays queued
+
+
+def _ide_context_delivered(root: str, ids) -> None:
+    if not ids:
+        return
+    try:
+        from .ide.context import delivered
+        delivered(root, ids)
+    except (ImportError, OSError, ValueError):
+        pass                                # undrained: re-sent next turn rather than lost
 
 
 def _turn_budget_after(surface, notice: str) -> Optional[int]:
@@ -1355,15 +1556,19 @@ def _develop_evidence(surface, root: str, session_id: str) -> List[str]:
         claim, rid = session_claim(root, session_id)
         if claim != CLAIM_BOUND or not rid:
             return []
+        from .domains import domain_turn_lines
         from .engine.live_evidence import develop_turn_lines
         from .engine.spec_anchor import develop_anchor_lines
         from .knowledge import KnowledgeLayer
+        # 0.0.25 Lane D — the domain skills the approved spec routes, LOADED in develop AND review
+        # (not left to description matching). They lead: a routing instruction the model needs
+        # before it reads anything else, and they cost one line per engaged skill.
+        routed = domain_turn_lines(root, rid)
         # D4 (SPEC-ANCHOR S2) — the per-AC placement lines and the stale-anchor findings ride the
         # SAME lines, through the `extra` hook: one channel, one budget.
-        return develop_turn_lines(root, rid,
-                                  layer_factory=lambda: KnowledgeLayer.from_surface(surface),
-                                  extra=lambda h, s, lay: develop_anchor_lines(h, s, lay,
-                                                                               root=root))
+        return routed + develop_turn_lines(
+            root, rid, layer_factory=lambda: KnowledgeLayer.from_surface(surface),
+            extra=lambda h, s, lay: develop_anchor_lines(h, s, lay, root=root))
     except Exception:  # noqa: BLE001
         return []
 
@@ -1471,14 +1676,17 @@ def _mokata_segment(cwd: str, session_name: Optional[str],
     """mokata's badge for `cwd` — "" when mokata isn't initialized here, the badge is
     disabled, or the engine is unavailable. Never raises."""
     try:
-        from .config import Surface, find_project_root
+        # the cheap question first, on the leaf module: a repo mokata is not set up in renders
+        # nothing, and must not pay for `config` + `progress` to learn that (HOOK-BUDGET)
+        from .repo_identity import find_project_root, is_initialized
+        root = find_project_root(cwd)
+        if not is_initialized(root):
+            return ""
+        from .config import Surface
         from .progress import statusline_badge, statusline_enabled
     except Exception:
         return ""
     try:
-        root = find_project_root(cwd)
-        if not Surface.is_initialized(root):
-            return ""
         surface = Surface.load(root)
         if not statusline_enabled(surface):
             return ""
@@ -1546,10 +1754,10 @@ def statusline_main(argv: Optional[List[str]] = None) -> int:
     it first runs the user's pre-existing statusLine command and prepends its output
     (compose, don't clobber). ALWAYS exits 0 and prints at most ONE line; prints nothing
     when there's nothing to show."""
-    parser = argparse.ArgumentParser(description="mokata statusLine badge")
-    parser.add_argument("--wrap", default=None,
-                        help="a pre-existing statusLine command to run + compose with")
-    args, _unknown = parser.parse_known_args(argv)
+    args = _parse_flags(argv, "mokata statusLine badge", [
+        ("--wrap", dict(default=None,
+                        help="a pre-existing statusLine command to run + compose with")),
+    ])
 
     raw = _read_statusline_stdin()
     cwd, session_name, session_id = _cwd_and_session_name(raw)
@@ -1588,9 +1796,22 @@ _SUBCOMMANDS = {
 _SUBCOMMAND_LIST = " | ".join(_SUBCOMMANDS)
 
 
+#: The observability hooks that do NOTHING outside a mokata repo — each returns 0, silently, with no
+#: side effect, once its root resolves to None (and the plugin route's stand-down is the same exit 0).
+#: On the PLUGIN route (the one installed globally — `mokata setup` wires the settings route per
+#: project), `main` answers them from `_surely_not_mokata` before importing anything, so a user pays a
+#: bare interpreter for them in every non-mokata repo (HOOK-BUDGET). The settings route always reaches
+#: its handler (test_b3: it never stands down). NOT here:
+#: `dirty-track` (it records in any repo), the gate hooks (self-protect and the secret scan run
+#: everywhere), and the context hooks (session-start records the plugin root; the others may speak).
+QUIET_OUTSIDE_MOKATA = ("stop", "session-end", "pre-compact", "subagent-start", "subagent-stop",
+                        "run-bind")
+
+
 #: Appended by the PLUGIN's `hooks.json` to every command (0.0.23 B3,
-#: `HOOKS-FIRE-TWICE-WITH-PLUGIN-AND-PROJECT-WIRING`). Stripped before dispatch — no subcommand
-#: ever sees it.
+#: `HOOKS-FIRE-TWICE-WITH-PLUGIN-AND-PROJECT-WIRING`). Stripped before dispatch — except that
+#: `session-start` is handed it back (0.0.25 I-04: the check-on-miss line names the route switch
+#: only on the plugin route).
 VIA_PLUGIN_FLAG = "--via-plugin"
 
 
@@ -1669,6 +1890,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         sys.stderr.write(
             f"mokata-hook: unknown subcommand {sub!r} (expected {_SUBCOMMAND_LIST})\n")
         return 1  # misconfiguration → visible exit 1 (NOT 0=silent, NOT 2=security-block)
+    if via_plugin and sub in QUIET_OUTSIDE_MOKATA and not rest:
+        _STDIN_MEMO[:] = [_read_stdin_bounded(_STDIN_READ_TIMEOUT_SECS)]
+        try:
+            try:
+                loaded = json.loads(_STDIN_MEMO[0] or "")
+            except (ValueError, TypeError):
+                loaded = {}
+            cwd = (loaded.get("cwd") if isinstance(loaded, dict) else None) or os.getcwd()
+            if isinstance(cwd, str) and _surely_not_mokata(cwd):
+                return 0
+            return _dispatch(sub, handler, rest, via_plugin)
+        finally:
+            _STDIN_MEMO.clear()
+    return _dispatch(sub, handler, rest, via_plugin)
+
+
+def _dispatch(sub: str, handler: "Callable[[List[str]], int]", rest: List[str],
+              via_plugin: bool) -> int:
     if via_plugin and _settings_route_owns(sub):
         if sub == "session-start":
             # the plugin root is still recorded — `/mokata:init` finds the bundled engine by it
@@ -1678,6 +1917,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 root = rest[i + 1] if i + 1 < len(rest) else None
             _record_plugin_root(root)
         return 0
+    if via_plugin and sub == "session-start":
+        rest = rest + [VIA_PLUGIN_FLAG]
     return handler(rest)
 
 

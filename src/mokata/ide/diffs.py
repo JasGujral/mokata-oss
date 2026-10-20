@@ -24,6 +24,7 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..quiet_spawn import hidden
 from . import snapshots as S
 from ..repo_walk import under_python_env
 
@@ -89,7 +90,7 @@ def _git(root: str, *args: str, timeout: float = GIT_TIMEOUT) -> Tuple[int, str]
     try:
         p = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=timeout,
-                           stdin=subprocess.DEVNULL)
+                           stdin=subprocess.DEVNULL, **hidden())
     except FileNotFoundError:
         return 127, "git is not installed"
     except (OSError, subprocess.SubprocessError) as exc:

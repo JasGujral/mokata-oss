@@ -287,8 +287,16 @@ class TestEveryNavIntentHasAnOp(unittest.TestCase):
         wearing a structural label."""
         c = crg_client.CodeReviewGraphClient(call_tool=lambda _t, _p: {})
         self.assertFalse(c.supports_kind("defs"))
-        for kind in ("callers", "callees", "imports", "implementers", "refs", "blast_radius"):
+        for kind in ("callers", "callees", "imports", "implementers", "refs"):
             self.assertTrue(c.supports_kind(kind), kind)
+
+    def test_crg_declares_it_cannot_back_blast_radius_yet(self):
+        """0.0.25 — `traverse_graph_tool` answered every blast radius EMPTY (rows under a key the
+        parser does not read) and walks edges both ways. An empty impact reads as "nothing is
+        affected", so the kind is declared unmapped and the AST floor answers it."""
+        c = crg_client.CodeReviewGraphClient(
+            call_tool=lambda _t, _p: (_ for _ in ()).throw(AssertionError("asked CRG")))
+        self.assertFalse(c.supports_kind("blast_radius"))
 
 
 # ======================================================================================

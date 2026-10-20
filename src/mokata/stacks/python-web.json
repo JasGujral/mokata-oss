@@ -103,7 +103,10 @@
         "fastapi",
         "django",
         "flask"
-      ]
+      ],
+      "kind": "backend",
+      "domains": [],
+      "toolchain": {}
     }
   }
 }

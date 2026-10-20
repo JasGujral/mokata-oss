@@ -11,6 +11,9 @@ actually CALLED at runtime (the "dark code" gap 0.1.0 closes):
 Both degrade clean (no toggle / nothing to compress / no constitution -> pass-through).
 """
 
+import os
+import shutil
+import tempfile
 import unittest
 
 from _support import sample_manifest_data, sqlite_disk_ok
@@ -91,16 +94,43 @@ class TestPlaybookDenseSurface(unittest.TestCase):
     # the precise guard — never an always-skip, and it stays green on every real filesystem.
     _SANDBOX_SKIP = "sandbox broken-disk (SQLite disk I/O) — runs on native fs (CI/dev)"
 
+    def _scratch_cwd(self):
+        """0.0.25 — run the playbook in a throwaway directory, never the developer's checkout.
+        `make_surface()` roots at "." and the playbook PERSISTS a whole run there (an approved
+        "add a slugify helper" approach, its plan file, memory, ledger): every suite run left one
+        more run in the real repo's `.mokata/temp_local/` — 2,375 of them on the maintainer's
+        machine, burying real runs in `mokata ide`'s Plan view. Same filesystem as the cwd (a
+        sub-directory of it), so the sandbox SQLite guard above still describes this disk."""
+        d = tempfile.mkdtemp(prefix=".mk-playbook-", dir=os.getcwd())
+        old = os.getcwd()
+        os.chdir(d)
+        self.addCleanup(shutil.rmtree, d, True)
+        self.addCleanup(os.chdir, old)
+
     @unittest.skipUnless(sqlite_disk_ok(), _SANDBOX_SKIP)
     def test_dense_flag_runs_clean(self):
         # The --dense surface threads through and degrades clean (no harness -> sequential).
+        self._scratch_cwd()
         res = run_playbook(make_surface(), dense=True)
         self.assertTrue(res.ok)
 
     @unittest.skipUnless(sqlite_disk_ok(), _SANDBOX_SKIP)
     def test_default_runs_clean(self):
+        self._scratch_cwd()
         res = run_playbook(make_surface())
         self.assertTrue(res.ok)
+
+    @unittest.skipUnless(sqlite_disk_ok(), _SANDBOX_SKIP)
+    def test_the_playbook_tests_leave_the_checkout_untouched(self):
+        # CORPUS: THE WORKING TREE — the run-state dir of the checkout the suite runs from.
+        here = os.path.join(os.getcwd(), ".mokata")
+        before = sorted(os.listdir(os.path.join(here, "temp_local", "state"))) \
+            if os.path.isdir(os.path.join(here, "temp_local", "state")) else []
+        self._scratch_cwd()
+        run_playbook(make_surface())
+        after = sorted(os.listdir(os.path.join(here, "temp_local", "state"))) \
+            if os.path.isdir(os.path.join(here, "temp_local", "state")) else []
+        self.assertEqual(before, after, "the playbook wrote run state into the checkout")
 
 
 # --- F6: stable cache prefix is WIRED into the briefing ahead of variable -------

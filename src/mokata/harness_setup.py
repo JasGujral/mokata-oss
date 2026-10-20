@@ -25,6 +25,7 @@ import os
 import shlex
 import shutil
 import sys
+import sysconfig
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -159,6 +160,208 @@ _EXPECTED_HOOK_WIRING: Dict[str, List[Dict[str, Optional[str]]]] = {
 }
 
 
+# ID.S3 (0.0.25, ruling U7) — the OBSERVE-ONLY Claude Code `type: "http"` hooks that post straight to
+# the running IDE's event bus (no process spawn). Opt-in: `mokata setup claude --ide-bridge`.
+#   * Written to `.claude/settings.local.json` — the URL carries this machine's per-repo port and the
+#     header a per-repo hook token, so the entry is machine-local and must never be committed.
+#   * Observe-only: the IDE answers 2xx with an EMPTY body ("success, no decision"); a refused or
+#     absent server is a NON-BLOCKING error per the hooks reference, so a closed IDE never slows or
+#     blocks a session beyond the `timeout`. No `onFailure` (default "continue").
+#   * SessionStart is NOT here: the hooks reference says only `command` and `mcp_tool` hooks run on
+#     it. The bus learns the session from its first event instead.
+#   * No `if` filter: `if` takes exactly ONE positive permission rule and follow mode wants every
+#     in-repo edit, which the `matcher` already selects; out-of-repo paths are dropped by the server.
+#   * Gate hooks are NOT moved (ruling U8): they stay `mokata-hook` command hooks.
+IDE_BRIDGE_EVENTS: Dict[str, Optional[str]] = {
+    "PostToolUse": HOOK_DIRTY_MATCHER,
+    "Stop": None,
+    "SessionEnd": None,
+}
+IDE_BRIDGE_TIMEOUT_SECS = 1
+IDE_BRIDGE_HEADER = "X-Mokata-Hook"
+LOCAL_SETTINGS = "settings.local.json"
+
+
+# U8 (0.0.25 Lane HB, ruling U8) — OPT-IN http GATE hooks: `mokata setup claude --http-gates`. OFF by
+# default; the `mokata-hook` command gates stay wired either way and stay the default.
+#   * ONE PreToolUse matcher group posting to the IDE's `/api/gate`, whose verdict is
+#     `hook_cli.pretooluse_verdict` — the SAME secret-guard + gate-guard code, under the same matchers
+#     (the group's matcher is their union; the verdict applies each hook's own).
+#   * `onFailure: "block"` (Claude Code ≥ 2.1.295, verified against code.claude.com/docs/en/hooks
+#     2026-10-19): a refused connection, a non-2xx or a timeout BLOCKS the tool call. So the flag
+#     REQUIRES a running `mokata ide` (`mokata ide --foreground` never idles out): with no server,
+#     every gated tool call is refused. Fail-closed is the point of the flag, and the reason it is off.
+#   * machine-local like the bridge (port + hook token): `.claude/settings.local.json`. A setup run
+#     WITHOUT the flag removes it — a fail-closed lane never outlives the run that did not ask for it.
+HTTP_GATES_TIMEOUT_SECS = 10
+HTTP_GATES_MIN_CLAUDE_CODE = (2, 1, 295)
+HTTP_GATES_PATH = "/api/gate"
+
+
+def http_gate_url(port: int) -> str:
+    return f"http://127.0.0.1:{port}{HTTP_GATES_PATH}"
+
+
+def http_gate_matcher() -> str:
+    """The union of the two command gates' matchers, in their order, each tool once."""
+    seen: List[str] = []
+    for tool in (HOOK_PRETOOL_MATCHER + "|" + HOOK_GATE_MATCHER).split("|"):
+        if tool not in seen:
+            seen.append(tool)
+    return "|".join(seen)
+
+
+def http_gate_hooks(url: str, token: str) -> Dict[str, List[Dict[str, Any]]]:
+    """`{"PreToolUse": [group]}` for the fail-closed http gate — read by the writer and the tests."""
+    return {"PreToolUse": [{"matcher": http_gate_matcher(),
+                            "hooks": [{"type": "http", "url": url,
+                                       "timeout": HTTP_GATES_TIMEOUT_SECS,
+                                       "headers": {IDE_BRIDGE_HEADER: token},
+                                       "onFailure": "block"}]}]}
+
+
+def _is_mokata_gate_hook(entry: Dict) -> bool:
+    """True for the matcher group `--http-gates` wired (loopback `/api/gate` + mokata's header)."""
+    for h in entry.get("hooks", []):
+        if not isinstance(h, dict) or h.get("type") != "http":
+            continue
+        url = str(h.get("url", ""))
+        headers = h.get("headers")
+        if (url.startswith("http://127.0.0.1:") and url.endswith(HTTP_GATES_PATH)
+                and isinstance(headers, dict) and IDE_BRIDGE_HEADER in headers):
+            return True
+    return False
+
+
+def http_gates_wired(path: Path) -> bool:
+    """Does this settings file carry mokata's http gate group? (doctor + the plan read this)"""
+    if not path.exists():
+        return False
+    hooks = _load_json(path).get("hooks")
+    return isinstance(hooks, dict) and any(
+        isinstance(e, dict) and _is_mokata_gate_hook(e)
+        for entries in hooks.values() if isinstance(entries, list) for e in entries)
+
+
+def _set_http_gates(path: Path, wiring: Optional[Dict[str, List[Dict[str, Any]]]]) -> bool:
+    """Replace mokata's http gate group in `path` with `wiring` (None removes it). Merge-safe: the
+    user's own entries and the ID.S3 bridge groups are untouched; a file left empty is deleted
+    (unless it holds anything else). Returns True when the file changed."""
+    if wiring is None and not http_gates_wired(path):
+        return False
+    data = _load_json(path) if path.exists() else {}
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        hooks = {}
+    for event in list(hooks):
+        entries = hooks.get(event)
+        if isinstance(entries, list):
+            hooks[event] = [e for e in entries
+                            if not (isinstance(e, dict) and _is_mokata_gate_hook(e))]
+    for event, groups in (wiring or {}).items():
+        entries = hooks.get(event)
+        hooks[event] = (entries if isinstance(entries, list) else []) + groups
+    hooks = {k: v for k, v in hooks.items() if v}
+    if hooks:
+        data["hooks"] = hooks
+    else:
+        data.pop("hooks", None)
+    _write_or_remove_json(path, data)
+    return True
+
+
+def ide_bridge_hooks(url: str, token: str) -> Dict[str, List[Dict[str, Any]]]:
+    """`{event: [matcher-group]}` for the observe-only http hooks — one declaration, read by the
+    writer and by the tests."""
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for event, matcher in IDE_BRIDGE_EVENTS.items():
+        group: Dict[str, Any] = {"hooks": [{"type": "http", "url": url,
+                                            "timeout": IDE_BRIDGE_TIMEOUT_SECS,
+                                            "headers": {IDE_BRIDGE_HEADER: token}}]}
+        if matcher:
+            group["matcher"] = matcher
+        out[event] = [group]
+    return out
+
+
+def _is_mokata_http_hook(entry: Dict) -> bool:
+    """True for a matcher group mokata's `--ide-bridge` wired (loopback URL to `/api/bus` with
+    mokata's hook header) — so re-setup refreshes it and unsetup removes it, never a user's own."""
+    for h in entry.get("hooks", []):
+        if not isinstance(h, dict) or h.get("type") != "http":
+            continue
+        url = str(h.get("url", ""))
+        headers = h.get("headers")
+        if (url.startswith("http://127.0.0.1:") and url.endswith("/api/bus")
+                and isinstance(headers, dict) and IDE_BRIDGE_HEADER in headers):
+            return True
+    return False
+
+
+def _merge_ide_bridge(path: Path, wiring: Dict[str, List[Dict[str, Any]]]) -> None:
+    """Merge-safe and idempotent, exactly like `_merge_hooks`: drop mokata's prior http groups on
+    every event, then add the current ones; the user's own entries are untouched."""
+    data = _load_json(path)
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        hooks = {}
+    for event in list(hooks):
+        entries = hooks.get(event)
+        if isinstance(entries, list):
+            hooks[event] = [e for e in entries
+                            if not (isinstance(e, dict) and _is_mokata_http_hook(e))]
+    for event, groups in wiring.items():
+        entries = hooks.get(event)
+        hooks[event] = (entries if isinstance(entries, list) else []) + groups
+    data["hooks"] = {k: v for k, v in hooks.items() if v}
+    _write_json(path, data)
+
+
+def _strip_ide_bridge(path: Path) -> bool:
+    """Remove mokata's http hook groups from `path`; delete the file if nothing else is left."""
+    if not path.exists():
+        return False
+    data = _load_json(path)
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return False
+    changed = False
+    for event in list(hooks):
+        entries = hooks.get(event)
+        if not isinstance(entries, list):
+            continue
+        kept = [e for e in entries if not (isinstance(e, dict) and _is_mokata_http_hook(e))]
+        if len(kept) != len(entries):
+            changed = True
+            if kept:
+                hooks[event] = kept
+            else:
+                del hooks[event]
+    if changed:
+        if hooks:
+            data["hooks"] = hooks
+        else:
+            data.pop("hooks", None)
+        _write_or_remove_json(path, data)
+    return changed
+
+
+def local_settings_ignored(root: str) -> Optional[bool]:
+    """Is `.claude/settings.local.json` git-ignored in `root`? None when git cannot say (no git,
+    not a repo). Claude Code only ignores that file when IT creates it; mokata writing it first
+    must not leave a hook token one `git add .` away from a commit."""
+    import subprocess
+    from .quiet_spawn import hidden
+    try:
+        r = subprocess.run(["git", "-C", str(root), "check-ignore", "-q",
+                            ".claude/" + LOCAL_SETTINGS], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
+                           **hidden())
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return {0: True, 1: False}.get(r.returncode)
+
+
 def expected_hook_wiring() -> Dict[str, List[Dict[str, Optional[str]]]]:
     """`{event: [{"subcommand", "matcher"}]}` — what a CURRENT `mokata setup claude` wires.
 
@@ -278,6 +481,14 @@ class SetupPlan:
     # run through a shell (F10) — a preview that resolved a different file than the apply is
     # exactly the drift the disclosure exists to prevent.
     home: Optional[str] = None
+    # ID.S3 — wire the observe-only http hooks to the IDE bus (`--ide-bridge`); and why not, when
+    # asked for and not possible here (user scope, no hooks, not claude).
+    ide_bridge: bool = False
+    ide_bridge_note: str = ""
+    # U8 — the opt-in fail-closed http gate hooks (`--http-gates`); and why not, when asked for and
+    # not possible here.
+    http_gates: bool = False
+    http_gates_note: str = ""
 
 
 # The hook scripts (kept as standalone shims) map to `mokata-hook` subcommands.
@@ -527,6 +738,8 @@ def plan_setup(
     with_hooks: bool = True,
     home: Optional[str] = None,
     grant: bool = True,
+    ide_bridge: bool = False,
+    http_gates: bool = False,
 ) -> SetupPlan:
     if harness not in HARNESSES:
         raise ValueError(f"unknown harness '{harness}'; choose one of {HARNESSES}")
@@ -609,7 +822,22 @@ def plan_setup(
     skill_orphans = [p.parent.name for p in
                      find_orphan_skills(targets.skills_dir, keep_names)]
 
+    bridge_note = ""
+    if ide_bridge and not (harness == "claude" and scope == "project" and with_hooks):
+        bridge_note = ("--ide-bridge is Claude Code, project scope, with hooks only: its URL and "
+                       "token are per repo and per machine")
+        ide_bridge = False
+    gates_note = ""
+    if http_gates and not (harness == "claude" and scope == "project" and with_hooks):
+        gates_note = ("--http-gates is Claude Code, project scope, with hooks only: its URL and "
+                      "token are per repo and per machine")
+        http_gates = False
+
     return SetupPlan(
+        ide_bridge=ide_bridge,
+        ide_bridge_note=bridge_note,
+        http_gates=http_gates,
+        http_gates_note=gates_note,
         harness=harness,
         scope=scope,
         profile=profile,
@@ -627,6 +855,36 @@ def plan_setup(
         skill_orphans=skill_orphans,
         home=home,
     )
+
+
+def _render_http_gates(plan: SetupPlan) -> List[str]:
+    """U8 — the plan's disclosure for the fail-closed http gates: what is written, and what it costs
+    when the IDE is not running. Said BEFORE the human says yes (P2)."""
+    t = plan.targets
+    if plan.http_gates_note:
+        return ["", f"NOTE — http gates not wired: {plan.http_gates_note}."]
+    if t.settings_path is None or not (plan.with_hooks and plan.harness == "claude"
+                                       and plan.scope == "project"):
+        return []
+    local = t.settings_path.parent / LOCAL_SETTINGS
+    if not plan.http_gates:
+        if http_gates_wired(local):
+            return ["", f"Will REMOVE the fail-closed http gate hooks from {local} "
+                        "(this setup did not ask for `--http-gates`)."]
+        return []
+    need = ".".join(str(x) for x in HTTP_GATES_MIN_CLAUDE_CODE)
+    lines = ["", "Will wire FAIL-CLOSED http gate hooks (PreToolUse, `onFailure: \"block\"`) posting "
+                 "to the local `mokata ide` in:",
+             f"  {local}  (machine-local: carries this repo's IDE port + hook token)",
+             "  !! While the mokata IDE server is NOT running, Claude Code BLOCKS every "
+             f"{http_gate_matcher().replace('|', '/')} call. Keep it running with "
+             "`mokata ide --foreground` (the background one exits after 30 idle minutes).",
+             f"  (needs Claude Code >= {need}; the `mokata-hook` command gates stay wired; the "
+             "verdict is the same gate code)"]
+    if local_settings_ignored(plan.root) is False:
+        lines.append(f"  !! {local} is NOT git-ignored here — add `.claude/{LOCAL_SETTINGS}` "
+                     "to .gitignore so the hook token is never committed.")
+    return lines
 
 
 def render_setup_plan(plan: SetupPlan) -> str:
@@ -697,6 +955,21 @@ def render_setup_plan(plan: SetupPlan) -> str:
         # sees the exact command before they say yes, not after.
         lines.extend(render_wrap_disclosure(statusline_wrap_disclosure(
             plan.harness, plan.root, plan.scope, plan.home, plan.with_hooks)))
+    if plan.ide_bridge and t.settings_path is not None:
+        local = t.settings_path.parent / LOCAL_SETTINGS
+        lines.append("")
+        lines.append("Will wire the IDE live bridge — observe-only Claude Code http hooks "
+                     "(PostToolUse edits, Stop, SessionEnd) posting to the local `mokata ide` in:")
+        lines.append(f"  {local}  (machine-local: carries this repo's IDE port + hook token)")
+        lines.append("  (never blocks: with the IDE closed each post fails fast and non-blocking; "
+                     "gate hooks stay command hooks)")
+        if local_settings_ignored(plan.root) is False:
+            lines.append(f"  !! {local} is NOT git-ignored here — add `.claude/{LOCAL_SETTINGS}` "
+                         "to .gitignore so the hook token is never committed.")
+    elif plan.ide_bridge_note:
+        lines.append("")
+        lines.append(f"NOTE — IDE live bridge not wired: {plan.ide_bridge_note}.")
+    lines.extend(_render_http_gates(plan))
     if plan.unsupported:
         # Degrade CLEARLY — never pretend a capability exists or silently skip it.
         lines.append("")
@@ -810,7 +1083,17 @@ def _write_or_remove_json(path: Path, data: Dict) -> None:
         path.unlink(missing_ok=True)
 
 
-def resolved_console_script(name: str) -> str:
+#: Windows script shims — what pyenv-win (and npm-style installers) put on PATH. A `.bat`/`.cmd`
+#: always runs through `cmd.exe`, so wiring one into settings.json makes EVERY statusLine refresh,
+#: hook and MCP start open a visible cmd window (0.0.25 `WIN-SHIM-WIRED`, reported 2026-10-19).
+_WINDOWS_SHIM_EXTS = (".bat", ".cmd")
+
+
+def is_windows_shim(path: str) -> bool:
+    return str(path).lower().endswith(_WINDOWS_SHIM_EXTS)
+
+
+def resolved_console_script(name: str, *, windows: Optional[bool] = None) -> str:
     """Resolve a mokata console entry point (`mokata-mcp`, `mokata-hook`) to an ABSOLUTE path
     so it survives the GUI-launched minimal PATH — the classic silent killer: a GUI-launched
     macOS app inherits a PATH WITHOUT the console-script dir, so a bare name never resolves and
@@ -818,19 +1101,30 @@ def resolved_console_script(name: str) -> str:
     not found`). Resolution order, SHARED so `mokata-mcp` and `mokata-hook` resolve identically:
     (1) `shutil.which` on the current PATH; (2) a console-script sibling of the running
     interpreter (`<sys.executable dir>/<name>[.exe]`) — this covers a venv/install whose bin
-    dir isn't on PATH, which is precisely the silent-killer case `which` can't see; (3) the bare
-    name as a last resort (e.g. `-e` source runs). The PLUGIN route can't call this at all (its
-    manifests are static), so it runs the SAME ladder at hook time via
-    `hooks/mokata-hook-launch`, and `mokata doctor` reports any wired command that won't resolve
-    (`govern.doctor.hook_resolution_findings`) — HOOK-RESOLVE."""
+    dir isn't on PATH, which is precisely the silent-killer case `which` can't see — or the
+    interpreter's scripts dir (`<prefix>\\Scripts` for a non-venv Windows Python such as
+    pyenv-win's); (3) the bare name as a last resort (e.g. `-e` source runs). The PLUGIN route
+    can't call this at all (its manifests are static), so it runs the SAME ladder at hook time
+    via `hooks/mokata-hook-launch`, and `mokata doctor` reports any wired command that won't
+    resolve (`govern.doctor.hook_resolution_findings`) — HOOK-RESOLVE.
+
+    0.0.25 `WIN-SHIM-WIRED`: on Windows a step-(1) hit that is a `.bat`/`.cmd` SHIM (pyenv-win's
+    `shims\\mokata-hook.bat`) is not taken while a real executable exists in step (2) — the shim
+    resolves, but every launch goes through `cmd.exe` and flashes a window. It is still the
+    answer of last resort, because a hook that flashes beats a hook that never runs."""
+    windows = (os.name == "nt") if windows is None else windows
     found = shutil.which(name)
-    if found:
+    if found and not (windows and is_windows_shim(found)):
         return found
-    bindir = Path(sys.executable).parent
-    for candidate in (bindir / name, bindir / f"{name}.exe"):
-        if candidate.is_file():
-            return str(candidate)
-    return name
+    dirs = [Path(sys.executable).parent]
+    scripts = sysconfig.get_path("scripts")
+    if scripts and Path(scripts) not in dirs:
+        dirs.append(Path(scripts))
+    for bindir in dirs:
+        for candidate in (bindir / name, bindir / f"{name}.exe"):
+            if candidate.is_file():
+                return str(candidate)
+    return found or name
 
 
 def resolved_mcp_command() -> str:
@@ -1297,6 +1591,26 @@ def apply_setup(plan: SetupPlan, *, assume_yes: bool = False, force: bool = Fals
         if str(t.settings_path) not in touched:
             touched.append(str(t.settings_path))
 
+    # 5b. ID.S3 — the observe-only http hooks to the IDE bus (opt-in), in the machine-local file.
+    if plan.ide_bridge and t.settings_path is not None:
+        from .ide.bus import bridge_url, ensure_bridge
+        rec = ensure_bridge(str(Path(plan.root).resolve()))
+        local = t.settings_path.parent / LOCAL_SETTINGS
+        _merge_ide_bridge(local, ide_bridge_hooks(bridge_url(int(rec["port"])), str(rec["token"])))
+        touched.append(str(local))
+
+    # 5c. U8 — the fail-closed http gate hooks: written when asked for, REMOVED when not.
+    if plan.with_hooks and plan.harness == "claude" and plan.scope == "project" \
+            and t.settings_path is not None:
+        local = t.settings_path.parent / LOCAL_SETTINGS
+        wiring = None
+        if plan.http_gates:
+            from .ide.bus import ensure_bridge
+            rec = ensure_bridge(str(Path(plan.root).resolve()))
+            wiring = http_gate_hooks(http_gate_url(int(rec["port"])), str(rec["token"]))
+        if _set_http_gates(local, wiring) and str(local) not in touched:
+            touched.append(str(local))
+
     # 6. MCP tool grant (the "stuck-loop" fix) — default-ON, merge-safe. Grants Claude Code
     # permission for mokata's MCP tools + enables the server so it doesn't gate each call.
     # Claude-only, shares settings.json (so `--no-hooks` skips it), opt out with `--no-grant`.
@@ -1337,10 +1651,13 @@ def setup_harness(
     grant: bool = True,
     confirm: Optional[Callable[[str], bool]] = None,
     out: Optional[Callable[[str], None]] = None,
+    ide_bridge: bool = False,
+    http_gates: bool = False,
 ) -> SetupResult:
     """Plan + human-gate + apply the harness wiring end to end."""
     emit = out or print
-    plan = plan_setup(harness, root, scope, profile, with_hooks, home, grant=grant)
+    plan = plan_setup(harness, root, scope, profile, with_hooks, home, grant=grant,
+                      ide_bridge=ide_bridge, http_gates=http_gates)
 
     emit(render_setup_plan(plan))
     # 0.0.23 B4 — INSTALL-ISOLATED-BY-DEFAULT: name an in-project or shadowed install BEFORE the
@@ -1442,6 +1759,8 @@ def render_unsetup_plan(plan: UnsetupPlan) -> str:
                      f"(any composed-over statusLine is restored)")
         lines.append(f"  the mokata MCP tool grant in {t.settings_path} "
                      f"(enabledMcpjsonServers / permissions.allow; your own entries kept)")
+        lines.append(f"  the IDE live-bridge http hooks in {t.settings_path.parent / LOCAL_SETTINGS}"
+                     f" (if wired; your own entries kept)")
     lines.append("")
     lines.append("Your .mokata/ config is left untouched (use `mokata reset` for that).")
     return "\n".join(lines)
@@ -1525,6 +1844,14 @@ def apply_unsetup(plan: UnsetupPlan) -> List[str]:
         if changed:
             _write_or_remove_json(t.settings_path, data)
             removed.append(str(t.settings_path))
+
+    # 4. ID.S3 — the IDE live-bridge http hooks (machine-local settings file).
+    if t.settings_path is not None:
+        local = t.settings_path.parent / LOCAL_SETTINGS
+        if _strip_ide_bridge(local):
+            removed.append(str(local))
+        if _set_http_gates(local, None) and str(local) not in removed:
+            removed.append(str(local))
 
     return removed
 

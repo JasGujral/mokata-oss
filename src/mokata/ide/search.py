@@ -37,6 +37,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from ..quiet_spawn import hidden
 from . import nav
 from ..errors import MokataError
 from ..repo_paths import name_of
@@ -122,12 +123,20 @@ def _rg(root: str, q: str, mode: str, case: bool, allowed: set,
         only: Optional[Sequence[str]]) -> Optional[Tuple[Dict[str, list], int, bool]]:
     """`rg --json`; None when rg could not answer (missing, refused the pattern, timed out) — the
     caller then answers with the floor AND says so. The pattern goes through `-e` after every
-    option, never through a shell, so a pattern can never become an rg flag."""
+    option, never through a shell, so a pattern can never become an rg flag.
+
+    STREAMED (0.0.25 lane S): rg's output is read line by line and rg is stopped the moment
+    MAX_MATCHES are in. It used to be buffered whole first — on a common word over a 1M-line repo
+    that was every match in the repo (+~100 MB RSS) only to keep the first 2000.
+    `--sort path` makes WHICH 2000 deterministic (the same query gives the same answer). It makes rg
+    walk single-threaded; measured on the 1M-line scale repo it costs nothing that matters — a full
+    scan for a rare word 0.17 s sorted vs 0.18 s unsorted, a common word stops after its first
+    2000 matches in ~0.04 s — so determinism wins."""
     from ..languages import VENDOR_DIRS
     exe = rg_path()
     if not exe:
         return None
-    cmd = [exe, "--json", "--no-ignore", "--no-config", "--max-filesize", "1M",
+    cmd = [exe, "--json", "--no-ignore", "--no-config", "--sort", "path", "--max-filesize", "1M",
            "--max-columns", str(MAX_LINE_CHARS * 2), "--max-columns-preview"]
     cmd.append("--case-sensitive" if case else "--ignore-case")
     if mode != "regex":
@@ -137,43 +146,59 @@ def _rg(root: str, q: str, mode: str, case: bool, allowed: set,
     cmd += ["-e", q, "--"]
     cmd += [os.path.join(*p.split("/")) for p in only] if only else ["."]
     try:
-        p = subprocess.run(cmd, cwd=root, capture_output=True, timeout=RG_TIMEOUT,
-                           stdin=subprocess.DEVNULL)
+        proc = subprocess.Popen(cmd, cwd=root, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, **hidden())
     except (OSError, subprocess.SubprocessError):
         return None
-    if p.returncode not in (0, 1):
-        return None                                   # 2 = error (e.g. a pattern rg rejects)
+    timer = threading.Timer(RG_TIMEOUT, proc.kill)    # a hung rg is stopped, never waited on
+    timer.daemon = True
+    timer.start()
     found: Dict[str, list] = {}
     total = 0
-    pat = None
+    capped = eof = False
     try:
         pat = _compile(q, mode, case)
     except BadPattern:
         pat = None
-    for raw in p.stdout.splitlines():
-        try:
-            ev = json.loads(raw)
-        except ValueError:
-            continue
-        if ev.get("type") != "match":
-            continue
-        d = ev["data"]
-        path = (d.get("path") or {}).get("text")
-        if not path:
-            continue
-        rel = str(name_of(os.path.join(root, path), root))
-        if rel not in allowed:
-            continue                                  # outside the explorer's file set (a venv)
-        line = ((d.get("lines") or {}).get("text") or "").rstrip("\r\n")
-        spans = [[s["start"], s["end"]] for s in d.get("submatches", [])]
-        if pat is not None:                           # rg spans are BYTE offsets; re-derive chars
-            spans = _spans(pat, line) or spans
-        found.setdefault(rel, []).append({"line": d.get("line_number") or 0,
-                                          "text": line[:MAX_LINE_CHARS],
-                                          "spans": [s for s in spans if s[0] < MAX_LINE_CHARS]})
-        total += 1
-        if total >= MAX_MATCHES:
-            return found, total, True
+    try:
+        assert proc.stdout is not None
+        for raw in proc.stdout:
+            try:
+                ev = json.loads(raw)
+            except ValueError:
+                continue
+            if ev.get("type") != "match":
+                continue
+            d = ev["data"]
+            path = (d.get("path") or {}).get("text")
+            if not path:
+                continue
+            rel = str(name_of(os.path.join(root, path), root))
+            if rel not in allowed:
+                continue                              # outside the explorer's file set (a venv)
+            line = ((d.get("lines") or {}).get("text") or "").rstrip("\r\n")
+            spans = [[s["start"], s["end"]] for s in d.get("submatches", [])]
+            if pat is not None:                       # rg spans are BYTE offsets; re-derive chars
+                spans = _spans(pat, line) or spans
+            found.setdefault(rel, []).append({"line": d.get("line_number") or 0,
+                                              "text": line[:MAX_LINE_CHARS],
+                                              "spans": [s for s in spans if s[0] < MAX_LINE_CHARS]})
+            total += 1
+            if total >= MAX_MATCHES:
+                capped = True
+                break                                 # enough: stop rg instead of draining it
+        else:
+            eof = True
+    finally:
+        if not eof and proc.poll() is None:
+            proc.kill()                               # capped (or failed mid-read): stop rg now
+        code = proc.wait()
+        timer.cancel()
+        proc.stdout.close()
+    if capped:
+        return found, total, True
+    if code not in (0, 1):
+        return None                                   # 2 = error (a pattern rg rejects); killed
     return found, total, False
 
 
@@ -189,7 +214,7 @@ def text(root: str, q: str, mode: str = "word", case: bool = False,
     if not q.strip():
         return out
     pat = _compile(q, mode, case)                     # BadPattern → 400 with the reason
-    files = nav._cached(root, "files", lambda: nav.walk_files(root))
+    files = nav.files_of(root)
     allowed = set(files)
     scope = None
     if only is not None:

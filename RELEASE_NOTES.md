@@ -1,49 +1,69 @@
-mokata **0.0.24**. Set up or upgrade with the same instruction, in your repo:
-`uv tool install --upgrade mokata` (or `pipx install --force mokata`), then `mokata setup claude`.
+mokata **0.0.25**. Set up or upgrade with one instruction, in your repo:
+`uv tool install --upgrade mokata` (or `pipx install --force mokata`), then
+`mokata setup claude --mode full`.
 Requires **Python ≥ 3.10**, and for the Claude Code integration **Claude Code ≥ 2.1.0**. The plugin
 route needs **[`uv`](https://docs.astral.sh/uv/) on your PATH**.
 
 ---
 
-## 0.0.24 — "A patch for slow suites on Windows, and a lighter CI gate."
+## 0.0.25 — "Install in one step, domain stacks, and the CLI↔IDE bridge."
 
-**0.0.23 never reached PyPI** — its release workflow's tests were cancelled at a 22-minute ceiling
-(no test failed). 0.0.24 carries every 0.0.23 change, so read the 0.0.23 section of the CHANGELOG
-too; this is the first published release since 0.0.22.
+**One instruction installs your mode.** `mokata setup claude --mode seatbelt|memory|full` asks one
+question for the mode's dependencies, installs them with the installer that owns your mokata (uv
+tool, pipx, pip or uv pip), and ends with a table: what is installed, what failed, and the one
+command that fixes it. `--with-deps` installs without asking; `--yes` alone installs nothing. Full
+mode tells you up front that the code graph's first index takes minutes and up to ~1 GB on a
+~1M-line repository.
 
-Two reports against 0.0.22 on Windows (OSS #82, #83) came down to three causes. One — a Windows
-`PermissionError` when another mokata process held the state file, which lost an approach approval —
-was already fixed in 0.0.23. This patch fixes the rest.
+**`mokata upgrade` uses your installer too** — `uv tool upgrade mokata` on the documented route,
+where the old pip-only upgrade failed.
 
-**`baseline` over MCP can wait for a slow suite.** The 120 s budget is now
-`settings.mcp.test_timeout_seconds` (up to 600 s):
+**The review window grew up.** `mokata ide` now:
+- follows a live session (`mokata setup claude --ide-bridge` wires observe-only `http` hooks) and
+  joins a CLI session; `mokata query` prints links that open the IDE at the line;
+- shows a run's plan and spec — runs with a spec first — including a spec still waiting for
+  `mokata approve <id>`, and your saved plan files;
+- explains its call graph: what a symbol is, what each view answers, a picker as you type;
+- has a health panel: what is missing, degraded or out of sync, buttons to force-rebuild the code
+  graph, the AST index and the search index, and **Update mokata** on a confirmed click (checking for
+  an update is a button — the only time the IDE goes online);
+- calculates impact for the rest of a file's changed functions when you ask;
+- stays responsive on a million-line repository and runs nothing while idle.
 
-    mokata config set settings.mcp.test_timeout_seconds 300
+The embedded terminal is **opt-in**: `mokata ide --terminal`, only from your own terminal, never
+inside a Claude Code session.
 
-**An approved spec commits from its id.** `spec_emit` with only `proposal_id` reloads the payload
-the proposal saved; the content hash still refuses anything the human did not approve.
+**Frontend and backend work routes to its own skills and gates.** React (`frontend-react`,
+`frontend-perf`, `frontend-security`) and NestJS (`backend-nestjs`) skills; `react-web` and
+`nestjs-api` stacks; UI acceptance criteria carry a state matrix (default, loading, empty, error,
+disabled); six backed domain gates run with `mokata gate check <gate>`.
 
-**`gate override` in an agent's shell refuses up front** and names `--yes`, instead of asking a
-question nobody can answer.
+**Fixed on Windows:** cmd windows flashing while the IDE ran or from pyenv-win `.bat` shims. Run
+`mokata setup claude` once after upgrading so the shims are unwired; `mokata doctor` says if any remain.
 
-**A degraded `session_save` names its cause** — the error type and code — in the MCP result.
+**Fixed with code-review-graph 2.3.9:** mokata's handshake was refused, so every query silently fell
+back to the built-in reader while the status bar said otherwise, and answers cut at 100 were shown
+as complete.
 
-**The release workflow's test ceiling is 32 minutes** (it was 22, which the 0.0.23 suite outgrew).
-
-**CI runs Python 3.12 only.** The declared floor (`>=3.10`) is no longer exercised by any workflow;
-that is a deliberate trade and it is disclosed.
+**Faster hooks:** gate hooks p95 68–128 ms (was 117–320), observe hooks outside a repo 25–38 ms
+(was 80–100), on Linux. `mokata setup claude --http-gates` (off by default) runs the gates as one
+`http` hook to the IDE server — every gated call is refused while the IDE is not running.
 
 ## Re-scheduled
 
-No published commitment named **0.0.24**, so nothing slipped from this release. One item from an
-earlier release's notes is still open, and is restated so it is not lost:
-
-- **The CI ceiling re-derived from the public mirror.** The v0.0.21 notes said it was, with the
-  internal-tooling suite's recorded local gate, re-scheduled to **0.0.22** (tracked as `INTERNAL-ONLY-TESTS-RUN-ON-NO-RUNNER`).
-  The gate shipped at 0.0.22; no stage of 0.0.22, 0.0.23 or 0.0.24 built the ceiling half. **These
-  notes name no new release for it.** Contributor-facing.
+- **The CI ceiling re-derived from the public mirror** (`INTERNAL-ONLY-TESTS-RUN-ON-NO-RUNNER`),
+  open since the v0.0.21 notes, is **built in 0.0.25** (`scripts/ci_ceiling.py`). Contributor-facing.
+- **code-review-graph's blast radius** — the correct mapping of its traversal result is re-scheduled
+  to **0.0.26** (tracked as `CRG-BLAST-EMPTY`); until then the built-in reader answers it.
+- **The declared Python floor** now has a weekly Python 3.10 workflow (`python-floor.yml`); it has not
+  run on a release runner yet.
 
 ### Known limitations
 
-- **The declared Python floor is untested.** No workflow runs 3.10 or 3.11, so a bug that exists only below 3.12 (like 0.0.15's ISO-date split) would reach users first.
-- **A suite slower than 600 s** cannot be baselined over MCP; use `mokata baseline` in a terminal.
+- **code-review-graph's blast radius is answered by mokata's AST reader**: CRG's traversal returned every blast radius empty, so impact under CRG is Python-only until a correct mapping exists.
+- **A blast radius is cut at 20,000 references or 2 s**; on a function called from tens of thousands of places the IDE says "not determined — cut at …".
+- **Observe hooks inside a mokata repo take 54–125 ms** (p95, Linux) against a 50 ms budget; macOS and Windows timings are not measured.
+- **Follow mode is unproven against a real `claude` session**; "edits appear within 1 s" has not been measured end to end.
+- **The embedded terminal is POSIX-only**; on Windows the IDE says it is not available.
+- **CI runs Python 3.12 only.** The weekly Python 3.10 floor workflow has not run on a release runner yet.
+- **The clean-machine install workflow and the Windows no-console-window test have not run on a release runner yet.**

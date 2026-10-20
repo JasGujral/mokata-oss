@@ -6,7 +6,7 @@ full-pipeline prerequisite and applies **only its own gate**. The **37** shipped
 commands under `templates/commands/` are generated from this same registry, so the command
 and the CLI never drift.
 
-**The count: 26 skills** — the **16** curated skills below plus **10** domain-knowledge skills.
+**The count: 30 skills** — the **16** curated skills below plus **14** domain-knowledge skills.
 That is what `mokata setup claude` writes into `.claude/skills/`, and what
 [`mokata doctor`](cli.md#mokata-doctor-wiring-matrix) checks for when it tells you whether your skills
 are visible in this root.
@@ -44,7 +44,7 @@ which is a CLI utility) plus five standalone/auto-firing skills:
 
 Since 0.0.12 every skill carries a `## Contract` — what it CAN do, what it MUST NOT, and the
 real gate backing each boundary — plus an active-skill banner shared with the statusline and
-`mokata progress`. There are also **10 domain-knowledge skills** that attach to pipeline phases;
+`mokata progress`. There are also **14 domain-knowledge skills** that attach to pipeline phases;
 see [Domain skills](../how-it-works/domain-skills.md).
 
 ## `refine` vs `review`

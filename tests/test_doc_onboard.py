@@ -112,7 +112,7 @@ class TestUpgradeFinishesTheJob(WiringCase):
         # A hand-upgrader reading `upgrade_steps` sees the SAME steps the CLI runs — the
         # documented story and the automated one can't diverge.
         steps = upgrade_steps("pip")
-        self.assertEqual(steps[0], "pip install -U mokata")     # unchanged: cmd_upgrade runs [0]
+        self.assertTrue(steps[0].endswith("-m pip install --upgrade mokata"), steps[0])
         joined = " ".join(steps)
         self.assertIn("mokata setup claude", joined)
         self.assertIn("mokata doctor --wiring", joined)
@@ -180,8 +180,9 @@ class TestUpgradeFinishesTheJob(WiringCase):
 
     def test_cmd_upgrade_runs_the_tail_after_an_approved_pip_upgrade(self):
         seen = []
-        with mock.patch("mokata.version.run_pip_upgrade",
-                        side_effect=lambda *a, **k: seen.append("pip")), \
+        from mokata.version import UpgradeRun
+        with mock.patch("mokata.version.run_upgrade",
+                        side_effect=lambda *a, **k: seen.append("pip") or UpgradeRun([], 0)), \
              mock.patch("mokata.version._default_tail_runner",
                         side_effect=lambda cmd: seen.append(cmd) or 0):
             rc, out = run_cli(["upgrade", "--method", "pip", "--path", str(self.root),
@@ -202,7 +203,8 @@ class TestUpgradeFinishesTheJob(WiringCase):
         self.assertIn("not run", out.lower())
 
     def test_no_refresh_opts_out(self):
-        with mock.patch("mokata.version.run_pip_upgrade", side_effect=lambda *a, **k: None), \
+        from mokata.version import UpgradeRun
+        with mock.patch("mokata.version.run_upgrade", side_effect=lambda *a, **k: UpgradeRun([], 0)), \
              mock.patch("mokata.version._default_tail_runner",
                         side_effect=AssertionError("tail ran under --no-refresh")):
             rc, out = run_cli(["upgrade", "--method", "pip", "--path", str(self.root),

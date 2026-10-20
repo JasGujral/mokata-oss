@@ -11,6 +11,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from contextlib import redirect_stdout
 
 from _support import sample_manifest_data  # noqa: F401  (path fix side-effect)
@@ -25,7 +26,8 @@ from mokata.version import (
     VersionInfo,
     check_for_update,
     detect_install_method,
-    run_pip_upgrade,
+    run_upgrade,
+    upgrade_plan,
     upgrade_steps,
     version_info,
 )
@@ -131,20 +133,32 @@ class TestUpdateCheck(unittest.TestCase):
 class TestUpgrade(unittest.TestCase):
     def test_pip_upgrade_runs_the_right_command_via_runner(self):
         spy = []
-        cmd = run_pip_upgrade(runner=lambda c: spy.append(c))
-        self.assertEqual(cmd[-3:], ["install", "-U", "mokata"])
-        self.assertEqual(spy[0][-3:], ["install", "-U", "mokata"])
+        res = run_upgrade(upgrade_plan("pip"), runner=lambda c: spy.append(c) or 0)
+        self.assertTrue(res.ok)
+        self.assertEqual(spy[0][-4:], ["pip", "install", "--upgrade", "mokata"])
 
     def test_upgrade_steps_per_method(self):
-        self.assertIn("pip install -U mokata", " ".join(upgrade_steps("pip")))
+        self.assertIn("pip install --upgrade mokata", " ".join(upgrade_steps("pip")))
         self.assertIn("marketplace update", " ".join(upgrade_steps("plugin")))
 
     def test_cmd_upgrade_pip_proposes_without_running(self):
         with tempfile.TemporaryDirectory() as d:
             rc, out = run_cli(["upgrade", "--method", "pip", "--path", d], stdin="")
         self.assertEqual(rc, 0)
-        self.assertIn("pip install -U mokata", out)
+        self.assertIn("pip install --upgrade mokata", out)
         self.assertIn("not run", out.lower())          # declined at the human gate
+
+    def test_a_failed_upgrade_says_so_and_skips_the_wiring_tail(self):
+        from mokata.version import UpgradeRun
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch("mokata.version.run_upgrade",
+                           return_value=UpgradeRun(["x"], 2, "ERROR: no network")), \
+                mock.patch("mokata.version._default_tail_runner",
+                           side_effect=AssertionError("tail ran after a failed upgrade")):
+            rc, out = run_cli(["upgrade", "--method", "pip", "--path", d, "--yes"])
+        self.assertEqual(rc, 1)
+        self.assertIn("upgrade FAILED", out)
+        self.assertIn("no network", out)
 
     def test_cmd_upgrade_plugin_prints_steps(self):
         with tempfile.TemporaryDirectory() as d:

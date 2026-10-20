@@ -163,7 +163,7 @@ implementation, but no approach is approved for this run yet. Explore and approv
 ```
 
 It was the ninth gate with a real enforcement mechanism behind it rather than prose. mokata backs
-**9 backed gates** today, and the `gate-guard` hook holds **4 run-state gates** on the agent's
+**15 backed gates** today (six are the frontend/backend domain gates `mokata gate check` runs), and the `gate-guard` hook holds **4 run-state gates** on the agent's
 native `Write`/`Edit` (see §4). Like the other three gates in that lane, `approach-approval` is a
 *methodology* block a human can lift on the record.
 
@@ -791,9 +791,9 @@ Standalone / auto-firing skills (their own command or fire on their own — not 
 # mokata · /review (standalone)
 ```
 
-(16 curated skills, plus 10 auto-engaging domain skills — `api`, `security`, `performance`,
-`frontend-a11y`, `browser-testing`, `ci-cd`, `git`, `deprecation`, `docs-adr`, `shipping` — for
-26 shipped in all.)
+(16 curated skills, plus 14 auto-engaging domain skills — `api`, `security`, `performance`,
+`frontend-a11y`, `browser-testing`, `ci-cd`, `git`, `deprecation`, `docs-adr`, `shipping`,
+`frontend-react`, `backend-nestjs`, `frontend-perf`, `frontend-security` — for 30 shipped in all.)
 
 Profiles, per-layer/tool toggles, and trust dials make the stack configurable and reproducible.
 

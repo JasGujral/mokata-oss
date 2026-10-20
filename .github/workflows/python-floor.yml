@@ -1,0 +1,110 @@
+name: python-floor (weekly)
+
+# THE DECLARED PYTHON FLOOR, EXERCISED AGAIN — weekly, not per PR (0.0.25 Lane C, ruling U2 as
+# recommended: "weekly 3.10 leg; cheap; keeps the floor honest without slowing PR CI").
+#
+# `pyproject.toml` declares `requires-python = ">=3.10"`. At 0.0.24 (owner ruling 2026-10-17) the
+# 3.10 legs left `ci.yml` and `release.yml` to cut the PR gate's Windows wall-clock, and the floor
+# became a promise no workflow exercised (`tests/test_ci_matrix_floor.py` pinned that, so nobody
+# would believe otherwise). That gap is not hypothetical: `datetime.fromisoformat` learned the
+# Zulu designator in 3.11, and a 3.12-only gate cannot see a bug of that shape. 0.0.25 I-03 then
+# MET one in a real install — `uv tool install .` built its env on 3.10, which has no `tomllib`, so
+# every extra failed with "could not read uv's tool receipt" (`RECEIPT-UNREADABLE-ON-3.10`).
+#
+# This job runs the FULL unit suite on the floor interpreter, on ubuntu, once a week and on demand.
+# It is NOT a PR gate and gates nothing in the publish path (release.yml declares its own chain),
+# so a red here is a weekly signal to fix or to raise the floor — never a blocked merge.
+#
+# It also runs the G4 harness-certification SERVER half (`scripts/harness_cert.py contract all`,
+# criteria C1..C6 against every cert client's `mokata setup` wiring) on the same interpreter: the
+# server half was only ever run by hand (0.0.23), and "does mokata-mcp start and answer on the
+# floor" is the same question this job asks of the suite. The CLIENT half (a real Cursor / Codex /
+# Gemini / Copilot) stays the owner's checklist — nothing here can certify a client.
+#
+# NO REPO SECRETS ARE CONSUMED.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Wednesdays 04:37 UTC — off the hour, a day after embeddings-leg (Tue) and a day before
+    # order-seeds (Thu), so the three weekly suite runs never contend for the same morning.
+    - cron: "37 4 * * 3"
+
+permissions:
+  contents: read
+
+jobs:
+  floor:
+    name: Python floor — full unit suite + G4 server half on the declared minimum
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # CI-JOBS-WITHOUT-A-TIMEOUT. No completed run of THIS job exists yet, so it is derived from
+    # the reference class it copies: release.yml's `test` job runs the same suite on the same
+    # runner image (install + unit + integration); its slowest completed leg is 1240.6s
+    # (`test (3.12, present)`, run 38966278058). 3.10 is NOT slower for this suite on CI: CI #141
+    # (0.0.20) measured windows py3.10 present 32m05s vs py3.12 present 33m54s, and all four
+    # ubuntu legs (3.10 and 3.12) inside 17m18s-18m45s. Plus the G4 server-half step (16s here,
+    # all four clients, on a contended box; 60s allowed): (1240.6 + 60) x 1.5 = 1951s -> **33**. The last
+    # step re-derives it from this job's own clock (`scripts/ci_ceiling.py`) on every run.
+    timeout-minutes: 33
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Start the ceiling clock (CI-CEILING)
+        run: echo "MOKATA_CLOCK_T0=$(date +%s)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+
+      - name: "Preflight — this IS the declared floor (a leg on the wrong Python reads GREEN)"
+        # The floor is read out of pyproject.toml, never typed here: raising the floor without
+        # raising this job would otherwise keep testing an interpreter nobody promises.
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import re, sys
+          text = open("pyproject.toml", encoding="utf-8").read()
+          m = re.search(r'requires-python\s*=\s*["\']>=\s*([0-9]+)\.([0-9]+)', text)
+          if not m:
+              print("::error::pyproject.toml declares no requires-python floor"); sys.exit(1)
+          floor = (int(m.group(1)), int(m.group(2)))
+          if sys.version_info[:2] != floor:
+              print(f"::error::this job runs Python {sys.version_info[0]}.{sys.version_info[1]} "
+                    f"but the declared floor is {floor[0]}.{floor[1]} — update setup-python, or "
+                    "this job tests an interpreter nobody promises."); sys.exit(1)
+          print(f"floor {floor[0]}.{floor[1]} == interpreter — the suite below runs ON the floor.")
+          PY
+
+      - name: Install mokata (non-editable, from this checkout)
+        # A LOCAL_SOURCE install of the package under test — never hash-pinnable, like ci.yml's.
+        run: pip install .
+
+      - name: Install test tooling (hash-pinned; PyYAML + jsonschema, compiled for the floor)
+        # Both files are `uv pip compile --python-version 3.10` outputs (requirements/README.md).
+        # PyYAML: without it the workflow-lint tests RAISE (stage 10). jsonschema: `mcp`
+        # hard-requires it, and the MCP gates below must RUN, not skip.
+        run: |
+          pip install --require-hashes -r requirements/ci.txt
+          pip install --require-hashes -r requirements/jsonschema.txt
+
+      - name: The full unit suite on the floor
+        # MOKATA_REQUIRE_MCP_SDK: on a leg that installed the SDK a skip of an MCP gate is the bug.
+        env:
+          MOKATA_REQUIRE_MCP_SDK: '1'
+        run: |
+          set -euo pipefail
+          if ! python -m unittest discover -s tests -t tests; then
+            echo "::error::the unit suite is RED on the declared Python floor and GREEN on 3.12 (the PR gate). Either fix the 3.10 incompatibility or raise requires-python — the floor is a promise to users, and this job is the only place it is tested."
+            exit 1
+          fi
+
+      - name: G4 — mokata-mcp server half (C1..C6) for every cert client, on the floor
+        # Proves the SERVER half only and never writes the matrix
+        # (docs/reference/harness-cert-matrix.json is the owner's record of REAL clients).
+        run: python scripts/harness_cert.py contract all
+
+      - name: This job's ceiling still clears it (CI-CEILING)
+        run: python scripts/ci_ceiling.py --since "$MOKATA_CLOCK_T0" --workflow .github/workflows/python-floor.yml --job floor

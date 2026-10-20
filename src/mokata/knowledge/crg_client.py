@@ -35,8 +35,10 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import threading
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from ..quiet_spawn import hidden
 from ..bounded_io import (BoundedStderrTail, READ_CLOSED, READ_ERROR, READ_TIMEOUT,
                           read_line_bounded)
 from ..degrade import FAILURE_TIMEOUT
@@ -68,7 +70,35 @@ _REFS_PATTERNS: Tuple[str, ...] = ("callers_of", "importers_of", "inheritors_of"
 # ranks by similarity rather than resolving a name — mapping "where is X defined" onto it would be
 # a fuzzy answer wearing a structural label. So the client REFUSES the kind here and the layer
 # routes it to the AST floor, which answers it exactly on a Python repo.
-UNMAPPED_KINDS: Tuple[str, ...] = ("defs",)
+#
+# 0.0.25 — `blast_radius` joins it. It was mapped onto `traverse_graph_tool`, which (measured on CRG
+# 2.3.9, 1.2M lines) returns its rows under a `traversal` key the parser does not read — so EVERY
+# blast radius came back EMPTY — and follows edges in BOTH directions, so it is not a blast radius
+# even when read. An empty impact reads as "nothing is affected"; the floor's answer is exact on
+# Python. Until a correct CRG mapping is chosen, the floor answers and the note says so.
+UNMAPPED_KINDS: Tuple[str, ...] = ("defs", "blast_radius")
+
+# 0.0.25 K — how many rows mokata asks `query_graph_tool` for. The tool's own default is 100 and it
+# reports what it cut (`result_count` / `results_omitted`); mokata passed nothing, so every hub answer
+# was the first 100 call sites, and `_normalize` threw the counts away — a partial answer presented
+# as complete. The cap is now mokata's (sized to the IDE's 2000-node graph bound) and what is still
+# cut is carried onto the QueryResult (`CrgRows` → `mark_truncated`). Verified against the real
+# 2.3.9 schema: `query_graph_tool(pattern, target, repo_root, detail_level, max_results,
+# resolution)`; `traverse_graph_tool` takes NO `max_results` (it is bounded by `token_budget` and
+# reports `truncated`), so nothing is passed there.
+CRG_MAX_RESULTS = 2000
+
+
+class CrgRows(list):
+    """The normalized rows of ONE code-review-graph answer, plus what the tool said it LEFT OUT.
+
+    A `list` (the `GraphQueryClient` protocol is unchanged for every consumer that iterates it) that
+    also carries `truncated` and `total` — the tool's own `result_count` / `total_impacted` when it
+    reports one. `CodeReviewGraphBackend.query` reads them onto the QueryResult."""
+
+    truncated: bool = False
+    total: Optional[int] = None
+
 
 # Version-compat handshake bounds (semver, inclusive lower / exclusive upper-major). CRG exposes
 # no schema version, so the handshake is on the CLI `--version` string. The adopted-tool contract
@@ -180,7 +210,8 @@ class CodeReviewGraphClient:
             if pattern is None:
                 raise CrgUnavailable(f"code-review-graph has no mapping for kind '{kind}'")
             payload = self._call_tool("query_graph_tool", {
-                "pattern": pattern, "target": target, "repo_root": root})
+                "pattern": pattern, "target": target, "repo_root": root,
+                "max_results": CRG_MAX_RESULTS})
         return self._normalize(payload)
 
     def _refs(self, target: str, root: str) -> List[Dict[str, Any]]:
@@ -189,12 +220,18 @@ class CodeReviewGraphClient:
         reference. A pattern that finds nothing contributes nothing; a pattern that FAILS raises
         (CrgUnavailable) and the whole answer degrades to the floor, exactly as a single-pattern
         kind would — the composition adds no new failure mode."""
-        rows: List[Dict[str, Any]] = []
+        rows = CrgRows()
         seen = set()
         for pattern in _REFS_PATTERNS:
             payload = self._call_tool("query_graph_tool", {
-                "pattern": pattern, "target": target, "repo_root": root})
-            for row in self._normalize(payload):
+                "pattern": pattern, "target": target, "repo_root": root,
+                "max_results": CRG_MAX_RESULTS})
+            part = self._normalize(payload)
+            # Any pattern that was cut makes the union partial; the union's TRUE size is unknown
+            # (the cut rows may duplicate kept ones), so no total is claimed for it.
+            if part.truncated:
+                rows.truncated = True
+            for row in part:
                 key = (row.get("path"), row.get("line"), row.get("symbol"))
                 if key in seen:
                     continue
@@ -241,14 +278,26 @@ class CodeReviewGraphClient:
         return rc == 0
 
     def version(self, root: Optional[str] = None) -> Optional[str]:
+        """The tool's version. A SUCCESSFUL answer is remembered for this client's life (0.0.25
+        `IDE-SERVER-LIGHT`): `--version` is a Python cold start, and the IDE's long-lived client
+        used to pay it on every query. A failure is never cached — the next call asks again."""
+        cached = getattr(self, "_version", None)
+        if cached:
+            return cached
         rc, out, err = self._run_cli(["--version"])
         if rc != 0:
             return None
-        return parse_crg_version(out) or parse_crg_version(err)
+        self._version = parse_crg_version(out) or parse_crg_version(err)
+        return self._version
 
     def health(self, root: str) -> bool:
-        """A cheap liveness probe: the tool answers `--version`. (The backend's query path is
-        what ultimately proves the serve/index is live; this is the fast pre-check.)"""
+        """A cheap liveness probe. With a live `serve` session the answer is that process being
+        alive (no spawn at all); otherwise the tool answers `--version`. (The backend's query
+        path is what ultimately proves the serve/index is live; this is the fast pre-check.)"""
+        session = getattr(self, "_session", None)
+        proc = getattr(session, "_proc", None)
+        if proc is not None and proc.poll() is None:
+            return True
         try:
             return self.version(root) is not None
         except Exception:
@@ -261,12 +310,37 @@ class CodeReviewGraphClient:
 
     # --- result normalization -----------------------------------------------------------
     @staticmethod
-    def _normalize(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _cut(payload: Dict[str, Any]) -> Tuple[bool, Optional[int]]:
+        """0.0.25 K — what the tool says it LEFT OUT of `payload`: `(truncated, total)`.
+
+        Read from the grounded 2.3.9 shapes: `query_graph_tool` → `result_count` +
+        `results_omitted`; `get_impact_radius_tool` → `truncated` + `total_impacted` +
+        `nodes_omitted`; `traverse_graph_tool` → `truncated` (token budget, no total). A field
+        that is absent or malformed says nothing — it never manufactures a cut."""
+        def _int(v: Any) -> Optional[int]:
+            if isinstance(v, bool):
+                return None
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return None
+        omitted = _int(payload.get("results_omitted"))
+        if omitted is None:
+            omitted = _int(payload.get("nodes_omitted"))
+        total = _int(payload.get("result_count"))
+        if total is None:
+            total = _int(payload.get("total_impacted"))
+        truncated = bool(payload.get("truncated") is True or (omitted or 0) > 0)
+        return truncated, (total if truncated else None)
+
+    @staticmethod
+    def _normalize(payload: Dict[str, Any]) -> "CrgRows":
         """CRG node+edge results -> mokata row dicts (rich: edge_type + metadata). Defensive:
         CRG wrapper keys vary by tool, so we read `results`/`impacted_nodes` tolerantly and
-        never raise on a missing field (a shape drift degrades to fewer fields, not a crash)."""
+        never raise on a missing field (a shape drift degrades to fewer fields, not a crash).
+        0.0.25 K: returns `CrgRows`, which also carries what the tool reported it cut."""
         if not isinstance(payload, dict):
-            return []
+            return CrgRows()
         nodes = payload.get("results")
         if nodes is None:
             nodes = payload.get("impacted_nodes") or []
@@ -281,7 +355,8 @@ class CodeReviewGraphClient:
                 q = e.get(key)
                 if q and k and q not in edge_kind:
                     edge_kind[q] = k
-        rows: List[Dict[str, Any]] = []
+        rows = CrgRows()
+        rows.truncated, rows.total = CodeReviewGraphClient._cut(payload)
         for n in nodes:
             if not isinstance(n, dict):
                 continue
@@ -308,20 +383,33 @@ class CodeReviewGraphClient:
 
     # --- real transports (opt-in real-CRG CI leg validates these) -----------------------
     def _default_run_cli(self, args: List[str]) -> Tuple[int, str, str]:
-        cmd = [self.name] + list(args)
+        from ..detect import find_command
+        cmd = [find_command(self.name) or self.name] + list(args)
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True,
-                                  timeout=self.timeout, cwd=self.root)
+                                  timeout=self.timeout, cwd=self.root,
+                                  stdin=subprocess.DEVNULL, **hidden())
         except (OSError, subprocess.SubprocessError) as exc:
             raise CrgUnavailable(f"could not run {self.name}: {exc}") from exc
         # Secret-safety (B-VER precedent): CLI output for version/build/update carries no env
         # secret, but we never surface raw output — only the parsed version — so nothing leaks.
         return proc.returncode, proc.stdout or "", proc.stderr or ""
 
+    def close(self) -> None:
+        """Stop this client's `code-review-graph serve` session, if it has one (0.0.25
+        `IDE-SERVER-LIGHT`). A long-lived owner (the IDE server's per-repo layer cache) calls this
+        when it drops the client, so no serve process outlives the thing that used it."""
+        session = getattr(self, "_session", None)
+        self._session = None
+        if session is not None:
+            session.close()
+
     def _default_call_tool(self, tool: str, params: Dict[str, Any]) -> Dict[str, Any]:
         session = getattr(self, "_session", None)
         if session is None:
-            session = _McpStdioSession(self.name, root=self.root, timeout=self.timeout)
+            from ..detect import find_command
+            session = _McpStdioSession(find_command(self.name) or self.name, root=self.root,
+                                       timeout=self.timeout)
             self._session = session
         try:
             return session.call(tool, params)
@@ -334,6 +422,12 @@ class CodeReviewGraphClient:
             # server on the other end never saw the end of.
             self._session = None
             raise
+
+
+def client_info() -> Dict[str, str]:
+    """The MCP `clientInfo` mokata sends: its name AND its version (both required by the schema)."""
+    from .. import __version__
+    return {"name": "mokata", "version": str(__version__)}
 
 
 class _McpStdioSession:
@@ -366,6 +460,11 @@ class _McpStdioSession:
         self._proc: Optional[subprocess.Popen] = None
         self._stderr: Optional[BoundedStderrTail] = None
         self._id = 0
+        # 0.0.25 `IDE-SERVER-LIGHT`: the IDE now keeps ONE session per repo for its lifetime and
+        # answers requests on worker threads. A JSON-RPC exchange is write-then-read on one pipe
+        # pair, so two threads interleaving would hand each other's answers back — the
+        # desynchronised-session failure this class already kills sessions over. One at a time.
+        self._lock = threading.Lock()
 
     def _ensure(self) -> subprocess.Popen:
         if self._proc is not None and self._proc.poll() is None:
@@ -374,7 +473,7 @@ class _McpStdioSession:
             self._proc = subprocess.Popen(
                 [self.command, "serve", "--repo", self.root],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, bufsize=1)
+                text=True, bufsize=1, **hidden())
         except (OSError, subprocess.SubprocessError) as exc:
             raise CrgUnavailable(f"could not start {self.command} serve: {exc}") from exc
         # A1 — stderr was `DEVNULL`, which threw away the subprocess's own account of why it hung;
@@ -383,8 +482,11 @@ class _McpStdioSession:
         # unread `PIPE` fills its ~64 KiB buffer and blocks the server on its next write, which
         # would be a brand-new hang introduced by the fix for a hang.
         self._stderr = BoundedStderrTail(self._proc.stderr)
+        # 0.0.25 K — `clientInfo.version` is REQUIRED by the MCP schema, and code-review-graph
+        # 2.3.9 enforces it: without it `initialize` is rejected with -32602, every CRG query raised
+        # `CrgUnavailable`, and every answer silently fell back to the AST floor.
         self._rpc("initialize", {"protocolVersion": "2024-11-05",
-                                 "capabilities": {}, "clientInfo": {"name": "mokata"}})
+                                 "capabilities": {}, "clientInfo": client_info()})
         self._notify("notifications/initialized", {})
         return self._proc
 
@@ -457,8 +559,9 @@ class _McpStdioSession:
                 pass
 
     def call(self, tool: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        self._ensure()
-        result = self._rpc("tools/call", {"name": tool, "arguments": params})
+        with self._lock:
+            self._ensure()
+            result = self._rpc("tools/call", {"name": tool, "arguments": params})
         # MCP tool results wrap content; CRG returns a JSON text block.
         content = result.get("content") or []
         for block in content:

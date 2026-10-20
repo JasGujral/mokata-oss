@@ -33,6 +33,8 @@
   async function run() {
     const gen = ++S.gen;
     const q = $("sq").value;
+    // Nothing typed = nothing to ask: no repo walk at page load or on an empty box.
+    if (!q.trim()) { renderWord({}, q); $("sr-meaning-list").replaceChildren(); return; }
     const only = $("s-changed").checked ? changedPaths() : null;
     const body = { q, mode: S.kind === "regex" ? "regex" : "word", case: $("s-case").checked, only };
     const jobs = [api("/api/search", body).catch(() => null)];

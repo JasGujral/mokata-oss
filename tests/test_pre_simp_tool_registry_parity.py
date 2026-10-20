@@ -38,6 +38,9 @@ SNAPSHOT_FULL = [
     # observability-tier READ kind like `review_record`), APPENDED to the READ block's tail.
     'progress_mark', 'run_finish',
     'working_set',                     # 0.0.22 D2 (HP.S2) — appended to the READ tail
+    # 0.0.25 ID3 — ID.S3's `ide_*` tools (read: a loopback UI round trip / a derived listing),
+    # appended to the READ tail (`tools_read` imports `tools_ide` last), so no position moves.
+    'ide_status', 'ide_open', 'ide_sessions',
     'remember', 'import_stack', 'reset', 'apply_proposal', 'memory_export', 'memory_import',
     'vault_push', 'session_push', 'session_pull', 'session_name', 'audit_share', 'spec_emit',
     'spec_amend', 'spec_check', 'init', 'reconfigure', 'config_set', 'export_stack',

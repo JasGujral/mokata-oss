@@ -4,12 +4,14 @@
 run Python 3.12 ONLY. The 3.10 "floor" legs that 0.0.16 and 0.0.18 stage 17 added to close
 `CI-MATRIX-FLOOR-GAP` were removed to cut the gate's wall-clock — the Windows legs dominate it.
 
-`pyproject.toml` still declares `requires-python = ">=3.10"`. That promise is now exercised by NO
-workflow, which reopens exactly the gap that let the ISO-dialect split ship green
+`pyproject.toml` still declares `requires-python = ">=3.10"`. That promise is exercised by NO
+PR-gate or tag-gate leg, which reopens exactly the gap that let the ISO-dialect split ship green
 (`datetime.fromisoformat` learned the Zulu designator in 3.11, so a 3.12-only gate cannot see a
 bug of that shape). The owner chose that trade knowingly; this file's job is to keep it VISIBLE:
-it pins that no leg runs the floor, so the day someone believes the floor is tested, a red says
-otherwise — and the day a floor leg returns, this file is edited deliberately, not drifted past.
+it pins that no GATE leg runs the floor, so the day someone believes a PR was tested on the floor,
+a red says otherwise. 0.0.25 Lane C (ruling U2 as recommended) brought the floor back WEEKLY —
+`.github/workflows/python-floor.yml`, graded by `tests/test_c_02_python_floor_leg.py` — which
+tests the promise without gating a merge; the gates here are unchanged.
 
 Kept from the earlier file: per-leg provenance, graded against the workflow in both directions,
 and the failure policy — every leg BLOCKS; nothing swallows its own failure.
@@ -158,7 +160,8 @@ class EveryLegRunsOnePython(unittest.TestCase):
         self.assertEqual([GATE_PYTHON], versions)
 
     def test_c_the_declared_floor_is_UNTESTED_and_that_is_pinned(self):
-        """★ The disclosed trade. If a floor leg comes back, edit this test on purpose."""
+        """★ The disclosed trade. If a floor leg comes back TO A GATE, edit this test on purpose.
+        (The weekly floor leg is not a gate; `test_c_02_python_floor_leg` grades it.)"""
         self.assertEqual(self.floor, "3.10",
                          "the declared floor moved — re-read this file's premise before editing it")
         everywhere = ({p for _o, p, _j in _expand(self.ci["jobs"]["test"])}

@@ -18,16 +18,16 @@ compares.
 Run `mokata skills` for the live list, `mokata skills <name>` to reveal a skill's full prompt and
 gate, and `mokata run <name>` to run one standalone (each keeps only its own gate).
 
-## The two groups — 26 skills
+## The two groups — 30 skills
 
 - **16 pipeline/capability skills** — the curated set Claude may engage on its own: the pipeline
   gates (`brainstorm`, `spec`, `test`, `develop`, `review`, `refine`, `debug`, `bug`, `optimize`,
   `ship`) plus the knowledge/governance/portability capabilities (`onboard`, `govern`, `session`,
   `playbook`), the docs↔code capability (`docsync`), and harness repair (`mcp-repair`).
-- **10 domain skills** — API, security, performance, frontend-a11y, browser-testing, CI/CD, git,
-  deprecation, docs/ADR, shipping — see [the domain-skills layer](domain-skills.md).
+- **14 domain skills** — API, security, performance, frontend-a11y, browser-testing, CI/CD, git,
+  deprecation, docs/ADR, shipping, frontend-react, backend-nestjs, frontend-perf, frontend-security — see [the domain-skills layer](domain-skills.md).
 
-That's **26 skills in total**. The counts are read from the registry, not hand-kept — `mokata
+That's **30 skills in total**. The counts are read from the registry, not hand-kept — `mokata
 skills` is the single source, and [docsync](docsync.md) fails the build if any doc claims a number
 the registry doesn't report.
 
@@ -53,13 +53,25 @@ a sentence the model is trusted to honour:
 
 If a skill's prose promised a boundary the engine didn't back, that would be a bug the skill-lint
 catches — Contracts are grounded in a boundary→gate map, so a Contract never claims enforcement
-that isn't there. Only a *backed* gate may be cited as enforcement, and there are **9 backed
+that isn't there. Only a *backed* gate may be cited as enforcement, and there are **15 backed
 gates** — every one of them a row in the `skill_contracts.GATES` map carrying `backed=True`:
 
 <!-- mokata:gates backed -->
 `write-gate` · `secret-guard` · `spec-persisted` · `completeness` ·
-`no-code-without-failing-test` · `deviation` · `hard-rule` · `approach-approval` · `self-protect`
+`no-code-without-failing-test` · `deviation` · `hard-rule` · `approach-approval` · `self-protect` ·
+`dep-cooldown` · `route-guarded` · `bundle-budget` · `react-lint` · `bundle-secret-scan` ·
+`dep-vulnerability`
 <!-- /mokata:gates -->
+
+The last six are the **frontend/backend domain gates** (0.0.25). `mokata gate check <gate>` runs
+one on a repo; the exit code is the verdict — `0` pass, `1` fail, `3` not configured. *Not
+configured* (no budget declared, the tool not installed, no build output) is its own state and is
+never reported as a pass. `dep-cooldown` and `route-guarded` are mokata's own checks; the other
+four run the real tool (size-limit or `lhci assert`, eslint with eslint-plugin-react-hooks,
+gitleaks, `npm audit --audit-level=high`) and pass its exit code through. `route-guarded` proves a
+guard is *attached* to every NestJS route — whether that guard's policy is right is still a human
+review. `render-regression` is **advisory**: no tool exits non-zero on a render regression, so no
+Contract may cite it.
 
 `self-protect` is the structurally unusual one — not because it sits outside that map, but because
 of *what it keys on*. Every other entry asks where a run has got to; `self-protect` asks only about

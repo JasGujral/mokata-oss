@@ -38,6 +38,7 @@ EXPECTED_READ = {"query", "recall", "doctor", "coverage", "budget", "audit",
                  # verdict event and is still a READ-kind tool: observability-tier, append-only +
                  # UNGATED, mirroring `mokata progress record-review` (the `session_save` shape).
                  "review_status", "review_record",
+                 "ide_status", "ide_open", "ide_sessions",  # 0.0.25 ID3 — ID.S3's IDE tools (read)
                  # 0.0.22 C1 — the stage mark and the ship-completion event, in-harness. READ kind
                  # for the same reason: append-only + UNGATED, like their CLI twins.
                  "progress_mark", "run_finish",

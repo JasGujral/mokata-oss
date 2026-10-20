@@ -345,16 +345,15 @@ def _hooks_from_config(data: Dict, *, surface: str, where: str,
 def _settings_hooks(root: str, home: Optional[str]) -> List[WiredHook]:
     """The hooks `mokata setup claude` wired, project scope then user scope."""
     out: List[WiredHook] = []
-    try:
-        from .harness_setup import resolve_targets
-    except ImportError:
-        return out
+    # The leaf `harness_paths` (the single source `harness_setup.resolve_targets` itself uses for
+    # this path), not `harness_setup`: every PLUGIN-route hook asks this question before it runs,
+    # and importing the installer cost it ~35 ms (HOOK-BUDGET, 0.0.25 Lane HB).
+    from .harness_paths import claude_settings_path
     for scope in ("project", "user"):
         try:
-            targets = resolve_targets(scope, root, home, "claude")
+            path = claude_settings_path(scope, root, home)
         except (ValueError, OSError):
             continue
-        path = getattr(targets, "settings_path", None)
         if path is None or not Path(str(path)).is_file():
             continue
         data = _read_json(path)

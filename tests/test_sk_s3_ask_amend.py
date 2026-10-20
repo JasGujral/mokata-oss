@@ -24,6 +24,7 @@ import unittest
 from pathlib import Path
 
 import _support  # noqa: F401  (puts src/ on the path)
+from mokata.govern.domain_gates import DOMAIN_GATE_IDS  # 0.0.25 Lane D2
 
 from mokata.agent_skills import CURATED_SKILLS, skill_markdown
 from mokata.skills import command_markdown, get_skill
@@ -147,7 +148,7 @@ class TestComposesWithExistingGates(unittest.TestCase):
     def test_gate_registry_is_unchanged(self):
         # No gate was added or altered by this stage — the backed set is exactly the SK.S1 eight.
         self.assertEqual(
-            sorted(g for g, r in sc.GATES.items() if r.backed),
+            sorted(g for g, r in sc.GATES.items() if r.backed and g not in DOMAIN_GATE_IDS),
             # PH-GATE.S0 (0.0.14) backed `approach-approval`; this stage still adds no gate.
             # 0.0.17 stage 5 moved the SET without changing its SIZE: `self-protect` was
             # added (it enforces at `WriteGate.submit` layer 0 and was missing from the

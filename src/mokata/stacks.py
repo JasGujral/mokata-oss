@@ -74,6 +74,13 @@ class StackSpec:
     guardrails: Tuple[str, ...]
     skills: Tuple[str, ...]
     tags: Tuple[str, ...]
+    # 0.0.25 Lane D — which side of the wire the stack governs ("frontend" | "backend"), the domain
+    # skills it brings (routed per spec by the classifier — the stack only declares them), and the
+    # toolchain CANDIDATES `detect_toolchain` chooses between in a real repo. Declared, never
+    # vendored: mokata installs none of these tools.
+    kind: str = "backend"
+    domains: Tuple[str, ...] = ()
+    toolchain: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()
 
 
 _COMMON_SKILLS = ("brainstorm", "spec", "test", "develop", "review", "ship")
@@ -126,6 +133,52 @@ _STARTER_SPECS: Tuple[StackSpec, ...] = (
         skills=_COMMON_SKILLS,
         tags=("go", "golang", "service", "backend"),
     ),
+    StackSpec(
+        name="react-web",
+        framework="React (web) + TypeScript",
+        summary="Governed stack for a React web app — component tests first, pure renders, "
+                "authorization on every server entry point, measured performance.",
+        base_profile="standard",
+        guardrails=(
+            "A component's behaviour lands only after a failing test that queries it by role or "
+            "label (RED before GREEN).",
+            "Every Server Function and route handler authorizes the caller for the object it "
+            "touches; hiding a button is not access control.",
+            "No secret carries a client-exposed env prefix; the built output is checked, not "
+            "only the git history.",
+            "A performance change is kept only with a before/after measurement on a production "
+            "build.",
+        ),
+        skills=_COMMON_SKILLS,
+        tags=("react", "web", "frontend", "typescript", "javascript", "jsx", "tsx"),
+        kind="frontend",
+        domains=("frontend-react", "frontend-a11y", "frontend-perf", "frontend-security"),
+        toolchain=(("test_runner", ("vitest", "jest")), ("linter", ("oxlint", "eslint")),
+                   ("type_checker", ("tsc",))),
+    ),
+    StackSpec(
+        name="nestjs-api",
+        framework="NestJS + TypeScript",
+        summary="Governed stack for a NestJS API — guards on every route, runtime-validated DTOs, "
+                "walked contract changes, tests through the testing module.",
+        base_profile="standard",
+        guardrails=(
+            "Every route handler has a guard or an explicit, reviewed public marker; "
+            "authorization never lives only in middleware.",
+            "DTOs are runtime classes or schemas (never `import type`), validated with unknown "
+            "fields stripped and rejected.",
+            "A controller, provider or DTO contract change is walked to its callers before it "
+            "lands.",
+            "No behaviour without a failing test through the testing module or the HTTP layer "
+            "(RED before GREEN).",
+        ),
+        skills=_COMMON_SKILLS,
+        tags=("nestjs", "nest", "node", "typescript", "ts", "backend", "api"),
+        kind="backend",
+        domains=("backend-nestjs", "api", "security"),
+        toolchain=(("test_runner", ("vitest", "jest")), ("linter", ("oxlint", "eslint")),
+                   ("type_checker", ("tsc",))),
+    ),
 )
 
 _SPECS_BY_NAME: Dict[str, StackSpec] = {s.name: s for s in _STARTER_SPECS}
@@ -133,6 +186,244 @@ _SPECS_BY_NAME: Dict[str, StackSpec] = {s.name: s for s in _STARTER_SPECS}
 
 def starter_stack_names() -> List[str]:
     return [s.name for s in _STARTER_SPECS]
+
+
+# ============================================================================ JS/TS project facts
+# 0.0.25 Lane D — the FRAMEWORK a touched file belongs to, read from its nearest `package.json`.
+# These are STRUCTURAL facts about the repo (what the project declares it depends on), never a
+# reading of the prompt: the domain classifier needs them to tell a React WEB component from a
+# React Native one (both are `.tsx`), and a NestJS controller from an Express handler (both are
+# `.ts` files named `*.controller.ts` in the wild). Read-only, stdlib-only, bounded (one parse per
+# package dir, cached by the caller), degrade-clean (an unreadable or absent manifest is "no facts",
+# so a framework-gated domain does NOT fire — never a guess).
+FW_REACT_WEB = "react-web"
+FW_REACT_NATIVE = "react-native"
+FW_NESTJS = "nestjs"
+FW_EXPRESS = "express"
+
+PACKAGE_JSON = "package.json"
+_DEP_FIELDS = ("dependencies", "devDependencies", "peerDependencies")
+# A package that renders to the DOM. `next` ships its own renderer dependency, so it counts alone.
+_REACT_WEB_DEPS = ("react-dom", "next")
+# A React Native app (Expo included) is a different platform: no DOM, no web bundle, no
+# Server Components — the React web rule pack does not apply to it.
+_REACT_NATIVE_DEPS = ("react-native", "expo")
+_NEST_DEPS = ("@nestjs/core",)
+
+
+def read_package_json(directory: str) -> Optional[Dict[str, Any]]:
+    """The parsed `package.json` in `directory`, or None (absent, unreadable, not an object)."""
+    path = os.path.join(directory, PACKAGE_JSON)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def package_deps(pkg: Optional[Dict[str, Any]]) -> Tuple[str, ...]:
+    """Every dependency name the manifest declares (runtime + dev + peer), sorted."""
+    out: set = set()
+    for fld in _DEP_FIELDS:
+        block = (pkg or {}).get(fld)
+        if isinstance(block, dict):
+            out.update(str(k) for k in block)
+    return tuple(sorted(out))
+
+
+def frameworks_of_package(pkg: Optional[Dict[str, Any]]) -> Tuple[str, ...]:
+    """The framework facts one `package.json` establishes. React Native EXCLUDES React web (an Expo
+    app may list `react-dom` for its web target, but its components are native components); NestJS
+    EXCLUDES plain Express (Nest pulls Express in through its platform adapter)."""
+    deps = set(package_deps(pkg))
+    out: List[str] = []
+    native = any(d in deps for d in _REACT_NATIVE_DEPS)
+    if native:
+        out.append(FW_REACT_NATIVE)
+    elif any(d in deps for d in _REACT_WEB_DEPS):
+        out.append(FW_REACT_WEB)
+    nest = any(d in deps for d in _NEST_DEPS)
+    if nest:
+        out.append(FW_NESTJS)
+    elif "express" in deps:
+        out.append(FW_EXPRESS)
+    return tuple(out)
+
+
+def nearest_package_dir(root: str, path: str) -> Optional[str]:
+    """The closest directory at or above `path` (relative to `root`, or absolute under it) that
+    holds a `package.json`, never climbing above `root`. None when there is none."""
+    from .repo_paths import escapes_root, name_of, path_of
+    if not root:
+        return None
+    root_abs = os.path.abspath(root)
+    p = path if os.path.isabs(path) else path_of(root_abs, path)
+    cur = os.path.dirname(os.path.abspath(p))
+    while True:
+        try:
+            name = name_of(cur, root_abs)
+        except ValueError:                    # another drive on Windows — not under the repo
+            return None
+        if name != "." and escapes_root(name):
+            return None                       # outside the repo — never read above the root
+        if os.path.isfile(os.path.join(cur, PACKAGE_JSON)):
+            return cur
+        if cur == root_abs:
+            return None
+        cur = os.path.dirname(cur)
+
+
+def frameworks_for_file(root: str, path: str,
+                        cache: Optional[Dict[str, Tuple[str, ...]]] = None) -> Tuple[str, ...]:
+    """The framework facts of the project `path` belongs to (its nearest `package.json`), or ()
+    when there is no manifest. `cache` maps a package dir to its facts so a surface of N files in
+    one package parses the manifest once."""
+    pdir = nearest_package_dir(root, path)
+    if pdir is None:
+        return ()
+    if cache is not None and pdir in cache:
+        return cache[pdir]
+    facts = frameworks_of_package(read_package_json(pdir))
+    if cache is not None:
+        cache[pdir] = facts
+    return facts
+
+
+# ============================================================================ detect (suggest only)
+# 0.0.25 Lane D — which starter stack a repo's packages look like, and the toolchain each package
+# actually uses. SUGGEST-ONLY (doc 103 §8.4): it reads, prints, and installs nothing; adopting a
+# stack is still `mokata stacks install`, the gated path. Bounded walk, stdlib only.
+_FRAMEWORK_STACK = {FW_REACT_WEB: "react-web", FW_NESTJS: "nestjs-api"}
+_SKIP_DIRS = frozenset({"node_modules", ".git", ".mokata", "dist", "build", ".next", "coverage",
+                        ".venv", "venv", "__pycache__"})
+DETECT_MAX_DEPTH = 3          # package dirs this deep below the root are considered
+DETECT_MAX_PACKAGES = 50      # and at most this many manifests are parsed
+
+_RUNNER_CONFIGS = {"vitest": ("vitest.config.ts", "vitest.config.mts", "vitest.config.js",
+                              "vitest.config.mjs", "vitest.workspace.ts"),
+                   "jest": ("jest.config.ts", "jest.config.js", "jest.config.mjs",
+                            "jest.config.cjs", "jest.config.json")}
+_LINTER_CONFIGS = {"oxlint": (".oxlintrc.json", "oxlint.json", "oxlintrc.json"),
+                   "eslint": ("eslint.config.js", "eslint.config.mjs", "eslint.config.cjs",
+                              "eslint.config.ts", ".eslintrc", ".eslintrc.js", ".eslintrc.cjs",
+                              ".eslintrc.json", ".eslintrc.yml", ".eslintrc.yaml")}
+
+
+@dataclass(frozen=True)
+class Toolchain:
+    """What one package uses. `test_runner` is "vitest" | "jest" | "" (none found); `linters` lists
+    every linter the package wires (oxlint and eslint are commonly run together); `type_checker`
+    is "tsc" when the package carries TypeScript, else ""."""
+
+    test_runner: str
+    linters: Tuple[str, ...]
+    type_checker: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"test_runner": self.test_runner, "linters": list(self.linters),
+                "type_checker": self.type_checker}
+
+
+def _script(pkg: Optional[Dict[str, Any]], name: str) -> str:
+    scripts = (pkg or {}).get("scripts")
+    val = scripts.get(name) if isinstance(scripts, dict) else None
+    return val if isinstance(val, str) else ""
+
+
+def _has_any(directory: str, names: Tuple[str, ...]) -> bool:
+    return any(os.path.isfile(os.path.join(directory, n)) for n in names)
+
+
+def detect_toolchain(directory: str, pkg: Optional[Dict[str, Any]] = None) -> Toolchain:
+    """The test runner, linters and type checker one package uses. Evidence order, strongest
+    first: what its `test`/`lint` script RUNS, then a config file on disk, then a declared
+    dependency. A runner named by the test script wins outright; with no script evidence, a config
+    file beats a bare dependency; a tie at the same level resolves in candidate order (vitest, then
+    jest) and is reported as that — never as both."""
+    pkg = read_package_json(directory) if pkg is None else pkg
+    deps = set(package_deps(pkg))
+    test_script = _script(pkg, "test")
+    runner = ""
+    for level in ("script", "config", "dep"):
+        for cand in ("vitest", "jest"):
+            hit = ((level == "script" and cand in test_script)
+                   or (level == "config" and (_has_any(directory, _RUNNER_CONFIGS[cand])
+                                              or (cand == "jest" and "jest" in (pkg or {}))))
+                   or (level == "dep" and cand in deps))
+            if hit:
+                runner = cand
+                break
+        if runner:
+            break
+    lint_script = _script(pkg, "lint")
+    linters = tuple(c for c in ("oxlint", "eslint")
+                    if c in lint_script or c in deps or _has_any(directory, _LINTER_CONFIGS[c]))
+    checker = "tsc" if ("typescript" in deps or os.path.isfile(
+        os.path.join(directory, "tsconfig.json"))) else ""
+    return Toolchain(test_runner=runner, linters=linters, type_checker=checker)
+
+
+@dataclass(frozen=True)
+class StackDetection:
+    """One package that looks like a starter stack: where it is (repo-relative, `/`-spelled, "."
+    for the root), which stack, which side of the wire, and its toolchain."""
+
+    stack: str
+    path: str
+    kind: str
+    toolchain: Toolchain
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"stack": self.stack, "path": self.path, "kind": self.kind,
+                "toolchain": self.toolchain.to_dict()}
+
+    def line(self) -> str:
+        tc = self.toolchain
+        return (f"{self.stack} ({self.kind}) at {self.path} · test: {tc.test_runner or 'none'}"
+                f" · lint: {', '.join(tc.linters) or 'none'} · types: {tc.type_checker or 'none'}")
+
+
+def _package_dirs(root: str) -> List[str]:
+    from .repo_paths import name_of, split_path
+    out: List[str] = []
+    root_abs = os.path.abspath(root)
+    for dirpath, dirnames, filenames in os.walk(root_abs):
+        rel = name_of(dirpath, root_abs)
+        depth = 0 if rel == "." else len(split_path(rel))
+        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS and not d.startswith("."))
+        if depth >= DETECT_MAX_DEPTH:
+            dirnames[:] = []
+        if PACKAGE_JSON in filenames:
+            out.append(dirpath)
+            if len(out) >= DETECT_MAX_PACKAGES:
+                break
+    return out
+
+
+def detect_stacks(root: str) -> List[StackDetection]:
+    """Every package under `root` (bounded) whose declared framework maps to a starter stack, with
+    its toolchain — React web → `react-web` (frontend), NestJS → `nestjs-api` (backend). A React
+    Native app, a plain Express server or a framework-less TypeScript library is NOT suggested a
+    framework stack. Read-only; an unreadable manifest is skipped."""
+    from .repo_paths import name_of
+    found: List[StackDetection] = []
+    if not root or not os.path.isdir(root):
+        return found
+    root_abs = os.path.abspath(root)
+    for pdir in _package_dirs(root_abs):
+        pkg = read_package_json(pdir)
+        if pkg is None:
+            continue
+        rel = str(name_of(pdir, root_abs))
+        for fw in frameworks_of_package(pkg):
+            name = _FRAMEWORK_STACK.get(fw)
+            if name:
+                found.append(StackDetection(stack=name, path=rel, kind=_SPECS_BY_NAME[name].kind,
+                                            toolchain=detect_toolchain(pdir, pkg)))
+    return found
 
 
 # ============================================================================ manifest builder
@@ -152,6 +443,9 @@ def build_stack_manifest(name: str) -> Dict[str, Any]:
         "guardrails": list(spec.guardrails),
         "skills": list(spec.skills),
         "tags": list(spec.tags),
+        "kind": spec.kind,
+        "domains": list(spec.domains),
+        "toolchain": {role: list(cands) for role, cands in spec.toolchain},
     }
     return data
 
@@ -166,6 +460,8 @@ def _index_entry(spec: StackSpec) -> Dict[str, Any]:
         "guardrails": len(spec.guardrails),
         "skills": list(spec.skills),
         "tags": list(spec.tags),
+        "kind": spec.kind,
+        "domains": list(spec.domains),
         # Where the manifest file lives in a file-backed catalog (the committed mirror + any
         # git-org/vault catalog use this same convention).
         "manifest": f"{spec.name}.json",

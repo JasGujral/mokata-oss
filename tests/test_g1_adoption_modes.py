@@ -119,7 +119,11 @@ class TestG1QuickstartPrinted(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             rc, out = _run_init(d, mode=mode)
             self.assertEqual(rc, 0)
-            self.assertIn(adoption_modes.render_quickstart(mode).strip(), out)
+            # 0.0.25 I-02: the banner follows the OUTCOME — a `--yes` init without
+            # `--with-deps` installs nothing, so full/memory print the PARTIALLY form. The body
+            # (every runnable command) is unchanged and is what this asserts.
+            body = adoption_modes.render_quickstart(mode).strip().splitlines()[1:]
+            self.assertIn("\n".join(body), out)
             return out
 
     def test_g1_quickstart_texts_are_distinct(self):
@@ -169,50 +173,48 @@ class TestG1Consent(unittest.TestCase):
     """All consent through the DB.S4 primitives; seatbelt never enters the flow."""
 
     def test_g1_memory_mode_offers_embeddings(self):
-        """Interactive double -> the ask fires and lands on the EXISTING install_extra."""
+        """Interactive -> ONE ask, and the install lands on the shared install_extras."""
         with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as home:
-            pip_spy = _Spy(ret=mock.Mock(returncode=0, stderr=""))
-            asked = []
-
-            def _offer(root, **kw):
-                # the REAL DB.S4 primitive, with its own seams injected
-                return extras_install.offer_embeddings(
-                    root, already=lambda: False, verify=lambda: True,
-                    prompt_fn=lambda q: (asked.append(q), True)[1],
-                    runner=pip_spy,
-                    **{**kw, "out": (lambda _s: None)})
-
+            asked, installs = [], []
             res = adoption_modes.offer_mode_extras(
                 d, "memory", interactive=True, user_home=home, out=lambda _s: None,
-                offer_embeddings_fn=_offer)
-
-            self.assertTrue(res.embeddings_offered)
-            self.assertEqual(len(asked), 1, "the DB.S4 ask must fire exactly once")
-            self.assertEqual(len(pip_spy.calls), 1, "install must go through install_extra's pip")
-            cmd = pip_spy.calls[0][0][0]
-            self.assertEqual(cmd[:4], [sys.executable, "-m", "pip", "install"])
+                prompt_fn=lambda q: (asked.append(q), True)[1],
+                probes={"embeddings": (lambda: False, lambda: True)},
+                embedder_wired_fn=lambda _r: False, wire_embedder_fn=lambda root, **k: True,
+                install_fn=lambda specs, **kw: installs.append(specs) or
+                mock.Mock(ok=True, deferred=False, fix="", message="installed"))
+            self.assertEqual(len(asked), 1, "the ask must fire exactly once")
+            self.assertEqual(installs, [["mokata[embeddings]"]])
             self.assertTrue(res.embeddings_installed)
 
     def test_g1_full_mode_offers_embeddings_and_graph(self):
         with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as home:
-            emb, graph = _Spy(ret=mock.Mock(installed=True)), _Spy(ret=mock.Mock(adopted=True))
+            asked, installs, adopted = [], [], []
             res = adoption_modes.offer_mode_extras(
                 d, "full", interactive=True, user_home=home, out=lambda _s: None,
-                offer_embeddings_fn=emb, offer_graph_fn=graph)
-            self.assertTrue(res.embeddings_offered and res.graph_offered)
-            self.assertEqual(len(emb.calls), 1)
-            self.assertEqual(len(graph.calls), 1, "full mode surfaces the GR.S2 graph offer")
+                prompt_fn=lambda q: (asked.append(q), True)[1],
+                probes={"embeddings": (lambda: False, lambda: True),
+                        "code-graph": (lambda: False, lambda: True)},
+                graph_pinned_fn=lambda _r: False, embedder_wired_fn=lambda _r: False,
+                wire_embedder_fn=lambda root, **k: True,
+                install_fn=lambda specs, **kw: installs.append(specs) or
+                mock.Mock(ok=True, deferred=False, fix="", message="installed"),
+                adopt_fn=lambda root, **kw: adopted.append(kw) or mock.Mock(committed=True))
+            self.assertEqual(len(asked), 1, "full mode asks ONE dependency question")
+            self.assertEqual(installs, [["mokata[embeddings]", "code-review-graph"]],
+                             "both extras in ONE installer run")
+            self.assertEqual(len(adopted), 1, "full mode pins the graph on that one consent")
+            self.assertTrue(res.complete)
 
     def test_g1_seatbelt_never_offers(self):
         """STRUCTURAL: the flow is not invoked — not merely suppressed downstream."""
         with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as home:
             with mock.patch.object(extras_install, "offer_extra") as oe, \
-                 mock.patch.object(extras_install, "install_extra") as ie, \
+                 mock.patch.object(extras_install, "install_extras") as ie, \
                  mock.patch.object(extras_install, "offer_embeddings") as oem:
                 res = adoption_modes.offer_mode_extras(
                     d, "seatbelt", interactive=True, user_home=home, out=lambda _s: None)
-            self.assertFalse(res.embeddings_offered)
-            self.assertFalse(res.graph_offered)
+            self.assertEqual(res.rows, [])
             oe.assert_not_called()
             ie.assert_not_called()
             oem.assert_not_called()
@@ -245,7 +247,7 @@ class TestG1Consent(unittest.TestCase):
         for mode in adoption_modes.mode_names():
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as d:
                 with mock.patch("subprocess.run") as sp, \
-                     mock.patch.object(extras_install, "install_extra") as ie, \
+                     mock.patch.object(extras_install, "install_extras") as ie, \
                      mock.patch.object(extras_install, "offer_extra") as oe, \
                      mock.patch("mokata.prompt.read_yes_no") as ask:
                     rc, _ = _run_init(d, mode=mode, yes=True)
@@ -274,21 +276,27 @@ class TestG1Consent(unittest.TestCase):
 
     def test_g1_non_interactive_flag_skips_offers_structurally(self):
         with tempfile.TemporaryDirectory() as d:
-            with mock.patch.object(extras_install, "offer_embeddings") as oem:
-                res = adoption_modes.offer_mode_extras(d, "full", interactive=False,
-                                                       out=lambda _s: None)
-            oem.assert_not_called()
-            self.assertFalse(res.embeddings_offered)
+            with mock.patch.object(extras_install, "install_extras") as ie:
+                res = adoption_modes.offer_mode_extras(
+                    d, "full", interactive=False, out=lambda _s: None,
+                    probes={"embeddings": (lambda: False, lambda: False),
+                            "code-graph": (lambda: False, lambda: False)},
+                    graph_pinned_fn=lambda _r: False, embedder_wired_fn=lambda _r: False,
+                    wire_embedder_fn=lambda root, **k: True)
+            ie.assert_not_called()
+            self.assertFalse(res.asked)
             self.assertIn("non-interactive", res.skipped_reason)
+            self.assertTrue(all(r.status == adoption_modes.NOT_ASKED for r in res.rows))
 
     def test_g1_offer_failure_never_breaks_init(self):
         """DEGRADE_CLEAN — an already-successful init is never undone by an optional extra."""
         with tempfile.TemporaryDirectory() as d:
-            def _boom(root, **kw):
+            def _boom(specs, **kw):
                 raise RuntimeError("index unreachable")
             res = adoption_modes.offer_mode_extras(
-                d, "memory", interactive=True, out=lambda _s: None,
-                offer_embeddings_fn=_boom)
+                d, "memory", interactive=False, with_deps=True, out=lambda _s: None,
+                probes={"embeddings": (lambda: False, lambda: False)}, install_fn=_boom,
+                embedder_wired_fn=lambda _r: False)
             self.assertFalse(res.embeddings_installed)
             self.assertTrue(res.notes)
 

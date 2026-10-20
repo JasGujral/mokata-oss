@@ -27,7 +27,7 @@ single sources the rest of mokata reads — never a hand-kept copy:
 
 | Check | Ground truth | Severity |
 |---|---|---|
-| **skill count** (`N skills`) | the curated registry (16) + shipped domain skills (26 total) | Blocking |
+| **skill count** (`N skills`) | the curated registry (16) + shipped domain skills (30 total) | Blocking |
 | **command name** (`mokata <cmd>`) | the live CLI parser | Blocking |
 | **slash skill** (`/<name>`) | the shipped skill set | Blocking |
 | **install path** (`pip install …`) | the canonical `pip install mokata` | Blocking |
@@ -45,7 +45,7 @@ A clean doc reports `OK — every claim matches the code`. A drifted one lists e
 ```text
 docsync audit · docs/example.md: 2 discrepancy(ies)
   ⚠ stale section(s): Install
-  [Blocking] skill-count (L12 · §Overview): doc claims an outdated skill count; the code ships 16 pipeline skills (26 incl. domain skills)
+  [Blocking] skill-count (L12 · §Overview): doc claims an outdated skill count; the code ships 16 pipeline skills (30 incl. domain skills)
   [Blocking] install-path (L20 · §Install): dead install path — a mokata-prefixed package other than the canonical `pip install mokata`
 ```
 

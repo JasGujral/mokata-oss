@@ -25,7 +25,7 @@ truth). A CI parity test derives the command set from the live CLI parser and **
 command lacks a Claude Code surface *or* an explicit exemption — so this can never silently
 regress.
 
-**The MCP surface today: 67 tools — 43 read, 23 write, and 1 approve** (the default-off in-chat
+**The MCP surface today: 70 tools — 46 read, 23 write, and 1 approve** (the default-off in-chat
 approval described below). The registry in `mokata.mcp.registry` is the single source of that
 count.
 
@@ -121,7 +121,7 @@ matrix with exactly that rationale, and the parity test asserts the exemption st
 | CLI command | Why it has no in-harness surface |
 |---|---|
 | `approve` | It mints the human approval a durable MCP write needs. By default the approval must be minted by a human at a terminal (explicit, shown in full, re-confirmed, single-use, content-hashed, session-scoped, ledgered); the model may only *reference* it by id. The write tools' propose path **is** its in-harness surface: they hand back a `proposal_id` and tell the model to ask you to run the command. **0.0.14 adds an opt-in `mcp__mokata__approve` tool that is DEFAULT-OFF (`settings.approvals.in_chat`; enabling it is a human-gated, ledgered config write)**; once enabled it performs the SAME single-use, content-hash-bound, session-scoped, expiring approval as `mokata approve <id>` (never `approve=true`), it never rides the `mcp__mokata__*` auto-grant (setup writes a `permissions.ask` entry so the harness prompts on every call), and its ledger records `actor="chat-relayed"`. While off it refuses; the terminal `mokata approve` stays the default posture. |
-| `gate` | `gate status` / `gate override <gate> --reason "<why>"` / `gate clear` govern the run-state gates the [`gate-guard` hook](../how-it-works/skills-and-gates.md#the-gate-guard-the-gates-enforced-on-native-edits) enforces on native `Write`/`Edit`. A model-invocable override would make a structural gate advisory again — so the override is a human act at a terminal: explicit, re-confirmed, session-scoped, ledgered. There is no env-var kill switch either (a side door any process can open silently). The hook itself needs no surface: `mokata setup` wires it. |
+| `gate` | `gate status` / `gate override <gate> --reason "<why>"` / `gate clear` govern the run-state gates the [`gate-guard` hook](../how-it-works/skills-and-gates.md#the-gate-guard-the-gates-enforced-on-native-edits) enforces on native `Write`/`Edit`. A model-invocable override would make a structural gate advisory again — so the override is a human act at a terminal: explicit, re-confirmed, session-scoped, ledgered. There is no env-var kill switch either (a side door any process can open silently). The hook itself needs no surface: `mokata setup` wires it. `gate check <gate>` is the read-only exception: it runs one frontend/backend domain gate on the repo and overrides nothing, so it is safe for an agent to run from the shell — its exit code is the verdict. |
 
 ## Intentionally CLI-or-hook (install / diagnostic plumbing)
 

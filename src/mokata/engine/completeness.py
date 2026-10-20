@@ -12,7 +12,7 @@ The gate BLOCKS on any unmapped AC (and on an empty spec); it never silently pas
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from ..brainstorm import load_approved_approach
 from ..pipeline import PHASE_GATES
@@ -31,6 +31,16 @@ GATE = PHASE_GATES[COMPLETENESS_PHASE]
 WARN_NO_DECISIONS = ("no structured decisions[] on the approved approach — the diff has no "
                      "machine-readable contract for review to verify against (adoption is gradual; "
                      "record decisions in brainstorm to enable it)")
+
+
+# 0.0.25 Lane D — the UI acceptance-criterion form. The refusal names the fix in the reason itself,
+# so every surface that prints the reason (CLI, MCP, the pipeline) prints the remedy with it.
+UI_MATRIX_FIX = ("give each UI criterion a `states` matrix stating what the user sees when it is "
+                 "default, loading, empty, error and disabled (or `n/a — why` for a state that "
+                 "cannot occur)")
+# Advisory (never blocks): a spec routed to the React web pack that states no UI criterion at all.
+WARN_NO_UI_CRITERION = ("the spec routes a UI domain (frontend-react) but states no UI acceptance "
+                        "criterion — a component change usually owes one with its state matrix")
 
 
 # SPEC-STANDALONE-SILENT — THE sentence for "this spec has no upstream approved direction".
@@ -79,6 +89,8 @@ class GateResult:
     # "evidence covers the stated ACs" FINDING. Reported beside the verdict; never flips it.
     evidence: Any = None
     evidence_finding: Any = None
+    # 0.0.25 Lane D — UI criteria whose state matrix is incomplete: {ac_id: [missing states]}.
+    ui_incomplete: Dict[str, List[str]] = field(default_factory=dict)
 
     @property
     def standalone(self) -> bool:
@@ -96,6 +108,8 @@ class GateResult:
         ]
         if self.unmapped_ids:
             lines.append(f"  unmapped: {', '.join(self.unmapped_ids)}")
+        for ac_id, missing in self.ui_incomplete.items():
+            lines.append(f"  UI state matrix incomplete: {ac_id} (missing {', '.join(missing)})")
         for w in self.warnings:
             lines.append(f"  ⚠ {w}")
         if self.approach_present:
@@ -129,6 +143,13 @@ def _completeness_evidence(spec: Spec, map_result: MapResult):
                           detail=f"{len(spec.criteria)} acceptance criterion/criteria")]
     artifacts: List[Artifact] = []
     seen = set()
+    for ac in spec.criteria:
+        if ac.kind == "ui":
+            missing = ac.missing_states()
+            tested.append(TestedCheck(f"ui-state-matrix:{ac.id}", FAIL if missing else PASS,
+                                      ac_ids=(ac.id,),
+                                      detail=(f"missing {', '.join(missing)}" if missing
+                                              else "every UI state is stated")))
     for m in map_result.mappings:
         names = [t.name for t in m.tests]
         tested.append(TestedCheck(f"ac-maps-to-test:{m.ac.id}", PASS if m.mapped else FAIL,
@@ -174,12 +195,19 @@ def run_completeness_gate(spec: Spec, tests: List[TestRef],
 
     map_result = map_acceptance_criteria(spec, tests)
 
+    ui_incomplete = {ac.id: ac.missing_states() for ac in spec.criteria if ac.missing_states()}
     if not spec.criteria:
         passed, reason = False, "no acceptance criteria — a spec must state at least one"
-    elif map_result.unmapped_ids:
+    elif map_result.unmapped_ids or ui_incomplete:
         passed = False
-        reason = (f"{len(map_result.unmapped_ids)} acceptance criterion/criteria "
-                  f"unmapped to any test")
+        problems = []
+        if map_result.unmapped_ids:
+            problems.append(f"{len(map_result.unmapped_ids)} acceptance criterion/criteria "
+                            f"unmapped to any test")
+        if ui_incomplete:
+            problems.append(f"{len(ui_incomplete)} UI acceptance criterion/criteria without a "
+                            f"full state matrix ({', '.join(ui_incomplete)}) — {UI_MATRIX_FIX}")
+        reason = "; ".join(problems)
     else:
         passed = True
         reason = (f"all {len(spec.criteria)} acceptance criteria map to tests "
@@ -191,6 +219,9 @@ def run_completeness_gate(spec: Spec, tests: List[TestRef],
     warnings: List[str] = []
     if approach_present and not getattr(handoff.approach, "decisions", None):
         warnings.append(WARN_NO_DECISIONS)
+    if "frontend-react" in (spec.domains or []) and not any(ac.kind == "ui"
+                                                             for ac in spec.criteria):
+        warnings.append(WARN_NO_UI_CRITERION)
     if root or graph_available:
         from .spec_anchor import anchor_warnings
         warnings.extend(anchor_warnings(spec, root=root, graph_available=graph_available))
@@ -213,6 +244,7 @@ def run_completeness_gate(spec: Spec, tests: List[TestRef],
                                              [ac.id for ac in spec.criteria]),
         approach=approach, approach_present=approach_present,
         unmapped_ids=list(map_result.unmapped_ids),
+        ui_incomplete=ui_incomplete,
         refinements_present=refinements is not None,
         refinements=refinements.label if refinements is not None else None,
         warnings=warnings,

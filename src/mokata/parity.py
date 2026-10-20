@@ -93,9 +93,12 @@ def _surfaces() -> List[CommandSurface]:
         CommandSurface("version", slash=("version",),
                        note="version + how-to-update (offline; opt-in check) → slash"),
         CommandSurface("ide", slash=("review-window",),
+                       mcp_read=("ide_status", "ide_open", "ide_sessions"),
                        note="the read-only review window (stage E2) — `/mokata:review-window` is what "
                             "opens it for THIS session: the prompt hook is the one surface that "
-                            "knows which session asked, so it opens or re-focuses the window"),
+                            "knows which session asked, so it opens or re-focuses the window; "
+                            "the agent finds it, points the human at code and reads the session "
+                            "browser + needs-you queue through the ide_* reads (lane ID3)"),
         CommandSurface("init", slash=("init",), mcp_write=("init",),
                        note="scaffold config — gated MCP write (preview→approve) + slash; the "
                             "interactive first-run wizard runs through this surface (Stage 56)"),

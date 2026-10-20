@@ -209,7 +209,8 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
         check_for_update,
         detect_install_method,
         finish_upgrade,
-        run_pip_upgrade,
+        run_upgrade,
+        upgrade_plan,
         upgrade_steps,
     )
     if args.check:
@@ -231,14 +232,26 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
         for step in steps:
             print(f"  {step}")
         return 0
-    # pip install — propose `pip install -U mokata`, HUMAN-GATED (never auto-runs).
-    print(f"To upgrade: {steps[0]}")
-    decision = confirmed(args.yes, f"run `{steps[0]}` now?", "Run the upgrade?")
+    # 0.0.25 — the installer that OWNS this environment upgrades it (uv tool / pipx / pip / uv
+    # pip). Until now this was always `pip install -U`, which the primary route has no pip for.
+    plan = upgrade_plan("pip" if args.method == "pip" else "auto")
+    if not plan.runnable:
+        why = f" ({plan.reason})" if plan.reason else ""
+        print(f"Run this yourself{why}:\n  {plan.display}")
+        print("then:  " + "\n       ".join(steps[1:]))
+        return 0
+    print(f"To upgrade: {plan.display}")
+    decision = confirmed(args.yes, f"run `{plan.display}` now?", "Run the upgrade?")
     if not decision:
         print(f"not run — {decline_notice(decision)}. Run it yourself when ready.")
         return 0
-    run_pip_upgrade()
-    print(f"ran: {steps[0]}")
+    res = run_upgrade(plan)
+    if not res.ok:
+        print(f"upgrade FAILED (exit {res.returncode}): {plan.display}")
+        if res.output:
+            print(res.output.rstrip()[-2000:])
+        return 1
+    print(f"ran: {plan.display}")
     if getattr(args, "no_refresh", False):
         # Opting out of the tail must still leave the user holding the step they now owe —
         # an upgrade that stops here is exactly the half-done state this deliverable exists for.

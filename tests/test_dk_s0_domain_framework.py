@@ -359,8 +359,14 @@ class TestNoNewGate(unittest.TestCase):
         # enforces at `WriteGate.submit` layer 0 and was missing from the table doc 85 §4 has
         # listed it in since 2026-07-26) and `ship-readiness` was demoted to advisory (nothing
         # executes it). Still no gate from THIS stage.
+        # 0.0.25 Lane D2 added six DOMAIN gates (`govern/domain_gates.py`, run by `mokata gate
+        # check`); they belong to that lane, not to the domain framework, so they are named apart
+        # and the framework's own set is asserted unchanged around them.
+        lane_d2 = {"bundle-budget", "bundle-secret-scan", "dep-cooldown", "dep-vulnerability",
+                   "react-lint", "route-guarded"}
+        self.assertTrue(lane_d2 <= {g for g, r in GATES.items() if r.backed})
         self.assertEqual(
-            sorted(g for g, r in GATES.items() if r.backed),
+            sorted(g for g, r in GATES.items() if r.backed and g not in lane_d2),
             ["approach-approval", "completeness", "deviation", "hard-rule",
              "no-code-without-failing-test", "secret-guard", "self-protect", "spec-persisted",
              "write-gate"])

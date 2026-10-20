@@ -503,8 +503,14 @@ class TestConsentInstall(unittest.TestCase):
                                                "installed": True, "scope": "repo"})],
                              ledger.entries)
             cmd, kw = calls[0]
-            self.assertEqual(["-m", "pip", "install", EMBEDDINGS_EXTRA], cmd[1:],
-                             "installs into THIS interpreter, not whatever `pip` is on PATH")
+            # 0.0.25 I-01: the route follows the installer that owns this env (install_route);
+            # under pip it is THIS interpreter, and the extra's own requirements (never
+            # `mokata[...]`, which would make pip re-resolve mokata itself).
+            from mokata.install_route import PIP, detect_installer, extra_requirements
+            if detect_installer() == PIP:
+                self.assertEqual(["-m", "pip", "install", *extra_requirements("embeddings")],
+                                 cmd[1:], "installs into THIS interpreter, not whatever `pip` "
+                                          "is on PATH")
             self.assertIn("timeout", kw, "the ONE subprocess is bounded (the D0 discipline)")
 
     def test_db_s4_consent_decline_is_ledgered_once_and_never_re_asked(self):

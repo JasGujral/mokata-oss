@@ -10,6 +10,87 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.25] — 2026-10-20
+
+**Install in one step, frontend/backend domain stacks, and the CLI↔IDE bridge.** `mokata setup claude
+--mode full` now installs everything its mode needs with the installer you used, asks once, and says
+exactly what is missing. The review window (`mokata ide`) follows a live session, shows a run's plan
+and spec, explains its call graph, stays responsive on a million-line repository, and has a health
+panel. React and NestJS work routes to its own skills and gates.
+
+### Added
+- **`mokata setup claude --mode seatbelt|memory|full`** — one instruction, one `[y/N]` for the
+  mode's dependencies (`--with-deps` to install without asking; `--yes` alone installs nothing), an
+  outcome table that names each failure and its fix, the semantic memory tier switched on, and the
+  code graph made visible from a `uv tool` environment. The question states the code graph's
+  first-index cost (minutes and up to ~1 GB on a ~1M-line repository).
+- **Plugin route, first session:** the briefing names what the repo's mode is missing and the one
+  command that completes it (nothing is installed by the hook).
+- **Domain stacks:** the graph-derived domain classifier now routes develop and review;
+  `frontend-react`, `backend-nestjs`, `frontend-perf`, `frontend-security` skills; `react-web` and
+  `nestjs-api` stacks with toolchain detection; a UI acceptance-criterion form (`kind: "ui"` with
+  the default/loading/empty/error/disabled state matrix, refused by the completeness gate without
+  it); six backed domain gates (`mokata gate check <gate>`) and one advisory (`render-regression`).
+- **CLI↔IDE bridge:** an event bus with SSE fan-out; `mokata setup claude --ide-bridge` wires
+  observe-only `http` hooks; follow mode; session join; OSC-8 links from `mokata query` into the IDE;
+  bounded IDE context in the next turn; `ide_status`, `ide_open`, `ide_sessions` MCP tools; session
+  browser, switcher and a risk-sorted needs-you marker; session time-lapse and change treemap.
+- **Embedded terminal** in the IDE: opt-in (`mokata ide --terminal`), only for a human at a terminal,
+  refused inside a Claude Code session; not available on Windows yet (said as its own state).
+- **Plan view:** a drafted spec awaiting `mokata approve` is shown with that command; saved plan
+  files (`.mokata/temp_local/plans/`, the repo's `plans/`) are listed and readable.
+- **Graph view explains itself:** a "How the graph works" guide, a hint per view, a start card that
+  says what a symbol is and offers the functions you changed, and a type-ahead symbol picker.
+- **Health panel** in the IDE: a top-bar count of what is missing, degraded or out of sync (no spawn,
+  no network at load); the panel adds `mokata doctor`'s verdicts with their fixes; force a rebuild of
+  the code graph's index, mokata's AST index or the search index; update mokata with your installer
+  on a confirmed click (the update check is a button — the only time the IDE goes online).
+- **Impact on request:** a file with more changed definitions than the automatic pass calculates
+  shows "8 of N calculated" and calculates the rest when you click.
+- **`mokata setup claude --http-gates`** (off by default): the gate hooks as one `http` hook with
+  `onFailure: "block"` to the IDE server.
+
+### Changed
+- **`mokata upgrade` uses the installer that owns the install** (`uv tool upgrade`, `pipx upgrade`,
+  `pip install --upgrade`, `uv pip`); a dev checkout gets "git pull"; Windows + uv is deferred
+  (the running `mokata.exe` is locked).
+- **Hooks start faster:** lazy package imports, no `jsonschema` on every manifest load, record-only
+  hooks exit before importing the engine outside a mokata repo. Gate hooks p95 117–320 ms → 68–128 ms;
+  observe hooks outside a repo 80–100 ms → 25–38 ms (Linux).
+- **The IDE runs nothing it does not need:** one freshness check per page action (a ripple went from
+  24 git processes to 2); each request once at page load; nothing while idle; heavy graph work on its
+  own bounded lane with a 20 s deadline, answered as "timed out — what to do" instead of hanging.
+- **The run chooser lists runs with a spec first, then runs with a plan**, and says how many it shows.
+
+### Fixed
+- **Windows: cmd windows flashing** while the IDE ran, and from pyenv-win `.bat` shims wired into the
+  status line, hooks and MCP (re-run `mokata setup claude` to unwire them; `mokata doctor` names it).
+- **The IDE on a large repository:** impact on a widely-called function froze the server (now 1–2 s,
+  marked as cut); first ⌘P 18 s → 0.3 s; memory grew ~11 MB per graph query; every graph question
+  scanned every edge.
+- **code-review-graph 2.3.9 answered nothing** (the handshake lacked `clientInfo.version`) while the
+  status bar named it; results cut at 100 were shown as complete. Both fixed; a degraded graph is
+  named in the status bar.
+- **The plan and spec of an older run were not shown** when newer runs without them existed.
+- **The ripple view drew only the centre symbol** (callers and tests were invisible).
+- **The test suite wrote a run into the checkout it ran from** on every run.
+- **`uv tool` on Python 3.10 could not read its own receipt** (no `tomllib`), so every extra failed.
+
+### Known limitations
+- **CI runs Python 3.12 only.** The declared 3.10 floor has a weekly workflow (`python-floor.yml`)
+  that has not yet run on a release runner.
+- **code-review-graph's blast radius is answered by mokata's AST reader.** CRG's traversal returned
+  every blast radius empty; until a correct mapping exists, impact under CRG is Python-only.
+- **A blast radius is cut at 20,000 references or 2 s.** On a function called from tens of thousands
+  of places the IDE says "not determined — cut at …" rather than calculating it fully.
+- **Observe hooks inside a mokata repo take 54–125 ms (p95, Linux) against a 50 ms budget.** Gate
+  hooks and observe hooks outside a repo meet theirs. macOS and Windows timings are not measured.
+- **Follow mode is unproven against a real `claude` session.** The bus, hooks and page are tested;
+  "edits appear within 1 s" has not been measured end to end.
+- **The embedded terminal is POSIX-only.** On Windows the IDE says it is not available.
+- **The clean-machine install workflow and the Windows no-console-window test have not run on a
+  release runner yet.**
+
 ## [0.0.24] — 2026-10-17
 
 **A patch for two Windows reports against 0.0.22 (OSS #82, #83) and a lighter CI gate.** Long test

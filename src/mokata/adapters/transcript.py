@@ -73,7 +73,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..bootstrap import estimate_tokens
+# `bootstrap.estimate_tokens` is imported where it is called: `bootstrap` is a heavy module and this
+# reader runs inside the PostToolUse dirty-track hook (HOOK-BUDGET, 0.0.25 Lane HB).
 
 # How much of a transcript ONE call may read. The incremental cursor means the steady-state read
 # is proportional to what was appended since the last call; this cap bounds the COLD read (a long
@@ -253,6 +254,7 @@ def sample_of_response(group: Dict[str, Any]) -> Optional[TokenSample]:
     if not isinstance(model, str) or not model.strip():
         return None
     # The ONE expression where the text exists: its length is taken and the string is not kept.
+    from ..bootstrap import estimate_tokens
     estimate = estimate_tokens("".join(t for _k, t in blocks if t))
     if estimate <= 0:
         return None

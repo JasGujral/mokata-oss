@@ -175,19 +175,36 @@ def _optional_jsonschema_errors(data: Any) -> List[str]:
 def validate_manifest(data: Any) -> List[str]:
     """Return a list of human-readable validation errors (empty == valid).
 
-    Always runs the built-in structural checks. If `jsonschema` is importable it is
-    run first for richer messages; its absence is silently fine (graceful degrade).
-    """
-    # Optional richer pass — additive only, and degrades on any failure (absent,
-    # old, or incompatible jsonschema). The built-in checks below are authoritative.
-    errors: List[str] = _optional_jsonschema_errors(data)
+    Always runs the built-in structural checks. When they REJECT and `jsonschema` is importable,
+    its messages are put first for richer phrasing; its absence is silently fine (graceful degrade).
 
-    # Built-in structural validation (authoritative, dependency-free).
+    ⚡ The jsonschema pass runs ONLY on a manifest the built-in pass already rejects (0.0.25 Lane HB,
+    HOOK-BUDGET). Every hook that loads the Surface validates the manifest, and importing jsonschema
+    (attrs, referencing, rpds…) cost ~60–80 ms of a per-tool-call hook — on every real install, since
+    the `mcp` dependency pulls jsonschema in. That is safe because the built-in checks enforce EVERY
+    constraint in `MANIFEST_JSON_SCHEMA` (the three it used to miss — `capabilities.*.description`,
+    `tools.*.version`, `tools.*.detect.name` — are checked below), so jsonschema can never be the
+    only one to object: the verdict is the built-in's, with or without the library.
+    `tests/test_hb_hook_budget.py` proves the superset constraint by constraint.
+    """
+    errors = _builtin_errors(data)
+    if errors:
+        # Optional richer pass — additive phrasing only, and degrades on any failure (absent,
+        # old, or incompatible jsonschema). The built-in errors after it are authoritative.
+        errors = _optional_jsonschema_errors(data) + errors
+    return errors
+
+
+def _builtin_errors(data: Any) -> List[str]:
+    """The authoritative, dependency-free structural validation."""
+    errors: List[str] = []
     if not isinstance(data, dict):
         return ["manifest must be a JSON object"]
 
     mv = data.get("manifest_version")
-    if _require(isinstance(mv, int), "manifest_version must be an integer", errors):
+    # `bool` is an `int` in Python but never a JSON-Schema integer: `true` is not a version.
+    if _require(isinstance(mv, int) and not isinstance(mv, bool),
+                "manifest_version must be an integer", errors):
         _require(
             mv == SUPPORTED_MANIFEST_VERSION,
             f"manifest_version {mv} is unsupported (this build supports "
@@ -230,6 +247,8 @@ def validate_manifest(data: Any) -> List[str]:
             continue
         if not isinstance(tool.get("provides"), str):
             errors.append(f"tools.{tool_id}.provides must be a string")
+        if "version" in tool and not isinstance(tool.get("version"), (str, type(None))):
+            errors.append(f"tools.{tool_id}.version must be a string or null")
         if "enabled" in tool and not isinstance(tool.get("enabled"), bool):
             errors.append(f"tools.{tool_id}.enabled must be a boolean")
         kind = tool.get("kind")
@@ -251,6 +270,8 @@ def validate_manifest(data: Any) -> List[str]:
                 errors.append(
                     f"tools.{tool_id}.detect.name is required for type '{dt}'"
                 )
+            if "name" in detect and not isinstance(detect.get("name"), str):
+                errors.append(f"tools.{tool_id}.detect.name must be a string")
 
     caps = data.get("capabilities")
     if not isinstance(caps, dict):
@@ -260,6 +281,8 @@ def validate_manifest(data: Any) -> List[str]:
         if not isinstance(cap, dict):
             errors.append(f"capabilities.{need} must be an object")
             continue
+        if "description" in cap and not isinstance(cap.get("description"), str):
+            errors.append(f"capabilities.{need}.description must be a string")
         # Optional owning layer (K1): if declared it must be a string naming a layer
         # that actually exists, so a typo can't silently un-gate a capability.
         if "layer" in cap:
@@ -276,6 +299,9 @@ def validate_manifest(data: Any) -> List[str]:
             errors.append(f"capabilities.{need}.fallback must be a non-empty array")
             continue
         for tool_id in fallback:
+            if not isinstance(tool_id, str):
+                errors.append(f"capabilities.{need}.fallback entries must be strings")
+                continue
             # Referential integrity: every fallback entry must be a declared tool
             # that actually provides this capability.
             if tool_id not in tools:

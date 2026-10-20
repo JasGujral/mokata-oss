@@ -33,6 +33,7 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401
+from mokata.govern.domain_gates import DOMAIN_GATE_IDS  # 0.0.25 Lane D2
 
 from mokata.brainstorm import (Approach, BrainstormGateError, BrainstormSession,
                                DesignFitVerdict)
@@ -373,7 +374,8 @@ class ApproveSeam(_Base):
         # point in the registry, and this deliberately has none.
         from mokata import skill_contracts as sc
         self.assertNotIn(G.GATE_ID, sc.GATES)
-        backed = sorted(k for k, v in sc.GATES.items() if getattr(v, "backed", False))
+        backed = sorted(k for k, v in sc.GATES.items() if getattr(v, "backed", False)
+                        and k not in DOMAIN_GATE_IDS)   # 0.0.25 Lane D2: pinned in test_d2_domain_gates
         # The exact set, frozen — a count would let one addition hide one removal, and in 0.0.17
         # stage 5 exactly that happened: `self-protect` was ADDED and `ship-readiness` REMOVED in
         # the same stage, so the count stayed 9 while the set changed twice. This assertion is why

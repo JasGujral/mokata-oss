@@ -30,6 +30,7 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+from mokata.govern.domain_gates import DOMAIN_GATE_IDS  # 0.0.25 Lane D2
 
 from mokata import domains as dk
 from mokata import skill_lints as sl
@@ -62,9 +63,12 @@ class TestShipGovernDomainSkillsShip(unittest.TestCase):
     def test_domain_skills_set_completed_to_ten(self):
         for name in DK_S4_SKILLS:
             self.assertIn(name, dk.DOMAIN_SKILLS)
-        self.assertEqual(len(dk.DOMAIN_SKILLS), 10)             # the full attachment map now ships
+        # the 10-domain attachment map ships in full. 0.0.25 Lane D appends a framework batch AFTER
+        # it (test_d1_2_framework_rule_packs pins that batch), so the attachment map is asserted as
+        # the LEADING ten, in registry order — derived, not a hand-kept total.
+        self.assertEqual(len(dk.DOMAIN_SKILLS), len(dk.shipped_domain_skills()))
         # attachment-map (registry) order: the S1/S2/S3 batches, then the DK.S4 ship/govern batch
-        self.assertEqual(dk.shipped_domain_skills(),
+        self.assertEqual(dk.shipped_domain_skills()[:10],
                          ("api", "security", "performance", "frontend-a11y", "browser-testing",
                           "ci-cd", "git", "deprecation", "docs-adr", "shipping"))
 
@@ -356,7 +360,7 @@ class TestNoNewGate(unittest.TestCase):
 
     def test_backed_gate_set_is_unchanged(self):
         self.assertEqual(
-            sorted(g for g, r in GATES.items() if r.backed),
+            sorted(g for g, r in GATES.items() if r.backed and g not in DOMAIN_GATE_IDS),
             # PH-GATE.S0 (0.0.14) backed `approach-approval`; this stage still adds no gate.
             # 0.0.17 stage 5 moved the SET without changing its SIZE: `self-protect` was
             # added (it enforces at `WriteGate.submit` layer 0 and was missing from the

@@ -109,9 +109,14 @@ def cmd_query(args: argparse.Namespace) -> int:
         f"{result.kind}({result.target}) via {result.backend} [{mode}] — "
         f"{result.count} result(s)"
     )
+    # ID.S3 (doc 109 §4.2 item 4) — each `path:line` is an OSC-8 link into the running IDE, only on
+    # a TTY that renders it with an IDE up; otherwise these bytes are exactly the plain text.
+    from ..ide.links import Linker
+    link = Linker(surface.root, sys.stdout)
     for ref in result.references:
         sym = f"  «{ref.symbol}»" if ref.symbol else ""
-        print(f"  {ref.path}:{ref.line}{sym}  {ref.snippet}")
+        where = link.ref(ref.path, ref.line, f"{ref.path}:{ref.line}")
+        print(f"  {where}{sym}  {ref.snippet}")
     if result.note:
         print(f"  ({result.note})")
     # GRAPH-FIRST-IMPACT (d) — a lexical blast radius names itself degraded, with ITS remedy.

@@ -126,6 +126,11 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
+      - name: Start the ceiling clock (CI-CEILING)
+        # INTERNAL-ONLY-TESTS-RUN-ON-NO-RUNNER's ceiling half (0.0.25 Lane C). Starts after
+        # checkout + setup-python (seconds, which the release job pays too). The last steps of
+        # this job read it — see `scripts/ci_ceiling.py`.
+        run: echo "MOKATA_CLOCK_T0=$(date +%s)" >> "$GITHUB_ENV"
       - name: Install mokata
         run: pip install -e .
       - name: Install workflow-lint test tooling (PyYAML — a test-only dep, not a mokata dep)
@@ -212,6 +217,19 @@ jobs:
           tmp="$(mktemp -d)"
           mokata init --profile standard --yes --path "$tmp"
           mokata playbook --path "$tmp"
+      - name: This job's ceiling still clears this leg (CI-CEILING)
+        # The ceiling above was derived by hand and owed re-deriving "whenever the suite grows".
+        # This leg measures itself and reds while the ceiling is still a one-line edit: under
+        # 1.2x headroom it prints the 1.5x value to set (`scripts/ci_ceiling.py`).
+        run: python scripts/ci_ceiling.py --since "$MOKATA_CLOCK_T0" --workflow .github/workflows/ci.yml --job test
+      - name: The TAG gate's ceiling still clears this suite (CI-CEILING, ubuntu legs)
+        # ⭐ The one that would have saved v0.0.23: release.yml's `test` job was CANCELLED at its
+        # 22-minute ceiling with no test failing (run 38966278058), so the tag never published.
+        # An ubuntu leg here runs a SUPERSET of that job (same image, same Python, install + unit
+        # + integration, plus the MCP / stress / smoke steps), so if this leg still clears
+        # release.yml's ceiling the tag gate does too — measured on every PR, before a tag.
+        if: runner.os == 'Linux'
+        run: python scripts/ci_ceiling.py --since "$MOKATA_CLOCK_T0" --workflow .github/workflows/release.yml --job test
 
   hooks-execute:
     # HOOK-SHELL-AGNOSTIC — the deliverable that string assertions cannot replace.

@@ -54,7 +54,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 from __future__ import annotations
 
 import os
-import subprocess
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 from ..repo_paths import name_of
@@ -109,6 +109,13 @@ BASELINE_DRIFT_HASH_CAP = 500     # drifted candidates hashed per pass; the rest
 # which paths lost their tombstone: an A5-shaped recreate of one of those is then a gap, and a
 # disclosed gap is the only honest kind.
 BASELINE_TOMBSTONE_CAP = 5000     # ABSENT entries kept; past this the oldest are dropped + noted
+
+# 0.0.25 K — PER-SESSION BASELINES ACCUMULATED FOREVER. Each new session key writes its own cold
+# baseline (`FRESHNESS_INDEX_PREFIX + key`, ~2 MB on a 7k-file repo) and none was ever deleted: 36
+# of them (36 MB) after a day of IDE restarts on the scale repo. `prune_stale_sessions` keeps the
+# newest `SESSION_BASELINES_KEPT`, anything younger than `SESSION_BASELINE_GRACE_S`, and its own.
+SESSION_BASELINES_KEPT = 8
+SESSION_BASELINE_GRACE_S = 15 * 60.0
 
 
 # --- how the freshness session was determined (Fix A, 0.0.21 stage 14) -------------------
@@ -430,6 +437,7 @@ def _default_git_run(root: str, args: List[str]):
     # bytes under `-z`. `caf\u00e9.py` came back mojibaked (two cp1252 chars for the one UTF-8
     # e-acute): a path that names no file, so signal 2 reported a change nothing could find. `replace` keeps an undecodable byte VISIBLE as U+FFFD
     # rather than raising inside a degrade-clean reader.
+    import subprocess   # lazy: the dirty-track hook imports this module (HOOK-BUDGET)
     p = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True,
                        encoding="utf-8", errors="replace", timeout=10)
     return p.returncode, p.stdout
@@ -510,6 +518,32 @@ def stale_against(base: Any, root: str, rel: str) -> bool:
     except Exception:  # noqa: BLE001 — ANY read fault means "cannot hash", not "unchanged"
         return recorded != UNFINGERPRINTABLE
     return current != recorded
+
+
+def stat_unchanged(base: Any, root: str, rel: str) -> bool:
+    """0.0.25 K — True only when `rel`'s baseline record is a real fingerprint AND its recorded
+    `(mtime, size, ctime)` all match the filesystem now: the case in which hashing it cannot change
+    `stale_against`'s verdict (POSIX gives userspace no way to set ctime, so a content write always
+    moves it — finding 4-1). Anything else — no record, a sentinel, no ctime on record (an index
+    from before that field), a `stat` that fails, or Windows, where ctime is the creation time —
+    answers False, which means "ask `stale_against`" (hash), never "unchanged". Never raises."""
+    if not CTIME_CLAUSE_CATCHES_A_RESTORED_WRITE:
+        return False
+    entry = getattr(base, "entries", {}).get(rel)
+    if entry is None:
+        return False
+    if getattr(entry, "content_hash", None) in (ABSENT, UNFINGERPRINTABLE):
+        return False
+    try:
+        recorded_ctime = float(getattr(entry, "ctime", 0) or 0)
+        if not recorded_ctime:
+            return False
+        st = os.stat(os.path.join(root, rel))
+        return (st.st_mtime == float(getattr(entry, "mtime", 0))
+                and st.st_size == int(getattr(entry, "size", -1))
+                and st.st_ctime == recorded_ctime)
+    except (OSError, TypeError, ValueError):
+        return False
 
 
 def baseline_drift(base: Any, root: str) -> List[str]:
@@ -933,10 +967,62 @@ class FreshnessController:
             changed = [rel for rel in idx.entries if stale_against(prior, self.root, rel)]
         self._index = idx
         self._save_index(idx)
+        self.prune_stale_sessions()
         return changed, capped
 
     def _index_key(self) -> str:
         return FRESHNESS_INDEX_PREFIX + self.session_id
+
+    def prune_stale_sessions(self, keep: int = SESSION_BASELINES_KEPT,
+                             grace_s: float = SESSION_BASELINE_GRACE_S) -> List[str]:
+        """0.0.25 K — bound the per-session baselines. Every new session key (each IDE server start,
+        each unbound process) writes a `graph_freshness_index__<key>.json` — ~2 MB on the scale repo
+        — and nothing ever removed one. Run once per COLD WALK (i.e. once per new session), so the
+        cost is one `scandir` per session, never per query.
+
+        WHAT IS KEPT, and why concurrent sessions are safe:
+          * this session's own key — always;
+          * the `keep` most recently written baselines — the sessions most likely still live;
+          * anything written within `grace_s` — a session that started moments ago.
+        Only a baseline outside all three is removed, together with its `graph_freshness__<key>`
+        state, as a PAIR: a session that turns out to be alive after all then finds no state, so
+        its next pass re-runs the cold walk and re-seeds its baseline — one extra walk (∝ repo),
+        never a wrong answer. Deleting the index alone would have left `cold_done=True` with no
+        baseline, which silences the post-answer recheck for the rest of that session.
+
+        Returns the session keys removed. Never raises (a baseline that cannot be listed or removed
+        stays — the cost is disk, never an answer)."""
+        store = self._store()
+        d = getattr(store, "root", None)
+        if not d:
+            return []
+        try:
+            rows = []
+            with os.scandir(d) as it:
+                for e in it:
+                    n = e.name
+                    if n.startswith(FRESHNESS_INDEX_PREFIX) and n.endswith(".json"):
+                        try:
+                            rows.append((e.stat().st_mtime, n[len(FRESHNESS_INDEX_PREFIX):-5]))
+                        except OSError:
+                            continue
+        except OSError:
+            return []
+        rows.sort(reverse=True)                       # newest first
+        now = time.time()
+        removed: List[str] = []
+        for rank, (mtime, key) in enumerate(rows):
+            if key == self.session_id or rank < keep or now - mtime < grace_s:
+                continue
+            for prefix in (FRESHNESS_STATE_PREFIX, FRESHNESS_INDEX_PREFIX):
+                try:
+                    store.delete(prefix + key)
+                except OSError:
+                    pass
+                # The `.<key>.json.lock` sidecar is left on purpose: it is empty, and removing a
+                # lock file another process may hold is how mutual exclusion silently breaks.
+            removed.append(key)
+        return removed
 
     def _load_index(self):
         store = self._store()
@@ -1357,9 +1443,17 @@ class FreshnessController:
         if self._index is None:
             return False        # no baseline on disk yet ⇒ no opinion, not "nothing changed"
         try:
-            paths = [r.path for r in getattr(result, "references", [])]
+            # 0.0.25 K — ONE verdict per FILE, not per reference, and a `stat` before any hash.
+            # This hashed the file behind EVERY reference: 86k hashes over 2.7k files for one hub
+            # answer on the scale repo. `dict.fromkeys` de-duplicates in first-seen order, and a
+            # file whose (mtime, size, ctime) all match its baseline record is unchanged by the
+            # SAME test `baseline_drift` already trusts (finding 4-1: ctime is not settable from
+            # userspace) — so only a file that moved, or has no ctime on record, is hashed.
+            paths = dict.fromkeys(r.path for r in getattr(result, "references", []))
             # REVIEW FINDING A3 — same reason as the two sites above: `stale_files` opens files.
-            stale = [rel for rel in paths if stale_against(self._index, self.root, rel)]
+            stale = [rel for rel in paths
+                     if not stat_unchanged(self._index, self.root, rel)
+                     and stale_against(self._index, self.root, rel)]
         except Exception:  # noqa: BLE001
             return False
         if not stale:

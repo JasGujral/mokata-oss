@@ -94,16 +94,16 @@ This site follows the [Diátaxis](https://diataxis.fr/) model:
 | E | TDD & execution | RED-before-GREEN, model routing, bug/debug/optimize engines, execution-mode selector; a run can take **its own worktree and branch** — always offered, never automatic — and `worktree list` joins your worktrees against their sessions with a staleness verdict per row; `worktree clean` and `worktree remove` tidy them — previewed, human-gated, and never touching a live session |
 | F | Token governance | tracker, JIT retrieval, handback caps, output density, budget, cache-stable prefixes |
 | G | Rules & governance | 4-tier rules, taxonomy, sync/async hooks, Karpathy gates, rule-learning, skill authoring |
-| I | Safety & audit | secret protection, human-minted single-use approvals, **9 backed gates — and the hook stops 5 things on your agent's native writes** (`self-protect` plus the four run-state gates), audit ledger, lethal-trifecta gate, revert, resume |
+| I | Safety & audit | secret protection, human-minted single-use approvals, **15 backed gates (six of them frontend/backend domain gates run by `mokata gate check`) — and the hook stops 5 things on your agent's native writes** (`self-protect` plus the four run-state gates), audit ledger, lethal-trifecta gate, revert, resume |
 | J | Distribution | cross-harness boundary, shareable stack manifests, portable sessions (transport derived from the repo's mode); `release-notes-check` **refuses the cut** when the notes announce a different version than the tag, or quietly drop a fact the changelog declared as a known limitation |
 | K | Config | per-layer/tool toggles, profiles, local-first, committed config, trust dial, doctor (incl. the DSN deep-check and retrieval-stack line), reset |
 | L | Composability | standalone commands, mid-pipeline entry, direct skills, catalog, chaining, suggestions |
-| M | MCP surface | 67 tools (43 read · 23 write · 1 opt-in approve), every call bounded with a `timed_out` status that names the operation, typed annotations, structured `response_format`, cursor pagination, and a loud `AWAITING APPROVAL` head so waiting-on-a-human never reads as a hang |
+| M | MCP surface | 70 tools (46 read · 23 write · 1 opt-in approve), every call bounded with a `timed_out` status that names the operation, typed annotations, structured `response_format`, cursor pagination, and a loud `AWAITING APPROVAL` head so waiting-on-a-human never reads as a hang |
 | + | Sessions & subagents | each Claude session bound to its own run (parallel-safe); the gate state re-anchored after compaction; one context budget; subagent contracts (read-only, depth, a structured hand-back); shell writes meet the same gates as native edits; session notes drafted from the record and kept only on approval |
 | + | Review window | `mokata ide` + `/mokata:review-window` — a read-only, localhost-only page: what each session wrote, the diff at any point in time from mokata's own write snapshots, the live tree, branch compare and GitHub PRs by URL; re-focuses on the asking session; `--demo` sample data ([guide](how-to/review-agent-work.md)) |
 
-Counts in the box today: **26 Agent Skills** (16 curated + 10 domain) · **38 slash commands** ·
-**71 CLI subcommands** · **67 MCP tools** · **9 backed gates** · **1 runtime dependency**.
+Counts in the box today: **30 Agent Skills** (16 curated + 14 domain) · **38 slash commands** ·
+**71 CLI subcommands** · **70 MCP tools** · **15 backed gates** · **1 runtime dependency**.
 
 Published docs: <https://mokata.ai/> · Source & issues:
 <https://github.com/JasGujral/mokata-oss>.

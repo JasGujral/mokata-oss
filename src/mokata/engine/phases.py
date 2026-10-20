@@ -136,11 +136,13 @@ def _emit(ctx: PhaseContext, store: Any, gate: WriteGate, approve: bool) -> Phas
         return PhaseRecord("emit", False,
                            "emit refused — completeness gate did not pass",
                            gate_id="emit-approval", gate_passed=False)
-    # DK.S0 — carry the brainstorm-classified domain set (on the approved hand-off) into the spec
-    # as a first-class constraint, so it is persisted into emitted_spec.json and the user approves
-    # the domains along with the plan. A spec that already carries domains keeps its own.
-    if not ctx.spec.domains:
-        ctx.spec.domains = list(getattr(ctx.handoff, "domains", []) or [])
+    # DK.S0 / 0.0.25 Lane D — carry the domain set the approved hand-off classifies to (its own
+    # `domains` + its frozen blast radius, framework-gated by each touched file's package.json)
+    # into the spec as a first-class constraint, UNIONED with what the spec already declares, so it
+    # is persisted into emitted_spec.json and the user approves the routing with the plan.
+    from ..domains import derive_spec_domains
+    from .emit import _repo_root
+    derive_spec_domains(ctx.spec, ctx.handoff, root=_repo_root(store) if store is not None else "")
 
     if store is None:                       # no state surface — nothing durable to write
         return PhaseRecord("emit", False, "emit refused — no state store to persist the spec into",

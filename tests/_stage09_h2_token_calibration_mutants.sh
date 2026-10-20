@@ -210,10 +210,10 @@ mutant "H01 ★★★ the hook call goes — §7i, a perfect mechanism nothing r
   '        pass' "$T"
 
 mutant "H02 ★★★ the refusal goes — .mokata/ created in a tree the user never initialized" "$HC" \
-  '        from .config import Surface
-        if not Surface.is_initialized(root):
+  '        from .repo_identity import is_initialized   # not `config`: HOOK-BUDGET
+        if not is_initialized(root):
             return' \
-  '        from .config import Surface
+  '        from .repo_identity import is_initialized   # not `config`: HOOK-BUDGET
         if False:
             return' "$T"
 
