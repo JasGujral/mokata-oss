@@ -107,8 +107,11 @@ def install_extras(specs: Any, *, verify: Optional[Callable[[], bool]] = None,
     run = runner or subprocess.run
     emit(f"installing {label} via {plan.installer} …")
     try:
-        proc = run(plan.argv, capture_output=True, text=True, timeout=timeout,
-                   check=False)  # nosec B603 — fully-argumented, never shell=True
+        for argv in [plan.argv, *plan.then]:      # pipx: libraries, then the apps (install_route)
+            proc = run(argv, capture_output=True, text=True, timeout=timeout,
+                       check=False)  # nosec B603 — fully-argumented, never shell=True
+            if getattr(proc, "returncode", 1) != 0:
+                break
     except subprocess.TimeoutExpired:
         return InstallResult(ran=True, message=f"install timed out after {int(timeout)}s", **base)
     except (OSError, ValueError) as exc:

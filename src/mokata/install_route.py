@@ -78,6 +78,10 @@ class InstallPlan:
     display: str = ""                        # the one-line command a human can paste
     deferred: bool = False                   # runnable, but only after this process exits
     reason: str = ""                         # why argv is None (empty when it is runnable)
+    # Further commands to run after `argv`, in order, each only if the previous succeeded. pipx
+    # needs two: `--include-apps` refuses a package with no app of its own (model2vec), so the
+    # libraries and code-review-graph's command go in separately. `display` shows them all.
+    then: List[List[str]] = field(default_factory=list)
 
     @property
     def runnable(self) -> bool:
@@ -440,15 +444,24 @@ def plan_install(specs: Sequence[str], *,
                                   + ", ".join(specs))
 
     if inst == PIPX:
+        # `pipx inject --include-apps` exits 1 when ANY injected package has no app of its own
+        # ("No apps associated with package model2vec" — install-e2e, pipx leg, 0.0.25 cut). So a
+        # package whose command must reach PATH (code-review-graph) is injected on its own with
+        # the flag, and the libraries go in a plain inject first.
         pipx = which("pipx")
-        argv = [pipx or "pipx", "inject", DIST, *reqs]
-        if any(_canon(re.split(r"[\[<>=!~;@ ]", r, 1)[0]) in
-               {_canon(x) for x in EXPOSE_EXECUTABLES} for r in reqs):
-            argv.insert(2, "--include-apps")
+        exposed = {_canon(x) for x in EXPOSE_EXECUTABLES}
+        apps = [r for r in reqs if _canon(re.split(r"[\[<>=!~;@ ]", r, 1)[0]) in exposed]
+        libs = [r for r in reqs if r not in apps]
+        cmds = []
+        if libs:
+            cmds.append([pipx or "pipx", "inject", DIST, *libs])
+        if apps:
+            cmds.append([pipx or "pipx", "inject", "--include-apps", DIST, *apps])
+        shown = " && ".join(_display(c) for c in cmds)
         if not pipx:
-            return InstallPlan(PIPX, specs, None, _display(argv),
+            return InstallPlan(PIPX, specs, None, shown,
                                reason="`pipx` is not on PATH from this process")
-        return InstallPlan(PIPX, specs, argv, _display(argv))
+        return InstallPlan(PIPX, specs, cmds[0], shown, then=cmds[1:])
 
     if inst == PIP:
         argv = [executable, "-m", "pip", "install", *reqs]

@@ -202,10 +202,49 @@ class TestOtherRoutes(unittest.TestCase):
     def test_pipx_injects_the_extras_requirements_not_mokata_itself(self):
         with _Env("pipx_metadata.json", "{}") as p:
             plan = R.plan_install(self.SPECS, prefix=p, which=_which("pipx"), requires=REQUIRES)
-        self.assertEqual(plan.argv[1:4], ["inject", "--include-apps", "mokata"])
-        self.assertIn("--include-apps", plan.argv, "CRG's command must reach PATH")
+        # Two injects: `--include-apps` exits 1 on a package with no app (model2vec), so the
+        # libraries go in plain and code-review-graph alone carries the flag (install-e2e pipx).
+        self.assertEqual(plan.argv[1:3], ["inject", "mokata"])
+        self.assertNotIn("--include-apps", plan.argv)
         self.assertIn("model2vec>=0.3", plan.argv)
+        self.assertNotIn("code-review-graph", plan.argv)
         self.assertNotIn("mokata[embeddings]", plan.argv)
+        self.assertEqual(1, len(plan.then))
+        self.assertEqual(plan.then[0][1:], ["inject", "--include-apps", "mokata", "code-review-graph"],
+                         "CRG's command must reach PATH")
+        self.assertIn(" && ", plan.display)
+
+    def test_pipx_with_only_libraries_never_passes_include_apps(self):
+        with _Env("pipx_metadata.json", "{}") as p:
+            plan = R.plan_install(["mokata[embeddings]"], prefix=p, which=_which("pipx"),
+                                  requires=REQUIRES)
+        self.assertNotIn("--include-apps", plan.argv)
+        self.assertEqual([], plan.then)
+
+    def test_every_pipx_command_runs_and_a_failure_stops_the_rest(self):
+        from mokata.extras_install import install_extras
+        with _Env("pipx_metadata.json", "{}") as p:
+            plan = R.plan_install(self.SPECS, prefix=p, which=_which("pipx"), requires=REQUIRES)
+        ran = []
+
+        class _P:
+            def __init__(self, rc):
+                self.returncode, self.stderr = rc, "boom"
+
+        def ok(argv, **_kw):
+            ran.append(argv)
+            return _P(0)
+        res = install_extras(self.SPECS, plan=plan, runner=ok, out=lambda *_: None)
+        self.assertTrue(res.ok, res.message)
+        self.assertEqual([plan.argv, *plan.then], ran)
+        ran.clear()
+
+        def first_fails(argv, **_kw):
+            ran.append(argv)
+            return _P(1)
+        res = install_extras(self.SPECS, plan=plan, runner=first_fails, out=lambda *_: None)
+        self.assertFalse(res.ok)
+        self.assertEqual([plan.argv], ran)
 
     def test_pip_route_uses_this_interpreter(self):
         with _Env() as p:
