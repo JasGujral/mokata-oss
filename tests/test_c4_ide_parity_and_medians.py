@@ -98,7 +98,7 @@ class TheLaunchIsLockedOnEveryOS(unittest.TestCase):
         started = {"rec": None}
         lock = threading.Lock()
 
-        def fake_inner(root, session, demo, browser, idle):
+        def fake_inner(root, session, demo, browser, idle, terminal=False):
             with lock:
                 if started["rec"] is None:
                     starts.append(session)

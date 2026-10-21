@@ -101,7 +101,10 @@
         "golang",
         "service",
         "backend"
-      ]
+      ],
+      "kind": "backend",
+      "domains": [],
+      "toolchain": {}
     }
   }
 }

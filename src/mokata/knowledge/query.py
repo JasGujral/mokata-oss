@@ -146,6 +146,15 @@ class QueryResult:
     backend: str = ""                           # which provider answered
     basis: str = BASIS_LEXICAL                  # which rung answered (the ONE stored signal)
     note: str = ""
+    # 0.0.25 K — a BOUNDED answer says so. `truncated` is True when the backend stopped before the
+    # full answer (the AST floor's blast-radius bound, the adopted graph's result cap); `total` is
+    # the full count when the backend KNOWS it (code-review-graph reports `result_count`), None when
+    # it does not. Set through `mark_truncated`, which also attaches the classed `truncated —` note,
+    # so the flag and the reason cannot drift apart. A truncated answer is still the backend's own
+    # basis (a structural prefix is structural) — but it is a PREFIX, never "the" answer: a reader
+    # that concludes an absence from it ("no test reaches this") must read `truncated` first.
+    truncated: bool = False
+    total: Optional[int] = None
 
     def __post_init__(self) -> None:
         # The one incoherent combination: a basis claiming "the answer is zero" while carrying
@@ -196,8 +205,29 @@ class QueryResult:
             "basis": self.basis,
             "degraded": self.degraded,
             "note": self.note,
+            "truncated": self.truncated,
+            "total": self.total,
             "references": [r.to_dict() for r in self.references],
         }
+
+
+#: The class word a bounded answer's note leads with (pipe-joined onto the existing note, the same
+#: convention every other classed note on a QueryResult uses).
+TRUNCATED_NOTE_PREFIX = "truncated —"
+
+
+def mark_truncated(result: "QueryResult", total: Optional[int], why: str) -> "QueryResult":
+    """Mark `result` as a PARTIAL answer (0.0.25 K) — the one spelling, so `truncated`, `total` and
+    the note always move together. `total` is the full count when the backend knows it."""
+    result.truncated = True
+    if total is not None:
+        result.total = int(total)
+    shown = len(result.references)
+    head = (f"{TRUNCATED_NOTE_PREFIX} {shown} of {total} shown" if total is not None
+            else f"{TRUNCATED_NOTE_PREFIX} {shown} shown, more exist")
+    add = f"{head} ({why})" if why else head
+    result.note = f"{result.note} | {add}" if result.note else add
+    return result
 
 
 class GraphBackend(ABC):

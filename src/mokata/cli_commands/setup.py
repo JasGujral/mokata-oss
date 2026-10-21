@@ -8,6 +8,7 @@ from ..adoption_modes import (
     mode_names,
     offer_mode_extras,
     profile_for_mode,
+    render_outcome,
     render_quickstart,
 )
 from ._common import (
@@ -217,15 +218,27 @@ def _init_with_mode(args: argparse.Namespace, mode: str, profile: str) -> int:
         print(f"\n{result.message}", file=sys.stderr)
         return 1
 
-    interactive = sys.stdin.isatty() and not args.yes
-    offer_mode_extras(args.path, mode, interactive=interactive)
+    outcome = _mode_dependencies(args, mode)
     # A2/F8 — `--mode` NEVER routes through the wizard (see this function's docstring), so it is
     # one of the paths that reached `init_repo` and wired nothing. It owes the same two halves as
     # the plain route, and it owes them BEFORE the quickstart: a quickstart that tells you to run
     # the pipeline, printed under a repo whose gate is off, is the seatbelt claim #28 is about.
     _wire_or_disclose(args, profile)
-    print(render_quickstart(mode))
+    print(render_quickstart(mode, outcome))
     return 0
+
+
+def _mode_dependencies(args: argparse.Namespace, mode: str):
+    """0.0.25 I-02 — the mode's optional dependencies, one consent, then the outcome table.
+    Shared by `init --mode` and `setup <harness> --mode` so the two routes cannot drift.
+    `--yes` is NOT consent to a network install; `--with-deps` is (the DB.S4 posture)."""
+    interactive = sys.stdin.isatty() and not args.yes
+    outcome = offer_mode_extras(args.path, mode, interactive=interactive,
+                                with_deps=getattr(args, "with_deps", False))
+    table = render_outcome(outcome)
+    if table:
+        print(table)
+    return outcome
 
 
 def cmd_tour(args: argparse.Namespace) -> int:
@@ -259,16 +272,27 @@ def cmd_reconfigure(args: argparse.Namespace) -> int:
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
+    # 0.0.25 I-02 (`SETUP-MODE-FLAG`): `mokata setup claude --mode full` is the ONE documented
+    # instruction (Jas 2026-10-16). A mode is a profile alias plus its dependencies + quickstart,
+    # exactly as on `init --mode`; the two routes share `_mode_dependencies`.
+    mode = getattr(args, "mode", None)
+    if getattr(args, "with_deps", False) and not mode:
+        print("error: --with-deps needs --mode memory|full (it installs that mode's "
+              "dependencies)", file=sys.stderr)
+        return 2
+    profile = profile_for_mode(mode) if mode else args.profile
     try:
         result = setup_harness(
             harness=args.harness,
             root=args.path,
             scope=args.scope,
-            profile=args.profile,
+            profile=profile,
             with_hooks=not args.no_hooks,
             grant=not args.no_grant,
             assume_yes=args.yes,
             force=args.force,
+            ide_bridge=getattr(args, "ide_bridge", False),
+            http_gates=getattr(args, "http_gates", False),
         )
     except SetupError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -276,6 +300,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if result.aborted:
         print(f"\n{result.message}", file=sys.stderr)
         return 1
+    if mode:
+        outcome = _mode_dependencies(args, mode)
+        print(render_quickstart(mode, outcome))
     return 0
 
 
@@ -294,6 +321,10 @@ def cmd_unsetup(args: argparse.Namespace) -> int:
         print(f"\n{result.message}", file=sys.stderr)
         return 1
     return 0
+
+
+_WITH_DEPS_HELP = ("with --mode memory|full: install that mode's optional dependencies without "
+                   "asking (the opt-in for --yes / CI; --yes alone installs nothing)")
 
 
 def register(sub, common):
@@ -322,6 +353,7 @@ def register(sub, common):
     p_init.add_argument(
         "--yes", action="store_true", help="non-interactive; skip the write prompt"
     )
+    p_init.add_argument("--with-deps", action="store_true", help=_WITH_DEPS_HELP)
     p_init.add_argument(
         "--force", action="store_true", help="overwrite an existing manifest"
     )
@@ -379,9 +411,14 @@ def register(sub, common):
                          help="the harness to wire (currently: claude)")
     p_setup.add_argument("--scope", choices=SCOPES, default="project",
                          help="install into this project (default) or user-global (~/.claude)")
-    p_setup.add_argument("--profile", default=DEFAULT_PROFILE, choices=profile_names(),
-                         help=f"profile to init with if not already set up "
-                              f"(default: {DEFAULT_PROFILE})")
+    p_setup_axis = p_setup.add_mutually_exclusive_group()
+    p_setup_axis.add_argument("--profile", default=DEFAULT_PROFILE, choices=profile_names(),
+                              help=f"profile to init with if not already set up "
+                                   f"(default: {DEFAULT_PROFILE})")
+    p_setup_axis.add_argument("--mode", default=None, choices=mode_names(),
+                              help="seatbelt / memory / full: a profile plus that mode's optional "
+                                   "dependencies (one question) and a printed quickstart")
+    p_setup.add_argument("--with-deps", action="store_true", help=_WITH_DEPS_HELP)
     p_setup.add_argument("--no-hooks", action="store_true",
                          help="skip wiring mokata's hooks (SessionStart briefing + "
                               "user-prompt-submit per-turn recall + secret-guard + run-state "
@@ -392,6 +429,15 @@ def register(sub, common):
                          help="don't grant Claude Code permission for mokata's MCP tools / "
                               "enable the server in settings.json (default: grant, so Claude "
                               "Code doesn't gate each mcp__mokata__* call)")
+    p_setup.add_argument("--ide-bridge", dest="ide_bridge", action="store_true",
+                         help="claude, project scope: also wire observe-only http hooks that post "
+                              "edits / turn ends to the running `mokata ide` (live follow mode); "
+                              "written to .claude/settings.local.json")
+    p_setup.add_argument("--http-gates", dest="http_gates", action="store_true",
+                         help="claude, project scope, OFF by default: ALSO wire FAIL-CLOSED http "
+                              "PreToolUse gate hooks (onFailure: block) to the running `mokata ide` "
+                              "— while it is not running, every gated tool call is blocked; the "
+                              "mokata-hook command gates stay wired")
     p_setup.add_argument("--yes", action="store_true",
                          help="non-interactive; skip the confirmation prompt")
     p_setup.add_argument("--force", action="store_true",

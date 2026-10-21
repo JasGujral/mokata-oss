@@ -265,6 +265,8 @@ OUT_OF_SCOPE = {
         "Already atomic (temp + os.replace). 0.0.22 E2 — the capped snapshot timeline, not the manifest.",
     ("ide/snapshots.py", "capture_before_first_write"):
         "Already atomic (temp + os.replace). 0.0.22 E2 — the per-session first-write index, not the manifest.",
+    ("ide/bus.py", "ensure_bridge"):
+        "Already atomic (temp + os.replace), mode 0600. 0.0.25 ID.S3 — the IDE live-bridge record (port + hook token) under temp_local/ide/, not the manifest.",
     ("ide/server.py", "_write_record"):
         "Already atomic (temp + os.replace), mode 0600. 0.0.22 E2 — the review-window server record, not the manifest.",
     ("team_events.py", "save_mark"):

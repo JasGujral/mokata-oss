@@ -71,7 +71,8 @@ def pair_url(rec: dict, focus: Optional[str]) -> str:
 
 
 def open_or_focus(root: str, session: Optional[str] = None, demo: bool = False,
-                  browser: bool = True, idle_secs: Optional[float] = None) -> Launched:
+                  browser: bool = True, idle_secs: Optional[float] = None,
+                  terminal: bool = False) -> Launched:
     """Open the window, or re-focus the running one. Serialised per repo by a lock file, so two
     `/mokata:review-window` at once cannot both start a server (0.0.22 verification)."""
     from ..oslock import file_lock
@@ -82,13 +83,16 @@ def open_or_focus(root: str, session: Optional[str] = None, demo: bool = False,
     # `fcntl.flock` on POSIX, `msvcrt.locking` on Windows, released if the holder dies, and a
     # BOUNDED wait (a stuck launcher is named, never waited on forever).
     with file_lock(lock, timeout=START_TIMEOUT + LOCK_SLACK):
-        return _open_or_focus(root, session, demo, browser, idle_secs)
+        return _open_or_focus(root, session, demo, browser, idle_secs, terminal)
 
 
 def _open_or_focus(root: str, session: Optional[str], demo: bool, browser: bool,
-                   idle_secs: Optional[float]) -> Launched:
+                   idle_secs: Optional[float], terminal: bool = False) -> Launched:
+    """`terminal` (ID.S3): the caller is a human at a TTY (`mokata ide`), so the window may run the
+    embedded terminal. A running window WITHOUT it is restarted with it — the same "other mode"
+    rule as demo vs real; a request without it never downgrades a window that has it."""
     rec = running(root)
-    if rec and bool(rec.get("demo")) == demo:
+    if rec and bool(rec.get("demo")) == demo and (not terminal or _has_terminal(rec)):
         _call(int(rec["port"]), str(rec["token"]), "/api/focus", {"session": session})
         url = pair_url(rec, session)
         _open(url, browser)
@@ -103,6 +107,8 @@ def _open_or_focus(root: str, session: Optional[str], demo: bool, browser: bool,
         cmd += ["--focus", session]
     if demo:
         cmd.append("--demo")
+    if terminal and not demo:
+        cmd.append("--terminal")
     if idle_secs is not None:
         cmd += ["--idle", str(idle_secs)]
     env = dict(os.environ)
@@ -122,6 +128,11 @@ def _open_or_focus(root: str, session: Optional[str], demo: bool, browser: bool,
                        f"{START_TIMEOUT:g}s — run `mokata ide --foreground` to see why")
 
 
+def _has_terminal(rec: dict) -> bool:
+    pong = _call(int(rec.get("port") or 0), str(rec.get("token") or ""), "/api/ping")
+    return bool(pong and pong.get("terminal"))
+
+
 def _pinged_pid(rec: dict) -> int:
     """The pid the running server REPORTS (its ping), never the record file's — the record is a
     file on disk, and signalling a pid read from it could hit an unrelated process."""
@@ -134,12 +145,17 @@ def _pinged_pid(rec: dict) -> int:
 
 def _detach_kwargs() -> dict:
     """The child outlives this command on every OS: a new session on POSIX; on Windows a new
-    process group with no console (`start_new_session` is POSIX-only and silently ignored there,
-    so the child would die with the terminal that started it)."""
+    process group with its own HIDDEN console (`start_new_session` is POSIX-only and silently
+    ignored there, so the child would die with the terminal that started it).
+
+    0.0.25 `IDE-WIN-CMD-FLASH`: NOT `DETACHED_PROCESS`. Windows ignores CREATE_NO_WINDOW beside
+    it, so the server had no console at all — and a console-less process makes every console
+    child (`git`, `rg`, a pyenv-win `.bat` shim through `cmd.exe`) open a new VISIBLE window. The
+    IDE polls, so cmd windows flashed continuously. A hidden console is inherited by those
+    children instead, and still does not belong to the launching terminal (`mokata/quiet_spawn.py`)."""
     if os.name == "nt":
-        flags = (getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                 | getattr(subprocess, "DETACHED_PROCESS", 0)
-                 | getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        flags = (getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+                 | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
         return {"creationflags": flags}
     return {"start_new_session": True}
 

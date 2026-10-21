@@ -26,10 +26,17 @@ stops the agent shipping the wrong thing.
 
 ```bash
 uv tool install --upgrade mokata       # installs mokata, or upgrades it (or: pipx install --force mokata)
-mokata setup claude                    # wires the repo: commands, skills, hooks, MCP — human-gated
+mokata setup claude --mode full        # wires the repo + installs full mode's dependencies (one question)
 # restart Claude Code, then check:
 mokata doctor
 ```
+
+`--mode full` asks **one** question before installing its optional dependencies — the local
+semantic-memory model and the code-review-graph structural graph (about 360 MB, all local, no API
+key) — through the same installer you used, so they survive its upgrades. It ends with a table of
+what is active and, for anything that is not, the one command that fixes it. Scripted or CI:
+`mokata setup claude --mode full --yes --with-deps` (`--yes` alone never installs anything).
+Prefer less? `--mode seatbelt` (just the gates) or `--mode memory` (gates + persistent memory).
 
 `mokata setup claude` runs `mokata init` for you on a repo that has no `.mokata/` yet, and on a
 repo that has one it leaves your config, memory and ledger alone and refreshes only the wiring —
@@ -193,7 +200,7 @@ Per-layer / per-tool toggles, the trust dial (per write surface or per tool — 
 
 ## Commands & skills
 
-`mokata skills` lists the catalog — **16 curated skills** Claude can auto-engage (each also a slash command — bare `/<name>` on the pip + `mokata setup claude` route): the pipeline (`brainstorm`, `refine`, `onboard`, `spec`, `test`, `develop`, `review`, `debug`, `optimize`, `bug`, `ship`) plus standalone/auto-firing `govern`, `session`, `playbook`, `docsync` (docs↔code reconciler, human-gated fixes), and `mcp-repair` — and **10 domain-knowledge skills** (API design, security, performance, frontend/accessibility, browser testing, CI/CD, git workflow, deprecation, docs/ADRs, shipping) that attach to the pipeline phase where they apply. Utilities like `version` stay CLI-only.
+`mokata skills` lists the catalog — **16 curated skills** Claude can auto-engage (each also a slash command — bare `/<name>` on the pip + `mokata setup claude` route): the pipeline (`brainstorm`, `refine`, `onboard`, `spec`, `test`, `develop`, `review`, `debug`, `optimize`, `bug`, `ship`) plus standalone/auto-firing `govern`, `session`, `playbook`, `docsync` (docs↔code reconciler, human-gated fixes), and `mcp-repair` — and **14 domain-knowledge skills** (API design, security, performance, frontend/accessibility, browser testing, CI/CD, git workflow, deprecation, docs/ADRs, shipping, plus React, NestJS, frontend performance and frontend security) that attach to the pipeline phase where they apply. Utilities like `version` stay CLI-only.
 
 The CLI exposes 69 subcommands, including:
 

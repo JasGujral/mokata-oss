@@ -36,7 +36,6 @@ from __future__ import annotations
 import json
 import os
 import threading
-import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -106,6 +105,13 @@ FAULT_CORRUPT = "corrupt"           # the log has lines that could not be parsed
 FAULT_UNKNOWN = "unknown"           # the read itself failed before the log could be examined
 
 
+def _uuid4_hex() -> str:
+    """A fresh event id. `uuid` is imported here, not at module top: it pulls in `platform`, and the
+    Stop/PreCompact hooks import this module only to READ the log (HOOK-BUDGET, 0.0.25 Lane HB)."""
+    import uuid
+    return uuid.uuid4().hex
+
+
 def _parse_line(raw: bytes) -> Optional[Dict[str, Any]]:
     """One JSONL line -> an event dict, or None when it is blank / torn / not an object. Same
     degrade-clean contract as `read_events`: a corrupt line is SKIPPED, never raised."""
@@ -147,7 +153,7 @@ class ProgressLog:
         the read-then-append is locked so concurrent writers never drop one. UNGATED —
         this writes straight to the JSONL, never through the WriteGate (observability)."""
         entry: Dict[str, Any] = {
-            "event_id": uuid.uuid4().hex,
+            "event_id": _uuid4_hex(),
             "ts": _now_iso(),
             "schema_version": PROGRESS_SCHEMA_VERSION,
             "type": type,

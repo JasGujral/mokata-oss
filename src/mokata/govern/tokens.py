@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
-from ..bootstrap import estimate_tokens
 
 # Illustrative default rates (USD per 1k tokens); override for your model.
 DEFAULT_INPUT_COST = 0.003
@@ -112,6 +111,7 @@ class TokenTracker:
     def add(self, label: str, input_text: str = "", output_text: str = "",
             input_tokens: Optional[int] = None,
             output_tokens: Optional[int] = None) -> UsageEntry:
+        from ..bootstrap import estimate_tokens   # lazy: tokens sits on the dirty-track hook path
         it = input_tokens if input_tokens is not None else estimate_tokens(input_text)
         ot = output_tokens if output_tokens is not None else estimate_tokens(output_text)
         entry = UsageEntry(label=label, input_tokens=it, output_tokens=ot)

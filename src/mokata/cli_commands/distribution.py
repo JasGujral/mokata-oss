@@ -114,6 +114,13 @@ def cmd_stacks(args: argparse.Namespace) -> int:
         for e in entries:
             print(f"  {e['name']:12} {e.get('framework', '')}")
             print(f"  {'':12} {e.get('summary', '')}")
+        # 0.0.25 Lane D — what THIS repo looks like (suggest-only; installs nothing).
+        detected = ST.detect_stacks(getattr(args, "path", None) or ".")
+        if detected:
+            print("\ndetected in this repo (suggestion only — `mokata stacks install <name>` "
+                  "to adopt):")
+            for det in detected:
+                print(f"  {det.line()}")
         print(f"\n{ST.HONEST_NOTE}")
         return 0
 

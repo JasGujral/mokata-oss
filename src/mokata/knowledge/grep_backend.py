@@ -53,13 +53,17 @@ class GrepBackend(GraphBackend):
         self.extensions = tuple(extensions)
 
     # --- public API ----------------------------------------------------------
-    def query(self, kind: str, target: str, depth: int = 1) -> QueryResult:
+    def query(self, kind: str, target: str, depth: int = 1,
+              files: Optional[List[str]] = None) -> QueryResult:
+        """`files` (0.0.25 K) SCOPES the corpus to those absolute paths instead of the repo walk —
+        the AST floor passes the files its index does NOT hold, so the lexical floor never re-reads
+        Python the structural index has already answered for."""
         # 0.0.23 `BLAST-RADIUS-WALKS-THE-CORPUS-PER-SYMBOL` — every helper used to re-walk and
         # re-read the whole tree, so a depth-2 blast radius read the corpus once PER CALLER found
         # at hop 1 (31 full reads for 30 callers) and `spec amend`'s 20 s lens timed out on an
         # ordinary repo. The corpus is now read ONCE per query and held only for that query —
         # never across calls, so an edit between two queries is always seen.
-        self._corpus_cache = {}
+        self._corpus_cache = {} if files is None else {None: list(files)}
         try:
             return self._query(kind, target, depth)
         finally:

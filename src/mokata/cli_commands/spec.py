@@ -194,6 +194,11 @@ def _consent_criteria(spec: "object", payload: "object") -> list:
         src = raw[i] if i < len(raw) and isinstance(raw[i], dict) else {}
         if src.get("anchors"):
             d["anchors"] = src["anchors"]
+        # 0.0.25 Lane D — a UI criterion's form is part of what the human approves (raw, as sent:
+        # the MCP surface hashes its raw `criteria`, so both surfaces stay one identity).
+        for key in ("kind", "states"):
+            if src.get(key):
+                d[key] = src[key]
         out.append(d)
     return out
 
@@ -425,6 +430,10 @@ def cmd_spec_show(args: argparse.Namespace) -> int:
         print(f"approach: {spec.approach}")
     if spec.domains:
         print(f"domains: {', '.join(spec.domains)}")
+        from ..domains import domain_routing_line
+        routing = domain_routing_line(spec.domains)
+        if routing:
+            print(routing)
     for c in spec.criteria:
         print(f"  {c.id}: {c.text}")
     # SPEC-ANCHOR S2 — where each AC lives, so a test is placed without exploring for it.

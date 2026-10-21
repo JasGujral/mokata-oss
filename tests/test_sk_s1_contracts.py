@@ -205,8 +205,11 @@ class TestNoShippedSkillLeaksAnInternalDocPath(unittest.TestCase):
 
     def test_all_25_ship(self):
         names = self._all_shipped_skill_names()
-        self.assertEqual(len(names), len(CURATED_SKILLS) + 10,
-                         "expected 15 pipeline + 10 domain = 25 shipped SKILL.md")
+        # Derived (0.0.25 Lane D): the curated pipeline set plus every domain id that ships a skill
+        # — the literal "+ 10" went red the first time a domain batch landed after DK.S4.
+        from mokata.domains import DOMAIN_SKILLS
+        self.assertEqual(len(names), len(CURATED_SKILLS) + len(DOMAIN_SKILLS),
+                         "expected every curated pipeline skill + every shipped domain skill")
         for name in names:
             with self.subTest(skill=name):
                 self.assertTrue(os.path.isfile(os.path.join(_SKILLS_DIR, name, "SKILL.md")))

@@ -174,8 +174,21 @@ def preview_content(store: Any, spec: Spec) -> str:
     # COPY (the preview must not mutate the spec it describes).
     import copy
     from .spec_anchor import derive_anchors
-    shown = derive_anchors(copy.deepcopy(shown), _approved(store))
+    approved = _approved(store)
+    shown = derive_anchors(copy.deepcopy(shown), approved)
+    # 0.0.25 Lane D — the domains `spec_commit` will derive, projected onto the same copy, so the
+    # human approves the routing (which domain skills develop + review will load) with the plan.
+    from ..domains import derive_spec_domains
+    derive_spec_domains(shown, approved, root=_repo_root(store))
     return json.dumps(shown.to_dict())
+
+
+def _repo_root(store: Any) -> str:
+    """The repo behind a StateStore (`tdd_state.root_of_state_dir`), or "" when it is not a mokata
+    state dir — in which case no package manifest is read and no framework-gated domain fires."""
+    from ..tdd_state import root_of_state_dir
+    root = getattr(store, "root", "")
+    return (root_of_state_dir(root) or "") if isinstance(root, str) and root else ""
 
 
 def _approved(store: Any) -> Any:
@@ -507,7 +520,14 @@ def spec_commit(store: Any, spec: Spec, *, version: int = 0,
     # brainstorm artifacts already on record (zero new exploration). After the scope, whose
     # `authorized` globs are the coarse fallback. Idempotent; byte-identical when nothing derives.
     from .spec_anchor import derive_anchors
-    derive_anchors(spec, _approved(store))
+    approved = _approved(store)
+    derive_anchors(spec, approved)
+    # 0.0.25 Lane D (DK-CLUSTER-INERT, wired) — the domains-in-play, classified from the approved
+    # approach's frozen blast radius + each touched file's declared framework, UNIONED into the
+    # spec's own. In the one committer, so every emit surface (CLI / MCP / pipeline) binds it, and
+    # the routing develop + review load from is a recorded fact of the approved spec.
+    from ..domains import derive_spec_domains
+    derive_spec_domains(spec, approved, root=_repo_root(store))
 
     data = dict(spec.to_dict())
     data["version"] = version
@@ -611,7 +631,12 @@ def emit_spec(surface: Any, spec: Spec, tests: List[TestRef], *,
     # SPEC-ANCHOR — derive the anchors BEFORE the gate, so its S3 advisories judge the anchors that
     # will actually land (the committer derives again; derivation is idempotent).
     from .spec_anchor import derive_anchors
-    derive_anchors(spec, handoff if handoff is not None else _approved(store))
+    from ..domains import derive_spec_domains
+    approved = handoff if handoff is not None else _approved(store)
+    derive_anchors(spec, approved)
+    # 0.0.25 Lane D — the routed domains, BEFORE the gate too, so its UI-criterion advisory judges
+    # the domains that will land (the committer derives again; derivation is idempotent).
+    derive_spec_domains(spec, approved, root=_repo_root(store))
     gr = run_completeness_gate(spec, tests, handoff=handoff, store=store,
                                root=getattr(surface, "root", "") or "",
                                graph_available=structural_backend_available(surface),
@@ -672,7 +697,9 @@ def spec_from_payload(payload: Dict[str, Any]) -> "tuple[Spec, List[TestRef]]":
     """`(spec, tests)` out of the JSON shape both surfaces accept:
 
         {"title": str, "approach": str?, "domains": [str]?,
-         "criteria": [{"id": str, "text": str, "anchors": [CodeAnchor]?}],
+         "criteria": [{"id": str, "text": str, "anchors": [CodeAnchor]?,
+                       "kind": "behaviour" | "ui"?, "states": {default, loading, empty, error,
+                       disabled: str}?}],
          "tests":    [{"name": str, "ac_ids": [str]}]}
 
     Raises `ValueError` with an actionable message on a shape the gates could not judge — an
@@ -699,8 +726,13 @@ def spec_from_payload(payload: Dict[str, Any]) -> "tuple[Spec, List[TestRef]]":
         if not isinstance(anchors, list):
             raise ValueError(f"criterion {c['id']}: `anchors` must be a list of "
                              f"{{file, symbol?, kind, source, confidence}}")
+        # 0.0.25 Lane D — a UI criterion's `kind` + state matrix ride the same strict parse the
+        # persisted spec uses, so the wire and the disk reject the same malformed shapes.
+        ui = AcceptanceCriterion.from_dict({"id": str(c["id"]), "kind": c.get("kind"),
+                                            "states": c.get("states")})
         criteria.append(AcceptanceCriterion(id=str(c["id"]), text=str(c.get("text", "")),
-                                            anchors=[CodeAnchor.from_dict(a) for a in anchors]))
+                                            anchors=[CodeAnchor.from_dict(a) for a in anchors],
+                                            kind=ui.kind, states=ui.states))
 
     tests: List[TestRef] = []
     for t in payload.get("tests") or []:

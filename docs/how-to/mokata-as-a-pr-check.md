@@ -58,7 +58,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --quiet mokata
       - id: check
-        uses: JasGujral/mokata-oss/.github/actions/mokata-check@v0.0.24
+        uses: JasGujral/mokata-oss/.github/actions/mokata-check@v0.0.25
         with:
           base: ${{ github.event.pull_request.base.sha }}
           fail-on-block: "true"          # set "false" for report-only (never fails the job)

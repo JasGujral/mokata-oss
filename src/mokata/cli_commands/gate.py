@@ -151,6 +151,17 @@ def cmd_gate_clear(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gate_check(args: argparse.Namespace) -> int:
+    """Run ONE domain gate (Lane D2) on the repo at --path; the exit code IS the verdict. Read-only:
+    it writes nothing, so it needs no mokata project and no run."""
+    from ..govern.domain_gates import render_run, run_domain_gate
+
+    root = os.path.abspath(getattr(args, "path", None) or ".")
+    run = run_domain_gate(args.gate, root, min_days=args.min_days)
+    print(render_run(run))
+    return run.exit_code
+
+
 def register(sub, common):
     p_gate = sub.add_parser(
         "gate", parents=[common],
@@ -180,3 +191,16 @@ def register(sub, common):
     p_clear.add_argument("--run", default=None, help="the run id to clear (default: resolved)")
     p_clear.add_argument("--actor", default="human", help="who is clearing (default: human)")
     p_clear.set_defaults(func=cmd_gate_clear)
+
+    from ..govern.domain_gates import (ADVISORY_DOMAIN_GATE_IDS, DEFAULT_MIN_COOLDOWN_DAYS,
+                                       DOMAIN_GATE_IDS)
+    p_check = gsub.add_parser(
+        "check", parents=[common],
+        help="run a frontend/backend domain gate on this repo (exit 0 pass, 1 fail, "
+             "3 not configured)")
+    p_check.add_argument("gate", choices=DOMAIN_GATE_IDS + ADVISORY_DOMAIN_GATE_IDS,
+                         help="the domain gate to run")
+    p_check.add_argument("--min-days", type=float, default=DEFAULT_MIN_COOLDOWN_DAYS,
+                         help="dep-cooldown: the minimum release-age cooldown in days "
+                              f"(default {DEFAULT_MIN_COOLDOWN_DAYS:g})")
+    p_check.set_defaults(func=cmd_gate_check)

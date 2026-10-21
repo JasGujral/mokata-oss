@@ -45,7 +45,7 @@ _FAKE_DSN = "postgres://u" + ":" + "pw" + "@h:5432/db"
 _DENY = lambda _t: False
 _ALLOW = lambda _t: True
 
-STARTER = ("python-web", "node-ts", "go-service")
+STARTER = ("python-web", "node-ts", "go-service", "react-web", "nestjs-api")   # +2 at 0.0.25 D1
 
 
 def _repo(d, profile="standard"):
@@ -138,7 +138,9 @@ class TestReadOnlyCatalog(unittest.TestCase):
         self.assertEqual([e["name"] for e in entries], sorted(STARTER))
 
     def test_search_matches_by_tag_and_framework(self):
-        self.assertEqual([h.entry["name"] for h in ST.search_stacks("typescript")], ["node-ts"])
+        # 0.0.25 D1 — react-web and nestjs-api are TypeScript stacks too; node-ts still ranks first.
+        self.assertEqual([h.entry["name"] for h in ST.search_stacks("typescript")],
+                         ["node-ts", "react-web", "nestjs-api"])
         self.assertEqual([h.entry["name"] for h in ST.search_stacks("golang")], ["go-service"])
         self.assertEqual(ST.search_stacks(""), [])              # empty query → no matches
 

@@ -818,6 +818,9 @@ UNGATED_BY_DESIGN = {
     ("ide/snapshots.py", "_maybe_prune"): "0.0.22 E2 — the review window's SNAPSHOT store under gitignored temp_local/snapshots/ (ADR doc 85 §1b): a content-addressed copy of a file mokata OBSERVED being written, for the diff at any point in time. Ungated by design: it records what the agent or the human already wrote (the write itself met its own gates), it touches no committed file, and routing an OBSERVATION of a write through the WriteGate would gate every write twice. Bounded (MAX_FILE_BYTES, MAX_ENTRIES); losing it loses history, not code.",
     ("ide/snapshots.py", "capture_before_first_write"): "0.0.22 E2 — the review window's SNAPSHOT store under gitignored temp_local/snapshots/ (ADR doc 85 §1b): a content-addressed copy of a file mokata OBSERVED being written, for the diff at any point in time. Ungated by design: it records what the agent or the human already wrote (the write itself met its own gates), it touches no committed file, and routing an OBSERVATION of a write through the WriteGate would gate every write twice. Bounded (MAX_FILE_BYTES, MAX_ENTRIES); losing it loses history, not code.",
     ("ide/search.py", "build_index"): "0.0.23 C2 — the IDE's local SEMANTIC INDEX (ruling R2) under gitignored temp_local/ide/semantic/: function/class chunk vectors from the optional model2vec extra, stamped with the embedder id, rebuilt from the source at will. A derived cache of code the user already wrote — no committed file, nothing approved, losing it costs one re-embed.",
+    ("ide/health.py", "_rebuild_ast"): "0.0.25 — the health panel's FORCE RE-PARSE: deletes mokata's own AST edge cache under gitignored temp_local/knowledge_ast/ and re-parses the source into it. A derived cache of code the user already wrote, rebuilt on a human's click in the paired IDE (token + Origin guarded); no committed file, nothing approved, losing it costs one re-parse.",
+    ("ide/health.py", "_rebuild_search"): "0.0.25 — the health panel's FORCE REBUILD of the IDE's local semantic index (the same derived cache `ide/search.py:build_index` writes, under gitignored temp_local/ide/semantic/): deleted and re-embedded on a human's click in the paired IDE. No committed file, nothing approved, losing it costs one re-embed.",
+    ("ide/bus.py", "ensure_bridge"): '0.0.25 ID.S3 — the IDE LIVE-BRIDGE RECORD (stable port + hook token) under gitignored temp_local/ide/, mode 0600. Machine-local run-state the `--ide-bridge` http hooks point at; written inside apply_setup, whose batched `setup` ledger entry names settings.local.json. Content is two generated values, never repo content.',
     ("ide/server.py", "_write_record"): '0.0.22 E2 — the review-window SERVER RECORD (port, pid, token) under gitignored temp_local/ide/, mode 0600, removed on exit. Transient run-state: it says whether a window is open so `/mokata:review-window` re-focuses it instead of starting another.',
     ("ide/server.py", "_remove_record"): '0.0.22 E2 — the review-window SERVER RECORD (port, pid, token) under gitignored temp_local/ide/, mode 0600, removed on exit. Transient run-state: it says whether a window is open so `/mokata:review-window` re-focuses it instead of starting another.',
     ("notify.py", "_debounced"): "Lane F — the notification RATE LIMITER's stamp, under gitignored "
@@ -861,7 +864,12 @@ UNGATED_BY_DESIGN = {
         "to an optional extra (the embeddings model), recorded in ~/.mokata/extra_declines.json. "
         "Not a governed PROJECT write — nothing in the repo changes, and the whole point of the "
         "record is that the human is never asked again. The consent it guards is the gate; this "
-        "is only its memory. (The ACCEPT path writes no project file at all — it runs pip.)",
+        "is only its memory. (The ACCEPT path writes no project file at all — it runs pip.) "
+        "0.0.25 I-02: also called by `adoption_modes.offer_mode_extras` for the ONE mode-wide "
+        "decline (key `mode-dependencies`) — the same user-scoped 'no', for the whole dependency "
+        "set; only a HUMAN's no is recorded (an unreadable stdin is not one). Its consented "
+        "path's project writes (`memory.embedder`, the graph pin) go through `config_set` and "
+        "`adopt_graph`, both gated.",
     ("govern/lifecycle.py", "_write_tombstone"): "KB.S1 — the USER-scoped removal TOMBSTONE in "
         "~/.mokata/removals.json (repo identity + when + actor, NO repo content). Same class as "
         "user_prefs above: a user-profile record, not a governed PROJECT write. It exists BECAUSE "
@@ -1496,9 +1504,12 @@ CALLER_PINS = {
     # `_writegraph.derive_callers`. Each entry's justification is about WHAT it writes (an
     # observation under temp_local/, or the server's own 0600 record), never about who calls it.
     # 0.0.23 C2 — the IDE's semantic index, derived the same way.
-    ("ide/search.py", "build_index"): (("ide/search.py", "meaning"),),
+    ("ide/search.py", "build_index"): (("ide/health.py", "_rebuild_search"), ("ide/search.py", "meaning")),
+    ("ide/health.py", "_rebuild_ast"): (("ide/health.py", "start"),),
+    ("ide/health.py", "_rebuild_search"): (("ide/health.py", "start"),),
     ("ide/server.py", "_remove_record"): (("ide/server.py", "serve"),),
     ("ide/server.py", "_write_record"): (("ide/server.py", "serve"),),
+    ("ide/bus.py", "ensure_bridge"): (("harness_setup.py", "apply_setup"),),
     ("ide/snapshots.py", "_append"): (("ide/snapshots.py", "capture"),),
     ("ide/snapshots.py", "_maybe_prune"): (("ide/snapshots.py", "_append"),),
     ("ide/snapshots.py", "_write_object"): (("ide/snapshots.py", "capture"),),
@@ -1562,6 +1573,7 @@ CALLER_PINS = {
         ("mcp/tools_read.py", "govern"),
     ),
     ("extras_install.py", "record_extra_decline"): (
+        ("adoption_modes.py", "offer_mode_extras"),
         ("extras_install.py", "offer_extra"),
     ),
     ("flush_liveness.py", "clear_state"): (
@@ -1585,6 +1597,7 @@ CALLER_PINS = {
     ("harness_setup.py", "_write_json"): (
         ("harness_setup.py", "_merge_grant"),
         ("harness_setup.py", "_merge_hooks"),
+        ("harness_setup.py", "_merge_ide_bridge"),
         ("harness_setup.py", "_merge_mcp"),
         ("harness_setup.py", "_merge_statusline"),
         ("harness_setup.py", "_write_or_remove_json"),
@@ -2189,7 +2202,7 @@ class TestZeroBypass(unittest.TestCase):
                           "than leaving a stale one in the report.")
 
     def test_rule_e_yield_is_stated_not_left_as_a_silent_ratio(self):
-        """RULE (e) RESOLVES 69 CALLS AND ADDS 6 DERIVED SITES, and the ratio is one a reader of
+        """RULE (e) RESOLVES 76 CALLS AND ADDS 6 DERIVED SITES, and the ratio is one a reader of
         a derived report is entitled to have explained rather than left to wonder at.
 
         THE EXPLANATION, and it is checkable, not a hand-wave: the rule's job is to resolve calls
@@ -2202,6 +2215,28 @@ class TestZeroBypass(unittest.TestCase):
         Both baselines were re-derived through `scripts/mutate.sh` with a measurement label rather
         than by hand (doc 85 §7b: "I am only measuring, not mutation-testing" is not an exemption):
         rule (e) ON gives 118 derived sites, the M05-shape mutation OFF gives 116.
+
+        73 -> 76 AT 0.0.25 (the IDE health panel), re-derived from `_write_closure()`'s edge list:
+        `ide/health.py:health` calls `JOB.snapshot()` twice and `ide/health.py:start` calls
+        `JOB.start(...)` — the module's one `_Job`. Neither target writes anything (a lock and a
+        dict; the job's work runs in a thread the sweep does not follow, and each job's writer —
+        `_rebuild_ast`, `_rebuild_search` — is registered on its own), so `productive` is unchanged.
+
+        72 -> 73 AT 0.0.25 lane S, re-derived rather than bumped (`_write_closure()` edge list,
+        filtered to `ide/`): `ide/server.serve` binds a local `AppState` and calls its `.close` on
+        the way out (cancelling the heavy lanes' jobs). `.close` stops in-memory worker queues and
+        writes nothing, so `productive` is unchanged: one resolution, no site.
+
+        71 -> 72 AT 0.0.25 ID2, re-derived rather than bumped (`_write_closure()` edge list,
+        filtered to `ide/`): `cli_commands/knowledge.cmd_query` builds a local `ide.links.Linker`
+        and calls its `.ref` per printed reference (the OSC-8 deep link). `.ref` formats a string
+        and writes nothing, so `productive` is unchanged: one resolution, no site.
+
+        69 -> 71 AT 0.0.25 I-02, re-derived rather than bumped (`_write_closure()` edge list,
+        filtered to the files I-02 touched): `adoption_modes.offer_mode_extras` builds a local
+        `ModeOffersResult` and calls its `.row` twice (the embeddings and code-graph rows, to wire
+        the embedder setting and pin the graph). `.row` is an in-memory lookup and writes nothing,
+        so `productive` is unchanged: two resolutions, no site.
 
         54 -> 69 AT 0.0.23, the three lanes below summed at the merge (11 + 2 + 2): each was
         re-derived against 45c620f on its own branch.
@@ -2275,7 +2310,7 @@ class TestZeroBypass(unittest.TestCase):
         self.assertEqual(len(graph.receiver_edges), graph.receiver_calls,
                          "the rule-(e) COUNT and the rule-(e) EDGE LIST disagree — a count with no "
                          "list can only be re-asserted, never re-graded")
-        self.assertEqual(graph.receiver_calls, 69,
+        self.assertEqual(graph.receiver_calls, 76,
                          "rule (e)'s resolution count moved; re-derive its yield before trusting "
                          "any number in the audit report that depends on it")
         productive = sorted({caller for caller, _ln, target in graph.receiver_edges
@@ -2285,9 +2320,9 @@ class TestZeroBypass(unittest.TestCase):
             [("govern/calibration.py", "observe"), ("harvest.py", "decide"),
              ("harvest.py", "harvest"), ("mcp/tools_read.py", "session_save"),
              ("run_intent.py", "bind_registered"), ("team_journal.py", "_floor_rows")],
-            "of rule (e)'s 69 resolutions, exactly these reach a durable write — every other one "
+            "of rule (e)'s 73 resolutions, exactly these reach a durable write — every other one "
             "binds a receiver whose class writes nothing (or, since CM.S5, IS the WriteGate), "
-            "which is why 69 resolutions buy 6 sites rather than 68. If this list moved, the "
+            "which is why 73 resolutions buy 6 sites rather than 72. If this list moved, the "
             "ratio in the report is stale.")
         for site in productive:
             self.assertIn(site, closure.derived,

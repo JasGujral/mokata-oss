@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Protocol
 
 from ..errors import failure_class_of
 from .query import (BASIS_LEXICAL, BASIS_STRUCTURAL, QUERY_KINDS, BackendError,
-                    GraphBackend, QueryResult, Reference)
+                    GraphBackend, QueryResult, Reference, mark_truncated)
 
 
 def _backend_error(message: str, cause: BaseException) -> BackendError:
@@ -115,10 +115,16 @@ class CodeReviewGraphBackend(GraphBackend):
                 f"graph backend '{self.name}' failed on {kind}({target}): {exc}", exc
             ) from exc
         refs = [Reference.from_dict(r) for r in rows]
-        return QueryResult(
+        result = QueryResult(
             kind=kind, target=target, references=refs, backend=self.name,
             basis=BASIS_STRUCTURAL, note="answered by the codebase graph",
         )
+        # 0.0.25 K — the adopted graph CAPS its answers and says so (`CrgRows.truncated/total`);
+        # that disclosure is carried onto the answer instead of being dropped at the boundary.
+        if getattr(rows, "truncated", False):
+            mark_truncated(result, getattr(rows, "total", None),
+                           f"the adopted graph '{self.name}' capped this answer")
+        return result
 
     @property
     def supports_resolve(self) -> bool:

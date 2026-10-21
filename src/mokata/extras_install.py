@@ -9,7 +9,8 @@ The flow, and why each step is a step:
   1. **ASK** — fail-closed off a TTY (`prompt.read_yes_no`). An agent harness leaves stdin
      connected but silent; a bare `input()` there hangs forever, and an install that "defaults to
      yes" because nobody answered is not consent.
-  2. **INSTALL** — ONE bounded subprocess (the MCP-R.D0 discipline). `pip` on a wedged index is
+  2. **INSTALL** — ONE bounded subprocess (the MCP-R.D0 discipline), run by the installer that
+     owns the env (`install_route`, 0.0.25 I-01 — uv tool / pipx / pip). An installer on a wedged index is
      the canonical unbounded hang; a timeout here degrades to the fallback tier, which is a
      perfectly good outcome, whereas a hang is not an outcome at all.
   3. **VERIFY** — an install that reports success and then can't be imported is worse than no
@@ -52,6 +53,9 @@ class InstallResult:
     verified: bool = False
     message: str = ""
     spec: str = ""
+    installer: str = ""              # which installer owns this env (install_route.INSTALLERS)
+    fix: str = ""                    # the one line a human can paste when ok is False
+    deferred: bool = False           # planned but must run after this process exits (Windows)
 
 
 @dataclass
@@ -64,54 +68,90 @@ class OfferResult:
 
 
 # ------------------------------------------------------------------ the bounded install
-def install_extra(spec: str, *, verify: Optional[Callable[[], bool]] = None,
-                  timeout: float = INSTALL_TIMEOUT_S,
-                  runner: Optional[Callable[..., Any]] = None,
-                  out: Optional[Callable[[str], None]] = None) -> InstallResult:
-    """`pip install <spec>` in THIS interpreter, bounded, then verify. Never raises.
+def fix_command(specs: Any) -> str:
+    """The pasteable install line for `specs` under THIS environment's installer (0.0.25 I-01).
+    Every "retry with …" hint uses this — a hint that says `pip install` to a uv-tool user names a
+    command that cannot work there."""
+    from .install_route import plan_install
+    specs = [specs] if isinstance(specs, str) else list(specs)
+    return plan_install(specs).display
 
-    `sys.executable -m pip` (not a bare `pip`) so the extra lands in the interpreter that will
-    import it — a `pip` earlier on PATH belonging to a different environment installs a package
-    mokata then cannot see, and the user is told it worked. `runner` is injectable so tests
-    exercise every branch without a real install; `verify` is the caller's proof that the thing
-    is actually usable now."""
+
+def install_extras(specs: Any, *, verify: Optional[Callable[[], bool]] = None,
+                   timeout: float = INSTALL_TIMEOUT_S,
+                   runner: Optional[Callable[..., Any]] = None,
+                   out: Optional[Callable[[str], None]] = None,
+                   plan: Any = None) -> InstallResult:
+    """Install `specs` with the installer that OWNS this environment, bounded, then verify.
+    Never raises.
+
+    0.0.25 I-01: this used to be `sys.executable -m pip install` unconditionally, which is
+    `No module named pip` in a `uv tool install mokata` env — the documented primary route. The
+    route now comes from `install_route.plan_install` (uv tool / pipx / pip / uv pip), so the
+    extra lands where mokata imports from AND survives that installer's next upgrade. Several
+    specs go in ONE installer run: a uv tool env is rebuilt once, not once per extra.
+
+    A plan with no runnable argv (no installer on PATH, an unreadable receipt, Windows deferring a
+    self-rebuild) runs nothing and returns `ran=False` with `fix` set — the caller reports it.
+    `runner` is injectable so tests exercise every branch without a real install; `verify` is the
+    caller's proof that the thing is actually usable now."""
+    from .install_route import plan_install
     emit = out or print
+    specs = [specs] if isinstance(specs, str) else list(specs)
+    label = " ".join(specs)
+    plan = plan or plan_install(specs)
+    base = dict(spec=label, installer=plan.installer, fix=plan.display, deferred=plan.deferred)
+    if not plan.runnable:
+        return InstallResult(ran=False, message=plan.reason or "no runnable install plan", **base)
+
     run = runner or subprocess.run
-    cmd = [sys.executable, "-m", "pip", "install", spec]
-    emit(f"installing {spec} …")
+    emit(f"installing {label} via {plan.installer} …")
     try:
-        proc = run(cmd, capture_output=True, text=True, timeout=timeout, check=False)  # nosec B603
+        for argv in [plan.argv, *plan.then]:      # pipx: libraries, then the apps (install_route)
+            proc = run(argv, capture_output=True, text=True, timeout=timeout,
+                       check=False)  # nosec B603 — fully-argumented, never shell=True
+            if getattr(proc, "returncode", 1) != 0:
+                break
     except subprocess.TimeoutExpired:
-        return InstallResult(ran=True, message=f"install timed out after {int(timeout)}s", spec=spec)
+        return InstallResult(ran=True, message=f"install timed out after {int(timeout)}s", **base)
     except (OSError, ValueError) as exc:
-        # DEGRADE_CLEAN: no pip / an unexecutable interpreter path (OSError), a malformed argv
-        # (ValueError). Both mean "the install did not happen", which the caller handles by
-        # staying on the fallback tier — there is nothing here to crash a setup over.
-        return InstallResult(ran=False, message=f"could not run pip: {exc}", spec=spec)
+        # DEGRADE_CLEAN: the installer vanished between planning and running (OSError), or a
+        # malformed argv (ValueError). Either way "the install did not happen".
+        return InstallResult(ran=False, message=f"could not run {plan.installer}: {exc}", **base)
 
     if getattr(proc, "returncode", 1) != 0:
-        # pip's own stderr can be long and can echo index URLs (which may carry credentials in a
-        # corporate setup), so report the LAST line and the code, never the whole transcript.
+        # An installer's stderr can be long and can echo index URLs (which may carry credentials
+        # in a corporate setup), so report the LAST line and the code, never the transcript.
         tail = (getattr(proc, "stderr", "") or "").strip().splitlines()
-        return InstallResult(ran=True, spec=spec,
-                             message=f"pip exited {proc.returncode}"
-                                     + (f": {tail[-1]}" if tail else ""))
+        return InstallResult(ran=True, message=f"{plan.installer} exited {proc.returncode}"
+                             + (f": {tail[-1]}" if tail else ""), **base)
 
+    import importlib
+    importlib.invalidate_caches()        # the packages landed after this process started
     if verify is None:
-        return InstallResult(ok=True, ran=True, verified=True, spec=spec, message="installed")
+        return InstallResult(ok=True, ran=True, verified=True, message="installed",
+                             **{**base, "fix": ""})
     try:
         verified = bool(verify())
     except Exception as exc:
         # DEGRADE_CLEAN, broad by necessity: `verify` is a CALLER-supplied probe that imports an
         # OPTIONAL third-party package and may load a model — its raisables belong to packages
-        # mokata cannot import at module scope to name. A failed probe means "not usable", which
-        # is precisely the answer the caller needs, so there is nothing to re-raise.
-        return InstallResult(ran=True, spec=spec,
-                             message=f"installed, but verification failed: "
-                                     f"{type(exc).__name__}: {exc}")
-    return InstallResult(ok=verified, ran=True, verified=verified, spec=spec,
+        # mokata cannot import at module scope to name. A failed probe means "not usable".
+        return InstallResult(ran=True, message=f"installed, but verification failed: "
+                                               f"{type(exc).__name__}: {exc}", **base)
+    if verified:
+        base["fix"] = ""
+    return InstallResult(ok=verified, ran=True, verified=verified,
                          message="installed and verified" if verified else
-                                 "installed, but the package is still not usable here")
+                                 "installed, but the package is still not usable here", **base)
+
+
+def install_extra(spec: str, *, verify: Optional[Callable[[], bool]] = None,
+                  timeout: float = INSTALL_TIMEOUT_S,
+                  runner: Optional[Callable[..., Any]] = None,
+                  out: Optional[Callable[[str], None]] = None) -> InstallResult:
+    """One spec through `install_extras` — the single-extra entry the offers use."""
+    return install_extras([spec], verify=verify, timeout=timeout, runner=runner, out=out)
 
 
 # ------------------------------------------------------------------ user-scoped decline records
@@ -196,7 +236,7 @@ def offer_extra(root: str, extra: str, spec: str, question: str, *,
             # about the memory the tier would have embedded.
             ledger.record("extra_offer", extra=extra, decision="declined", scope="repo")
         emit(decline_note or f"Skipping {extra}. (mokata won't ask again — "
-                             f"`pip install {spec}` any time.)")
+                             f"`{fix_command(spec)}` any time.)")
         return OfferResult(declined=True, asked=True, message="declined")
 
     res = install_extra(spec, verify=verify, timeout=timeout, runner=runner, out=out)
@@ -205,7 +245,7 @@ def offer_extra(root: str, extra: str, spec: str, question: str, *,
                       installed=res.ok, scope="repo")
     if not res.ok:
         emit(f"note: {extra} is not active — {res.message}. mokata carries on with its "
-             f"built-in fallback; retry any time with `pip install {spec}`.")
+             f"built-in fallback; retry any time with `{res.fix or fix_command(spec)}`.")
     return OfferResult(accepted=True, installed=res.ok, asked=True, message=res.message)
 
 
@@ -231,5 +271,5 @@ def offer_embeddings(root: str, **kwargs: Any) -> OfferResult:
     kwargs.setdefault("verify", _usable)
     kwargs.setdefault("decline_note",
                       "Keeping the built-in hashing tier (token-hash, not meaning). "
-                      "(mokata won't ask again — `pip install 'mokata[embeddings]'` any time.)")
+                      f"(mokata won't ask again — `{fix_command(EMBEDDINGS_EXTRA)}` any time.)")
     return offer_extra(root, MODEL2VEC_ID.split(":")[0], EMBEDDINGS_EXTRA, question, **kwargs)

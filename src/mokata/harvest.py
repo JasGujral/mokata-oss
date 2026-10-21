@@ -133,15 +133,24 @@ def build_note(root: str, run_id: str, last_message: Optional[str] = None) -> st
             lines.append(f"- review: {gate.message}")
     except Exception:  # noqa: BLE001
         pass
-    if isinstance(last_message, str) and last_message.strip():
-        msg = " ".join(last_message.split())
-        if len(msg) > LAST_MESSAGE_CHARS:
-            msg = msg[:LAST_MESSAGE_CHARS - 1] + "…"
-        lines.append(f"- last word: {msg}")
-    note = "\n".join(lines)
-    if len(note) > MAX_NOTE_CHARS:
-        note = note[:MAX_NOTE_CHARS - 1] + "…"
-    return note
+    return _with_last_word(_bounded_note("\n".join(lines)), last_message)
+
+
+def _bounded_note(note: str) -> str:
+    return note[:MAX_NOTE_CHARS - 1] + "…" if len(note) > MAX_NOTE_CHARS else note
+
+
+def _with_last_word(record_note: str, last_message: Optional[str]) -> str:
+    """The record-only note plus the session's last word, bounded. Equal to building the note with
+    the last word in one pass (the bound cuts the same prefix either way), which is what lets
+    `harvest` read the record ONCE for both the note and its record-only digest (HOOK-BUDGET)."""
+    if not (isinstance(last_message, str) and last_message.strip()):
+        return record_note
+    msg = " ".join(last_message.split())
+    if len(msg) > LAST_MESSAGE_CHARS:
+        msg = msg[:LAST_MESSAGE_CHARS - 1] + "…"
+    line = f"- last word: {msg}"
+    return _bounded_note(f"{record_note}\n{line}" if record_note else line)
 
 
 def _position_for_run(root: str, run_id: str) -> Any:
@@ -189,12 +198,13 @@ def harvest(root: str, session_id: Any, event: str,
         prior = store.read(_key(sid)) or {}
         if last_message is None and isinstance(prior, dict):
             last_message = prior.get("last_message")      # PreCompact/SessionEnd carry none
-        note = build_note(root, rid, last_message)
+        record_note = build_note(root, rid, None)       # the record is read ONCE (HOOK-BUDGET)
+        note = _with_last_word(record_note, last_message)
         if not note:
             return None
         # The digest is over the RECORD, never the chat: the last message changes every turn, so
         # keying on it re-proposed a decided draft after a mere "thanks" (0.0.22 verification).
-        digest = _digest(build_note(root, rid, None) or note)
+        digest = _digest(record_note or note)
         if isinstance(prior, dict) and prior.get("state") in (ACCEPTED, REJECTED) \
                 and prior.get("decided_digest") == digest:
             return None                                   # decided; nothing new since

@@ -125,7 +125,7 @@ MK.restoreView = function restoreView() {
 };
 
 // ------------------------------------------------------------------------------- modes / panels
-const MODES = ["review", "navigate", "search", "graph", "plan"];
+const MODES = ["review", "navigate", "search", "graph", "plan", "sessions"];
 const PANELS = ["changes", "files", "search", "sessions", "graph", "plan"];
 MK.MODES = MODES;
 
@@ -140,6 +140,7 @@ function setMode(mode) {
   if (mode === "review" && ui.panel !== "changes" && ui.panel !== "sessions") setPanel("changes", true);
   if (mode === "navigate" && ui.panel !== "files") setPanel("files", true);
   if (mode === "plan" && ui.panel !== "plan") setPanel("plan", true);
+  if (mode === "sessions" && ui.panel !== "sessions") setPanel("sessions", true);
   if (MK.onMode) MK.onMode(mode);
 }
 MK.setMode = setMode;
@@ -240,6 +241,7 @@ async function pick(e) {
   setMode("review");
   await refresh();
 }
+MK.pickSnapshot = pick;
 
 // ------------------------------------------------------------------------------- compare / PR
 function renderBranches(state) {
@@ -348,9 +350,9 @@ function renderNavigator() {
   }
   const empty = $("nav-empty");
   empty.hidden = vis.length > 0 || ui.files.length === 0;
-  const pending = ui.files.filter((f) => !ui.impact[f.path]).length;
+  const pending = ui.files.filter((f) => impactable(f) && !ui.impact[f.path]).length;
   empty.textContent = ui.filter === "untested" && pending
-    ? `Checking ${pending} file(s) against the graph…`
+    ? `Checked ${ui.files.length - pending} of ${ui.files.length} file(s) against the graph…`
     : `No file matches “${ui.filter}”.`;
   const pos = vis.findIndex((o) => o.i === ui.sel);
   $("pos-label").textContent = ui.files.length ? `${pos >= 0 ? pos + 1 : "–"} of ${vis.length}` : "";
@@ -383,6 +385,7 @@ function showFile(i, opts) {
   renderNavigator();
   renderInspector();
   ensureOutline(f);
+  wantImpact(f);
 }
 MK.showFile = showFile;
 
@@ -480,28 +483,99 @@ async function ensureOutline(f) {
   }
 }
 
-// Impact (callers, covering tests, untested) for every changed file — at most two at a time.
+// Impact (callers, covering tests, untested) — lane S (the 1M-line scale run). It used to be asked
+// for EVERY changed file on EVERY refresh; on a hub function one never finished and the page kept
+// re-asking. Now: answers are cached by the file's FINGERPRINT (its diff), so a refresh that changed
+// nothing about a file never asks again; the file in view is asked first, then at most IMPACT_AHEAD
+// more in the background; the rest when they are opened (or when the "untested" filter asks for
+// all). At most two in flight. A timed-out answer is kept (and shown) like any other — it is asked
+// again only when its file changes, or when the file is opened again after IMPACT_RETRY_MS.
+const IMPACT_AHEAD = 6;
+const IMPACT_RETRY_MS = 60000;
+const IMPACT_CACHE_MAX = 500;
+const impactCache = new Map();      // path -> { fp, im, at }
+const impactFlight = new Set();     // "path\0fp" asked and not yet answered
+let impactQueue = [];
+let impactRunning = 0;
 let impactGen = 0;
-async function loadImpacts() {
+
+function fileFp(f) {
+  // A cheap content hash of the file's diff (FNV-1a over its hunks) + its counts.
+  const s = `${f.status}|${f.added}|${f.removed}|${JSON.stringify(f.hunks || [])}`;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return `${s.length}:${h.toString(16)}`;
+}
+MK.fileFp = fileFp;
+
+function impactable(f) { return f && f.status !== "deleted" && !f.binary; }
+
+function loadImpacts(all) {
   const gen = ++impactGen;
   if (ui.view !== "live" || ui.sample) {
     // Only the working tree is what the graph indexes; another source's lines are not on disk.
     for (const f of ui.files) if (!ui.impact[f.path]) ui.impact[f.path] = { status: "unknown", is_test: /(^|\/)tests?\//.test(f.path), symbols: [], note: "impact is computed for the working-tree view" };
+    impactQueue = [];
     return;
   }
-  const queue = ui.files.filter((f) => f.status !== "deleted" && !f.binary);
-  const worker = async () => {
-    while (queue.length && gen === impactGen) {
-      const f = queue.shift();
-      const im = await api(`/api/impact?path=${encodeURIComponent(f.path)}&lines=${encodeURIComponent(changedLines(f))}`).catch(() => null);
-      if (gen !== impactGen) return;
-      ui.impact[f.path] = im && !im.error ? im : { status: "unknown", symbols: [], is_test: false, note: (im && im.note) || "impact unavailable" };
-      renderNavigator();
-      if (ui.files[ui.sel] === f) { $("diff").replaceChildren(renderFile(f)); renderInspector(); }
-    }
-  };
-  await Promise.all([worker(), worker()]);
+  for (const f of ui.files) {
+    const c = impactCache.get(f.path);
+    if (c && c.fp === fileFp(f)) ui.impact[f.path] = c.im;
+  }
+  const order = new Set();
+  const cur = ui.files[ui.sel];
+  if (cur) order.add(cur);
+  const vis = visibleFiles().map((o) => o.x);
+  const at = Math.max(0, vis.indexOf(cur));
+  const ahead = all || ui.filter === "untested" ? vis.concat(ui.files)
+    : vis.slice(at + 1).concat(vis.slice(0, at)).slice(0, IMPACT_AHEAD);
+  for (const f of ahead) order.add(f);
+  impactQueue = [...order].filter((f) => impactable(f) && !ui.impact[f.path]);
+  pumpImpacts(gen);
 }
+MK.loadImpacts = loadImpacts;
+
+// The file the user opens is asked for at once (front of the queue), whatever the bound.
+function wantImpact(f) {
+  if (!impactable(f) || ui.view !== "live" || ui.sample) return;
+  const c = impactCache.get(f.path);
+  const fresh = c && c.fp === fileFp(f);
+  if (fresh && !(c.im.timed_out && Date.now() - c.at > IMPACT_RETRY_MS)) return;
+  if (fresh) { impactCache.delete(f.path); delete ui.impact[f.path]; }
+  impactQueue = [f].concat(impactQueue.filter((x) => x !== f));
+  pumpImpacts(impactGen);
+}
+
+function pumpImpacts(gen) {
+  while (impactRunning < 2 && impactQueue.length && gen === impactGen) {
+    const f = impactQueue.shift();
+    const fp = fileFp(f);
+    if (ui.impact[f.path] || impactFlight.has(f.path + "\0" + fp)) continue;
+    impactRunning++;
+    askImpact(f, fp).finally(() => { impactRunning--; pumpImpacts(impactGen); });
+  }
+}
+
+async function askImpact(f, fp) {
+  const key = f.path + "\0" + fp;
+  impactFlight.add(key);
+  const im = await api(`/api/impact?path=${encodeURIComponent(f.path)}&lines=${encodeURIComponent(changedLines(f))}`).catch(() => null);
+  impactFlight.delete(key);
+  const val = im && !im.error ? im : { status: "unknown", symbols: [], is_test: false, timed_out: !!(im && im.timed_out), note: (im && im.note) || "impact unavailable" };
+  impactCache.delete(f.path);
+  impactCache.set(f.path, { fp, im: val, at: Date.now() });
+  while (impactCache.size > IMPACT_CACHE_MAX) impactCache.delete(impactCache.keys().next().value);
+  if (val.graph_note && MK.noteGraph) MK.noteGraph(val.graph_note);
+  const now = ui.files.find((x) => x.path === f.path);
+  if (!now || fileFp(now) !== fp) return;          // the file moved on while we asked
+  ui.impact[f.path] = val;
+  renderNavigator();
+  if (ui.files[ui.sel] === now) { $("diff").replaceChildren(renderFile(now)); renderInspector(); }
+}
+
+// The status bar names the graph that is ACTUALLY answering (lane S): an answer that says the
+// adopted graph degraded updates it — no extra request.
+MK.noteGraph = (note) => { const s = $("st-graph"); if (s && note) { s.textContent = note; s.classList.add("degraded"); } };
 
 // ------------------------------------------------------------------------------- inspector
 function refItem(r, basis) {
@@ -523,7 +597,8 @@ function renderInspector() {
   $("insp-ripple").disabled = true;
   if (!f) { $("insp-sym").textContent = "no file selected"; pickSel.hidden = true; return; }
   if (!im) { $("insp-sym").textContent = "asking the graph…"; pickSel.hidden = true; return; }
-  const syms = im.symbols || [];
+  // 0.0.25 — symbols the automatic pass did not calculate are `pending`, calculated on request.
+  const syms = (im.symbols || []).concat((im.pending || []).map((p) => ({ ...p, pending: true, verdict: "not calculated" })));
   if (!syms.length) {
     $("insp-sym").textContent = im.is_test ? "a test file" : (im.note || "no changed symbol the graph can name");
     pickSel.hidden = true;
@@ -538,15 +613,31 @@ function renderInspector() {
   pickSel.value = cur.name;
   $("insp-sym").textContent = cur.name;
   $("insp-ripple").disabled = false;
+  if (cur.pending) { renderPendingImpact(f, im, cur); return; }
   const callers = (cur.callers && cur.callers.references) || [];
-  $("insp-chips").append(el("span", "chip", `${callers.length} callers`),
+  const nCallers = cur.callers.references_total ?? callers.length;
+  const blastTxt = cur.blast.truncated
+    ? `${cur.blast.count}${cur.blast.total ? " of " + cur.blast.total : "+"} in blast radius (cut)`
+    : `${cur.blast.count} in blast radius`;
+  $("insp-chips").append(el("span", "chip", `${nCallers} callers`),
                          el("span", "chip", `${cur.tests.length} tests`),
-                         el("span", "chip", `${cur.blast.count} in blast radius`), basisBadge(cur.blast.basis));
+                         el("span", "chip" + (cur.blast.truncated ? " amber" : ""), blastTxt), basisBadge(cur.blast.basis));
+  if ((im.pending || []).length) {
+    // The cap is disclosed, and the rest is one click away (calculated on request).
+    const c = el("span", "chip amber", `${(im.symbols || []).length} of ${im.symbols_changed} calculated`);
+    c.title = im.cap_note || "";
+    $("insp-chips").append(c, calcButton(f, im, im.pending.map((p) => p.name), `Calculate the other ${im.pending.length}`));
+  }
+  if (im.graph_note) { const c = el("span", "chip amber", "graph degraded"); c.title = im.graph_note; $("insp-chips").append(c); }
   for (const r of callers) $("insp-callers").append(refItem(r, cur.callers.basis));
+  if (cur.callers.references_capped) $("insp-callers").append(el("li", "dim small", `showing ${callers.length} of ${nCallers} callers — open it in Focus or search its call sites for the rest`));
   if (!callers.length) $("insp-callers").append(el("li", "dim small", cur.callers.basis === "verified_empty" ? "nothing calls it (verified by the graph)" : "no callers found"));
   if (cur.verdict === "untested") {
     $("insp-notests").hidden = false;
     $("insp-notests").textContent = "No test reaches this change — the graph found no test on any path into it.";
+  } else if (cur.verdict === "unknown" && cur.blast.not_determined) {
+    $("insp-notests").hidden = false;
+    $("insp-notests").textContent = `Coverage ${cur.blast.not_determined}.`;
   } else if (cur.verdict === "unknown") {
     $("insp-notests").hidden = false;
     $("insp-notests").textContent = "Coverage unknown — the graph could not answer structurally, so mokata does not claim either way.";
@@ -555,6 +646,47 @@ function renderInspector() {
   loadBlastList(cur.name);
 }
 MK.renderInspector = renderInspector;
+
+// ------------------------------------------------------------------------------- impact on request
+function calcButton(f, im, names, label) {
+  const b = el("button", "btn ghost small", label);
+  b.type = "button";
+  b.onclick = () => calculateImpact(f, im, names, b);
+  return b;
+}
+
+function renderPendingImpact(f, im, cur) {
+  $("insp-chips").append(el("span", "chip amber", "not calculated yet"));
+  const box = $("insp-notests");
+  box.hidden = false;
+  box.replaceChildren(document.createTextNode(
+    `${cur.name}'s callers and tests were not calculated automatically (a file with many changed definitions gets the first ${(im.symbols || []).length}). `));
+  box.append(calcButton(f, im, [cur.name], `Calculate ${cur.name}`));
+  const rest = (im.pending || []).map((p) => p.name);
+  if (rest.length > 1) box.append(document.createTextNode(" "), calcButton(f, im, rest, `Calculate all ${rest.length}`));
+}
+
+function impactStatus(im) {
+  const v = new Set((im.symbols || []).map((s) => s.verdict));
+  return v.has("untested") ? "untested" : v.has("unknown") ? "unknown" : (im.pending || []).length ? "partial" : "covered";
+}
+
+async function calculateImpact(f, im, names, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "calculating…"; }
+  const want = names.slice(0, 40);
+  const res = await api(`/api/impact?path=${encodeURIComponent(f.path)}&lines=${encodeURIComponent(changedLines(f))}&symbols=${encodeURIComponent(want.join(","))}`).catch(() => null);
+  if (!res || res.error) {
+    if (btn) { btn.disabled = false; btn.textContent = res && res.timed_out ? "timed out — try one at a time" : "failed — retry"; btn.title = (res && res.note) || ""; }
+    return;
+  }
+  const got = new Set((res.symbols || []).map((s) => s.name));
+  im.symbols = (im.symbols || []).filter((s) => !got.has(s.name)).concat(res.symbols || []);
+  im.pending = (im.pending || []).filter((p) => !got.has(p.name));
+  im.symbols_capped = im.pending.length > 0;
+  im.status = impactStatus(im);
+  if (ui.files[ui.sel] && ui.files[ui.sel].path === f.path) { renderNavigator(); $("diff").replaceChildren(renderFile(ui.files[ui.sel])); renderInspector(); }
+}
+MK.calculateImpact = calculateImpact;
 
 async function loadBlastList(sym) {
   const res = await api(`/api/query?kind=blast_radius&target=${encodeURIComponent(sym)}&depth=2`).catch(() => null);
@@ -628,9 +760,59 @@ async function refresh() {
 }
 MK.refresh = refresh;
 
+// ID.S3 follow mode: the server pushes each edit as a `bus` event ({kind, path, session}); with
+// Follow on, the edited file opens (reloaded) in Navigate. Only the focused session is followed when
+// one is focused. The path was contained server-side; it is only ever passed to the read API.
+let follow = false;
+let refreshTimer = 0;
+function softRefresh() {
+  if (ui.view === "pr" || refreshTimer) return;
+  refreshTimer = setTimeout(() => { refreshTimer = 0; refresh(); }, 250);
+}
+function onBus(ev) {
+  if (MK.onBusExtra) MK.onBusExtra(ev);          // ID.S3 join events (bridge.js)
+  let e;
+  try { e = JSON.parse(ev.data); } catch (_) { return; }
+  // ID3 `ide_open`: the agent points the human at code (the server contained the path).
+  if (e && e.kind === "open" && typeof e.path === "string") {
+    if (MK.openFile) MK.openFile(e.path, e.line || 1, null, { reload: true });
+    return;
+  }
+  if (!e || e.kind !== "edit" || typeof e.path !== "string") return;
+  $("live-dot").classList.add("on");
+  softRefresh();
+  if (!follow || !MK.openFile) return;
+  if (ui.focus && e.session && e.session !== ui.focus) return;
+  MK.openFile(e.path, 1, null, { reload: true });
+}
+function setFollow(on) {
+  follow = !!on;
+  const b = $("follow");
+  if (b) b.setAttribute("aria-pressed", String(follow));
+}
+MK.setFollow = setFollow;
+function initFollow() {
+  const b = $("follow");
+  if (!b) return;
+  b.onclick = () => setFollow(!follow);
+}
+MK.initFollow = initFollow;
+
 function live() {
   const es = new EventSource("/api/events");
-  es.addEventListener("changed", () => { $("live-dot").classList.add("on"); if (ui.view !== "pr") refresh(); });
+  initFollow();
+  es.addEventListener("bus", onBus);
+  // The stream's FIRST `changed` is the server's opening fingerprint, sent the moment the page
+  // connects — right after the page loaded everything. Re-fetching on it doubled every first-load
+  // request (state, live, timeline, impact, runs, sessions, …). It is remembered, not acted on;
+  // any later fingerprint (or a resync) refreshes.
+  es.addEventListener("changed", (ev) => {
+    $("live-dot").classList.add("on");
+    const first = ui.lastFp === undefined;
+    if (!first && ev.data && ev.data !== "resync" && ev.data === ui.lastFp) return;
+    ui.lastFp = ev.data || "";
+    if (!first) softRefresh();
+  });
   es.addEventListener("focus", (ev) => {
     const f = JSON.parse(ev.data).focus;
     if (f !== ui.focus) { ui.focus = f; ui.view = f ? "session" : "live"; refresh(); }
@@ -666,6 +848,10 @@ async function runQuick() {
   if (gen !== qo.gen || !res) return;
   if (qo.changedOnly) { res.files = []; res.symbols = []; }
   renderQuick(res, q);
+  // lane S: the symbol index is still loading — the files answered now; ask again shortly.
+  if (res.symbols_state === "building" && !qo.changedOnly) {
+    setTimeout(() => { if (gen === qo.gen && qo.open) runQuick(); }, 1500);
+  }
 }
 
 function hl(text, q) {
@@ -735,7 +921,8 @@ function renderQuick(res, q) {
       }, () => { closeQuick(); if (MK.openFile) MK.openFile(s.path, s.line, s.name); });
     }
   }
-  if (!qo.rows.length) box.append(el("p", "empty", res.error ? `could not search: ${res.note || res.error}` : "No match."));
+  if (res.symbols_note && !qo.changedOnly) section("Symbols", res.symbols_note);
+  if (!qo.rows.length) box.append(el("p", "empty", res.error ? `could not search: ${res.note || res.error}` : res.symbols_note ? "No file matches yet." : "No match."));
   qo.idx = 0;
   paintQuick();
   $("qo-matcher").textContent = res.matcher ? `matcher: ${res.matcher}${res.matcher === "python-floor" ? " (pure-Python floor — pip install rapidfuzz)" : ""}${qo.changedOnly ? " · changed only" : ""}` : "";
@@ -796,7 +983,7 @@ MK.wireCore = function wireCore() {
   for (const b of document.querySelectorAll("button.mode")) b.onclick = () => setMode(b.dataset.mode);
   for (const b of document.querySelectorAll("button.rail-btn")) b.onclick = () => setPanel(b.dataset.panel);
   for (const b of document.querySelectorAll("button.pill[data-filter]")) {
-    b.onclick = () => { ui.filter = b.dataset.filter; renderNavigator(); };
+    b.onclick = () => { ui.filter = b.dataset.filter; renderNavigator(); if (ui.filter === "untested") loadImpacts(true); };
   }
   $("session-chip").onclick = () => setPanel("sessions", ui.mode !== "review" ? false : true);
   $("src-change").onclick = () => setPanel("sessions", true);

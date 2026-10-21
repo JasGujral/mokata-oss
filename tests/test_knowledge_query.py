@@ -72,7 +72,10 @@ class TestGrepStructuralQueries(unittest.TestCase):
         # DEGRADE. One stored signal, one derived view.
         self.assertEqual(
             {f.name for f in dataclasses.fields(QueryResult)},
-            {"kind", "target", "references", "backend", "basis", "note"},
+            # 0.0.25 K — `truncated` / `total` joined on purpose: a BOUNDED answer (the AST blast
+            # radius cap, the adopted graph's result cap) must be representable, or it reads as
+            # complete. They are not a second copy of anything `basis` says.
+            {"kind", "target", "references", "backend", "basis", "note", "truncated", "total"},
         )
         self.assertFalse(any(f.name == "degraded" for f in dataclasses.fields(QueryResult)),
                          "`degraded` must stay DERIVED — a second stored copy is the defect")

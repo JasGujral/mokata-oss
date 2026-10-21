@@ -227,7 +227,10 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
     `criteria` is `[{"id": "AC1", "text": "..."}]` and `tests` is `[{"name": "test_x",
     "ac_ids": ["AC1"]}]` — every acceptance criterion must map to a test or the COMPLETENESS GATE
     refuses the emit outright (no proposal: a human approving an incomplete spec could not make it
-    complete). A passing gate then goes through the normal human gate: no `proposal_id` -> a
+    complete). A UI criterion is `{"id", "text": "Given/When/Then", "kind": "ui", "states":
+    {"default", "loading", "empty", "error", "disabled"}}` — what the user sees in each state (or
+    `n/a — why`); the gate refuses a UI criterion without the full matrix. A passing gate then
+    goes through the normal human gate: no `proposal_id` -> a
     proposal and NOTHING written; a human mints the approval with `mokata approve <id>`; re-call
     with that id to commit it, once. The re-call may carry `proposal_id` ALONE: the approved
     payload is reloaded from where the proposal saved it, and the content hash still proves it is
@@ -299,6 +302,10 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
         derive_anchors(spec, load_approved_approach(store))
     except Exception:  # noqa: BLE001 — anchors are advisory; they never fail an emit
         pass
+    # 0.0.25 Lane D — the routed domains before the gate (idempotent; `spec_commit` derives again).
+    from ..domains import derive_spec_domains
+    from ..engine.emit import _approved, _repo_root
+    derive_spec_domains(spec, _approved(store), root=_repo_root(store))
     gr = run_completeness_gate(spec, test_refs, store=store, root=surface.root,
                                graph_available=structural_backend_available(surface))
     if not gr.passed:

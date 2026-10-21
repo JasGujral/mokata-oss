@@ -117,7 +117,7 @@ class TestCoverage(unittest.TestCase):
         # `consolidate` (gated write — the agent submits the summary it drafted);
         # 61 -> 62 at CM.S5 (0.0.21 stage 11): `events_share` (gated write — publishing the typed
         # event stream to the team's own store; open-world, because it reaches a remote DSN).
-        self.assertEqual(len(TOOLS), 67)   # -> 64 at 0.0.22 C1; -> 65 at D2: `working_set`; -> 67 at 0.0.23 E3: `worktree_clean` + `worktree_remove`
+        self.assertEqual(len(TOOLS), 70)   # -> 64 at 0.0.22 C1; -> 65 at D2: `working_set`; -> 67 at 0.0.23 E3: `worktree_clean` + `worktree_remove`; -> 70 at 0.0.25 ID3: `ide_status` + `ide_open` + `ide_sessions` (read, closed-world: loopback IDE only)
         for spec in TOOLS:
             ann = A.annotations_for(spec.kind, spec.name)
             self.assertIn("readOnlyHint", ann)           # present + bool for EVERY tool
@@ -156,7 +156,7 @@ class TestSdkAttach(unittest.TestCase):
         # 55 -> 56 at HANDOFF.G1 (`spec_show`); 56 -> 58 at REVIEW-FIX.R3 (the 6r review loop);
         # 58 -> 59 at WT-LIST (`worktree_list`); 59 -> 61 at M-4/R5 (`consolidate_proposals` +
         # `consolidate`, the two-phase drafted-summary flow); 61 -> 62 at CM.S5 (`events_share`)
-        self.assertEqual(len(tools), 67)   # -> 64 at 0.0.22 C1; -> 65 at D2; -> 67 at 0.0.23 E3
+        self.assertEqual(len(tools), 70)   # -> 64 at 0.0.22 C1; -> 65 at D2; -> 67 at 0.0.23 E3; -> 70 at 0.0.25 ID3
 
         by_name = {s.name: s for s in TOOLS}
         for name, tool in tools.items():

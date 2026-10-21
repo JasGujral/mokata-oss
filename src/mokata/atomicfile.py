@@ -27,7 +27,6 @@ without a cycle). Copyright 2026 MoStack. Licensed under the Apache License, Ver
 from __future__ import annotations
 
 import os
-import tempfile
 import time
 from typing import Optional
 
@@ -82,6 +81,7 @@ def atomic_write_text(path: str, text: str, *, tmp_prefix: str = ".tmp-",
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
+    import tempfile   # lazy: `state` imports this module on every hook's READ path (HOOK-BUDGET)
     fd, tmp = tempfile.mkstemp(dir=parent or ".", prefix=tmp_prefix, suffix=tmp_suffix)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:

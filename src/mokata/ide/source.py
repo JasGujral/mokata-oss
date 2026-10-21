@@ -68,9 +68,9 @@ class RealSource:
         from . import nav
         return nav.query_payload(nav.run(self.root, kind, target, depth)) + "\n"
 
-    def impact(self, path: str, lines: str) -> Dict[str, Any]:
+    def impact(self, path: str, lines: str, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
         from . import nav
-        return nav.impact(self.root, path, lines)
+        return nav.impact(self.root, path, lines, symbols)
 
     # --- 0.0.23 C2 search ---------------------------------------------------------------
     def search(self, q: str, mode: str, case: bool, only: Optional[List[str]]) -> Dict[str, Any]:
@@ -113,6 +113,27 @@ class RealSource:
     def lifecycle(self, run: str) -> Dict[str, Any]:
         from . import plans
         return plans.lifecycle(self.root, run)
+
+    def saved_plans(self) -> Dict[str, Any]:
+        from . import plans
+        return plans.saved_plans(self.root)
+
+    def saved_plan(self, slug: str, where: str) -> Dict[str, Any]:
+        from . import plans
+        return plans.saved_plan(self.root, slug, where)
+
+    # --- 0.0.25 ID3 session browser / needs-you / time-lapse / treemap (see `session_views`) --
+    def browser(self, bus_events: List[Dict[str, Any]]) -> Dict[str, Any]:
+        from . import session_views as SV
+        return SV.browser(self.root, bus_events=bus_events)
+
+    def timelapse(self, sid: str) -> Dict[str, Any]:
+        from . import session_views as SV
+        return SV.timelapse(self.root, sid)
+
+    def treemap(self, sid: Optional[str], size: str) -> Dict[str, Any]:
+        from . import session_views as SV
+        return SV.treemap(self.root, sid, size)
 
 
 # ------------------------------------------------------------------------------------- SAMPLE
@@ -219,8 +240,8 @@ class DemoSource:
         return json.dumps({"sample": True, "kind": kind, "target": target, "references": [],
                            "basis": "", "note": self._NO_GRAPH}) + "\n"
 
-    def impact(self, path: str, lines: str) -> Dict[str, Any]:
-        return {"sample": True, "path": path, "symbols": [], "status": "unknown",
+    def impact(self, path: str, lines: str, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
+        return {"sample": True, "pending": [], "path": path, "symbols": [], "status": "unknown",
                 "is_test": path.startswith("tests/"), "note": self._NO_GRAPH}
 
     def search(self, q: str, mode: str, case: bool, only: Optional[List[str]]) -> Dict[str, Any]:
@@ -292,6 +313,21 @@ class DemoSource:
                 "approach": p["approach"], "spec": spec, "versions": p["versions"],
                 "amendment": {"open": False}}
 
+    def saved_plans(self) -> Dict[str, Any]:
+        return {"sample": True, "plans": [{"slug": "sample-parser-fix", "where": "internal",
+                                           "updated": self._t0,
+                                           "path": ".mokata/temp_local/plans/sample-parser-fix.md"}],
+                "total": 1, "dirs": {"internal": ".mokata/temp_local/plans", "exported": "plans"}}
+
+    def saved_plan(self, slug: str, where: str) -> Dict[str, Any]:
+        from .server import BadRequest
+        if slug != "sample-parser-fix" or where != "internal":
+            raise BadRequest(f"no saved plan {slug} in this SAMPLE")
+        return {"sample": True, "slug": slug, "where": where, "updated": self._t0,
+                "path": ".mokata/temp_local/plans/sample-parser-fix.md", "truncated": False,
+                "text": "# SAMPLE — fix the parser\n\n## Approved approach\n\n- tokenize first, "
+                        "then parse\n- keep the public API\n"}
+
     def lifecycle(self, run: str) -> Dict[str, Any]:
         from . import plans
         rid = self._demo_run(run)
@@ -318,6 +354,35 @@ class DemoSource:
                 "finished_at": "", "regressed": False, "amendment": {"open": False},
                 "started": t, "started_basis": "SAMPLE", "marks": marks,
                 "test_record": {"failing": 0, "passing": 1}}
+
+    # --- 0.0.25 ID3 over the SAMPLE: invented sessions, one marked as waiting on a human -------
+    def browser(self, bus_events: List[Dict[str, Any]]) -> Dict[str, Any]:
+        from . import session_views as SV
+        return SV.sample_browser(self._sessions)
+
+    def timelapse(self, sid: str) -> Dict[str, Any]:
+        entries = self.timeline(sid or None)["entries"]
+        steps = [{"i": i, "t": e["t"], "kind": "write" if e["kind"] == "after" else "before",
+                  "path": e["path"], "snap": e["id"], "state": "ok", "added": None,
+                  "removed": None, "measured": e["kind"] != "after"}
+                 for i, e in enumerate(entries)]
+        files = list(dict.fromkeys(s["path"] for s in steps))
+        return {"sample": True, "session": sid, "run": "", "steps": steps, "files": files,
+                "count": len(steps), "truncated": False, "reads": "SAMPLE",
+                "unmeasured": sum(1 for s in steps if s["kind"] == "write")}
+
+    def treemap(self, sid: Optional[str], size: str) -> Dict[str, Any]:
+        from . import session_views as SV
+        touched = {e["path"] for e in self.timeline(sid or None)["entries"]}
+        leaves = [{"path": p, "loc": t.count("\n"), "bytes": len(t), "weight": max(1, t.count("\n")),
+                   "writes": 1 if p in touched else 0, "added": t.count("\n") if p in touched else 0,
+                   "removed": 0, "unmeasured": 0} for p, t in sorted(self._FILES.items())]
+        dirs = SV.layout(leaves)
+        return {"sample": True, "session": sid or "", "size": size, "width": SV.TREEMAP_W,
+                "height": SV.TREEMAP_H, "files": leaves, "dirs": dirs, "count": len(leaves),
+                "total_files": len(leaves), "omitted": 0,
+                "changed": sum(1 for lf in leaves if lf["writes"]), "not_on_disk": [],
+                "heat_scale": "SAMPLE", "sized_by": "lines of code"}
 
     def pr(self, url: str) -> Dict[str, Any]:
         return _fake("PR #42 (sample/repo) against origin/main",

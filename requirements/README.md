@@ -15,6 +15,7 @@ pip install --require-hashes -r requirements/<file>.txt
 | `jsonschema.txt` | `ci.yml` / `release.yml` present leg · `release.sh` preflight | the optional `[schema]` extra, pinned to the exact version mokata resolves in `uv.lock` |
 | `release-build.txt` | `release.yml` (build) | `build` (PyPA sdist/wheel) + `cyclonedx-bom` (SBOM) |
 | `docs.txt` | `docs.yml` (build) | `mkdocs` + `mkdocs-material` for the docs site |
+| `uv.txt` | `install-e2e.yml` (uv-tool legs) | the `uv` installer — the documented primary install route (`uv tool install mokata`) is what that job tests |
 
 ## What is NOT pinned here (deliberately)
 

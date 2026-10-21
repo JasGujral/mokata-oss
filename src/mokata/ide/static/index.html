@@ -25,14 +25,28 @@
     <button type="button" class="mode" data-mode="navigate">Navigate</button>
     <button type="button" class="mode" data-mode="graph">Graph</button>
     <button type="button" class="mode" data-mode="plan">Plan</button>
+    <button type="button" class="mode" data-mode="sessions">Sessions</button>
   </nav>
   <span class="spacer"></span>
   <button type="button" id="qo-open" class="qo-box" title="Go to file or symbol (Ctrl/⌘+P)">
     <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9.5 9.5l3 3" stroke="currentColor" stroke-width="1.5"/></svg>
     <span class="qo-ph">Go to file or symbol…</span><kbd>⌘P</kbd>
   </button>
+  <button type="button" id="health-chip" class="health-chip" title="What is missing, degraded or out of sync — and updates">health <b id="health-n">…</b></button>
+  <button type="button" id="needs-you" class="needs-you" hidden title="sessions waiting on you (!)">needs you <b id="needs-you-n">0</b></button>
+  <button type="button" id="follow" class="follow" aria-pressed="false" title="Follow: open each file a session edits as it edits it">Follow</button>
+  <button type="button" id="join-btn" class="follow" aria-pressed="false" aria-haspopup="true" title="Join a live session: focus and follow it; context you send goes to it">Join</button>
+  <button type="button" id="term-toggle" class="follow" aria-pressed="false" title="Terminal: run claude (unmodified, your own login) or your shell here">Terminal</button>
   <span id="live-dot" class="live" title="updates live as sessions write">● live</span>
 </header>
+
+<!-- ============ ID.S3: join a session (registry + snapshots) ============ -->
+<div id="join-pop" class="join-pop" role="dialog" aria-label="Join a session" hidden>
+  <div class="lp-head"><h2>Join a session</h2><button type="button" id="join-leave" class="link small">leave</button></div>
+  <ul id="join-list" class="list"></ul>
+  <p class="small dim">Joining focuses the window on the session, follows its edits, and makes it the target of anything you send with <b>Send to session</b>.</p>
+</div>
+<div id="bridge-toast" class="bridge-toast small" role="status" hidden></div>
 
 <!-- ============ the focused run's lifecycle (C5) — compact; the detail is in Sessions ============ -->
 <div id="lifecycle" class="lc-strip" aria-label="run lifecycle" hidden>
@@ -156,7 +170,7 @@
 
     <section class="lp" id="panel-graph" aria-label="Graph" hidden>
       <div class="lp-head"><h2>Graph</h2></div>
-      <p class="small dim">The graph views open in the main area.</p>
+      <p class="small dim">The graph views open in the main area; press <b>?</b> there for how it works.</p>
     </section>
 
     <!-- ============ plan + spec: which run, from where, which version (C5) ============ -->
@@ -169,10 +183,14 @@
       <p class="small dim pad-x" id="plan-source-note"></p>
       <div class="lp-head"><h2>Run</h2></div>
       <div class="row combo-row"><div class="combo" id="plan-run" data-label="run" data-placeholder="find a run…"></div></div>
+      <p class="small dim pad-x" id="plan-run-note"></p>
       <div class="lp-head"><h2>Spec version</h2></div>
       <div class="row combo-row"><div class="combo" id="plan-version" data-label="spec version" data-placeholder="version…"></div></div>
       <ul id="plan-versions" class="list plan-versions"></ul>
       <p class="small dim pad-x" id="plan-versions-note"></p>
+      <div class="lp-head"><h2>Saved plan files</h2></div>
+      <ul id="plan-files" class="list plan-files"></ul>
+      <p class="small dim pad-x" id="plan-files-note"></p>
     </section>
   </aside>
 
@@ -189,6 +207,7 @@
         <span id="cur-status" class="st-badge"></span>
         <span class="spacer"></span>
         <span id="hunk-count" class="dim small"></span>
+        <button type="button" id="send-diff" class="btn ghost" title="send this file's uncommitted diff to the session's next turn">Send diff to session</button>
         <button type="button" id="open-nav" class="btn ghost" title="open in Navigate (e)">Open file</button>
         <button type="button" id="mark-seen" class="btn">Mark seen · next</button>
       </div>
@@ -212,6 +231,7 @@
         <span id="crumbs" class="crumbs mono"></span>
         <span class="spacer"></span>
         <span class="pill-static">read-only</span>
+        <button type="button" id="send-ctx" class="pill-link" title="send the selected lines (or the whole file) to the session's next turn">Send to session</button>
         <button type="button" id="as-diff" class="pill-link" hidden>view as diff</button>
       </div>
       <div class="scroll code-scroll" id="code-scroll">
@@ -259,22 +279,34 @@
     <section id="view-graph" class="view-pane" hidden>
       <div class="bar">
         <div class="tabs-inline" role="tablist" aria-label="graph view">
-          <button type="button" class="pill" data-gview="ripple" role="tab">Ripple</button>
-          <button type="button" class="pill" data-gview="focus" role="tab">Focus</button>
-          <button type="button" class="pill" data-gview="path" role="tab">Path to…</button>
-          <button type="button" class="pill" data-gview="untested" role="tab">Untested paths</button>
+          <button type="button" class="pill" data-gview="ripple" role="tab" title="What is affected if this symbol changes — callers, ring by ring, and the tests that reach them">Ripple</button>
+          <button type="button" class="pill" data-gview="focus" role="tab" title="One step each way: its callers (left) and what it calls (right)">Focus</button>
+          <button type="button" class="pill" data-gview="path" role="tab" title="The shortest chain of calls from one symbol to another">Path to…</button>
+          <button type="button" class="pill" data-gview="untested" role="tab" title="Caller chains into this symbol that no test runs">Untested paths</button>
         </div>
-        <label for="g-symbol" class="sr-only">symbol</label>
-        <input id="g-symbol" class="g-input" placeholder="symbol" autocomplete="off" spellcheck="false">
-        <span id="g-to-wrap" hidden>→ <label for="g-to" class="sr-only">to symbol</label><input id="g-to" class="g-input" placeholder="to symbol" autocomplete="off" spellcheck="false"></span>
+        <label for="g-symbol" class="sr-only">symbol — a function, class or method name</label>
+        <span class="g-pick"><input id="g-symbol" class="g-input" placeholder="function or class, e.g. slugify" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-controls="g-sug" title="A symbol is a named piece of your code — a function, class or method. Start typing to pick one."></span>
+        <span id="g-to-wrap" hidden>→ <label for="g-to" class="sr-only">to symbol</label><span class="g-pick"><input id="g-to" class="g-input" placeholder="to function or class" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-controls="g-sug"></span></span>
         <div class="check">depth <div class="combo" id="g-depth" data-label="depth" data-options="1,2,3,4,5" data-value="2"></div></div>
         <label class="check"><input type="checkbox" id="g-organic"> organic layout</label>
         <button type="button" id="g-go" class="btn">Show</button>
+        <button type="button" id="g-help" class="btn ghost" title="How the graph works" aria-label="How the graph works">?</button>
       </div>
+      <p id="g-hint" class="small dim g-hint"></p>
       <div class="graph-wrap">
         <div class="graph-stage">
+          <ul id="g-sug" class="g-sug" role="listbox" hidden></ul>
           <div id="cy" class="cy" aria-label="graph"></div>
-          <p id="g-empty" class="empty big">Pick a symbol — from a changed file's inspector, Navigate, or type it above.</p>
+          <div id="g-empty" class="empty big g-start">
+            <h3>Pick a symbol to start</h3>
+            <p class="small">A <b>symbol</b> is a named piece of your code — a <b>function</b>, a <b>class</b> or a <b>method</b>
+              (like <code>slugify</code> or <code>UserService</code>). The graph puts it in the middle and draws what
+              connects to it.</p>
+            <p id="g-empty-text" class="small"></p>
+            <div id="g-suggest" class="g-suggest"></div>
+            <p class="small dim">Three ways to pick one: start typing its name in the box above and choose from the list ·
+              click a name below · or in <b>Review</b>/<b>Navigate</b>, click a function in a file and press <b>Open ripple view</b>.</p>
+          </div>
           <div class="legend small">
             <span><span class="lg-edge solid"></span> structural edge (graph)</span>
             <span><span class="lg-edge dashed"></span> lexical edge (name match)</span>
@@ -283,6 +315,39 @@
           </div>
         </div>
         <aside class="graph-side" aria-label="graph details">
+          <details id="g-guide" class="g-guide small" open>
+            <summary>How the graph works</summary>
+            <p>A map of <b>who calls what</b> in this repo, built from your code — not from the agent's
+              memory. Each dot is a function or class; each arrow is a call or an import, and clicking it
+              shows the exact line that makes it true.</p>
+            <p class="dim">Read by: <b id="g-engine">…</b></p>
+            <h3>Start</h3>
+            <ol class="g-steps">
+              <li>Type a function or class name above the graph (e.g. <code>slugify</code>), or select a symbol in a changed file or in Navigate and press <b>Open ripple view</b> in its inspector.</li>
+              <li>Pick a view (below) and press <b>Show</b>.</li>
+              <li>Click a dot or arrow for its source. Double-click a dot to re-centre on it.</li>
+            </ol>
+            <h3>The four views</h3>
+            <dl class="g-views">
+              <dt>Ripple</dt><dd>“If I change this, what else is affected?” The symbol sits in the middle;
+                each ring further out is one more hop of callers. Tests sit on the outer ring.</dd>
+              <dt>Focus</dt><dd>One step each way: who calls it (left) and what it calls (right).</dd>
+              <dt>Path to…</dt><dd>“How does A reach B?” The shortest chain of calls between two symbols.</dd>
+              <dt>Untested paths</dt><dd>The caller chains into the symbol that <b>no test</b> runs —
+                where a change could break something unnoticed.</dd>
+            </dl>
+            <h3>Reading it</h3>
+            <ul class="g-read">
+              <li><span class="lg-edge solid"></span> solid arrow — the code graph proved this call/import.</li>
+              <li><span class="lg-edge dashed"></span> dashed arrow — only a name match (a hint, not proof).</li>
+              <li><span class="lg-dot amber"></span> amber dot — on a chain no test reaches.</li>
+              <li><span class="lg-dot test"></span> ringed dot — a test.</li>
+              <li><b>depth</b> — how many hops out to look. Start at 2; raise it to see further,
+                lower it if the picture gets crowded.</li>
+            </ul>
+            <p class="dim">Nothing found? The symbol may be spelled differently, or the graph may not cover
+              that language yet — the note under the details says which.</p>
+      </details>
           <h2 id="g-title" class="g-title"></h2>
           <p id="g-summary" class="small"></p>
           <h3 id="g-chains-h" hidden>Paths no test runs</h3>
@@ -306,6 +371,55 @@
         <div id="plan-state" class="empty big" hidden></div>
         <section class="plan-sec" id="plan-approach" aria-label="approved approach"></section>
         <section class="plan-sec" id="plan-spec" aria-label="emitted spec"></section>
+        <section class="plan-sec" id="plan-file" aria-label="saved plan file" hidden></section>
+      </div>
+    </section>
+
+    <!-- ============ Sessions (0.0.25 ID3): browser · needs-you · time-lapse · change treemap ============ -->
+    <section id="view-sessions" class="view-pane" hidden>
+      <div class="bar">
+        <span class="cur-path mono">Sessions</span>
+        <span class="dim small">switch: <kbd>&lt;</kbd> / <kbd>&gt;</kbd> · most urgent <kbd>!</kbd></span>
+        <span class="spacer"></span>
+        <span class="pill-static">read-only</span>
+      </div>
+      <div class="scroll sv-scroll" id="sessions-scroll">
+        <section class="sv-sec" aria-label="needs you">
+          <h2>Needs you</h2>
+          <ul id="ny-list" class="list ny-list"></ul>
+          <p class="empty" id="ny-empty">Nothing is waiting on you.</p>
+          <p class="small dim" id="ny-formula"></p>
+        </section>
+        <section class="sv-sec" aria-label="session browser">
+          <h2>All sessions</h2>
+          <ul id="sb-list" class="list sb-list"></ul>
+          <p class="empty" id="sb-empty" hidden>No session has written in this repository yet.</p>
+        </section>
+        <section class="sv-sec" aria-label="time-lapse">
+          <h2>Time-lapse</h2>
+          <p class="empty" id="tl-empty">Focus a session to replay it.</p>
+          <div id="tl-box" hidden>
+            <div class="row">
+              <button type="button" id="tl-play" class="btn">Play</button>
+              <label for="tl-range" class="sr-only">step</label>
+              <input type="range" id="tl-range" class="tl-range" min="0" max="0" value="0">
+              <button type="button" id="tl-show" class="btn ghost">Show this write</button>
+            </div>
+            <p id="tl-label" class="mono small"></p>
+            <ul id="tl-files" class="tl-files"></ul>
+            <p id="tl-note" class="small dim"></p>
+          </div>
+        </section>
+        <section class="sv-sec" aria-label="change treemap">
+          <h2>Change treemap</h2>
+          <div class="tabs-inline" role="tablist" aria-label="treemap size">
+            <button type="button" class="pill active" data-tmsize="loc" role="tab">Sized by LOC</button>
+            <button type="button" class="pill" data-tmsize="change" role="tab">Sized by change</button>
+          </div>
+          <svg id="tm" class="tm" role="img" aria-label="change treemap" preserveAspectRatio="none"></svg>
+          <p class="small dim legend-line"><span class="tm-key tm-h0"></span> unchanged <span class="tm-key tm-h1"></span><span class="tm-key tm-h2"></span><span class="tm-key tm-h3"></span><span class="tm-key tm-h4"></span> lines changed (log scale) · click a file to open it</p>
+          <p id="tm-note" class="small dim"></p>
+        </section>
       </div>
     </section>
   </main>
@@ -341,6 +455,19 @@
   <div class="ticks" id="ticks"></div>
   <span id="ticks-label" class="mono dim small"></span>
 </div>
+<!-- ============ ID.S3: the embedded terminal (a pty on the server; nothing is stored) ============ -->
+<section id="term-drawer" class="term-drawer" aria-label="Terminal" hidden>
+  <div class="term-bar">
+    <button type="button" id="term-claude" class="btn">claude</button>
+    <button type="button" id="term-shell" class="btn ghost">shell</button>
+    <span id="term-state" class="term-state small"></span>
+    <span class="spacer"></span>
+    <button type="button" id="term-close" class="btn ghost" hidden>Close</button>
+  </div>
+  <div id="term-screen" class="term-screen mono" tabindex="0" aria-label="terminal output and input">
+    <div id="term-sb"></div><div id="term-scr"></div>
+  </div>
+</section>
 <footer class="status mono">
   <span>graph: <b id="st-graph">…</b></span>
   <span>matcher: <b id="st-matcher">…</b></span>
@@ -350,6 +477,32 @@
 </footer>
 
 <!-- ============ ⌘P quick open ============ -->
+<div id="hp" class="qo-overlay" hidden>
+  <div class="qo-dialog hp-dialog" role="dialog" aria-label="Health and updates">
+    <div class="qo-input-row">
+      <span class="qo-label">Health</span>
+      <span class="dim small" id="hp-sub">what is missing, degraded or out of sync</span>
+      <span class="spacer"></span>
+      <button type="button" class="btn ghost" id="hp-close" aria-label="Close">Close</button>
+    </div>
+    <div class="qo-results hp-body">
+      <div id="hp-job" class="hp-job" hidden></div>
+      <ul id="hp-rows" class="hp-rows"></ul>
+      <div class="hp-update">
+        <h3>Update mokata</h3>
+        <p class="small" id="hp-version"></p>
+        <div class="row"><button type="button" class="btn" id="hp-check">Check for update</button>
+          <span class="small dim" id="hp-check-note">asks the release page once — the only time this window goes online</span></div>
+        <div id="hp-upd" hidden>
+          <p class="small">Runs, with the installer that owns this install:</p>
+          <pre class="mono cmd" id="hp-cmd"></pre>
+          <p class="small dim" id="hp-cmd-why"></p>
+          <button type="button" class="btn" id="hp-run">Update now</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 <div id="qo" class="qo-overlay" hidden>
   <div class="qo-dialog" role="dialog" aria-label="Go to">
     <div class="qo-input-row">
@@ -374,6 +527,10 @@
 <script src="/static/search.js"></script>
 <script src="/static/graph.js"></script>
 <script src="/static/plan.js"></script>
+<script src="/static/sessions.js"></script>
+<script src="/static/terminal.js"></script>
+<script src="/static/bridge.js"></script>
+<script src="/static/health.js"></script>
 <script src="/static/boot.js"></script>
 </body>
 </html>

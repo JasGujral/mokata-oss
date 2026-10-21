@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mokata"
-version = "0.0.24"
+version = "0.0.25"
 description = "The memory + seatbelt for your AI coding agent. Spec-driven TDD for Claude Code — knowledge-aware, human-gated, local-first."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -115,6 +115,10 @@ mokata = [
     "hooks/*",
     "skills/*",
     "skills/*/*",
+    # 0.0.25 Lane D — a domain skill's progressive-disclosure `references/` (one level deep). The
+    # `skills/*/*` glob above stops at the directory itself, so before this line a wheel shipped
+    # every SKILL.md and NONE of the reference files it points at (the rule packs' rules included).
+    "skills/*/references/*",
     # 0.0.22 E2 — the review window's static frontend (hand-written, no build step; doc 85 §1b).
     "ide/static/*",
     # 0.0.23 C3 — the vendored graph libraries (Cytoscape.js + fcose + dagre, MIT) with their

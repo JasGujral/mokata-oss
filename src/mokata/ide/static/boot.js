@@ -14,6 +14,7 @@
   MK.api("/api/caps").then((c) => {
     if (!c || c.error) return;
     MK.$("st-graph").textContent = c.graph || "—";
+    MK.$("st-graph").classList.toggle("degraded", !!c.graph_degraded);
     MK.$("st-matcher").textContent = c.matcher || "—";
     const extra = MK.$("st-extra");
     extra.replaceChildren();
@@ -21,5 +22,8 @@
       const s = MK.el("span", "", `${k}: `); s.append(MK.el("b", "", v)); extra.append(s, " ");
     }
   }).catch(() => {});
-  MK.refresh().then(() => { MK.restoreView(); MK.live(); });
+  MK.refresh().then(() => {
+    if (!(MK.openFromLink && MK.openFromLink())) MK.restoreView();   // ID.S3: an OSC-8 /open link
+    MK.live();
+  });
 })();

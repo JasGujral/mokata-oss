@@ -12,8 +12,9 @@ so analysis enriches a durable layer instead of being recomputed each run.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 import re
 
@@ -27,6 +28,32 @@ from .query import BASIS_LEXICAL, BackendError, GraphBackend, QueryResult
 GRAPH_TOOLS = ("code-review-graph", "serena")
 
 STORY_ANALYSIS_PREFIX = "story_analysis__"
+
+# 0.0.25 K — `KnowledgeLayer.history` is BOUNDED. It was a plain list of every full QueryResult the
+# layer ever answered, and the IDE keeps one layer for its whole lifetime: +11 MB per hub query on
+# the 1.2M-line scale repo, 1.1 GB observed. Its one reader (`build_story_analysis`) needs only
+# kind / target / count / backend, so a history entry is now that summary (`QueryRecord`) and the
+# record keeps the most recent `HISTORY_MAX` of them. What fell off the front is COUNTED
+# (`history_dropped`) and carried onto the story analysis, never silently lost.
+HISTORY_MAX = 512
+
+
+@dataclass(frozen=True)
+class QueryRecord:
+    """What the layer REMEMBERS about one answer — never the references themselves."""
+
+    kind: str
+    target: str
+    count: int
+    backend: str
+    basis: str = ""
+    truncated: bool = False
+
+    @classmethod
+    def of(cls, result: QueryResult) -> "QueryRecord":
+        return cls(kind=result.kind, target=result.target, count=result.count,
+                   backend=result.backend, basis=getattr(result, "basis", ""),
+                   truncated=bool(getattr(result, "truncated", False)))
 
 
 def _join_note(existing: str, add: str) -> str:
@@ -228,7 +255,13 @@ class KnowledgeLayer:
         # attached in `from_surface` for production so every real answer front-runs the
         # dirty-set/HEAD reconcile (the FRESHNESS-BEFORE-ANSWER invariant).
         self.freshness = freshness
-        self.history: List[QueryResult] = []
+        self.history: Deque[QueryRecord] = deque(maxlen=HISTORY_MAX)
+        self.history_dropped = 0              # records that fell off the bounded front
+
+    def _remember(self, result: QueryResult) -> None:
+        if len(self.history) == self.history.maxlen:
+            self.history_dropped += 1
+        self.history.append(QueryRecord.of(result))
 
     # --- construction (always via the router) -------------------------------
     @classmethod
@@ -309,7 +342,7 @@ class KnowledgeLayer:
             floor.demote_to_floor()
             floor.note = _join_note(floor.note, fresh.note)
             self._surface_index_staleness(floor)
-            self.history.append(floor)
+            self._remember(floor)
             return floor
         # CRG-NAV (b)+(d) — a MAPPING gap is not a FAILURE. When the adopted graph declares it has
         # no op for this kind (code-review-graph exposes no definition-site pattern), route the
@@ -326,7 +359,7 @@ class KnowledgeLayer:
             if fresh is not None and fresh.note:
                 floor.note = _join_note(floor.note, fresh.note)
             self._surface_index_staleness(floor)
-            self.history.append(floor)
+            self._remember(floor)
             return floor
         try:
             result = self.primary.query(kind, target, depth=depth)
@@ -406,7 +439,7 @@ class KnowledgeLayer:
             result.note = _join_note(result.note, fresh.note)
         # B4: surface staleness for any referenced file changed since indexing.
         self._surface_index_staleness(result)
-        self.history.append(result)
+        self._remember(result)
         return result
 
     def _surface_index_staleness(self, result: QueryResult) -> None:
@@ -470,7 +503,7 @@ class KnowledgeLayer:
                                  note="semantic search failed; degraded to no result")
         if fresh is not None and fresh.note and not fresh.answer_from_floor:
             result.note = _join_note(result.note, fresh.note)
-        self.history.append(result)
+        self._remember(result)
         return result
 
 
@@ -682,6 +715,9 @@ class StoryAnalysis:
     symbols: List[str] = field(default_factory=list)
     queries: List[Dict[str, Any]] = field(default_factory=list)
     backend: str = ""
+    # 0.0.25 K — queries the layer's BOUNDED history no longer held (see `HISTORY_MAX`): the
+    # analysis says how many earlier queries it cannot list rather than reading as complete.
+    queries_dropped: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -691,6 +727,7 @@ class StoryAnalysis:
             "symbols": list(self.symbols),
             "queries": list(self.queries),
             "backend": self.backend,
+            "queries_dropped": self.queries_dropped,
         }
 
     @classmethod
@@ -701,6 +738,7 @@ class StoryAnalysis:
             symbols=list(d.get("symbols", [])),
             queries=list(d.get("queries", [])),
             backend=d.get("backend", ""),
+            queries_dropped=int(d.get("queries_dropped", 0) or 0),
         )
 
 
@@ -715,7 +753,8 @@ def build_story_analysis(story_id: str, summary: str,
         queries.append({"kind": r.kind, "target": r.target,
                         "count": r.count, "backend": r.backend})
     return StoryAnalysis(story_id=story_id, summary=summary, symbols=symbols,
-                         queries=queries, backend=layer.backend_name)
+                         queries=queries, backend=layer.backend_name,
+                         queries_dropped=int(getattr(layer, "history_dropped", 0) or 0))
 
 
 def persist_story_analysis(store: Any, analysis: StoryAnalysis) -> str:

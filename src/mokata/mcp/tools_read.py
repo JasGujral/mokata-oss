@@ -872,6 +872,10 @@ def spec_show(path: str = ".", run: str = "", version: int = 0, list_versions: b
         "approach": spec.approach, "domains": list(spec.domains),
         "criteria": [c.to_dict() for c in spec.criteria],     # SPEC-ANCHOR: anchors when set
     }
+    # 0.0.25 Lane D — the domain skills each stage LOADS for this spec (the neutral twin of the
+    # per-turn routing lines): a harness without hooks reads the same answer here.
+    from ..domains import LOADING_STAGES, skills_for_stage
+    out["domain_skills"] = {st: list(skills_for_stage(spec.domains, st)) for st in LOADING_STAGES}
     if spec.scope is not None:
         out["scope"] = spec.scope.to_dict()
     out["block"] = LazyRender(lambda: _render_spec_show(spec, shown, current))
@@ -887,6 +891,10 @@ def _render_spec_show(spec: Any, version: int = 0, current: int = 0) -> str:
         lines.append(f"approach: {spec.approach}")
     if spec.domains:
         lines.append(f"domains: {', '.join(spec.domains)}")
+        from ..domains import domain_routing_line
+        routing = domain_routing_line(spec.domains)
+        if routing:
+            lines.append(routing)
     for c in spec.criteria:
         lines.append(f"  {c.id}: {c.text}")
     from ..engine.spec_anchor import ac_anchor_lines
@@ -1157,16 +1165,21 @@ def stacks_list(path: str = ".", source: str = "", limit: int = DEFAULT_PAGE_LIM
     optional git-org/vault catalog dir or index.json; default is the bundled curated index.
     Read-only. There is NO hosted marketplace — this reads a versioned index.json. PAGED from the
     start of the name-sorted catalog (`limit` defaults to 50, `limit=0` opts out); the result
-    carries `count` (this page), `total`, `has_more`, and `next_offset`."""
+    carries `count` (this page), `total`, `has_more`, and `next_offset`. `detected` lists the
+    starter stacks the repo at `path` looks like (react-web / nestjs-api per package, with its
+    test runner, linters and type checker) — a suggestion only; nothing is installed."""
     from .. import stacks as ST
     try:
         index = ST.load_index(source or None)
     except ST.StackError as exc:
         return {"status": "error", "message": str(exc)}
     entries = ST.list_stacks(index)
+    # 0.0.25 Lane D — the starter stacks the repo at `path` looks like, with each package's test
+    # runner / linters / type checker. Suggest-only: nothing is installed or written.
+    detected = [d.to_dict() for d in ST.detect_stacks(path or ".")]
     return {"status": "ok", "hosted": False,
             **paginate(entries, key="stacks", limit=limit, offset=offset),
-            "note": ST.HONEST_NOTE}
+            "detected": detected, "note": ST.HONEST_NOTE}
 
 
 @_tool("stacks_search", "read")
@@ -1338,3 +1351,9 @@ def working_set(path: str = ".", run: str = "", note: str = "") -> Dict[str, Any
     out["status"] = "ok"
     return out
 
+
+
+# 0.0.25 ID3 — ID.S3's `ide_*` tools (`ide_status`, `ide_open`, `ide_sessions`), all READ-kind.
+# Imported HERE, at the very end, so they register at the READ tail: the registry order is an
+# append-only public surface (`test_pre_simp_tool_registry_parity`).
+from . import tools_ide  # noqa: E402,F401

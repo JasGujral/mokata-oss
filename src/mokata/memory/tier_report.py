@@ -39,6 +39,20 @@ _SEMANTIC_NOTE = {
     SEMANTIC_OFF: "no embedder configured — ranking is lexical only",
     UNKNOWN: "the configured embedder could not be resolved — run `mokata doctor` in the repo",
 }
+_HASHING_MODEL_NOT_LOADED = (
+    "token-hash overlap, NOT meaning — mokata[embeddings] IS installed but its model has not "
+    "loaded; it downloads (~30 MB) from huggingface.co on first use, so retry when that host is "
+    "reachable")
+
+
+def _model2vec_installed() -> bool:
+    from importlib.util import find_spec
+    try:
+        return find_spec("model2vec") is not None
+    except (ImportError, ValueError):
+        return False
+
+
 _LEXICAL_NOTE = {
     "jaccard": "Python keyword overlap — the floor",
     "fts5": "SQLite FTS5 + bm25, ranked in the database",
@@ -66,6 +80,11 @@ class RetrievalStack:
     def render_lines(self, *, ascii_only: bool = False) -> List[str]:
         bullet = "-" if ascii_only else "•"
         sem_note = _SEMANTIC_NOTE.get(self.semantic_family, "")
+        if self.semantic_family == "hashing" and _model2vec_installed():
+            # 0.0.25 `DOCTOR-HASHING-NOTE-WRONG-FIX`: the package IS installed and only its model
+            # could not load (first-use download). "install mokata[embeddings]" sends the user to
+            # re-install something they have; the fix is reaching huggingface.co once.
+            sem_note = _HASHING_MODEL_NOT_LOADED
         lex_note = _LEXICAL_NOTE.get(self.lexical, "")
         lines = [
             "retrieval stack",

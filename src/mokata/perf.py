@@ -37,6 +37,81 @@ LATENCY_BUDGETS_MS: Dict[str, float] = {
     "status": 150.0,       # `mokata status` capability resolution
 }
 
+# HOOK-BUDGET (doc 85 §7l, doc 109 §17.2; enforced from 0.0.25 by tests/test_hb_hook_budget.py for the
+# `mokata-hook` COMMAND hooks and tests/test_id_s3_cli_ide_bridge.py for the ID.S3 http path).
+# p95 of ONE hook invocation as the harness experiences it — a fresh process, payload on stdin — in ms.
+#
+# TARGETS (doc 109 §17.2): an observability hook ≤ 50, a gate hook ≤ 150. `context` (the hooks that
+# inject text — SessionStart, UserPromptSubmit, SubagentStart, the statusline) is NOT in doc 109; it
+# is held to the gate figure here, ✎ PROPOSED (0.0.25 Lane HB), until Jas rules.
+HOOK_BUDGET_TARGETS_MS: Dict[str, float] = {"observe": 50.0, "gate": 150.0, "context": 150.0}
+
+#: Every wired `mokata-hook` subcommand → its doc 109 kind. A hook that can BLOCK or send a decision
+#: (PreToolUse exit 2, SubagentStop's `decision: block`) is a gate; one that only records is observe.
+HOOK_KINDS: Dict[str, str] = {
+    "secret-guard": "gate", "gate-guard": "gate", "subagent-stop": "gate",
+    "dirty-track": "observe", "run-bind": "observe", "stop": "observe", "session-end": "observe",
+    "pre-compact": "observe",
+    "session-start": "context", "user-prompt-submit": "context", "subagent-start": "context",
+    "statusline": "context",
+}
+
+#: The paths MEASURED ABOVE their target after the 0.0.25 Lane HB work, keyed `<sub>@<fixture>`
+#: (`outside` a mokata repo / a mokata `repo` with no run / a session `bound` to a run). Each value
+#: is a CEILING (the measurement × ~1.5 headroom), NOT a target and NOT a claim of compliance — the
+#: gap is named in the HB report and owed. Everything not listed here is held to its kind's target.
+HOOK_BUDGET_GAPS_MS: Dict[str, float] = {
+    # Measured normalised p95 (the worse of two runs, 2026-10-19), ceiling ≈ ×1.5.
+    # Observability hooks INSIDE a mokata repo: the engine modules they need (state, run_intent,
+    # harvest, freshness, snapshots) all use `dataclasses`, whose import alone is ~15 ms here. The
+    # stdlib-only emitter doc 109 sketches is what closes these; outside a repo they meet 50.
+    "dirty-track@outside": 140.0,   # measured 94 — it records in ANY repo, so no quiet path
+    "dirty-track@repo": 130.0,      # measured 85
+    "dirty-track@bound": 150.0,     # measured 101
+    "run-bind@repo": 110.0,         # measured 74
+    "run-bind@bound": 90.0,         # measured 59
+    "stop@repo": 100.0,             # measured 66
+    "stop@bound": 150.0,            # measured 100 — the session draft is rebuilt every turn end
+    "session-end@repo": 115.0,      # measured 76
+    "session-end@bound": 170.0,     # measured 112
+    "pre-compact@repo": 150.0,      # measured 99
+    "pre-compact@bound": 190.0,     # measured 125
+    # context hooks (no doc 109 target; held to the PROPOSED 150): briefing, recall pack, badge
+    "session-start@repo": 410.0,    # measured 272
+    "session-start@bound": 400.0,   # measured 269
+    "user-prompt-submit@repo": 260.0,   # measured 174
+    "user-prompt-submit@bound": 330.0,  # measured 221
+    "statusline@repo": 200.0,       # measured 128 — under 150, but too close to hold as a target
+    "statusline@bound": 220.0,      # measured 147–152
+}
+
+#: `python -c pass` p50 wall on the Linux bed the targets were measured on, idle (0.0.25 Lane HB:
+#: 15.5–16.1 ms). The budget test measures the same bare interpreter in the same minute and scales by
+#: `max(1, measured / this)`: a hook's cost is mostly interpreter + imports, so a box running twice as
+#: slow (load from parallel suites) doubles both — on an idle box of this speed the factor is 1 and
+#: the raw targets apply. A regression in mokata's own cost moves the hook and not the floor.
+REFERENCE_INTERPRETER_MS = 16.0
+
+#: The ID.S3 http path (`observe_http`, and its IDE-closed refusal) — held to the observe target.
+HOOK_BUDGET_P95_MS: Dict[str, float] = {
+    "observe_http": 50.0,           # target
+    "observe_http_closed": 50.0,    # target: IDE not running — must fail open fast
+}
+
+
+def hook_budget_ms(sub: str, fixture: str) -> "tuple":
+    """`(ms, is_target)` for one wired hook on one fixture: the named gap ceiling where one exists,
+    else its kind's doc 109 target."""
+    gap = HOOK_BUDGET_GAPS_MS.get(f"{sub}@{fixture}")
+    if gap is not None:
+        return gap, False
+    return HOOK_BUDGET_TARGETS_MS[HOOK_KINDS[sub]], True
+
+
+def interpreter_factor(floor_p50_ms: float) -> float:
+    """The load factor for a measured bare-interpreter p50 (see `REFERENCE_INTERPRETER_MS`)."""
+    return max(1.0, floor_p50_ms / REFERENCE_INTERPRETER_MS)
+
 DEFAULT_REPEAT = 7
 DEFAULT_WARMUP = 2
 

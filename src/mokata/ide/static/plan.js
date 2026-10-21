@@ -11,7 +11,7 @@
   const $ = MK.$;
   const el = MK.el;
   const P = { source: "local", runs: null, run: null, pinned: false, version: 0, team: null,
-              gen: 0, lcGen: 0, lc: null, plan: null };
+              gen: 0, lcGen: 0, lc: null, plan: null, file: null, files: null };
   MK.plan = P;
 
   // --- mdLite ---
@@ -93,6 +93,10 @@
       sub: [r.short, r.author ? "by " + r.author : "", `plan ${r.approach}`, `spec ${r.spec}`,
             (r.sessions || []).length ? `${r.sessions.length} session(s)` : ""].filter(Boolean).join(" · "),
     })), P.run || "");
+    const c = P.runs && P.runs.counts;
+    $("plan-run-note").textContent = c && c.total
+      ? `${c.listed < c.total ? `Showing ${c.listed} of ${c.total} runs` : `${c.total} run(s)`} — ${c.with_spec} with a spec, ` +
+        `${c.with_plan} with a plan. Runs with a spec are listed first, then runs with a plan.` : "";
     const teamBtn = $("plan-team-btn");
     teamBtn.hidden = !(P.team && P.team.configured) && P.source !== "team";
     for (const b of document.querySelectorAll("button.pill[data-psource]")) b.classList.toggle("active", b.dataset.psource === P.source);
@@ -106,6 +110,7 @@
   // ------------------------------------------------------------------------------- plan + spec
   async function loadPlan() {
     const gen = ++P.gen;
+    showFile(false);
     const box = $("plan-state");
     if (P.runs && P.runs.state === "team-unreachable") { showState(P.runs.note, "unreachable"); clearPlan(); return; }
     if (!P.run) {
@@ -194,6 +199,19 @@
       card.append(t);
     }
     box.append(card);
+    const files = (P.plan && P.plan.plan_files) || [];
+    if (files.length) {
+      const t = el("div", "chips");
+      t.append(el("span", "dim small", "saved as"));
+      for (const f of files) {
+        const b = el("button", "chip mono linkish", f.path);
+        b.type = "button";
+        b.title = "open the saved plan file";
+        b.onclick = () => openFile(f.slug, f.where);
+        t.append(b);
+      }
+      box.append(t);
+    }
     if ((a.decisions || []).length) {
       box.append(el("h3", "plan-sub", `Decisions (${a.decisions.length})`));
       const ul = el("ul", "dec-list");
@@ -234,7 +252,15 @@
       box.append(el("p", "warn plan-banner", `An amendment is open (v${res.amendment.from_version} → v${res.amendment.to_version}${res.amendment.reason ? ": " + res.amendment.reason : ""}) — the run is back at SPEC and development writes are blocked.`));
     }
     if (s.state !== "ok") {
+      const drafts = (res && res.pending_spec) || [];
+      if (drafts.length) { renderDrafts(box, drafts); return; }
       box.append(el("p", s.state === "malformed" ? "note" : "empty", s.note || "no spec"));
+      if (s.state !== "malformed" && res && res.source === "local") {
+        box.append(el("p", "small dim",
+          "A spec shows here once it is committed to this run. `spec_emit` first only PROPOSES it: " +
+          "nothing is saved until you run `mokata approve <id>` and the agent re-sends it with that id. " +
+          "A spec.json or spec file the agent wrote in the repo is a draft, not this run's spec."));
+      }
       return;
     }
     if (s.superseded) box.append(el("p", "warn plan-banner", `You are reading v${s.version}, a superseded spec. The run's current spec is v${s.current_version}.`));
@@ -291,6 +317,79 @@
       box.append(sc);
     }
   }
+
+  function renderDrafts(box, drafts) {
+    for (const d of drafts) {
+      const card = el("div", "plan-card");
+      const head = el("p", "warn plan-banner");
+      head.append(el("b", "", d.status === "approved" ? "Spec approved — waiting for the agent to commit it. "
+        : "Spec drafted — waiting for your approval. "));
+      head.append(document.createTextNode(d.status === "approved"
+        ? "Ask the agent to re-send spec_emit with this proposal id."
+        : "Run this in a terminal, then tell the agent:"));
+      card.append(head);
+      if (d.status !== "approved") card.append(el("pre", "mono cmd", d.approve));
+      card.append(el("p", "small dim", `${d.tool} · proposal ${d.proposal_id} · expires in ${Math.max(1, Math.round(d.expires_in / 60))} min`
+        + " — an unapproved draft expires and is never saved."));
+      if (d.summary) card.append(mdInline(el("p", ""), d.summary));
+      if (d.preview) card.append(el("pre", "mono small preview", d.preview));
+      box.append(card);
+    }
+  }
+
+  // ------------------------------------------------------------------------------- saved plan files
+  async function loadFiles() {
+    const res = await MK.api("/api/saved-plans").catch(() => null);
+    P.files = res && !res.error ? res : { plans: [], error: (res && (res.note || res.error)) || "unavailable" };
+    const ul = $("plan-files");
+    ul.replaceChildren();
+    for (const f of P.files.plans || []) {
+      const b = el("button", "item" + (P.file && P.file.slug === f.slug && P.file.where === f.where ? " active" : ""));
+      b.type = "button";
+      b.append(el("span", "", f.slug),
+               el("span", "sub", `${f.where === "exported" ? "in your repo" : "mokata's copy"} · ${f.path} · ${fmtT(f.updated)}`));
+      b.onclick = () => openFile(f.slug, f.where);
+      ul.append(MK.wrapLi(b));
+    }
+    const dirs = P.files.dirs || {};
+    $("plan-files-note").textContent = P.files.error ? `could not list plan files: ${P.files.error}`
+      : (P.files.plans || []).length ? "Saved at approval; `mokata plan export` copies one into your repo."
+      : `No saved plan files yet (${dirs.internal || ".mokata/temp_local/plans"}, ${dirs.exported || "plans"}).`;
+  }
+
+  function showFile(on) {
+    $("plan-file").hidden = !on;
+    $("plan-approach").hidden = on;
+    $("plan-spec").hidden = on;
+    if (!on) P.file = null;
+  }
+
+  async function openFile(slug, where) {
+    if (MK.ui.mode !== "plan") MK.setMode("plan");
+    const res = await MK.api(`/api/saved-plan?plan=${encodeURIComponent(slug)}&where=${encodeURIComponent(where)}`)
+      .catch((e) => ({ error: "fetch", note: String(e) }));
+    MK.markSample(res);
+    $("plan-state").hidden = true;
+    const box = $("plan-file");
+    box.replaceChildren();
+    showFile(true);
+    P.file = { slug, where };
+    $("plan-title").textContent = res.path || slug;
+    $("plan-source-badge").textContent = res.sample ? "SAMPLE" : where === "exported" ? "plan file · your repo" : "plan file · mokata";
+    if (res.error) { box.append(el("p", "empty", `could not read this plan: ${res.note || res.error}`)); return; }
+    section(box, "Saved plan", `${res.path} · ${fmtT(res.updated)}`);
+    const back = el("button", "pill", "← back to the run");
+    back.type = "button";
+    back.onclick = () => loadPlan();
+    box.append(back);
+    const md = el("div", "md plan-card");
+    md.append(mdLite(res.text));
+    box.append(md);
+    if (res.truncated) box.append(el("p", "small dim", "Long file — the first 256 KB is shown."));
+    for (const b of document.querySelectorAll("#plan-files button.item")) b.classList.remove("active");
+    loadFiles();
+  }
+  MK.openPlanFile = openFile;
 
   function renderVersions(res) {
     const rows = res.versions || [];
@@ -392,13 +491,14 @@
   // ------------------------------------------------------------------------------- hooks
   async function refreshAll() {
     await loadRuns();
+    loadFiles();
     await loadLifecycle();
     if (MK.ui.mode === "plan") await loadPlan();
   }
   MK.onRefreshPlan = () => { refreshAll(); };
   MK.onModePlan = (mode) => {
     renderStrip();
-    if (mode === "plan") loadPlan();
+    if (mode === "plan") { loadFiles(); if (!P.file) loadPlan(); }
   };
   MK.openPlan = (run) => {
     if (run) { P.run = run; P.pinned = true; P.version = 0; }

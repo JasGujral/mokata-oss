@@ -64,7 +64,10 @@ from mokata.mcp.registry import TOOLS
 
 # The eight list tools D1c touches — the schema-diff contract: exactly these gain limit/offset.
 PAGINATED = {"audit", "sessions", "session_windows", "session_list",
-             "vault_list", "vault_search", "stacks_list", "stacks_search"}
+             "vault_list", "vault_search", "stacks_list", "stacks_search",
+             # 0.0.25 ID3 — `ide_sessions` (the IDE session browser) is a list tool born paged,
+             # on the same `paginate` helper and the same bounded default.
+             "ide_sessions"}
 
 
 def _repo(d, profile="standard"):

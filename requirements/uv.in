@@ -1,0 +1,7 @@
+# The `uv` installer, for `install-e2e.yml` (0.0.25 I-03 — INSTALL-CLEAN-MACHINE-E2E): the
+# documented primary install route is `uv tool install mokata`, so the clean-machine job needs uv
+# itself. NOT a mokata dependency. Hash-pinned like every other CI tool (requirements/README.md).
+#
+# Compiled to uv.txt with per-package hashes — see requirements/README.md for the
+# single regen command. Do not edit uv.txt by hand.
+uv

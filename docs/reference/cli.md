@@ -728,6 +728,23 @@ guessing could block on another window's state. Two ways out — give each windo
 [`mokata windows`](#mokata-windows) lets you *see* you're in that situation; it is a visibility tool,
 not the disambiguator.
 
+### `mokata gate check <gate>`
+Runs one **frontend/backend domain gate** on the repo at `--path` (read-only; no mokata project or
+run needed). The exit code is the verdict: `0` pass, `1` fail, `3` **not configured** — no budget
+declared, the tool not installed, no build output. Not configured is never reported as a pass.
+
+| gate | backed by | fails when… |
+|---|---|---|
+| `dep-cooldown` | mokata's own check of `.npmrc` `min-release-age` (days), pnpm `minimumReleaseAge` (minutes), Yarn `npmMinimalAgeGate` | the cooldown is unset or below `--min-days` (default 3), or a dependency is a git / `github:` / URL spec that bypasses it |
+| `route-guarded` | mokata's own static scan of NestJS controllers | a `@Get`/`@Post`/… handler has no `@UseGuards` (handler, class, or a decorator wrapping it), no global guard, and no `@Public()`. It proves a guard is attached — whether the guard's policy is right stays a human review |
+| `bundle-budget` | `size-limit`, else `lhci assert` | an asset is over budget (`lhci assert` reads results a prior `lhci collect` wrote; mokata runs no browser) |
+| `react-lint` | `eslint --max-warnings 0` with eslint-plugin-react-hooks | any error or warning |
+| `bundle-secret-scan` | `gitleaks dir` over `dist/`, `build/`, `out/`, `.next/static/` | a credential is in built output |
+| `dep-vulnerability` | `npm audit --audit-level=high` (npm lockfile) | a high/critical advisory. For pnpm/Yarn lockfiles the `osv-scanner` route runs **advisory** — it reports what it would have blocked and exits 0 |
+
+`mokata gate check render-regression` explains why that one is advisory: no tool exits non-zero on
+a render regression, so no skill Contract may cite it.
+
 ### `mokata approve [<proposal-id>] [--yes] [--actor <who>]`
 Approve **one** proposed durable write — the act an MCP tool **cannot perform**.
 
@@ -1052,7 +1069,7 @@ It is also where **a degrade stops being invisible**. Seven honesty surfaces rid
   checkout, or a root that was never set up shows an empty `/` menu, and this says why:
   ```text
   mokata skills: NOT VISIBLE ✗ — no mokata skills or commands are wired in this root
-    expected 26 skills at <root>/.claude/skills and 37 commands at <root>/.claude/commands — none found.
+    expected 30 skills at <root>/.claude/skills and 37 commands at <root>/.claude/commands — none found.
     Fix: run `mokata setup claude` in this repo, then restart Claude Code.
   ```
   The restart hint rides every state, because Claude Code reads the skill/command list **once per

@@ -71,11 +71,28 @@ Three phases carry a gate (the rest are advisory):
 | Phase | Gate id | Kind | Blocks on |
 |---|---|---|---|
 | brainstorm | `approach-approval` | human | no approved approach |
-| completeness_gate | `completeness` | check | any acceptance criterion with no mapped test (or an empty spec) |
+| completeness_gate | `completeness` | check | any acceptance criterion with no mapped test, a UI criterion without its state matrix (or an empty spec) |
 | emit | `emit-approval` | human | un-approved durable output |
 
 The completeness gate **never silently passes**: an empty spec and any unmapped AC both
 block. See [AC traceability](knowledge.md) and the [governance model](governance.md).
+
+**UI criteria carry a state matrix.** A criterion about what a user sees is written as a UI
+criterion — its `text` is the Given/When/Then behaviour, and `states` says what the user sees when
+the element is `default`, `loading`, `empty`, `error` and `disabled` (`"n/a — why"` for a state that
+cannot occur):
+
+```json
+{"id": "AC-2", "kind": "ui",
+ "text": "Given a dirty form, when the user clicks Save, then the change is persisted",
+ "states": {"default": "Save is enabled", "loading": "Save is disabled and a spinner shows",
+            "empty": "n/a — the form always has fields", "error": "an alert names the failure",
+            "disabled": "Save is greyed out and not focusable"}}
+```
+
+The completeness gate refuses a UI criterion whose matrix is missing or incomplete, and names the
+missing states. A spec routed to the React web pack that states no UI criterion at all gets an
+advisory, never a block.
 
 ### The run-state gates (enforced on native writes)
 

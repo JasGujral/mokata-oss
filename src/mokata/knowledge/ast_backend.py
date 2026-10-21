@@ -38,6 +38,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -45,7 +46,7 @@ from ..repo_paths import name_of
 from ..repo_walk import prune_source_dirs
 from .grep_backend import GrepBackend
 from .query import (BASIS_STRUCTURAL, BASIS_VERIFIED_EMPTY, QUERY_KINDS,
-                    GraphBackend, QueryResult, Reference)
+                    GraphBackend, QueryResult, Reference, mark_truncated)
 
 # The one honest sentence an AST answer carries (P22): what it IS, and its one documented limit.
 AST_NOTE = ("answered by the embedded AST floor (name-resolution, not type inference); "
@@ -78,6 +79,30 @@ AST_EMPTY_NOTE = ("no references — the embedded AST floor holds this symbol's 
 #                 stops it; `test_d2_blast_radius_leaf` pins the equivalence so a future change
 #                 that makes it reachable cannot land silently.
 SYMBOL_EDGE_KINDS = ("callers", "callees", "implementers", "blast_radius")
+
+# 0.0.25 K — THE BLAST RADIUS IS BOUNDED, AND SAYS SO WHEN THE BOUND BITES. Measured on a 1.2M-line
+# synthetic repo: a hub function with ~85k call sites never finished a depth-2 blast radius, and the
+# IDE's Review page asks for one automatically for every changed file. Two bounds, either of which
+# stops the walk: a reference cap (what a reader can use at all) and a wall-clock budget (what a
+# page can wait for). A bounded answer is NEVER a silent partial: `QueryResult.truncated` is set and
+# a classed `truncated —` note says which bound bit and how far the walk got (`mark_truncated`).
+BLAST_RADIUS_MAX_REFS = 20000
+BLAST_RADIUS_TIME_BUDGET_S = 2.0
+
+# 0.0.25 K — the sentence an EMPTY answer carries when the AST floor indexes every Python file and
+# holds NO definition of the target: an external / undefined name (a builtin like `str`, a library
+# call, a dynamic name). §7g: this is NOT a verified zero — the floor cannot account for a symbol it
+# has no definition of — so the basis stays LEXICAL. What changed is only WHERE the lexical floor
+# looks: it searches the files the AST floor could not index (non-Python sources, unparseable `.py`)
+# instead of re-reading the whole repo to re-discover what the index already answered for Python.
+AST_EXTERNAL_NOTE = ("not observable — the embedded AST floor indexes {py} Python file(s) here, holds "
+                     "no definition of `{target}` and found no {kind} edge for it: it is external or "
+                     "undefined (a builtin, a library, or a dynamic name), so this is NOT a verified "
+                     "zero; the lexical floor searched only the {rest} source file(s) the AST floor "
+                     "cannot index")
+AST_NO_IMPORT_NOTE = ("not observable — none of the {py} Python file(s) the embedded AST floor indexes "
+                      "imports `{target}`; the lexical floor searched only the {rest} source file(s) "
+                      "the AST floor cannot index")
 
 CACHE_DIRNAME = "knowledge_ast"
 CACHE_FILENAME = "edges.json"
@@ -261,6 +286,17 @@ class AstBackend(GraphBackend):
             cache_dir = os.path.join(root, MOKATA_DIR, TEMP_LOCAL_DIRNAME, CACHE_DIRNAME)
         self.cache_dir = cache_dir
         self._edges: Optional[Dict[str, FileEdges]] = None    # rel -> edges, built lazily
+        # 0.0.25 K — (mtime, size) per indexed file, and the index an `invalidate()` dropped: the
+        # NEXT build re-uses unchanged files from memory instead of re-reading the 30 MB JSON cache.
+        self._stat: Dict[str, Tuple[float, int]] = {}
+        self._prior: Optional[Tuple[Dict[str, FileEdges], Dict[str, Tuple[float, int]]]] = None
+        # 0.0.25 K — reverse indexes over the edges, each built ONCE per index build, on the first
+        # query that needs it (`_rev`). Every query used to scan all edges (453k on the scale repo,
+        # 25-100 ms each, multiplied by ripple / path / blast radius); each lookup is now a dict
+        # hit. A bucket is FLAT — `[rel, edge, rel, edge, ...]` holding the edge tuples the index
+        # already owns — so the index costs two pointers per edge, not a new tuple per edge.
+        self._rev_maps: Dict[str, Optional[Dict[str, list]]] = {}
+        self._uncovered: Optional[List[str]] = None   # grep-corpus files the index does not hold
 
     # --- public API ----------------------------------------------------------
     def query(self, kind: str, target: str, depth: int = 1) -> QueryResult:
@@ -286,7 +322,12 @@ class AstBackend(GraphBackend):
         elif kind == "defs":
             refs = self._defs(target)
         else:
-            refs = self._blast_radius(target, depth)
+            refs, cut = self._blast_radius_bounded(target, depth)
+            if cut:
+                res = QueryResult(kind=kind, target=target, references=refs, backend=self.name,
+                                  basis=BASIS_STRUCTURAL, note=AST_NOTE)
+                mark_truncated(res, None, cut)
+                return res
         if not refs:
             # D2 (BLAST-RADIUS-LEAF-DEGRADE) — THE defect site. This branch used to collapse two
             # different worlds into one grep fallthrough:
@@ -305,9 +346,39 @@ class AstBackend(GraphBackend):
             if self._holds_definition(kind, target):
                 return QueryResult(kind=kind, target=target, references=[], backend=self.name,
                                    basis=BASIS_VERIFIED_EMPTY, note=AST_EMPTY_NOTE)
-            return self.grep.query(kind, target, depth=depth)
+            return self._outside_the_index(kind, target, depth)
         return QueryResult(kind=kind, target=target, references=refs, backend=self.name,
                            basis=BASIS_STRUCTURAL, note=AST_NOTE)
+
+    def _outside_the_index(self, kind: str, target: str, depth: int) -> QueryResult:
+        """0.0.25 K — the fallthrough for an empty answer the index cannot certify.
+
+        It used to hand the question to the grep floor over the WHOLE repo: a 3.6 s regex read of
+        every source file, per query, for `str` / `append` / any library call — to re-discover, for
+        the Python files, exactly what the AST index had already answered (no edge). The Python
+        half of that answer is the index's; only the files the index does NOT hold (non-Python
+        sources, `.py` files `ast.parse` rejected) can add anything, so only those are searched.
+
+        ⛔ The verdict does NOT move (§7g): the answer stays LEXICAL — degraded, never a verified
+        zero — because the floor holds no definition to account for the name. Only the cost and
+        the honesty of the note change: the note now says WHY the zero is not observable.
+        Accepted difference, stated: a lexical match inside a Python COMMENT or STRING (e.g. `foo(`
+        in a docstring) is no longer reported — the index is the authority on Python call sites,
+        and such a hit was never one."""
+        rest = self._uncovered_files()
+        res = self.grep.query(kind, target, depth=depth, files=rest)
+        tmpl = AST_NO_IMPORT_NOTE if kind == "imports" else AST_EXTERNAL_NOTE
+        why = tmpl.format(py=len(self._edges or {}), target=target, kind=kind, rest=len(rest))
+        res.note = f"{res.note} | {why}" if res.note else why
+        return res
+
+    def _uncovered_files(self) -> List[str]:
+        """The grep floor's corpus MINUS what this index holds — computed once per index build."""
+        if self._uncovered is None:
+            held = self._edges or {}
+            self._uncovered = [ab for ab in self.grep._walk_files()
+                               if name_of(ab, self.root) not in held]
+        return self._uncovered
 
     def _holds_definition(self, kind: str, target: str) -> bool:
         """D2 — whether this floor may certify a ZERO for `kind(target)`.
@@ -337,39 +408,128 @@ class AstBackend(GraphBackend):
 
     # --- incremental index ---------------------------------------------------
     def invalidate(self) -> None:
-        """GR.S4: drop the in-memory edge index so the NEXT query re-parses. The on-disk cache
-        is (mtime,size)-keyed, so the re-parse touches only CHANGED files (cost ∝ churn) — this
-        is the AST-floor half of the freshness rebuild."""
+        """GR.S4: drop the in-memory edge index so the NEXT query re-parses. The rebuild is
+        (mtime,size)-keyed, so the re-parse touches only CHANGED files (cost ∝ churn) — this
+        is the AST-floor half of the freshness rebuild. 0.0.25 K: the dropped index is kept as the
+        rebuild's cache, so an unchanged file costs a `stat`, not a JSON re-read of the cache."""
+        if self._edges is not None:
+            self._prior = (self._edges, self._stat)
         self._edges = None
 
     def _ensure_index(self) -> None:
         if self._edges is not None:
             return
-        cache = self._load_cache()
+        prior, self._prior = self._prior, None
+        disk: Dict[str, Any] = {} if prior is not None else self._load_cache()
         edges: Dict[str, FileEdges] = {}
-        fresh: Dict[str, Any] = {}
+        # (mtime, size) of EVERY source file seen — parsed or not. A file `ast.parse` rejects is
+        # remembered as UNPARSED under its stat key, so an unchanged broken file is neither
+        # re-parsed nor counted as a change on every build (it was both: 28 deliberately broken
+        # files on the scale repo forced a 30 MB cache rewrite per build).
+        stat: Dict[str, Tuple[float, int]] = {}
+        unparsed: set = set()
+        changed = False
         for ab in self._source_files():
             rel = name_of(ab, self.root)
             try:
                 st = os.stat(ab)
             except OSError:
                 continue
-            hit = cache.get(rel)
-            if (hit is not None and hit.get("mtime") == st.st_mtime
-                    and hit.get("size") == st.st_size):
-                try:
-                    edges[rel] = FileEdges.from_dict(hit["edges"])
-                    fresh[rel] = hit
+            key = (st.st_mtime, st.st_size)
+            if prior is not None:
+                if prior[1].get(rel) == key:
+                    stat[rel] = key
+                    if rel in prior[0]:
+                        edges[rel] = prior[0][rel]
+                    else:
+                        unparsed.add(rel)
                     continue
-                except (KeyError, TypeError, IndexError):
-                    pass                          # a malformed cache entry → re-parse this file
+            else:
+                hit = disk.get(rel)
+                if (hit is not None and hit.get("mtime") == st.st_mtime
+                        and hit.get("size") == st.st_size):
+                    if hit.get("unparsed") is True:
+                        stat[rel] = key
+                        unparsed.add(rel)
+                        continue
+                    try:
+                        edges[rel] = FileEdges.from_dict(hit["edges"])
+                        stat[rel] = key
+                        continue
+                    except (KeyError, TypeError, IndexError):
+                        pass                      # a malformed cache entry → re-parse this file
+            changed = True
+            stat[rel] = key
             fe = self._parse_file(ab)
             if fe is None:
-                continue                          # unparseable: a coverage gap, not a crash
+                unparsed.add(rel)                 # unparseable: a coverage gap, not a crash
+                continue
             edges[rel] = fe
-            fresh[rel] = {"mtime": st.st_mtime, "size": st.st_size, "edges": fe.to_dict()}
-        self._edges = edges
-        self._save_cache(fresh)
+        # A file that LEFT the repo is a change too (its entry must not survive in the cache).
+        held_before = prior[1] if prior is not None else disk
+        if not changed and len(held_before) != len(stat):
+            changed = True
+        self._edges, self._stat = edges, stat
+        self._build_reverse()
+        # 0.0.25 K — write ONLY WHEN SOMETHING CHANGED, and once. A cold reconcile used to rebuild
+        # twice (cold walk → invalidate → rebuild) and rewrite the full ~30 MB cache both times,
+        # ~28 s on the scale repo, the second time with byte-identical content.
+        if changed:
+            entries: Dict[str, Any] = {}
+            for rel, key in stat.items():
+                fe = edges.get(rel)
+                entries[rel] = ({"mtime": key[0], "size": key[1], "unparsed": True} if fe is None
+                                else {"mtime": key[0], "size": key[1], "edges": fe.to_dict()})
+            self._save_cache(entries)
+
+    def _build_reverse(self) -> None:
+        """Drop the reverse indexes; each is rebuilt from the new edges on first use."""
+        self._rev_maps = {}
+        self._uncovered = None
+
+    def _rev(self, which: str) -> Dict[str, list]:
+        """0.0.25 K — one reverse index (`callee` / `scope` / `def` / `base` / `import`), built in
+        ONE pass over the edges in the SAME order the linear scans walked them (files in index
+        order, edges in file order), so every answer is element-for-element the scan's answer."""
+        m = self._rev_maps.get(which)
+        if m is not None:
+            return m
+        m = {}
+        get = m.get
+        for rel, fe in (self._edges or {}).items():
+            if which == "callee":
+                rows, col = fe.calls, 0
+            elif which == "scope":
+                rows, col = fe.calls, 2
+            elif which == "def":
+                rows, col = fe.defs, 0
+            elif which == "import":
+                rows, col = fe.imports, 0
+            else:                                     # "base": one hit per class per DISTINCT base
+                for c in fe.classes:
+                    for base in dict.fromkeys(c[2]):
+                        bucket = get(base)
+                        if bucket is None:
+                            bucket = m[base] = []
+                        bucket.append(rel)
+                        bucket.append(c)
+                continue
+            for e in rows:
+                k = e[col]
+                bucket = get(k)
+                if bucket is None:
+                    bucket = m[k] = []
+                bucket.append(rel)
+                bucket.append(e)
+        self._rev_maps[which] = m
+        return m
+
+    def _hits(self, which: str, key: str):
+        """`(rel, edge)` pairs of one reverse-index bucket, in scan order."""
+        bucket = self._rev(which).get(key)
+        if not bucket:
+            return ()
+        return zip(bucket[0::2], bucket[1::2])
 
     def _source_files(self):
         """Every file this backend can produce edges for — `.py` always, TS when the extra is in.
@@ -434,83 +594,88 @@ class AstBackend(GraphBackend):
         except OSError:
             pass                                  # transient cache — a write failure is never fatal
 
-    # --- query implementations over the edge index ---------------------------
+    # --- query implementations over the reverse indexes -----------------------
     def _callers(self, target: str) -> List[Reference]:
         out: List[Reference] = []
         seen: set = set()
-        for rel, fe in self._edges.items():
-            for callee, line, scope in fe.calls:
-                if callee != target:
-                    continue
-                key = (rel, line)
-                if key in seen:
-                    continue
-                seen.add(key)
-                out.append(Reference(rel, line, "", scope or None))
+        for rel, (_callee, line, scope) in self._hits("callee", target):
+            key = (rel, line)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(Reference(rel, line, "", scope or None))
         return out
 
     def _callees(self, target: str) -> List[Reference]:
         out: List[Reference] = []
         seen: set = set()
-        for rel, fe in self._edges.items():
-            for callee, line, scope in fe.calls:
-                if scope != target or callee == target:
-                    continue
-                key = (rel, line, callee)
-                if key in seen:
-                    continue
-                seen.add(key)
-                out.append(Reference(rel, line, "", callee))
+        for rel, (callee, line, _scope) in self._hits("scope", target):
+            if callee == target:
+                continue
+            key = (rel, line, callee)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(Reference(rel, line, "", callee))
         return out
 
     def _implementers(self, target: str) -> List[Reference]:
-        out: List[Reference] = []
-        for rel, fe in self._edges.items():
-            for cname, line, bases in fe.classes:
-                if target in bases:
-                    out.append(Reference(rel, line, "", cname))
-        return out
+        return [Reference(rel, c[1], "", c[0]) for rel, c in self._hits("base", target)]
 
     def _defs(self, target: str) -> List[Reference]:
         """CRG-NAV (b) — the DEFINITION site(s) of `target`, from the def edges the walk already
         extracts (function / method / class). This is the one navigation intent the adopted graph
         has no op for, so the AST floor is the most precise answer available on a Python repo:
         exact, not lexical, and it carries the def's kind in `metadata`."""
-        out: List[Reference] = []
-        for rel, fe in self._edges.items():
-            for name, line, dkind in fe.defs:
-                if name == target:
-                    out.append(Reference(rel, line, "", name,
-                                         metadata={"kind": dkind}))
-        return out
+        return [Reference(rel, d[1], "", target, metadata={"kind": d[2]})
+                for rel, d in self._hits("def", target)]
 
     def _imports(self, target: str) -> List[Reference]:
         out: List[Reference] = []
         seen: set = set()
-        for rel, fe in self._edges.items():
-            for token, line, _kind in fe.imports:
-                if token != target:
-                    continue
-                key = (rel, line)
-                if key in seen:
-                    continue
-                seen.add(key)
-                out.append(Reference(rel, line, "", None))
+        for rel, (_token, line, _kind) in self._hits("import", target):
+            key = (rel, line)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(Reference(rel, line, "", None))
         return out
 
     def _blast_radius(self, target: str, depth: int) -> List[Reference]:
+        """Transitive callers up to `depth` hops — bounded (see `_blast_radius_bounded`)."""
+        return self._blast_radius_bounded(target, depth)[0]
+
+    def _blast_radius_bounded(self, target: str, depth: int,
+                              max_refs: Optional[int] = None,
+                              budget_s: Optional[float] = None) -> Tuple[List[Reference], str]:
         """Transitive callers up to `depth` hops — the impact surface of `target` (the same
-        BFS the grep floor runs, but over AST-resolved caller edges)."""
+        BFS the grep floor runs, but over AST-resolved caller edges).
+
+        0.0.25 K — BOUNDED. Returns `(refs, why)`: `why` is "" for a complete answer, else the
+        sentence naming the bound that stopped the walk (`BLAST_RADIUS_MAX_REFS` references, or
+        `BLAST_RADIUS_TIME_BUDGET_S` seconds) and how far it got. Within the bounds the answer is
+        the unbounded BFS's prefix, in the same order."""
+        cap = BLAST_RADIUS_MAX_REFS if max_refs is None else max_refs
+        budget = BLAST_RADIUS_TIME_BUDGET_S if budget_s is None else budget_s
+        deadline = time.monotonic() + budget
         seen_syms = {target}
         seen_refs: set = set()
         out: List[Reference] = []
         frontier = [target]
-        for _ in range(max(1, depth)):
+        for hop in range(1, max(1, depth) + 1):
             nxt: List[str] = []
             for sym in frontier:
+                if time.monotonic() > deadline:
+                    return out, (f"blast radius stopped at the {budget:g}s time budget during hop "
+                                 f"{hop} of {max(1, depth)} with {len(out)} reference(s); deeper "
+                                 "callers were not walked")
                 for r in self._callers(sym):
                     key = (r.path, r.line)
                     if key not in seen_refs:
+                        if len(out) >= cap:
+                            return out, (f"blast radius stopped at the {cap}-reference cap during "
+                                         f"hop {hop} of {max(1, depth)}; more callers exist and "
+                                         "were not walked")
                         seen_refs.add(key)
                         out.append(r)
                     enc = r.symbol
@@ -520,4 +685,4 @@ class AstBackend(GraphBackend):
             frontier = nxt
             if not frontier:
                 break
-        return out
+        return out, ""

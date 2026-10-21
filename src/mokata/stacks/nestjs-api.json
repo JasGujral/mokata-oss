@@ -1,0 +1,129 @@
+{
+  "manifest_version": 1,
+  "mokata": {
+    "version": "0.0.5"
+  },
+  "profile": "standard",
+  "layers": {
+    "engine": {
+      "enabled": true
+    },
+    "knowledge": {
+      "enabled": true
+    },
+    "memory": {
+      "enabled": true
+    },
+    "governance": {
+      "enabled": true
+    }
+  },
+  "capabilities": {
+    "code_graph": {
+      "description": "Structural codebase queries (callers/callees, imports, blast-radius); the embedded AST floor answers on Python, grep is the universal fallback.",
+      "layer": "knowledge",
+      "fallback": [
+        "ast",
+        "ripgrep",
+        "grep"
+      ]
+    },
+    "memory_store": {
+      "description": "Where persistent/decision memory is stored; SQLite is the guaranteed default backend.",
+      "layer": "memory",
+      "fallback": [
+        "sqlite"
+      ]
+    }
+  },
+  "tools": {
+    "ast": {
+      "provides": "code_graph",
+      "kind": "builtin",
+      "version": null,
+      "detect": {
+        "type": "python_files"
+      },
+      "enabled": true
+    },
+    "ripgrep": {
+      "provides": "code_graph",
+      "kind": "cli",
+      "version": null,
+      "detect": {
+        "type": "command",
+        "name": "rg"
+      },
+      "enabled": true
+    },
+    "grep": {
+      "provides": "code_graph",
+      "kind": "builtin",
+      "version": null,
+      "detect": {
+        "type": "always"
+      },
+      "enabled": true
+    },
+    "sqlite": {
+      "provides": "memory_store",
+      "kind": "library",
+      "version": null,
+      "detect": {
+        "type": "python_module",
+        "name": "sqlite3"
+      },
+      "enabled": true
+    }
+  },
+  "settings": {
+    "stack": {
+      "name": "nestjs-api",
+      "framework": "NestJS + TypeScript",
+      "version": "0.0.5",
+      "summary": "Governed stack for a NestJS API \u2014 guards on every route, runtime-validated DTOs, walked contract changes, tests through the testing module.",
+      "guardrails": [
+        "Every route handler has a guard or an explicit, reviewed public marker; authorization never lives only in middleware.",
+        "DTOs are runtime classes or schemas (never `import type`), validated with unknown fields stripped and rejected.",
+        "A controller, provider or DTO contract change is walked to its callers before it lands.",
+        "No behaviour without a failing test through the testing module or the HTTP layer (RED before GREEN)."
+      ],
+      "skills": [
+        "brainstorm",
+        "spec",
+        "test",
+        "develop",
+        "review",
+        "ship"
+      ],
+      "tags": [
+        "nestjs",
+        "nest",
+        "node",
+        "typescript",
+        "ts",
+        "backend",
+        "api"
+      ],
+      "kind": "backend",
+      "domains": [
+        "backend-nestjs",
+        "api",
+        "security"
+      ],
+      "toolchain": {
+        "test_runner": [
+          "vitest",
+          "jest"
+        ],
+        "linter": [
+          "oxlint",
+          "eslint"
+        ],
+        "type_checker": [
+          "tsc"
+        ]
+      }
+    }
+  }
+}

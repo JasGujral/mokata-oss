@@ -283,7 +283,7 @@ class PlantedOffenderTest(unittest.TestCase):
         )
         findings = pc.grade("docs/how-it-works/skills-and-gates.md", offender, self.facts)
         self.assertEqual(1, len(findings), findings)
-        self.assertIn("states backed_gates = 10, the code derives 9", findings[0])
+        self.assertIn("states backed_gates = 10, the code derives %d" % self.facts["backed_gates"].value, findings[0])
         self.assertIn("re-derive:", findings[0])
 
     def test_the_count_gate_reads_html_stat_tiles(self):
@@ -296,7 +296,7 @@ class PlantedOffenderTest(unittest.TestCase):
         )
         findings = pc.grade("overrides/home.html", offender, self.facts)
         self.assertEqual(2, len(findings), findings)
-        self.assertIn("states backed_gates = 10, the code derives 9", findings[0])
+        self.assertIn("states backed_gates = 10, the code derives %d" % self.facts["backed_gates"].value, findings[0])
         self.assertIn("states hook_enforced = 4, the code derives 5", findings[1])
 
     def test_the_count_gate_reads_a_claim_THAT_WRAPS_across_a_line(self):
@@ -307,7 +307,7 @@ class PlantedOffenderTest(unittest.TestCase):
         offender = ("Only a *backed* gate may be cited as enforcement, and there are **10 backed\n"
                     "gates** — every one a row in the `skill_contracts.GATES` map.\n")
         [finding] = pc.grade("x.md", offender, self.facts)
-        self.assertIn("states backed_gates = 10, the code derives 9", finding)
+        self.assertIn("states backed_gates = 10, the code derives %d" % self.facts["backed_gates"].value, finding)
         self.assertIn("x.md:1", finding)
 
     def test_the_count_gate_reads_the_mcp_split_across_a_wrap_and_a_parenthetical(self):
@@ -370,7 +370,7 @@ class PlantedOffenderTest(unittest.TestCase):
         [finding] = pc.grade("docs/index.md", "**8 backed gates**\n", self.facts)
         self.assertIn("docs/index.md:1", finding)
         self.assertIn("states backed_gates = 8", finding)
-        self.assertIn("the code derives 9", finding)
+        self.assertIn("the code derives %d" % self.facts["backed_gates"].value, finding)
         self.assertIn("skill_contracts.GATES where backed=True", finding)
         self.assertIn(pc.REDERIVE_CMD, finding)
 

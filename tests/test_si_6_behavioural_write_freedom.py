@@ -348,10 +348,16 @@ _SHARED_DB_SUBSTRATE = "refused (a) — reads a shared Postgres/pgvector DB; its
                        "whatever it did. The SQLite twin of this read IS bound."
 
 REFUSED = {
+    ("ide/health.py", "_rebuild_ast"):
+        "writes — 0.0.25: the health panel's force re-parse deletes and rebuilds mokata's AST edge cache under temp_local/knowledge_ast/ by purpose, so it cannot be bound as write-free",
+    ("ide/health.py", "_rebuild_search"):
+        "writes — 0.0.25: the health panel's force rebuild deletes and re-embeds the IDE's semantic index under temp_local/ide/semantic/ by purpose, so it cannot be bound as write-free",
     ("ide/search.py", "build_index"):
         "writes — 0.0.23 C2: the IDE's local semantic index under temp_local/ide/semantic/ is its whole purpose, so it cannot be bound as write-free",
     ("harness_cert.py", "record_result"):
         "writes — 0.0.23 D12: the owner's `record` action writes the certification matrix doc by purpose (atomic tmp + replace), so it cannot be bound as write-free",
+    ("ide/bus.py", "ensure_bridge"):
+        "writes — 0.0.25 ID.S3: it creates the IDE live-bridge record (port + hook token) under temp_local/ide/ by purpose, so it cannot be bound as write-free",
     ("ide/server.py", "_remove_record"):
         "writes — 0.0.22 E2's review window: it is a writer by purpose (the snapshot store / the server record under temp_local/), so it cannot be bound as write-free",
     ("ide/server.py", "_write_record"):

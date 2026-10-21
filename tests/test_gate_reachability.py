@@ -124,6 +124,16 @@ GATE_ENFORCERS = {
     # `WriteGate.submit` and layer 1 of the gate-guard hook, so it runs FIRST on every durable
     # write; stage 4 measured it REACHABLE before it was in any registry at all.
     "self-protect": ("selfprotect.py", "check_target"),
+    # 0.0.25 Lane D2 — the six frontend/backend DOMAIN gates. One module enforces all six; each
+    # gate's refusing callable is its own `check_*` (the function whose FAIL state the Sentinel
+    # turns into exit 1), reached from `mokata gate check` -> `run_domain_gate`, which calls each by
+    # name (no dispatch dict) precisely so this structural rung can see every one.
+    "dep-cooldown": ("govern/domain_gates.py", "check_dep_cooldown"),
+    "route-guarded": ("govern/domain_gates.py", "check_route_guarded"),
+    "bundle-budget": ("govern/domain_gates.py", "check_bundle_budget"),
+    "react-lint": ("govern/domain_gates.py", "check_react_lint"),
+    "bundle-secret-scan": ("govern/domain_gates.py", "check_bundle_secret_scan"),
+    "dep-vulnerability": ("govern/domain_gates.py", "check_dep_vulnerability"),
     # ⚠ NO `ship-readiness` ROW. It was backed (naming `engine/ship.py`) through stage 4, which
     # measured it a certified zero; stage 5 demoted it to advisory. An advisory boundary has
     # nothing to be reachable TO, so it is excluded here by the same rule as the other 13 — see

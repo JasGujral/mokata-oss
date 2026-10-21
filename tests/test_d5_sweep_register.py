@@ -321,7 +321,7 @@ _register("memory/tier_report.py", {
 })
 
 _register("extras_install.py", {
-    "install_extra": (DEGRADE_CLEAN,
+    "install_extras": (DEGRADE_CLEAN,
         "The consent-install VERIFY step. `verify` is a CALLER-supplied probe that imports an "
         "OPTIONAL third-party package and may load a model, so its raisables belong to packages "
         "mokata cannot import at module scope to name. A failed probe means 'not usable' — which "
@@ -1393,6 +1393,11 @@ _register("ide/launch.py", {
         "turn's context (/mokata:review-window) either way, so a headless machine loses nothing."),
 })
 _register("ide/server.py", {
+    "HeavyLane._work": (DEGRADES_LOUD,
+        "0.0.25 lane S — a heavy question (impact, a graph view, query) that raises on the heavy "
+        "lane is handed, exception and all, to the request waiting on it, which answers it exactly "
+        "as before (`_json`: 400 for a bad request, else a 500 JSON error the page shows). Nothing "
+        "is swallowed: the catch only moves the exception across the thread boundary."),
     "build_app._json.handler": (DEGRADES_LOUD,
         "0.0.22 E2 — a read that fails returns a JSON error the page SHOWS ('could not read: …'), "
         "never a blank view that reads as 'nothing changed' (§7g)."),
@@ -1420,6 +1425,18 @@ _register("ide/search.py", {
     "_load_embedder": (DEGRADES_LOUD,
         "0.0.23 C2 — a local model that will not load is re-raised as `ModelUnavailable`, shown the "
         "same way; nothing is cached, so the next request tries again."),
+})
+_register("ide/health.py", {
+    "_Job.start.run": (DEGRADES_LOUD,
+        "0.0.25 — a health-panel job (force rebuild of the code graph / AST index / search index, "
+        "or the confirmed update) that raised: the job ends `failed` with the exception's class and "
+        "message, which the panel shows. Never a job stuck at `running`, never a silent success."),
+    "_doctor_rows": (DEGRADES_LOUD,
+        "0.0.25 — `mokata doctor`'s checks could not run: the panel shows a `broken` row naming the "
+        "exception and the command to run by hand. Never an empty list that reads as all-clear."),
+    "_wiring_rows": (DEGRADES_LOUD,
+        "0.0.25 — the cheap wiring-drift check could not run: a `broken` row with the reason and "
+        "`mokata doctor --wiring`. Never silence that reads as current wiring."),
 })
 _register("ide/plans.py", {
     "team_runs": (DEGRADES_LOUD,

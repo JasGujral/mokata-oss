@@ -102,7 +102,10 @@
         "ts",
         "javascript",
         "backend"
-      ]
+      ],
+      "kind": "backend",
+      "domains": [],
+      "toolchain": {}
     }
   }
 }

@@ -152,6 +152,20 @@ HARD_ERRORS = {
     "BadPattern",
     # 0.0.23 C3 — a graph-view request with a missing or unknown parameter. HARD: answered 400.
     "BadRequest",
+    # 0.0.25 lane S — the IDE's heavy lane. `TimedOut`: a heavy question passed its deadline; HARD,
+    # answered 503 with what to do — no weaker answer is substituted (a partial impact shown as
+    # the answer would be the overclaim). `ClientGone` / `Abandoned`: the browser that asked left,
+    # so the wait (ClientGone) and then the work (Abandoned, at its next graph question) stop;
+    # nobody reads either — there is no answer to degrade.
+    "TimedOut", "ClientGone", "Abandoned",
+    # 0.0.25 ID2 — the embedded terminal refuses a request it will not serve (a program outside the
+    # closed set, the cap reached, an unknown id, a platform with no pty). HARD: answered 4xx with
+    # the reason; nothing is spawned, and there is no weaker process to start instead.
+    "TerminalRefused",
+    # 0.0.25 ID2 — an IDE → session context item that cannot be sent (uncontained path, sensitive
+    # file, bad lines, still a secret after redaction). HARD: answered 400, nothing is stored; a
+    # partial send would put text the human did not choose (or a secret) into the session.
+    "ContextRefused",
 }
 
 # Hard errors that fail CLOSED (nothing degrades to a floor) but are still ABOUT a schema, so
@@ -546,6 +560,8 @@ def _live_classes():
     from mokata.ide import search as ide_search
     # 0.0.23 C3 — `BadRequest`, the IDE server's bad-parameter refusal.
     from mokata.ide import server as ide_server
+    # 0.0.25 ID2 — `TerminalRefused` (the embedded terminal) and `ContextRefused` (IDE → session).
+    from mokata.ide import context as ide_context, terminal as ide_terminal
 
     mods = (netguard, oslock, skills, stacks, teamdb, team_audit, team_events, team_journal,
             vault, config,
@@ -559,6 +575,7 @@ def _live_classes():
     mods += (ide_nav,)
     mods += (ide_search,)
     mods += (ide_server,)
+    mods += (ide_terminal, ide_context)
     live = {"MokataError": MokataError}
     for mod in mods:
         for name in dir(mod):

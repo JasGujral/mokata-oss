@@ -326,8 +326,11 @@ class ThePreviewCoversTheWrite(unittest.TestCase):
 
     def test_f8a_the_count_grader_catches_an_understated_count(self):
         """§7i — the count half, shown failing, over the under-report that was actually there."""
-        understated = self.preview_text.replace("Will write 26 Agent Skills",
-                                                "Will write 16 Agent Skills")
+        # The shipped count is DERIVED (0.0.25 D1 grew it 26 → 30; a literal re-anchor went stale).
+        from mokata.agent_skills import installed_skill_names
+        shipped = len(installed_skill_names())
+        understated = self.preview_text.replace(f"Will write {shipped} Agent Skills",
+                                                f"Will write {shipped - 10} Agent Skills")
         self.assertNotEqual(self.preview_text, understated,
                             "re-anchor: the rendered skills line moved")
         self.assertNotEqual(written_counts(self.done_root), declared_counts(understated))

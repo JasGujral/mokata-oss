@@ -109,7 +109,7 @@ suggestions), `playbook.py` (the end-to-end integration runner), `packaging.py`
 (plugin/marketplace validators), `team*.py` (the opt-in shared Postgres store).
 
 ### The MCP server (`mcp/`)
-`registry.py` is the single source of truth for the tool set — **67 tools: 43 read, 23 write, 1
+`registry.py` is the single source of truth for the tool set — **70 tools: 46 read, 23 write, 1
 approve** — and `server.py` builds the `mokata-mcp` server from it. Every write tool is
 propose-only; `tools_approve.py` is the default-off, opt-in in-chat approval
 (`settings.approvals.in_chat`). The robustness layer is shared by every tool rather than

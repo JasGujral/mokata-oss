@@ -91,7 +91,46 @@ GATES: Dict[str, GateRef] = {
         "writes to installed package trees, mokata's own install, or outside the workspace root "
         "are refused — security-class, never overridable",
         "src/mokata/selfprotect.py"),
+    # --- 0.0.25 Lane D2: the frontend/backend DOMAIN gates. Each is RUN by `mokata gate check <id>`
+    # (`govern/domain_gates.py:run_domain_gate`), exits non-zero on a violation, reports NOT
+    # CONFIGURED (exit 3, never a pass) when the repo is not set up for it, and has a detection
+    # fixture in `tests/test_d2_domain_gates.py` proving it fires on a bad sample and passes a good
+    # one. The two mokata-owned checks are stdlib; the four tool-backed ones propagate the tool's
+    # exit code, whose semantics were verified against the real tools when this was built.
+    "dep-cooldown": GateRef(
+        "dep-cooldown",
+        "a JS project's package manager enforces a release-age cooldown, and no dependency is a "
+        "git/URL spec that bypasses it",
+        "src/mokata/govern/domain_gates.py"),
+    "route-guarded": GateRef(
+        "route-guarded",
+        "every NestJS route handler has a guard attached or is explicitly @Public() — attachment "
+        "only; whether the guard's policy is right stays a human review",
+        "src/mokata/govern/domain_gates.py"),
+    "bundle-budget": GateRef(
+        "bundle-budget",
+        "no built asset exceeds its declared size-limit / lhci budget",
+        "src/mokata/govern/domain_gates.py"),
+    "react-lint": GateRef(
+        "react-lint",
+        "eslint with eslint-plugin-react-hooks recommended reports zero errors and zero warnings",
+        "src/mokata/govern/domain_gates.py"),
+    "bundle-secret-scan": GateRef(
+        "bundle-secret-scan",
+        "no credential appears in built output (gitleaks over dist/build/out/.next/static)",
+        "src/mokata/govern/domain_gates.py"),
+    "dep-vulnerability": GateRef(
+        "dep-vulnerability",
+        "no high/critical advisory against the npm lockfile (npm audit); the osv-scanner route "
+        "for other lockfiles is advisory",
+        "src/mokata/govern/domain_gates.py"),
     # --- advisory protocol boundaries (backed=False): headline-gate copy only, never cited ---
+    # `render-regression` (Lane D2): no off-the-shelf tool exits non-zero on a render-count
+    # regression, so it is a review boundary. No Contract may cite it (pinned by test_d2).
+    "render-regression": GateRef(
+        "render-regression",
+        "a change does not regress render counts or durations — reviewed by a human, not gated",
+        "", backed=False),
     # `ship-readiness` was BACKED until 0.0.17 stage 5, and the demotion is the honest state, not a
     # loss of function. REVIEW-FIX.R3 deleted `check_ship_readiness` and moved the review truth to
     # `progress_events.ship_review_gate`, leaving this entry naming the "landing-decision half" of

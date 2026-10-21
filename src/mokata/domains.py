@@ -63,6 +63,16 @@ class Domain:
     roles: Tuple[str, ...]               # graph-derived structural roles that imply this domain
     path_markers: Tuple[str, ...]        # the coarse path-segment FLOOR (degrade-clean)
     sources: Tuple[str, ...] = ()        # primary-source anchors for clean-room authoring
+    # 0.0.25 Lane D — FRAMEWORK-gated domains. `requires` names framework facts (see
+    # `stacks.FW_*`, read from the touched file's nearest package.json); a domain that declares
+    # any fires ONLY when one of them holds for the file that matched. So a `.tsx` in a React
+    # Native app never routes to the React WEB pack, and `*.controller.ts` in an Express server
+    # never routes to NestJS. Empty = framework-agnostic (every pre-0.0.25 domain).
+    requires: Tuple[str, ...] = ()
+    # A COMPANION domain specialises a generic one for a framework: it fires exactly when BOTH
+    # named domains were classified (e.g. `frontend-security` = `frontend-react` + `security`).
+    # It has no markers of its own, so it can never fire on a surface its parents did not reach.
+    companion_of: Tuple[str, ...] = ()
 
 
 # The 10 domain areas of the attachment map (doc 72 Phase E). Each attaches to a phase we already
@@ -131,6 +141,42 @@ DOMAIN_REGISTRY: Dict[str, Domain] = {
         review_axis=None, memory_kind=CONTEXT,
         roles=("release", "rollout", "rollback", "launch-checklist"),
         path_markers=("release", "deploy", "rollout", "changelog")),
+    # ---- 0.0.25 Lane D — framework domains (doc 100 §7.2). Each is FRAMEWORK-GATED (`requires`)
+    # or a COMPANION (`companion_of`), so a near-miss surface (React Native, Express, a plain TS
+    # library) cannot reach it. None activates a review axis of its own: they ride the axes their
+    # generic parents already activate. None adds a gate: each feeds an existing one.
+    "frontend-react": Domain(
+        "frontend-react", "React (web) components, hooks and server boundaries",
+        phases=("develop", "review"), gate="no-code-without-failing-test",
+        review_axis=None, memory_kind=BEST_PRACTICE,
+        roles=("react-component", "react-hook", "server-component", "server-action"),
+        path_markers=(".jsx", ".tsx"),
+        sources=("https://react.dev/reference/react", "https://react.dev/learn/react-compiler"),
+        requires=("react-web",)),
+    "backend-nestjs": Domain(
+        "backend-nestjs", "NestJS modules, providers, guards and DTOs",
+        phases=("develop", "review"), gate="blast-radius",
+        review_axis=None, memory_kind=DECISION,
+        roles=("nest-module", "nest-controller", "nest-provider", "nest-guard", "nest-dto"),
+        path_markers=(".controller.ts", ".module.ts", ".service.ts", ".guard.ts",
+                      ".resolver.ts", ".dto.ts", ".interceptor.ts", ".pipe.ts", ".gateway.ts",
+                      ".strategy.ts", ".filter.ts"),
+        sources=("https://docs.nestjs.com/",),
+        requires=("nestjs",)),
+    "frontend-perf": Domain(
+        "frontend-perf", "Frontend performance (React web): measure, fix, verify",
+        phases=("optimize", "develop", "review"), gate="measure-first",
+        review_axis=None, memory_kind=CONTEXT,
+        roles=(), path_markers=(),
+        sources=("https://web.dev/articles/vitals",),
+        companion_of=("frontend-react", "performance")),
+    "frontend-security": Domain(
+        "frontend-security", "Frontend security (React web): authorization first",
+        phases=("develop", "review"), gate="secret-guard",
+        review_axis=None, memory_kind=GUARDRAIL,
+        roles=(), path_markers=(),
+        sources=("https://owasp.org/Top10/",),
+        companion_of=("frontend-react", "security")),
 }
 
 # Ordered ids (registry insertion order — the attachment-map order).
@@ -157,9 +203,13 @@ REVIEW_AXES: Tuple[str, ...] = (
 # ledger through the EXISTING WriteGate — the governed edge; Nygard's ADRs) and `shipping` (→ a
 # pre-launch checklist + staged rollout + rollback thresholds feeding the EXISTING ship-readiness
 # gate; progressive-delivery / rollback literature). Registry order gives the attachment-map order.
+# 0.0.25 Lane D adds the framework batch: `frontend-react` + `backend-nestjs` (impact-ordered rule
+# packs; framework-gated by the touched file's package.json) and their companions `frontend-perf`
+# + `frontend-security` (measure → fix → verify; security puts authorization first).
 DOMAIN_SKILLS: FrozenSet[str] = frozenset({
     "api", "security", "performance", "frontend-a11y", "browser-testing", "ci-cd", "git",
-    "deprecation", "docs-adr", "shipping"})
+    "deprecation", "docs-adr", "shipping",
+    "frontend-react", "backend-nestjs", "frontend-perf", "frontend-security"})
 
 
 def shipped_domain_skills() -> Tuple[str, ...]:
@@ -181,6 +231,10 @@ class DomainSurface:
     touched_files: List[str] = field(default_factory=list)
     touched_symbols: List[str] = field(default_factory=list)
     roles: List[str] = field(default_factory=list)
+    # 0.0.25 Lane D — per touched file, the framework facts of the project it belongs to (read
+    # from its nearest package.json by :func:`classify_from_impact`). A structural fact about the
+    # repo, never prompt text. A file absent here has no facts, so no framework-gated domain fires.
+    file_frameworks: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
 
 
 # Reverse indexes, built once from the registry.
@@ -188,15 +242,22 @@ _ROLE_TO_DOMAIN: Dict[str, str] = {
     role: dom.id for dom in DOMAIN_REGISTRY.values() for role in dom.roles}
 
 
-def _floor_domains_for_path(path: str) -> List[str]:
+def _framework_ok(dom: "Domain", facts: Sequence[str]) -> bool:
+    """A framework-gated domain fires only when one of its required facts holds; others always."""
+    return not dom.requires or any(f in dom.requires for f in facts)
+
+
+def _floor_domains_for_path(path: str, frameworks: Sequence[str] = ()) -> List[str]:
     """The coarse path-marker FLOOR: which domains a single touched file implies by its structural
     location (deterministic, lexical — like ``brainstorm_impact.classify_path``). This scores when
     no model-supplied role tag is present, so a domain is never MISSED for lack of a hint; it is a
-    lower-confidence signal the roles refine."""
+    lower-confidence signal the roles refine. ``frameworks`` are the file's project facts: a
+    framework-gated domain (``Domain.requires``) needs one of them, so a marker alone never routes a
+    React Native ``.tsx`` to the React web pack."""
     p = (path or "").lower()
     out: List[str] = []
     for dom in DOMAIN_REGISTRY.values():
-        if any(m in p for m in dom.path_markers):
+        if any(m in p for m in dom.path_markers) and _framework_ok(dom, frameworks):
             out.append(dom.id)
     return out
 
@@ -204,72 +265,123 @@ def _floor_domains_for_path(path: str) -> List[str]:
 def classify_domains(surface: "DomainSurface") -> List[str]:
     """Derive the domains-in-play from a graph-derived :class:`DomainSurface` — the PRIMARY
     trigger. Model-supplied ``roles`` map to domains directly; the ``touched_files`` add the
-    path-marker floor. Returns a sorted, de-duplicated list of domain ids. There is NO topic
-    argument — classification is derived from structure, never from a prompt keyword."""
+    path-marker floor; COMPANION domains then fire where both their parents did. Returns a sorted,
+    de-duplicated list of domain ids. There is NO topic argument — classification is derived from
+    structure (and the touched files' declared frameworks), never from a prompt keyword."""
     found: set = set()
+    any_facts: set = set()
+    for facts in surface.file_frameworks.values():
+        any_facts.update(facts)
     for role in surface.roles:
         did = _ROLE_TO_DOMAIN.get(str(role).strip())
-        if did:
+        if did and _framework_ok(DOMAIN_REGISTRY[did], tuple(any_facts)):
             found.add(did)
     for path in surface.touched_files:
-        found.update(_floor_domains_for_path(path))
+        found.update(_floor_domains_for_path(path, surface.file_frameworks.get(path, ())))
+    for dom in DOMAIN_REGISTRY.values():
+        if dom.companion_of and all(parent in found for parent in dom.companion_of):
+            found.add(dom.id)
     return sorted(found)
 
 
 def classify_from_impact(impact: Any, roles: Optional[Sequence[str]] = None, *,
-                         graph_gate: Any = None) -> List[str]:
+                         graph_gate: Any = None, root: str = "") -> List[str]:
     """Classify domains from a brainstorm blast-radius report (:class:`ApproachImpact`). The
     impact's ``targets`` + ``impacted_files`` are the graph-derived surface; ``roles`` are the
     model's structural tags. A convenience wrapper over :func:`classify_domains`.
+
+    ``root`` is the repo the impact was computed in: when given, each touched file's FRAMEWORK
+    facts are read from its nearest ``package.json`` (:func:`mokata.stacks.frameworks_for_file`),
+    which is what lets a framework-gated domain (``frontend-react``, ``backend-nestjs``) fire —
+    and what keeps it from firing on a near miss. Without a root no facts are read, so no
+    framework-gated domain fires (never a guess).
 
     GR.S3 — ``graph_gate`` is the ``graph.required`` verdict for this impact's blast radius. When it
     REFUSES (the surface is a degraded lexical estimate, ``graph.required`` on, no override), the
     classification is refused with :class:`~mokata.govern.graph_required.GraphDegradedError`: a
     domain set derived from an unreliable surface is not a decision input. Absent (the
-    ``graph.required=false`` path) it is a no-op — byte-identical.
+    ``graph.required=false`` path) it is a no-op.
 
-    ⚠ NEITHER BRANCH RUNS IN PRODUCTION. This function has ZERO callers anywhere in ``src/``
-    outside this module, so the refusal above is unreachable twice over: nothing originates a
-    ``graph_gate`` value, AND nothing calls the function that would consume one. It is not an inert
-    gate on a live function — the function is inert too. Filed as ``DK-CLUSTER-INERT`` (doc 84):
-    13 of this module's 16 top-level symbols have no production caller, and every dead one is the
-    BEHAVIOURAL half (classification, engagement, domain memory, handoff) while the three live ones
-    are the skill-REGISTRY half. The domain framework was built and never connected. Stage 5 of
-    0.0.17 corrects this comment and REPORTS; the wire-or-delete ruling belongs with 0.0.18's SIMP
-    deletion work, because "should the domain framework be live?" is a product question."""
+    0.0.25 Lane D — WIRED (it was ``DK-CLUSTER-INERT``: zero production callers through 0.0.24).
+    Its production caller is :func:`derive_spec_domains`, which every spec-emit surface reaches
+    through ``engine/emit.spec_commit`` (and the emit preview), so the classified set lands in
+    ``emitted_spec.json`` and drives what develop + review load (:func:`domain_skill_lines`). The
+    emit path passes no ``graph_gate``: the emit's own quality gate already refuses a degraded
+    radius when ``graph.required`` is on, so a second refusal here would only duplicate it."""
     if graph_gate is not None and getattr(graph_gate, "refused", False):
         from .govern.graph_required import GraphDegradedError
         raise GraphDegradedError(graph_gate.render())
     files = list(getattr(impact, "impacted_files", []) or []) + \
         list(getattr(impact, "targets", []) or [])
     symbols = list(getattr(impact, "impacted_symbols", []) or [])
-    surface = DomainSurface(touched_files=files, touched_symbols=symbols,
-                            roles=list(roles or []))
-    return classify_domains(surface)
+    return classify_domains(surface_from_files(files, symbols, roles, root))
+
+
+def surface_from_files(files: Sequence[str], symbols: Sequence[str] = (),
+                       roles: Optional[Sequence[str]] = None, root: str = "") -> "DomainSurface":
+    """The :class:`DomainSurface` for a set of touched files, with each file's framework facts read
+    from its nearest package.json when a repo ``root`` is known (no root → no facts)."""
+    facts: Dict[str, Tuple[str, ...]] = {}
+    if root:
+        from .stacks import frameworks_for_file
+        cache: Dict[str, Tuple[str, ...]] = {}
+        for f in files:
+            if f and f not in facts:
+                facts[f] = frameworks_for_file(root, f, cache)
+    return DomainSurface(touched_files=list(files), touched_symbols=list(symbols),
+                         roles=list(roles or []), file_frameworks=facts)
 
 
 def classify_session_domains(session: Any, roles: Optional[Sequence[str]] = None, *,
-                             graph_gate: Any = None) -> List[str]:
+                             graph_gate: Any = None, root: str = "") -> List[str]:
     """Classify the domains-in-play for a brainstorm session's CHOSEN approach — from its
     computed blast-radius impact when present, else its declared targets. The ``roles`` are the
     model's structural tags for the touched surface (grounded in the graph). GR.S3 — ``graph_gate``
-    refuses classification from a degraded surface (see :func:`classify_from_impact`).
-
-    ⚠ ALSO UNREACHABLE, and it is the other half of the same finding. This function has no
-    production caller either, and the ``graph_gate=`` pass below is the ONLY ``graph_gate``
-    argument pass anywhere in ``src/`` — one dead function handing a value to another dead
-    function. That single pass is what makes the cheap statement of the defect true: no production
-    path ORIGINATES a ``graph_gate`` at all. See :func:`classify_from_impact` for
-    ``DK-CLUSTER-INERT`` and why stage 5 reports rather than wires or deletes."""
+    refuses classification from a degraded surface (see :func:`classify_from_impact`)."""
     chosen = getattr(session, "chosen", None)
     if chosen is None:
         return []
     impact = getattr(session, "impacts", {}).get(chosen.name)
     if impact is not None:
-        return classify_from_impact(impact, roles=roles, graph_gate=graph_gate)
-    surface = DomainSurface(touched_files=list(getattr(chosen, "targets", []) or []),
-                            roles=list(roles or []))
-    return classify_domains(surface)
+        return classify_from_impact(impact, roles=roles, graph_gate=graph_gate, root=root)
+    targets = list(getattr(chosen, "targets", []) or [])
+    return classify_domains(surface_from_files(targets, [], roles, root))
+
+
+def classify_handoff(handoff: Any, root: str = "") -> List[str]:
+    """The domains an APPROVED hand-off implies: those it already carries, plus those its frozen
+    blast radius (``handoff.impact``, else the approach's ``targets``) classifies to. Pure over the
+    hand-off + the repo's package manifests; ``[]`` for no hand-off."""
+    if handoff is None:
+        return []
+    found = set(str(d) for d in (getattr(handoff, "domains", None) or []))
+    impact = getattr(handoff, "impact", None)
+    if impact is not None:
+        found.update(classify_from_impact(impact, root=root))
+    else:
+        targets = list(getattr(getattr(handoff, "approach", None), "targets", None) or [])
+        if targets:
+            found.update(classify_domains(surface_from_files(targets, [], None, root)))
+    return [d for d in DOMAIN_IDS if d in found]
+
+
+def derive_spec_domains(spec: Any, handoff: Any, root: str = "") -> Any:
+    """0.0.25 Lane D — stamp the classifier's verdict onto ``spec.domains`` at EMIT, so routing is a
+    recorded fact of the approved spec rather than something a model has to remember to type.
+
+    The result is the UNION of what the spec already declares and what the approved hand-off
+    classifies to (:func:`classify_handoff`), in registry order. Union, not override: an explicit
+    domain is never dropped, and a domain the graph surface implies is never silently missed by a
+    payload that forgot it. Unknown ids the spec carried are kept as given (``engage_for_spec``
+    rejects them loudly later). Idempotent; mutates and returns ``spec``; never raises on an
+    unreadable manifest (no facts → no framework-gated domain)."""
+    have = [str(d) for d in (getattr(spec, "domains", None) or [])]
+    derived = classify_handoff(handoff, root=root)
+    merged = set(have) | set(derived)
+    ordered = [d for d in DOMAIN_IDS if d in merged] + sorted(d for d in merged
+                                                              if d not in DOMAIN_REGISTRY)
+    spec.domains = ordered
+    return spec
 
 
 def handoff_with_domains(session: Any, domains: Sequence[str]) -> Any:
@@ -310,6 +422,78 @@ def engage_for_spec(spec_domains: Sequence[str]) -> Engagement:
             raise KeyError(f"unknown domain {d!r} — not in the registry")
     axes = [DOMAIN_REGISTRY[d].review_axis for d in ordered if DOMAIN_REGISTRY[d].review_axis]
     return Engagement(domains=tuple(ordered), knowledge=tuple(ordered), axes=tuple(axes))
+
+
+# --------------------------------------------------------------- 2b. LOAD the skills, per stage
+# 0.0.25 Lane D — the deterministic half of routing. Vercel's own evals found a domain skill left to
+# description-matching was never invoked in over half the cases; doc 85 §6 bans keyword
+# auto-activation anyway. So the skill a spec's domains name is LOADED by mokata at the stage that
+# needs it: the per-turn pack carries one line per engaged domain skill while the run is in develop
+# or review (:func:`domain_turn_lines`, riding the ONE injection channel), and `spec show` /
+# `spec_show` print the same routing so a harness without hooks reads the identical answer.
+LOADING_STAGES: Tuple[str, ...] = ("develop", "review")
+
+
+def skills_for_stage(spec_domains: Sequence[str], stage: str) -> Tuple[str, ...]:
+    """The shipped domain SKILLS a run at ``stage`` loads for a spec carrying ``spec_domains``:
+    exactly the spec's domains that (a) ship a skill and (b) are native to that stage, in registry
+    order. Unknown ids are skipped here (``engage_for_spec`` is where they fail loudly) — this runs
+    on the per-turn hook, which must never break a turn."""
+    want = set(str(d) for d in spec_domains or ())
+    return tuple(d for d in DOMAIN_IDS
+                 if d in want and d in DOMAIN_SKILLS and stage in DOMAIN_REGISTRY[d].phases)
+
+
+def domain_skill_lines(spec_domains: Sequence[str], stage: str) -> List[str]:
+    """The per-turn routing line for ``stage``: ONE line naming every domain skill the approved spec
+    routes there, so the model loads them by name. ``[]`` outside develop/review or when nothing is
+    routed. One line, not one per skill: it rides the shared per-turn budget ahead of the
+    live-evidence findings, so it is kept to a few tokens (each skill's own ⛭ line announces it
+    once it is loaded)."""
+    if stage not in LOADING_STAGES:
+        return []
+    names = skills_for_stage(spec_domains, stage)
+    if not names:
+        return []
+    from .progress import SKILL_GLYPH
+    listed = ", ".join(f"`{n}`" for n in names)
+    return [f"- {SKILL_GLYPH} mokata domain skills for {stage} (routed by the approved spec) — "
+            f"load now: {listed}"]
+
+
+def domain_routing_line(spec_domains: Sequence[str]) -> str:
+    """The `spec show` line naming what develop and review load — "" when neither loads anything.
+    The neutral twin of the per-turn lines: same routing, read from the same spec field."""
+    parts = []
+    for stage in LOADING_STAGES:
+        names = skills_for_stage(spec_domains, stage)
+        if names:
+            parts.append(f"{stage} loads {', '.join(names)}")
+    return ("domain skills: " + " · ".join(parts)) if parts else ""
+
+
+def domain_turn_lines(root: str, run_id: str) -> List[str]:
+    """The per-turn domain-skill lines for ``run_id``: the skills its EMITTED spec routes, for the
+    stage the run is in (develop or review; a run with no ``stage_enter`` but an emitted spec reads
+    as develop, the progress view's own rule). ``[]`` for any other stage, no spec, or an unreadable
+    one — the per-turn lane only ever adds context."""
+    if not root or not run_id:
+        return []
+    from .progress_events import current_stage
+    from .run_resolver import SPEC_PREFIX
+    from .state import StateStore
+    from .tdd_state import state_dir
+    try:
+        stage = current_stage(state_dir(root), run_id, default="") or "develop"
+        if stage not in LOADING_STAGES:
+            return []
+        raw = StateStore(state_dir(root)).read(SPEC_PREFIX + run_id)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(raw, dict):
+        return []
+    doms = raw.get("domains")
+    return domain_skill_lines([str(d) for d in doms], stage) if isinstance(doms, list) else []
 
 
 # --------------------------------------------------------------- 3. LIVE refinement (amend loop)

@@ -8,9 +8,11 @@ loses state. Built on the state store + the spine's PIPELINE_PHASES.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Sequence
 
-from ..brainstorm import PIPELINE_PHASES
+# `brainstorm.PIPELINE_PHASES` is read where it is used, not at import: `brainstorm` drags in
+# prior_art + brainstorm_impact + manifest, and this module sits on every Stop/PreCompact hook's
+# path (harvest → working_set) — HOOK-BUDGET, 0.0.25 Lane HB.
 
 CHECKPOINT_PREFIX = "pipeline_run__"
 
@@ -105,9 +107,12 @@ class PipelineCheckpoint:
     def last_passed(self) -> Optional[str]:
         return self.passed[-1] if self.passed else None
 
-    def resume_phase(self, phases=PIPELINE_PHASES) -> Optional[str]:
+    def resume_phase(self, phases: Optional[Sequence[str]] = None) -> Optional[str]:
         """The phase to resume at: the first phase after the last passed one. The first
-        phase for a fresh run; None when the run is complete."""
+        phase for a fresh run; None when the run is complete. `phases` defaults to the spine's
+        `PIPELINE_PHASES`."""
+        if phases is None:
+            from ..brainstorm import PIPELINE_PHASES as phases
         if not self.passed:
             return phases[0]
         last = self.passed[-1]
@@ -116,5 +121,5 @@ class PipelineCheckpoint:
         i = phases.index(last)
         return phases[i + 1] if i + 1 < len(phases) else None
 
-    def is_complete(self, phases=PIPELINE_PHASES) -> bool:
+    def is_complete(self, phases: Optional[Sequence[str]] = None) -> bool:
         return self.resume_phase(phases) is None

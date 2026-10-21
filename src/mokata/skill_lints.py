@@ -29,7 +29,7 @@ purposes (the underlying defect is still reported) AND is itself flagged as a vi
 only way to exempt a skill from a lint is to edit this module — a reviewable, human-gated change.
 
 These are TEST/CI checks over static content, not runtime gates: nothing here blocks execution.
-The eight real gates stay exactly the backed enforcement points in the gate-integrity map.
+The real (backed) gates stay exactly the backed enforcement points in the gate-integrity map.
 
 Clean-room: mokata's own words and structure; no external framework imported.
 

@@ -28,6 +28,8 @@ from . import nav
 
 MAX_NODES = 2000
 MAX_DEPTH = 6
+MAX_CHAINS = 50                 # untested chains listed; the answer says how many there were
+CHAIN_COUNT_CAP = 1000          # chains counted past the listed ones before saying "at least"
 STRUCTURAL = ("structural", "verified_empty")
 
 
@@ -65,8 +67,26 @@ class _G:
         self.bases[basis] = self.bases.get(basis, 0) + 1
 
     def payload(self, **extra: Any) -> Dict[str, Any]:
-        return {"sample": False, "nodes": list(self.nodes.values()), "edges": list(self.edges.values()),
-                "truncated": self.truncated, "max_nodes": MAX_NODES, "bases": self.bases, **extra}
+        out = {"sample": False, "nodes": list(self.nodes.values()),
+               "edges": list(self.edges.values()), "truncated": self.truncated,
+               "max_nodes": MAX_NODES, "bases": self.bases, **extra}
+        h = nav.graph_health(extra.get("root") or "") if extra.get("root") else None
+        out.pop("root", None)
+        if h:
+            out["graph_note"] = nav.degraded_line(h)
+        return out
+
+
+def _truncation_note(symbol: str, hop: int, direct: Optional[int]) -> str:
+    """What to do when the picture stopped at MAX_NODES. "Lower the depth" is useless when the
+    FIRST ring already overflows (a megahub): then say how many direct callers there are and
+    point at Focus / narrowing instead."""
+    if hop <= 1:
+        n = f"{direct} direct callers" if direct is not None else "more direct callers than fit"
+        return (f"stopped at {MAX_NODES} nodes — {symbol} has {n}, so even depth 1 does not fit; "
+                f"open one caller in Focus, or search its call sites, instead of drawing them all")
+    return (f"stopped at {MAX_NODES} nodes on ring {hop} — depth {hop - 1} fits; lower the depth "
+            f"or open a caller in Focus")
 
 
 def _sym_id(name: str) -> str:
@@ -114,14 +134,20 @@ def ripple(root: str, symbol: str, depth: int = 2, layer: Any = None) -> Dict[st
     seen = {symbol}
     frontier = [(symbol, center)]
     answers = []
+    direct: Optional[int] = None
+    stopped_at = 0
     for hop in range(1, depth + 1):
         nxt = []
         for sym, nid in frontier:
             res = nav.run(root, "callers", sym, layer=layer)
             answers.append(res.basis)
+            if direct is None:
+                direct = len(res.references)
             for r in res.references:
                 cid = _ref_node(g, r, hop)
                 if cid is None:
+                    if g.truncated:
+                        break                # full: the rest of this answer cannot be drawn
                     continue
                 g.edge(cid, nid, "CALLS", res.basis, r.path, r.line)
                 callers_of.setdefault(nid, []).append(cid)
@@ -130,6 +156,9 @@ def ripple(root: str, symbol: str, depth: int = 2, layer: Any = None) -> Dict[st
                     nxt.append((r.symbol, cid))
                 elif r.symbol and r.symbol not in seen:
                     seen.add(r.symbol)
+            if g.truncated:
+                stopped_at = hop             # do not ask the rest of this ring: it cannot be drawn
+                break
         frontier = nxt
         if not frontier or g.truncated:
             break
@@ -146,9 +175,13 @@ def ripple(root: str, symbol: str, depth: int = 2, layer: Any = None) -> Dict[st
     for n in g.nodes.values():               # tests sit on the OUTER ring, whatever their hop
         if n["kind"] == "test":
             n["ring"] = depth + 1
-    chains = _untested_chains(g, center, callers_of)
+    chains, total, exact = _untested_chains(g, center, callers_of)
+    extra = {"truncation_note": _truncation_note(symbol, stopped_at or depth, direct)} \
+        if g.truncated else {}
     return g.payload(view="ripple", center=center, symbol=symbol, depth=depth,
-                     answer_bases=sorted(set(answers)), untested_chains=chains, **meta)
+                     answer_bases=sorted(set(answers)), untested_chains=chains,
+                     untested_chains_total=total, untested_chains_exact=exact,
+                     direct_callers=direct, root=root, **extra, **meta)
 
 
 def _mark_coverage(g: _G, callers_of: Dict[str, List[str]]) -> None:
@@ -187,28 +220,36 @@ def _mark_coverage(g: _G, callers_of: Dict[str, List[str]]) -> None:
 
 
 def _untested_chains(g: _G, center: str, callers_of: Dict[str, List[str]],
-                     limit: int = 50) -> List[List[str]]:
+                     limit: Optional[int] = None) -> Tuple[List[List[str]], int, bool]:
     """Every caller chain into `center` whose ROOT (the outermost caller — nothing here calls it)
     no test reaches: no test runs that path from its entry. Claimed only when every node on it is
     structurally known (`coverage` not `unknown`). Listed outermost-first, as a reader traces it.
-    The centre itself may be covered through ANOTHER chain — this chain is still untested."""
+    The centre itself may be covered through ANOTHER chain — this chain is still untested.
+
+    Returns (the first `limit` chains, how many were counted, whether that count is exact): the
+    count goes on to CHAIN_COUNT_CAP so the page can say "showing 50 of 312" (or "of at least
+    1000") instead of presenting the cap as the answer."""
+    limit = MAX_CHAINS if limit is None else limit
     chains: List[List[str]] = []
+    count = [0]
 
     def walk(nid: str, chain: List[str]) -> None:
-        if len(chains) >= limit:
+        if count[0] >= CHAIN_COUNT_CAP:
             return
         ups = [c for c in callers_of.get(nid, []) if c not in chain]
         if not ups:
             outer = g.nodes[chain[-1]].get("coverage")
             if len(chain) > 1 and outer == "untested" and \
                     all(g.nodes[x].get("coverage") != "unknown" for x in chain):
-                chains.append([g.nodes[x]["label"] for x in reversed(chain)])
+                count[0] += 1
+                if len(chains) < limit:
+                    chains.append([g.nodes[x]["label"] for x in reversed(chain)])
             return
         for c in ups:
             walk(c, chain + [c])
 
     walk(center, [center])
-    return chains
+    return chains, count[0], count[0] < CHAIN_COUNT_CAP
 
 
 def focus(root: str, symbol: str, layer: Any = None) -> Dict[str, Any]:
@@ -218,6 +259,8 @@ def focus(root: str, symbol: str, layer: Any = None) -> Dict[str, Any]:
     callers = nav.run(root, "callers", symbol, layer=layer)
     for r in callers.references:
         cid = _ref_node(g, r, 1)
+        if cid is None and g.truncated:
+            break
         if cid:
             g.nodes[cid]["side"] = "left"
             g.edge(cid, center, "CALLS", callers.basis, r.path, r.line)
@@ -230,7 +273,9 @@ def focus(root: str, symbol: str, layer: Any = None) -> Dict[str, Any]:
                   kind="callee", side="right") is not None:
             g.nodes[nid].setdefault("side", "right")
             g.edge(center, nid, "CALLS", callees.basis, r.path, r.line)
-    return g.payload(view="focus", center=center, symbol=symbol,
+    extra = {"truncation_note": _truncation_note(symbol, 1, len(callers.references))} \
+        if g.truncated else {}
+    return g.payload(view="focus", center=center, symbol=symbol, root=root, **extra,
                      answer_bases=sorted({callers.basis, callees.basis}),
                      callers_basis=callers.basis, callees_basis=callees.basis, **meta)
 
@@ -278,7 +323,7 @@ def path(root: str, src: str, dst: str, depth: int = 5, layer: Any = None) -> Di
             _p, r, basis = parent[b]
             g.nodes[_sym_id(b)]["path"] = None
             g.edge(_sym_id(a), _sym_id(b), "CALLS", basis, r.path, r.line)
-    return g.payload(view="path", source=src, target=dst, depth=depth, found=found,
+    return g.payload(view="path", source=src, target=dst, depth=depth, found=found, root=root,
                      explored=explored, answer_bases=sorted(bases),
                      note="" if found else f"no call path from {src} to {dst} within {depth} "
                                            "hops in the graph's answers")

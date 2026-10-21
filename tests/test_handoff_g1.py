@@ -365,6 +365,7 @@ class TestSpecShowPayload(unittest.TestCase):
             # deliberately: "which spec am I looking at" must be answerable on both surfaces.
             self.assertEqual(block.splitlines(),
                              ["spec: T", "version: v1 (current)", "approach: A", "domains: api",
+                              "domain skills: develop loads api · review loads api",   # 0.0.25 D1
                               "  AC1: one"])
 
     def test_detailed_block_matches_the_cli_render_line_for_line(self):
@@ -605,8 +606,12 @@ class TestNegativesUnchanged(unittest.TestCase):
             self.assertEqual(rc, 0)
             # 0.0.23 D6 (SPEC-HISTORY rider) — the one deliberate move: the spec names its
             # version, so "which spec am I looking at" is answerable. Everything else is unchanged.
+            # 0.0.25 D1 — the second deliberate move: the domain-skill ROUTING line follows the
+            # domains (what develop and review load), so a hook-less harness reads the same routing.
             self.assertEqual(out, "spec: T\nversion: v1 (current)\napproach: A\n"
-                                  "domains: api, git\n  AC1: one\n  AC2: two\n")
+                                  "domains: api, git\n"
+                                  "domain skills: develop loads api · review loads api\n"
+                                  "  AC1: one\n  AC2: two\n")
 
     def test_run_scoped_store_default_is_unchanged_for_every_cli_caller(self):
         """The seam gained an OPTIONAL `run_id`; no CLI surface passes it, and omitted it resolves

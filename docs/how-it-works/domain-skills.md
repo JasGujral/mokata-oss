@@ -1,7 +1,8 @@
 # The domain-skills layer
 
-mokata ships **10 domain skills** — the technology knowledge (API design, security, performance,
-frontend accessibility, browser testing, CI/CD, git, deprecation, docs/ADRs, shipping) that the
+mokata ships **14 domain skills** — the technology knowledge (API design, security, performance,
+frontend accessibility, browser testing, CI/CD, git, deprecation, docs/ADRs, shipping, and the
+framework packs for React, NestJS, frontend performance and frontend security) that the
 pipeline skills don't carry. What makes them *mokata* rather than a second pile of advice is how
 they're wired: **each domain attaches to the phase where it applies and feeds the gate that already
 runs there.** The repo advises; mokata governs, remembers, and audits.
@@ -65,6 +66,27 @@ This table is generated from the domain registry in the code:
 | **Deprecation & migration** | refine · develop | blast-radius on removal (code-as-liability) → the deviation gate | — | decision |
 | **Documentation & ADRs** | ship · govern | an ADR is persisted to memory + the ledger (the governed edge) | — | decision |
 | **Shipping & launch** | ship | the release gate — pre-launch checklist + rollback thresholds | — | context |
+| **React (web) rule pack** | develop · review | no code without a failing (RED) component test | — | best-practice |
+| **NestJS rule pack** | develop · review | blast-radius — a controller/provider/DTO contract change is walked to its callers | — | decision |
+| **Frontend performance** | optimize · develop · review | measure-first — measure, identify, fix, verify (keep or revert), guard | — | context |
+| **Frontend security** | develop · review | secret-guard — authorization first, then secrets in the built bundle and injection sinks | — | guardrail |
+
+## Framework domains — routed by what the project depends on
+
+`frontend-react` and `backend-nestjs` are **framework-gated**. A touched `.tsx` file routes to the
+React pack only when its nearest `package.json` depends on `react-dom` or `next` and not on
+`react-native`/`expo`; a touched `*.controller.ts` routes to the NestJS pack only when that package
+depends on `@nestjs/core`. So a React Native screen, an Express handler, or a plain TypeScript
+library never pulls in the wrong rule pack. `frontend-perf` and `frontend-security` are
+**companions**: they engage only when the spec carries `frontend-react` *and* the generic
+`performance` / `security` domain.
+
+The classifier runs when the spec is emitted (every surface — CLI, MCP, pipeline — lands in the same
+committer), and the derived set is **unioned** with any domains the spec already declared. While the
+run is in `develop` or `review`, mokata names each routed domain skill on the per-turn context
+(one `⛭ mokata domain skills for develop … — load now: …` line naming the skills to load), and
+`mokata spec show` prints the same routing (`domain skills: develop loads … · review loads …`) for a
+harness without hooks. Loading is decided by the approved spec, not by the skill's description.
 
 Only **API, security, and performance** map to a named [review axis](skills-and-gates.md); the
 review pass activates that axis only when the spec's domain set includes it. The full set of review

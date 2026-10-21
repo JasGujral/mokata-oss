@@ -26,6 +26,8 @@
         "django",
         "flask"
       ],
+      "kind": "backend",
+      "domains": [],
       "manifest": "python-web.json"
     },
     {
@@ -50,6 +52,8 @@
         "javascript",
         "backend"
       ],
+      "kind": "backend",
+      "domains": [],
       "manifest": "node-ts.json"
     },
     {
@@ -73,7 +77,74 @@
         "service",
         "backend"
       ],
+      "kind": "backend",
+      "domains": [],
       "manifest": "go-service.json"
+    },
+    {
+      "name": "react-web",
+      "framework": "React (web) + TypeScript",
+      "summary": "Governed stack for a React web app \u2014 component tests first, pure renders, authorization on every server entry point, measured performance.",
+      "version": "0.0.5",
+      "profile": "standard",
+      "guardrails": 4,
+      "skills": [
+        "brainstorm",
+        "spec",
+        "test",
+        "develop",
+        "review",
+        "ship"
+      ],
+      "tags": [
+        "react",
+        "web",
+        "frontend",
+        "typescript",
+        "javascript",
+        "jsx",
+        "tsx"
+      ],
+      "kind": "frontend",
+      "domains": [
+        "frontend-react",
+        "frontend-a11y",
+        "frontend-perf",
+        "frontend-security"
+      ],
+      "manifest": "react-web.json"
+    },
+    {
+      "name": "nestjs-api",
+      "framework": "NestJS + TypeScript",
+      "summary": "Governed stack for a NestJS API \u2014 guards on every route, runtime-validated DTOs, walked contract changes, tests through the testing module.",
+      "version": "0.0.5",
+      "profile": "standard",
+      "guardrails": 4,
+      "skills": [
+        "brainstorm",
+        "spec",
+        "test",
+        "develop",
+        "review",
+        "ship"
+      ],
+      "tags": [
+        "nestjs",
+        "nest",
+        "node",
+        "typescript",
+        "ts",
+        "backend",
+        "api"
+      ],
+      "kind": "backend",
+      "domains": [
+        "backend-nestjs",
+        "api",
+        "security"
+      ],
+      "manifest": "nestjs-api.json"
     }
   ]
 }

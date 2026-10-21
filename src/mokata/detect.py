@@ -24,9 +24,30 @@ from __future__ import annotations
 import importlib.util
 import os
 import shutil
+import sys
+import sysconfig
 from typing import Dict, Optional
 
 from .repo_walk import prune_source_dirs
+
+
+def find_command(name: str) -> Optional[str]:
+    """`name` on PATH, else in the scripts dir of the interpreter running mokata (0.0.25 I-02).
+
+    An optional tool installed INTO mokata's own environment — `uv tool install mokata --with X`,
+    `pipx inject mokata X`, `pip install X` beside a Homebrew mokata — puts its executable in that
+    env's scripts dir, which is often not on PATH. Without this second look the extra is installed,
+    importable, and still reported absent: measured at 0.0.25 I-02 (`doctor` said "floor 'ast'"
+    with code-review-graph installed in the uv tool env)."""
+    hit = shutil.which(name)
+    if hit:
+        return hit
+    dirs = {sysconfig.get_path("scripts"), os.path.dirname(sys.executable)}
+    for d in filter(None, dirs):
+        found = shutil.which(name, path=d)
+        if found:
+            return found
+    return None
 
 
 class Detector:
@@ -71,7 +92,7 @@ class Detector:
         if dtype == "python_files":
             return self._python_files_present()
         if dtype == "command":
-            return bool(name) and shutil.which(name) is not None
+            return bool(name) and find_command(name) is not None
         if dtype == "python_module":
             if not name:
                 return False

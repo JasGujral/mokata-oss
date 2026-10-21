@@ -30,7 +30,7 @@ config, or a git action — happens without an explicit human approval.
         │
         ▼
 ┌───────────────────────────────────────────────────────────────┐
-│  SKILLS  — 16 pipeline/capability skills + 10 domain skills    │
+│  SKILLS  — 16 pipeline/capability skills + 14 domain skills    │
 │  each carries a Contract and a ⛭ activation line; each maps    │
 │  to a REAL gate below (not prose)                              │
 ├───────────────────────────────────────────────────────────────┤
@@ -38,6 +38,9 @@ config, or a git action — happens without an explicit human approval.
 │  backed gates: approach-approval · completeness · spec-persisted│
 │  · no-code-without-failing-test · deviation · hard-rule ·      │
 │  self-protect · write-gate · secret-guard                      │
+│  domain (mokata gate check): dep-cooldown · route-guarded ·    │
+│  bundle-budget · react-lint · bundle-secret-scan ·             │
+│  dep-vulnerability                                             │
 ├───────────────────────────────────────────────────────────────┤
 │  KNOWLEDGE graph   │  MEMORY engine (local + team scopes)      │
 │  structural facts  │  typed, human-gated, precedence-resolved  │
@@ -59,7 +62,7 @@ developer-facing arc is `brainstorm → spec → test → develop → review →
 7-phase spec engine (`brainstorm → analysis → strawman → pre_mortem → probes → completeness_gate
 → emit`) turns an approved approach into testable acceptance criteria.
 
-The gates are real code, not advice. There are **9 backed gates** — each names the module that
+The gates are real code, not advice. There are **15 backed gates** — each names the module that
 enforces it, and each is a `skill_contracts.GATES` row carrying `backed=True`:
 
 <!-- mokata:gates backed -->
@@ -73,6 +76,12 @@ enforces it, and each is a `skill_contracts.GATES` row carrying `backed=True`:
 | `deviation` | spec/refine/develop | a change that would break a saved spec or recorded decision |
 | `hard-rule` | any phase | an in-scope hard governance rule (fail-closed, no runtime override) |
 | `write-gate` | emit, ship, memory, config | an un-approved durable write |
+| `dep-cooldown` | `mokata gate check` (JS/TS repos) | no package-manager release-age cooldown, or a git/URL dependency that bypasses it |
+| `route-guarded` | `mokata gate check` (NestJS) | a route handler with no guard attached and no explicit `@Public()` — attachment only; the guard's policy stays a human review |
+| `bundle-budget` | `mokata gate check` (size-limit / `lhci assert`) | an asset over its declared budget |
+| `react-lint` | `mokata gate check` (eslint + react-hooks) | any eslint error or warning |
+| `bundle-secret-scan` | `mokata gate check` (gitleaks) | a credential in built output |
+| `dep-vulnerability` | `mokata gate check` (`npm audit`) | a high/critical advisory against the npm lockfile |
 | `secret-guard` | emit, ship, memory, config | a secret in the payload |
 | `self-protect` | any write, before every other gate | a write to an installed package tree, to mokata's own install, or outside your workspace |
 
@@ -109,7 +118,7 @@ one skill standalone (`mokata run <skill>`) — the gates apply either way. Full
 Every mokata capability is a **skill**: a `SKILL.md` Claude Code can auto-engage from its
 description, backed by the identical protocol the `/<name>` command runs. There are two
 groups — the **16 pipeline/capability skills** (the registry `mokata skills` prints) and the
-**10 domain skills** below, for **26 in total**.
+**14 domain skills** below, for **30 in total**.
 
 What makes a mokata skill more than a prompt:
 
@@ -124,8 +133,8 @@ Deep-dive: [The skills layer & gate map](skills-and-gates.md).
 
 ## 3. The domain-skills layer
 
-Ten **domain skills** — API, security, performance, frontend-a11y, browser-testing, CI/CD, git,
-deprecation, docs/ADR, and shipping — carry the technology knowledge the pipeline skills don't.
+The **14 domain skills** — API, security, performance, frontend-a11y, browser-testing, CI/CD, git,
+deprecation, docs/ADR, shipping, and the React / NestJS / frontend-perf / frontend-security packs — carry the technology knowledge the pipeline skills don't.
 The point is *native integration*: each domain **attaches to the phase where it applies and feeds
 the gate that already runs there**, rather than sitting beside the pipeline as advice.
 
@@ -190,7 +199,7 @@ mokata integrates with Claude Code through two harness surfaces:
   only harness that declares the `hooks` capability** — elsewhere the gate-guard is never wired and
   the run-state gates enforce nothing. Deep-dive:
   [the gate-guard](skills-and-gates.md#the-gate-guard-the-gates-enforced-on-native-edits).
-- **MCP.** mokata's `mokata-mcp` server exposes **67 tools** — **43 read** (`progress`, `lanes`,
+- **MCP.** mokata's `mokata-mcp` server exposes **70 tools** — **46 read** (`progress`, `lanes`,
   `watch`, `govern`, `query`, …), **23 write**, and **1 approve** — so the pipeline's state and the
   graph are reachable from inside the harness without leaving the chat. Every *write* tool is
   **propose-only**: it returns a `proposal_id` and commits nothing until a human mints the approval

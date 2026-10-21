@@ -186,20 +186,68 @@ def upgrade_steps(method: str) -> List[str]:
     if method == "source":
         return ["git pull   # you're on a source checkout",
                 "pip install -e .   # reinstall the editable package"] + list(UPGRADE_TAIL_STEPS)
-    return ["pip install -U mokata"] + list(UPGRADE_TAIL_STEPS)
+    return [upgrade_plan(method).display or "pip install -U mokata"] + list(UPGRADE_TAIL_STEPS)
 
 
-def pip_upgrade_command() -> List[str]:
-    return [sys.executable, "-m", "pip", "install", "-U", "mokata"]
+def upgrade_plan(method: str = "auto", **kw: Any):
+    """The installer-aware upgrade plan (`install_route.plan_upgrade`). `method="pip"` forces the
+    pip route (the `--method pip` override); anything else detects the owning installer."""
+    from .install_route import PIP, plan_upgrade
+    if method == "pip":
+        # An explicit `--method pip` is the human naming the route: no detection overrides it.
+        kw.setdefault("editable", None)
+        return plan_upgrade(installer=PIP, **kw)
+    return plan_upgrade(**kw)
 
 
-def run_pip_upgrade(runner: Optional[Callable[[List[str]], Any]] = None) -> List[str]:
-    """Run `pip install -U mokata` (ONLY when the caller has already human-gated it).
-    Returns the command run. The runner is injectable so callers/tests don't shell out."""
-    cmd = pip_upgrade_command()
-    runner = runner or (lambda c: __import__("subprocess").run(c, check=False))
-    runner(cmd)
-    return cmd
+@dataclass
+class UpgradeRun:
+    ran: List[str]
+    returncode: Optional[int]
+    output: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.returncode == 0
+
+
+def run_upgrade(plan: Any, runner: Optional[Callable[[List[str]], Any]] = None,
+                timeout: float = 900.0) -> UpgradeRun:
+    """Run a RUNNABLE upgrade plan (ONLY when the caller has already human-gated it). The runner
+    is injectable so callers/tests don't shell out; the default captures output (the IDE shows
+    it) with stdin closed and no console window on Windows."""
+    if not getattr(plan, "runnable", False):
+        return UpgradeRun(ran=[], returncode=None, output=getattr(plan, "reason", ""))
+    argv = list(plan.argv)
+    if runner is not None:
+        rc = runner(argv)
+        return UpgradeRun(ran=argv, returncode=rc if isinstance(rc, int) else 0)
+    import subprocess
+    from .quiet_spawn import hidden
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", stdin=subprocess.DEVNULL, timeout=timeout,
+                              check=False, **hidden())
+    except (OSError, subprocess.SubprocessError) as exc:
+        return UpgradeRun(ran=argv, returncode=-1, output=f"{type(exc).__name__}: {exc}")
+    tail = (done.stdout or "") + (done.stderr or "")
+    return UpgradeRun(ran=argv, returncode=done.returncode, output=tail[-8000:])
+
+
+def installed_version(python: Optional[str] = None, timeout: float = 60.0) -> Optional[str]:
+    """The mokata version a NEW process sees — after an upgrade THIS process still holds the old
+    modules, so the only honest answer is a fresh interpreter's."""
+    import subprocess
+    from .quiet_spawn import hidden
+    try:
+        done = subprocess.run([python or sys.executable, "-c",
+                               "import mokata; print(mokata.__version__)"],
+                              capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              stdin=subprocess.DEVNULL, timeout=timeout, check=False, **hidden())
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = (done.stdout or "").strip()
+    return out if done.returncode == 0 and out else None
 
 
 # --- DOC-ONBOARD: finishing the job ---------------------------------------------

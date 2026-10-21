@@ -1,0 +1,130 @@
+{
+  "manifest_version": 1,
+  "mokata": {
+    "version": "0.0.5"
+  },
+  "profile": "standard",
+  "layers": {
+    "engine": {
+      "enabled": true
+    },
+    "knowledge": {
+      "enabled": true
+    },
+    "memory": {
+      "enabled": true
+    },
+    "governance": {
+      "enabled": true
+    }
+  },
+  "capabilities": {
+    "code_graph": {
+      "description": "Structural codebase queries (callers/callees, imports, blast-radius); the embedded AST floor answers on Python, grep is the universal fallback.",
+      "layer": "knowledge",
+      "fallback": [
+        "ast",
+        "ripgrep",
+        "grep"
+      ]
+    },
+    "memory_store": {
+      "description": "Where persistent/decision memory is stored; SQLite is the guaranteed default backend.",
+      "layer": "memory",
+      "fallback": [
+        "sqlite"
+      ]
+    }
+  },
+  "tools": {
+    "ast": {
+      "provides": "code_graph",
+      "kind": "builtin",
+      "version": null,
+      "detect": {
+        "type": "python_files"
+      },
+      "enabled": true
+    },
+    "ripgrep": {
+      "provides": "code_graph",
+      "kind": "cli",
+      "version": null,
+      "detect": {
+        "type": "command",
+        "name": "rg"
+      },
+      "enabled": true
+    },
+    "grep": {
+      "provides": "code_graph",
+      "kind": "builtin",
+      "version": null,
+      "detect": {
+        "type": "always"
+      },
+      "enabled": true
+    },
+    "sqlite": {
+      "provides": "memory_store",
+      "kind": "library",
+      "version": null,
+      "detect": {
+        "type": "python_module",
+        "name": "sqlite3"
+      },
+      "enabled": true
+    }
+  },
+  "settings": {
+    "stack": {
+      "name": "react-web",
+      "framework": "React (web) + TypeScript",
+      "version": "0.0.5",
+      "summary": "Governed stack for a React web app \u2014 component tests first, pure renders, authorization on every server entry point, measured performance.",
+      "guardrails": [
+        "A component's behaviour lands only after a failing test that queries it by role or label (RED before GREEN).",
+        "Every Server Function and route handler authorizes the caller for the object it touches; hiding a button is not access control.",
+        "No secret carries a client-exposed env prefix; the built output is checked, not only the git history.",
+        "A performance change is kept only with a before/after measurement on a production build."
+      ],
+      "skills": [
+        "brainstorm",
+        "spec",
+        "test",
+        "develop",
+        "review",
+        "ship"
+      ],
+      "tags": [
+        "react",
+        "web",
+        "frontend",
+        "typescript",
+        "javascript",
+        "jsx",
+        "tsx"
+      ],
+      "kind": "frontend",
+      "domains": [
+        "frontend-react",
+        "frontend-a11y",
+        "frontend-perf",
+        "frontend-security"
+      ],
+      "toolchain": {
+        "test_runner": [
+          "vitest",
+          "jest"
+        ],
+        "linter": [
+          "oxlint",
+          "eslint"
+        ],
+        "type_checker": [
+          "tsc"
+        ]
+      }
+    }
+  }
+}

@@ -68,6 +68,16 @@ class _MinimalPath:
         # sys.executable's parent IS the sibling bin dir (step 2 must find it).
         self._patches.append(
             mock.patch.object(sys, "executable", str(self.bindir / "python")))
+        # 0.0.25 WIN-SHIM-WIRED: the resolver also looks in the interpreter's SCRIPTS dir (a
+        # non-venv Windows Python keeps console scripts in `<prefix>\\Scripts`). The fake
+        # interpreter's scripts dir is its own bin dir — a venv's shape — so the REAL test
+        # venv's scripts dir cannot answer for it.
+        import sysconfig
+        _real = sysconfig.get_path
+        bindir = str(self.bindir)
+        self._patches.append(mock.patch.object(
+            sysconfig, "get_path",
+            lambda name, *a, **k: bindir if name == "scripts" else _real(name, *a, **k)))
         for p in self._patches:
             p.start()
         return self

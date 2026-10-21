@@ -67,6 +67,10 @@ def register(sub, common):
     p_adopt.add_argument("tool", nargs="?", default="code-review-graph",
                          choices=list(ADOPTABLE_GRAPH_TOOLS),
                          help="the graph tool to adopt (default: code-review-graph)")
+    # 0.0.25 K — the human gate's non-interactive refusal tells the user to "re-run with --yes",
+    # and this subcommand rejected the flag; `cmd_graph_adopt` already read `args.yes`.
+    p_adopt.add_argument("--yes", action="store_true",
+                         help="non-interactive (approve the gate)")
     p_adopt.set_defaults(func=cmd_graph_adopt)
 
     p_status = gsub.add_parser(
