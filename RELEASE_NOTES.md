@@ -59,6 +59,8 @@ as complete.
   run on a release runner yet.
 
 ### Known limitations
+- **On Windows, `--ide-bridge` costs ~1 s per hook while the IDE is closed.** Windows retries a
+  refused localhost connection; the hook still fails open. The bridge is off by default.
 
 - **code-review-graph's blast radius is answered by mokata's AST reader**: CRG's traversal returned every blast radius empty, so impact under CRG is Python-only until a correct mapping exists.
 - **A blast radius is cut at 20,000 references or 2 s**; on a function called from tens of thousands of places the IDE says "not determined — cut at …".

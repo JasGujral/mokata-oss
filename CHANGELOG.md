@@ -77,6 +77,8 @@ panel. React and NestJS work routes to its own skills and gates.
 - **`uv tool` on Python 3.10 could not read its own receipt** (no `tomllib`), so every extra failed.
 
 ### Known limitations
+- **On Windows, `--ide-bridge` costs ~1 s per hook while the IDE is closed.** Windows retries a
+  refused localhost connection; the hook still fails open. The bridge is off by default.
 - **CI runs Python 3.12 only.** The declared 3.10 floor has a weekly workflow (`python-floor.yml`)
   that has not yet run on a release runner.
 - **code-review-graph's blast radius is answered by mokata's AST reader.** CRG's traversal returned

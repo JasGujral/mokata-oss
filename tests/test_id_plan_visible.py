@@ -250,7 +250,8 @@ class TheRoutesAreGuardedAndAnswer(_Repo):
     def test_paired_requests_list_read_and_refuse(self):
         _repo(self.root)
         os.makedirs(os.path.join(self.root, "plans"))
-        with open(os.path.join(self.root, "plans", "p.md"), "w", encoding="utf-8") as fh:
+        # newline="\n": text mode on Windows writes "\r\n", and the route serves the file's own bytes.
+        with open(os.path.join(self.root, "plans", "p.md"), "w", encoding="utf-8", newline="\n") as fh:
             fh.write("# P\n")
         c = self._client()
         self.assertEqual(c.get("/api/saved-plans").json()["plans"][0]["slug"], "p")

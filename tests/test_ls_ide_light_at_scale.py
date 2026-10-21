@@ -244,6 +244,11 @@ class TheServerStopsWhenAsked(unittest.TestCase):
     def test_sigterm_and_ctrl_c_exit_promptly_with_heavy_work_in_flight(self):
         for sig in (signal.SIGTERM, signal.SIGINT):
             with self.subTest(signal=sig.name):
+                if os.name == "nt" and sig == signal.SIGINT:
+                    # Windows has no SIGINT to send to a child (`send_signal` raises "Unsupported
+                    # signal: 2"); Ctrl-C there is a console event to a process group. SIGTERM
+                    # (TerminateProcess) still runs.
+                    self.skipTest("Windows cannot send SIGINT to a child process")
                 self._stops_on(sig)
 
     def _stops_on(self, sig):
