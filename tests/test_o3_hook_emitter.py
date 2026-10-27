@@ -83,7 +83,18 @@ class _Repo(unittest.TestCase):
 
     def tearDown(self):
         _wait_drained(self.spool)
-        self._t.cleanup()
+        # An empty spool means the work is done, not that the detached drainer has EXITED: on
+        # Windows its open handle on the spool dir refuses the delete for a moment (WinError 32,
+        # 0.0.26 CI). Give it up to 30 s to go, then leave the temp dir rather than fail the test.
+        deadline = time.monotonic() + 30
+        while True:
+            try:
+                self._t.cleanup()
+                return
+            except PermissionError:
+                if time.monotonic() > deadline:
+                    return
+                time.sleep(0.2)
 
     def _payload(self, **kw) -> str:
         base = {"session_id": "S1", "cwd": self.repo, "transcript_path": "/dev/null"}

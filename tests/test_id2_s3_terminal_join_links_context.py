@@ -459,7 +459,7 @@ class TheTerminalScreenModel(unittest.TestCase):
                    "const location = {href: 'http://127.0.0.1:9/', origin: 'http://127.0.0.1:9'};\n")
         helpers = ("const S = window.MK.TermScreen;\n"
                    "const txt = (s) => s.g.map(l => l.map(c => c.ch).join('').replace(/ +$/, ''));\n")
-        p = subprocess.run([node, "-e", prelude + src + helpers + js], capture_output=True,
+        p = subprocess.run(_support.node_argv(prelude + src + helpers + js), capture_output=True,
                            text=True, timeout=60, stdin=subprocess.DEVNULL, encoding="utf-8")
         self.assertEqual(0, p.returncode, p.stderr)
         return json.loads(p.stdout)

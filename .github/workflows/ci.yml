@@ -319,8 +319,9 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-    # Measured locally: install ~1 min, the e2e ~25 s. 10 is a backstop for a wedged browser.
-    timeout-minutes: 10
+    # Measured locally: install ~1 min, the e2e ~25 s. 15 is a backstop for a wedged browser with
+    # room for a slow package mirror (the 0.0.26 cut lost 10 minutes to apt alone).
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -331,7 +332,10 @@ jobs:
         # job fetches is hash-pinned in requirements/e2e.txt — no editable-install site added.
         run: pip install --require-hashes -r requirements/e2e.txt
       - name: Install the Chromium build that playwright version pins
-        run: python -m playwright install --with-deps chromium
+        # No `--with-deps`: the ubuntu-24.04 image already carries Chromium's libraries (it ships
+        # Google Chrome), and `--with-deps` spent the job's whole 10 minutes pulling CJK fonts from
+        # a slow apt mirror on the 0.0.26 cut (run 40529842184) before a single test ran.
+        run: python -m playwright install chromium
       - name: IDE end-to-end in a real browser
         env:
           MOKATA_REQUIRE_E2E: '1'

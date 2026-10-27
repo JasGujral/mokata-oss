@@ -492,7 +492,8 @@ const texts = []; const walk = (n) => { if (n.tag === "#text") texts.push(n.text
 walk(f);
 console.log(JSON.stringify({ made: [...new Set(made)].sort(), texts }));
 """
-        out = subprocess.run([node, "-e", prog], capture_output=True, text=True, timeout=30)
+        out = subprocess.run(_support.node_argv(prog), capture_output=True, text=True,
+                             timeout=120, stdin=subprocess.DEVNULL, encoding="utf-8")
         self.assertEqual(0, out.returncode, out.stderr)
         res = json.loads(out.stdout)
         self.assertTrue(set(res["made"]) <= {"p", "ul", "li", "b", "code", "h4"}, res["made"])

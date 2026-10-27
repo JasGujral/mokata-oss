@@ -420,7 +420,7 @@ const h = {header: '@@ -1,9 +1,11 @@', lines: [[' ',1,1,'a'],['-',2,null,'x'],['
 const del = {header: '@@ -5,3 +5,2 @@', lines: [[' ',5,5,'a'],['-',6,null,'x'],[' ',7,6,'b']]};
 console.log(JSON.stringify([changedLines({hunks: [h]}), changedLines({hunks: [del]})]));
 """
-        p = subprocess.run([node, "-e", "const MK = {};\n" + probe], capture_output=True, text=True,
+        p = subprocess.run(_support.node_argv("const MK = {};\n" + probe), capture_output=True, text=True,
                            timeout=60, stdin=subprocess.DEVNULL)
         self.assertEqual(0, p.returncode, p.stderr)
         self.assertEqual(["2-4,8-8", "6-6"], json.loads(p.stdout))

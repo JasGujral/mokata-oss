@@ -148,6 +148,16 @@ def _full_mode(bash, launcher, start_cmd, env, repo) -> int:
     return 0
 
 
+def _utf8_stdio() -> None:
+    """Print what the subprocesses printed, whatever the console's code page: a Windows runner's
+    stdout is cp1252, and setup's `→` crashed the smoke itself (0.0.26 CI, plugin route · windows)."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--plugin-root", required=True)
@@ -291,4 +301,5 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
+    _utf8_stdio()
     raise SystemExit(main())

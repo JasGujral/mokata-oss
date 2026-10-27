@@ -44,6 +44,16 @@ exit /b %ERRORLEVEL%
 :try_pinned
 rem 1 — the pinned runtime the plugin's MCP server recorded for THIS version.
 if not defined CLAUDE_PLUGIN_DATA goto :try_python
+if not defined MOKATA_VER goto :try_python
+if not exist "%CLAUDE_PLUGIN_DATA%\runtime-%MOKATA_VER%.txt" goto :try_python
+set "MOKATA_PINNED="
+set /p MOKATA_PINNED=<"%CLAUDE_PLUGIN_DATA%\runtime-%MOKATA_VER%.txt"
+if not defined MOKATA_PINNED goto :try_python
+if not exist "%MOKATA_PINNED%" goto :try_python
+"%MOKATA_PINNED%" -m mokata_emit %*
+exit /b %ERRORLEVEL%
+
+:try_python
 rem 2 — a Python at mokata's floor, 3.12+ (PY-FLOOR-3.12, = pyproject's requires-python), runs the
 rem packaged module. Each candidate is ASKED its version; an older Python 3 is remembered in
 rem MOKATA_OLD so the last line says why nothing ran instead of "no Python".
@@ -64,18 +74,6 @@ rem 0 = at the floor (use it) · 7 = an older Python 3 (remember it) · anything
 if "%ERRORLEVEL%"=="0" set "MOKATA_PY=%*"
 if "%ERRORLEVEL%"=="7" if not defined MOKATA_OLD set "MOKATA_OLD=%*"
 exit /b 0
-
-:try_uvx
-set "MOKATA_PY=py -3"
-goto :run_python
-
-:use_env_python
-set "MOKATA_PY=%MOKATA_PYTHON%"
-
-:run_python
-set "PYTHONPATH=%MOKATA_SRC_DIR%;%PYTHONPATH%"
-%MOKATA_PY% -m mokata_emit %*
-exit /b %ERRORLEVEL%
 
 :try_uvx
 rem 3 — no Python, but uv: the pinned package (the MCP server's environment, one download).

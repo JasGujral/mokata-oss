@@ -145,13 +145,52 @@ def probe_version(path: str, timeout: float = VERSION_PROBE_TIMEOUT) -> Optional
     from .quiet_spawn import hidden
     from .knowledge.crg_client import parse_crg_version
     try:
-        proc = subprocess.run([path, "--version"], capture_output=True, text=True,
-                              timeout=timeout, stdin=subprocess.DEVNULL, **hidden())
-        version = parse_crg_version(proc.stdout) or parse_crg_version(proc.stderr)
+        out, err = _bounded_output([path, "--version"], timeout, hidden())
+        version = parse_crg_version(out) or parse_crg_version(err)
     except (OSError, subprocess.SubprocessError):
         version = None
     _PROBED[key] = version
     return version
+
+
+def _bounded_output(argv, timeout: float, extra) -> "tuple":
+    """Run `argv` with stdin closed and its output in TEMP FILES, bounded by `timeout`.
+
+    Not `subprocess.run(capture_output=True, timeout=…)`: on Windows a `.cmd` shim runs cmd.exe,
+    which starts the real program; on timeout `run` kills cmd.exe only and then `communicate()`s
+    with NO bound, so the orphaned child — still holding the pipes — blocks it until it exits
+    (0.0.26 cut review: an hour, on a probe whose bound is one second). Files are not pipes: a
+    late writer blocks nobody. On Windows the whole process tree is ended."""
+    import subprocess
+    import tempfile
+    with tempfile.TemporaryFile() as fo, tempfile.TemporaryFile() as fe:
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=fo, stderr=fe, **extra)
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _end_tree(proc)
+            raise
+        fo.seek(0)
+        fe.seek(0)
+        return (fo.read().decode("utf-8", "replace"), fe.read().decode("utf-8", "replace"))
+
+
+def _end_tree(proc) -> None:
+    """Kill `proc` and, on Windows, every process it started (`taskkill /T`, by absolute path so
+    no PATH entry can stand in for it). Never raises; never waits longer than a few seconds."""
+    import subprocess
+    try:
+        if os.name == "nt":
+            exe = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32",
+                               "taskkill.exe")
+            from .quiet_spawn import hidden
+            subprocess.run([exe, "/F", "/T", "/PID", str(proc.pid)], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+                           **hidden())
+        proc.kill()
+        proc.wait(timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def _checked(res: "CrgResolution", path: str, version: Optional[str]) -> "CrgResolution":

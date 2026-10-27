@@ -263,7 +263,8 @@ class TheSuiteIsHermetic(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="o15-path-")
         self.addCleanup(shutil.rmtree, tmp, True)
         _fake(tmp)
-        other = os.path.join(tmp, "sometool")
+        tool_name = "sometool.cmd" if os.name == "nt" else "sometool"   # which() needs PATHEXT
+        other = os.path.join(tmp, tool_name)
         with open(other, "w", encoding="utf-8") as fh:
             fh.write("#!/bin/sh\n")
         os.chmod(other, 0o755)
@@ -271,7 +272,7 @@ class TheSuiteIsHermetic(unittest.TestCase):
         self.assertEqual([tmp], scrubbed)
         self.assertIsNone(shutil.which(NAME, path=new))
         if new:                                      # mirrored (symlinks allowed here)
-            self.assertIsNotNone(shutil.which("sometool", path=new))
+            self.assertIsNotNone(shutil.which(tool_name, path=new))
 
     def test_a_spawn_of_an_unnamed_outside_crg_raises_at_the_spawn(self):
         outside = tempfile.mkdtemp(prefix="o15-out-")

@@ -57,6 +57,17 @@ def _exe(path, body):
     return str(path)
 
 
+def _sh_path(path):
+    """`path` as the shim's shell sees it. `MOKATA_UV_DIRS` is a `:`-separated list the shim splits
+    itself, and Git Bash does not convert it (only PATH, HOME, TMP and the like), so a native
+    `C:\\Users\\…` would split at the drive colon (0.0.26 CI, windows legs). Real users never set it;
+    the default list is built from `$HOME`, which msys does convert."""
+    if os.name != "nt":
+        return path
+    drive, rest = os.path.splitdrive(os.path.abspath(path))
+    return "/" + drive.rstrip(":").lower() + rest.replace("\\", "/")
+
+
 def _env(**extra):
     """Nothing resolvable: no PATH, no interpreter dirs, no uv dirs, no plugin data."""
     env = {k: v for k, v in os.environ.items()
@@ -145,7 +156,7 @@ class TheHookShimRunsThePinnedVersion(unittest.TestCase):
     def test_rung_3_uv_without_any_python(self):
         d = _tmp(self)
         _exe(os.path.join(d, "uvx"), 'echo "UVX $*"')
-        res = _run(SHIM, ["stop", "--via-plugin"], _env(MOKATA_UV_DIRS=d))
+        res = _run(SHIM, ["stop", "--via-plugin"], _env(MOKATA_UV_DIRS=_sh_path(d)))
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(res.stdout.strip(),
                          f"UVX --python >=3.12 --from mokata[full]=={__version__} python -m mokata_emit "
@@ -172,7 +183,7 @@ class TheCliLauncherRunsThePinnedVersion(unittest.TestCase):
         self.assertEqual(res.stdout.strip(), "PINNED -m mokata ide --no-browser", res.stderr)
         uv = _tmp(self)
         _exe(os.path.join(uv, "uvx"), 'echo "UVX $*"')
-        res = _run(LAUNCHER, ["doctor", "--plugin"], _env(MOKATA_UV_DIRS=uv, HOME=d, USERPROFILE=d))
+        res = _run(LAUNCHER, ["doctor", "--plugin"], _env(MOKATA_UV_DIRS=_sh_path(uv), HOME=d, USERPROFILE=d))
         self.assertEqual(res.stdout.strip(),
                          f"UVX --python >=3.12 --from mokata[full]=={__version__} python -m mokata doctor --plugin")
 

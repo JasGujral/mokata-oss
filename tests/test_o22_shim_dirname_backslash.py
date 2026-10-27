@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 
 import _support  # noqa: F401
@@ -32,6 +33,20 @@ def _sh():
     return shutil.which("sh") or shutil.which("bash")
 
 
+def _run_script(body, arg):
+    """Run `body` from a FILE (LF), never through `sh -c`: Git Bash's runtime halves `\\\\` inside a
+    quoted argument when a native Windows process starts it, which would turn the shim's own
+    `${1%\\\\*}` into `${1%\\*}` and test something the shim never runs (0.0.26 Windows review)."""
+    fd, path = tempfile.mkstemp(suffix=".sh")
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(body)
+    try:
+        return subprocess.run([_sh(), path, arg], capture_output=True, text=True, timeout=30,
+                              stdin=subprocess.DEVNULL)
+    finally:
+        os.remove(path)
+
+
 @unittest.skipUnless(_sh(), "no POSIX shell here")
 class TheShimsSplitOnBothSeparators(unittest.TestCase):
 
@@ -40,8 +55,7 @@ class TheShimsSplitOnBothSeparators(unittest.TestCase):
             src = fh.read()
         fn = re.search(r"^_dirname\(\) \{.*?^\}", src, re.S | re.M).group(0)
         for given, want in CASES:
-            p = subprocess.run([_sh(), "-c", fn + '\n_dirname "$1"; printf %s "$_dirname_out"',
-                                "_", given], capture_output=True, text=True, timeout=30)
+            p = _run_script(fn + '\n_dirname "$1"; printf %s "$_dirname_out"\n', given)
             self.assertEqual(want, p.stdout, given)
 
     def test_the_cli_launcher_dirname(self):
@@ -50,8 +64,7 @@ class TheShimsSplitOnBothSeparators(unittest.TestCase):
         block = re.search(r"^_dn_s=\$\{0%/\*\}.*?^\[ -n \"\$_here\" \] \|\| _here=/$", src,
                           re.S | re.M).group(0).replace("$0", "$1").replace("${0%", "${1%")
         for given, want in CASES:
-            p = subprocess.run([_sh(), "-c", block + '\nprintf %s "$_here"', "_", given],
-                               capture_output=True, text=True, timeout=30)
+            p = _run_script(block + '\nprintf %s "$_here"\n', given)
             self.assertEqual(want, p.stdout, given)
 
 
