@@ -84,6 +84,29 @@ def _rpc(proc, q, msg, timeout):
     return None
 
 
+def _duplicate_wiring(repo):
+    """What the plugin already wires and `setup --plugin` must NOT write again: the MCP
+    registration, commands, skills, hooks, the statusline and the MCP grant. The session-worktree
+    settings (`worktree.baseRef`, P31) are project settings no plugin can carry, so setup writes
+    them on this route too — they are not a second copy of anything."""
+    if os.path.exists(os.path.join(repo, ".mcp.json")):
+        return ".mcp.json"
+    for sub in ("commands", "skills", "agents"):
+        if os.path.exists(os.path.join(repo, ".claude", sub)):
+            return ".claude/" + sub
+    settings = os.path.join(repo, ".claude", "settings.json")
+    if os.path.exists(settings):
+        with open(settings, encoding="utf-8") as fh:
+            data = json.load(fh)
+        for key in ("hooks", "statusLine", "mcpServers", "enabledMcpjsonServers"):
+            if key in data:
+                return ".claude/settings.json:" + key
+        allow = (data.get("permissions") or {}).get("allow") or []
+        if any(str(a).startswith("mcp__mokata") for a in allow):
+            return ".claude/settings.json:permissions.allow"
+    return None
+
+
 def _full_mode(bash, launcher, start_cmd, env, repo) -> int:
     """Step 5 — the plugin route ends where `uv tool install "mokata[full]"` + setup ends."""
     with open(os.path.join(repo, "billing.py"), "w", encoding="utf-8") as fh:
@@ -103,9 +126,9 @@ def _full_mode(bash, launcher, start_cmd, env, repo) -> int:
     print(out, flush=True)
     if res.returncode != 0 or "✗ " in out or "PARTIALLY wired" in out:
         return _fail("full-mode", f"setup --plugin did not wire every row (exit {res.returncode})")
-    if os.path.exists(os.path.join(repo, ".claude")) or os.path.exists(
-            os.path.join(repo, ".mcp.json")):
-        return _fail("full-mode", "setup --plugin wrote a second copy of the harness wiring")
+    dup = _duplicate_wiring(repo)
+    if dup:
+        return _fail("full-mode", "setup --plugin wrote a second copy of the harness wiring: " + dup)
     res = subprocess.run([bash, launcher, "doctor", "--path", "."], capture_output=True,
                          text=True, encoding="utf-8", env=env, cwd=repo, timeout=900)
     out = res.stdout + res.stderr

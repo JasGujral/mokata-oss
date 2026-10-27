@@ -123,6 +123,37 @@ TEST_BUDGET = 0.3
 STALL = 3.0                 # comfortably past TEST_BUDGET, comfortably inside a test's patience
 
 
+class TestATimeoutIsKnownWithoutAClock(unittest.TestCase):
+    """0.0.26 cut, windows legs: the hook decided "the budget fired" by re-reading `monotonic()`
+    after `join(budget)` — and Windows' ~15.6 ms clock tick let a real timeout measure as 0.297 s
+    of a 0.3 s budget, so the turn got NOTHING (the silent cut O12 exists to forbid). `_bounded`
+    now says so itself. Planted here with a clock that reads short, on every OS."""
+
+    def test_a_timeout_is_said_even_when_the_clock_reads_short(self):
+        import time as _t
+        real = _t.monotonic
+        ticks = iter([0.0] + [0.29] * 1000)               # never reaches the 0.3 s budget
+        with _Repo() as repo:
+            with mock.patch.object(hook_cli, "_HOOK_WORK_BUDGET_SECS", TEST_BUDGET), \
+                    mock.patch.object(hook_cli, "_build_injection_for",
+                                      TestExceedingTheBudget._stall()), \
+                    mock.patch("time.monotonic", lambda: next(ticks, real())):
+                rc, out, _secs = _run(repo.path)
+        self.assertEqual(0, rc)
+        ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(hook_cli.RECALL_TIMEOUT_LINE.format(secs=TEST_BUDGET), ctx)
+
+    def test_bounded_names_over_budget_and_nothing_apart(self):
+        over = object()
+        self.assertIs(over, hook_cli._bounded(lambda: _sleep_then(0.5), 0.05, over_budget=over))
+        self.assertIsNone(hook_cli._bounded(lambda: None, 1.0, over_budget=over))
+
+
+def _sleep_then(secs):
+    time.sleep(secs)
+    return "late"
+
+
 class TestExceedingTheBudget(unittest.TestCase):
     """The stall is injected at `_build_injection_for`, which is where the measurement found the
     exposure: it is the call that opens the store and therefore resolves the embedder."""

@@ -146,6 +146,8 @@ are now required.
   full suite) and on macOS by hand; Windows setup, the Windows IDE terminal and the `.cmd` hook
   launcher are not yet verified on a real Windows desktop.
 - **Hook timings are measured on Linux only.**
+- **On Windows, a spec proposal can wait ~20 s** while another mokata process writes the same run's
+  state without pause (Windows' file lock is not fair); it then completes.
 - **Follow mode is unproven against a real `claude` session** end to end.
 - **Runs created before 0.0.26 keep the previous re-entry behaviour** for a resumed or idle window
   until a new run is registered (they carry no creation time).

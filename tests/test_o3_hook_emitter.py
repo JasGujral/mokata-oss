@@ -110,6 +110,22 @@ _CLOSURE = ("import sys\nbefore = set(sys.modules)\nimport mokata_emit\n"
             "raise SystemExit(rc)")
 
 
+def _windows_spawn_closure(env, cwd):
+    """On Windows the drainer is started with `subprocess.Popen` + `quiet_spawn.detached()`
+    (CREATE_NO_WINDOW — `mokata_emit._spawn_drainer`'s documented Windows branch; POSIX uses
+    `os.posix_spawn` and imports neither). The modules THAT costs, measured in a fresh interpreter
+    the same way the hook's closure is, so the allowance is derived, never typed. Empty off Windows."""
+    if sys.platform != "win32":
+        return frozenset()
+    p = subprocess.run([sys.executable, "-c",
+                        "import sys\nbefore = set(sys.modules)\nimport subprocess\n"
+                        "from mokata.quiet_spawn import detached\n"
+                        "print(repr(sorted(set(sys.modules) - before)))"],
+                       env=env, cwd=cwd, text=True, capture_output=True, timeout=60,
+                       stdin=subprocess.DEVNULL, **hidden())
+    return frozenset(ast.literal_eval(p.stdout))
+
+
 class TheEmitterImportsOnlyTheStandardLibrary(_Repo):
 
     def test_importing_the_module_loads_no_mokata_and_nothing_third_party(self):
@@ -130,13 +146,15 @@ class TheEmitterImportsOnlyTheStandardLibrary(_Repo):
     def test_every_observe_hook_in_a_mokata_repo_runs_on_the_standard_library_alone(self):
         observe = sorted(s for s, k in perf.HOOK_KINDS.items() if k == "observe")
         self.assertEqual(5, len(observe))            # the list is perf's, not the emitter's own
+        spawn = _windows_spawn_closure(self.env, self.t)
         for sub in observe:
             for extra in ([], ["--via-plugin"]):
                 p = self._hook(sub, *extra, stdin=self._payload(hook_event_name="Stop"),
                                code=_CLOSURE)
                 self.assertEqual(0, p.returncode, (sub, p.stderr))
                 self.assertEqual("", p.stdout, sub)
-                loaded = json.loads(p.stderr.rsplit("MODS ", 1)[1])
+                loaded = [m for m in json.loads(p.stderr.rsplit("MODS ", 1)[1])
+                          if m not in spawn]
                 self.assertEqual([], [m for m in loaded if m.split(".")[0] == "mokata"], sub)
                 self.assertEqual([], [m for m in loaded if not _stdlib(m) and m != "mokata_emit"],
                                  sub)
@@ -148,11 +166,12 @@ class TheEmitterImportsOnlyTheStandardLibrary(_Repo):
     def test_the_observe_hooks_do_not_even_load_json(self):
         """The payload is read with the C scanner and the spool header is NUL-framed: `json` pulls in
         `re`, `enum`, `functools` — ~10 ms of the 50."""
+        spawn = _windows_spawn_closure(self.env, self.t)
         for sub in ("dirty-track", "stop", "run-bind"):
             p = self._hook(sub, "--via-plugin",
                            stdin=self._payload(tool_input={"file_path": "src/a.py"}),
                            code=_CLOSURE)
-            loaded = json.loads(p.stderr.rsplit("MODS ", 1)[1])
+            loaded = [m for m in json.loads(p.stderr.rsplit("MODS ", 1)[1]) if m not in spawn]
             self.assertNotIn("json", loaded, sub)
             self.assertNotIn("re", loaded, sub)
 

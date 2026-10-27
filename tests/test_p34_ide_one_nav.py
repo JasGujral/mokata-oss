@@ -43,7 +43,7 @@ SRC = str(ROOT / "src")
 
 
 def _node(js):
-    p = subprocess.run([shutil.which("node"), "-e", js], capture_output=True, text=True, timeout=60,
+    p = subprocess.run(_support.node_argv(js), capture_output=True, text=True, timeout=60,
                        stdin=subprocess.DEVNULL, encoding="utf-8")
     if p.returncode != 0:
         raise AssertionError(p.stderr)

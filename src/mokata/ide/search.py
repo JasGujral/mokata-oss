@@ -371,7 +371,15 @@ def _model_dir(allow_network: bool) -> str:
     the `HF_HUB_OFFLINE` variable: huggingface_hub reads that once, at import, so setting it for
     the first (offline) load made the user's later "fetch" silently offline too — measured, not
     guessed, when this path was first run against the real extra."""
-    from ..memory.embed import MODEL2VEC_MODEL, MODEL_FETCH_TIMEOUT_S, ModelUnavailable
+    from ..memory.embed import (MODEL2VEC_MODEL, MODEL_FETCH_TIMEOUT_S, ModelUnavailable,
+                                cached_model_dir)
+    local = cached_model_dir(MODEL2VEC_MODEL)
+    if local:                     # the files model2vec reads are here: never a network call
+        return local
+    if not allow_network:
+        raise ModelUnavailable(f"model2vec model '{MODEL2VEC_MODEL}' could not be found on this "
+                               "machine (loaded offline): its model files are not in the "
+                               "Hugging Face cache")
     try:
         from huggingface_hub import snapshot_download
     except ImportError as exc:

@@ -447,8 +447,8 @@ class CommandsAndKeysAreARegistry(unittest.TestCase):
 
     def _node(self, js):
         src = (STATIC / "registry.js").read_text(encoding="utf-8")
-        p = subprocess.run([shutil.which("node"), "-e", src + "\n" + js +
-                            "\nprocess.stdout.write(JSON.stringify(out));"],
+        p = subprocess.run(_support.node_argv(src + "\n" + js +
+                            "\nprocess.stdout.write(JSON.stringify(out));"),
                            capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL,
                            encoding="utf-8")
         self.assertEqual(0, p.returncode, p.stderr)
@@ -498,7 +498,7 @@ out.taken = (() => { const e = ev({ ctrlKey: true, code: "KeyK", key: "k" }); e.
 out.n = n; out.m = m;
 process.stdout.write(JSON.stringify(out));
 """
-        p = subprocess.run([shutil.which("node"), "-e", js], capture_output=True, text=True,
+        p = subprocess.run(_support.node_argv(js), capture_output=True, text=True,
                            timeout=60, stdin=subprocess.DEVNULL, encoding="utf-8")
         self.assertEqual(0, p.returncode, p.stderr)
         o = json.loads(p.stdout)

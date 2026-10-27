@@ -25,10 +25,18 @@
 
 set -u
 
-case $0 in
-    */*) _here=${0%/*}; [ -n "$_here" ] || _here=/ ;;
-    *)   _here=. ;;
-esac
+# `/` or `\` (Git Bash on Windows hands $0 over with backslashes) — the LATER separator wins.
+_dn_s=${0%/*}; _dn_b=${0%\\*}
+if [ "$_dn_s" = "$0" ] && [ "$_dn_b" = "$0" ]; then
+    _here=.
+elif [ "$_dn_s" = "$0" ]; then
+    _here=$_dn_b
+elif [ "$_dn_b" = "$0" ] || [ ${#_dn_s} -ge ${#_dn_b} ]; then
+    _here=$_dn_s
+else
+    _here=$_dn_b
+fi
+[ -n "$_here" ] || _here=/
 _src_dir=$(CDPATH= cd -- "$_here/../.." 2>/dev/null && pwd) || _src_dir=""
 
 . "$_here/mokata-plugin-env.sh"
@@ -46,7 +54,7 @@ fi
 
 # 2 — uvx, pinned to this checkout's version.
 if [ -n "$_mk_version" ] && _mk_find_uvx; then
-    exec "$_mk_uvx" --from "mokata[full]==$_mk_version" python -m mokata "$@"
+    exec "$_mk_uvx" --python ">=3.12" --from "mokata[full]==$_mk_version" python -m mokata "$@"
 fi
 
 # 3 — a Python at mokata's floor (3.12+) running this checkout's own module (core only).

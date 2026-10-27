@@ -82,7 +82,7 @@ rem 3 — no Python, but uv: the pinned package (the MCP server's environment, o
 if not defined MOKATA_VER goto :fail
 where uvx >nul 2>&1
 if errorlevel 1 goto :fail
-uvx --from "mokata[full]==%MOKATA_VER%" python -m mokata_emit %*
+uvx --python ">=3.12" --from "mokata[full]==%MOKATA_VER%" python -m mokata_emit %*
 exit /b %ERRORLEVEL%
 
 :fail

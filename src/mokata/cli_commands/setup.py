@@ -485,7 +485,7 @@ def register(sub, common):
                               "skills, hooks and the MCP server, so only init the repo (if "
                               "needed) and detect + wire the --mode (embedder, code graph, model "
                               "warm-up). Run it through the plugin's pinned environment: "
-                              "uvx --from \"mokata[full]==<plugin version>\" mokata setup claude "
+                              "uvx --python \">=3.12\" --from \"mokata[full]==<plugin version>\" mokata setup claude "
                               "--mode full --plugin")
     p_setup.add_argument("--no-grant", action="store_true",
                          help="don't grant Claude Code permission for mokata's MCP tools / "

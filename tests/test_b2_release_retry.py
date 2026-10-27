@@ -296,8 +296,8 @@ class TestTheScriptsObeyTheRules(unittest.TestCase):
     # exist to catch. ⭐ It shipped on its first run; `test_b1`'s mirror census caught it, with
     # three classes of `test_a32` reporting GRADED in a mirror where they should have been absent
     # by design. 27 → 28 internal paths, 31 → 32 excludes.
-    INTERNAL_PATHS_SHA1 = "22a7c5212a1a"
-    EXCLUDE_SHA1 = "8d25b2061831"
+    INTERNAL_PATHS_SHA1 = "80c8a7ed5528"   # 0.0.26 cut: + .venv* (dev virtualenvs)
+    EXCLUDE_SHA1 = "814753ce8f8b"         # 0.0.26 cut: + /.venv*/
 
     def test_the_public_boundary_controls_are_byte_identical(self):
         block = re.search(r"INTERNAL_PATHS=\(\n(.*?)\n\)\n", self.sync, re.S)
@@ -305,8 +305,8 @@ class TestTheScriptsObeyTheRules(unittest.TestCase):
         names = [t for ln in block.group(1).splitlines()
                  if not ln.strip().startswith("#") for t in ln.split()]
         excludes = re.findall(r"--exclude='([^']*)'", self.sync)
-        self.assertEqual(len(names), 28)
-        self.assertEqual(len(excludes), 32)
+        self.assertEqual(len(names), 29)
+        self.assertEqual(len(excludes), 33)
         self.assertEqual(hashlib.sha1(" ".join(names).encode()).hexdigest()[:12],
                          self.INTERNAL_PATHS_SHA1,
                          "INTERNAL_PATHS changed — update this hash in the same commit, or "

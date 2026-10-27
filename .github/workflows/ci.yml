@@ -314,7 +314,9 @@ jobs:
     # everywhere; the server's OS behaviour is the unit legs' job. `MOKATA_REQUIRE_E2E=1` turns
     # "no browser" into a failure — a skipped e2e reads green and tested nothing.
     name: ide e2e · headless Chromium
-    runs-on: ubuntu-latest
+    # ubuntu-24.04, not -latest: `ubuntu-latest` moved to Ubuntu 26 on 2026-10-19 and the pinned
+    # playwright's `install --with-deps` does not know that OS yet (the 0.0.26 cut's red leg).
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     # Measured locally: install ~1 min, the e2e ~25 s. 10 is a backstop for a wedged browser.

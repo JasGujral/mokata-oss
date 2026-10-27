@@ -52,6 +52,8 @@ index, the meaning-search index and ripgrep word search ready. The per-prompt ho
 - **Not yet run on the macOS and Windows CI legs.** Tested on Linux and by hand on macOS; Windows
   setup, the Windows IDE terminal and the `.cmd` hook launcher are not yet verified on a real desktop.
 - **Hook timings are measured on Linux only.**
+- **On Windows, a spec proposal can wait ~20 s** while another mokata process writes the same run's
+  state without pause; it then completes.
 - **Follow mode is unproven against a real `claude` session** end to end.
 - **Runs created before 0.0.26 keep the previous re-entry behaviour** for a resumed or idle window
   until a new run is registered.

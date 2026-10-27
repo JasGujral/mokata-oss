@@ -242,6 +242,9 @@ _register("memory/tiered.py", {
 # classes live in packages mokata refuses to import at module scope, so an `except` naming them
 # would either force the dependency or miss the one class that actually fires.
 _register("memory/embed.py", {
+    "cached_model_dir": (SUPPRESS_OK,
+        "0.0.26 cut — a per-file cache LOOKUP in an optional extra's error tree; any fault reads "
+        "\"not cached\" and the caller fetches (or says it is offline), never a wrong model."),
     "_load_model2vec": (DEGRADE_CLEAN,
         "The blessed extra's model load. BROAD by necessity — the raisables span huggingface_hub's "
         "error tree, `requests`' transport errors, `safetensors`, and plain OSError on a corrupt "

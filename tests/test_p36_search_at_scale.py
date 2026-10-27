@@ -287,7 +287,7 @@ globalThis.MK = { $: (id) => nodes[id] || (nodes[id] = new Node("div")), el: (t,
 
 
 def _node(js: str):
-    p = subprocess.run([shutil.which("node"), "-e", js], capture_output=True, text=True,
+    p = subprocess.run(_support.node_argv(js), capture_output=True, text=True,
                        timeout=60, stdin=subprocess.DEVNULL, encoding="utf-8")
     if p.returncode:
         raise AssertionError(p.stderr)

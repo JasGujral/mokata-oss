@@ -77,7 +77,7 @@ class TheManifestPinsTheFullEnvironment(unittest.TestCase):
         data = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(data["version"], __version__)
         spec = data["mcpServers"]["mokata"]
-        self.assertEqual(["uvx", "--from", PR.pin_spec(data["version"]), "mokata-mcp"],
+        self.assertEqual(["uvx", "--python", PR.UV_PYTHON, "--from", PR.pin_spec(data["version"]), "mokata-mcp"],
                          [spec["command"]] + spec["args"])
         self.assertEqual(PR.pin_spec("1.2.3"), "mokata[full]==1.2.3")
 
@@ -148,7 +148,7 @@ class TheHookShimRunsThePinnedVersion(unittest.TestCase):
         res = _run(SHIM, ["stop", "--via-plugin"], _env(MOKATA_UV_DIRS=d))
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(res.stdout.strip(),
-                         f"UVX --from mokata[full]=={__version__} python -m mokata_emit "
+                         f"UVX --python >=3.12 --from mokata[full]=={__version__} python -m mokata_emit "
                          f"stop --via-plugin")
 
     def test_nothing_resolves_is_loud_and_names_uv(self):
@@ -174,7 +174,7 @@ class TheCliLauncherRunsThePinnedVersion(unittest.TestCase):
         _exe(os.path.join(uv, "uvx"), 'echo "UVX $*"')
         res = _run(LAUNCHER, ["doctor", "--plugin"], _env(MOKATA_UV_DIRS=uv, HOME=d, USERPROFILE=d))
         self.assertEqual(res.stdout.strip(),
-                         f"UVX --from mokata[full]=={__version__} python -m mokata doctor --plugin")
+                         f"UVX --python >=3.12 --from mokata[full]=={__version__} python -m mokata doctor --plugin")
 
     def test_no_uv_no_python_names_uv_for_every_os(self):
         res = _run(LAUNCHER, ["doctor"], _env(HOME=_tmp(self), USERPROFILE=_tmp(self)))

@@ -23,6 +23,8 @@
     "mokata": {
       "command": "uvx",
       "args": [
+        "--python",
+        ">=3.12",
         "--from",
         "mokata[full]==0.0.26",
         "mokata-mcp"

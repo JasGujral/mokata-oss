@@ -315,8 +315,8 @@ class ACorruptWorkspaceIsRefusedLoudly(_Repo):
 
 def _node(js: str):
     src = (STATIC / "features" / "tabs.js").read_text(encoding="utf-8")
-    p = subprocess.run([shutil.which("node"), "-e", src + "\nconst M = globalThis.MK.tabsModel;\n"
-                        + js + "\nprocess.stdout.write(JSON.stringify(out));"],
+    p = subprocess.run(_support.node_argv(src + "\nconst M = globalThis.MK.tabsModel;\n"
+                        + js + "\nprocess.stdout.write(JSON.stringify(out));"),
                        capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL,
                        encoding="utf-8")
     if p.returncode:
@@ -451,7 +451,7 @@ out.palette = R.commands().filter((c) => c.feature === "tabs").map((c) => c.titl
 out.conflicts = R.conflicts();
 process.stdout.write(JSON.stringify(out));
 """)
-        p = subprocess.run([shutil.which("node"), "-e", js], capture_output=True, text=True,
+        p = subprocess.run(_support.node_argv(js), capture_output=True, text=True,
                            timeout=60, stdin=subprocess.DEVNULL, encoding="utf-8")
         self.assertEqual(0, p.returncode, p.stderr)
         o = json.loads(p.stdout)

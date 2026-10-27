@@ -25,7 +25,7 @@ Everything runs **on your machine, as you**. Nothing runs on a mokata server, be
 |---|---|---|
 | Hooks (`src/mokata/hooks/hooks.json`) | `SessionStart`, `UserPromptSubmit`, `PreToolUse` (`secret-guard`, `gate-guard`), `PostToolUse` (`dirty-track`, `run-bind`), `PreCompact`, `SubagentStart`/`SubagentStop`, `Stop`, `SessionEnd` | A short Python process per event, run by Claude Code. Only the two `PreToolUse` hooks can block a tool call (exit code 2). Every other hook only adds context or records, and always exits 0 |
 | Background helpers | After a hook returns | Short-lived detached Python processes: they record spooled hook events, refresh the session briefing's cached facts, and precompute code-graph lookups. Each holds a per-repo lock, writes only under `.mokata/temp_local/`, and exits |
-| MCP server (`mokata-mcp`) | For the Claude Code session | A local **stdio** server. On the plugin route it is launched as `uvx --from "mokata[full]==<exact version>" mokata-mcp`, pinned to the plugin's own version |
+| MCP server (`mokata-mcp`) | For the Claude Code session | A local **stdio** server. On the plugin route it is launched as `uvx --python ">=3.12" --from "mokata[full]==<exact version>" mokata-mcp`, pinned to the plugin's own version |
 | IDE (`mokata ide`) | Only when you start it | A local web server bound to **127.0.0.1 only**. It checks the `Host` header on every request (DNS rebinding), and a page needs the per-start **pairing token** |
 | Skills and commands | When Claude Code invokes them | Markdown the model follows. They run `mokata` CLI commands as ordinary shell commands |
 

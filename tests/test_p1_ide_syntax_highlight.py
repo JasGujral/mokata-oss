@@ -355,7 +355,7 @@ globalThis.window = { MK: { $: () => null, el: (t, c, x) => { const n = document
 """
 
     def _node(self, js):
-        p = subprocess.run([shutil.which("node"), "-e", js], capture_output=True, text=True,
+        p = subprocess.run(_support.node_argv(js), capture_output=True, text=True,
                            timeout=30)
         self.assertEqual(0, p.returncode, p.stderr)
         return json.loads(p.stdout.strip().splitlines()[-1])

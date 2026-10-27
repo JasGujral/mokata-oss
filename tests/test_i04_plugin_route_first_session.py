@@ -34,7 +34,8 @@ from mokata.init import init_repo
 
 ROOT = Path(__file__).resolve().parents[1]
 
-_ALL_PRESENT = {"embeddings": lambda: True, "code-graph": lambda: True, "graph-ts": lambda: True}
+_ALL_PRESENT = {"embeddings": lambda: True, "code-graph": lambda: True, "graph-ts": lambda: True,
+                "lexical": lambda: True}   # every full-mode row, ripgrep included (CI has none)
 _NONE_PRESENT = {"embeddings": lambda: False, "code-graph": lambda: False,
                  "graph-ts": lambda: False}
 
@@ -150,8 +151,8 @@ class PluginOnlyFullRepoIsToldTheOneCommand(unittest.TestCase):
         from mokata.cli import build_parser
         import shlex
         argv = shlex.split(AM.plugin_setup_command("full", platform="linux"))
-        self.assertEqual(argv[:2], ["uvx", "--from"])
-        ns = build_parser().parse_args(argv[3:][1:])
+        self.assertEqual(argv[:4], ["uvx", "--python", ">=3.12", "--from"])
+        ns = build_parser().parse_args(argv[5:][1:])
         self.assertEqual(("claude", "full", True), (ns.harness, ns.mode, ns.plugin))
         win = AM.plugin_setup_command("full", platform="win32")
         self.assertIn('"mokata[full]==', win)

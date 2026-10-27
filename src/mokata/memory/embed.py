@@ -239,11 +239,7 @@ def _load_model2vec(model_name: str):
         # local cache is loaded from disk with no network call. Measured: with the model cached and
         # a proxy refusing huggingface.co, the online-first load failed and `setup --mode full`
         # reported the semantic tier BLOCKED on a machine that had everything it needed.
-        try:
-            from huggingface_hub import snapshot_download        # type: ignore
-            local = snapshot_download(model_name, local_files_only=True)
-        except Exception:                                        # noqa: BLE001 — not cached: fetch
-            local = None
+        local = cached_model_dir(model_name)
         if local:
             return StaticModel.from_pretrained(local)
         return StaticModel.from_pretrained(model_name)
@@ -391,6 +387,34 @@ def detect_embedder(*, degrade_out: Optional[Callable[[str], None]] = None
                    + "` (it warms the model once)"),
                 detail=str(exc), out=degrade_out)
         return HashingEmbedder()
+
+
+#: The files model2vec's `StaticModel.from_pretrained` reads from a model directory.
+MODEL_FILES = ("config.json", "model.safetensors", "tokenizer.json")
+
+
+def cached_model_dir(model_name: str) -> Optional[str]:
+    """The LOCAL directory holding `model_name`'s model files, or None — no network, ever.
+
+    0.0.26 cut (install-e2e, all 9 legs): `snapshot_download(local_files_only=True)` is the wrong
+    question. huggingface_hub ≥ 1.x answers it with `IncompleteSnapshotError` whenever the cached
+    snapshot lacks ANY file of the repo (`.gitattributes`, the README) — and model2vec's own fetch
+    downloads only the files it needs, so a freshly-fetched model always read as "not on this
+    machine" and the meaning-search index never built. Ask for exactly the files model2vec loads."""
+    try:
+        from huggingface_hub import try_to_load_from_cache   # type: ignore
+    except ImportError:
+        return None
+    dirs = set()
+    for name in MODEL_FILES:
+        try:
+            path = try_to_load_from_cache(model_name, name)
+        except Exception:  # noqa: BLE001 — optional extra's error tree; unreadable = not cached
+            return None
+        if not isinstance(path, str) or not os.path.isfile(path):
+            return None
+        dirs.add(os.path.dirname(path))
+    return dirs.pop() if len(dirs) == 1 else None
 
 
 def model_fetch_cause(error: str, environ: Optional[Dict[str, str]] = None) -> str:

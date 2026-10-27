@@ -174,7 +174,7 @@ def _read_stdin_bounded(timeout: float = _STDIN_READ_TIMEOUT_SECS) -> Optional[s
     return holder.get("raw")
 
 
-def _bounded(work: "Callable[[], Any]", timeout: float) -> Any:
+def _bounded(work: "Callable[[], Any]", timeout: float, over_budget: Any = None) -> Any:
     """Run `work` on a daemon thread and return its result, or None if it outlives `timeout`.
     Never raises: an exception inside `work` also comes back as None, which every caller already
     treats as "nothing to say" — so there is exactly ONE no-result answer and no caller has to
@@ -208,7 +208,11 @@ def _bounded(work: "Callable[[], Any]", timeout: float) -> Any:
     thread.start()
     thread.join(timeout)
     if thread.is_alive():
-        return None                  # over budget — refuse it for RUNNING, not for being empty
+        # over budget — refuse it for RUNNING, not for being empty. `over_budget` lets a caller
+        # tell "ran out of time" from "finished with nothing" WITHOUT reading a clock: on Windows
+        # `monotonic()` ticks at ~15.6 ms, so `join(0.3)` can return with 0.297 s measured and a
+        # clock comparison called a real timeout "not over" (0.0.26 cut, windows legs).
+        return over_budget
     return holder.get("value")
 
 
@@ -1681,14 +1685,16 @@ def user_prompt_submit_main(argv: Optional[List[str]] = None) -> int:
         # had no verdict for are queued for the detached warmer once the work is done (below).
         from .memory.graph_anchors import CachedGraphScorer
         graph = CachedGraphScorer(root, prompt)
-        import time as _time
-        started = _time.monotonic()
+        over = object()
         pack = _bounded(lambda: _build_injection_for(surface, prompt, root, session_id, budget,
                                                      graph),
-                        _HOOK_WORK_BUDGET_SECS)
+                        _HOOK_WORK_BUDGET_SECS, over_budget=over)
+        timed_out = pack is over
+        if timed_out:
+            pack = None
         if pack is not None:
             graph.request_warm()
-        elif _time.monotonic() - started >= _HOOK_WORK_BUDGET_SECS:
+        elif timed_out:
             # 0.0.26 O12 (coordinator ruling: never a silent cut) — the runaway catch fired. No
             # partial pack (a cut pack is context the model would trust), but the turn is TOLD that
             # its memory was skipped and why; nothing is recorded as injected.

@@ -79,11 +79,23 @@ fi
 # — the very directory a stripped PATH omits — so using them here would break the shim in
 # exactly the environment it exists to survive. Only shell BUILTINS (`command -v`, `cd`, `[`,
 # parameter expansion) are used to resolve anything.
-_dirname() {           # ${1%/*} with the no-slash and root cases handled
-    case $1 in
-        */*) _dirname_out=${1%/*}; [ -n "$_dirname_out" ] || _dirname_out=/ ;;
-        *)   _dirname_out=. ;;
-    esac
+_dirname() {           # ${1%/*} with the no-slash and root cases handled — and `\` too
+    # Git Bash on Windows runs a hook as `bash D:\a\…\hooks\mokata-hook-launch`: $0 has NO `/`,
+    # so a `/`-only split answered `.` and the shim sourced ./mokata-plugin-env.sh from the cwd
+    # (0.0.26 cut, hooks-execute · windows · git bash). The LATER of the two separators wins.
+    _dn_s=${1%/*}; _dn_b=${1%\\*}
+    if [ "$_dn_s" = "$1" ] && [ "$_dn_b" = "$1" ]; then
+        _dirname_out=.
+    elif [ "$_dn_s" = "$1" ]; then
+        _dirname_out=$_dn_b
+    elif [ "$_dn_b" = "$1" ]; then
+        _dirname_out=$_dn_s
+    elif [ ${#_dn_s} -ge ${#_dn_b} ]; then
+        _dirname_out=$_dn_s
+    else
+        _dirname_out=$_dn_b
+    fi
+    [ -n "$_dirname_out" ] || _dirname_out=/
 }
 
 # This shim lives at <plugin>/src/mokata/hooks/ — so ../.. is the packaged source root that
@@ -169,7 +181,7 @@ IFS=$_oldifs
 if [ -n "$_mk_version" ] && _mk_find_uvx; then
     # `python -m`, not the `mokata-hook` console script: uv's generated script calls `realpath`
     # and `dirname`, which a stripped PATH does not have (measured at L8).
-    exec "$_mk_uvx" --from "mokata[full]==$_mk_version" python -m mokata_emit "$@"
+    exec "$_mk_uvx" --python ">=3.12" --from "mokata[full]==$_mk_version" python -m mokata_emit "$@"
 fi
 
 # 4 — nothing resolved. LOUD and non-zero: a dead gate must never look like a passing one.

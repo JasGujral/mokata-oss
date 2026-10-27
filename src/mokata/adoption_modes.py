@@ -704,8 +704,8 @@ def plugin_setup_command(mode: str, *, platform: Optional[str] = None) -> str:
     """The plugin route's `setup claude --mode <m>`: through `uvx`, pinned to the plugin's version
     (the same environment the plugin's MCP server runs in), with `--plugin`."""
     from .install_route import quote_arg
-    from .plugin_runtime import pin_spec
-    return (f"uvx --from {quote_arg(pin_spec(), platform)} mokata setup claude "
+    from .plugin_runtime import UV_PYTHON, pin_spec
+    return (f"uvx --python {quote_arg(UV_PYTHON, platform)} --from {quote_arg(pin_spec(), platform)} mokata setup claude "
             f"--mode {mode_spec(mode).name} --plugin")
 
 

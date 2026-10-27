@@ -86,7 +86,7 @@ mutant() {
 mutant "M01 the budget is removed — the body is unbounded again (the shipped bug)" "$H" \
   '        pack = _bounded(lambda: _build_injection_for(surface, prompt, root, session_id, budget,
                                                      graph),
-                        _HOOK_WORK_BUDGET_SECS)' \
+                        _HOOK_WORK_BUDGET_SECS, over_budget=over)' \
   '        pack = _build_injection_for(surface, prompt, root, session_id, budget, graph)' "$T"
 
 mutant "M02 the budget is set AT the harness kill — it can never fire in time" "$H" \
@@ -109,9 +109,9 @@ equivalent "M05 [EQUIVALENT] the no-result check is dropped — an empty/absent 
 
 equivalent "M06 [EQUIVALENT] _bounded reads the holder unconditionally — a LATE pack is handed back and emitted" "$H" \
   '    if thread.is_alive():
-        return None                  # over budget — refuse it for RUNNING, not for being empty
-    return holder.get("value")' \
-  '    return holder.get("value")' "$T"
+        # over budget — refuse it for RUNNING, not for being empty.' \
+  '    if False:
+        # over budget — refuse it for RUNNING, not for being empty.' "$T"
 
 # ---- the abandoned worker must not record ---------------------------------------------------------
 

@@ -24,7 +24,7 @@ registers it as a marketplace named `mostack` — a self-hosted marketplace need
 needs `pip`.
 
 **One pinned version for everything.** The MCP server starts as
-`uvx --from "mokata[full]==<plugin version>" mokata-mcp`. On its first start it records that
+`uvx --python ">=3.12" --from "mokata[full]==<plugin version>" mokata-mcp`. On its first start it records that
 environment's interpreter in the plugin's data directory (`~/.claude/plugins/data/mokata-mostack/`),
 and the plugin's hooks and its CLI launcher (`src/mokata/hooks/mokata-launch`, used by
 `/mokata:doctor` and `/mokata:review-window`) run that same interpreter — so the plugin, its MCP
@@ -52,7 +52,7 @@ state as `uv tool install "mokata[full]"` + `mokata setup claude --mode full`): 
 first briefing names, in the repo,
 
 ```text
-uvx --from "mokata[full]==<plugin version>" mokata setup claude --mode full --plugin
+uvx --python ">=3.12" --from "mokata[full]==<plugin version>" mokata setup claude --mode full --plugin
 ```
 
 or `/mokata:init full`. `--plugin` initializes the repo if needed (human-gated), switches semantic

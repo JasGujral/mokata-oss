@@ -252,6 +252,18 @@ NO_BASH = ("no bash on PATH — this check drives a shell script and cannot be R
            "un-run check, not a passing one (doc 85 §7g).")
 
 
+def node_argv(js):
+    """`[node, <file>]` running `js` — the page-logic tests' replacement for `node -e <js>`.
+    Windows' CreateProcess caps a command line at 32,767 characters, and a feature module inlined
+    into `-e` passes it (0.0.26 cut: WinError 206 on the windows legs). A file has no such cap."""
+    fd, path = _tempfile.mkstemp(suffix=".js", prefix="mk-node-")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(js)
+    import atexit
+    atexit.register(lambda: os.path.exists(path) and os.remove(path))
+    return [shutil.which("node"), path]
+
+
 def bash_argv(*args):
     """argv for running bash, resolved through PATH rather than left to CreateProcess.
 

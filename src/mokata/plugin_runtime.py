@@ -70,6 +70,12 @@ _UV_DIRS_POSIX = ("~/.local/bin", "~/.cargo/bin", "/opt/homebrew/bin", "/usr/loc
 _UV_DIRS_WINDOWS = ("~/.local/bin", "~/.cargo/bin", "~/AppData/Local/Microsoft/WinGet/Links")
 
 
+#: The interpreter request every plugin `uvx` carries (0.0.26 cut). Without it uv runs its DEFAULT
+#: Python — a uv-managed 3.10 or macOS's system 3.9 — and the 3.12+ package is "unsatisfiable", so
+#: the plugin's MCP server never starts. Measured at the cut on the plugin-route CI leg's own shape.
+UV_PYTHON = ">=3.12"
+
+
 def pin_spec(version: str = __version__, extra: Optional[str] = PIN_EXTRA) -> str:
     """The requirement every plugin launch pins: `mokata[full]==<version>`."""
     return f"mokata[{extra}]=={version}" if extra else f"mokata=={version}"
@@ -103,8 +109,11 @@ def _portable(path: str) -> str:
 
 
 def _write(path: str, text: str) -> None:
+    # LF on every OS: the hook shim reads the runtime record with `read -r`, which keeps a `\r` —
+    # Windows' text-mode CRLF made the recorded interpreter `python.exe\r`, never executable, and
+    # every plugin hook fell off the pinned rung (0.0.26 cut, plugin route · windows-latest).
     from .atomicfile import atomic_write_text
-    atomic_write_text(path, text)
+    atomic_write_text(path, text, newline="\n")
 
 
 def record_runtime(env: Optional[Mapping[str, str]] = None, *, version: str = __version__,
@@ -366,7 +375,7 @@ def plugin_route_report(plugin_root: Optional[str], *, env: Optional[Mapping[str
          f"{_ago(status.get('started_at'), now)}" if status else "never started on this machine")
         + ("" if alive or not status else " — not running now"),
         fix=None if alive else "open `/mcp` in Claude Code and reconnect mokata; if it fails, "
-                               "run `uvx --from \"" + pin_spec(want) + "\" mokata-mcp --version` in "
+                               "run `uvx --python \"" + UV_PYTHON + "\" --from \"" + pin_spec(want) + "\" mokata-mcp --version` in "
                                "a terminal to see uv's error"))
 
     seen = _read_json(os.path.join(data, HOOK_STATUS_FILE)) if data else None
@@ -396,6 +405,7 @@ def _guess_data_dir(env: Mapping[str, str]) -> Optional[str]:
 
 
 __all__ = [
+    "UV_PYTHON",
     "FIRST_RUN_COST", "PIN_EXTRA", "RouteCheck", "RouteReport", "UV_INSTALL_LINES",
     "find_uvx", "first_session_line", "on_plugin_route", "pin_spec", "plugin_data_dir", "plugin_route_report",
     "read_runtime", "record_hook_seen", "record_runtime", "runtime_record_name", "uv_install_hint",

@@ -210,7 +210,7 @@ class TestPluginMcpRegistration(unittest.TestCase):
         spec = data["mcpServers"]["mokata"]
         self.assertEqual(spec["command"], "uvx")
         # 0.0.26 L8: the `full` extra — the plugin route reaches the one-line install's end state.
-        self.assertEqual(spec["args"], ["--from", "mokata[full]==" + data["version"], "mokata-mcp"])
+        self.assertEqual(spec["args"], ["--python", ">=3.12", "--from", "mokata[full]==" + data["version"], "mokata-mcp"])
 
     def test_doctor_names_an_unresolvable_plugin_mcp_registration(self):
         with tempfile.TemporaryDirectory() as d:

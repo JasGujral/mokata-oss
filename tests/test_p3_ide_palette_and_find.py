@@ -144,7 +144,7 @@ class TheRoutes(unittest.TestCase):
 
 
 def _node(js: str):
-    p = subprocess.run([shutil.which("node"), "-e", js + "\nprocess.stdout.write(JSON.stringify(out));"],
+    p = subprocess.run(_support.node_argv(js + "\nprocess.stdout.write(JSON.stringify(out));"),
                        capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL,
                        encoding="utf-8")
     if p.returncode:

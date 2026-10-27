@@ -23,6 +23,7 @@
 
 _mk_version=""
 _mk_py=""
+_mk_cr=$(printf '\r')          # printf is a builtin in every shell the hooks run under
 _mk_uvx=""
 _mk_old=""
 
@@ -83,6 +84,8 @@ _mk_pinned_python() {
     _mk_rec="$_mk_data/runtime-$_mk_version.txt"
     [ -r "$_mk_rec" ] || return 1
     IFS= read -r _mk_py < "$_mk_rec" || [ -n "$_mk_py" ] || return 1
+    # A record written with CRLF (Windows text mode, or an older mokata) ends in `\r`: drop it.
+    _mk_py=${_mk_py%"$_mk_cr"}
     # uv may have pruned its cache since the record was written: a dead path is no runtime.
     [ -n "$_mk_py" ] && [ -x "$_mk_py" ]
 }

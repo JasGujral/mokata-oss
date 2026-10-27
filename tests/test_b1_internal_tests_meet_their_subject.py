@@ -849,7 +849,7 @@ class TestTheBoundaryIsUnchangedByThisStage(unittest.TestCase):
     #: `--exclude=` clauses, at `b9b203b`, plus `scripts/verify-mirror.sh` at 0.0.21 stage 02.
     EXCLUDES = frozenset({
         "*.REFUSED-RESTORE*.bak", "*.egg-info", "*.pyc", "*.tgz", ".DS_Store", ".claude", ".env*",
-        ".git", ".mokata", ".mutate.lock", ".pytest_cache", ".venv", "/*.mp4", "/mokata-*",
+        ".git", ".mokata", ".mutate.lock", ".pytest_cache", ".venv", "/.venv*", "/*.mp4", "/mokata-*",
         "/release-backup-*", "CLAUDE.md", "__pycache__", "_to_delete", "build", "dist",
         "docs/build", "docs/launch", "docs/marketing", "docs/talks", "editors/vscode/node_modules",
         "editors/vscode/out", "push-to-github.command", "scripts/check-tracker-tables.py",
@@ -859,7 +859,7 @@ class TestTheBoundaryIsUnchangedByThisStage(unittest.TestCase):
     #: `INTERNAL_PATHS=( … )`, at `b9b203b`, plus `scripts/verify-mirror.sh` at 0.0.21 stage 02.
     GUARDS = frozenset({
         "*.egg-info", "*.mp4", "*.pyc", "*.tgz", ".DS_Store", ".claude", ".env", ".mokata",
-        ".pytest_cache", ".venv", "CLAUDE.md", "__pycache__", "_to_delete", "build", "dist",
+        ".pytest_cache", ".venv", ".venv*", "CLAUDE.md", "__pycache__", "_to_delete", "build", "dist",
         "docs/build", "docs/launch", "docs/marketing", "docs/talks",
         "editors/vscode/node_modules", "editors/vscode/out", "push-to-github.command",
         "release-backup-*", "scripts/check-tracker-tables.py", "scripts/release.sh",
