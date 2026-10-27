@@ -42,6 +42,7 @@ PY="${PYTHON:-python3}"
 
 DEP=src/mokata/deprecation.py
 LAY=src/mokata/knowledge/layer.py
+GT=src/mokata/knowledge/graph_tools.py   # 0.0.26 O12: GRAPH_TOOLS' own leaf module
 ONB=src/mokata/onboarding.py
 SEL=src/mokata/memory/selection.py
 STX=src/mokata/session_transport.py
@@ -169,7 +170,7 @@ mutant "B06 ***  the removed entry routes to the EMERGENCY lexical floor rather 
   '        return GrepBackend(root=root, name="grep"), None' "$T14"
 
 mutant "B07 **   \`neo4j\` comes back into GRAPH_TOOLS, so the router treats a deleted backend as a
-       real graph and tries to build a client for it" "$LAY" \
+       real graph and tries to build a client for it" "$GT" \
   'GRAPH_TOOLS = ("code-review-graph", "serena")' \
   'GRAPH_TOOLS = ("code-review-graph", "serena", "neo4j")' "$T14"
 

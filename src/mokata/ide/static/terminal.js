@@ -431,6 +431,11 @@
     T.caps = await MK.api("/api/term/caps").catch(() => null);
     const c = T.caps;
     const ok = !!(c && c.available);
+    // G22 (B-F15): no TTY → the Terminal button is HIDDEN and the reason is said in its place
+    // (it used to open a drawer of disabled buttons with the reason only in /api/term/caps).
+    const why = $("term-why");
+    if ($("term-toggle")) $("term-toggle").hidden = !ok;
+    if (why) { why.hidden = ok; why.textContent = ok ? "" : "Terminal: " + ((c && (c.reason || c.note)) || "unavailable here"); }
     $("term-claude").disabled = !ok || !(c.programs || {}).claude;
     $("term-shell").disabled = !ok || !(c.programs || {}).shell;
     if (!ok) setState((c && c.reason) || "the terminal is unavailable", "warn");
@@ -438,6 +443,7 @@
     else if (!T.id) setState("start claude or your shell — it runs here, signed in your own way", "");
     return ok;
   }
+  MK.termCaps = caps;
   MK.wireTerminal = function wireTerminal() {
     const box = $("term-screen");
     if (!box) return;

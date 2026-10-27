@@ -130,13 +130,10 @@ _WAL_RETRY_SLEEP_S = 0.01
 
 def _is_busy(exc: sqlite3.Error) -> bool:
     """SQLITE_BUSY / SQLITE_LOCKED — a lock held by someone else RIGHT NOW (transient), as opposed
-    to a filesystem that structurally cannot do WAL (permanent). `sqlite_errorcode` exists from
-    3.11; on the 3.10 floor the driver only carries the message, hence the text fallback."""
-    code = getattr(exc, "sqlite_errorcode", None)
-    if isinstance(code, int):
-        return code in (_SQLITE_BUSY, _SQLITE_LOCKED)
-    text = str(exc).lower()
-    return "locked" in text or "busy" in text
+    to a filesystem that structurally cannot do WAL (permanent). Read from the driver's own
+    `sqlite_errorcode` (every error the driver raises carries it on the 3.12 floor); an error
+    WITHOUT one did not come from SQLite and is not a lock."""
+    return getattr(exc, "sqlite_errorcode", None) in (_SQLITE_BUSY, _SQLITE_LOCKED)
 
 
 def _current_mode(conn: Any) -> str:
@@ -234,3 +231,19 @@ def connect_sqlite(path: str, *, busy_timeout_ms: int = BUSY_TIMEOUT_MS,
     conn = sqlite3.connect(path)
     _apply_pragmas(conn, path, busy_timeout_ms=busy_timeout_ms, out=out, seen=seen)
     return conn
+
+
+def connect_sqlite_readonly(path: str, *, timeout_s: float = 1.0) -> sqlite3.Connection:
+    """Open SOMEONE ELSE'S SQLite file read-only (`mode=ro` URI) — the second door of this one
+    factory, for a database mokata reads but does not own (code-review-graph's `graph.db`, probed by
+    `knowledge.crg_build.probe_index`).
+
+    ⛔ Deliberately applies NONE of `connect_sqlite`'s pragmas: `journal_mode=WAL` is a property of
+    the DATABASE FILE, so asserting it here would rewrite another tool's database from a probe that
+    promises to change nothing. The wait is bounded explicitly (`timeout_s`) for the same reason
+    `busy_timeout` is owned above. Raises what `sqlite3.connect` raises (`sqlite3.Error`,
+    `ValueError` for an unencodable path); the caller decides what an unreadable file means."""
+    from pathlib import Path
+    import os
+    uri = Path(os.path.abspath(path)).as_uri() + "?mode=ro"
+    return sqlite3.connect(uri, uri=True, timeout=timeout_s)

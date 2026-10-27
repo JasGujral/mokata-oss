@@ -10,17 +10,26 @@
 # and mokata's PreToolUse enforcement plane — secret-guard AND gate-guard — is silently OFF.
 # A gate that silently does not run is worse than no gate (P14).
 #
-# `hooks.json` therefore invokes THIS shim via "${CLAUDE_PLUGIN_ROOT}", and the shim runs the
-# SAME resolution ladder B1 runs, at hook time, in the hook's own environment:
+# `hooks.json` therefore invokes THIS shim via "${CLAUDE_PLUGIN_ROOT}", and the shim resolves
+# mokata at hook time, in the hook's own environment — and, since 0.0.26 L8 (MP.S1), ALWAYS the
+# plugin's OWN version (the plugin, its MCP server and its hooks never drift):
 #
 #   0. $MOKATA_HOOK        — an explicit override the user pinned themselves
-#   1. `mokata-hook` on PATH        (identical to the pre-HOOK-RESOLVE behaviour)
-#   2. the `mokata-hook` console-script SIBLING of a resolved Python 3 — B1's rule, and
-#      precisely the case `command -v` cannot see (an installed venv/bin not on PATH)
-#   3. that interpreter running the PACKAGED module directly:
-#      `python3 -m mokata.hook_cli`, with this plugin checkout's `src/` on PYTHONPATH —
-#      mokata's core is dependency-free, so this works with NO pip install at all
+#   1. the PINNED runtime  — the interpreter of the plugin's `uvx --from "mokata[full]==<version>"`
+#      environment, recorded in ${CLAUDE_PLUGIN_DATA} by the plugin's MCP server (which runs in
+#      it). Fast (no uv on the hot path: a warm uvx costs ~150 ms, an observe hook's budget is
+#      50 ms) and complete (the `full` extra: semantic memory, code graph, the IDE)
+#   2. a Python 3.12+ running THIS checkout's packaged module: `python3 -m mokata_emit` with the
+#      checkout's `src/` on PYTHONPATH — identical code by construction; mokata's core is
+#      dependency-free, so this works with NO install at all
+#   3. `uvx --from "mokata[full]==<version>" mokata-hook` — a machine with uv and no Python
 #   4. nothing resolved → ONE line on stderr naming the fix, and exit 1 (NEVER a silent 0)
+#
+# REMOVED at L8: `mokata-hook` on PATH and the console-script sibling of a resolved Python. Both
+# ran whatever mokata happened to be installed — a CLI install of ANOTHER version served the
+# plugin's hooks while the plugin's MCP server ran its own. The CLI route does not need this shim
+# (it wires exec form with an absolute path), so nothing is lost by the plugin route running only
+# itself.
 #
 # EXIT CODES ARE THE HOOK'S OWN. Every success path `exec`s, so the subcommand's exit code
 # reaches Claude Code untouched — secret-guard's exit 2 still BLOCKS. Exit 1 here is the
@@ -57,7 +66,8 @@
 set -u
 
 _fail() {
-    echo "mokata: hooks are NOT firing — could not resolve \`mokata-hook\` or a Python 3 to run it ($1). Fix: run \`mokata setup claude\`." >&2
+    _mk_old_note 2>/dev/null || _mk_note=""
+    echo "mokata: hooks are NOT firing — found neither a Python 3.12+ nor uv to run mokata ($1)${_mk_note}. Fix: install uv (https://docs.astral.sh/uv/getting-started/installation/; it fetches Python 3.12 itself) or Python 3.12+, and restart Claude Code, or run \`mokata setup claude\`." >&2
     exit 1
 }
 
@@ -79,15 +89,20 @@ _dirname() {           # ${1%/*} with the no-slash and root cases handled
 # This shim lives at <plugin>/src/mokata/hooks/ — so ../.. is the packaged source root that
 # makes `mokata` importable without any install.
 _dirname "$0"
-_src_dir=$(CDPATH= cd -- "$_dirname_out/../.." 2>/dev/null && pwd) || _src_dir=""
+_here=$_dirname_out
+_src_dir=$(CDPATH= cd -- "$_here/../.." 2>/dev/null && pwd) || _src_dir=""
 
-# Does the given command run as Python 3?  ("$@" lets us pass `py -3` as one command.)
+# The plugin-route helpers (version, pinned runtime, uvx). Builtins only, like this file.
+. "$_here/mokata-plugin-env.sh"
+_mk_read_version
+
+# Does the given command run a Python at mokata's floor (3.12+)?  ("$@" lets us pass `py -3` as
+# one command.) `_mk_py_ok` (mokata-plugin-env.sh) also remembers an older one for the last line.
 _is_py3() {
-    "$@" -c 'import sys; raise SystemExit(0 if sys.version_info[0] == 3 else 1)' \
-        >/dev/null 2>&1
+    _mk_py_ok "$@"
 }
 
-# Put the plugin's own source tree on PYTHONPATH so `-m mokata.hook_cli` works with no
+# Put the plugin's own source tree on PYTHONPATH so `-m mokata_emit` works with no
 # install. PREPENDED, and an existing PYTHONPATH is preserved.
 _export_pythonpath() {
     if [ -n "$_src_dir" ]; then
@@ -96,17 +111,13 @@ _export_pythonpath() {
     fi
 }
 
-# Given a resolved interpreter, prefer ITS console-script sibling (B1's rule), else run the
-# packaged module. Always `exec`s — the hook's exit code is the subcommand's.
+# Rung 2: a resolved interpreter runs THIS checkout's module. Always `exec`s — the hook's exit
+# code is the subcommand's.
 _run_with() {
     _py=$1
     shift
-    _dirname "$_py"
-    if [ -x "$_dirname_out/mokata-hook" ]; then
-        exec "$_dirname_out/mokata-hook" "$@"
-    fi
     _export_pythonpath
-    exec "$_py" -m mokata.hook_cli "$@"
+    exec "$_py" -m mokata_emit "$@"
 }
 
 # 0 — an explicit override wins.
@@ -114,13 +125,13 @@ if [ -n "${MOKATA_HOOK:-}" ] && [ -x "${MOKATA_HOOK}" ]; then
     exec "$MOKATA_HOOK" "$@"
 fi
 
-# 1 — the console entry point on PATH. When this resolves, behaviour is EXACTLY what the
-#     bare `mokata-hook` command did before: same process, same args, same exit code.
-if command -v mokata-hook >/dev/null 2>&1; then
-    exec mokata-hook "$@"
+# 1 — the pinned runtime the plugin's MCP server recorded for THIS version. Its site-packages
+#     hold exactly `mokata==<version>`, so no PYTHONPATH is needed.
+if _mk_pinned_python; then
+    exec "$_mk_py" -m mokata_emit "$@"
 fi
 
-# 2/3 — resolve an interpreter, then its sibling console script, else the packaged module.
+# 2 — resolve a Python 3.12+ (mokata's floor) and run this checkout's module.
 if [ -n "${MOKATA_PYTHON:-}" ] && _is_py3 "$MOKATA_PYTHON"; then
     _run_with "$MOKATA_PYTHON" "$@"
 fi
@@ -132,11 +143,10 @@ for _cand in python3 python; do
     fi
 done
 
-# The Windows Python launcher (reachable from Git Bash); it has no console-script sibling
-# to prefer, so it goes straight to the packaged module.
+# The Windows Python launcher (reachable from Git Bash).
 if command -v py >/dev/null 2>&1 && _is_py3 py -3; then
     _export_pythonpath
-    exec py -3 -m mokata.hook_cli "$@"
+    exec py -3 -m mokata_emit "$@"
 fi
 
 # Common install locations a minimal PATH (macOS GUI launch) omits. Overridable for testing.
@@ -153,6 +163,14 @@ for _dir in $_dirs; do
     done
 done
 IFS=$_oldifs
+
+# 3 — no Python at all, but uv: the pinned package, fetched once into uv's cache (the same
+#     environment the MCP server uses, so it is one download, not two).
+if [ -n "$_mk_version" ] && _mk_find_uvx; then
+    # `python -m`, not the `mokata-hook` console script: uv's generated script calls `realpath`
+    # and `dirname`, which a stripped PATH does not have (measured at L8).
+    exec "$_mk_uvx" --from "mokata[full]==$_mk_version" python -m mokata_emit "$@"
+fi
 
 # 4 — nothing resolved. LOUD and non-zero: a dead gate must never look like a passing one.
 _fail "subcommand $1"

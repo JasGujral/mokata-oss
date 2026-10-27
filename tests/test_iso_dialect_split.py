@@ -1,7 +1,8 @@
 """P1 — the ONE ISO lexer, pinned directly. The mutation-provable half.
 
-THE BUG. `datetime.fromisoformat` only learned the Zulu designator ('…Z') in Python 3.11. mokata's
-declared floor is 3.10, where every `…Z` stamp raises ValueError — and at most consumer sites that
+THE BUG (history since 0.0.26 L12 raised the floor to 3.12; lower-case '…z' still parses on NO
+Python, so the lexer stays). `datetime.fromisoformat` only learned the Zulu designator ('…Z') in
+Python 3.11. mokata's old declared floor was 3.10, where every `…Z` stamp raises ValueError — and at most consumer sites that
 fault was ABSORBED to None by `lifecycle.parse_iso`, degrading a real signal to 0.0 with nothing
 logged and nothing failing. The ranking was quietly wrong on the interpreter the package claims to
 support, and branch CI (3.12 only) was structurally unable to see it.

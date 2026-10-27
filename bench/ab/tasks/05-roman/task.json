@@ -1,0 +1,6 @@
+{
+  "id": "05-roman",
+  "title": "Roman numeral conversion",
+  "prompt": "Implement `to_roman(n)` and `from_roman(s)` in roman.py for 1..3999. Out-of-range or invalid input raises ValueError. Add tests.",
+  "max_turns": 40
+}

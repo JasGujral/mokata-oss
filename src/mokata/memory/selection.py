@@ -225,8 +225,9 @@ def _unasked_semantic_embedder() -> Optional[Any]:
         return Model2VecEmbedder()
     except ModelUnavailable as exc:
         if _extra_is_installed():
-            fix = ("run `mokata doctor`; the model is fetched once — connect to the network once "
-                   "and re-run, or `pip install -U mokata[embeddings]`")
+            from .embed import model_fetch_cause
+            fix = (model_fetch_cause(str(exc)) + "; then re-run `" + _setup_full()
+                   + "` (it warms the model once)")
             cause = "the `embeddings` extra is installed but the model could not be loaded"
         else:
             fix = ("pip install 'mokata[embeddings]'  (~30MB, numpy-only) — or set "
@@ -477,3 +478,9 @@ def _identity_and_access_for(surface: Any) -> Tuple[Any, Any]:
                           fix="repair the manifest (`mokata doctor`), then retry",
                           detail=str(exc))
     return identity, access
+
+
+def _setup_full() -> str:
+    """0.0.26 L8 — `setup --mode full` as THIS route runs it (the plugin route has no CLI)."""
+    from ..adoption_modes import setup_command_for
+    return setup_command_for("full")

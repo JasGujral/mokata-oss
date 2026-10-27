@@ -50,6 +50,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
+from .repo_identity import temp_local_dir as _shared_temp_local  # P31: one shared state
 import os
 import shutil
 import subprocess  # nosec B404 — argv-only, shell=False, timeout-bounded; see the rules above
@@ -327,7 +328,7 @@ def _debounced(root: str, *, now: float) -> bool:
     process-lifetime timestamp. Getting this wrong in the quiet direction costs one missed banner;
     getting it wrong in the loud direction is the defect this whole constant exists for."""
     global _PROCESS_LAST_NOTIFIED
-    stamp = os.path.join(root, MOKATA_DIR, TEMP_LOCAL_DIRNAME, _MARKER_DIRNAME, _LAST_STAMP)
+    stamp = os.path.join(_shared_temp_local(root), _MARKER_DIRNAME, _LAST_STAMP)
     try:
         os.makedirs(os.path.dirname(stamp), exist_ok=True)
         try:
@@ -692,7 +693,7 @@ def claim_first_notice(root: str = ".") -> bool:
     marker — no `.mokata` at all, which is the state `mokata init` prompts a human FROM — falls
     back to a process-lifetime flag: at most one rider per CLI invocation, never zero."""
     global _PROCESS_FIRST_SHOWN
-    marker = os.path.join(root, MOKATA_DIR, TEMP_LOCAL_DIRNAME,
+    marker = os.path.join(_shared_temp_local(root),
                           _MARKER_DIRNAME, _OFF_SWITCH_MARKER)
     try:
         os.makedirs(os.path.dirname(marker), exist_ok=True)

@@ -34,6 +34,8 @@ import unittest
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 from _support import mcp_commit
 
 from mokata import gate_hook as G                                  # noqa: E402
@@ -114,8 +116,8 @@ def _persist_approach_for_real(repo):
 
 
 def _spec():
-    return Spec(TITLE, [AcceptanceCriterion(i, t) for i, t in ACS],
-                approach="normalize-then-slug")
+    return with_tasks(Spec(TITLE, [AcceptanceCriterion(i, t) for i, t in ACS],
+                           approach="normalize-then-slug"))
 
 
 def _tests():
@@ -123,13 +125,13 @@ def _tests():
 
 
 def _args(path):
-    return dict(
+    return planned(dict(
         path=path,
         title=TITLE,
         criteria=[{"id": i, "text": t} for i, t in ACS],
         tests=[{"name": n, "ac_ids": list(a)} for n, a in TESTS],
         approach="normalize-then-slug",
-    )
+    ))
 
 
 # ======================================================================================
@@ -281,7 +283,7 @@ class TestEmitThroughTheRealGates(unittest.TestCase):
         from mokata.engine import run_pipeline
         with _Repo() as repo:
             handoff = _approved_session().handoff()
-            run = run_pipeline(handoff, _spec(), _tests(), store=repo.surface.state)
+            run = run_pipeline(handoff, with_tasks(_spec()), _tests(), store=repo.surface.state)
             self.assertTrue(run.ok, run.render())
             self.assertTrue(check_spec_persisted(repo.surface.state).passed)
             self.assertEqual(len(repo.surface.state.read(SPEC_CORPUS_KEY) or []), 1)

@@ -18,17 +18,18 @@ it just enumerates the installed command/skill files and prints them; it writes 
 - Read the cached plugin root: `cat ~/.mokata/plugin-root` → `ROOT`. If missing/empty, search the
   Claude Code plugins directory for a `mokata` plugin containing `src/mokata/__init__.py`. (If a
   `mokata` CLI is on PATH, use it directly.)
-- Build the engine command with the **absolute interpreter**:
+- Define the engine as a shell FUNCTION on the **absolute interpreter** — arguments then reach
+  it as separate words, never re-parsed by `eval` (pass user or repo text single-quoted):
 
   ```bash
   PY="$(command -v python3 || command -v python)"
-  ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
+  mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
   ```
 
 ## 2. Print the palette (read-only)
 
 ```bash
-eval "$ENGINE menu"
+mokata menu
 ```
 
 Show the output **verbatim**. It renders two grouped tables:

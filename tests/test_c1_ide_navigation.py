@@ -152,11 +152,14 @@ class SameAnswerAsMokataQuery(unittest.TestCase):
             self.assertEqual(400, c.get("/api/query?kind=callers&target=").status_code)
 
     def test_a_repo_mokata_cannot_load_is_said_not_a_500_page(self):
+        # 0.0.26 P29: a repo with NO `.mokata/` now answers from the AST floor (see
+        # test_p29_ide_uninitialized_repo); one whose manifest mokata cannot READ is still said.
         with tempfile.TemporaryDirectory() as d:
             _write(d, "a.py", "def f():\n    pass\n")
+            _write(d, ".mokata/manifest.json", "{ not json")
             r = _client(d).get("/api/query?kind=defs&target=f")
-            self.assertEqual(409, r.status_code)
-            self.assertIn("error", r.json())
+            self.assertEqual(409, r.status_code, r.text)
+            self.assertEqual("ConfigError", r.json()["error"])
 
 
 class QuickOpen(unittest.TestCase):
@@ -241,7 +244,9 @@ class TreeFileOutline(unittest.TestCase):
     def test_the_tree_is_the_graphs_own_walk(self):
         with tempfile.TemporaryDirectory() as d:
             _fixture(d)
-            files = nav.tree(d)["files"]
+            # 0.0.26 P35: the tree is lazy — a filter over every path lists them all
+            files = [e["path"] for e in nav.tree(d, filter="/")["entries"]] + \
+                [e["path"] for e in nav.tree(d)["entries"] if e["kind"] == "file"]
             self.assertIn("src/app/core.py", files)
             for bad in ("venv/", "node_modules/", ".mokata/", ".git/"):
                 self.assertFalse([f for f in files if f.startswith(bad)], bad)
@@ -306,10 +311,10 @@ class Impact(unittest.TestCase):
                                   backend="grep", basis="lexical")
             real = nav.run
 
-            def fake(root, kind, target, depth=2, layer=None):
+            def fake(root, kind, target, depth=2, layer=None, budget="default"):
                 if kind == "blast_radius":
                     return lexical
-                return real(root, kind, target, depth, layer)
+                return real(root, kind, target, depth, layer, budget)
             with mock.patch.object(nav, "run", side_effect=fake):
                 im = nav.impact(d, "src/app/core.py", "8-8")
             self.assertEqual("unknown", im["symbols"][0]["verdict"])
@@ -460,7 +465,8 @@ class ThePage(unittest.TestCase):
     def test_the_design_shell_is_there(self):
         with open(os.path.join(STATIC, "index.html"), encoding="utf-8") as fh:
             html = fh.read()
-        for needle in ('data-mode="review"', 'data-mode="navigate"', 'data-mode="graph"',
+        # P34 (IA-ONE-NAV): the screens are rail buttons (`data-screen`); there is no mode bar.
+        for needle in ('data-screen="review"', 'data-screen="navigate"', 'data-screen="graph"',
                        'id="qo-open"', 'class="rail"', 'id="nav-list"', 'data-filter="unseen"',
                        'data-filter="untested"', 'data-filter="tests"', 'id="mark-seen"',
                        'id="pos-label"', 'id="only-changed"', 'id="outline"', 'id="ref-tabs"',
@@ -474,6 +480,14 @@ class ThePage(unittest.TestCase):
             self.assertIn("try", body)
             self.assertIn("catch", body)
         self.assertIn("localStorage", js)
+
+
+def setUpModule():
+    # 0.0.26 O11 — this module's expectations are the CORE install's: no external code graph on
+    # the machine. Pinned, so a venv with code-review-graph (`mokata[full]`) means the same thing;
+    # what is true WITH it present is graded in test_o11_crg_present (and the sibling below, if any).
+    from _support import hide_external_graphs
+    hide_external_graphs()
 
 
 if __name__ == "__main__":

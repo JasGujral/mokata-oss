@@ -151,6 +151,16 @@ def config_set(
         emit(msg)
         return ConfigSetResult(False, True, msg, key=key, old=_old, new=value)
 
+    # R6 (0.0.26) — a model tier is governed, not free text: an unknown role or tier, or a tier
+    # below a role's floor (reviewers: sonnet; the final review: opus), is refused here.
+    if key == "settings.models" or key.startswith("settings.models."):
+        from .model_tiers import settings_problems
+        problems = settings_problems(_get(proposed, "settings.models"))
+        if problems:
+            msg = "config set rejected — " + "; ".join(problems)
+            emit(msg)
+            return ConfigSetResult(False, True, msg, key=key, old=_old, new=value)
+
     shown_old = "(unset)" if old is _MISSING else json.dumps(old)
     emit(f"mokata config set {key}: {shown_old} -> {json.dumps(value)}")
 

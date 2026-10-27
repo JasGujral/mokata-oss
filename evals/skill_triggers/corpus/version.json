@@ -1,0 +1,34 @@
+{
+ "skill": "version",
+ "triggers": [
+  "installed version"
+ ],
+ "positive": [
+  "What mokata version is installed?",
+  "Show the installed mokata version",
+  "Which version of mokata am I running?",
+  "mokata version please",
+  "Show the installed version and how to update"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Upgrade mokata to the latest release with pip",
+   "expect": "update"
+  },
+  {
+   "prompt": "Bump our package version to 2.0 and tag it",
+   "expect": "git"
+  },
+  {
+   "prompt": "What Python version does this project need?"
+  },
+  {
+   "prompt": "Show the governed rules",
+   "expect": "govern"
+  },
+  {
+   "prompt": "Show every mokata command",
+   "expect": "menu"
+  }
+ ]
+}

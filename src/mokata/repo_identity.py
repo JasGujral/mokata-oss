@@ -298,3 +298,82 @@ def worktree_label(root: str) -> str:
         return os.path.relpath(ar, canon)
     except ValueError:
         return os.path.basename(ar)
+
+
+# --------------------------------------------------------------------------- P31: ONE state, per-tree facts
+# 0.0.26 P31 (SESSION-WORKTREES, Jas 2026-10-22) — every Claude Code session runs in its own git
+# worktree (`.claude/worktrees/<name>/`), and `.mokata/temp_local/` is gitignored, so a fresh
+# worktree has none. Runs, sessions, approvals, snapshots, the ledger and the IDE's own state are ONE
+# store shared by every tree of the repo — the main checkout's — or the IDE (which runs from the
+# main checkout) never sees a worktree session's run, and a merged-then-removed worktree would take
+# its run history with it. What is genuinely a fact about ONE tree's files (the AST parse cache, the
+# freshness dirty-set, anchor fingerprints) still lives in that same store, keyed by the tree.
+# This supersedes WT-ROOT's "pipeline state stays local to the tree" (2026-08-04) by ruling.
+
+#: Per-tree facts of a LINKED worktree live under `<main>/.mokata/temp_local/trees/<key>/`.
+TREES_DIRNAME = "trees"
+
+
+def worktree_toplevel(path: str) -> Optional[str]:
+    """The top of the LINKED worktree `path` is in (the directory whose `.git` is a FILE pointing
+    into another repo's `worktrees/`), or None — for a main checkout, a submodule, a non-git dir.
+    Pure file reads; never raises."""
+    try:
+        cur = os.path.abspath(path)
+    except (OSError, ValueError):
+        return None
+    while True:
+        gp = os.path.join(cur, _GIT)
+        try:
+            if os.path.isdir(gp):
+                return None
+            if os.path.isfile(gp):
+                common = _common_from_gitfile(gp)
+                if common and os.path.basename(common) == _GIT and \
+                        os.path.realpath(os.path.dirname(common)) != os.path.realpath(cur):
+                    return cur
+                return None
+        except OSError:
+            return None
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return None
+        cur = parent
+
+
+def state_root(root: str) -> str:
+    """The directory whose `.mokata/` holds the ONE shared state for `root`'s repo: the main
+    checkout when `root` is in a linked worktree of a repo initialised there, else `root` itself
+    (byte-identical for a main checkout or a non-git dir). Never conjures a store: a main checkout
+    with no `.mokata/` leaves `root` as it was (`canonical_mokata_dir`'s rule)."""
+    from . import MOKATA_DIR
+    if not root:
+        return root                       # the bare layout tail (`state_dir("")`): no repo above it
+    return os.path.dirname(canonical_mokata_dir(os.path.join(root, MOKATA_DIR)))
+
+
+def temp_local_dir(root: str) -> str:
+    """`<state root>/.mokata/temp_local` — every path builder of shared run-state goes through this."""
+    from . import MOKATA_DIR, TEMP_LOCAL_DIRNAME
+    return os.path.join(state_root(root), MOKATA_DIR, TEMP_LOCAL_DIRNAME)
+
+
+def tree_key(tree: str) -> str:
+    """A filesystem-safe key for a linked worktree: its basename + a short hash of its real path
+    (two `.claude/worktrees/a` in two repos, or a re-created one at a new path, never collide)."""
+    import hashlib
+    real = os.path.normcase(os.path.realpath(os.path.abspath(tree)))
+    base = "".join(c if c.isalnum() or c in "-_." else "-" for c in os.path.basename(real))[:40]
+    return f"{base or 'tree'}-{hashlib.sha256(real.encode('utf-8')).hexdigest()[:8]}"
+
+
+def tree_temp_local_dir(root: str) -> str:
+    """Where a PER-TREE fact about `root`'s files lives: the shared `temp_local` for the main
+    checkout (unchanged), `<main>/.mokata/temp_local/trees/<key>/` for a linked worktree — so a
+    worktree's AST cache or dirty-set never mixes with the main checkout's, and nothing is ever
+    written inside the worktree itself."""
+    shared = temp_local_dir(root)
+    tree = worktree_toplevel(root)
+    if tree is None or os.path.realpath(state_root(root)) == os.path.realpath(tree):
+        return shared
+    return os.path.join(shared, TREES_DIRNAME, tree_key(tree))

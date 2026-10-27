@@ -20,6 +20,8 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata.engine import phases as PH
 from mokata.engine import spec_history as SH
@@ -59,7 +61,7 @@ class R2RenderIsWired(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             surface = mock.Mock(root=d, state=StateStore(d))
             spec = Spec("t", [AcceptanceCriterion("AC-1", "x"), AcceptanceCriterion("AC-2", "y")])
-            out = emit_spec(surface, spec, [TestRef("t", ["AC-1"])], run_id="r1")
+            out = emit_planned(surface, spec, [TestRef("t", ["AC-1"])], run_id="r1")
             self.assertTrue(out.blocked_by_completeness)
             self.assertEqual(["AC-2"], out.completeness.unmapped_ids)
 
@@ -71,7 +73,7 @@ class R2RenderIsWired(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "s.json")
             with open(path, "w", encoding="utf-8") as fh:
-                json.dump({"title": "t", "criteria": [{"id": "AC-1", "text": "x"}]}, fh)
+                json.dump(planned({"title": "t", "criteria": [{"id": "AC-1", "text": "x"}]}), fh)
             args = types.SimpleNamespace(path=d, file=path, yes=True)
             with mock.patch.object(CS, "_load_surface", return_value=mock.Mock(root=d,
                                                                                 mokata_dir=d)), \
@@ -122,8 +124,8 @@ class SpecHistory(unittest.TestCase):
 
     def _two_versions(self, d):
         store = StateStore(d)
-        spec_commit(store, Spec("first", [AcceptanceCriterion("AC-1", "one")]), run_id="r1")
-        spec_commit(store, Spec("second", [AcceptanceCriterion("AC-1", "one"),
+        commit_planned(store, Spec("first", [AcceptanceCriterion("AC-1", "one")]), run_id="r1")
+        commit_planned(store, Spec("second", [AcceptanceCriterion("AC-1", "one"),
                                            AcceptanceCriterion("AC-2", "two")]), run_id="r1")
         return store
 

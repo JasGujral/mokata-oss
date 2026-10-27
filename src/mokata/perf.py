@@ -42,14 +42,17 @@ LATENCY_BUDGETS_MS: Dict[str, float] = {
 # p95 of ONE hook invocation as the harness experiences it — a fresh process, payload on stdin — in ms.
 #
 # TARGETS (doc 109 §17.2): an observability hook ≤ 50, a gate hook ≤ 150. `context` (the hooks that
-# inject text — SessionStart, UserPromptSubmit, SubagentStart, the statusline) is NOT in doc 109; it
-# is held to the gate figure here, ✎ PROPOSED (0.0.25 Lane HB), until Jas rules.
+# inject text — SessionStart, UserPromptSubmit, SubagentStart, the statusline) ≤ 150: RULED (U14,
+# 0.0.26), no longer a proposal.
+#
+# OBSERVE hooks are measured through the `mokata-hook` front door (`mokata_emit`, 0.0.26 O3 / U13):
+# stdlib only, the event spooled and drained by a detached process off the harness's clock.
 HOOK_BUDGET_TARGETS_MS: Dict[str, float] = {"observe": 50.0, "gate": 150.0, "context": 150.0}
 
 #: Every wired `mokata-hook` subcommand → its doc 109 kind. A hook that can BLOCK or send a decision
 #: (PreToolUse exit 2, SubagentStop's `decision: block`) is a gate; one that only records is observe.
 HOOK_KINDS: Dict[str, str] = {
-    "secret-guard": "gate", "gate-guard": "gate", "subagent-stop": "gate",
+    "secret-guard": "gate", "gate-guard": "gate", "subagent-stop": "gate", "stop-gate": "gate",
     "dirty-track": "observe", "run-bind": "observe", "stop": "observe", "session-end": "observe",
     "pre-compact": "observe",
     "session-start": "context", "user-prompt-submit": "context", "subagent-start": "context",
@@ -62,21 +65,15 @@ HOOK_KINDS: Dict[str, str] = {
 #: gap is named in the HB report and owed. Everything not listed here is held to its kind's target.
 HOOK_BUDGET_GAPS_MS: Dict[str, float] = {
     # Measured normalised p95 (the worse of two runs, 2026-10-19), ceiling ≈ ×1.5.
-    # Observability hooks INSIDE a mokata repo: the engine modules they need (state, run_intent,
-    # harvest, freshness, snapshots) all use `dataclasses`, whose import alone is ~15 ms here. The
-    # stdlib-only emitter doc 109 sketches is what closes these; outside a repo they meet 50.
-    "dirty-track@outside": 140.0,   # measured 94 — it records in ANY repo, so no quiet path
-    "dirty-track@repo": 130.0,      # measured 85
-    "dirty-track@bound": 150.0,     # measured 101
-    "run-bind@repo": 110.0,         # measured 74
-    "run-bind@bound": 90.0,         # measured 59
-    "stop@repo": 100.0,             # measured 66
-    "stop@bound": 150.0,            # measured 100 — the session draft is rebuilt every turn end
-    "session-end@repo": 115.0,      # measured 76
-    "session-end@bound": 170.0,     # measured 112
-    "pre-compact@repo": 150.0,      # measured 99
-    "pre-compact@bound": 190.0,     # measured 125
-    # context hooks (no doc 109 target; held to the PROPOSED 150): briefing, recall pack, badge
+    # (0.0.26 O3: the deferred OBSERVE ceilings are gone — the stdlib emitter holds dirty-track, stop,
+    # session-end and pre-compact to doc 109's 50 ms target; measured before/after in the O3 report.)
+    # run-bind stays SYNCHRONOUS (coordinator ruling on O3: the gate reads its binding on the next
+    # tool call). A session_save that registered nothing is answered on the stdlib (≤ 50); a REAL
+    # registration — the timed payload — binds inline through `run_intent.bind_from_hook`, whose
+    # imports (dataclasses in degrade/tdd_state/repo_identity/run_resolver, json, typing) are the gap.
+    "run-bind@repo": 130.0,         # measured 88 normalised (HEAD 112), 2026-10-21
+    "run-bind@bound": 120.0,        # measured 77 normalised (HEAD 94)
+    # context hooks (U14: 150): briefing, recall pack, badge — still engine-bound, gaps owed
     "session-start@repo": 410.0,    # measured 272
     "session-start@bound": 400.0,   # measured 269
     "user-prompt-submit@repo": 260.0,   # measured 174

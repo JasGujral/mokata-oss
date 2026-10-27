@@ -1,0 +1,34 @@
+{
+ "skill": "tour",
+ "triggers": [
+  "60-second read-only demo"
+ ],
+ "positive": [
+  "Give me a 60-second read-only demo of mokata",
+  "Show me a quick tour of what mokata can do",
+  "Demo mokata: a graph query, a memory recall and a gate catch",
+  "Take me on the mokata tour",
+  "I'm new — give me a quick read-only demo of mokata"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Run the full pipeline end to end on this repo",
+   "expect": "playbook"
+  },
+  {
+   "prompt": "Show every mokata command on one screen",
+   "expect": "menu"
+  },
+  {
+   "prompt": "Plan a tour of Rome for three days"
+  },
+  {
+   "prompt": "Guided first-run setup",
+   "expect": "setup"
+  },
+  {
+   "prompt": "List the docs topics",
+   "expect": "docs"
+  }
+ ]
+}

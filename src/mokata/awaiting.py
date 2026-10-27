@@ -301,8 +301,9 @@ def liveness_lines() -> List[str]:
             f"mokata liveness: every MCP call is BOUNDED — "
             f"{MCP_SURFACE_TIMEOUT_SECONDS:g}s interactive budget, "
             f"{BASELINE_MCP_TIMEOUT_SECONDS:g}s for `baseline` (it runs the test suite).",
-            "  A call that exceeds its budget returns status `timed_out` naming the operation — "
-            "mokata never answers with silence, so silence is the harness, not the server.",
+            "  A call still working at its budget answers status `running` naming the operation; "
+            "re-call it with the same arguments to join the work (never run twice) — mokata "
+            "never answers with silence, so silence is the harness, not the server.",
         ]
     except Exception as exc:                 # informational path — never raise
         return [f"mokata liveness: budget check skipped ({exc})."]

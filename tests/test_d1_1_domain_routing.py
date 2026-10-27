@@ -23,6 +23,8 @@ from contextlib import redirect_stdout
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata import domains as dk
 from mokata import hook_cli
@@ -79,7 +81,7 @@ def _payload(domains=None):
          "tests": [{"name": "test_save_progress", "ac_ids": ["AC-1"]}]}
     if domains is not None:
         p["domains"] = list(domains)
-    return p
+    return planned(p)
 
 
 class _Repo(unittest.TestCase):

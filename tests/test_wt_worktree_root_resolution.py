@@ -244,11 +244,14 @@ class RedirectRefusalTests(_WorktreeCase):
 class PerTreeStateTests(_WorktreeCase):
     commit_config = True
 
-    def test_pipeline_state_stays_local_to_the_tree(self):
-        """Branches/worktrees are SEPARATE. Only the four named things are repo-scoped; the rest of
-        `temp_local` is keyed to paths in this tree and must not follow the memory store home."""
-        self.assertNotEqual(os.path.realpath(Surface.load(self.wt).temp_local_dir),
-                            os.path.realpath(Surface.load(self.main).temp_local_dir))
+    def test_pipeline_state_is_the_one_shared_store(self):
+        """0.0.26 P31 (SESSION-WORKTREES, Jas 2026-10-22) SUPERSEDES the 2026-08-04 per-tree rule:
+        every session now runs in its own worktree, so its runs, approvals and snapshots must be
+        the store the IDE and every other session read — the main checkout's. What is a fact
+        about ONE tree's files (AST cache, freshness dirty-set) is keyed by the tree INSIDE that
+        store (`repo_identity.tree_temp_local_dir`; pinned in test_p31_session_worktrees)."""
+        self.assertEqual(os.path.realpath(Surface.load(self.wt).temp_local_dir),
+                         os.path.realpath(Surface.load(self.main).temp_local_dir))
 
     def test_the_working_tree_stays_the_worktree(self):
         self.assertSamePath(Surface.load(self.wt).root, self.wt)

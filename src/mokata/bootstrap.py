@@ -12,6 +12,7 @@ high rather than low, so passing the budget here means passing it for real.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from dataclasses import dataclass
 from typing import Any, List, Optional
@@ -98,7 +99,8 @@ class BootstrapResult:
         return self.token_estimate <= self.budget
 
 
-def _render(surface: Surface, include_live: bool = True, cb: Any = None) -> str:
+def _render(surface: Surface, include_live: bool = True, cb: Any = None,
+            structure_line: Optional[str] = None, off_path: bool = False) -> str:
     if cb is None:
         from .context_budget import context_budget
         cb = context_budget(surface.manifest)
@@ -139,7 +141,12 @@ def _render(surface: Surface, include_live: bool = True, cb: Any = None) -> str:
     # DOC-ONBOARD — immediately under the gates, because that is what stale wiring costs you:
     # the gates listed above are the ones this mokata HAS, not necessarily the ones wired. One
     # line, only when actually drifted (a current install's briefing is byte-identical).
-    drift_line = _wiring_drift_line(surface)
+    if off_path:
+        # O12b — the hook-wiring check is background-refreshed (`briefing_cache.WIRING`).
+        from .briefing_cache import WIRING, lookup
+        drift_line = lookup(surface.root, WIRING)[1]
+    else:
+        drift_line = _wiring_drift_line(surface)
     if drift_line:
         lines.append(drift_line)
     lines.append("")
@@ -170,13 +177,18 @@ def _render(surface: Surface, include_live: bool = True, cb: Any = None) -> str:
     if include_live:
         try:
             from .live_context import live_context_lines
-            live = live_context_lines(surface, max_lines=cb.live_lines)
+            if off_path:
+                # O12b — the `git status` line is background-refreshed (`briefing_cache.GIT`).
+                from .briefing_cache import GIT, lookup
+                live = live_context_lines(surface, max_lines=cb.live_lines,
+                                          git=lookup(surface.root, GIT)[1])
+            else:
+                live = live_context_lines(surface, max_lines=cb.live_lines)
         except Exception:  # noqa: BLE001 — live context is a convenience, never a broken briefing
             live = []
         if live:
             lines.extend(live)
             lines.append("")
-    structure_line = _graph_structure_line(surface)
     if structure_line:
         lines.append(structure_line)
         lines.append("")
@@ -205,7 +217,8 @@ def _render(surface: Surface, include_live: bool = True, cb: Any = None) -> str:
 
     # Stage 36 — captured project rules/guardrails, honoured EVERY run. A small capped set
     # (P11); over-budget entries are flagged, not dumped. Degrade-clean if memory is off.
-    rules_lines = _always_on_rule_lines(surface, cb.briefing_rules_lines)
+    rules_lines = (_cached_rule_lines(surface, cb.briefing_rules_lines) if off_path
+                   else _always_on_rule_lines(surface, cb.briefing_rules_lines))
     if rules_lines:
         lines.append("")
         lines.append("Project rules & guardrails (always honour):")
@@ -213,7 +226,7 @@ def _render(surface: Surface, include_live: bool = True, cb: Any = None) -> str:
 
     # Stage 54 — proactive resume surfacing: ONE line (max two) when there's a resumable run
     # or an in-progress brainstorm, ABSENT (no noise) when there's nothing to pick up.
-    resume_hint = build_resume_hint(surface)
+    resume_hint = _cached_resume_hint(surface) if off_path else build_resume_hint(surface)
     if resume_hint:
         lines.append("")
         lines.extend(resume_hint.split("\n"))
@@ -221,7 +234,7 @@ def _render(surface: Surface, include_live: bool = True, cb: Any = None) -> str:
     # Stage 60 — "what changed since last session": ONE bounded line, read-only/derived, ABSENT
     # (no noise) on a first session or when nothing changed. So reopening a repo tells you what
     # moved while you were away. Never writes; the baseline is captured by the SessionStart hook.
-    since_line = _changed_since_line(surface)
+    since_line = _cached_changed_since(surface) if off_path else _changed_since_line(surface)
     if since_line:
         lines.append("")
         lines.append(since_line)
@@ -251,7 +264,7 @@ def _wiring_drift_line(surface: Surface) -> Optional[str]:
     This is the channel that reaches the user who never runs `doctor`: the session they are
     already in. It is honest about its own blind spot — if the wiring is dead rather than merely
     stale, this hook did not run and nothing here printed, which is exactly why the same verdict
-    also rides the MCP `status` surface and `mokata upgrade`.
+    also rides the MCP `status` surface and `mokata doctor --wiring`.
 
     Derived, never re-derived: the verdict is `hook_wiring.wiring_drift` and the wording is
     `wiring_drift_line`, the same two the doctor finding and the MCP surface read. Fully
@@ -266,12 +279,25 @@ def _wiring_drift_line(surface: Surface) -> Optional[str]:
         return None
 
 
-def _graph_structure_line(surface: Surface) -> Optional[str]:
+def _graph_structure_line(surface: Surface, inline: bool = True) -> Optional[str]:
     """The GR.S4 briefing structure line, or None (byte-identical) on any repo the structural
-    floor can't summarise. Fully guarded — the briefing never crashes on it."""
+    floor can't summarise. Fully guarded — the briefing never crashes on it.
+
+    0.0.26 O12 — `inline=False` (the SessionStart hook) never walks the tree: it reads the line
+    `knowledge.structure_cache` keeps, refreshed by a detached job, and SAYS when it is still being
+    built. `inline=True` (a human running `mokata bootstrap`) walks, and refreshes that cache."""
     try:
+        if not inline:
+            from .knowledge.structure_cache import cached_line
+            return cached_line(surface.root, surface, spawn=False)[0]
         from .knowledge.layer import graph_structure_line
-        return graph_structure_line(surface)
+        line = graph_structure_line(surface)
+        try:
+            from .knowledge.structure_cache import store
+            store(surface.root, line)
+        except OSError:
+            pass                              # an unwritable cache costs the next hook a walk-off
+        return line
     except Exception:
         return None
 
@@ -292,9 +318,17 @@ def _always_on_rule_lines(surface: Surface,
     (`sqlite3.Error`: locked/corrupt/permission-broken `.mokata/`), the local IO under it
     (`OSError`), and a half-installed package (`ImportError`). A shared-Postgres failure never gets
     here: `select_memory_backend` already degrades it to the SQLite floor."""
+    lines = _rule_lines_or_none(surface, max_lines)
+    return [] if lines is None else lines
+
+
+def _rule_lines_or_none(surface: Surface, max_lines: int) -> "Optional[List[str]]":
+    """`_always_on_rule_lines`, with a failed read as None (announced) instead of [] — so O12b's
+    cache can tell "no rules" (cacheable) from "could not read the rules" (never cached)."""
     try:
         from .memory import MemoryStore, always_on_lines
-        store = MemoryStore.from_surface(surface)
+        # O12 — the rules read needs neither the knowledge layer nor an embedding model.
+        store = MemoryStore.from_surface(surface, knowledge=False, load_model=False)
         lines, _overflow = always_on_lines(store, max_lines)
         return lines
     except (OSError, ImportError, sqlite3.Error) as exc:
@@ -303,7 +337,63 @@ def _always_on_rule_lines(surface: Surface,
                       fallback="your project rules are NOT being applied this session",
                       fix="run `mokata doctor` to repair the memory store",
                       detail=str(exc)[:200])
-        return []
+        return None
+
+
+def _memory_inputs(surface: Surface) -> List[str]:
+    """The files the memory-derived briefing lines depend on (O12b's freshness key)."""
+    from . import TEMP_LOCAL_DIRNAME
+    db = os.path.join(surface.mokata_dir, TEMP_LOCAL_DIRNAME, "memory", "memory.db")
+    return [db, db + "-wal", os.path.join(surface.mokata_dir, "manifest.json")]
+
+
+def _cached_rule_lines(surface: Surface, max_lines: int) -> List[str]:
+    """O12b — the rules lines, from the derived cache when the memory store has not changed since
+    they were read (no memory-stack import), else read NOW and cached. Never served stale: rules
+    are what the session must not violate. A failed read is not cached (it stays loud)."""
+    from .briefing_cache import derived
+    lines = derived(surface.root, f"rules:{max_lines}", _memory_inputs(surface),
+                    lambda: _rule_lines_or_none(surface, max_lines),
+                    keep=lambda v: v is not None)
+    return [] if lines is None else lines
+
+
+def _cached_changed_since(surface: Surface) -> "str | None":
+    """O12b — the "changed since last session" line, cached on exactly what it compares: the
+    memory store, the audit ledger and the session snapshot. Unchanged inputs ⇒ the same line."""
+    from . import TEMP_LOCAL_DIRNAME
+    from .briefing_cache import derived
+    from .govern.ledger import AuditLedger
+    from .visibility import SESSION_SNAPSHOT_FILENAME
+    paths = _memory_inputs(surface) + [
+        AuditLedger.path_for(surface.mokata_dir),
+        os.path.join(surface.mokata_dir, TEMP_LOCAL_DIRNAME, SESSION_SNAPSHOT_FILENAME)]
+    return derived(surface.root, "changed-since", paths, lambda: _changed_since_line(surface))
+
+
+#: State files the HOOKS write on every session start / prompt / tool call, which the resume hint
+#: never reads — left out of its freshness key so the hint is not re-derived for nothing.
+_RESUME_KEY_SKIP = ("session_ancestry.json", "graph_freshness", "harvest__", "ide_context.json")
+
+
+def _cached_resume_hint(surface: Surface) -> "str | None":
+    """O12b — the resume hint, from the derived cache when NO run-state file it could read has
+    changed (every file in the state dir but the hook-written ones above, plus git HEAD), else
+    derived NOW. Never served stale."""
+    from .briefing_cache import derived
+    from .knowledge.structure_cache import _git_dir
+    from .tdd_state import state_dir
+    sd = state_dir(surface.root)
+    try:
+        names = sorted(n for n in os.listdir(sd) if not n.startswith(_RESUME_KEY_SKIP))
+    except OSError:
+        names = []
+    gd = _git_dir(surface.root)
+    paths = [sd] + [os.path.join(sd, n) for n in names] + ([os.path.join(gd, "HEAD")] if gd else [])
+    # the dir itself is in the key only through its LISTING (names), not its mtime, which every
+    # hook-written file moves; a created/removed run file changes `names` and so the key.
+    paths[0] = sd + "::" + "|".join(names)
+    return derived(surface.root, "resume-hint", paths, lambda: build_resume_hint(surface))
 
 
 def _changed_since_line(surface: Surface) -> "str | None":
@@ -382,6 +472,7 @@ _LIVE_BOUNDARY = "\n\n=== session (live) ===\n\n"
 def build_bootstrap(
     surface: Surface, budget: "Optional[int]" = None,
     reanchor: "Optional[str]" = None, footer: "Optional[str]" = None,
+    off_path: bool = False,
 ) -> BootstrapResult:
     """The SessionStart briefing, inside ONE budget (H-8, 0.0.22 D3).
 
@@ -401,7 +492,11 @@ def build_bootstrap(
     head = (reanchor.rstrip("\n") + "\n\n") if reanchor else ""
     if cb.problems:
         head += cb.problem_line() + "\n\n"
-    text = prefix + _LIVE_BOUNDARY + head + _render(surface, cb=cb)
+    # 0.0.26 O12/O12b — `off_path` (the SessionStart hook): no full-tree walk and no `git` call
+    # here; both lines come from the background-refreshed caches, marked when stale or pending.
+    structure = _graph_structure_line(surface, inline=not off_path)
+    text = prefix + _LIVE_BOUNDARY + head + _render(surface, cb=cb, structure_line=structure,
+                                                    off_path=off_path)
     tokens = estimate_tokens(text)
     offers: List[str] = []          # appended after the render; kept so a re-render can re-append
 
@@ -437,8 +532,13 @@ def build_bootstrap(
     # gets no offer, so its briefing is byte-identical. Local FS reads only — no subprocess, no
     # handshake — so the async SessionStart path is never blocked/slowed. Degrade-clean.
     try:
-        from .skills_visibility import briefing_offer
-        offer = briefing_offer(surface.root)
+        if off_path:
+            # O12b — the skills-menu check is background-refreshed (`briefing_cache`).
+            from .briefing_cache import lookup, skills_name
+            offer = lookup(surface.root, skills_name())[1]
+        else:
+            from .skills_visibility import briefing_offer
+            offer = briefing_offer(surface.root)
         if offer:
             text = text.rstrip("\n") + "\n" + offer + "\n"
             offers.append(offer)
@@ -458,7 +558,8 @@ def build_bootstrap(
         # before the defensive truncation below is allowed anywhere near the gates or the rules.
         from .live_context import DROPPED_NOTICE
         slim = (prefix + _LIVE_BOUNDARY + head
-                + _render(surface, include_live=False, cb=cb)).rstrip("\n")
+                + _render(surface, include_live=False, cb=cb, structure_line=structure,
+                          off_path=off_path)).rstrip("\n")
         text = slim + "\n" + DROPPED_NOTICE + "\n" + "".join(o + "\n" for o in offers)
         tokens = estimate_tokens(text)
     if tokens > budget:
@@ -586,7 +687,7 @@ def _fit_to_budget(header: str, reserved: List[str], ranked: List[str], budget: 
 
 def _ranked_injection_items(store: Any, query: str, exclude: "set",
                             kinds: tuple, jit_recall: Any,
-                            top_k: int = INJECTION_JIT_TOP_K) -> list:
+                            top_k: int = INJECTION_JIT_TOP_K, graph_scorer: Any = None) -> list:
     """The ranked half of the per-turn pack: the FULL tiered stack, degrading to the lexical floor.
 
     JIT-STAMP-SEAM. `recall_relevant(stamp=False, kinds=…)` is what makes this legal on a hook that
@@ -626,7 +727,7 @@ def _ranked_injection_items(store: Any, query: str, exclude: "set",
             # the identical notice would print every turn and what it would report is that one
             # turn got less context than it could have — never that a guarantee was broken. The
             # same degrade still announces loudly on every path a human actually invoked.
-            hits = recall(query, top_k=top_k + len(exclude),
+            hits = recall(query, top_k=top_k + len(exclude), graph_scorer=graph_scorer,
                           stamp=False, kinds=kinds, degrade_out=lambda _msg: None)
             items = [h.item for h in hits if h.item.id not in exclude
                      and injection_admits(query, h.item)]
@@ -642,7 +743,8 @@ def _ranked_injection_items(store: Any, query: str, exclude: "set",
 def build_injection(surface: Surface, query: str,
                     budget: "Optional[int]" = None,
                     exclude_ids: "Optional[set]" = None,
-                    evidence_lines: "Optional[List[str]]" = None) -> InjectionResult:
+                    evidence_lines: "Optional[List[str]]" = None,
+                    graph_scorer: Any = None) -> InjectionResult:
     """The per-turn pack for `query`, guaranteed to fit `budget`.
 
     Never raises: every failure (an unreadable store, a half-installed package, a store that
@@ -672,7 +774,10 @@ def build_injection(surface: Surface, query: str,
     evidence = [ln for ln in (evidence_lines or []) if isinstance(ln, str) and ln.strip()]
     try:
         from .memory import JIT_KINDS, MemoryStore, always_on_lines, jit_recall, render_item_line
-        store = MemoryStore.from_surface(surface)
+        if graph_scorer is None:
+            from .memory.graph_anchors import CachedGraphScorer
+            graph_scorer = CachedGraphScorer(surface.root, query)
+        store = MemoryStore.from_surface(surface, knowledge=False, load_model=False)
         # Both reads are NON-COUNTING and scope/readability filtered (H-1a C1) — a per-turn
         # injection must move no durable state and must never surface a teammate's private item.
         reserved, _overflow = always_on_lines(store, cb.turn_rules_lines, query=query)
@@ -692,7 +797,7 @@ def build_injection(surface: Surface, query: str,
         # `stamp=False` suppresses BOTH instrumentation writes (`record_usage` AND the read
         # counter), so the read-only guarantee H-1a pins by byte snapshot is unchanged.
         hits = _ranked_injection_items(store, query, exclude, JIT_KINDS, jit_recall,
-                                       top_k=cb.turn_top_k)
+                                       top_k=cb.turn_top_k, graph_scorer=graph_scorer)
     except Exception:  # noqa: BLE001
         # (iv) SUPPRESS-OK, and the one place the usual "announce the degrade" answer is wrong:
         # see the D5 register entry for `hook_cli.user_prompt_submit_main`. This runs on EVERY
@@ -714,6 +819,22 @@ def build_injection(surface: Surface, query: str,
 
     text, kept_rules, kept_ranked, dropped = _fit_to_budget(_INJECTION_HEADER, reserved, ranked,
                                                             budget)
+    # O12 — a graph tier that did not apply to THIS ranking is said, never silently skipped. The
+    # line rides the header and is admitted only when it displaces NOTHING: a note about ranking
+    # quality never costs the turn a guardrail or an item (under a budget that tight, the pack's own
+    # "+N more" line is what speaks).
+    notes = []
+    if hits and hasattr(graph_scorer, "note"):
+        notes.append(graph_scorer.note())
+    if hits and getattr(store, "semantic_skipped", False):
+        # O12 — the configured embedding MODEL is never loaded on the prompt path (~0.4 s).
+        notes.append("meaning-ranking skipped this turn — the embedding model is not loaded on "
+                     "the prompt path; ranked without it")
+    skipped = "; ".join(n for n in notes if n)
+    if skipped and text:
+        noted = _fit_to_budget(f"{_INJECTION_HEADER[:-1]} ({skipped}):", reserved, ranked, budget)
+        if noted[1:3] == (kept_rules, kept_ranked):
+            text = noted[0]
     kept = max(0, kept_ranked - len(evidence))      # memory items shown (evidence leads the half)
 
     # The closing ARITHMETIC backstop. `_fit_to_budget` drops whole lines and can therefore fail

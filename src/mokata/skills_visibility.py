@@ -27,6 +27,8 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
+import os
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
@@ -260,6 +262,12 @@ def briefing_offer(root: str = ".", home: Optional[str] = None) -> Optional[str]
     except Exception:
         return None
     if f.status not in ("missing", "partial"):
+        return None
+    if f.status == "missing" and (f.plugin_present or os.environ.get("CLAUDE_PLUGIN_ROOT")):
+        # 0.0.26 L8 (MP.S1) — the plugin route: the plugin puts every skill and command in the `/`
+        # menu as `/mokata:<name>` with nothing wired in this root, and `CLAUDE_PLUGIN_ROOT` means
+        # this very briefing comes from the plugin's hook. Telling that user to run
+        # `mokata setup claude` sends them to a CLI they do not have, for wiring they do not need.
         return None
     if f.status == "missing" and f.is_worktree:
         why = f"this worktree ('{f.worktree_label}') has none of mokata's skills/commands wired"

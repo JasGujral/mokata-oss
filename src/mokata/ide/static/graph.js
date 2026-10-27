@@ -8,7 +8,7 @@
 (function () {
   const MK = window.MK;
   const { $, el, api } = MK;
-  const G = (MK.graph = { view: "ripple", cy: null, loading: null, data: null });
+  const G = (MK.graph = { view: "ripple", cy: null, loading: null, data: null, open: new Map() });
   const VENDOR = ["cytoscape.min.js", "layout-base.js", "cose-base.js", "cytoscape-fcose.js", "cytoscape-dagre.min.js"];
 
   // Load the vendored libraries once, in order, on first use.
@@ -53,62 +53,130 @@
       { selector: "edge[kind = 'IMPORTS']", style: { "line-style": "dotted" } },
       { selector: "edge[kind = 'IMPORTS'][basis = 'lexical']", style: { "line-style": "dashed" } },
       { selector: ":selected", style: { "overlay-color": c.accent, "overlay-opacity": 0.15 } },
+      // P37 — a CLUSTER stands for the nodes not drawn (by directory, with the count); click opens it.
+      { selector: "node[kind = 'cluster']", style: { shape: "round-rectangle", "border-style": "double", "border-width": 3,
+        "border-color": c.text2, color: c.text2, "background-color": c.panel } },
+      { selector: "node[kind = 'cluster'][untested > 0]", style: { "border-color": c.amber } },
+      { selector: "edge[kind = 'GROUP']", style: { width: "mapData(count, 1, 50, 1.2, 5)", "line-style": "solid", opacity: 0.55 } },
+      // P37 — drawn from the code graph's index, not yet confirmed by its answer: faded until it is.
+      { selector: "node[?pending]", style: { opacity: 0.55 } },
+      { selector: "edge[?pending]", style: { opacity: 0.4 } },
     ];
   }
 
-  // Rings around the symbol, each ring turned a little from the last: with a plain concentric
-  // layout a lone node per ring lined up on one ray, so an edge that skips a ring (a test calling
-  // the symbol directly) ran straight THROUGH the node between and read as that node's edge.
-  function ringPositions(data) {
+  // P37 (R24) — labels are cut to LABEL_MAX characters (the full name is in the details panel)
+  // and every ring is packed into as many concentric BANDS as it needs, so 150 nodes take a disc,
+  // not one huge circle that only fits on screen at an unreadable zoom.
+  const LABEL_MAX = 30;
+  const CHAR_W = 6.7;
+  function shortLabel(n) {
+    let t = String(n.label || n.id);
+    if (n.kind === "site" || n.kind === "module") t = t.split("/").pop();
+    return t.length > LABEL_MAX ? t.slice(0, LABEL_MAX - 1) + "…" : t;
+  }
+  function ringPositions(nodes) {
     const byRing = {};
-    for (const n of data.nodes) (byRing[n.ring || 0] = byRing[n.ring || 0] || []).push(n.id);
+    for (const n of nodes) (byRing[n.ring || 0] = byRing[n.ring || 0] || []).push(n);
     const pos = {};
-    // Circles are spaced by RANK, not by hop count: tests carry an outer ring number, and an empty
-    // ring between them and the callers only shrank the picture.
+    // Rings are spaced by RANK, not by hop count: an empty ring only shrank the picture.
     const rings = Object.keys(byRing).map(Number).sort((a, b) => a - b);
-    let last = 0;
-    for (const ring of rings) {
-      const ids = byRing[ring];
-      const rank = rings.indexOf(ring);
-      const radius = rank === 0 ? 0 : Math.max(last + 110, (ids.length * 110) / (2 * Math.PI));
-      last = radius;
-      const base = Math.PI + rank * 0.7;
-      ids.forEach((id, i) => {
-        const a = base + (2 * Math.PI * i) / ids.length;
-        pos[id] = { x: radius * Math.cos(a), y: radius * Math.sin(a) };
-      });
-    }
+    let radius = 0;
+    rings.forEach((ring, rank) => {
+      const list = byRing[ring];
+      if (rank === 0) { list.forEach((n, i) => { pos[n.id] = { x: 0, y: i * 40 }; }); return; }
+      let i = 0;
+      let band = 0;
+      radius += 80;
+      while (i < list.length) {
+        const w = Math.max(...list.slice(i, i + 40).map((n) => (n.short || "").length * CHAR_W + 30));
+        const cap = Math.max(4, Math.floor((2 * Math.PI * radius) / w));
+        const take = list.slice(i, i + cap);
+        // each band (and ring) turned a little: a lone node per ring would line up on one ray
+        const base = Math.PI + rank * 0.7 + band * 0.37;
+        take.forEach((n, k) => {
+          const ang = base + (2 * Math.PI * k) / take.length;
+          pos[n.id] = { x: radius * Math.cos(ang), y: radius * Math.sin(ang) };
+        });
+        i += take.length;
+        band += 1;
+        if (i < list.length) radius += 44;
+      }
+    });
     return pos;
   }
-  const RINGED = (data) => !$("g-organic").checked && (data.view === "ripple" || data.view === "untested");
+  const RINGED = (data) => data.view === "ripple" || data.view === "untested";
 
-  function elements(data) {
-    const pos = RINGED(data) ? ringPositions(data) : {};
-    const nodes = data.nodes.map((n) => (pos[n.id] ? { data: { ...n }, position: pos[n.id] } : { data: { ...n } }));
+  // P37 (R24, G19) — what is drawn: the server's draw plan (≤150: the most relevant nodes, one
+  // CLUSTER per directory group for the rest), plus the clusters this page opened (G.open).
+  function visible(data) {
+    const plan = data.draw || { shown: data.nodes.map((n) => n.id), clusters: [], limit: 150 };
+    const byId = new Map(data.nodes.map((n) => [n.id, n]));
+    const shown = new Set(plan.shown);
+    const clusters = [];
+    for (const c of plan.clusters) {
+      const opened = (G.open.get(c.id) || 0);
+      c.members.slice(0, opened).forEach((id) => shown.add(id));
+      const left = c.members.slice(opened);
+      if (left.length) clusters.push({ ...c, members: left, count: left.length, opened });
+    }
+    const of = new Map();
+    for (const c of clusters) for (const id of c.members) of.set(id, c.id);
+    const nodes = [...shown].map((id) => byId.get(id)).filter(Boolean).map((n) => ({ ...n, short: shortLabel(n) }));
+    for (const c of clusters) {
+      const label = (c.opened ? "+" : "") + c.label.replace(/ · \d+$/, " · " + c.count);
+      nodes.push({ id: c.id, kind: "cluster", label, short: label.length > LABEL_MAX + 8 ? "…" + label.slice(-(LABEL_MAX + 7)) : label,
+        ring: c.ring, count: c.count, untested: c.untested || 0, cluster: c, symbol: null });
+    }
+    const edges = new Map();
+    for (const e of data.edges) {
+      const s = shown.has(e.source) ? e.source : of.get(e.source);
+      const t = shown.has(e.target) ? e.target : of.get(e.target);
+      if (!s || !t || s === t) continue;
+      if (s === e.source && t === e.target) { edges.set(e.id, e); continue; }
+      const key = `g:${s}>${t}`;
+      const g = edges.get(key);
+      if (g) { g.count += 1; if (e.basis === "lexical") g.basis = "lexical"; }
+      else edges.set(key, { id: key, source: s, target: t, kind: "GROUP", basis: e.basis, count: 1, site: e.site, pending: e.pending });
+    }
+    return { nodes, edges: [...edges.values()], clusters, limit: plan.limit || 150, total: plan.total || data.nodes.length };
+  }
+
+  function elements(data, vis) {
+    const pos = RINGED(data) ? ringPositions(vis.nodes) : {};
     const cov = {};
-    for (const n of data.nodes) cov[n.id] = n.coverage;
-    const edges = data.edges.map((e) => ({ data: { ...e, risk: cov[e.source] === "untested" ? 1 : 0 } }));
+    for (const n of vis.nodes) cov[n.id] = n.coverage;
+    const nodes = vis.nodes.map((n) => {
+      const d = { ...n, label: n.short };
+      delete d.cluster;
+      d.full = n.label;
+      return pos[n.id] ? { data: d, position: pos[n.id] } : { data: d };
+    });
+    const edges = vis.edges.map((e) => ({ data: { ...e, risk: cov[e.source] === "untested" ? 1 : 0 } }));
     return nodes.concat(edges);
   }
 
   function layoutFor(data) {
-    if ($("g-organic").checked) return { name: "fcose", animate: false, randomize: true, nodeSeparation: 90, idealEdgeLength: 110 };
+    // P37 (§5.1: "organic" → auto) — rings for what-breaks, a left-to-right chain for who-calls
+    // and path, and the organic layout when a who-calls picture is too tall for one column.
+    if (!RINGED(data) && data.view === "focus" && (G.vis ? G.vis.nodes.length : data.nodes.length) > 60) {
+      return { name: "fcose", animate: false, randomize: true, nodeSeparation: 90, idealEdgeLength: 110 };
+    }
     if (RINGED(data)) return { name: "preset", animate: false, fit: false };
     return { name: "dagre", rankDir: "LR", nodeSep: 26, rankSep: 90, animate: false };
   }
 
   // What each view answers, in the user's words — shown under the bar so the picture is never a puzzle.
   const VIEW_HINT = {
-    ripple: "Ripple — what is affected if this symbol changes: callers ring by ring (ring 1 = calls it directly), tests on the outer ring, amber = no test reaches it.",
-    focus: "Focus — one step each way: who calls this symbol (left) and what it calls (right).",
-    path: "Path to… — the shortest chain of calls from the first symbol to the second. Fill in both names.",
-    untested: "Untested paths — the caller chains into this symbol that no test runs: where a change could break something unnoticed.",
+    ripple: "What breaks — what is affected if this symbol changes: callers ring by ring (ring 1 = calls it directly), tests on the outer ring, amber = no test reaches it.",
+    focus: "Who calls — one step each way: who calls this symbol (left) and what it calls (right).",
+    path: "Path — the shortest chain of calls from the first symbol to the second. Fill in both names.",
+    untested: "What breaks, untested only — the caller chains into this symbol that no test runs: where a change could break something unnoticed.",
   };
   const EMPTY_TEXT = {
-    ripple: "Ripple then shows everything that would be affected if you changed it.",
-    focus: "Focus then shows who calls it and what it calls.",
-    path: "Path to… needs two: pick the start in the first box and the end in the second — the shortest chain of calls between them appears here.",
-    untested: "Untested paths then shows the callers of it that no test runs.",
+    ripple: "What breaks then shows everything that would be affected if you changed it.",
+    focus: "Who calls then shows who calls it and what it calls.",
+    path: "Path needs two: pick the start in the first box and the end in the second — the shortest chain of calls between them appears here.",
+    untested: "Untested only then shows the callers of it that no test runs.",
   };
   function hint() {
     $("g-hint").textContent = VIEW_HINT[G.view] || "";
@@ -212,10 +280,13 @@
     box.append(wrap);
   }
 
-  async function show(view, symbol, to) {
+  async function show(view, symbol, to, page) {
+    G.page = page || 1;
     G.view = view || G.view;
     hint();
-    for (const b of document.querySelectorAll("button[data-gview]")) b.classList.toggle("active", b.dataset.gview === G.view);
+    for (const b of document.querySelectorAll("button[data-gview]")) b.classList.toggle("active", b.dataset.gview === G.view || (b.dataset.gview === "ripple" && G.view === "untested"));
+    $("g-untested").checked = G.view === "untested";
+    $("g-untested-wrap").hidden = G.view === "focus" || G.view === "path";
     $("g-to-wrap").hidden = G.view !== "path";
     if (symbol !== undefined) $("g-symbol").value = symbol;
     if (to !== undefined) $("g-to").value = to;
@@ -228,48 +299,218 @@
       G.data = null;
       for (const id of ["g-title", "g-summary", "g-note"]) $(id).textContent = "";
       $("g-chains").replaceChildren(); $("g-chains-h").hidden = true;
-      $("g-guide").open = true;
+      clearChrome(); message();
       suggest();
       return;
     }
     $("g-empty").hidden = true;
-    $("g-title").textContent = "asking the graph…";
+    if (G.page === 1) G.open = new Map();              // a new question starts with every group closed
+    message();
+    // P32 — the question is a job: its progress is shown ON the canvas (§5.4 — the old "asking the
+    // graph…" sat in #g-title, under the guide, off-screen), its rings are drawn as they arrive,
+    // and a newer question aborts this one (its job is left; nobody else wants it, so it stops).
+    if (G.ctl) G.ctl.abort();
+    const ctl = (G.ctl = new AbortController());
+    const gen = (G.gen = (G.gen || 0) + 1);
+    const strip = progressStrip();
+    strip.say(`asking the graph: ${G.view} of ${sym}${dst ? " → " + dst : ""}…`);
+    $("cy").classList.add("stale");                   // the old picture is not this question's
+    for (const id of ["g-title", "g-summary", "g-note"]) $(id).textContent = "";
+    $("g-title").textContent = `${G.view} · ${sym}${G.view === "path" ? " → " + dst : ""}`;
     const depth = G.view === "path" ? Math.max(3, +$("g-depth").value) : +$("g-depth").value;
-    const url = `/api/graph?view=${G.view}&symbol=${encodeURIComponent(sym)}&to=${encodeURIComponent(dst)}&depth=${depth}`;
-    const [data] = await Promise.all([api(url).catch(() => null), loadLibs().catch((e) => { G.libError = e; })]);
-    if (G.libError) { $("g-title").textContent = "graph view unavailable"; $("g-note").textContent = String(G.libError.message); return; }
-    if (!data || data.error || data.sample) {
-      $("g-title").textContent = data && data.timed_out ? "timed out" : "no graph";
-      $("g-summary").textContent = data ? (data.note || data.error) : "the server did not answer";
-      if (data) MK.markSample(data);
-      if (G.cy) G.cy.elements().remove();
-      return;
+    const url = `/api/graph?view=${G.view}&symbol=${encodeURIComponent(sym)}&to=${encodeURIComponent(dst)}&depth=${depth}${G.page > 1 ? "&page=" + G.page : ""}`;
+    const libs = loadLibs().catch((e) => { G.libError = e; });
+    const opts = {
+      signal: ctl.signal,
+      onJob: (j) => { if (gen === G.gen) strip.set(j); },
+      onPartial: async (part) => {
+        await libs;
+        if (gen !== G.gen || G.libError || !part || !part.nodes) return;
+        G.data = part;
+        $("cy").classList.remove("stale");
+        draw(part);
+        summarize(part);
+      },
+    };
+    let data;
+    try {
+      [data] = await Promise.all([api(url, undefined, opts), libs]);
+    } catch (e) {
+      if (e && e.name === "AbortError") return;      // superseded: the newer question owns the canvas
+      data = null;
     }
+    if (gen !== G.gen) return;
+    if (G.libError) { strip.done(); $("g-title").textContent = "graph view unavailable"; $("g-note").textContent = String(G.libError.message); return; }
+    if (!data || data.error || data.sample) {
+      if (data && (data.cancelled || data.failed) && data.job) strip.set(data.job); else strip.done();
+      $("cy").classList.remove("stale");
+      if (data) MK.markSample(data);
+      const keep = data && (data.cancelled || data.failed) && G.data && G.data.partial && G.cy;
+      if (G.cy && !keep) G.cy.elements().remove();
+      if (keep) status(G.data);
+      else clearChrome();
+      failedState(data, keep, sym, dst);
+      return;
+    }    strip.done();
+    $("cy").classList.remove("stale");
     G.data = data;
     if (!G.guidePinned) $("g-guide").open = false;     // the picture gets the room; ? reopens it
     draw(data);
     summarize(data);
   }
-  MK.openGraph = (view, symbol, to) => { MK.setMode("graph"); MK.setPanel("graph", true); show(view, symbol, to); };
+
+  // §5.4 — never blank, errors name what failed, keep the partial picture, offer Retry + the CLI
+  // twin. The message sits ON the canvas (the region the user is looking at).
+  function cliTwin(sym, dst) {
+    return G.view === "path" ? `mokata query callees ${sym} --json (then each callee, toward ${dst})`
+      : `mokata query callers ${sym} --json`;
+  }
+  function msgHost() {
+    let box = $("g-msg");
+    if (!box) {
+      box = el("div", "g-msg small");
+      box.id = "g-msg";
+      document.querySelector(".graph-stage").append(box);
+    }
+    return box;
+  }
+  function message(text, opts) {
+    const box = msgHost();
+    if (!text) { box.hidden = true; box.replaceChildren(); return; }
+    MK.regionSay(box, "error", text, opts);
+    box.hidden = false;
+  }
+  function failedState(data, kept, sym, dst) {
+    const cancelled = data && data.cancelled;
+    const what = !data ? "the graph question could not be asked (the IDE server is not reachable)"
+      : cancelled ? "cancelled" : data.sample ? (data.note || "the SAMPLE has no code graph")
+      : `the graph question failed — ${data.note || data.error}`;
+    $("g-title").textContent = cancelled ? `${G.view} · ${sym} — cancelled` : `${G.view} · ${sym} — not answered`;
+    // R25 — a kept partial picture still says its basis, the same word as its status line
+    $("g-summary").textContent = kept ? `${what}; the partial picture so far is kept (labelled partial). Basis: ${basisWord(G.data)}.` : what + ".";
+    if (data && data.sample) { message(what); return; }
+    message(kept ? `${what} — showing the partial picture.` : what, { retry: () => show(G.view, undefined, undefined, G.page), cli: cliTwin(sym, dst) });
+  }
+
+  function progressStrip() {
+    if (!G.strip && MK.jobs) G.strip = MK.jobs.strip(document.querySelector(".graph-stage"), "on-canvas");
+    return G.strip || { say() {}, set() {}, done() {} };
+  }
+  MK.openGraph = (view, symbol, to) => { MK.setMode("graph"); show(view, symbol, to); };
 
   function draw(data) {
     const box = $("cy");
     if (!G.cy) {
-      G.cy = window.cytoscape({ container: box, style: style(), wheelSensitivity: 0.3, minZoom: 0.1, maxZoom: 3 });
-      G.cy.on("tap", "node", (ev) => select(ev.target.data(), "node"));
+      G.cy = window.cytoscape({ container: box, style: style(), wheelSensitivity: 0.3, minZoom: 0.05, maxZoom: 3 });
+      G.cy.on("tap", "node", (ev) => { const d = ev.target.data(); if (d.kind === "cluster") openCluster(d.id); else select(d, "node"); });
       G.cy.on("tap", "edge", (ev) => select(ev.target.data(), "edge"));
       G.cy.on("dbltap", "node", (ev) => { const d = ev.target.data(); if (d.symbol) show(G.view === "path" ? "ripple" : G.view, d.symbol); });
       if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => G.cy.style(style()));
     }
+    const vis = visible(data);
+    G.vis = vis;
     G.cy.elements().remove();
-    G.cy.add(elements(data));
+    G.cy.add(elements(data, vis));
     G.cy.layout(layoutFor(data)).run();
     fit();
+    status(data);
   }
 
-  function fit() {
+  // A cluster opens into its members, most relevant first, never past the draw limit: when the
+  // picture is full, the clusters opened before give their room back first.
+  function openCluster(id) {
+    const data = G.data;
+    if (!data || !G.vis) return;
+    const c = G.vis.clusters.find((x) => x.id === id);
+    if (!c) return;
+    let room = G.vis.limit - G.vis.nodes.length + 1;          // + the cluster node itself
+    if (room < Math.min(c.count, 12)) {
+      for (const k of [...G.open.keys()]) if (k !== id) { room += G.open.get(k); G.open.delete(k); }
+    }
+    const take = c.count <= room ? c.count : Math.max(1, room - 1);
+    G.open.set(id, (G.open.get(id) || 0) + take);
+    draw(data);
+  }
+
+  // P37 (R24) — at fit every label is drawn at ≥ 11 px: when the whole picture only fits below
+  // 1:1 the view centres on the symbol at 1:1 instead (the most relevant rings are around it),
+  // and the status line says the rest is a scroll away ("fit all" shows everything, smaller).
+  function fit(all) {
     G.cy.fit(undefined, 40);
+    G.fitAll = !!all;
     if (G.cy.zoom() > 1.25) { G.cy.zoom(1.25); G.cy.center(); }
+    else if (!all && G.cy.zoom() < 1) {
+      const c = G.cy.nodes("[kind = 'center']").first();
+      G.cy.zoom(1);
+      if (c && c.length) G.cy.center(c); else G.cy.center();
+    }
+  }
+
+  // --- P37 (R25): the ONE basis word — status line, legend and summary all say data.basis -----
+  const BASIS_SAYS = {
+    structural: "structural — every edge is a call or import the code graph proved",
+    approximate: "approximate — some edges are name matches (dashed), the rest are proved",
+    floor: "floor — no code graph answered: every edge is a name match (lexical floor)",
+    pending: "pending — nothing answered yet",
+  };
+  function basisWord(data) { return (data && data.basis) || "pending"; }
+  function ensureChrome() {
+    const stage = document.querySelector(".graph-stage");
+    if (!$("g-status")) {
+      const st = el("div", "g-status small");
+      st.id = "g-status";
+      st.setAttribute("role", "status");
+      st.hidden = true;
+      const txt = el("span", "g-status-text");
+      txt.id = "g-status-text";
+      const all = el("button", "btn ghost small", "fit all");
+      all.type = "button";
+      all.id = "g-fit-all";
+      all.onclick = () => { if (G.cy) { if (G.fitAll) fit(); else fit(true); all.textContent = G.fitAll ? "read size" : "fit all"; } };
+      const more = el("button", "btn small", "Continue");
+      more.type = "button";
+      more.id = "g-continue";
+      more.hidden = true;
+      more.title = "Draw the next page of this picture — the walk resumes where it stopped";
+      more.onclick = () => { const d = G.data; if (d) show(G.view, undefined, undefined, (d.page || 1) + 1); };
+      st.append(txt, more, all);
+      stage.append(st);
+    }
+    const legend = stage.querySelector(".legend");
+    if (legend && !$("g-legend-basis")) {
+      const b = el("span", "g-legend-basis");
+      b.id = "g-legend-basis";
+      legend.prepend(b);
+    }
+  }
+  function status(data) {
+    ensureChrome();
+    const word = basisWord(data);
+    const vis = G.vis;
+    const parts = [];
+    if (data.partial) parts.push(data.view === "path" ? "partial — a path from the index, being confirmed"
+      : `partial — ${data.rings_done || 0} of ${data.depth || "?"} ring(s) confirmed` + (data.index_rings ? `, ${data.index_rings} read from the index (faded = not yet confirmed)` : ""));
+    else parts.push("done");
+    parts.push("basis: " + word);
+    if (vis && vis.total > vis.nodes.length - vis.clusters.length) {
+      parts.push(`showing ${vis.nodes.length - vis.clusters.length} of ${vis.total} nodes, ${vis.clusters.length} group(s) — click a group to open it`);
+    }
+    if (G.cy && !G.fitAll && G.cy.zoom() <= 1 && vis && vis.nodes.length > 30) parts.push("centred at reading size — scroll or “fit all” for the rest");
+    // P37 (U10 overruled: no hard cap) — a full page says so and offers the next one.
+    if (data.more && !data.partial) parts.push(data.more_note || "more to draw");
+    $("g-status-text").textContent = parts.join(" · ");
+    $("g-continue").hidden = !(data.more && !data.partial);
+    $("g-status").hidden = false;
+    $("g-status").dataset.basis = word;
+    const lg = $("g-legend-basis");
+    lg.replaceChildren(el("b", "", "basis: " + word));
+    lg.title = BASIS_SAYS[word] || word;
+    lg.dataset.basis = word;
+  }
+  function clearChrome() {
+    ensureChrome();
+    $("g-status").hidden = true;
+    $("g-legend-basis").replaceChildren();
   }
 
   function summarize(data) {
@@ -293,10 +534,13 @@
       const byRing = {};
       for (const n of data.nodes) if (n.kind !== "test" && n.kind !== "center") byRing[n.ring] = (byRing[n.ring] || 0) + 1;
       const tests = data.nodes.filter((n) => n.kind === "test").length;
-      title.textContent = `If ${sym} changes`;
+      title.textContent = data.partial ? `If ${sym} changes — ring ${data.rings_done || 0} so far` : `If ${sym} changes`;
       const rings = Object.keys(byRing).sort().map((r) => `${byRing[r]} at ${r} hop(s)`).join(", ")
-        || `nothing in this repo calls ${sym} yet (new, unused, or only called from outside) — Focus shows what it calls`;
-      sum.textContent = data.defs === 0
+        || (data.partial ? `no caller yet`
+          : basisWord(data) === "structural" ? `0 callers (structural): nothing in this repo calls ${sym} (new, unused, or only called from outside) — Focus shows what it calls`
+          : `no caller of ${sym} found by name match — that is not a verified zero (no code graph answered)`);
+      sum.textContent = data.partial ? `showing partial results — ${rings}. Edges so far: ${bases}.`
+        : data.defs === 0
         ? `The graph holds no definition of ${sym} — nothing here is claimed about it.`
         : `${rings}; ${tests} test node(s). Edges: ${bases}.`;
       const ch = data.untested_chains || [];
@@ -310,9 +554,13 @@
         for (const c of ch) chains.append(el("li", "", c.join(" → ")));
       }
     }
+    // R25 — the summary says the same basis word as the status line and the legend
+    sum.textContent = `${sum.textContent.replace(/\s+$/, "")} Basis: ${basisWord(data)}.`;
     const notes = [];
-    if (data.graph_note) { notes.push(data.graph_note); if (MK.noteGraph) MK.noteGraph(data.graph_note); }
-    if (data.truncated) notes.push(data.truncation_note || `stopped at ${data.max_nodes} nodes — lower the depth`);
+    // R25 — the status bar is told "degraded" only when THIS picture is not structural: the last
+    // degrade any question saw must not contradict the basis this picture says.
+    if (data.graph_note && basisWord(data) !== "structural") { notes.push(data.graph_note); if (MK.noteGraph) MK.noteGraph(data.graph_note); }
+    if (data.more && data.more_note) notes.push(data.more_note);
     if ((data.bases || {}).lexical) notes.push("dashed edges are lexical (a name match, not a graph edge): they never mark anything untested");
     else if ((data.answer_bases || []).includes("lexical")) notes.push("at least one question had no structural answer (it fell to the lexical floor), so an empty part of this picture is not a verified zero");
     $("g-note").textContent = notes.join(" · ");
@@ -334,8 +582,8 @@
       box.append(row);
       return;
     }
-    box.append(el("b", "mono", d.label));
-    box.append(el("div", "small dim", `${d.kind}${d.coverage ? " · " + d.coverage : ""}${d.path ? " · " + d.path + ":" + d.line : ""}`));
+    box.append(el("b", "mono", d.full || d.label));
+    box.append(el("div", "small dim", `${d.pending ? "from the index, not yet confirmed · " : ""}${d.kind}${d.coverage ? " · " + d.coverage : ""}${d.path ? " · " + d.path + ":" + d.line : ""}`));
     const row = el("div", "row2");
     const open = el("button", "btn", "Open in Navigate");
     open.type = "button";
@@ -349,8 +597,8 @@
     };
     row.append(open);
     if (d.symbol) {
-      for (const v of ["ripple", "focus"]) {
-        const b = el("button", "btn ghost", v);
+      for (const [v, name] of [["ripple", "what breaks"], ["focus", "who calls"]]) {
+        const b = el("button", "btn ghost", name);
         b.type = "button";
         b.onclick = () => show(v, d.symbol);
         row.append(b);
@@ -379,7 +627,7 @@
       };
     }
     $("g-depth").onchange = () => show();
-    $("g-organic").onchange = () => { if (G.data) draw(G.data); };
+    $("g-untested").onchange = () => show($("g-untested").checked ? "untested" : "ripple");
     for (const b of document.querySelectorAll("button[data-gview]")) b.classList.toggle("active", b.dataset.gview === G.view);
     const guide = $("g-guide");
     $("g-help").onclick = () => {
@@ -392,6 +640,7 @@
   };
   MK.onModeGraph = (mode) => {
     if (mode !== "graph") return;
+    loadLibs().catch(() => null);                  // P37: the canvas is ready before the first ring
     const eng = ($("st-graph").textContent || "").trim();
     const FULL = "install the code graph for proven, multi-language edges: mokata setup claude --mode full";
     $("g-engine").textContent = !eng || eng === "…" ? "checking…"

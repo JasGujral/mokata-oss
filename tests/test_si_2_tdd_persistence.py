@@ -288,7 +288,10 @@ class TestCheapRead(_Base):
             # relaxed.
             self.assertEqual(
                 surface, ["mokata", "mokata.atomicfile", "mokata.degrade", "mokata.errors",
-                          "mokata.oslock", "mokata.state", "mokata.tdd_state"],
+                          "mokata.oslock",
+                  # 0.0.26 P31: `state_dir` resolves a linked worktree's ONE shared store through
+                  # `repo_identity` (pure os.path + file reads; stdlib only — no engine).
+                  "mokata.repo_identity", "mokata.state", "mokata.tdd_state"],
             )
 
     def test_degrades_clean_and_never_raises(self):

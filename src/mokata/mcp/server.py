@@ -1,6 +1,6 @@
 """MCP wiring — lazily imports the SDK; never imported by the core/CLI.
 
-The MCP SDK is an unconditional dependency of mokata (Python 3.10+ floor), so a plain
+The MCP SDK is an unconditional dependency of mokata (Python 3.12+ floor), so a plain
 `pip install mokata` always provides it. It is still imported LAZILY inside `build_server`, so
 the core package and CLI import and run even in a stripped/broken env where the SDK is absent —
 `mokata-mcp` then fails LOUD with a fix rather than crashing at import. Note: `mokata.mcp` (this
@@ -93,25 +93,30 @@ def _register_this_window(path: str) -> None:
 #   R5  the self-registration pre-hook runs CONCURRENTLY (a daemon thread we never join on the
 #       served path), so its up-to-10s cross-process lock wait (root cause 4) can NEVER delay or
 #       stall the tool the user asked for. Its failure stays best-effort + D5-classed, as before.
-#   R1  the tool BODY runs in a worker thread under a wall-clock MCP-SURFACE budget; on expiry we
-#       return a structured `status:"timed_out"` naming the operation + the CLI fallback, and the
-#       orphaned worker (a daemon, backstopped by the tool's own inner bound) dies on its own —
-#       the teamdb.probe daemon-join pattern, applied to the front door.
+#   R1  the tool BODY runs in a worker thread under a wall-clock MCP-SURFACE reply budget; on
+#       expiry we answer `status:"running"` (O14 — it was `timed_out`, whose hint claimed nothing
+#       was half-committed while the orphaned worker went on to commit) and the work continues;
+#       a re-call with the same arguments joins it and returns its result.
 #   R2  one try/except turns ANY uncaught exception into mokata's OWN `status:"error"` shape
 #       (isError + reason + hint), reclaiming the voice from FastMCP's generic handler.
 #   R3  a None / non-dict return is coerced to the same structured `error`.
 #   R6  every status the wrapper emits comes from the single-source vocab (`mcp.status`).
 #
-# R4 (progress/heartbeat) is a documented degrade-clean NO-OP this stage: `Context.report_progress`
-# is a coroutine that must be injected as a tool parameter and awaited on the event loop — a
-# synchronous, SDK-free tool body running in a worker thread cannot reach it without changing the
-# tool schema, which the schema-transparency constraint forbids this stage. Liveness is delivered
-# by the bounded budget + `timed_out`/`running` statuses instead; a real progress channel is D1's.
+# R4 (progress/heartbeat) is a documented degrade-clean NO-OP: `Context.report_progress` is a
+# coroutine that must be injected as a tool parameter, which the schema-transparency constraint
+# forbids. Liveness is delivered instead by O14's `running` answer (below): a call still working at
+# the reply budget SAYS so, and a re-call with the same arguments joins the same work.
 R4_PROGRESS_NOOP = True
 
-# The interactive MCP-surface wall-clock budget (R1). NAMED and distinct from any tool's internal
-# subprocess/DB bound — this is the front-door cap, not a tool's own timeout.
+# The interactive MCP-surface REPLY budget (R1, O14). After this long a call that is still working
+# answers `status:"running"` — the work is NOT cut: it keeps running, and a re-call with the same
+# arguments joins it and receives its result (Jas ruling: no deadline cuts real work; long work is
+# disclosed). Distinct from any tool's internal subprocess/DB bound.
 MCP_SURFACE_TIMEOUT_SECONDS = 60.0
+
+# O14 — how long a finished call's result is kept for the re-call that a `running` answer promised.
+# Only results whose caller was told `running` are kept; nothing else is cached.
+_RESULT_KEEP_SECONDS = 1800.0
 
 # R5 — fire-and-forget self-registration threads, tracked so tests/diagnostics can drain them. The
 # SERVED path never joins these; draining is a test/diagnostic affordance only.
@@ -122,10 +127,17 @@ _REG_THREADS: "List[threading.Thread]" = []
 def _spawn_registration(path: str) -> "threading.Thread":
     """R5 — self-register THIS window off the served path, in a daemon thread we do not join. A
     stalled registry (a contended cross-process lock) therefore cannot delay the tool call."""
-    t = threading.Thread(target=_register_this_window, args=(path,),
-                         name="mokata-mcp-register", daemon=True)
+    # O14 — COALESCED: a burst of parallel calls (Claude Code fans tool calls out) used to start one
+    # registry write per call, every one contending for the same cross-process registry lock with
+    # the hooks. One in flight per path is a refresh; a second adds only contention.
     with _REG_LOCK:
         _REG_THREADS[:] = [x for x in _REG_THREADS if x.is_alive()]   # prune finished
+        for x in _REG_THREADS:
+            if getattr(x, "_mokata_path", None) == path:
+                return x
+        t = threading.Thread(target=_register_this_window, args=(path,),
+                             name="mokata-mcp-register", daemon=True)
+        t._mokata_path = path                                   # type: ignore[attr-defined]
         _REG_THREADS.append(t)
     t.start()
     return t
@@ -165,16 +177,19 @@ def _manifest_or_none(path: str):
     return None
 
 
-def _timed_out(op: str, budget: float) -> Dict[str, Any]:
-    """R1 — the bounded-budget verdict. Names the OPERATION and the CLI fallback; NEVER the args (a
-    timed-out call must not echo a DSN/path/arg into the render)."""
+def _still_running(op: str, budget: float, elapsed: float, call_id: str) -> Dict[str, Any]:
+    """O14 — the reply-budget verdict. The work was NOT cut: it is still running in this server and
+    a re-call with the SAME arguments joins it (it never runs twice) and returns its result. Names
+    the OPERATION and a short call id; NEVER the args (a slow call must not echo a DSN/path/arg)."""
     return {
-        "status": _status.TIMED_OUT, "isError": True, "operation": op, "committed": False,
-        "reason": (f"the '{op}' operation did not finish within mokata's {int(budget)}s MCP "
-                   f"surface budget"),
-        "hint": (f"nothing was half-committed by this; run it from your terminal with "
-                 f"`mokata {op}` (no MCP time budget) or retry."
-                 + (" A suite that needs longer: `mokata config set "
+        "status": _status.RUNNING, "isError": False, "operation": op, "call_id": call_id,
+        "elapsed_s": round(elapsed, 1),
+        "reason": (f"the '{op}' operation is still working after {elapsed:.0f}s (mokata answers "
+                   f"within {int(budget)}s and keeps the work going)"),
+        "hint": (f"re-call '{op}' with exactly the same arguments to receive the result — it joins "
+                 f"the work already in flight and is never started twice. Do not switch to the "
+                 f"CLI for the same write: that WOULD run it twice."
+                 + (" A suite that needs longer per reply: `mokata config set "
                     "settings.mcp.test_timeout_seconds <seconds>` (up to 600)."
                     if op == "baseline" else "")),
     }
@@ -182,7 +197,23 @@ def _timed_out(op: str, budget: float) -> Dict[str, Any]:
 
 def _as_error(op: str, exc: BaseException) -> Dict[str, Any]:
     """R2 — reclaim the voice from FastMCP's generic handler. Only the exception TYPE name surfaces:
-    `str(exc)` can carry a DSN/path/arg and must not leak into the render."""
+    `str(exc)` can carry a DSN/path/arg and must not leak into the render.
+
+    O14 — a bounded lock wait that expired (`oslock.LockTimeout`) is its own, RETRYABLE answer:
+    another mokata process (a hook, the CLI, another window) held the same state for longer than
+    the bounded wait. Nothing is waited on indefinitely, and the agent can tell "busy, retry" from
+    "the server broke" by `retryable` alone."""
+    from ..oslock import LockTimeout
+    if isinstance(exc, LockTimeout):
+        return {
+            "status": _status.ERROR, "isError": True, "operation": op, "committed": False,
+            "retryable": True, "reason_code": "state-busy",
+            "reason": (f"the '{op}' operation could not take mokata's state lock — another mokata "
+                       f"process held it past the bounded wait"),
+            "hint": ("retry the same call in a few seconds. A write that was refused here did not "
+                     "land; a re-call of a write whose approval was already used reports whether "
+                     "it landed."),
+        }
     return {
         "status": _status.ERROR, "isError": True, "operation": op, "committed": False,
         "reason": f"the '{op}' operation raised {type(exc).__name__}",
@@ -222,11 +253,11 @@ def _emit_tool_call(path: str, op: str, kind: Optional[str], result: Any,
     it describes took. A dispatch wrapper knows both.
 
     `ok` is read from the structured status the wrapper returns, not from "did it raise": a
-    `refused`, an `error` and a `timed_out` are all non-exceptional returns here, and treating
+    `refused`, an `error` and a `running` are all non-exceptional returns here, and treating
     them as successes would make the event say the opposite of what the caller was told."""
     try:
         status = result.get("status") if isinstance(result, dict) else None
-        ok = status not in ("error", "timed_out", "refused")
+        ok = status not in ("error", "running", "refused")
         from ..events import ToolCall, emit as emit_event
         emit_event(path or ".", ToolCall(tool=op, surface=kind or "mcp", ok=ok),
                    duration_ms=duration_ms)
@@ -234,15 +265,195 @@ def _emit_tool_call(path: str, op: str, kind: Optional[str], result: Any,
         return
 
 
+# ======================================================================================
+# P41 MCP-FOLLOWS-WORKTREE — a code tool answers for the session's CURRENT tree
+# ======================================================================================
+# Claude Code starts this server once, in the main checkout, and `EnterWorktree` never moves it —
+# so every code answer used to describe the main checkout's files while the session edited its
+# worktree. A tool whose answer is about CODE (it builds the knowledge layer or reads the tree's
+# files) now resolves, per call, which tree it serves (`tree_scope.scope_for`: the session this
+# process serves, by process ancestry, and that session's P31 worktree binding) and runs its body
+# under that scope. The answer carries the scope (`tree`) whenever it is a worktree's — or the main
+# checkout's for a stated reason (the session could not be identified, or its worktree is gone).
+# Every other tool is untouched: shared state stays the main checkout's `.mokata/` (P31).
+TREE_TOOLS = frozenset({
+    "query", "decompose", "ci_check", "lat_check", "recall", "remember",
+    "spec_emit", "spec_amend", "spec_check",
+})
+
+
+def _tree_scope_for(op: str, path: str) -> Any:
+    if op not in TREE_TOOLS:
+        return None
+    try:
+        from .. import tree_scope
+        return tree_scope.scope_for(path)
+    except Exception:  # noqa: BLE001 — no scope is the main checkout, exactly as before
+        return None
+
+
+def _with_tree(out: Dict[str, Any], scope: Any) -> Dict[str, Any]:
+    if scope is None or not getattr(scope, "reportable", False) or not isinstance(out, dict):
+        return out
+    out.setdefault("tree", scope.to_dict())
+    if scope.note and isinstance(out.get("note"), str):
+        out["note"] = f"{out['note']} | {scope.note}" if out["note"] else scope.note
+    elif scope.note and "note" not in out:
+        out["note"] = scope.note
+    return out
+
+
+# ======================================================================================
+# O14 MCP-STABILITY — one piece of work per call, joined by its retries
+# ======================================================================================
+# Measured 2026-10-22 (mcp 1.30, stdio, the harness in tests/test_o14_mcp_stability.py): FastMCP runs
+# a SYNC tool function directly ON THE EVENT LOOP, and `_serve` is sync — so a tool body blocked the
+# whole server for its duration. Eleven parallel read calls on the K bed all answered at 18.0s (the
+# slowest, `lat_check`, set everyone's latency) and an MCP `ping` sent meanwhile took 18.0s; a
+# `spec_emit` redeem issued next to a `query` on django waited out the query first. That is the
+# "MCP gets stuck while the CLI is fast": the CLI runs one command, the server ran a queue. The
+# served handler is now async and runs `_serve` on a worker thread (`_offloop`), so the loop stays
+# free and parallel calls run in parallel.
+#
+# `_serve` itself keeps one piece of WORK per distinct call: a call (op + its exact arguments) that
+# is already in flight is JOINED, never started a second time. That is what makes the `running`
+# answer honest and a client retry safe — a retried `spec_amend` redeem lands once — and it is why
+# the reply budget is not a deadline: nothing is cut, the work finishes and the re-call collects it.
+# Durable writes (`kind` write/approve) on one repo also run one at a time in this process, so two
+# parallel commits can never interleave their multi-key writes; the wait happens inside the work,
+# so a queued write still answers `running` at the budget rather than hanging the caller.
+
+class _Call:
+    __slots__ = ("key", "call_id", "started", "done", "out", "told_running", "finished_at",
+                 "elapsed_ms")
+
+    def __init__(self, key: str) -> None:
+        import hashlib
+        self.key = key
+        self.call_id = hashlib.sha256(key.encode("utf-8", "replace")).hexdigest()[:12]
+        self.started = time.perf_counter()
+        self.done = threading.Event()
+        self.out: Dict[str, Any] = {}
+        self.told_running = False
+        self.finished_at = 0.0
+        self.elapsed_ms = 0
+
+
+_INFLIGHT_LOCK = threading.Lock()
+_INFLIGHT: Dict[str, _Call] = {}
+_WRITE_LOCKS: Dict[str, threading.Lock] = {}
+
+
+def _call_key(op: str, args: tuple, kwargs: dict) -> str:
+    import json
+    try:
+        blob = json.dumps([list(args), kwargs], sort_keys=True, default=repr)
+    except (TypeError, ValueError):
+        blob = repr((args, sorted(kwargs.items())))
+    return f"{op}\x00{blob}"
+
+
+def _write_lock(path: str) -> threading.Lock:
+    import os
+    key = os.path.realpath(path or ".")
+    with _INFLIGHT_LOCK:
+        lock = _WRITE_LOCKS.get(key)
+        if lock is None:
+            lock = _WRITE_LOCKS[key] = threading.Lock()
+        return lock
+
+
+def _prune_kept(now: float) -> None:
+    """Drop finished calls nobody came back for (caller holds `_INFLIGHT_LOCK`)."""
+    for k in [k for k, c in _INFLIGHT.items()
+              if c.done.is_set() and now - c.finished_at > _RESULT_KEEP_SECONDS]:
+        del _INFLIGHT[k]
+
+
+def _join_or_start(op: str, kind: Optional[str], fn: Callable[..., Any], args: tuple,
+                   kwargs: dict, call_path: str) -> "tuple":
+    """The in-flight call for exactly this (op, args), joined — or a new one, started. Returns
+    `(call, joined)`."""
+    key = _call_key(op, args, kwargs)
+    now = time.perf_counter()
+    with _INFLIGHT_LOCK:
+        _prune_kept(now)
+        live = _INFLIGHT.get(key)
+        if live is not None and (not live.done.is_set() or live.told_running):
+            return live, True
+        call = _INFLIGHT[key] = _Call(key)
+    scope = _tree_scope_for(op, call_path)                # P41 — which tree a code answer is for
+
+    def _run() -> None:
+        call.out = _coerce(op, None)       # what the caller gets if even the shaping below dies
+        try:
+            call.out = _work(op, kind, fn, args, kwargs, call_path, scope)
+        except Exception as exc:                          # noqa: BLE001 - never leave a caller waiting
+            call.out = _as_error(op, exc)
+        finally:
+            # ⚠ `perf_counter`, NOT `monotonic` (0.0.21 cut): on Windows `monotonic` ticks ~15.6 ms.
+            call.elapsed_ms = int((time.perf_counter() - call.started) * 1000)
+            call.finished_at = time.perf_counter()
+            call.done.set()
+
+    threading.Thread(target=_run, name=f"mokata-mcp-{op}", daemon=True).start()
+    return call, False
+
+
+def _work(op: str, kind: Optional[str], fn: Callable[..., Any], args: tuple, kwargs: dict,
+          call_path: str, scope: Any) -> Dict[str, Any]:
+    """Run one tool body and shape its outcome (R2/R3/D1d/P41/AXI-OUT) — on the call's worker."""
+    from ..tree_scope import serving
+    gate = _write_lock(call_path) if kind in ("write", "approve") else None
+    try:
+        if gate is not None:
+            gate.acquire()
+        try:
+            with serving(scope):
+                result = fn(*args, **kwargs)
+        finally:
+            if gate is not None:
+                gate.release()
+    except ValidationError as bad:
+        # D1d — a tool-local validator raises from inside the body. It is still a caller fault, so
+        # it converts through the SAME single site as the pre-step's, ahead of R2.
+        return with_remedy(refusal(bad, op))
+    except Exception as exc:                              # noqa: BLE001 - R2: reclaim ANY failure
+        return with_remedy(_as_error(op, exc))
+    # AXI-OUT (10) — a non-success result carries the exact fixing command as `remedyCommand`.
+    return with_remedy(_with_tree(_coerce(op, result), scope))   # R3 + P41
+
+
+def _finish(call: _Call) -> None:
+    """The caller has the result: forget the call (a later identical call is new work)."""
+    with _INFLIGHT_LOCK:
+        if _INFLIGHT.get(call.key) is call:
+            del _INFLIGHT[call.key]
+
+
+def _offloop(served: Callable[..., Any]) -> Callable[..., Any]:
+    """O14 — the handler FastMCP registers: async, and it runs `_serve` on a worker thread, so the
+    event loop (pings, cancellations, every other parallel call) never waits on a tool body.
+    Signature-transparent: `functools.wraps` carries `__wrapped__` down to the tool function, so the
+    tool schema FastMCP builds is the unwrapped function's, byte for byte."""
+    @functools.wraps(served)
+    async def handler(*args: Any, **kwargs: Any) -> Any:
+        import anyio
+        return await anyio.to_thread.run_sync(functools.partial(served, *args, **kwargs),
+                                              abandon_on_cancel=True)
+    return handler
+
+
 def _serve(fn: Callable[..., Any], name: Optional[str] = None,
            kind: Optional[str] = None) -> Callable[..., Any]:
     """The ONE systemic dispatch wrapper (MCP-R.D0). Every served tool call self-registers this
-    window (R5, off the served path), runs under a wall-clock MCP-surface budget (R1), and returns
-    a structured, single-vocab `status` — `timed_out` on expiry (R1), `error` on any uncaught
-    exception (R2) or None/non-dict return (R3) — reclaiming the outcome from silence.
+    window (R5, off the served path), answers within the MCP-surface reply budget (R1), and returns
+    a structured, single-vocab `status` — `running` while the work continues past the budget (O14:
+    a re-call with the same arguments joins it), `error` on any uncaught exception (R2) or
+    None/non-dict return (R3) — reclaiming the outcome from silence.
 
-    R4 progress/heartbeat is a documented degrade-clean NO-OP this stage (see the module note): the
-    bounded budget + `timed_out` status carry liveness in its place.
+    R4 progress/heartbeat stays a documented no-op (see the module note); `running` carries
+    liveness in its place.
 
     Signature-transparent: `functools.wraps` sets `__wrapped__`, which `inspect.signature` follows,
     so the FastMCP tool schema built from the wrapper is byte-identical to the unwrapped fn (D1a's
@@ -264,45 +475,23 @@ def _serve(fn: Callable[..., Any], name: Optional[str] = None,
 
         call_path = _call_path(args, kwargs)
         _spawn_registration(call_path)                    # R5 — concurrent, never gates the body
-        budget = _mcp_timeout_for(op, call_path)          # R1/R7 — per-tool wall-clock cap
-        box: Dict[str, Any] = {}
-        # R1.S1b — the event's real duration. ⚠ `perf_counter`, NOT `monotonic` (0.0.21 cut, mirror
-        # run on PR #77): on Windows `monotonic` ticks at ~15.6 ms, so a 30 ms call was stamped
-        # `duration_ms=16`. A duration is an interval, and `perf_counter` is the interval clock.
-        started = time.perf_counter()
+        budget = _mcp_timeout_for(op, call_path)          # R1/R7 — per-tool reply budget
+        call, joined = _join_or_start(op, kind, fn, args, kwargs, call_path)
+        call.done.wait(budget)
 
-        def _run() -> None:
-            try:
-                box["result"] = fn(*args, **kwargs)
-            except Exception as exc:                      # noqa: BLE001 - R2: reclaim ANY failure
-                box["exc"] = exc
-
-        worker = threading.Thread(target=_run, name=f"mokata-mcp-{op}", daemon=True)
-        worker.start()
-        worker.join(budget)
-
-        elapsed_ms = int((time.perf_counter() - started) * 1000)
-
-        # R1.S1b — ONE exit, so every outcome is evented. The four returns below used to be four
-        # returns; a wrapper whose instrumentation sits on three of them is a wrapper that
-        # reports `timed_out` least often, which is the outcome anyone reading this store most
-        # wants to find (§7e: an instrument that goes quiet exactly where the trouble is).
-        if worker.is_alive():                             # R1 — over budget, still running
-            out = _timed_out(op, budget)
-        elif "exc" in box:
-            # D1d — a tool-local validator (an enum / comma-list whose vocabulary is the TOOL's, not
-            # the surface's) raises from inside the body. It is still a caller fault, so it converts
-            # through the SAME single site as the pre-step's, ahead of R2's server-fault reclaim.
-            if isinstance(box["exc"], ValidationError):
-                out = refusal(box["exc"], op)
-            else:
-                out = _as_error(op, box["exc"])           # R2 — reclaim the exception
-        else:
-            out = _coerce(op, box.get("result"))          # R3 — never None / non-dict
-        # AXI-OUT (10) — a non-success result (and any degraded marker) carries the exact fixing
-        # command as a machine-readable `remedyCommand`, derived from the text it already says.
-        out = with_remedy(out)
-        _emit_tool_call(call_path, op, kind, out, elapsed_ms)
+        if not call.done.is_set():                        # O14 — still working: SAY so, keep going
+            call.told_running = True
+            elapsed = time.perf_counter() - call.started
+            out = with_remedy(_still_running(op, budget, elapsed, call.call_id))
+            _emit_tool_call(call_path, op, kind, out, int(elapsed * 1000))
+            return out
+        _finish(call)
+        # R1.S1b — the event's real duration, measured by the call itself (a joined re-call reports
+        # the work's duration, not the re-call's wait). ONE event per piece of work: a re-call that
+        # joined does not event it a second time.
+        out = call.out
+        if not joined:
+            _emit_tool_call(call_path, op, kind, out, call.elapsed_ms)
         return out
 
     return wrapper
@@ -561,7 +750,7 @@ def build_server() -> Any:
         # human-declined / server-error + the `mokata approve --list` fallback), appended once from
         # `kind` rather than re-prosed per tool. Read tools stay byte-identical. Metadata only —
         # like D1a's annotations it changes no input schema and no tool result.
-        server.add_tool(_serve(spec.fn, name=spec.name, kind=spec.kind), name=spec.name,
+        server.add_tool(_offloop(_serve(spec.fn, name=spec.name, kind=spec.kind)), name=spec.name,
                         description=description_for(spec.kind, spec.name, spec.fn.__doc__ or ""),
                         annotations=ToolAnnotations(**annotations_for(spec.kind, spec.name)))
     return server
@@ -617,5 +806,59 @@ def main(argv: Optional[List[str]] = None) -> int:
     # tool call — the reverse of R5's tradeoff, and the right way round at startup. `_serve` still
     # re-registers per call, which is now a REFRESH (`last_seen`/phase) rather than the first write.
     _register_this_window(getattr(args, "path", ".") or ".")
-    _public_module().build_server().run()   # stdio (plugin-launched); each tool takes its `path`
+    # 0.0.26 L8 (MP.S1) — on the plugin route (`CLAUDE_PLUGIN_DATA` is exported only to a plugin's
+    # servers and hooks) this process IS the pinned `uvx --from "mokata[full]==<v>"` environment:
+    # record its interpreter so the plugin's hooks and CLI launcher run the same version, fast.
+    # A no-op on every other route; never raises.
+    from ..plugin_runtime import record_runtime
+    record_runtime()
+    # O14b — this process lives for the whole session: share one code-graph `serve` per repo across
+    # calls instead of starting (and leaking) one per call.
+    from ..knowledge.crg_client import enable_session_pool
+    enable_session_pool()
+    _run_stdio(_public_module().build_server())   # stdio (plugin-launched); each tool takes `path`
     return 0
+
+
+def _run_stdio(server: Any) -> None:
+    """O14 — serve stdio with the JSON-RPC stream on a PRIVATE descriptor.
+
+    The protocol owns stdout, and before this anything else that reached file descriptor 1 went
+    into the client's JSON-RPC stream: a stray `print`, a library warning written to stdout, and —
+    the case no code review catches — any child process (git, a graph CLI, a test runner) started
+    without its stdout captured, because a child inherits fd 1. One such line and the client
+    drops the connection or waits for a reply that is now unparseable: a "stuck" server. So the
+    real stdout is duplicated to a private fd that only the transport writes, and fd 1 (plus
+    `sys.stdout`) is pointed at stderr, where a stray write is harmless log noise. Works the same
+    on Windows (`os.dup`/`os.dup2` are CRT calls there). A non-FastMCP server (a test double) is
+    run as-is."""
+    try:
+        from mcp.server.fastmcp import FastMCP
+    except ImportError:                                   # pragma: no cover - checked in main
+        FastMCP = None                                    # type: ignore[assignment]
+    if FastMCP is None or not isinstance(server, FastMCP):
+        server.run()
+        return
+    import os
+    from io import TextIOWrapper
+    import anyio
+    from mcp.server.stdio import stdio_server
+
+    try:
+        sys.stdout.flush()
+        rpc_fd = os.dup(sys.stdout.fileno())
+        os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+    except (AttributeError, OSError, ValueError):
+        # No usable stderr descriptor to park fd 1 on (a windowless launcher): serve as the SDK
+        # does. Nothing is lost that this host could have kept.
+        server.run()
+        return
+    sys.stdout = sys.stderr
+    rpc = anyio.wrap_file(TextIOWrapper(os.fdopen(rpc_fd, "wb"), encoding="utf-8"))
+    low = server._mcp_server                              # FastMCP's own lowlevel server (mcp<2)
+
+    async def _serve_forever() -> None:
+        async with stdio_server(stdout=rpc) as (read_stream, write_stream):
+            await low.run(read_stream, write_stream, low.create_initialization_options())
+
+    anyio.run(_serve_forever)

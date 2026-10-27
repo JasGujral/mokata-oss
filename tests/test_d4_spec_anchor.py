@@ -17,6 +17,8 @@ import unittest
 from contextlib import redirect_stdout
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata.brainstorm import APPROACH_STATE_KEY, Handoff
 from mokata.engine import spec_anchor as SA
@@ -129,7 +131,7 @@ class S1Capture(unittest.TestCase):
             spec = Spec("t", [AcceptanceCriterion("AC-1", "per D1 the max")])
             shown = json.loads(preview_content(store, spec))
             self.assertEqual([], spec.criteria[0].anchors, "the preview must not mutate the spec")
-            spec_commit(store, spec, run_id="r1")
+            commit_planned(store, spec, run_id="r1")
             landed = store.read(SPEC_STATE_KEY)
             self.assertEqual(shown["criteria"], landed["criteria"])
             self.assertEqual("approach", landed["criteria"][0]["anchors"][0]["source"])
@@ -214,7 +216,8 @@ class S2Surface(unittest.TestCase):
         import types
         args = types.SimpleNamespace(path=".")
         with mock.patch.object(CS, "_load_surface"), \
-                mock.patch.object(CS, "_run_scoped_store", return_value=(object(), "r1", "")), \
+                mock.patch.object(CS, "_run_scoped_store",
+                                  return_value=(mock.Mock(read=lambda _k: None), "r1", "")), \
                 mock.patch("mokata.engine.spec_gate.load_emitted_spec",
                            return_value=self._spec()):
             buf = io.StringIO()

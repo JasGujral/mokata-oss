@@ -41,7 +41,7 @@ after pull.
 
   ```bash
   PY="$(command -v python3 || command -v python)"
-  ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
+  mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
   ```
 
 ## 2. Pick the sub-action from `$ARGUMENTS`
@@ -53,7 +53,7 @@ If `$ARGUMENTS` is empty, infer the sub-action from the conversation (save/share
   transport's store, `list` says so and names them rather than quietly listing short:
 
   ```bash
-  eval "$ENGINE session list --path ."
+  mokata session list --path .
   ```
 
 - **`push <tag> [--to local|postgres]`** — package THIS session under a tag on the chosen
@@ -79,15 +79,15 @@ If `$ARGUMENTS` is empty, infer the sub-action from the conversation (save/share
 
    ```bash
    # push the current session (postgres is the shared team store):
-   eval "$ENGINE session push <tag> --to local --yes --path ."
+   mokata session push '<tag>' --to local --yes --path .
    # add --force ONLY to overwrite a changed bundle; --author <name> for provenance.
 
    # pull + re-hydrate (default target = this repo; --into to target another):
-   eval "$ENGINE session pull <tag> --from local --yes --path ."
+   mokata session pull '<tag>' --from local --yes --path .
    # add --force ONLY to apply across a cross-codebase mismatch, after the user confirms.
 
    # rename a tagged session:
-   eval "$ENGINE session name <tag> <new> --yes --path ."
+   mokata session name '<tag>' '<new>' --yes --path .
    # add --force ONLY to overwrite a colliding name, after the user confirms.
    ```
 

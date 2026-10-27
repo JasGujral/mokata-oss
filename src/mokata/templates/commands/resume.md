@@ -22,9 +22,9 @@ active/most-recent).
 
 ```bash
 PY="$(command -v python3 || command -v python)"
-ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
-eval "$ENGINE resume --path ."            # the active/most-recent run
-eval "$ENGINE resume <run-id> --path ."   # a specific run from `sessions`
+mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
+mokata resume --path .            # the active/most-recent run
+mokata resume '<run-id>' --path .   # a specific run from `sessions`
 ```
 
 It prints the resume phase and the gate that applies. To continue, run that phase

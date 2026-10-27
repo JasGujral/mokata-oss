@@ -40,6 +40,8 @@ import unittest
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata import approval as A
 from mokata import session as S
@@ -100,9 +102,9 @@ def _pipeline_repo(run_id="runA", *, prior_art_ran=True, emit=True):
     PipelineCheckpoint(surface.state, run_id).ensure_registered()
     surface.state.write("approved_approach", _handoff(prior_art_ran))
     if emit:
-        out = TS.spec_emit(path=d, title="s", criteria=C1, tests=T1, approach="a")
+        out = call_planned(TS.spec_emit, path=d, title="s", criteria=C1, tests=T1, approach="a")
         _human_approves(d, out["proposal_id"])
-        TS.spec_emit(path=d, title="s", criteria=C1, tests=T1, approach="a",
+        call_planned(TS.spec_emit, path=d, title="s", criteria=C1, tests=T1, approach="a",
                      proposal_id=out["proposal_id"])
     return d
 
@@ -117,11 +119,11 @@ def _re_enter(root, session_id):
 def _commit(root, **kw):
     """One full human round-trip through `spec_emit` — propose, a HUMAN approves out-of-band,
     re-call with the id. Returns the committed result."""
-    out = TS.spec_emit(path=root, **kw)
+    out = call_planned(TS.spec_emit, path=root, **kw)
     if out.get("status") != "proposed":
         return out
     _human_approves(root, out["proposal_id"])
-    return TS.spec_emit(path=root, proposal_id=out["proposal_id"], **kw)
+    return call_planned(TS.spec_emit, path=root, proposal_id=out["proposal_id"], **kw)
 
 
 # ---------------------------------------------------------------- a degraded chosen radius
@@ -175,7 +177,7 @@ class TestReproHandoffInvisible(_Base):
         at `spec-persisted` and never got as far as a proposal a human could approve."""
         d = _pipeline_repo("runY")
         _re_enter(d, "runZ")
-        out = TS.spec_amend(path=d, title="s", criteria=C2, tests=T2, approach="a", reason="r")
+        out = call_planned(TS.spec_amend, path=d, title="s", criteria=C2, tests=T2, approach="a", reason="r")
         self.assertEqual(out["status"], "proposed",
                          "there IS a spec on this pipeline to amend — the amendment must reach the "
                          "human gate, not die on a state-scope miss")
@@ -191,7 +193,7 @@ class TestReproHandoffInvisible(_Base):
 
         d = _pipeline_repo("runY")
         _re_enter(d, "runZ")
-        self.assertEqual(TS.spec_amend(path=d, title="s", criteria=C2, tests=T2, approach="a",
+        self.assertEqual(call_planned(TS.spec_amend, path=d, title="s", criteria=C2, tests=T2, approach="a",
                                        reason="r")["status"], "proposed")
         store, run_id, err = _run_scoped_store(Surface.load(d))
         self.assertIsNone(err)
@@ -221,14 +223,14 @@ class TestReproRefusalGatesGoSilent(_Base):
     # --- GR-PA-WIRE: the durable `approved_approach` Handoff -----------------------------------
     def test_prior_art_refuses_same_session(self):
         d = _pipeline_repo("runA", prior_art_ran=False, emit=False)
-        out = TS.spec_emit(path=d, title="s", criteria=C1, tests=T1, approach="a")
+        out = call_planned(TS.spec_emit, path=d, title="s", criteria=C1, tests=T1, approach="a")
         self.assertEqual(out["gate"], "prior-art")
         self.assertFalse(out["committed"])
 
     def test_prior_art_still_refuses_cross_session(self):
         d = _pipeline_repo("runA", prior_art_ran=False, emit=False)
         _re_enter(d, "runB")
-        out = TS.spec_emit(path=d, title="s", criteria=C1, tests=T1, approach="a")
+        out = call_planned(TS.spec_emit, path=d, title="s", criteria=C1, tests=T1, approach="a")
         self.assertEqual(out.get("gate"), "prior-art",
                          "a gate that quietly is not there is worse than one that blocks — the "
                          "prior-art step did not run for the approach this spec comes from")
@@ -238,7 +240,7 @@ class TestReproRefusalGatesGoSilent(_Base):
     def test_graph_required_refuses_same_session(self):
         d = _pipeline_repo("runA", emit=False)
         save_brainstorm_progress(_degraded_brainstorm(), Surface.load(d).state)
-        out = TS.spec_emit(path=d, title="s", criteria=C1, tests=T1, approach="a")
+        out = call_planned(TS.spec_emit, path=d, title="s", criteria=C1, tests=T1, approach="a")
         self.assertEqual(out["gate"], "graph-required")
         self.assertFalse(out["committed"])
 
@@ -246,7 +248,7 @@ class TestReproRefusalGatesGoSilent(_Base):
         d = _pipeline_repo("runA", emit=False)
         save_brainstorm_progress(_degraded_brainstorm(), Surface.load(d).state)
         _re_enter(d, "runB")
-        out = TS.spec_emit(path=d, title="s", criteria=C1, tests=T1, approach="a")
+        out = call_planned(TS.spec_emit, path=d, title="s", criteria=C1, tests=T1, approach="a")
         self.assertEqual(out.get("gate"), "graph-required",
                          "the chosen approach's blast radius is still a lexical estimate after a "
                          "re-entry — the run did not change, only the process did")
@@ -261,13 +263,13 @@ class TestReproRefusalGatesGoSilent(_Base):
         d = _pipeline_repo("runA", emit=False)
         save_brainstorm_progress(_degraded_brainstorm(), Surface.load(d).state)
         _re_enter(d, "runB")
-        self.assertEqual(TS.spec_emit(path=d, title="s", criteria=C1, tests=T1,
+        self.assertEqual(call_planned(TS.spec_emit, path=d, title="s", criteria=C1, tests=T1,
                                       approach="a")["gate"], "graph-required")
 
         # a not-ran handoff + NO progress at all -> only prior-art fires.
         d2 = _pipeline_repo("runA", prior_art_ran=False, emit=False)
         _re_enter(d2, "runB")
-        self.assertEqual(TS.spec_emit(path=d2, title="s", criteria=C1, tests=T1,
+        self.assertEqual(call_planned(TS.spec_emit, path=d2, title="s", criteria=C1, tests=T1,
                                       approach="a")["gate"], "prior-art")
 
 
@@ -294,10 +296,10 @@ class TestReproSingleShotKeying(_Base):
                                  approach="a")["status"], "committed")
 
         _re_enter(d, "runC")
-        first = TS.spec_emit(path=d, title="s3", criteria=C2, tests=T2,
+        first = call_planned(TS.spec_emit, path=d, title="s3", criteria=C2, tests=T2,
                              approach="a")["proposal_id"]
         _re_enter(d, "runD")
-        second = TS.spec_emit(path=d, title="s3", criteria=C2, tests=T2,
+        second = call_planned(TS.spec_emit, path=d, title="s3", criteria=C2, tests=T2,
                               approach="a")["proposal_id"]
         self.assertEqual(first, second,
                          "one write, one proposal — after the FIRST cross-session commit the key "
@@ -360,7 +362,7 @@ class TestFailClosed(_Base):
         self.assertEqual(run_id, "runB",
                          "unresolvable means this PROCESS's own id — the narrowest scope there "
                          "is, and exactly today's behaviour. Never a guessed pipeline")
-        out = TS.spec_emit(path=d, title="s2", criteria=C2, tests=T2, approach="a")
+        out = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2, approach="a")
         self.assertEqual(out["status"], "proposed")
         self.assertFalse(out["committed"])
         self.assertEqual(A.load(d, out["proposal_id"]).run_id, "runB")
@@ -398,23 +400,26 @@ class TestFailClosed(_Base):
     def test_the_model_still_cannot_mint_consent_across_a_boundary(self):
         d = _pipeline_repo("runA")
         _re_enter(d, "runB")
-        out = TS.spec_emit(path=d, title="s2", criteria=C2, tests=T2, approach="a",
+        out = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2, approach="a",
                            approve=True, confirm=True)
         self.assertEqual(out["status"], "proposed")
         self.assertFalse(out["committed"])
 
     def test_a_cross_session_approval_still_licenses_exactly_one_write(self):
         d = _pipeline_repo("runA")
-        pid = TS.spec_emit(path=d, title="s2", criteria=C2, tests=T2,
+        pid = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2,
                            approach="a")["proposal_id"]
         _human_approves(d, pid)
         _re_enter(d, "runB")
-        first = TS.spec_emit(path=d, title="s2", criteria=C2, tests=T2, approach="a",
+        first = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2, approach="a",
                              proposal_id=pid)
         self.assertEqual(first["status"], "committed")
-        second = TS.spec_emit(path=d, title="s2", criteria=C2, tests=T2, approach="a",
+        second = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2, approach="a",
                               proposal_id=pid)
-        self.assertEqual(second["status"], "refused")
+        # O14 — the burnt approval licenses nothing more; the retry is answered from the record
+        self.assertFalse(second["committed"])
+        self.assertEqual(second["status"], "unchanged")
+        self.assertTrue(second["already_applied"])
         self.assertEqual(second["reason_code"], A.REFUSED_USED,
                          "with the write landing on the pipeline's own run, the burn is now the "
                          "SPECIFIC answer — RE-ENTRY could only promise the write was refused")
@@ -424,7 +429,7 @@ class TestFailClosed(_Base):
         radius must still emit cleanly after a re-entry."""
         d = _pipeline_repo("runA", emit=False)
         _re_enter(d, "runB")
-        out = TS.spec_emit(path=d, title="s", criteria=C1, tests=T1, approach="a")
+        out = call_planned(TS.spec_emit, path=d, title="s", criteria=C1, tests=T1, approach="a")
         self.assertEqual(out["status"], "proposed")
         self.assertNotIn(out.get("gate"), ("prior-art", "graph-required"))
 

@@ -47,7 +47,12 @@ SWEEP_HOOK_DIR = os.path.join(_TESTS, "_tty_sweep")
 #: double but reaches no entry point cannot reach `input()` on the ambient stream, and the
 #: "a correct interactive test is not flagged" property is graded on a PLANTED subject below rather
 #: than by sweeping the real ones.
-_PROMPT_REACHING = re.compile(r"read_yes_no|_cli_ask|read_yes_no_prompt")
+#: 0.0.26 O15 widened it: `test_l2_mok_update` reached `read_yes_no` through `mokata update`
+#: WITHOUT naming an entry point — it named `mokata.prompt._stdin_is_tty` — so the narrowed corpus
+#: never swept it, and it HUNG Jas's checkpoint-2 run at a real terminal. A module that reaches into
+#: the prompt module at all is now in the corpus.
+_PROMPT_REACHING = re.compile(r"read_yes_no|_cli_ask|read_yes_no_prompt|_stdin_is_tty|"
+                              r"mokata\.prompt\b|from mokata import prompt")
 
 
 #: 🔴 THIS MODULE IS EXCLUDED FROM ITS OWN CORPUS, AND IT IS NOT A CONVENIENCE — IT IS A HANG.

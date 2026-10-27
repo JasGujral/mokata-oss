@@ -1,0 +1,83 @@
+{
+  "schemas": {},
+  "routes": [
+    {
+      "path": "/api/highlight", "method": "GET", "kind": "json",
+      "params": {"query": {"path": "repo-relative path", "start": "first line (1-based)",
+                           "end": "last line (inclusive; at most 5,000 lines per request)"}},
+      "responses": {
+        "200": {"media": "json", "schema": {
+          "type": "object",
+          "required": ["path", "lines", "start", "end", "rows", "lang", "detected_by", "plain",
+                       "plain_reason", "basis", "truncated", "chunk", "cached", "sample"],
+          "properties": {
+            "path": {"type": "string"}, "lines": {"type": "integer"},
+            "start": {"type": "integer"}, "end": {"type": "integer"},
+            "rows": {"type": "array", "items": {"type": "array", "items": {"type": "array",
+                     "items": {"type": "string"}}}},
+            "lang": {"type": "string"},
+            "detected_by": {"enum": ["filename", "content", "none"]},
+            "plain": {"type": "boolean"}, "plain_reason": {"type": "string"},
+            "basis": {"type": "string"}, "truncated": {"type": "boolean"},
+            "chunk": {"type": "integer"}, "cached": {"type": "boolean"},
+            "not_served": {"type": "boolean"}, "sample": {"type": "boolean"}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"path": "src/app/core.py", "start": "1", "end": "50"}, "status": 200},
+                 {"query": {"path": "../etc/passwd"}, "status": 400}]
+    },
+    {
+      "path": "/api/highlight/info", "method": "GET", "kind": "json",
+      "params": {},
+      "responses": {
+        "200": {"media": "json", "schema": {
+          "type": "object",
+          "required": ["available", "lexers", "install", "classes", "chunk", "lead",
+                       "max_window", "cache"],
+          "properties": {
+            "available": {"type": "boolean"}, "lexers": {"type": "integer"},
+            "install": {"type": "string"}, "classes": {"type": "array", "items": {"type": "string"}},
+            "chunk": {"type": "integer"}, "lead": {"type": "integer"},
+            "max_window": {"type": "integer"}, "cache": {"type": "object"}}}}
+      },
+      "probes": [{"status": 200}]
+    },
+    {
+      "path": "/api/highlight/diff", "method": "POST", "kind": "action",
+      "params": {"body": {"path": "the file's path (for its language)",
+                          "hunks": "[{lines: [[op, old, new, text], ...]}] — as the diff routes give them"}},
+      "responses": {
+        "200": {"media": "json", "schema": {
+          "type": "object",
+          "required": ["path", "lang", "detected_by", "plain", "plain_reason", "hunks", "sample"],
+          "properties": {
+            "path": {"type": "string"}, "lang": {"type": "string"},
+            "detected_by": {"type": "string"}, "plain": {"type": "boolean"},
+            "plain_reason": {"type": "string"}, "sample": {"type": "boolean"},
+            "hunks": {"type": "array", "items": {"type": "array"}}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"body": {"path": "a.py", "hunks": [{"lines": [[" ", 1, 1, "x = 1"],
+                                                                ["+", null, 2, "y = 'two'"]]}]},
+                  "status": 200},
+                 {"body": {"path": "a.py"}, "status": 400}]
+    },
+    {
+      "path": "/api/highlight/snippet", "method": "POST", "kind": "action",
+      "params": {"body": {"text": "the code", "lang": "a fence language (optional)",
+                          "path": "a file name to detect by (optional)"}},
+      "responses": {
+        "200": {"media": "json", "schema": {
+          "type": "object",
+          "required": ["lang", "detected_by", "plain", "plain_reason", "rows", "sample"],
+          "properties": {
+            "lang": {"type": "string"}, "detected_by": {"type": "string"},
+            "plain": {"type": "boolean"}, "plain_reason": {"type": "string"},
+            "sample": {"type": "boolean"}, "rows": {"type": "array"}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"body": {"text": "def f():\n    return 1\n", "lang": "python"}, "status": 200},
+                 {"body": {"lang": "python"}, "status": 400}]
+    }
+  ]
+}

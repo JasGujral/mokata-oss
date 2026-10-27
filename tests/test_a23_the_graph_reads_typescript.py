@@ -171,7 +171,10 @@ class TheDegradationIsAnnouncedUpFront(unittest.TestCase):
     def test_the_warning_NAMES_the_command_and_says_no_config_is_needed(self):
         surface = _repo({"src/a.tsx": "export const A = () => <div/>;\n"})
         detail = D.ts_parser_findings(surface, available=lambda: False)[0].detail
-        self.assertIn("pip install 'mokata[graph-ts]'", detail)
+        # 0.0.26 L1: THIS installer's line for the extra, quoted for THIS platform.
+        from mokata.install_route import plan_extra_install
+        self.assertIn(plan_extra_install("graph-ts").display, detail)
+        self.assertIn("tree-sitter", detail)
         self.assertIn("mokata index", detail)
 
     def test_the_warning_says_the_answers_are_INCOMPLETE_not_merely_absent(self):

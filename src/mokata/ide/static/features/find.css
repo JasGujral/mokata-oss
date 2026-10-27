@@ -1,0 +1,18 @@
+/* mokata ide — the find bar (0.0.26 P3, ID-INFILE-FIND). Brand colours from app.css variables. */
+.find-bar { position: absolute; top: 8px; right: 16px; z-index: 15; display: flex; align-items: center; gap: 6px;
+  max-width: calc(100% - 32px); padding: 6px 8px; background: var(--panel); border: 1px solid var(--line2);
+  border-radius: 8px; box-shadow: 0 6px 20px rgba(0, 0, 0, .25); }
+.find-bar[hidden] { display: none; }
+#find-input { width: 220px; min-width: 80px; flex: 1 1 auto; font: inherit; font-family: var(--mono); color: var(--text);
+  background: var(--bg); border: 1px solid var(--line2); border-radius: 5px; padding: 3px 7px; outline: none; }
+#find-input:focus { border-color: var(--accent); }
+#find-input.bad { border-color: #e5484d; }
+.fb-btn { font: inherit; font-family: var(--mono); font-size: 12px; min-width: 26px; padding: 2px 6px; color: var(--text2);
+  background: transparent; border: 1px solid transparent; border-radius: 5px; cursor: pointer; }
+.fb-btn:hover { background: var(--sel); }
+.fb-btn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--sel); }
+.fb-count { min-width: 64px; text-align: right; white-space: nowrap; }
+.fb-scope { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+mark.fm { background: rgba(61, 245, 140, .22); color: inherit; border-radius: 2px; }
+mark.fm.cur { background: var(--accent); color: var(--on-accent); }
+@media (max-width: 640px) { .fb-scope { display: none; } #find-input { width: 120px; } }

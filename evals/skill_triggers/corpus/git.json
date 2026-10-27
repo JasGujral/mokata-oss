@@ -1,0 +1,35 @@
+{
+ "skill": "git",
+ "triggers": [
+  "branching or merge strategy",
+  "commit structure",
+  ".gitignore/.gitattributes policy"
+ ],
+ "positive": [
+  "Help me split this huge change into small atomic commits",
+  "What branching or merge strategy should we use for release branches?",
+  "Update our .gitignore/.gitattributes policy for generated files",
+  "How should we tag versions for the next release in git?",
+  "Plan the commit structure for this feature before I land it"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Add a lint step to the GitHub Actions workflow",
+   "expect": "ci-cd"
+  },
+  {
+   "prompt": "Fix the null check in the parser"
+  },
+  {
+   "prompt": "Plan a staged rollout to users with rollback thresholds",
+   "expect": "shipping"
+  },
+  {
+   "prompt": "Package this session so a teammate can resume it",
+   "expect": "session"
+  },
+  {
+   "prompt": "Explain how distributed version control differs from centralized in theory"
+  }
+ ]
+}

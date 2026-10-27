@@ -21,7 +21,7 @@ import re
 from typing import Any, Dict, Iterable, List, Optional
 
 # Statuses that are NOT a success: the ones a consumer needs a fix for.
-NON_SUCCESS_STATUSES = frozenset({"degraded", "refused", "blocked", "timed_out", "error"})
+NON_SUCCESS_STATUSES = frozenset({"degraded", "refused", "blocked", "error"})
 
 # The text fields a payload says its remedy in, in the order a remedy is looked for.
 _TEXT_FIELDS = ("remedy", "fix", "hint", "next", "message", "reason", "note", "notice", "detail")

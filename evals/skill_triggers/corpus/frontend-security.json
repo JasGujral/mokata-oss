@@ -1,0 +1,34 @@
+{
+ "skill": "frontend-security",
+ "triggers": [
+  "Server Function, a route handler, a page that reads protected data",
+  "renders user-controlled HTML or URLs"
+ ],
+ "positive": [
+  "Add a Server Function in our Next.js app that updates the user's billing address",
+  "This React page renders user-controlled HTML from comments; make it safe",
+  "Expose a new environment variable to the client in the Next app — is that a secret leak?",
+  "Add a route handler in the Next app that reads protected invoice data",
+  "Audit the React web app for injection sinks and secrets in the bundle"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Harden the Go backend's auth service against brute force",
+   "expect": "security"
+  },
+  {
+   "prompt": "Change the button colour on the landing page"
+  },
+  {
+   "prompt": "Add biometric login to the React Native app"
+  },
+  {
+   "prompt": "Shrink the React bundle size and cut the render count",
+   "expect": "frontend-perf"
+  },
+  {
+   "prompt": "Add a NestJS guard to the admin controller",
+   "expect": "backend-nestjs"
+  }
+ ]
+}

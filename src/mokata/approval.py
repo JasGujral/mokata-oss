@@ -111,6 +111,9 @@ LEDGER_KIND = "write_approval"
 STATUS_PROPOSED = "proposed"
 STATUS_APPROVED = "approved"
 STATUS_USED = "used"
+# 0.0.26 P38 — a human said NO. Terminal like `used`: it is never redeemable, and a re-proposal of
+# the same content starts a fresh `proposed` record the human sees again (exactly like an expiry).
+STATUS_REJECTED = "rejected"
 
 # Consent states, as seen by a write tool.
 GRANTED = "granted"          # a human-minted approval was found, verified, and burned
@@ -125,6 +128,7 @@ REFUSED_EXPIRED = "expired"
 REFUSED_USED = "already-used"
 REFUSED_OTHER_SESSION = "other-session"
 REFUSED_NOT_APPROVED = "not-approved"
+REFUSED_REJECTED = "rejected"
 
 _REFUSAL_TEXT = {
     REFUSED_UNKNOWN: "no such proposal — it never existed, expired, or was pruned",
@@ -135,6 +139,7 @@ _REFUSAL_TEXT = {
     REFUSED_OTHER_SESSION: ("that approval was minted for a different run — it does not license a "
                             "write against this one"),
     REFUSED_NOT_APPROVED: "no human has approved this proposal yet",
+    REFUSED_REJECTED: "a human REJECTED this proposal — it licenses nothing",
 }
 
 
@@ -281,7 +286,7 @@ def pending(root: str, now: Optional[float] = None) -> List[Proposal]:
         return []
     for name in names:
         p = load(root, name[len(PROPOSAL_PREFIX):-len(".json")])
-        if p is None or p.status == STATUS_USED or p.expired(now):
+        if p is None or p.status in (STATUS_USED, STATUS_REJECTED) or p.expired(now):
             continue
         out.append(p)
     return sorted(out, key=lambda p: p.created_at, reverse=True)
@@ -307,7 +312,7 @@ def prune(root: str, now: Optional[float] = None, keep: int = MAX_PROPOSALS) -> 
     for name in names:
         key = name[:-len(".json")]
         p = from_state(store.read(key)) if _safe(store, key) else None
-        if p is None or p.expired(now) or p.status == STATUS_USED:
+        if p is None or p.expired(now) or p.status in (STATUS_USED, STATUS_REJECTED):
             removed += 1 if store.delete(key) else 0
             continue
         live.append((p.created_at, key))
@@ -454,6 +459,8 @@ def approve(root: str, proposal_id: str, *, actor: str = "human", ledger: Any = 
         return ApprovalResult(False, REFUSED_UNKNOWN, _REFUSAL_TEXT[REFUSED_UNKNOWN])
     if p.status == STATUS_USED:
         return ApprovalResult(False, REFUSED_USED, _REFUSAL_TEXT[REFUSED_USED], p)
+    if p.status == STATUS_REJECTED:
+        return ApprovalResult(False, REFUSED_REJECTED, _REFUSAL_TEXT[REFUSED_REJECTED], p)
     if p.expired(now):
         return ApprovalResult(False, REFUSED_EXPIRED, _REFUSAL_TEXT[REFUSED_EXPIRED], p)
     if p.status == STATUS_APPROVED:
@@ -468,6 +475,31 @@ def approve(root: str, proposal_id: str, *, actor: str = "human", ledger: Any = 
                       target=p.target, content_hash=p.content_hash, actor=actor,
                       run=p.run_id, scope="session")
     return ApprovalResult(True, "approved", f"approved — {p.tool} may now commit once", approved)
+
+
+def reject(root: str, proposal_id: str, *, actor: str = "human", ledger: Any = None,
+           now: Optional[float] = None) -> ApprovalResult:
+    """0.0.26 P38 — the human's NO, the act's other half. The SAME bar as `approve` (callers: the
+    `mokata approve --reject` CLI behind its TTY re-confirm, and the IDE behind its TTY-printed
+    one-time code — never an MCP tool). A not-yet-redeemed APPROVAL can be rejected too: taking
+    consent back is always the safe direction. Ledgered as `decision="rejected"`."""
+    now = time.time() if now is None else now
+    p = load(root, proposal_id)
+    if p is None:
+        return ApprovalResult(False, REFUSED_UNKNOWN, _REFUSAL_TEXT[REFUSED_UNKNOWN])
+    if p.status == STATUS_USED:
+        return ApprovalResult(False, REFUSED_USED, "too late — that write was already committed", p)
+    if p.status == STATUS_REJECTED:
+        return ApprovalResult(True, "already-rejected", "already rejected — it licenses nothing", p)
+    if p.expired(now):
+        return ApprovalResult(False, REFUSED_EXPIRED, _REFUSAL_TEXT[REFUSED_EXPIRED], p)
+    rejected = replace(p, status=STATUS_REJECTED, approved_by=actor, approved_at=now)
+    _store(root).write(state_key(proposal_id), rejected.to_state())
+    if ledger is not None:
+        ledger.record(LEDGER_KIND, decision="rejected", proposal=proposal_id, tool=p.tool,
+                      target=p.target, content_hash=p.content_hash, actor=actor,
+                      run=p.run_id, scope="session")
+    return ApprovalResult(True, "rejected", f"rejected — {p.tool} will not commit this write", rejected)
 
 
 # ======================================================================================
@@ -506,6 +538,8 @@ def _verify(p: Optional[Proposal], *, chash: str, run_id: str, now: float) -> Op
         return REFUSED_CONTENT_CHANGED
     if p.status == STATUS_USED:
         return REFUSED_USED
+    if p.status == STATUS_REJECTED:
+        return REFUSED_REJECTED
     if p.expired(now):
         return REFUSED_EXPIRED
     if p.status != STATUS_APPROVED:
@@ -548,6 +582,28 @@ def redeem(root: str, proposal_id: str, *, tool: str, args: Dict[str, Any], run_
     if code is not None:
         return _refuse(code, box.get("proposal"))
     return Consent(GRANTED, box.get("proposal"))
+
+
+def used_for(root: str, proposal_id: str, *, tool: str, args: Dict[str, Any],
+             run_id: str) -> Optional[Proposal]:
+    """O14 — READ-ONLY: the proposal `proposal_id` names when it was already REDEEMED for exactly
+    this call (same tool + args content hash, same run), else None. Never burns, never writes.
+
+    A client retry of a write it already redeemed (its first reply was lost, or arrived late) must
+    not be re-run as a fresh attempt: `spec_amend` re-ran its regression before the consent check
+    refused the burnt approval, re-opening an amendment that had just landed. The tools ask this
+    first and answer the retry from the record instead."""
+    if not proposal_id:
+        return None
+    try:
+        p = from_state(_store(root).read(state_key(proposal_id)))
+    except OSError:
+        return None
+    if p is None or p.status != STATUS_USED or p.run_id != run_id:
+        return None
+    if p.content_hash != content_hash(tool, args):
+        return None
+    return p
 
 
 def _refuse(code: str, p: Optional[Proposal] = None) -> Consent:
@@ -619,13 +675,13 @@ def render_group(p: Proposal, now: Optional[float] = None) -> str:
 
 __all__ = [
     "PROPOSAL_PREFIX", "DEFAULT_TTL_SECONDS", "MAX_PROPOSALS", "LEDGER_KIND",
-    "STATUS_PROPOSED", "STATUS_APPROVED", "STATUS_USED",
+    "STATUS_PROPOSED", "STATUS_APPROVED", "STATUS_USED", "STATUS_REJECTED", "REFUSED_REJECTED",
     "GRANTED", "NEEDED", "REFUSED",
     "REFUSED_UNKNOWN", "REFUSED_CONTENT_CHANGED", "REFUSED_EXPIRED", "REFUSED_USED",
     "REFUSED_OTHER_SESSION", "REFUSED_NOT_APPROVED",
     "Proposal", "ApprovalResult", "Consent",
     "approve", "consent", "content_hash", "from_state", "load", "pending", "propose",
-    "proposal_id_for", "prune", "record_redemption", "redeem", "render", "state_key",
+    "proposal_id_for", "prune", "record_redemption", "redeem", "reject", "render", "state_key",
     # UX-CONFIRM (D7c) — grouped same-kind proposals: one ask, full content, per-item records
     "group_content_hash", "propose_group", "record_group_redemption", "render_group",
 ]

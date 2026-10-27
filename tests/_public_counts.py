@@ -111,10 +111,17 @@ def derived_facts(root):
     # gate. Mutant B01 survived against the getattr form for exactly this reason: an unreachable
     # branch is ungradable (doc 85 §7f), and pre-1.0 the answer is to delete it, not test around it.
     backed = {name for name, gate in skill_contracts.GATES.items() if gate.backed}
+    # The domain half of `backed`, keyed on the ENFORCEMENT POINT that owns them
+    # (`govern/domain_gates.py`), not on a remembered name list — index.md states this number
+    # in words, and an unpinned spelling is an ungraded claim (O16).
+    domain_gates = {name for name in backed
+                    if "domain_gates" in (skill_contracts.GATES[name].enforcement_point or "")}
     run_state = set(gate_hook.GATES)
     # The hook lane is NOT a subset of the backed nine: `spec-scope` is run-state and unbacked,
     # `self-protect` is backed and runs ahead of all four. Two overlapping sets, never "N of the M".
-    hook_enforced = run_state | {"self-protect"}
+    # 0.0.26 R4 — the `fix-breaker` loop gate is enforced by the same hook on the same native
+    # writes, so it is counted here (the other two loop gates guard a stop and a record).
+    hook_enforced = run_state | {"self-protect"} | set(gate_hook.NATIVE_WRITE_LOOP_GATES)
 
     deps = _runtime_dependencies(root)
 
@@ -135,8 +142,11 @@ def derived_facts(root):
         Fact("mcp_approve", len(kinds.get("approve", ())), "mcp.registry.TOOLS .kind == 'approve'",
              kinds.get("approve", ())),
         Fact("backed_gates", len(backed), "skill_contracts.GATES where backed=True", backed),
+        Fact("domain_gates", len(domain_gates),
+             "skill_contracts.GATES where backed and enforcement_point is govern/domain_gates.py",
+             domain_gates),
         Fact("run_state_gates", len(run_state), "gate_hook.GATES", run_state),
-        Fact("hook_enforced", len(hook_enforced), "gate_hook.GATES + self-protect", hook_enforced),
+        Fact("hook_enforced", len(hook_enforced), "gate_hook.GATES + self-protect + NATIVE_WRITE_LOOP_GATES", hook_enforced),
         Fact("runtime_dependencies", len(deps), "pyproject.toml dependencies", deps),
     ]
     return {fact.key: fact for fact in facts}
@@ -314,6 +324,7 @@ CLAIM_PATTERNS = (
     ("cli_subcommands", re.compile(_NUM + r"\s+CLI subcommands", re.I)),
     ("mcp_tools", re.compile(_NUM + r"\s+(?:MCP )?tools\b", re.I)),
     ("backed_gates", re.compile(_NUM + r"\s+backed gates", re.I)),
+    ("domain_gates", re.compile(_NUM + r"\s+of them frontend/backend domain gates", re.I)),
     ("run_state_gates", re.compile(_NUM + r"\s+run-state gates", re.I)),
     ("run_state_gates", re.compile(r"[Aa]head of all\s+" + _NUM, re.I)),
     ("hook_enforced", re.compile(_NUM + r"\s+of those gates are enforced by a hook", re.I)),

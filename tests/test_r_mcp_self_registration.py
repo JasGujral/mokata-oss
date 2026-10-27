@@ -45,6 +45,8 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 import _support  # noqa: F401  (puts src/ on the path, and runs the stage-05 provisioning preflight)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata import gate_hook as G
 from mokata import run_resolver as RR                                  # noqa: E402
@@ -79,7 +81,7 @@ def _approve(root, run):
 
 
 def _emit_spec(root, run):
-    _raw_store(root).write(G.SPEC_PREFIX + run, {"criteria": [{"id": "AC1", "text": "it works"}]})
+    _raw_store(root).write(G.SPEC_PREFIX + run, sealed({"criteria": [{"id": "AC1", "text": "it works"}]}))
 
 
 def _record_red(root, run, test_id="test_login"):

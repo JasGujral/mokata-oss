@@ -87,7 +87,7 @@ class TestSetupProject(unittest.TestCase):
         help_text = _flag_help("setup", "--no-hooks")
         named = ("SessionStart", "user-prompt-submit", "secret-guard", "gate-guard",
                  "dirty-track", "run-bind", "pre-compact", "subagent-start", "subagent-stop",
-                 "stop", "session-end")
+                 "stop", "stop-gate", "session-end")
         for hook in named:
             self.assertIn(hook, help_text,
                           f"--no-hooks help does not name the {hook} hook it skips: {help_text!r}")

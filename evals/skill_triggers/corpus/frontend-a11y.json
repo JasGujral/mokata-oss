@@ -1,0 +1,34 @@
+{
+ "skill": "frontend-a11y",
+ "triggers": [
+  "UI component, a view, a template, or a stylesheet",
+  "colour/contrast choice"
+ ],
+ "positive": [
+  "Add an accessible label and keyboard focus to the new dropdown component",
+  "Check the colour contrast of the new button styles against WCAG AA",
+  "We're adding an image carousel to the homepage template; make it accessible",
+  "Add a form field for phone number to the signup view",
+  "Change the stylesheet for the nav menu and keep it screen-reader friendly"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Change the database schema for the orders table"
+  },
+  {
+   "prompt": "Format the internal CLI's debug output columns"
+  },
+  {
+   "prompt": "The React bundle is too big, measure and cut it",
+   "expect": "frontend-perf"
+  },
+  {
+   "prompt": "Add a Server Function that reads protected data",
+   "expect": "frontend-security"
+  },
+  {
+   "prompt": "Add an index to the users table to speed up login",
+   "expect": "performance"
+  }
+ ]
+}

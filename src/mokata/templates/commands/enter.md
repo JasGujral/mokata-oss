@@ -19,9 +19,9 @@ PATH):
 
 ```bash
 PY="$(command -v python3 || command -v python)"
-ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
-eval "$ENGINE enter <phase> --path ."             # start at <phase>
-eval "$ENGINE enter <phase> --to <phase> --path ."  # run a span of phases
+mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
+mokata enter '<phase>' --path .             # start at <phase>
+mokata enter '<phase>' --to '<phase>' --path .  # run a span of phases
 ```
 
 `<phase>` is one of the pipeline phases (e.g. `spec`, `test`, `develop`, `review`, `ship`).

@@ -55,6 +55,8 @@ import unittest
 from contextlib import redirect_stdout
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 from _support import mcp_commit
 
 from mokata import approval as A                                    # noqa: E402
@@ -119,7 +121,7 @@ def _emit_args(root, **kw):
 
 def _propose(root, **kw):
     """The FIRST call only — the proposal, before any human has approved anything."""
-    return TS.spec_emit(**_emit_args(root, **kw))
+    return call_planned(TS.spec_emit, **_emit_args(root, **kw))
 
 
 def _pending_preview(root, proposal_id):
@@ -136,7 +138,7 @@ def _cli_emit(root, *, yes=True):
     payload = {"title": TITLE, "criteria": CRITERIA, "tests": TESTS}
     fp = os.path.join(root, "spec.json")
     with open(fp, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh)
+        json.dump(planned(payload), fh)
     args = types.SimpleNamespace(path=root, file=fp, yes=yes)
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -273,7 +275,7 @@ class TestTheHumanSeesItAtTheGateThatAlreadyExists(unittest.TestCase):
 
         A.approve(d, first["proposal_id"], actor="test-human",
                   ledger=AuditLedger.from_mokata_dir(os.path.join(d, ".mokata")))
-        committed = TS.spec_emit(**_emit_args(d, proposal_id=first["proposal_id"]))
+        committed = call_planned(TS.spec_emit, **_emit_args(d, proposal_id=first["proposal_id"]))
         self.assertEqual(committed["status"], "committed", committed)
         self.assertTrue(committed["committed"])
 
@@ -340,8 +342,8 @@ class TestTheAttachedPathIsUnchanged(unittest.TestCase):
 
         d = _repo("run-attached-preview", brainstorm=True)
         out = _propose(d, approach="a")
-        spec, tests = spec_from_payload({"title": TITLE, "criteria": CRITERIA, "tests": TESTS,
-                                         "approach": "a"})
+        spec, tests = spec_from_payload(planned({"title": TITLE, "criteria": CRITERIA,
+                                                 "tests": TESTS, "approach": "a"}))
         self.assertEqual(_pending_preview(d, out["proposal_id"]), _spec_preview(spec, tests))
 
     def test_cli_attached_emit_output_is_byte_identical(self):

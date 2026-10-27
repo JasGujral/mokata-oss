@@ -103,7 +103,7 @@ mokata's defensible position is **integration + governance + local-first**, not 
 
 ## 1. What mokata actually is
 
-mokata is a **spec-driven, test-driven development engine for Claude Code** with four things bolted in that most tools leave as add-ons: a **codebase knowledge graph**, **persistent self-healing memory**, **active token/cost governance**, and a **human-gated governance + audit layer**. The whole thing is local-first (zero telemetry), pure Python (≥ 3.10; the MCP SDK is its only required dependency, and every other integration is optional and degraded over), Apache-2.0, and built clean-room.
+mokata is a **spec-driven, test-driven development engine for Claude Code** with four things bolted in that most tools leave as add-ons: a **codebase knowledge graph**, **persistent self-healing memory**, **active token/cost governance**, and a **human-gated governance + audit layer**. The whole thing is local-first (zero telemetry), pure Python (≥ 3.12; the MCP SDK is its only required dependency, and every other integration is optional and degraded over), Apache-2.0, and built clean-room.
 
 The defining behavior: **no code ships until every acceptance criterion maps to a test (RED before GREEN), and every durable write — to code, memory, or config — is human-gated.** The completeness gate *blocks* emit; it never silently passes.
 
@@ -148,18 +148,18 @@ The `full` profile declares the richest fallback chain for each capability. Here
 | `memory_store` | `sqlite` | guaranteed stdlib floor | `sqlite3` importable (always) |
 | | `postgres` | opt-in shared team store (your own DSN) | `psycopg` importable |
 
-Plus two Python extras: **`schema`** (richer manifest validation via `jsonschema`) and **`mcp`** (the `mokata-mcp` server that exposes mokata as native Claude Code tools; needs Python ≥ 3.10).
+Plus two Python extras: **`schema`** (richer manifest validation via `jsonschema`) and **`mcp`** (the `mokata-mcp` server that exposes mokata as native Claude Code tools; needs Python ≥ 3.12).
 
 The router binds the **first present** provider in each chain. Our goal in §2 is to make the top of the `code_graph` chain present, so it binds `code-review-graph` instead of the lexical floor. `memory_store` has one local provider by design — `sqlite`, the guaranteed floor — and a shared Postgres is an explicit opt-in, never a detection.
 
 ### 2.1 Step 1 — base system (Python, git, a shell)
 
 ```bash
-python3 --version      # need ≥ 3.10 (the bundled mokata-mcp server ships by default)
+python3 --version      # need ≥ 3.12 (the bundled mokata-mcp server ships by default)
 git --version
 ```
 
-If Python is older than 3.10, install a newer one (`pyenv install 3.12`, `brew install python@3.12`, or your distro's package) before continuing.
+If Python is older than 3.12, install a newer one (`pyenv install 3.12`, `brew install python@3.12`, or your distro's package) before continuing.
 
 ### 2.2 Step 2 — an isolated environment
 
@@ -216,7 +216,7 @@ command -v code-review-graph    # must print a path for mokata to bind it
 command -v serena               # optional; sits between code-review-graph and ripgrep in the chain
 ```
 
-> **Why bother, when grep works?** The graph turns "who calls this / what's the blast radius / what implements this interface" from a fuzzy lexical guess (`degraded=True`) into exact, edge-accurate answers — which is what makes brainstorm and review *grounded in real structure* and what powers JIT retrieval's 60%+ token savings (§8, §11). The floors keep mokata working everywhere; the graph makes it strong.
+> **Why bother, when grep works?** The graph turns "who calls this / what's the blast radius / what implements this interface" from a fuzzy lexical guess (`degraded=True`) into exact, edge-accurate answers — which is what makes brainstorm and review *grounded in real structure* and what powers JIT retrieval's token savings, which it measures and reports per call on your repo (§8, §11). The floors keep mokata working everywhere; the graph makes it strong.
 
 ### 2.5 Step 5 — the `memory_store` provider
 
@@ -277,7 +277,7 @@ mokata mcp status            # expect: mokata-mcp: REGISTERED ✓ … connected 
 
 `mokata setup claude` runs `init` if needed, copies the slash commands into `.claude/commands/`, installs the Agent Skills, registers the `mokata-mcp` server in `.mcp.json`, wires **three hooks** into `.claude/settings.json` — the SessionStart briefing, the **secret-guard** and the **gate-guard** (both `PreToolUse`) — and wires the status-line badge. JSON files are **merged, never clobbered**, and it's idempotent (re-running syncs and prunes old skills on update). `--scope user` installs into `~/.claude` for every project; `--no-hooks` wires only commands + MCP.
 
-Restart Claude Code. You now have the workflow slash commands (`/brainstorm`, `/refine`, `/spec`, `/test`, `/develop`, `/review`, `/debug`, `/optimize`, `/bug`, and `/init`), the SessionStart briefing hook, and the two `PreToolUse` guards — all automatic. **38 slash commands ship in total**; run `/menu` for the full palette on one screen (or `mokata menu` from the terminal).
+Restart Claude Code. You now have the workflow slash commands (`/brainstorm`, `/refine`, `/spec`, `/test`, `/develop`, `/review`, `/debug`, `/optimize`, `/bug`, and `/init`), the SessionStart briefing hook, and the two `PreToolUse` guards — all automatic. **39 slash commands ship in total**; run `/menu` for the full palette on one screen (or `mokata menu` from the terminal).
 
 > **The hooks are what make the gates real.** Only Claude Code declares the `hooks` capability, so this is the one harness where the run-state gates enforce on the agent's *native* `Write`/`Edit` (§12.4, §13.2). On the CLI or any other harness, mokata's gates still fire inside its own tools — but nothing stops a plain editor write. `--no-hooks` opts out of that enforcement.
 
@@ -987,7 +987,7 @@ A conservative, dependency-free estimator (~4 chars/token). `TokenTracker.add(..
 
 ### 11.2 JIT graph-backed retrieval (F2)
 
-Instead of dumping whole files into context, `jit_retrieve(layer, identifiers)` pulls the relevant **reference snippets** for a set of identifiers via the knowledge layer, and reports the reduction vs the file-dump baseline (`tokens_retrieved` vs `tokens_if_dumped`, `saved`, `saved_pct`). On a small sample this is routinely a **60%+ reduction**. This is *why* the knowledge layer matters for cost, not just navigation.
+Instead of dumping whole files into context, `jit_retrieve(layer, identifiers)` pulls the relevant **reference snippets** for a set of identifiers via the knowledge layer, and reports the reduction vs the file-dump baseline (`tokens_retrieved` vs `tokens_if_dumped`, `saved`, `saved_pct`). That figure is measured on your repo, call by call. mokata makes no general savings claim until its A/B benchmark (`bench/ab`) backs one. This is *why* the knowledge layer matters for cost, not just navigation.
 
 ### 11.3 Sub-agent handback cap (F3)
 

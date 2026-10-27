@@ -24,6 +24,8 @@ from contextlib import redirect_stdout
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata import baseline as B
 from mokata.config import Surface
@@ -79,8 +81,10 @@ class TheBaselineBudgetIsTheRepos(unittest.TestCase):
                          MS.MCP_SURFACE_TIMEOUT_SECONDS)
 
     def test_the_timeout_hint_names_the_setting_for_baseline_only(self):
-        self.assertIn("settings.mcp.test_timeout_seconds", MS._timed_out("baseline", 120)["hint"])
-        self.assertNotIn("test_timeout_seconds", MS._timed_out("spec_check", 60)["hint"])
+        self.assertIn("settings.mcp.test_timeout_seconds",
+                      MS._still_running("baseline", 120, 121, "c")["hint"])
+        self.assertNotIn("test_timeout_seconds",
+                         MS._still_running("spec_check", 60, 61, "c")["hint"])
 
     def test_the_mcp_baseline_tool_hands_the_subprocess_the_same_budget(self):
         _set(self.root, 300)
@@ -135,7 +139,7 @@ class SpecEmitRedeemsWithTheIdAlone(unittest.TestCase):
         from mokata import approval
         from mokata.govern.ledger import AuditLedger
         from mokata.mcp import tools_write as TW
-        proposed = TW.spec_emit(**self.H._args(repo.path))
+        proposed = call_planned(TW.spec_emit, **self.H._args(repo.path))
         self.assertEqual(proposed["status"], "proposed")
         pid = proposed["proposal_id"]
         ledger = AuditLedger.from_mokata_dir(os.path.join(repo.path, ".mokata"))
@@ -145,9 +149,9 @@ class SpecEmitRedeemsWithTheIdAlone(unittest.TestCase):
     def test_proposal_id_alone_commits_exactly_once(self):
         with self.H._Repo() as repo:
             TW, pid = self._propose_and_approve(repo)
-            res = TW.spec_emit(path=repo.path, proposal_id=pid)
+            res = call_planned(TW.spec_emit, path=repo.path, proposal_id=pid)
             self.assertTrue(res.get("committed"), res)
-            again = TW.spec_emit(path=repo.path, proposal_id=pid)
+            again = call_planned(TW.spec_emit, path=repo.path, proposal_id=pid)
             self.assertFalse(again.get("committed"), "an approval licenses exactly one write")
 
     def test_a_tampered_saved_payload_is_refused_by_the_hash(self):
@@ -158,20 +162,20 @@ class SpecEmitRedeemsWithTheIdAlone(unittest.TestCase):
             saved = state.read(tools_spec.EMIT_ARGS_PREFIX + pid)
             saved["title"] = "something the human never saw"
             state.write(tools_spec.EMIT_ARGS_PREFIX + pid, saved)
-            res = TW.spec_emit(path=repo.path, proposal_id=pid)
+            res = call_planned(TW.spec_emit, path=repo.path, proposal_id=pid)
             self.assertFalse(res.get("committed"), res)
 
     def test_an_unknown_id_says_what_to_send(self):
         from mokata.mcp import tools_write as TW
         with self.H._Repo() as repo:
-            res = TW.spec_emit(path=repo.path, proposal_id="nope")
+            res = call_planned(TW.spec_emit, path=repo.path, proposal_id="nope")
             self.assertEqual(res["status"], "error")
             self.assertIn("title + criteria + tests", res["hint"])
 
     def test_the_full_payload_still_works(self):
         with self.H._Repo() as repo:
             TW, pid = self._propose_and_approve(repo)
-            res = TW.spec_emit(**dict(self.H._args(repo.path), proposal_id=pid))
+            res = call_planned(TW.spec_emit, **dict(self.H._args(repo.path), proposal_id=pid))
             self.assertTrue(res.get("committed"), res)
 
 

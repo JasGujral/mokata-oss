@@ -1023,7 +1023,10 @@ skipped, softened, or assumed. If you are unsure whether approval was given, it 
 1. Ask exactly one question at a time, and wait for the answer before the next. A wall of
    questions is a failure — it ends the conversation the user came to have.
 2. Spend each question on the biggest remaining unknown — the answer that most changes
-   the design.
+   the design. Ask it WITH your recommended answer, so the user can simply accept it. A
+   fact the codebase can answer is looked up, never asked. The clarifying questions the SPEC
+   rests on are capped at FIVE and recorded in its `clarifications[]` (a sixth is refused);
+   past the cap, proceed on STATED assumptions, recorded in its `assumptions[]`.
 3. Ground every assumption. If a codebase graph is available, navigate by structure
    (callers, callees, imports) instead of guessing; if it is absent, read or grep the
    code and say what you assumed. If a memory store is available, check prior decisions

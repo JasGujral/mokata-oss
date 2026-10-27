@@ -35,6 +35,8 @@ import unittest
 from contextlib import redirect_stdout
 
 import _support  # noqa: F401
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata.brainstorm import Approach, BrainstormSession, DesignFitVerdict
 from mokata.knowledge import anchor_fingerprints as AF
@@ -120,9 +122,9 @@ class _Base(unittest.TestCase):
     def spec_payload(self):
         p = os.path.join(self.root, "spec.json")
         with open(p, "w", encoding="utf-8") as fh:
-            json.dump({"title": "charge correctly",
-                       "criteria": [{"id": "AC1", "text": "it charges"}],
-                       "tests": [{"name": "test_charges", "ac_ids": ["AC1"]}]}, fh)
+            json.dump(planned({"title": "charge correctly",
+                               "criteria": [{"id": "AC1", "text": "it charges"}],
+                               "tests": [{"name": "test_charges", "ac_ids": ["AC1"]}]}), fh)
         return p
 
     # --- the two PRODUCTION entry points ------------------------------------
@@ -137,7 +139,7 @@ class _Base(unittest.TestCase):
 
     def mcp_emit(self):
         from mokata.mcp.tools_spec import spec_emit
-        return spec_emit(path=self.root, title="charge correctly",
+        return call_planned(spec_emit, path=self.root, title="charge correctly",
                          criteria=[{"id": "AC1", "text": "it charges"}],
                          tests=[{"name": "test_charges", "ac_ids": ["AC1"]}])
 

@@ -28,7 +28,8 @@ def remember(path: str = ".", subject: str = "", value: str = "",
              memory_type: str = DECISION, kind: str = "", approve: bool = False,
              confirm: Optional[bool] = None, mtype: Optional[str] = None,
              proposal_id: str = "", about_code: Optional[list] = None, due_at: str = "",
-             when_keyword: str = "", when_path: str = "") -> Dict[str, Any]:
+             when_keyword: str = "", when_path: str = "",
+             retire_when: Optional[list] = None) -> Dict[str, Any]:
     """Remember a fact/decision in memory. `memory_type` is the storage tier
     (persistent/decision/episodic); `kind` is the typed project part (rule/guardrail/
     best-practice/context/reference) captured by /mokata:onboard; `mtype` is a DEPRECATED alias
@@ -41,7 +42,16 @@ def remember(path: str = ".", subject: str = "", value: str = "",
     PM.S1 — `kind="intention"` is a PROSPECTIVE memory ("remind me when X"): give it a due
     condition with `due_at` (YYYY-MM-DD or ISO instant) and/or `when_keyword` / `when_path`
     (comma-separated). It is surfaced at SessionStart ("N intentions due") and by the healing
-    sweep; mark it done with the gated `apply_proposal` (approve). Same human gate as any write."""
+    sweep; mark it done with the gated `apply_proposal` (approve). Same human gate as any write.
+
+    R5 — GROUNDED: every citation the write carries (`about_code` anchors, paths / `path:line` /
+    commit ids / links in the value, `retire_when` predicates) must resolve against the repo, or the
+    write is REFUSED before any proposal is minted and the refusal names the citation. Symbols are
+    checked through the code graph when one is adopted (the basis says when they were not).
+    `retire_when` is a list of expiry predicates — `deleted:<path>`, `removed:<symbol>`,
+    `after:<commit>`, `date:<YYYY-MM-DD>`; when one fires, the learning is surfaced for a refresh
+    verb (keep/update/consolidate/replace/delete via `apply_proposal`). Text inside
+    `<private>…</private>` is never stored."""
     from ..memory import INTENTION, PART_KINDS, PERSISTENT, normalize_kind
     from ..memory.intentions import IntentionError, make_envelope
     surface = _surface(path)
@@ -65,31 +75,44 @@ def remember(path: str = ".", subject: str = "", value: str = "",
         return {"status": "error", "committed": False,
                 "message": "due_at / when_keyword / when_path apply only to kind='intention'"}
     item = MemoryItem.create(subject, value, mtype=mtype, kind=norm or kind,
-                             about_code=about_code, applicability=applicability)
+                             about_code=about_code, applicability=applicability,
+                             retire_when=retire_when)
+
+    # R5 — refuse an ungrounded write BEFORE a proposal is minted: a human must never be asked to
+    # approve a learning whose citations point at nothing. `store.remember` re-checks at commit.
+    from ..memory.private import UnbalancedPrivateTag, strip_private
+    try:
+        strip_private(subject if isinstance(subject, str) else "")
+        strip_private(value if isinstance(value, str) else "")
+    except UnbalancedPrivateTag as exc:
+        return {"status": "refused", "committed": False, "message": str(exc)}
+    grounding = store.grounding_report(item)
+    if grounding.refusal() is not None:
+        return {"status": "refused", "committed": False, "message": grounding.refusal(),
+                "unresolved": [v.citation.raw for v in grounding.unresolved]}
 
     args = {"path": path, "subject": subject, "value": value, "memory_type": mtype, "kind": norm}
     if applicability is not None:
         # The due condition is part of WHAT the human approves — so it is part of the hash.
         args["due"] = applicability["due"]
+    if about_code:
+        args["about_code"] = list(about_code)
+    if item.retire_when:
+        args["retire_when"] = list(item.retire_when)
     gate = _consent(path, "remember", args, proposal_id, surface=surface)
     if gate.refused:
         return _refused(gate)
     if not gate.granted:
-        # GR.S4 — validate any about_code anchors against the code graph. A PROPOSAL-level
-        # warning rides on the proposal (never a block, never an auto-write — P2 untouched).
-        payload = {"preview": store.render_write(item)}
-        if about_code:
-            try:
-                from ..knowledge.about_code import check_about_code_anchors
-                from ..knowledge.layer import KnowledgeLayer
-                chk = check_about_code_anchors(about_code, KnowledgeLayer.from_surface(surface))
-                if chk.warning:
-                    payload["about_code_warning"] = chk.warning
-            except Exception:
-                pass                       # validation never blocks a proposal
+        overlap = store.overlap_for(item)
+        preview = store.render_write(item, grounding, overlap)
+        payload = {"preview": preview,
+                   "grounding": [line.strip() for line in grounding.lines()]}
+        if overlap is not None:
+            payload["overlap"] = overlap.describe()
+            payload["updates_existing"] = overlap.updates
         return _propose(path, "remember", args, payload,
                         target=f"memory:{subject}", summary=f"remember '{subject}' = {value[:60]}",
-                        preview=store.render_write(item), approve=approve, confirm=confirm)
+                        preview=preview, approve=approve, confirm=confirm)
     # H4: scan subject AND value so a secret pasted into the subject can't slip the gate.
     return _gated_write(surface.mokata_dir, "memory", f"memory:{subject}",
                         f"{subject}\n{value}",
@@ -99,7 +122,8 @@ def remember(path: str = ".", subject: str = "", value: str = "",
 
 def apply_proposal(path: str = ".", subject: str = "", decision: str = "approve",
                    approve: bool = False, confirm: Optional[bool] = None,
-                   proposal_id: str = "") -> Dict[str, Any]:
+                   proposal_id: str = "", value: str = "", into_id: str = "",
+                   about_code: Optional[list] = None) -> Dict[str, Any]:
     """Resolve a surfaced self-healing memory proposal (contradiction/staleness/cross-writer).
     HUMAN-GATED (SI.3): PROPOSE-ONLY — it shows the staged old->new change and writes nothing. A
     human mints the approval with `mokata approve <id>`; re-call with that `proposal_id` to apply
@@ -109,14 +133,23 @@ def apply_proposal(path: str = ".", subject: str = "", decision: str = "approve"
     teammate's concurrent change won the CAS. It has its own word rather than riding `reject`
     because `reject` is where every safe default lands (a dismissed consent, a non-interactive
     call), and a default that throws away an approved write is exactly the silent loss this stage
-    removes. It is refused on any other kind of proposal."""
-    if decision not in ("approve", "reject", "defer", "discard"):
+    removes. It is refused on any other kind of proposal.
+
+    R5 — a `retire_due` proposal (a learning whose `retire_when` fired) is resolved with a REFRESH
+    verb instead: keep / update / consolidate / replace / delete (`value` for update/consolidate/
+    replace, `into_id` for consolidate, optional `about_code` for update/replace). Same human gate:
+    the verb, its value and target are in the approval hash."""
+    from ..memory.healing import REFRESH_VERBS, RETIRE_DUE
+    if decision not in ("approve", "reject", "defer", "discard") + REFRESH_VERBS:
         return {"status": "error",
                 "message": "decision must be one of approve/reject/defer (or discard, on a "
-                           "cross-writer conflict)"}
+                           "cross-writer conflict; or a refresh verb "
+                           f"{'/'.join(REFRESH_VERBS)} on a retire_due proposal)"}
     surface = _surface(path)
     store = MemoryStore.from_surface(surface)
     proposals = store.detect_issues()
+    if decision in REFRESH_VERBS:
+        proposals = [p for p in proposals if p.kind == RETIRE_DUE]
     if decision == "discard":
         # `discard` is only meaningful for a conflict, and a subject can carry BOTH a conflict and
         # an ordinary contradiction — so select by kind rather than letting first-match decide
@@ -128,6 +161,9 @@ def apply_proposal(path: str = ".", subject: str = "", decision: str = "approve"
                 "message": f"no pending proposal for subject '{subject}'"}
 
     args = {"path": path, "subject": subject, "decision": decision, "diff": match.diff()}
+    if decision in REFRESH_VERBS:
+        args.update({"value": value, "into_id": into_id,
+                     "about_code": list(about_code) if about_code is not None else None})
     gate = _consent(path, "apply_proposal", args, proposal_id, surface=surface)
     if gate.refused:
         return _refused(gate)
@@ -138,9 +174,13 @@ def apply_proposal(path: str = ".", subject: str = "", decision: str = "approve"
                         target=f"memory:{subject}",
                         summary=f"{decision} the self-healing proposal for '{subject}'",
                         preview=match.diff(), approve=approve, confirm=confirm)
+    def _apply() -> str:
+        if decision in REFRESH_VERBS:
+            return store.refresh(match, decision, value=value or None, into_id=into_id,
+                                 about_code=about_code, assume_yes=True).message
+        return store.apply_proposal(match, decision, assume_yes=True).message
     return _gated_write(
-        surface.mokata_dir, "memory", f"memory:{subject}", match.diff(),
-        lambda: store.apply_proposal(match, decision, assume_yes=True).message, gate,
+        surface.mokata_dir, "memory", f"memory:{subject}", match.diff(), _apply, gate,
         _policy(path, "apply_proposal", human_approved=True, surface=surface))
 
 

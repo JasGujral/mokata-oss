@@ -32,6 +32,8 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 import _mcp_sdk  # noqa: E402 - the MCP SDK disposition gate
 
 from mokata import mcp_server as M

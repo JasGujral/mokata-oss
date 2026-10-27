@@ -1,4 +1,4 @@
-// mokata ide — the shell, the changed-files navigator, Review mode and ⌘P.
+// mokata ide — the shell, the changed-files navigator and Review mode (⌘P: features/palette.js).
 // Vanilla JS, no build step (ADR doc 85 §1b).
 // SAFETY: every piece of repo text goes into the page through textContent, never as markup —
 // the code under review can contain markup, and a review window must not execute it.
@@ -17,18 +17,66 @@ MK.el = el;
 
 const ui = (MK.ui = {
   focus: null, view: "live", picked: [], pickedPaths: {}, sample: false, state: null, first: true,
-  mode: "review", panel: "changes", diff: null, files: [], sel: 0, filter: "all",
+  mode: "review", diff: null, files: [], sel: 0, filter: "all",
   impact: {}, outlines: {}, hunkIdx: -1, inspSym: null,
 });
 
 // ------------------------------------------------------------------------------- plumbing
-async function api(path, body) {
-  const opt = body === undefined ? {} : {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+// 0.0.26 P32 — this page's id: sent with every call, and on the event stream, so the server knows
+// which jobs a page still wants (a job nobody wants is cancelled; index builds keep going).
+MK.clientId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+  : "p" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+// `opts.signal` aborts a superseded call (and leaves its job); a long answer comes back as a JOB
+// (202 + handle) that MK.jobs.follow (features/activity.js) waits on — progress and partial
+// answers go to `opts.onJob` / `opts.onPartial` — and the caller still gets the final answer.
+async function api(path, body, opts) {
+  const o = opts || {};
+  const headers = { "X-Mokata-Client": MK.clientId };
+  const opt = body === undefined ? { headers } : {
+    method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  if (o.signal) opt.signal = o.signal;
   const r = await fetch(path, opt);
-  return r.json();
+  let data;
+  try { data = await r.json(); } catch (_e) { data = null; }
+  if (data === null || typeof data !== "object") {
+    // 0.0.26 P34 (§5.4 rule 4): a proxy's 502/503 page, a dropped connection mid-body or an empty
+    // answer is an ERROR the region names — never a thrown parse error that leaves it blank.
+    return { error: "HTTP " + r.status, note: `the server answered ${r.status} without a readable body`, status: r.status };
+  }
+  if (r.status === 202 && data && data.job && MK.jobs) return MK.jobs.follow(data, path, body, o);
+  if (r.status >= 500 && !data.error) data.error = "HTTP " + r.status;
+  return data;
 }
 MK.api = api;
+
+// §5.4 — one way for a region to say what it is doing: "loading" (a skeleton line IN the region),
+// "empty" (why + the one next action) or "error" (what failed + Retry + the CLI twin). Never blank.
+function regionSay(host, kind, text, opts) {
+  const o = opts || {};
+  if (!host) return null;
+  const box = el(host.tagName === "UL" || host.tagName === "OL" ? "li" : "div", "region-msg " + kind);
+  box.setAttribute("role", kind === "error" ? "alert" : "status");
+  if (kind === "loading") box.append(el("span", "job-spin"));
+  box.append(el("span", "", text));
+  if (o.cli) { box.append(document.createTextNode(" · run "), el("code", "", o.cli)); }
+  if (o.retry) {
+    const b = el("button", "btn ghost small", "Retry");
+    b.type = "button";
+    b.onclick = o.retry;
+    box.append(document.createTextNode(" "), b);
+  }
+  if (o.action) {
+    const b = el("button", "link small", o.action[0]);
+    b.type = "button";
+    b.onclick = o.action[1];
+    box.append(document.createTextNode(" "), b);
+  }
+  if (o.replace !== false) host.replaceChildren(box); else host.append(box);
+  return box;
+}
+MK.regionSay = regionSay;
+// What failed, in words, from an api() answer that has `error`.
+MK.whyFailed = (d, what) => `could not ${what}: ${(d && (d.note || d.error)) || "no answer"}`;
 
 function markSample(payload) {
   if (payload && payload.sample) { ui.sample = true; $("sample-banner").hidden = false; }
@@ -36,8 +84,8 @@ function markSample(payload) {
 MK.markSample = markSample;
 
 function shortOf(sid) {
-  const row = ((ui.state && ui.state.sessions) || []).find((s) => s.id === sid);
-  return row ? row.short : String(sid || "").slice(0, 8);
+  const row = ui.state && ui.state.focus_row;
+  return row && row.id === sid ? row.short : String(sid || "").slice(0, 8);
 }
 
 function wrapLi(child) { const li = el("li"); li.append(child); return li; }
@@ -94,97 +142,127 @@ function sigOf(f) {
   return String(h);
 }
 function isSeen(f) { return loadSeen()[f.path] === sigOf(f); }
+MK.isSeen = isSeen;
 function markSeenFile(f) { const m = loadSeen(); m[f.path] = sigOf(f); saveSeen(m); }
 
 // ------------------------------------------------------------------------------- restore
-// px0 parity (doc 109 §13, 0.0.23 C4): reopening the window puts you back where you were — the
-// mode, the left panel, and the file + line + symbol open in Navigate. Per repository; the same
-// throw-safe storage rule as the seen marks (absent storage = a fresh start, never an error).
-function viewKey() { return `mokata-ide:view:${(ui.state && ui.state.repo) || ""}`; }
-function saveView() {
-  if (ui.restoring || !ui.state) return;
-  const n = MK.nav || {};
-  try {
-    window.localStorage.setItem(viewKey(), JSON.stringify({ mode: ui.mode, panel: ui.panel,
-      path: n.path || null, line: n.line || 1, sym: n.sym || null }));
-  } catch (e) { /* no storage: nothing to restore next time */ }
-}
-MK.saveView = saveView;
-function loadView() {
-  try { return JSON.parse(window.localStorage.getItem(viewKey()) || "null"); } catch (e) { return null; }
-}
-MK.restoreView = function restoreView() {
-  const v = loadView();
-  if (!v) return;
-  ui.restoring = true;
-  try {
-    if (v.mode === "navigate" && v.path && MK.openFile) MK.openFile(v.path, v.line || 1, v.sym || null);
-    else if (MODES.includes(v.mode)) setMode(v.mode);
-    if (PANELS.includes(v.panel)) setPanel(v.panel, true);
-  } finally { ui.restoring = false; }
-};
+// 0.0.26 P2 (ID-TABS): the window's restore is the SERVER's workspace — tabs, the active tab, its
+// scroll, explorer dirs, mode and panel — owned by static/features/tabs.js, which defines
+// MK.saveView / MK.restoreView. (The 0.0.23 C4 per-browser localStorage restore is gone.)
+function saveView() { if (MK.saveView) MK.saveView(); }
 
-// ------------------------------------------------------------------------------- modes / panels
-const MODES = ["review", "navigate", "search", "graph", "plan", "sessions"];
-const PANELS = ["changes", "files", "search", "sessions", "graph", "plan"];
-MK.MODES = MODES;
+// ------------------------------------------------------------------------------- screens
+// 0.0.26 P34 (IA-ONE-NAV, R26) — ONE navigation: the rail IS the screen. A screen is a rail button
+// (`data-screen`), a centre view (#view-<id>), optionally a side panel (#panel-<id>) and the
+// inspector. `MK.setMode(id)` is the ONLY way to change screen: the rail highlight, the visible
+// view, the side panel and body[data-mode] are all set from the same id, so they cannot disagree.
+// (The id is `ui.mode` for historic reasons; there is no second "mode" any more — no mode bar, no
+// left-panel switch.) A feature adds a screen through the registry (`panels: [{id, title, …}]`),
+// which appends to MK.SCREENS. `chord` is the letter after `g` (§5.5).
+const SCREENS = [
+  { id: "sessions", title: "Sessions", chord: "s" },
+  { id: "review", title: "Review", chord: "r" },
+  { id: "navigate", title: "Code", chord: "c" },
+  { id: "search", title: "Search", chord: null, keys: "⌘⇧F" },
+  { id: "graph", title: "Impact", chord: "i" },
+  { id: "plan", title: "Plan", chord: "p" },
+];
+MK.SCREENS = SCREENS;
+const INSPECTOR = { review: "insp-review", navigate: "insp-nav" };
 
-function setMode(mode) {
-  ui.mode = mode;
-  for (const b of document.querySelectorAll("button.mode")) b.classList.toggle("active", b.dataset.mode === mode);
-  for (const id of MODES) $("view-" + id).hidden = id !== mode;
-  $("insp-review").hidden = mode !== "review";
-  $("insp-nav").hidden = mode !== "navigate";
-  document.body.dataset.mode = mode;
+function setMode(id) {
+  if (!SCREENS.some((s) => s.id === id)) return;
+  const changedMode = ui.mode !== id;
+  ui.mode = id;
+  for (const b of document.querySelectorAll("nav.rail .rail-btn")) {
+    const on = b.dataset.screen === id;
+    b.classList.toggle("active", on);
+    if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  }
+  for (const s of SCREENS) {
+    const v = $("view-" + s.id), p = $("panel-" + s.id);
+    if (v) v.hidden = s.id !== id;
+    if (p) p.hidden = s.id !== id;
+  }
+  for (const [sc, insp] of Object.entries(INSPECTOR)) $(insp).hidden = sc !== id;
+  document.body.dataset.mode = id;
+  document.body.dataset.side = $("panel-" + id) ? "1" : "0";
+  document.body.dataset.insp = INSPECTOR[id] ? "1" : "0";
   saveView();
-  if (mode === "review" && ui.panel !== "changes" && ui.panel !== "sessions") setPanel("changes", true);
-  if (mode === "navigate" && ui.panel !== "files") setPanel("files", true);
-  if (mode === "plan" && ui.panel !== "plan") setPanel("plan", true);
-  if (mode === "sessions" && ui.panel !== "sessions") setPanel("sessions", true);
-  if (MK.onMode) MK.onMode(mode);
+  if (MK.onMode) MK.onMode(id);
+  if (changedMode && MK.refreshIfStale) MK.refreshIfStale();   // P35: views a delta did not refresh
 }
 MK.setMode = setMode;
 
-function setPanel(panel, quiet) {
-  ui.panel = panel;
-  for (const b of document.querySelectorAll("button.rail-btn")) b.classList.toggle("active", b.dataset.panel === panel);
-  for (const id of PANELS) $("panel-" + id).hidden = id !== panel;
-  saveView();
-  if (quiet) return;
-  if (panel === "files" && ui.mode !== "navigate") setMode("navigate");
-  if (panel === "changes" && ui.mode !== "review") setMode("review");
-  if (panel === "search") setMode("search");
-  if (panel === "graph") setMode("graph");
-  if (panel === "plan") setMode("plan");
-}
-MK.setPanel = setPanel;
-
-// ------------------------------------------------------------------------------- sessions
-function renderSessions(state) {
-  const ul = $("sessions");
-  ul.replaceChildren();
-  const all = el("button", "item" + (ui.focus ? "" : " active"));
-  all.type = "button";
-  all.append(el("span", "", "All sessions"), el("span", "sub", "live diff of the whole tree"));
-  all.onclick = () => setFocus(null);
-  ul.append(wrapLi(all));
-  for (const s of state.sessions || []) {
-    const b = el("button", "item" + (ui.focus === s.id ? " active" : ""));
-    b.type = "button";
-    b.append(el("span", "", `session ${s.short}${s.claim === "bound" ? " · run " + s.run : ""}`));
-    const files = (s.files || []).length;
-    b.append(el("span", "sub", `${files} file(s) · ${s.writes} write(s) · ${s.last_iso || ""}`));
-    b.onclick = () => setFocus(s.id);
-    ul.append(wrapLi(b));
+// ------------------------------------------------------------------------------- viewing
+// 0.0.26 P33 (R28) — ONE "Viewing" context: the session the window is focused on (or the
+// uncommitted changes), the same for Review, the Code gutter (the server marks the file against
+// it, `changes_against`) and — through `MK.viewing()` / `MK.onViewing` — every later view
+// (P34 wires the search scope). The session LIST lives on the Sessions screen only (sessions.js).
+function viewing() {
+  const row = ui.state && ui.state.focus_row;
+  const sess = ui.focus ? `session ${shortOf(ui.focus)}` : null;
+  if (ui.view === "session" && ui.focus) {
+    return { kind: "session", session: ui.focus, label: sess, title: row && row.prompt ? `${sess} · ${row.prompt}` : sess, row };
   }
-  $("sessions-empty").hidden = (state.sessions || []).length > 0;
-  // the same sessions, as the searchable chooser (C5): type a session id, a run, a file count
-  MK.combo("session-pick").setOptions([{ value: "", label: "All sessions", sub: "live diff of the whole tree" },
-    ...(state.sessions || []).map((s) => ({ value: s.id, label: `session ${s.short}${s.run ? " · run " + String(s.run).slice(0, 8) : ""}`,
-      sub: `${(s.files || []).length} file(s) · ${s.writes} write(s) · ${s.last_iso || ""}` }))], ui.focus || "");
-  $("view-session").disabled = !ui.focus;
-  $("focus-chip").textContent = ui.focus ? `session ${shortOf(ui.focus)}` : "all sessions";
+  if (ui.view === "between") {
+    const what = ui.picked.length === 2 ? "two moments" : "one write";
+    return { kind: "write", session: ui.focus, label: sess ? `${sess} · ${what}` : what, title: what, row };
+  }
+  if (ui.view === "compare") {
+    const lab = `${$("base").value || "?"}…${$("head").value || "?"}`;
+    return { kind: "compare", session: null, label: lab, title: `branches ${lab}`, row: null };
+  }
+  if (ui.view === "pr") return { kind: "pr", session: null, label: "pull request", title: $("pr-url").value, row: null };
+  if (ui.view === "worktree") return { kind: "worktree", session: ui.focus, label: "a session's worktree", title: "a session's worktree (Worktrees)", row };
+  return { kind: "live", session: null, label: "uncommitted changes", title: "Uncommitted changes — working tree vs HEAD", row: null };
 }
+MK.viewing = viewing;
+MK.onViewing = MK.onViewing || [];
+
+// The files the Viewing session changed (R28 + P36's search scope "this session's files"):
+// null when no session is in view, so the scope says why it is off.
+MK.sessionFiles = () => {
+  const v = viewing();
+  if (!v.session || (v.kind !== "session" && v.kind !== "worktree")) return null;
+  return ui.sessionPaths && ui.sessionPaths.sid === v.session ? ui.sessionPaths.paths.slice() : [];
+};
+
+function renderViewing() {
+  const v = viewing();
+  $("view-session").disabled = !ui.focus;
+  $("view-session-sub").textContent = ui.focus ? `session ${shortOf(ui.focus)}` : "no session selected";
+  for (const b of document.querySelectorAll("#viewing-pop button.view[data-view]")) b.classList.toggle("active", b.dataset.view === ui.view);
+  const bt = $("viewing-between");
+  bt.hidden = ui.view !== "between";
+  bt.textContent = ui.view === "between" ? `Now: ${v.label} (picked on the Sessions screen).` : "";
+  $("focus-chip").textContent = "Viewing: " + v.label;
+  $("session-chip").title = v.title + " — click to change what Review, the Code gutter and Search's session scope show";
+  const cv = $("code-viewing");
+  if (cv) cv.textContent = v.kind === "live" ? "vs HEAD" : `vs ${v.label}`;
+  for (const fn of MK.onViewing) { try { fn(v); } catch (e) { /* a view's hook never breaks the shell */ } }
+}
+MK.renderViewing = renderViewing;
+
+function openViewing(open) {
+  const p = $("viewing-pop");
+  p.hidden = open === undefined ? !p.hidden : !open;
+  $("session-chip").setAttribute("aria-expanded", String(!p.hidden));
+  if (!p.hidden) renderViewing();
+}
+MK.openViewing = openViewing;
+
+// Pick a source from Viewing ▾. A session is picked on the Sessions screen (one list); the others
+// clear the session focus so the Code gutter and the search scope never disagree with Review.
+async function pickView(view) {
+  openViewing(false);
+  if (view === "session") { if (ui.focus) { ui.view = "session"; await refresh(); } else setMode("sessions"); return; }
+  ui.view = view;
+  if (ui.focus) { ui.focus = null; ui.picked = []; await api("/api/focus", { session: null }); }
+  if (!["review", "navigate", "search"].includes(ui.mode)) setMode("review");
+  await refresh();
+}
+MK.pickView = pickView;
 
 async function setFocus(sid) {
   ui.focus = sid;
@@ -193,49 +271,13 @@ async function setFocus(sid) {
   ui.view = sid ? "session" : "live";
   await refresh();
 }
+MK.setFocus = setFocus;
 
-// ------------------------------------------------------------------------------- timeline
-async function renderTimeline() {
-  const data = await api("/api/timeline" + (ui.focus ? "?session=" + encodeURIComponent(ui.focus) : ""));
-  markSample(data);
-  const ul = $("timeline");
-  ul.replaceChildren();
-  const entries = (data.entries || []).slice().reverse();
-  for (const e of entries) {
-    const b = el("button", "item" + (ui.picked.includes(e.id) ? " sel" : ""));
-    b.type = "button";
-    const when = new Date(e.t * 1000).toLocaleTimeString();
-    b.append(el("span", "", `${when}  ${e.kind === "before" ? "before" : "write"}  ${e.path}`));
-    b.append(el("span", "sub", `session ${shortOf(e.session)}${e.state !== "ok" ? " · " + e.state : ""}`));
-    b.onclick = () => pick(e);
-    ul.append(wrapLi(b));
-  }
-  $("timeline-empty").hidden = entries.length > 0;
-  renderTicks(data.entries || []);
-}
-
-function renderTicks(entries) {
-  const box = $("ticks");
-  box.replaceChildren(el("div", "tick-line"));
-  if (!entries.length) { $("ticks-label").textContent = "no writes recorded"; return; }
-  const t0 = entries[0].t, t1 = entries[entries.length - 1].t;
-  const span = Math.max(1, t1 - t0);
-  const shown = entries.slice(-300);
-  shown.forEach((e, i) => {
-    const b = el("button", "tick" + (ui.picked.includes(e.id) ? " sel" : "") + (i === shown.length - 1 ? " last" : ""));
-    b.type = "button";
-    b.style.left = `${((e.t - t0) / span) * 98 + 1}%`;
-    b.title = `${new Date(e.t * 1000).toLocaleTimeString()} ${e.kind} ${e.path}`;
-    b.setAttribute("aria-label", b.title);
-    b.onclick = () => pick(e);
-    box.append(b);
-  });
-  const fmt = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  $("ticks-label").textContent = `${entries.length} writes · ${fmt(t0)} → ${fmt(t1)}`;
-}
-
-async function pick(e) {
-  ui.picked = ui.picked.includes(e.id) ? ui.picked.filter((x) => x !== e.id) : [...ui.picked, e.id].slice(-2);
+// ------------------------------------------------------------------------------- one write / two moments
+// The bottom timeline is gone (P34): a write is picked on the Sessions screen (Per write — click
+// one to see it, shift-click a second to compare the two moments; or the Replay scrubber).
+async function pick(e, add) {
+  ui.picked = add ? (ui.picked.includes(e.id) ? ui.picked.filter((x) => x !== e.id) : [...ui.picked, e.id].slice(-2)) : [e.id];
   ui.view = "between";
   ui.pickedPaths[e.id] = e.path;
   setMode("review");
@@ -246,32 +288,29 @@ MK.pickSnapshot = pick;
 // ------------------------------------------------------------------------------- compare / PR
 function renderBranches(state) {
   const branches = state.branches || [];
+  // Viewing ▾ holds the branch pickers; a combo opened there keeps what was typed.
   for (const id of ["base", "head"]) MK.combo(id).setOptions(branches);
   if (branches.length > 1 && !$("head").dataset.touched) $("head").value = branches[1];
   $("compare-empty").hidden = branches.length > 1;
 }
 
-const SRC_LABEL = {
-  live: "working tree vs HEAD", session: "this session's writes", between: "two moments",
-  compare: "branch…branch", pr: "pull request",
-};
-
 // ------------------------------------------------------------------------------- the diff
 async function loadDiff() {
   if (ui.view === "session" && ui.focus) return api("/api/session?id=" + encodeURIComponent(ui.focus));
   if (ui.view === "between" && ui.picked.length) {
-    const [a, b] = ui.picked.length === 2 ? ui.picked : [ui.picked[0], "work"];
-    return api(`/api/between?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`);
+    // P33 (R9, B-F2): ONE pick = that write (the previous capture → this one); two = compare.
+    if (ui.picked.length === 1) return api("/api/session/write?snap=" + encodeURIComponent(ui.picked[0]));
+    return api(`/api/between?a=${encodeURIComponent(ui.picked[0])}&b=${encodeURIComponent(ui.picked[1])}`);
   }
   if (ui.view === "compare") return api(`/api/compare?base=${encodeURIComponent($("base").value)}&head=${encodeURIComponent($("head").value)}`);
   if (ui.view === "pr") return api("/api/pr", { url: $("pr-url").value });
-  return api("/api/live");
+  return api("/api/live" + (ui.showMokata ? "?mokata=1" : ""));
 }
 
 const EMPTY_WHY = {
   live: "The working tree matches HEAD. Changes appear here live as soon as a session (or you) edits a file.",
   session: "This session has not changed any file yet — its writes will show here as it makes them.",
-  between: "These two points hold the same content.",
+  between: "This write changed nothing (or these two points hold the same content).",
   compare: "The two branches have no differences.",
   pr: "This pull request changes nothing.",
 };
@@ -287,12 +326,15 @@ function acceptDiff(d) {
   $("diff-title").textContent = d.title || "Changes";
   $("diff-stats").textContent = d.files ? `${d.files.length} file(s) · +${d.added} −${d.removed}` : "";
   const note = $("diff-note");
-  note.hidden = !d.note;
+  note.hidden = !d.note || !!d.error;
   note.textContent = d.note || "";
-  if (d.error) { note.hidden = false; note.textContent = `could not read: ${d.error} ${d.note || ""}`; }
   $("diff-empty").hidden = !(ui.files.length === 0 && !d.note && !d.error);
+  // G23 — the Live view hides the files mokata setup wrote, says how many, and shows them on ask.
+  const hid = ui.view === "live" ? (d.hidden_mokata || 0) : 0;
+  $("diff-mokata").hidden = !(hid || (ui.view === "live" && ui.showMokata));
+  $("diff-mokata-n").textContent = ui.showMokata ? "Showing the files mokata setup wrote." : `${hid} file(s) mokata setup wrote are hidden.`;
+  $("diff-mokata-btn").textContent = ui.showMokata ? "hide them" : "show them";
   $("diff-empty-why").textContent = EMPTY_WHY[ui.view] || EMPTY_WHY.live;
-  $("src-label").textContent = SRC_LABEL[ui.view] || SRC_LABEL.live;
   $("nav-add").textContent = `+${d.added || 0}`;
   $("nav-del").textContent = `−${d.removed || 0}`;
   const badge = $("rail-count");
@@ -301,6 +343,12 @@ function acceptDiff(d) {
   loadImpacts();
   renderNavigator();
   showFile(ui.sel, { keepScroll: true });
+  if (d.error) {
+    // §5.4 rule 4: what failed, Retry, and the CLI twin — in the region the user is looking at.
+    $("diff-title").textContent = "Changes";
+    regionSay($("diff"), "error", MK.whyFailed(d, `read ${viewing().label}`),
+              { retry: () => refresh(), cli: ui.view === "live" ? "git diff HEAD" : null });
+  }
 }
 
 // ------------------------------------------------------------------------------- the navigator
@@ -349,9 +397,11 @@ function renderNavigator() {
     ul.append(wrapLi(b));
   }
   const empty = $("nav-empty");
-  empty.hidden = vis.length > 0 || ui.files.length === 0;
+  empty.hidden = vis.length > 0;
   const pending = ui.files.filter((f) => impactable(f) && !ui.impact[f.path]).length;
-  empty.textContent = ui.filter === "untested" && pending
+  empty.textContent = ui.diff && ui.diff.error ? "Could not read the changes — see the main view."
+    : !ui.files.length ? `No changed file in ${viewing().label}.`
+    : ui.filter === "untested" && pending
     ? `Checked ${ui.files.length - pending} of ${ui.files.length} file(s) against the graph…`
     : `No file matches “${ui.filter}”.`;
   const pos = vis.findIndex((o) => o.i === ui.sel);
@@ -386,11 +436,18 @@ function showFile(i, opts) {
   renderInspector();
   ensureOutline(f);
   wantImpact(f);
+  if (MK.onDiffShown) MK.onDiffShown(f, o);       // tabs.js: the diff tab for this file
 }
 MK.showFile = showFile;
 
 function renderFile(f) {
   const wrap = el("div", "file-body");
+  if (f.too_large) {
+    // R10 — changed, but over the snapshot cap: a row that says so, never a silent drop.
+    const kb = f.size ? ` · ${(f.size / 1048576).toFixed(1)} MB` : "";
+    wrap.append(el("div", "bin", `too large to diff${f.writes ? ` · ${f.writes} write(s)` : ""}${kb}`));
+    return wrap;
+  }
   if (f.binary) { wrap.append(el("div", "bin", "binary or too large to show")); return wrap; }
   const im = ui.impact[f.path];
   (f.hunks || []).forEach((h, k) => {
@@ -415,6 +472,7 @@ function renderFile(f) {
   });
   return wrap;
 }
+MK.renderFile = renderFile;
 
 function hunkRange(h) {
   const m = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(h.header || "");
@@ -540,7 +598,7 @@ function wantImpact(f) {
   if (!impactable(f) || ui.view !== "live" || ui.sample) return;
   const c = impactCache.get(f.path);
   const fresh = c && c.fp === fileFp(f);
-  if (fresh && !(c.im.timed_out && Date.now() - c.at > IMPACT_RETRY_MS)) return;
+  if (fresh && !(c.im.failed && Date.now() - c.at > IMPACT_RETRY_MS)) return;
   if (fresh) { impactCache.delete(f.path); delete ui.impact[f.path]; }
   impactQueue = [f].concat(impactQueue.filter((x) => x !== f));
   pumpImpacts(impactGen);
@@ -561,7 +619,7 @@ async function askImpact(f, fp) {
   impactFlight.add(key);
   const im = await api(`/api/impact?path=${encodeURIComponent(f.path)}&lines=${encodeURIComponent(changedLines(f))}`).catch(() => null);
   impactFlight.delete(key);
-  const val = im && !im.error ? im : { status: "unknown", symbols: [], is_test: false, timed_out: !!(im && im.timed_out), note: (im && im.note) || "impact unavailable" };
+  const val = im && !im.error ? im : { status: "unknown", symbols: [], is_test: false, failed: true, note: (im && im.note) || "impact unavailable" };
   impactCache.delete(f.path);
   impactCache.set(f.path, { fp, im: val, at: Date.now() });
   while (impactCache.size > IMPACT_CACHE_MAX) impactCache.delete(impactCache.keys().next().value);
@@ -638,6 +696,12 @@ function renderInspector() {
   } else if (cur.verdict === "unknown" && cur.blast.not_determined) {
     $("insp-notests").hidden = false;
     $("insp-notests").textContent = `Coverage ${cur.blast.not_determined}.`;
+    // 0.0.26 O7 — a radius the DEFAULT bound cut is one click from a full walk (on request only,
+    // one symbol, hard-bounded server-side; leaving the page cancels it).
+    if (cur.blast.full_available) {
+      $("insp-notests").append(document.createTextNode(" "),
+        calcButton(f, im, [cur.name], "Calculate the full blast radius", "full"));
+    }
   } else if (cur.verdict === "unknown") {
     $("insp-notests").hidden = false;
     $("insp-notests").textContent = "Coverage unknown — the graph could not answer structurally, so mokata does not claim either way.";
@@ -648,10 +712,11 @@ function renderInspector() {
 MK.renderInspector = renderInspector;
 
 // ------------------------------------------------------------------------------- impact on request
-function calcButton(f, im, names, label) {
+function calcButton(f, im, names, label, budget) {
   const b = el("button", "btn ghost small", label);
   b.type = "button";
-  b.onclick = () => calculateImpact(f, im, names, b);
+  if (budget === "full") b.title = "walks this symbol's whole blast radius — up to a minute; only when you ask";
+  b.onclick = () => calculateImpact(f, im, names, b, budget);
   return b;
 }
 
@@ -671,12 +736,16 @@ function impactStatus(im) {
   return v.has("untested") ? "untested" : v.has("unknown") ? "unknown" : (im.pending || []).length ? "partial" : "covered";
 }
 
-async function calculateImpact(f, im, names, btn) {
-  if (btn) { btn.disabled = true; btn.textContent = "calculating…"; }
-  const want = names.slice(0, 40);
-  const res = await api(`/api/impact?path=${encodeURIComponent(f.path)}&lines=${encodeURIComponent(changedLines(f))}&symbols=${encodeURIComponent(want.join(","))}`).catch(() => null);
+async function calculateImpact(f, im, names, btn, budget) {
+  if (btn) { btn.disabled = true; btn.textContent = budget === "full" ? "walking the full blast radius…" : "calculating…"; }
+  const want = budget === "full" ? names.slice(0, 1) : names.slice(0, 40);
+  const extra = budget === "full" ? "&budget=full" : "";
+  // P32: a long walk is a job — the button shows its progress in place (and the Activity chip has
+  // its Cancel); no deadline, so it never answers "timed out".
+  const onJob = (j) => { if (btn && MK.jobs) btn.textContent = MK.jobs.line(j); };
+  const res = await api(`/api/impact?path=${encodeURIComponent(f.path)}&lines=${encodeURIComponent(changedLines(f))}&symbols=${encodeURIComponent(want.join(","))}${extra}`, undefined, { onJob }).catch(() => null);
   if (!res || res.error) {
-    if (btn) { btn.disabled = false; btn.textContent = res && res.timed_out ? "timed out — try one at a time" : "failed — retry"; btn.title = (res && res.note) || ""; }
+    if (btn) { btn.disabled = false; btn.textContent = res && res.cancelled ? "cancelled — retry" : "failed — retry"; btn.title = (res && res.note) || ""; }
     return;
   }
   const got = new Set((res.symbols || []).map((s) => s.name));
@@ -689,9 +758,12 @@ async function calculateImpact(f, im, names, btn) {
 MK.calculateImpact = calculateImpact;
 
 async function loadBlastList(sym) {
-  const res = await api(`/api/query?kind=blast_radius&target=${encodeURIComponent(sym)}&depth=2`).catch(() => null);
-  if (!res || ui.inspSym !== sym) return;
   const ul = $("insp-blast");
+  // P32 (§5.4): the loading state is IN the list the user is looking at, with the job's progress.
+  ul.replaceChildren(el("li", "dim small job-inline", "asking the graph…"));
+  const onJob = (j) => { if (ui.inspSym === sym && MK.jobs) ul.firstChild.textContent = MK.jobs.line(j); };
+  const res = await api(`/api/query?kind=blast_radius&target=${encodeURIComponent(sym)}&depth=2`, undefined, { onJob }).catch(() => null);
+  if (!res || ui.inspSym !== sym) return;
   ul.replaceChildren();
   if (res.error || res.sample) { ul.append(el("li", "dim small", res.note || "unavailable")); return; }
   for (const r of (res.references || []).slice(0, 60)) ul.append(refItem(r, res.basis));
@@ -749,16 +821,28 @@ async function refresh() {
   markSample(state);
   if (ui.focus === null && state.focus) ui.focus = state.focus;
   if (ui.first) { ui.first = false; if (ui.focus) ui.view = "session"; }   // open on the session that asked
-  for (const b of document.querySelectorAll("button.view")) b.classList.toggle("active", b.dataset.view === ui.view);
   $("repo").textContent = state.repo || "";
-  renderSessions(state);
   renderBranches(state);
-  await renderTimeline();
   ui.impact = {};
-  acceptDiff(await loadDiff());
+  // §5.4 rule 2: a read slower than 300 ms shows a skeleton IN the Review region.
+  const slow = setTimeout(() => { if (!ui.files.length) regionSay($("diff"), "loading", `Reading ${viewing().label}…`); }, 300);
+  const d = await loadDiff().catch((e) => ({ error: "unreachable", note: String(e && e.message || e) }));
+  clearTimeout(slow);
+  if (ui.view === "session" && ui.focus && !d.error) ui.sessionPaths = { sid: ui.focus, paths: (d.files || []).map((f) => f.path) };
+  else if (ui.focus && (!ui.sessionPaths || ui.sessionPaths.sid !== ui.focus)) loadSessionPaths(ui.focus);
+  renderViewing();
+  acceptDiff(d);
   if (MK.onRefresh) MK.onRefresh();
 }
 MK.refresh = refresh;
+
+// The Viewing session's files when Review shows another source (search scope, R28).
+async function loadSessionPaths(sid) {
+  const d = await api("/api/session?id=" + encodeURIComponent(sid)).catch(() => null);
+  if (!d || d.error || ui.focus !== sid) return;
+  ui.sessionPaths = { sid, paths: (d.files || []).map((f) => f.path) };
+  renderViewing();
+}
 
 // ID.S3 follow mode: the server pushes each edit as a `bus` event ({kind, path, session}); with
 // Follow on, the edited file opens (reloaded) in Navigate. Only the focused session is followed when
@@ -767,8 +851,33 @@ let follow = false;
 let refreshTimer = 0;
 function softRefresh() {
   if (ui.view === "pr" || refreshTimer) return;
-  refreshTimer = setTimeout(() => { refreshTimer = 0; refresh(); }, 250);
+  refreshTimer = setTimeout(() => { refreshTimer = 0; staleViews = false; refresh(); }, 250);
 }
+// 0.0.26 P35 (G16, audit B-F11): ONE edit used to trigger a full refresh — 13 requests (state,
+// timeline, session(s), runs, saved-plans, lifecycle, file, outline, highlight, workspace …), and
+// every edit by every session paid it. A live `edit` event now refreshes only what it touched:
+// Review re-reads its change list (+ the edited file's impact); Navigate re-reads the open file
+// when it is the edited one (file + outline in one request, + its highlight). Every other view is
+// marked stale and refreshed when it is next shown.
+let staleViews = false;
+let lastEdit = 0;
+let deltaTimer = 0;
+const deltaPaths = new Set();
+function deltaRefresh(path) {
+  lastEdit = Date.now();
+  deltaPaths.add(path);
+  if (deltaTimer) return;
+  deltaTimer = setTimeout(async () => {
+    deltaTimer = 0;
+    const paths = [...deltaPaths];
+    deltaPaths.clear();
+    staleViews = true;
+    if (ui.mode === "review" && ui.view !== "pr") acceptDiff(await loadDiff());
+    else if (MK.onDeltaNav) MK.onDeltaNav(paths);
+  }, 250);
+}
+MK.deltaRefresh = deltaRefresh;
+MK.refreshIfStale = () => { if (staleViews) softRefresh(); };
 function onBus(ev) {
   if (MK.onBusExtra) MK.onBusExtra(ev);          // ID.S3 join events (bridge.js)
   let e;
@@ -780,7 +889,7 @@ function onBus(ev) {
   }
   if (!e || e.kind !== "edit" || typeof e.path !== "string") return;
   $("live-dot").classList.add("on");
-  softRefresh();
+  deltaRefresh(e.path);
   if (!follow || !MK.openFile) return;
   if (ui.focus && e.session && e.session !== ui.focus) return;
   MK.openFile(e.path, 1, null, { reload: true });
@@ -799,9 +908,10 @@ function initFollow() {
 MK.initFollow = initFollow;
 
 function live() {
-  const es = new EventSource("/api/events");
+  const es = new EventSource("/api/events?client=" + encodeURIComponent(MK.clientId));
   initFollow();
   es.addEventListener("bus", onBus);
+  for (const hook of MK.liveHooks || []) hook(es);     // P32: features/activity.js — `job` events
   // The stream's FIRST `changed` is the server's opening fingerprint, sent the moment the page
   // connects — right after the page loaded everything. Re-fetching on it doubled every first-load
   // request (state, live, timeline, impact, runs, sessions, …). It is remembered, not acted on;
@@ -811,6 +921,8 @@ function live() {
     const first = ui.lastFp === undefined;
     if (!first && ev.data && ev.data !== "resync" && ev.data === ui.lastFp) return;
     ui.lastFp = ev.data || "";
+    // the fingerprint an edit event already delivered as a delta (P35): stale, not a refresh
+    if (!first && Date.now() - lastEdit < 3000) { staleViews = true; return; }
     if (!first) softRefresh();
   });
   es.addEventListener("focus", (ev) => {
@@ -821,138 +933,59 @@ function live() {
 }
 MK.live = live;
 
-// ------------------------------------------------------------------------------- ⌘P
-const qo = { open: false, changedOnly: false, rows: [], idx: 0, gen: 0, timer: 0 };
-
-function openQuick() {
-  if (qo.open) { qo.changedOnly = !qo.changedOnly; runQuick(); return; }
-  qo.open = true; qo.changedOnly = false;
-  $("qo").hidden = false;
-  const inp = $("qo-input");
-  inp.value = "";
-  inp.focus();
-  runQuick();
+// ------------------------------------------------------------------------------- keyboard
+// §5.5. The `g` chord goes to a screen (g s / g r / g c / g i / g p / g w — a feature screen names
+// its own letter); `?` lists every key. Both are reserved in registry.js. The chord listener runs in
+// the CAPTURE phase so the letter after `g` is the chord's, never a registry binding's.
+const chord = { at: 0 };
+const CHORD_MS = 1500;
+function chordScreen(letter) {
+  const s = SCREENS.find((x) => x.chord && x.chord === letter);
+  return s ? s.id : null;
 }
-MK.openQuick = openQuick;
-function closeQuick() { qo.open = false; $("qo").hidden = true; }
-
-async function runQuick() {
-  const gen = ++qo.gen;
-  const q = $("qo-input").value;
-  if (q.startsWith("#")) {
-    renderQuick({ changed: [], files: [], symbols: [], text: q.slice(1) }, q);
+MK.chordScreen = chordScreen;
+function onChord(ev) {
+  if (typing(ev) || ev.metaKey || ev.ctrlKey || ev.altKey) { chord.at = 0; return; }
+  if (chord.at && Date.now() - chord.at < CHORD_MS && ev.key.length === 1) {
+    chord.at = 0;
+    const id = chordScreen(ev.key.toLowerCase());
+    if (id) { ev.preventDefault(); ev.stopImmediatePropagation(); setMode(id); }
     return;
   }
-  const changed = ui.files.filter((f) => f.status !== "deleted").map((f) => f.path);
-  const res = await api("/api/quickopen", { q, changed }).catch(() => null);
-  if (gen !== qo.gen || !res) return;
-  if (qo.changedOnly) { res.files = []; res.symbols = []; }
-  renderQuick(res, q);
-  // lane S: the symbol index is still loading — the files answered now; ask again shortly.
-  if (res.symbols_state === "building" && !qo.changedOnly) {
-    setTimeout(() => { if (gen === qo.gen && qo.open) runQuick(); }, 1500);
-  }
+  chord.at = 0;
+  if (ev.key === "g") { chord.at = Date.now(); ev.preventDefault(); ev.stopImmediatePropagation(); }
+  else if (ev.key === "?") { ev.preventDefault(); ev.stopImmediatePropagation(); keysHelp(true); }
 }
 
-function hl(text, q) {
-  // Highlight the matched subsequence — built from text nodes, never markup.
-  const frag = document.createDocumentFragment();
-  const ql = (q || "").replace(/^[@#]/, "").toLowerCase();
-  let j = 0;
-  for (const ch of text) {
-    if (j < ql.length && ch.toLowerCase() === ql[j]) { frag.append(el("b", "m", ch)); j++; }
-    else frag.append(document.createTextNode(ch));
-  }
-  return frag;
+// The `?` overlay: §5.5's map, built from the screens and the registry (what you see is bound).
+const CORE_KEYS = [
+  ["] / [", "next / previous changed file"], ["j / k", "next / previous hunk or change"], ["u", "next unseen file"],
+  ["e", "open the Review file in Code"], ["Alt+← / Alt+→", "back / forward"], ["> / < / !", "next / previous session · most urgent"],
+  ["Esc", "close the overlay"], ["?", "this list"],
+];
+function keysHelp(open) {
+  const box = $("keys-help");
+  box.hidden = !open;
+  if (!open) return;
+  const t = $("keys-table");
+  t.replaceChildren();
+  const row = (k, what) => { const tr = el("tr"); tr.append(el("td", "mono", k), el("td", "", what)); t.append(tr); };
+  for (const s of SCREENS) row(s.chord ? `g ${s.chord}` : (s.keys || "—"), `go to ${s.title}`);
+  for (const [k, w] of CORE_KEYS) row(k, w);
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform || "");
+  const fmt = (k) => (MK.palette && MK.palette.keyLabel ? MK.palette.keyLabel(k, mac) : k);
+  for (const c of (window.mokataIDE ? window.mokataIDE.commands() : [])) if (c.keys.length) row(c.keys.map(fmt).join(" · "), c.title);
+  $("keys-close").focus();
 }
+MK.keysHelp = keysHelp;
 
-function renderQuick(res, q) {
-  const box = $("qo-results");
-  box.replaceChildren();
-  qo.rows = [];
-  const section = (title, note) => {
-    const h = el("div", "qo-sec"); h.append(el("h2", "", title)); if (note) h.append(el("span", "dim small", note)); box.append(h);
-    const ul = el("ul", "qo-list"); box.append(ul); return ul;
-  };
-  if (res.text !== undefined) {
-    const ul = section("Text");
-    addRow(ul, () => { const li = el("li", "qo-row"); li.append(el("span", "", `Search the repo for “${res.text}”`)); return li; },
-           () => { closeQuick(); if (MK.openSearch) MK.openSearch(res.text); });
-  }
-  if ((res.changed || []).length) {
-    const ul = section(ui.focus ? "Changed in this session" : "Changed", "always ranked first");
-    for (const r of res.changed) {
-      const f = ui.files.find((x) => x.path === r.path) || { status: "modified", added: 0, removed: 0 };
-      const [dir, name] = splitPath(r.path);
-      addRow(ul, () => {
-        const li = el("li", "qo-row");
-        const letter = ST_LETTER[f.status] || "M";
-        li.append(el("span", "seen-dot" + (isSeen(f) ? " seen" : "")), el("span", "st st-" + letter, letter));
-        const nm = el("span", "nm mono"); nm.append(hl(name, q), el("span", "dim small", "  " + dir)); li.append(nm);
-        const im = ui.impact[r.path];
-        if (im && im.status === "untested") li.append(el("span", "risk", "untested"));
-        li.append(el("span", "n-add mono small", `+${f.added}`), el("span", "n-del mono small", `−${f.removed}`), el("span", "dim small", "↵ diff"));
-        return li;
-      }, (alt) => {
-        closeQuick();
-        if (alt && MK.openFile) { MK.openFile(r.path, 1, null); return; }
-        const i = ui.files.findIndex((x) => x.path === r.path);
-        setMode("review"); setPanel("changes", true); if (i >= 0) showFile(i);
-      });
-    }
-  }
-  if ((res.files || []).length) {
-    const ul = section("Files");
-    for (const r of res.files) {
-      const [dir, name] = splitPath(r.path);
-      addRow(ul, () => { const li = el("li", "qo-row"); const nm = el("span", "nm mono"); nm.append(hl(name, q), el("span", "dim small", "  " + dir)); li.append(nm); return li; },
-             () => { closeQuick(); if (MK.openFile) MK.openFile(r.path, 1, null); });
-    }
-  }
-  if ((res.symbols || []).length) {
-    const ul = section("Symbols");
-    for (const s of res.symbols) {
-      addRow(ul, () => {
-        const li = el("li", "qo-row");
-        li.append(el("span", "kind", s.kind === "class" ? "cls" : "fn"));
-        const nm = el("span", "nm mono"); nm.append(hl(s.name, q)); li.append(nm);
-        li.append(el("span", "dim small mono", `${s.path}:${s.line}`), basisBadge(s.basis));
-        return li;
-      }, () => { closeQuick(); if (MK.openFile) MK.openFile(s.path, s.line, s.name); });
-    }
-  }
-  if (res.symbols_note && !qo.changedOnly) section("Symbols", res.symbols_note);
-  if (!qo.rows.length) box.append(el("p", "empty", res.error ? `could not search: ${res.note || res.error}` : res.symbols_note ? "No file matches yet." : "No match."));
-  qo.idx = 0;
-  paintQuick();
-  $("qo-matcher").textContent = res.matcher ? `matcher: ${res.matcher}${res.matcher === "python-floor" ? " (pure-Python floor — pip install rapidfuzz)" : ""}${qo.changedOnly ? " · changed only" : ""}` : "";
-}
-
-function addRow(ul, make, act) {
-  const li = make();
-  const k = qo.rows.length;
-  li.onclick = (ev) => act(ev.altKey);
-  li.onmousemove = () => { if (qo.idx !== k) { qo.idx = k; paintQuick(); } };
-  qo.rows.push({ li, act });
-  ul.append(li);
-}
-function paintQuick() {
-  qo.rows.forEach((r, k) => r.li.classList.toggle("active", k === qo.idx));
-  const cur = qo.rows[qo.idx];
-  if (cur) cur.li.scrollIntoView({ block: "nearest" });
-}
-
-// ------------------------------------------------------------------------------- keyboard
 function onKey(ev) {
   const mod = ev.metaKey || ev.ctrlKey;
-  if (mod && (ev.key === "p" || ev.key === "P")) { ev.preventDefault(); openQuick(); return; }
-  if (qo.open) {
-    if (ev.key === "Escape") { ev.preventDefault(); closeQuick(); }
-    else if (ev.key === "ArrowDown") { ev.preventDefault(); qo.idx = Math.min(qo.rows.length - 1, qo.idx + 1); paintQuick(); }
-    else if (ev.key === "ArrowUp") { ev.preventDefault(); qo.idx = Math.max(0, qo.idx - 1); paintQuick(); }
-    else if (ev.key === "Enter") { ev.preventDefault(); const r = qo.rows[qo.idx]; if (r) r.act(ev.altKey); }
-    return;
+  if (ev.key === "Escape") {
+    if (!$("keys-help").hidden) { keysHelp(false); return; }
+    if (!$("viewing-pop").hidden) { openViewing(false); return; }
   }
+  // ⌘P / ⌘K / ⌘⇧P / ⌘G and the palette's own keys live in static/features/palette.js (0.0.26 P3).
   if (typing(ev) || mod || ev.altKey && !(ev.key === "ArrowLeft" || ev.key === "ArrowRight")) return;
   if (ev.altKey && MK.navHistory) {
     if (ev.key === "ArrowLeft") { ev.preventDefault(); MK.navHistory(-1); }
@@ -975,27 +1008,34 @@ MK.onKey = onKey;
 // ------------------------------------------------------------------------------- wiring
 MK.wireCore = function wireCore() {
   $("head").onchange = () => { $("head").dataset.touched = "1"; };
-  $("compare-go").onclick = async () => { ui.view = "compare"; setMode("review"); await refresh(); };
-  $("pr-go").onclick = async () => { ui.view = "pr"; setMode("review"); await refresh(); };
-  for (const b of document.querySelectorAll("button.view")) {
-    b.onclick = async () => { ui.view = b.dataset.view; setMode("review"); await refresh(); };
-  }
-  for (const b of document.querySelectorAll("button.mode")) b.onclick = () => setMode(b.dataset.mode);
-  for (const b of document.querySelectorAll("button.rail-btn")) b.onclick = () => setPanel(b.dataset.panel);
+  $("compare-go").onclick = () => pickView("compare");
+  $("pr-go").onclick = () => pickView("pr");
+  for (const b of document.querySelectorAll("#viewing-pop button.view[data-view]")) b.onclick = () => pickView(b.dataset.view);
+  $("viewing-pick").onclick = () => { openViewing(false); setMode("sessions"); };
+  $("viewing-close").onclick = () => openViewing(false);
+  $("session-chip").onclick = () => openViewing();
+  document.addEventListener("mousedown", (ev) => {
+    const p = $("viewing-pop");
+    if (!p.hidden && !p.contains(ev.target) && !$("session-chip").contains(ev.target)
+        && !(ev.target.closest && ev.target.closest(".combo-list"))) openViewing(false);
+  });
+  // The rail: one listener for every screen button, the core's and a feature's.
+  document.querySelector("nav.rail").addEventListener("click", (ev) => {
+    const b = ev.target.closest && ev.target.closest(".rail-btn");
+    if (b && b.dataset.screen) setMode(b.dataset.screen);
+  });
   for (const b of document.querySelectorAll("button.pill[data-filter]")) {
     b.onclick = () => { ui.filter = b.dataset.filter; renderNavigator(); if (ui.filter === "untested") loadImpacts(true); };
   }
-  $("session-chip").onclick = () => setPanel("sessions", ui.mode !== "review" ? false : true);
-  $("src-change").onclick = () => setPanel("sessions", true);
+  $("diff-mokata-btn").onclick = async () => { ui.showMokata = !ui.showMokata; await refresh(); };
   $("file-prev").onclick = () => moveFile(-1);
   $("file-next").onclick = () => moveFile(1);
   $("mark-seen").onclick = markSeenNext;
   $("open-nav").onclick = openCurrentInNavigate;
   $("insp-pick").onchange = () => { ui.inspSym = $("insp-pick").value; renderInspector(); };
-  $("session-pick").onchange = () => setFocus($("session-pick").value || null);
   $("insp-ripple").onclick = () => { if (MK.openGraph && ui.inspSym) MK.openGraph("ripple", ui.inspSym); };
-  $("qo-open").onclick = openQuick;
-  $("qo-input").oninput = () => { clearTimeout(qo.timer); qo.timer = setTimeout(runQuick, 70); };
-  $("qo").onclick = (ev) => { if (ev.target === $("qo")) closeQuick(); };
+  $("keys-close").onclick = () => keysHelp(false);
+  $("keys-help").addEventListener("mousedown", (ev) => { if (ev.target === $("keys-help")) keysHelp(false); });
+  window.addEventListener("keydown", onChord, true);
   document.addEventListener("keydown", onKey);
 };

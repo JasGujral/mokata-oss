@@ -25,8 +25,8 @@ recommends sequential vs parallel. The split is **read-only until you confirm it
 
 ```bash
 PY="$(command -v python3 || command -v python)"
-ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
-eval "$ENGINE decompose --path ."          # show the read-only split
+mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
+mokata decompose --path .          # show the read-only split
 ```
 
 If there's no emitted spec with ACs, it says so — run `/mokata:spec` first.
@@ -39,7 +39,7 @@ estimate, asks parallel-vs-sequential (default **sequential**), then runs with i
 two-stage review, degrading to sequential when subagents are unavailable:
 
 ```bash
-eval "$ENGINE decompose --run --path ."     # gated confirm → resolve mode → run_tasks
+mokata decompose --run --path .     # gated confirm → resolve mode → run_tasks
 ```
 
 If dependencies are present (or independence is unverified because no code graph is wired),

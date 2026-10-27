@@ -1,0 +1,18 @@
+/* mokata ide — the approval card (0.0.26 P38). Brand tokens only (app.css :root). */
+.ap-list { display: flex; flex-direction: column; gap: 8px; }
+.ap-review { margin: 10px 16px 0; }
+.ap-title { color: var(--amber); font-weight: 600; }
+.ap-card { border: 1px solid var(--amber-line); border-radius: 8px; padding: 8px 10px; background: var(--panel); }
+.ap-card.st-approved, .ap-card.st-used { border-color: var(--accent); }
+.ap-card.st-rejected, .ap-card.st-expired { border-color: var(--line2); opacity: .85; }
+.ap-head { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.ap-badge { font-size: 11px; border: 1px solid currentColor; border-radius: 999px; padding: 0 6px; color: var(--amber); }
+.ap-card.st-approved .ap-badge, .ap-card.st-used .ap-badge { color: var(--accent); }
+.ap-render { max-height: 220px; overflow: auto; white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line);
+  border-radius: 6px; padding: 6px 8px; margin: 6px 0; }
+.ap-acts { gap: 6px; flex-wrap: wrap; }
+.ap-coderow { gap: 6px; margin-top: 6px; }
+.ap-code { width: 11ch; letter-spacing: .08em; text-transform: uppercase; }
+.ap-note.bad { color: var(--del); }
+.ap-cmd { display: inline-block; font-family: var(--mono); font-size: 12px; margin-top: 2px; }
+.ap-ledger { margin: 4px 0 0; padding-left: 16px; color: var(--text2); }

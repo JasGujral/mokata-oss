@@ -44,7 +44,7 @@ SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "src",
 class TheServerGetsAHiddenConsole(unittest.TestCase):
     def test_windows_launch_flags_hide_the_console_and_never_detach_it(self):
         with mock.patch.object(L.os, "name", "nt"):
-            flags = L._detach_kwargs()["creationflags"]
+            flags = quiet_spawn.detached()["creationflags"]
         self.assertTrue(flags & CREATE_NO_WINDOW, "the server must own a hidden console")
         self.assertFalse(flags & DETACHED_PROCESS,
                          "DETACHED_PROCESS leaves the server console-less, so every console child "
@@ -103,12 +103,13 @@ class EverySpawnWhileServingIsWindowless(unittest.TestCase):
 # CORPUS: THE WORKING TREE — the IDE source this checkout would run (a static floor over it).
 def _ide_reach_files():
     return [os.path.join("ide", f) for f in sorted(os.listdir(os.path.join(SRC, "ide")))
-            if f.endswith(".py")] + [os.path.join("knowledge", "crg_client.py")]
+            if f.endswith(".py")] + [os.path.join("knowledge", "crg_client.py"),
+                             os.path.join("knowledge", "crg_build.py")]
 
 
 class NoSpawnInTheIdeReachIsUnflagged(unittest.TestCase):
     """Static floor: every subprocess call in `ide/` and the CRG client passes `**hidden()`
-    (launch.py's server start passes `**_detach_kwargs()`, asserted above)."""
+    (launch.py's server start passes `**detached()`, asserted above)."""
 
     SPAWNS = {"run", "Popen", "check_output", "check_call", "call"}
 
@@ -125,7 +126,7 @@ class NoSpawnInTheIdeReachIsUnflagged(unittest.TestCase):
                     continue
                 starred = [k.value for k in node.keywords if k.arg is None]
                 ok = any(isinstance(v, ast.Call) and getattr(v.func, "id", "") in
-                         ("hidden", "_detach_kwargs") for v in starred)
+                         ("hidden", "detached") for v in starred)
                 if not ok:
                     bad.append(f"{rel}:{node.lineno}")
         self.assertEqual(bad, [], "spawns in the IDE's reach without **hidden() — each one is a "

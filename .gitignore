@@ -78,3 +78,6 @@ editors/vscode/out/
 # match docs/build/, the internal build-docs dir that MUST stay tracked.
 docs/talks/client-technical-review/deck/build/
 docs/talks/client-technical-review/deck/diagrams/*.svg
+
+# SE.S1/S2 live tier: the `claude plugin eval` suite is generated from evals/skill_triggers/corpus.
+/evals/generated/

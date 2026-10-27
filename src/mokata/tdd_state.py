@@ -117,6 +117,10 @@ def state_key(run_id: str) -> str:
 def state_dir(root: str) -> str:
     """The state directory for a repo root — `<root>/.mokata/temp_local/state/` (config's layout,
     resolved without importing config; see STATE_DIRNAME)."""
+    # 0.0.26 P31 — from a linked worktree, the ONE shared store is the main checkout's (lazy import:
+    # the cheap-read surface stays `state` + `tdd_state`).
+    from .repo_identity import state_root
+    root = state_root(root)
     return os.path.join(root, MOKATA_DIR, TEMP_LOCAL_DIRNAME, STATE_DIRNAME)
 
 

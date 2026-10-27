@@ -26,7 +26,7 @@ engine instead:
 
   ```bash
   PY="$(command -v python3 || command -v python)"
-  ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
+  mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
   ```
 
 ## 2. Resolve the profile
@@ -47,7 +47,7 @@ Preview **the run you are about to make** — the same command as step 5 with `-
 Show the user the output **verbatim**:
 
 ```bash
-eval "$ENGINE init --profile <profile> --yes --preview --path ."
+mokata init --profile '<profile>' --yes --preview --path .
 ```
 
 ⚠ The `--yes` is not a typo and must not be dropped. `--preview` describes the run it is
@@ -70,17 +70,30 @@ stop — and don't ask again.
 Only after approval:
 
 ```bash
-eval "$ENGINE init --profile <profile> --yes --path ."
+mokata init --profile '<profile>' --yes --path .
 ```
 
 ⚠ If a manifest already existed and the user confirmed the overwrite, add `--force` — **to the
 step 3 preview as well, then re-show it**. Any flag that reaches this command and not that one
 means the user approved a plan for a different run.
 
+### 5b. Plugin route, `full` profile: finish the mode
+
+If `ROOT` came from `~/.mokata/plugin-root` (the plugin route) and the profile is `full`, finish
+full mode with the plugin's own pinned environment (`mokata[full]` at the plugin's version — the
+semantic model, code-review-graph and the TypeScript parser are already in it; this wires them and
+warms the model). It writes only this repo's mokata settings, which the user approved in step 4:
+
+```bash
+sh "$ROOT/src/mokata/hooks/mokata-launch" setup claude --mode full --plugin --yes --path .
+```
+
+Show its table verbatim; a ✗ row names its cause and fix.
+
 ## 6. Verify + report
 
 ```bash
-eval "$ENGINE status --path ."
+mokata status --path .
 ```
 
 Show the resulting profile and how each capability resolved (present vs. degraded to its

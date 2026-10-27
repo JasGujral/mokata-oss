@@ -14,18 +14,19 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional
 
 import re
 
 from ..manifest import ManifestError
 from .graph_backend import CodeReviewGraphBackend, GraphQueryClient
 from .grep_backend import GrepBackend
-from .query import BASIS_LEXICAL, BackendError, GraphBackend, QueryResult
+from .query import (BASIS_LEXICAL, BUDGET_DEFAULT, BUDGET_FULL, BUDGETS, BackendError,
+                    GraphBackend, GraphIndexUnbuilt, GraphNotIndexed, QueryResult)
 
 # Tools that ARE real structural graphs (everything else is the lexical floor).
 # `neo4j` left at 0.0.18 lane D stage 14 — see `_announce_removed_graph_chain` below.
-GRAPH_TOOLS = ("code-review-graph", "serena")
+from .graph_tools import GRAPH_TOOLS  # noqa: E402
 
 STORY_ANALYSIS_PREFIX = "story_analysis__"
 
@@ -166,6 +167,24 @@ def _announce_deprecated_graph_chain(router: Any, root: str) -> tuple:
     return deprecated
 
 
+def _graph_failure_summary(tool: str, failed: BaseException) -> str:
+    """0.0.26 O15 — WHICH binary failed and WHY, for the code-graph DEGRADED line. Jas's notice
+    said only "the backend is unreachable", naming neither the binary (it was a code-review-graph
+    on PATH from another environment) nor the cause. Bounded and secret-checked: the reason can
+    carry the tool's own text (`degrade.CapabilityDegradeNotice.render` — detail is not rendered
+    for that reason, so a site that needs its cause on screen bounds it into `fallback`)."""
+    from ..detect import find_command
+    binary = find_command(tool) or f"{tool} (not resolved)"
+    why = " ".join(str(failed).split())[:240] or type(failed).__name__
+    try:
+        from ..govern.secrets import scan
+        if scan(text=why):
+            why = f"{type(failed).__name__} (detail withheld: secret-shaped content)"
+    except Exception:                         # noqa: BLE001 — fail CLOSED
+        why = f"{type(failed).__name__} (detail withheld: could not be checked for secrets)"
+    return f"{binary}: {why}"
+
+
 def select_backends(
     router: Any,
     root: str,
@@ -275,6 +294,25 @@ class KnowledgeLayer:
     def from_surface(cls, surface: Any,
                      client: Optional[GraphQueryClient] = None,
                      index: Any = None) -> "KnowledgeLayer":
+        # P41 MCP-FOLLOWS-WORKTREE — a question about a linked worktree (the surface is rooted in
+        # one, or the MCP call serves a session bound to one) is answered by the MAIN checkout's
+        # layer with the worktree's changed files overlaid (`tree_overlay.TreeLayer`). Never a
+        # second graph built inside the worktree, never the main checkout's files alone.
+        from ..tree_scope import code_tree_for
+        hit = code_tree_for(surface.root) if cls is KnowledgeLayer else None
+        if hit is not None:
+            import os as _os
+            from ..config import Surface
+            from .tree_overlay import TreeLayer
+            tree, main = hit
+            main_surface = surface if _os.path.realpath(surface.root) == _os.path.realpath(main) \
+                else Surface.load(main)
+            return TreeLayer.over(cls._main_from_surface(main_surface, client, index), tree)
+        return cls._main_from_surface(surface, client, index)
+
+    @classmethod
+    def _main_from_surface(cls, surface: Any, client: Optional[GraphQueryClient] = None,
+                           index: Any = None) -> "KnowledgeLayer":
         # GR.S4: attach the read-time freshness controller so every production answer is fresh by
         # contract. Degrade-clean (None ⇒ no reconcile) when the run-state surface can't be
         # reached — freshness never becomes a reason a query can't run.
@@ -323,7 +361,19 @@ class KnowledgeLayer:
             return None
 
     # --- typed queries ------------------------------------------------------
-    def _run(self, kind: str, target: str, depth: int = 1) -> QueryResult:
+    def _run(self, kind: str, target: str, depth: int = 1, budget: str = BUDGET_DEFAULT,
+             checkpoint: Optional[Callable[[], None]] = None) -> QueryResult:
+        # 0.0.26 O7 — `budget=full` is the on-request long walk; only the blast radius has one.
+        if budget not in BUDGETS:
+            raise ValueError(f"unknown budget '{budget}'; one of {BUDGETS}")
+        if budget == BUDGET_FULL and kind != "blast_radius":
+            raise ValueError(f"budget '{BUDGET_FULL}' applies to blast_radius only, not '{kind}'")
+
+        def ask(backend: GraphBackend) -> QueryResult:
+            if budget == BUDGET_FULL:
+                return backend.blast_radius_full(target, depth=depth, checkpoint=checkpoint)
+            return backend.query(kind, target, depth=depth)
+
         # GR.S4 — FRESHNESS-BEFORE-ANSWER: reconcile the graph against the dirty-set + HEAD probe
         # BEFORE answering. A graph KNOWN stale rebuilds first; a graph whose rebuild FAILED
         # answers from the AST floor on CURRENT files with a loud classed note — never from stale
@@ -335,7 +385,7 @@ class KnowledgeLayer:
             except Exception:
                 fresh = None
         if fresh is not None and fresh.answer_from_floor and self.fallback is not None:
-            floor = self.fallback.query(kind, target, depth=depth)
+            floor = ask(self.fallback)
             # D2 — a demotion, not a flag flip: the floor may itself have certified a verified
             # ZERO, and a KNOWN-stale graph is not a basis on which to pass that certification on.
             # `demote_to_floor` moves the basis and the reason together so the two can't drift.
@@ -351,7 +401,7 @@ class KnowledgeLayer:
         # backend produced it and why, and the FLOOR's own verdict decides `degraded` — the AST
         # floor answers `defs` exactly on a Python repo, so it is not a degraded answer at all.
         if self.fallback is not None and not _supports_kind(self.primary, kind):
-            floor = self.fallback.query(kind, target, depth=depth)
+            floor = ask(self.fallback)
             floor.note = _join_note(
                 floor.note,
                 f"the adopted graph '{self.primary.name}' exposes no '{kind}' op; "
@@ -362,7 +412,29 @@ class KnowledgeLayer:
             self._remember(floor)
             return floor
         try:
-            result = self.primary.query(kind, target, depth=depth)
+            result = ask(self.primary)
+        except GraphNotIndexed as absent:
+            # 0.0.26 O2 — the adopted graph is HEALTHY and holds no node for `target`. Not a
+            # failure (no recover() re-probe, no degrade alarm against a working tool) and not a
+            # zero (an empty impact would read as "nothing is affected"). The floor answers in its
+            # own right — its verdict decides `degraded`, exactly as for a mapping gap above — and
+            # the note names both backends so the reader knows which one spoke.
+            if self.fallback is None:
+                raise
+            floor = ask(self.fallback)
+            if isinstance(absent, GraphIndexUnbuilt):
+                # 0.0.26 O13 — no index at all (yet): the backend already started the ONE
+                # background build (or says why it did not); this query never waits for it.
+                said = f"{absent} — answered by the '{floor.backend}' floor"
+            else:
+                said = (f"the adopted graph '{self.primary.name}' does not index `{target}` "
+                        f"({absent}); answered by the '{floor.backend}' floor")
+            floor.note = _join_note(floor.note, said)
+            if fresh is not None and fresh.note:
+                floor.note = _join_note(floor.note, fresh.note)
+            self._surface_index_staleness(floor)
+            self._remember(floor)
+            return floor
         except BackendError as first:
             # GR.S2(k): a real graph gets ONE bounded, operational recovery attempt (re-probe
             # -> index refresh/rebuild -> retry) before we degrade — kept functional
@@ -373,7 +445,7 @@ class KnowledgeLayer:
             recover = getattr(self.primary, "recover", None)
             if callable(recover) and recover():
                 try:
-                    result = self.primary.query(kind, target, depth=depth)
+                    result = ask(self.primary)
                 except BackendError as again:
                     failed = again
                     result = None
@@ -398,11 +470,12 @@ class KnowledgeLayer:
                            "persists")
                 note_degraded(
                     "code-graph", failure_class,
-                    fallback=f"the code graph fell back to '{self.fallback.name}'",
+                    fallback=(f"the code graph fell back to '{self.fallback.name}' — "
+                              f"{_graph_failure_summary(self.primary.name, failed)}"),
                     fix=fix,
                     detail=f"graph backend '{self.primary.name}' {said} "
                            f"{kind}({target}) and did not recover")
-                result = self.fallback.query(kind, target, depth=depth)
+                result = ask(self.fallback)
                 # D2 — the ADOPTED graph is the backend the user configured, and it failed. What
                 # the floor found stands in for it, but it does not inherit the adopted graph's
                 # authority: a verified zero from the floor is demoted here rather than presented
@@ -431,7 +504,7 @@ class KnowledgeLayer:
         if self.freshness is not None:
             try:
                 if self.freshness.recheck_after_answer(self, result):
-                    result = self.primary.query(kind, target, depth=depth)
+                    result = ask(self.primary)
             except Exception:
                 pass
         # GR.S4 — a freshness cap / tier note rides on the answer, honestly (never a block).
@@ -583,17 +656,73 @@ def impact_degrade(layer: Any, result: Any) -> Optional[Dict[str, Any]]:
     return {"reasons": reasons, "remedy": remedy, "message": message}
 
 
-def run_query(layer: "KnowledgeLayer", kind: str, target: str, depth: int = 2) -> QueryResult:
+def run_query(layer: "KnowledgeLayer", kind: str, target: str, depth: int = 2,
+              budget: str = BUDGET_DEFAULT,
+              checkpoint: Optional[Callable[[], None]] = None) -> QueryResult:
     """The ONE typed-query router the MCP `query` tool and the CLI `query` command share
     (GR.S2). Routes `semantic` to the capability-gated semantic API, every structural kind to
     `_run` — so the adopted graph's semantic search reaches in-harness through the typed API
     without a second surface, and a floor-only repo degrades honestly instead of crashing."""
     if kind == "semantic":
+        if budget != BUDGET_DEFAULT:
+            raise ValueError(f"budget '{budget}' applies to blast_radius only, not 'semantic'")
         return layer.semantic(target)
-    return layer._run(kind, target, depth=depth)
+    return layer._run(kind, target, depth=depth, budget=budget, checkpoint=checkpoint)
 
 
 # ----------------------------------------------------- Stage 25 Part B: graph guidance
+def impact_backend_line(layer: Any) -> str:
+    """0.0.26 O2 — WHICH BACKEND ANSWERS A BLAST RADIUS here, in one sentence, for doctor and the
+    IDE health page. Derived from the same `_supports_kind` routing `_run` uses, so the disclosure
+    cannot say one backend while the query path uses another."""
+    primary = getattr(layer, "primary", None)
+    fallback = getattr(layer, "fallback", None)
+    pname = getattr(primary, "name", "") or "none"
+    if primary is not None and getattr(primary, "is_graph", False) \
+            and _supports_kind(primary, "blast_radius"):
+        tail = (f"; a symbol it does not index, or a failure, is answered by the "
+                f"'{fallback.name}' floor" if fallback is not None else "")
+        return f"blast radius: answered by '{pname}' (transitive callers){tail}"
+    if fallback is not None:
+        return (f"blast radius: answered by the '{fallback.name}' floor "
+                f"('{pname}' has no blast-radius op)")
+    return f"blast radius: answered by '{pname}'"
+
+
+def graph_index_line(layer: Any) -> Optional[str]:
+    """0.0.26 O13 (O11 F2) — "active" is said only when the graph is ACTUALLY ANSWERING: its index
+    is built. A graph that is installed/pinned but whose index is building, never built, or failed
+    to build answers nothing — the floor does — and each of those is its own sentence. None when
+    the graph is built (or the backend has no on-disk index to report on): the caller's usual
+    "active" line applies. Read-only: never starts a build."""
+    primary = getattr(layer, "primary", None)
+    if not getattr(primary, "is_graph", False):
+        return None
+    probe = getattr(primary, "index_status", None)
+    if not callable(probe):
+        return None
+    try:
+        status = probe()
+    except Exception:  # noqa: BLE001 — a status line that cannot be read says nothing extra
+        return None
+    if status is None:
+        return None
+    from .crg_build import BUILDING, FAILED, UNBUILT
+    tool = primary.name
+    floor = getattr(getattr(layer, "fallback", None), "name", "") or "the floor"
+    if status.state == BUILDING:
+        return (f"code graph: {tool} building — {status.line(tool)}; until it finishes every "
+                f"structural answer comes from the '{floor}' floor (and says so).")
+    if status.state == UNBUILT:
+        return (f"code graph: {tool} detected, unbuilt — it has no index for this repo yet, so the "
+                f"'{floor}' floor answers. The first structural query starts the build in the "
+                f"background; `mokata graph build` builds it now, with progress.")
+    if status.state == FAILED:
+        return (f"code graph: {tool} index build FAILED — {status.line(tool)}. The '{floor}' "
+                f"floor answers meanwhile.")
+    return None
+
+
 def graph_guidance(surface: Any) -> str:
     """An ACTIONABLE one-line hint for doctor/status (Stage 25 Part B).
 
@@ -614,6 +743,9 @@ def graph_guidance(surface: Any) -> str:
     cannot disagree about which backend answers."""
     from .ast_backend import AstBackend
     layer = KnowledgeLayer.from_surface(surface)
+    state_line = graph_index_line(layer)
+    if state_line:
+        return state_line
     if layer.uses_graph:
         tool = layer.backend_name
         cfg = ""
@@ -624,7 +756,8 @@ def graph_guidance(surface: Any) -> str:
         except (ManifestError, AttributeError):
             cfg = ""            # the SAME call is narrowly caught in `select_backends` above
         return (f"code graph active ({tool}){cfg} — use `mokata query callers <sym>` / "
-                f"`callees <sym>` / `blast_radius <sym>` for structural queries.")
+                f"`callees <sym>` / `blast_radius <sym>` for structural queries. "
+                f"{impact_backend_line(layer)}.")
     if isinstance(layer.primary, AstBackend):
         # The DEFAULT on a CRG-less Python repo. Structural, embedded, zero-install — and still
         # a floor, so the actionable next step (adopt a real graph) is kept, not dropped.
@@ -648,7 +781,27 @@ def graph_guidance(surface: Any) -> str:
 
 
 # ----------------------------------------------- Stage 35f: live graph-proximity scorer
-_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")   # identifier-like tokens (len >= 3)
+def graph_anchor_verdict(layer: Any, tok: str) -> Optional[bool]:
+    """Does the adopted code graph confirm `tok` as a real symbol with callers? True / False, or None
+    when the graph could not say. ONE definition, shared by the live scorer below and the
+    off-prompt-path warmer (`memory.graph_anchors`, 0.0.26 O12), so a cached verdict and a live one
+    cannot disagree.
+
+    It asks the graph ITSELF (`layer.primary`), not `_run`: what is wanted is the graph's own
+    confirmation, and `_run`'s floor answer is not that. 0.0.26 O12 also fixes how a token the graph
+    simply does not hold was read: `_run` answers it from the floor with `degraded=True`, which this
+    tier counted as a graph FAILURE — so every ordinary prompt word ("fix", "the") raised a
+    "graph lookup failed" notice against a healthy graph. A healthy graph saying "no such node"
+    (`GraphNotIndexed`, O2) is a confirmed False. An index that is not built yet is unknown (None)."""
+    try:
+        res = layer.primary.query("callers", tok)
+    except GraphIndexUnbuilt:
+        return None
+    except GraphNotIndexed:
+        return False
+    except (BackendError, ValueError):
+        return None
+    return bool(res is not None and not res.degraded and res.references)
 
 
 def make_graph_scorer(layer: Any, query: str):
@@ -658,7 +811,9 @@ def make_graph_scorer(layer: Any, query: str):
     graph is wired (so the graph tier stays silent and lexical+semantic hold).
 
     Frugal (P11): runs one cheap graph lookup per identifier token in the query (a small set),
-    not per memory item; the resulting anchor set scores items by token membership.
+    not per memory item; the resulting anchor set scores items by token membership. It is a LIVE
+    graph call (a server start, a freshness `update`), so it is never on the per-prompt hook: that
+    path reads the verdicts `memory.graph_anchors` precomputed off it (0.0.26 O12).
 
     D5 — a graph that FAILS here used to be indistinguishable from a graph that simply found no
     anchor: both produced `None`, both left recall running on the lexical floor, and neither said a
@@ -669,25 +824,24 @@ def make_graph_scorer(layer: Any, query: str):
     act and produces the same false belief when it silently stops answering.)"""
     if layer is None or not getattr(layer, "uses_graph", False):
         return None
+    from ..memory.graph_anchors import query_tokens
+    # GR.S4 — FRESHNESS-BEFORE-ANSWER, once for the whole token set (it ran per token via `_run`).
+    # A graph known stale whose rebuild failed answers nothing here: the tier is off for this
+    # recall, exactly as `_run` would have answered from the floor.
+    if getattr(layer, "freshness", None) is not None:
+        try:
+            fresh = layer.freshness.ensure_fresh(layer)
+        except Exception:  # noqa: BLE001 — freshness never breaks a recall (`_run`'s rule)
+            fresh = None
+        if fresh is not None and fresh.answer_from_floor:
+            return None
     anchors = set()
     failed = 0
-    for tok in {t for t in _IDENT.findall(query or "")}:
-        try:
-            res = layer.callers(tok)          # graph confirms the symbol exists/relates
-        except (BackendError, ValueError):
-            # BackendError: the graph tool errored and `_run` had no fallback to fall to.
-            # ValueError: the grep floor's unknown-kind guard (structurally unreachable here —
-            # "callers" is a valid kind — but it is the only other class `_run` can raise).
+    for tok in query_tokens(query):
+        verdict = graph_anchor_verdict(layer, tok)
+        if verdict is None:
             failed += 1
-            continue
-        # `_run` ALSO degrades WITHOUT raising: a primary-backend failure is caught there and the
-        # grep floor answers with `degraded=True`. That path — the common one, since a graph
-        # primary always has the grep fallback wired — is why catching the exception alone would
-        # have left this notice unreachable. A degraded result IS the graph having failed.
-        if res is not None and res.degraded and getattr(layer, "uses_graph", False):
-            failed += 1
-            continue
-        if res is not None and not res.degraded and res.references:
+        elif verdict:
             anchors.add(tok)
     if failed:
         from ..degrade import FAILURE_UNREACHABLE, note_degraded

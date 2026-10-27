@@ -106,6 +106,40 @@ semantic (hybrid FTS + local-embedding) symbol search on top of the structural q
 3. **Confirm** with `mokata graph status` — the precise report of which backend answers
    (adopted graph / AST floor / grep) — or `mokata status` for the one-line hint.
 
+### The index: built once, never waited on
+
+code-review-graph answers from an index of your repo (~6 min and ~1 GB on a 1M-line repo, seconds
+on a small one). mokata builds it for you:
+
+- **`mokata setup claude --mode full`** builds it as part of setup, with progress (files parsed, then
+  post-processing; a heartbeat when the tool is quiet). There is **no time limit** — measured on a
+  2-CPU box: django (1.1M lines) 1–3 min, microsoft/TypeScript (6.4M lines, 32k files) 36 min. Ctrl+C
+  skips it — the partial index is removed (code-review-graph cannot resume a partial build) and the
+  first query builds it in the background instead. Re-running setup is incremental
+  (`code-review-graph update`: seconds). The setup table's `code-review-graph index` row says
+  *built* or *not built* and why.
+- The same setup builds the IDE's **meaning-search index** (TypeScript: 75k chunks in ~2 min) with
+  progress; Ctrl+C keeps what is embedded and the next run resumes. **Word search** uses ripgrep,
+  which `mokata[full]` installs on Windows x64, macOS and Linux x64/arm64 (elsewhere the pure-Python
+  floor answers, and the setup row says so).
+- In the IDE, search is **one box**: `.*` (regex), `Aa` (match case) and **Meaning** are toggles
+  (Alt+R / Alt+C / Alt+M in the box), and the scope is all files or the changed files. Word results
+  come in pages of 1,000 with **Load more**, so no hit is out of reach. Files over 1 MB are
+  searched too, and each one shows its size. On kubernetes (7.3M lines) the first hits appear
+  about 0.4 s after you stop typing. A warm meaning query takes 0.1–0.4 s.
+- **First use** on a repo whose index was never built: the query is answered by the AST floor with
+  the note *"code-review-graph is building its index (started HH:MM) — answered by the 'ast'
+  floor"*, and ONE background build starts (a lock keeps parallel sessions and the IDE from
+  starting a second). When it finishes, code-review-graph answers. No query ever waits for it.
+- **A failed build** is recorded and shown by `mokata graph status`, `mokata doctor` and the IDE's
+  health panel with its error and a rebuild action (`mokata graph build`); automatic retries back
+  off (1 min, 2, 4 … up to 1 h), so a broken tool is not re-run on every query.
+- After that, freshness keeps the index current **incrementally** (`code-review-graph update`) — it
+  never runs on an index that does not exist yet.
+
+The index lives in `.code-review-graph/`, which code-review-graph gitignores itself (`*`); mokata's
+own walks skip it.
+
 ## Wire an external graph database (Neo4j) — REMOVED in 0.0.18
 
 !!! warning "The Neo4j backend was removed in mokata 0.0.18"

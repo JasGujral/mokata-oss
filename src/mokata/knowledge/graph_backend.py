@@ -20,7 +20,8 @@ from typing import Any, Dict, List, Optional, Protocol
 
 from ..errors import failure_class_of
 from .query import (BASIS_LEXICAL, BASIS_STRUCTURAL, QUERY_KINDS, BackendError,
-                    GraphBackend, QueryResult, Reference, mark_truncated)
+                    GraphBackend, GraphIndexUnbuilt, GraphNotIndexed, QueryResult, Reference,
+                    floor_symbol, mark_truncated)
 
 
 def _backend_error(message: str, cause: BaseException) -> BackendError:
@@ -110,11 +111,15 @@ class CodeReviewGraphBackend(GraphBackend):
             raise ValueError(f"unknown query kind '{kind}'; one of {QUERY_KINDS}")
         try:
             rows = self.client.query(kind, target, root=self.root, depth=depth)
+        except GraphIndexUnbuilt as unbuilt:
+            raise GraphIndexUnbuilt(self.index_unbuilt_note(unbuilt)) from unbuilt
+        except GraphNotIndexed:
+            raise                 # the graph is healthy and cannot speak for `target` — not a failure
         except Exception as exc:  # any client/process failure -> degrade upstream
             raise _backend_error(
                 f"graph backend '{self.name}' failed on {kind}({target}): {exc}", exc
             ) from exc
-        refs = [Reference.from_dict(r) for r in rows]
+        refs = [self._identity(Reference.from_dict(r)) for r in rows]
         result = QueryResult(
             kind=kind, target=target, references=refs, backend=self.name,
             basis=BASIS_STRUCTURAL, note="answered by the codebase graph",
@@ -123,8 +128,58 @@ class CodeReviewGraphBackend(GraphBackend):
         # that disclosure is carried onto the answer instead of being dropped at the boundary.
         if getattr(rows, "truncated", False):
             mark_truncated(result, getattr(rows, "total", None),
-                           f"the adopted graph '{self.name}' capped this answer")
+                           getattr(rows, "cut_why", "")
+                           or f"the adopted graph '{self.name}' capped this answer")
+        # 0.0.26 P35 (G28/R37) — an ambiguous name is answered over ALL its definitions, labelled.
+        n = getattr(rows, "definitions", None)
+        if n and n > 1:
+            result.definitions = int(n)
+            result.candidates = list(getattr(rows, "candidates", []) or [])
+            result.note = (f"{result.note} | {n} definitions named `{target}` — merged over all "
+                           f"of them; ask by qualified name for one")
+        # 0.0.26 P37 (R39) — an update in flight (or one that did not finish) is said, never hidden:
+        # the answer comes from the last complete graph meanwhile.
+        if getattr(self.client, "can_build_index", False):
+            from .crg_build import update_note
+            pending = update_note(self.root)
+            if pending:
+                result.note = f"{result.note} | {pending}"
         return result
+
+    @staticmethod
+    def _identity(ref: Reference) -> Reference:
+        """0.0.26 O13 (F3) — the answer names symbols the way the FLOOR does (`refund`, not
+        `pkg/api.py::refund`), so an IDE node id, a picked symbol or a follow-up query means the
+        same thing whichever backend answered. The graph's own id stays in
+        `metadata.qualified_name` (what a follow-up GRAPH query sends back)."""
+        if ref.symbol and "::" in ref.symbol:
+            ref.metadata = dict(ref.metadata or {})
+            ref.metadata.setdefault("qualified_name", ref.symbol)
+            ref.symbol = floor_symbol(ref.symbol)
+        return ref
+
+    # --- the index (0.0.26 O13 — `CRG-AUTO-BUILD`) ---------------------------------------
+    def index_status(self):
+        """This repo's index state (`crg_build.BuildStatus`), or None for a client that has no
+        on-disk index of its own (an injected double, another adopted tool)."""
+        if not getattr(self.client, "can_build_index", False):
+            return None
+        from .crg_build import build_status
+        return build_status(self.root)
+
+    def index_unbuilt_note(self, cause: BaseException) -> str:
+        """R-a — a query hit an unbuilt index. Start the ONE background build (never wait for it)
+        and return the sentence the answer carries."""
+        if not getattr(self.client, "can_build_index", False):
+            return str(cause)
+        from .crg_build import BUILT, ensure_building
+        try:
+            status = ensure_building(self.root)
+        except Exception as exc:                       # noqa: BLE001 — never break the query
+            return f"{cause} (the index build could not be started: {exc})"
+        if status.state == BUILT:
+            return f"{self.name}'s index finished building just now — the next query uses it"
+        return status.line(self.name)
 
     @property
     def supports_resolve(self) -> bool:
@@ -167,6 +222,9 @@ class CodeReviewGraphBackend(GraphBackend):
         health = getattr(client, "health", None)
         if not callable(health):
             return False
+        ready = getattr(client, "index_ready", None)
+        if callable(ready) and not ready(self.root):
+            return False                              # no index to refresh: the build's job (O13)
         try:
             if health(self.root):
                 return True                       # a transient blip already cleared
@@ -186,6 +244,17 @@ class CodeReviewGraphBackend(GraphBackend):
         refresh = getattr(self.client, "refresh", None)
         if not callable(refresh):
             return True                          # no refreshable index ⇒ nothing to fail
+        # 0.0.26 O13 (F4) — freshness keeps an EXISTING index current, incrementally. An index that
+        # was never built has nothing to freshen; the first build is setup's or first use's job
+        # (`crg_build`), so this is a no-op, not a failure (a failure would route the answer to the
+        # floor with a "rebuild FAILED" alarm about a build nobody ran).
+        ready = getattr(self.client, "index_ready", None)
+        if callable(ready):
+            try:
+                if not ready(self.root):
+                    return True
+            except Exception:                    # noqa: BLE001
+                return True
         try:
             return bool(refresh(self.root, full=False))
         except Exception:
@@ -202,6 +271,8 @@ class CodeReviewGraphBackend(GraphBackend):
                 basis=BASIS_LEXICAL, note="the adopted graph exposes no semantic index")
         try:
             rows = self.client.semantic(query, root=self.root, kind=kind, limit=limit)
+        except GraphIndexUnbuilt as unbuilt:
+            raise _backend_error(self.index_unbuilt_note(unbuilt), unbuilt) from unbuilt
         except Exception as exc:
             raise _backend_error(
                 f"graph backend '{self.name}' semantic search failed: {exc}", exc) from exc

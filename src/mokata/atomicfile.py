@@ -68,8 +68,28 @@ def _replace(tmp: str, path: str, *, retries: Optional[int] = None,
             time.sleep(delay)
 
 
+_TEMP_SEQ = [0]
+
+
+def _exclusive_temp(parent: str, prefix: str, suffix: str) -> "tuple":
+    """`tempfile.mkstemp`'s contract — a NEW file, created exclusively (O_EXCL), owner-only (0600),
+    binary, not inherited by children — without importing `tempfile` (which drags in `random`,
+    `shutil`, `hashlib`…: ~8 ms of the synchronous `run-bind` hook's 50, 0.0.26 O3). The name is
+    pid + clock + a per-process counter; a collision just tries the next one."""
+    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0) \
+        | getattr(os, "O_NOINHERIT", 0)
+    for _ in range(10000):
+        _TEMP_SEQ[0] += 1
+        tmp = os.path.join(parent, f"{prefix}{os.getpid()}-{time.time_ns()}-{_TEMP_SEQ[0]}{suffix}")
+        try:
+            return os.open(tmp, flags, 0o600), tmp
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"no free temporary name in {parent}")
+
+
 def atomic_write_text(path: str, text: str, *, tmp_prefix: str = ".tmp-",
-                      tmp_suffix: str = ".tmp") -> None:
+                      tmp_suffix: str = ".tmp", newline: Optional[str] = None) -> None:
     """Replace `path` with `text` atomically — a reader sees the whole old file or the whole new
     one, never a fragment, and a crash at any point leaves the previous content intact.
 
@@ -77,14 +97,17 @@ def atomic_write_text(path: str, text: str, *, tmp_prefix: str = ".tmp-",
     same-filesystem rename, never a copy), written, flushed, and ``os.fsync``'d before the replace.
     Any failure after the temp file exists unlinks it, so a failed write leaves no stray behind.
     The parent directory is created if needed. Callers pass already-rendered text, so the bytes on
-    disk are exactly what the caller decided."""
+    disk are exactly what the caller decided.
+
+    `newline` is passed to the text layer: `None` (the default) is the platform's translation, and
+    `"\n"` writes LF on every OS — for a file that is COMMITTED, where a CRLF on Windows would churn
+    every diff (L7b's `.mokata/specs/`)."""
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    import tempfile   # lazy: `state` imports this module on every hook's READ path (HOOK-BUDGET)
-    fd, tmp = tempfile.mkstemp(dir=parent or ".", prefix=tmp_prefix, suffix=tmp_suffix)
+    fd, tmp = _exclusive_temp(parent or ".", tmp_prefix, tmp_suffix)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline=newline) as fh:
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())

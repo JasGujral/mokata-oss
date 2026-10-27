@@ -43,6 +43,7 @@ from .harness_paths import (MCP_APPROVE_TOOL_ASK, MCP_SERVER_NAME,
 # `setup_harness`) is now a plain module-level import.
 from .mcp_admin import parity_lines, status_lines
 from .errors import MokataError
+from .claude_code_version import since as _cc_since
 
 # Stage 54b — where the original statusLine is stashed when mokata composes over a user's
 # own (so `unsetup` can restore it verbatim). Claude Code ignores unknown statusLine keys.
@@ -119,7 +120,7 @@ HOOK_GATE_MATCHER = "Write|Edit|MultiEdit|NotebookEdit|Bash|Skill|Agent|Task"
 #   dirty-track  — GR.S4 PostToolUse ASYNC OBSERVABILITY hook. File-mutation tools only (it
 #                  records the written PATH into the graph dirty-set). NEVER blocks (exit 0
 #                  always) — it is not a security lane; the sync PreToolUse blockers are untouched.
-HOOK_DIRTY_MATCHER = "Write|Edit|MultiEdit|NotebookEdit"
+HOOK_DIRTY_MATCHER = "Write|Edit|MultiEdit|NotebookEdit|Bash"   # P31: Bash = fallback attribution
 #   run-bind     — 0.0.22 C1 PostToolUse on mokata's OWN `session_save`: reads the run id its
 #                  `register=true` returned and binds THIS Claude session to it — the one point where
 #                  Claude's session id and the MCP's run id meet without a guess (parallel runs).
@@ -155,7 +156,10 @@ _EXPECTED_HOOK_WIRING: Dict[str, List[Dict[str, Optional[str]]]] = {
     "SubagentStop": [{"script": "subagent_stop.py", "matcher": None}],
     # H-1c (0.0.22 D6) — the session harvest: each rewrites this session's DRAFT note (never a
     # memory; a person accepts it). No matcher; always exit 0, silent.
-    "Stop": [{"script": "stop.py", "matcher": None}],
+    # R1 (0.0.26) — the Stop EVIDENCE gate, SYNCHRONOUS beside the deferred harvest: a "done" the
+    # run's record does not back is sent back with the reason (fail-closed; never a trap).
+    "Stop": [{"script": "stop.py", "matcher": None},
+             {"script": "stop_gate.py", "matcher": None}],
     "SessionEnd": [{"script": "session_end.py", "matcher": None}],
 }
 
@@ -178,6 +182,8 @@ IDE_BRIDGE_EVENTS: Dict[str, Optional[str]] = {
     "SessionEnd": None,
 }
 IDE_BRIDGE_TIMEOUT_SECS = 1
+IDE_BRIDGE_COMMAND_TIMEOUT_SECS = 5     # Windows command shape: a spawn, then <= 0.25 s of connect
+IDE_BRIDGE_MODULE = "mokata.ide.bridge_client"
 IDE_BRIDGE_HEADER = "X-Mokata-Hook"
 LOCAL_SETTINGS = "settings.local.json"
 
@@ -194,7 +200,7 @@ LOCAL_SETTINGS = "settings.local.json"
 #   * machine-local like the bridge (port + hook token): `.claude/settings.local.json`. A setup run
 #     WITHOUT the flag removes it — a fail-closed lane never outlives the run that did not ask for it.
 HTTP_GATES_TIMEOUT_SECS = 10
-HTTP_GATES_MIN_CLAUDE_CODE = (2, 1, 295)
+HTTP_GATES_MIN_CLAUDE_CODE = _cc_since("hook.onFailure")    # CC-COMPAT manifest, never typed here
 HTTP_GATES_PATH = "/api/gate"
 
 
@@ -270,14 +276,29 @@ def _set_http_gates(path: Path, wiring: Optional[Dict[str, List[Dict[str, Any]]]
     return True
 
 
-def ide_bridge_hooks(url: str, token: str) -> Dict[str, List[Dict[str, Any]]]:
-    """`{event: [matcher-group]}` for the observe-only http hooks — one declaration, read by the
-    writer and by the tests."""
+def ide_bridge_hooks(url: str, token: str, root: str = "",
+                     windows: Optional[bool] = None) -> Dict[str, List[Dict[str, Any]]]:
+    """`{event: [matcher-group]}` for the observe-only bridge hooks — one declaration, read by the
+    writer and by the tests.
+
+    O4 (0.0.26) — on WINDOWS the hook is a `type: "command"` hook running `bridge_client`, not an
+    http hook: Windows retries a refused localhost connect for ~1 s, and Claude Code's http client
+    cannot check first, so every hook cost ~1 s while the IDE was closed. The command hook checks
+    the IDE's own record (file + live pid) before any connect and posts with a short timeout. The
+    settings file is machine-local, so a per-OS shape is safe. POSIX keeps the http hook (no spawn;
+    a refused connect is instant there)."""
+    if windows is None:
+        windows = os.name == "nt"
+    if windows:
+        hook: Dict[str, Any] = {"type": "command", "command": sys.executable,
+                                "args": ["-m", IDE_BRIDGE_MODULE, "--root", root],
+                                "timeout": IDE_BRIDGE_COMMAND_TIMEOUT_SECS}
+    else:
+        hook = {"type": "http", "url": url, "timeout": IDE_BRIDGE_TIMEOUT_SECS,
+                "headers": {IDE_BRIDGE_HEADER: token}}
     out: Dict[str, List[Dict[str, Any]]] = {}
     for event, matcher in IDE_BRIDGE_EVENTS.items():
-        group: Dict[str, Any] = {"hooks": [{"type": "http", "url": url,
-                                            "timeout": IDE_BRIDGE_TIMEOUT_SECS,
-                                            "headers": {IDE_BRIDGE_HEADER: token}}]}
+        group: Dict[str, Any] = {"hooks": [dict(hook)]}
         if matcher:
             group["matcher"] = matcher
         out[event] = [group]
@@ -285,10 +306,18 @@ def ide_bridge_hooks(url: str, token: str) -> Dict[str, List[Dict[str, Any]]]:
 
 
 def _is_mokata_http_hook(entry: Dict) -> bool:
-    """True for a matcher group mokata's `--ide-bridge` wired (loopback URL to `/api/bus` with
-    mokata's hook header) — so re-setup refreshes it and unsetup removes it, never a user's own."""
+    """True for a matcher group mokata's `--ide-bridge` wired — the POSIX http shape (loopback URL
+    to `/api/bus` with mokata's hook header) or the Windows command shape (`-m bridge_client`) — so
+    re-setup refreshes it and unsetup removes it, never a user's own."""
     for h in entry.get("hooks", []):
-        if not isinstance(h, dict) or h.get("type") != "http":
+        if not isinstance(h, dict):
+            continue
+        if h.get("type") == "command":
+            args = h.get("args")
+            if isinstance(args, list) and IDE_BRIDGE_MODULE in args:
+                return True
+            continue
+        if h.get("type") != "http":
             continue
         url = str(h.get("url", ""))
         headers = h.get("headers")
@@ -296,6 +325,26 @@ def _is_mokata_http_hook(entry: Dict) -> bool:
                 and isinstance(headers, dict) and IDE_BRIDGE_HEADER in headers):
             return True
     return False
+
+
+def ide_bridge_surfaces(path: Path) -> List[str]:
+    """CC-COMPAT — the manifest ids of the Claude Code surfaces the `--ide-bridge` groups in `path`
+    actually use (`hook.type.http` for the POSIX shape, `hook.command.args` for the Windows exec
+    form). Empty when nothing is wired. Read by doctor to check the installed Claude Code."""
+    if not path.exists():
+        return []
+    hooks = _load_json(path).get("hooks")
+    found: List[str] = []
+    for entries in (hooks.values() if isinstance(hooks, dict) else []):
+        for e in entries if isinstance(entries, list) else []:
+            if not (isinstance(e, dict) and _is_mokata_http_hook(e)):
+                continue
+            for h in e.get("hooks", []):
+                sid = ("hook.type.http" if isinstance(h, dict) and h.get("type") == "http"
+                       else "hook.command.args" if isinstance(h, dict) and h.get("args") else None)
+                if sid and sid not in found:
+                    found.append(sid)
+    return found
 
 
 def _merge_ide_bridge(path: Path, wiring: Dict[str, List[Dict[str, Any]]]) -> None:
@@ -489,6 +538,12 @@ class SetupPlan:
     # not possible here.
     http_gates: bool = False
     http_gates_note: str = ""
+    # 0.0.26 L2 — `--skills-only`: write ONLY the vendored tier (commands + Agent Skills, and the
+    # stale/orphan cleanup that goes with them). No init, no MCP, no hooks, no settings.json.
+    skills_only: bool = False
+    # 0.0.26 P31 — Claude Code's native session worktrees: `worktree.baseRef: "head"`,
+    # `.worktreeinclude`, `.claude/worktrees/` in .gitignore (claude, project scope, with hooks).
+    worktree_rows: List[Any] = field(default_factory=list)
 
 
 # The hook scripts (kept as standalone shims) map to `mokata-hook` subcommands.
@@ -497,6 +552,7 @@ _HOOK_SUBCOMMAND = {"session_start.py": "session-start", "secret_guard.py": "sec
                     "user_prompt_submit.py": "user-prompt-submit", "run_bind.py": "run-bind",
                     "pre_compact.py": "pre-compact", "subagent_start.py": "subagent-start",
                     "subagent_stop.py": "subagent-stop", "stop.py": "stop",
+                    "stop_gate.py": "stop-gate",
                     "session_end.py": "session-end"}
 
 
@@ -740,6 +796,7 @@ def plan_setup(
     grant: bool = True,
     ide_bridge: bool = False,
     http_gates: bool = False,
+    skills_only: bool = False,
 ) -> SetupPlan:
     if harness not in HARNESSES:
         raise ValueError(f"unknown harness '{harness}'; choose one of {HARNESSES}")
@@ -833,7 +890,19 @@ def plan_setup(
                       "token are per repo and per machine")
         http_gates = False
 
+    if skills_only:
+        with_hooks = grant = mcp_auto = ide_bridge = http_gates = False
+        bridge_note = gates_note = ""
+        hook_commands = {}
+        needs_init = False
+    worktree_rows: List[Any] = []
+    if (harness == "claude" and scope == "project" and with_hooks and not skills_only
+            and targets.settings_path is not None):
+        from .worktree_setup import plan_rows
+        worktree_rows = plan_rows(root, targets.settings_path)
     return SetupPlan(
+        worktree_rows=worktree_rows,
+        skills_only=skills_only,
         ide_bridge=ide_bridge,
         ide_bridge_note=bridge_note,
         http_gates=http_gates,
@@ -890,9 +959,13 @@ def _render_http_gates(plan: SetupPlan) -> List[str]:
 def render_setup_plan(plan: SetupPlan) -> str:
     t = plan.targets
     lines: List[str] = []
-    lines.append(f"mokata setup {plan.harness} — scope '{plan.scope}'")
+    lines.append(f"mokata setup {plan.harness} — scope '{plan.scope}'"
+                 + (" — commands + skills only" if plan.skills_only else ""))
     lines.append("")
-    if plan.needs_init:
+    if plan.skills_only:
+        lines.append("Refreshing ONLY the vendored commands + Agent Skills from this mokata "
+                     "(no init, no MCP, no hooks, no settings.json).")
+    elif plan.needs_init:
         lines.append(f"Will initialize mokata (profile '{plan.profile}') in {plan.root}:")
         lines.append(f"  {Path(plan.root).resolve() / MOKATA_DIR}/")
     else:
@@ -921,6 +994,8 @@ def render_setup_plan(plan: SetupPlan) -> str:
                      f"curated -> {t.skills_dir}/<name>/ (your own skills are left untouched):")
         lines.append("  " + "  ".join(plan.skill_orphans))
         lines.append("")
+    if plan.skills_only:
+        return "\n".join(lines).rstrip()
     if plan.mcp_auto:
         lines.append(f"Will register the MCP server '{MCP_SERVER_NAME}' (command: "
                      f"{MCP_COMMAND}) in:")
@@ -958,7 +1033,9 @@ def render_setup_plan(plan: SetupPlan) -> str:
     if plan.ide_bridge and t.settings_path is not None:
         local = t.settings_path.parent / LOCAL_SETTINGS
         lines.append("")
-        lines.append("Will wire the IDE live bridge — observe-only Claude Code http hooks "
+        shape = ("command hooks that check for a live IDE before connecting" if os.name == "nt"
+                 else "http hooks")
+        lines.append(f"Will wire the IDE live bridge — observe-only Claude Code {shape} "
                      "(PostToolUse edits, Stop, SessionEnd) posting to the local `mokata ide` in:")
         lines.append(f"  {local}  (machine-local: carries this repo's IDE port + hook token)")
         lines.append("  (never blocks: with the IDE closed each post fails fast and non-blocking; "
@@ -970,6 +1047,9 @@ def render_setup_plan(plan: SetupPlan) -> str:
         lines.append("")
         lines.append(f"NOTE — IDE live bridge not wired: {plan.ide_bridge_note}.")
     lines.extend(_render_http_gates(plan))
+    if plan.worktree_rows:
+        from .worktree_setup import render_rows
+        lines.extend(render_rows(plan.worktree_rows))
     if plan.unsupported:
         # Degrade CLEARLY — never pretend a capability exists or silently skip it.
         lines.append("")
@@ -1568,6 +1648,14 @@ def apply_setup(plan: SetupPlan, *, assume_yes: bool = False, force: bool = Fals
             touched.append(str(p))
             pruned.append(str(p))
 
+    if plan.skills_only:
+        # The vendored tier alone. Recorded only where a ledger already exists — refreshing a
+        # cloned repo's skills must not create `.mokata/` as a side effect.
+        if (Path(plan.root) / MOKATA_DIR).is_dir():
+            _record_setup_ledger(plan.root, "setup-skills-only", touched, removed=pruned,
+                                 harness=plan.harness, scope=plan.scope)
+        return touched
+
     # 3. MCP server (auto-registered only where the harness supports it; else manual).
     # Stage 3b.3: claude registers the RESOLVED absolute command (the SAME resolver as
     # `mokata mcp install` — one registration path, no fork) so auto-start survives the
@@ -1596,7 +1684,8 @@ def apply_setup(plan: SetupPlan, *, assume_yes: bool = False, force: bool = Fals
         from .ide.bus import bridge_url, ensure_bridge
         rec = ensure_bridge(str(Path(plan.root).resolve()))
         local = t.settings_path.parent / LOCAL_SETTINGS
-        _merge_ide_bridge(local, ide_bridge_hooks(bridge_url(int(rec["port"])), str(rec["token"])))
+        _merge_ide_bridge(local, ide_bridge_hooks(bridge_url(int(rec["port"])), str(rec["token"]),
+                                                  root=str(Path(plan.root).resolve())))
         touched.append(str(local))
 
     # 5c. U8 — the fail-closed http gate hooks: written when asked for, REMOVED when not.
@@ -1610,6 +1699,13 @@ def apply_setup(plan: SetupPlan, *, assume_yes: bool = False, force: bool = Fals
             wiring = http_gate_hooks(http_gate_url(int(rec["port"])), str(rec["token"]))
         if _set_http_gates(local, wiring) and str(local) not in touched:
             touched.append(str(local))
+
+    # 5d. 0.0.26 P31 — Claude Code's native session worktrees (rows shown in the plan above).
+    if plan.worktree_rows and t.settings_path is not None:
+        from .worktree_setup import apply_rows
+        for p in apply_rows(plan.root, t.settings_path):
+            if p not in touched:
+                touched.append(p)
 
     # 6. MCP tool grant (the "stuck-loop" fix) — default-ON, merge-safe. Grants Claude Code
     # permission for mokata's MCP tools + enables the server so it doesn't gate each call.
@@ -1653,11 +1749,12 @@ def setup_harness(
     out: Optional[Callable[[str], None]] = None,
     ide_bridge: bool = False,
     http_gates: bool = False,
+    skills_only: bool = False,
 ) -> SetupResult:
     """Plan + human-gate + apply the harness wiring end to end."""
     emit = out or print
     plan = plan_setup(harness, root, scope, profile, with_hooks, home, grant=grant,
-                      ide_bridge=ide_bridge, http_gates=http_gates)
+                      ide_bridge=ide_bridge, http_gates=http_gates, skills_only=skills_only)
 
     emit(render_setup_plan(plan))
     # 0.0.23 B4 — INSTALL-ISOLATED-BY-DEFAULT: name an in-project or shadowed install BEFORE the
@@ -1673,6 +1770,12 @@ def setup_harness(
                                message="aborted by user")
 
     touched = apply_setup(plan, assume_yes=assume_yes, force=force, out=emit)
+
+    if plan.skills_only:
+        emit("")
+        emit(f"Refreshed {len(touched)} vendored command/skill file(s) for {harness} "
+             f"({scope} scope). Restart Claude Code to load them.")
+        return SetupResult(touched=touched, plan=plan, message="ok")
 
     emit("")
     emit(f"mokata is wired into {harness} ({scope} scope).")
@@ -1716,6 +1819,112 @@ def setup_harness(
             emit(f"MCP: register the '{MCP_SERVER_NAME}' server ({MCP_COMMAND}) with "
                  f"{harness} yourself (automated MCP wiring isn't available for it).")
     return SetupResult(touched=touched, plan=plan, message="ok")
+
+
+# --------------------------------------------------------------------------------------
+# The vendored tier — what setup writes into the harness config, and whether it drifted
+# (0.0.26 L2, `MOK-UPDATE`)
+# --------------------------------------------------------------------------------------
+
+def vendored_files(harness: str, targets: Targets) -> Dict[Path, bytes]:
+    """Every file the commands + Agent Skills step of `apply_setup` writes, with the bytes THIS
+    mokata would write — built from the same generators apply uses (templates + grounding
+    expansion, `generate_skill_files`, the shipped references/ and domain-skill trees).
+    `tests/test_l2_mok_update.py` pins it to a real apply: after setup there is no drift."""
+    from .agent_skills import CURATED_SKILLS, generate_skill_files
+    from .domains import shipped_domain_skills
+    from .skills import expand_grounding
+    out: Dict[Path, bytes] = {}
+    tdir = _templates_dir()
+    fmt = _HARNESS_COMMAND_FORMAT[harness]
+    for src in sorted(tdir.glob("*.md")):
+        text = expand_grounding(src.read_text(encoding="utf-8"))
+        if fmt == "toml":
+            text = _to_gemini_toml(text)
+        out[targets.commands_dir / _command_target_name(harness, src.name)] = text.encode("utf-8")
+    if targets.skills_dir is None:
+        return out
+    for name, text in generate_skill_files(tdir, names=tuple(CURATED_SKILLS)).items():
+        out[targets.skills_dir / name / "SKILL.md"] = text.encode("utf-8")
+    src_skills = tdir.parent.parent / "skills"
+    trees = [(n, src_skills / n / "references") for n in CURATED_SKILLS]
+    trees += [(n, src_skills / n) for n in shipped_domain_skills()
+              if (src_skills / n / "SKILL.md").is_file()]
+    for _name, tree in trees:
+        if not tree.is_dir():
+            continue
+        for f in sorted(tree.rglob("*")):
+            if f.is_file():
+                out[targets.skills_dir / f.relative_to(src_skills)] = f.read_bytes()
+    return out
+
+
+def _same_text(a: bytes, b: bytes) -> bool:
+    # `write_text` translates newlines on Windows; `copyfile` does not. Compare the text.
+    return a.replace(b"\r\n", b"\n") == b.replace(b"\r\n", b"\n")
+
+
+def vendored_drift(root: str = ".", *, home: Optional[str] = None,
+                   harness: str = "claude") -> List[Dict[str, Any]]:
+    """Per scope (project, user): is the vendored tier installed there, and does it match THIS
+    mokata? File reads only — no spawn, no network; bounded by mokata's own file list.
+
+    `installed` — any mokata command or mokata-authored skill is on disk there.
+    `drift`     — counts of `missing` (this mokata writes it, it is absent), `changed` (bytes
+                  differ) and `stale` (a mokata file this mokata no longer writes).
+    The fix is `mokata setup claude --skills-only` (no Python dependency is involved)."""
+    from .agent_skills import find_orphan_skills, installed_skill_names
+    reports: List[Dict[str, Any]] = []
+    for scope in SCOPES:
+        try:
+            t = resolve_targets(scope, root, home, harness)
+        except (ValueError, OSError):
+            continue
+        expected = vendored_files(harness, t)
+        command_files = sorted(p.name for p in _templates_dir().glob("*.md"))
+        stale = stale_command_files(harness, t.commands_dir, command_files)
+        stale += find_orphan_skills(t.skills_dir, installed_skill_names())
+        present = [p for p in expected if p.is_file()]
+        # Installed = one of mokata's command files or skills is there. A user's own same-named
+        # file is not ours — command files carry the `mokata ·` mark, skills the skill marker.
+        ours = [p for p in present if _is_ours(p)]
+        if not ours and not stale:
+            reports.append({"scope": scope, "dir": str(t.commands_dir.parent), "installed": False,
+                            "drift": False})
+            continue
+        missing = [p for p in expected if p not in present]
+        changed = []
+        for p in present:
+            try:
+                if not _same_text(p.read_bytes(), expected[p]):
+                    changed.append(p)
+            except OSError:
+                changed.append(p)
+        n = len(missing) + len(changed) + len(stale)
+        parts = [f"{len(x)} {w}" for x, w in ((changed, "differ"), (missing, "missing"),
+                                               (stale, "no longer shipped")) if x]
+        reports.append({
+            "scope": scope, "dir": str(t.commands_dir.parent), "installed": True,
+            "drift": bool(n), "missing": len(missing), "changed": len(changed),
+            "stale": len(stale),
+            "summary": (", ".join(parts) + " — refresh with `mokata setup claude --skills-only"
+                        + (" --scope user" if scope == "user" else "") + "`") if n else "match",
+            "examples": [str(p) for p in (changed + missing + stale)[:5]],
+        })
+    return reports
+
+
+def _is_ours(p: Path) -> bool:
+    from .agent_skills import SKILL_MARKER
+    try:
+        head = p.read_text(encoding="utf-8", errors="replace")[:2000]
+    except OSError:
+        return False
+    if p.name == "SKILL.md":
+        return SKILL_MARKER in head
+    if p.suffix == ".md" and p.parent.name in ("commands",):
+        return _frontmatter_description(head).startswith(MOKATA_COMMAND_MARK)
+    return False
 
 
 # --------------------------------------------------------------------------------------
@@ -1839,6 +2048,12 @@ def apply_unsetup(plan: UnsetupPlan) -> List[str]:
         # MCP tool grant: remove exactly mokata's enabledMcpjsonServers + permissions.allow
         # entries (the user's own entries survive).
         if _strip_grant(data):
+            changed = True
+
+        # 0.0.26 P31 — the session-worktree base ref setup writes (`.worktreeinclude` and the
+        # `.gitignore` line are left: they name the user's own files and are harmless alone).
+        from .worktree_setup import strip_base_ref
+        if strip_base_ref(data):
             changed = True
 
         if changed:

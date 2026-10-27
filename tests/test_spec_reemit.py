@@ -50,6 +50,8 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata import approval as A
 from mokata import session as S
@@ -121,11 +123,12 @@ def _emit(root, criteria, tests, **kw):
     model redeems by id. Returns the committed result (or the non-proposal outcome as-is)."""
     args = dict(path=root, title="slugify", criteria=criteria, tests=tests, approach="a")
     args.update(kw)
-    out = TS.spec_emit(**args)
+    args = planned(args)
+    out = call_planned(TS.spec_emit, **args)
     if out.get("status") != "proposed":
         return out
     _human_approves(root, out["proposal_id"])
-    return TS.spec_emit(proposal_id=out["proposal_id"], **args)
+    return call_planned(TS.spec_emit, proposal_id=out["proposal_id"], **args)
 
 
 def _store(root):
@@ -191,11 +194,11 @@ class TestReproTheClobber(_Base):
         d = _repo("runA")
         _emit(d, A_C, A_T)                                   # v1 = A
         _emit(d, B_C, B_T)                                   # v2 = B, A archived at v1
-        out = TS.spec_amend(path=d, title="slugify", criteria=C_C, tests=C_T, approach="a",
+        out = call_planned(TS.spec_amend, path=d, title="slugify", criteria=C_C, tests=C_T, approach="a",
                             reason="release the empty-string case")
         self.assertEqual(out["status"], "proposed")
         _human_approves(d, out["proposal_id"])
-        out = TS.spec_amend(path=d, title="slugify", criteria=C_C, tests=C_T, approach="a",
+        out = call_planned(TS.spec_amend, path=d, title="slugify", criteria=C_C, tests=C_T, approach="a",
                             reason="release the empty-string case",
                             proposal_id=out["proposal_id"])
         self.assertTrue(out["committed"])
@@ -222,7 +225,7 @@ class TestTheReplacementIsNamed(_Base):
     def test_a_re_emit_before_any_red_still_reaches_the_human_gate(self):
         d = _repo("runA")
         _emit(d, A_C, A_T)
-        out = TS.spec_emit(path=d, title="slugify", criteria=B_C, tests=B_T, approach="a")
+        out = call_planned(TS.spec_emit, path=d, title="slugify", criteria=B_C, tests=B_T, approach="a")
         self.assertEqual(out["status"], "proposed",
                          "refining the spec of a brainstorm that has produced no code yet is the "
                          "flow Jas named — it must not be refused")
@@ -230,7 +233,7 @@ class TestTheReplacementIsNamed(_Base):
     def test_the_proposal_names_the_version_the_title_and_the_ac_delta(self):
         d = _repo("runA")
         _emit(d, A_C, A_T)
-        out = TS.spec_emit(path=d, title="slugify v2", criteria=B_C, tests=B_T, approach="a")
+        out = call_planned(TS.spec_emit, path=d, title="slugify v2", criteria=B_C, tests=B_T, approach="a")
         # The preview lives on the PROPOSAL — it is what `mokata approve <id>` renders into the
         # human's own terminal (approval.render), which is the surface that has to carry this.
         preview = A.load(d, out["proposal_id"]).preview
@@ -269,7 +272,7 @@ class TestTheReplacementIsNamed(_Base):
         the REPLACES block leads rather than trails the spec body."""
         d = _repo("runA")
         _emit(d, A_C, A_T)
-        out = TS.spec_emit(path=d, title="slugify", criteria=C_C, tests=C_T, approach="a")
+        out = call_planned(TS.spec_emit, path=d, title="slugify", criteria=C_C, tests=C_T, approach="a")
         rendered = A.render(A.load(d, out["proposal_id"]))
         self.assertIn("REPLACES v1", rendered,
                       "a human reading the approve screen must see they are replacing a spec")
@@ -278,7 +281,7 @@ class TestTheReplacementIsNamed(_Base):
         """The (a) path must be byte-identical for the FIRST emit — no version noise, no archive
         key, no replacement wording on a run that has no prior spec."""
         d = _repo("runA")
-        out = TS.spec_emit(path=d, title="slugify", criteria=A_C, tests=A_T, approach="a")
+        out = call_planned(TS.spec_emit, path=d, title="slugify", criteria=A_C, tests=A_T, approach="a")
         self.assertNotIn("REPLACES", A.load(d, out["proposal_id"]).preview)
         self.assertIsNone(out.get("replaces_version"))
         committed = _emit(d, A_C, A_T)
@@ -298,7 +301,7 @@ class TestWorkInFlightRoutesToAmend(_Base):
         d = _repo("runA")
         _emit(d, A_C, A_T)
         _go_red(d, "runA")
-        out = TS.spec_emit(path=d, title="slugify", criteria=B_C, tests=B_T, approach="a")
+        out = call_planned(TS.spec_emit, path=d, title="slugify", criteria=B_C, tests=B_T, approach="a")
         self.assertEqual(out["gate"], REEMIT_GATE)
         self.assertFalse(out["committed"])
         self.assertNotIn("proposal_id", out, "there is nothing here for a human to approve — the "
@@ -310,7 +313,7 @@ class TestWorkInFlightRoutesToAmend(_Base):
         d = _repo("runA")
         _emit(d, A_C, A_T)
         _go_red(d, "runA")
-        TS.spec_emit(path=d, title="slugify", criteria=B_C, tests=B_T, approach="a")
+        call_planned(TS.spec_emit, path=d, title="slugify", criteria=B_C, tests=B_T, approach="a")
         store, _rid = _store(d)
         self.assertEqual([c.id for c in load_emitted_spec(store).criteria], ["AC1"],
                          "the spec in force is untouched by a refused re-emit")
@@ -323,7 +326,7 @@ class TestWorkInFlightRoutesToAmend(_Base):
         d = _repo("runA")
         _emit(d, A_C, A_T, scope={"authorized": ["src/slug.py"]})
         _go_red(d, "runA")
-        out = TS.spec_emit(path=d, title="slugify", criteria=B_C, tests=B_T, approach="a",
+        out = call_planned(TS.spec_emit, path=d, title="slugify", criteria=B_C, tests=B_T, approach="a",
                            scope={"authorized": ["src/slug.py", "src/*"]})
         self.assertEqual(out["gate"], REEMIT_GATE)
         store, _rid = _store(d)
@@ -339,7 +342,7 @@ class TestWorkInFlightRoutesToAmend(_Base):
         _emit(d, A_C, A_T)
         store, run_id = _store(d)
         open_amend(store, run_id, reason="widen", from_version=1)
-        out = TS.spec_emit(path=d, title="slugify", criteria=B_C, tests=B_T, approach="a")
+        out = call_planned(TS.spec_emit, path=d, title="slugify", criteria=B_C, tests=B_T, approach="a")
         self.assertEqual(out["gate"], REEMIT_GATE)
         self.assertTrue(out["amend_open"])
         self.assertIn("--abort", out.get("hint", ""), "name BOTH ways out of an open amendment")
@@ -352,10 +355,10 @@ class TestWorkInFlightRoutesToAmend(_Base):
         _go_red(d, "runA")
         args = dict(path=d, title="slugify", criteria=B_C, tests=B_T, approach="a",
                     reason="the review turned up a trimming case")
-        out = TS.spec_amend(**args)
+        out = call_planned(TS.spec_amend, **args)
         self.assertEqual(out["status"], "proposed")
         _human_approves(d, out["proposal_id"])
-        out = TS.spec_amend(proposal_id=out["proposal_id"], **args)
+        out = call_planned(TS.spec_amend, proposal_id=out["proposal_id"], **args)
         self.assertTrue(out["committed"])
         self.assertEqual(out["version"], 2)
         self.assertEqual(list(out["red_owed"]), ["test_trims"],
@@ -414,7 +417,7 @@ class TestTheEmitGatesStillFireOnAReEmit(_Base):
     def test_completeness_still_refuses_an_unmapped_criterion(self):
         d = _repo("runA")
         _emit(d, A_C, A_T)
-        out = TS.spec_emit(path=d, title="slugify", criteria=B_C, tests=A_T, approach="a")
+        out = call_planned(TS.spec_emit, path=d, title="slugify", criteria=B_C, tests=A_T, approach="a")
         self.assertEqual(out["gate"], "completeness")
         self.assertEqual(list(out["unmapped"]), ["AC2"])
         self.assertEqual(spec_version(_store(d)[0]), 1, "a refused re-emit changes nothing")
@@ -424,7 +427,7 @@ class TestTheEmitGatesStillFireOnAReEmit(_Base):
         _emit(d, A_C, A_T)
         store, _rid = _store(d)
         store.write("approved_approach", _handoff(prior_art_ran=False))
-        out = TS.spec_emit(path=d, title="slugify", criteria=B_C, tests=B_T, approach="a")
+        out = call_planned(TS.spec_emit, path=d, title="slugify", criteria=B_C, tests=B_T, approach="a")
         self.assertEqual(out["gate"], "prior-art")
         self.assertFalse(out["committed"])
 
@@ -433,7 +436,7 @@ class TestTheEmitGatesStillFireOnAReEmit(_Base):
         _emit(d, A_C, A_T)
         store, _rid = _store(d)
         save_brainstorm_progress(_degraded_brainstorm(), store)
-        out = TS.spec_emit(path=d, title="slugify", criteria=B_C, tests=B_T, approach="a")
+        out = call_planned(TS.spec_emit, path=d, title="slugify", criteria=B_C, tests=B_T, approach="a")
         self.assertEqual(out["gate"], "graph-required")
         self.assertFalse(out["committed"])
 
@@ -442,7 +445,7 @@ class TestTheEmitGatesStillFireOnAReEmit(_Base):
         it commits nothing now — a re-emit is not a softer consent boundary."""
         d = _repo("runA")
         _emit(d, A_C, A_T)
-        out = TS.spec_emit(path=d, title="slugify", criteria=B_C, tests=B_T, approach="a",
+        out = call_planned(TS.spec_emit, path=d, title="slugify", criteria=B_C, tests=B_T, approach="a",
                            approve=True, confirm=True)
         self.assertEqual(out["status"], "proposed")
         self.assertFalse(out["committed"])
@@ -492,7 +495,7 @@ class TestTheReEmitIsRunScoped(_Base):
         _emit(d, A_C, A_T)
         _go_red(d, "runA")
         _re_enter(d, "runB")
-        out = TS.spec_emit(path=d, title="slugify", criteria=B_C, tests=B_T, approach="a")
+        out = call_planned(TS.spec_emit, path=d, title="slugify", criteria=B_C, tests=B_T, approach="a")
         self.assertEqual(out["gate"], REEMIT_GATE,
                          "a gate that quietly is not there is worse than one that blocks — the run "
                          "has work in flight, whichever process is asking")

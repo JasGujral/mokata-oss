@@ -61,10 +61,10 @@ Resolve the bundled engine (read `~/.mokata/plugin-root` → `ROOT`, or a `mokat
 
 ```bash
 PY="$(command -v python3 || command -v python)"
-ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
-eval "$ENGINE docsync --path ."                        # sweep + audit the doc tree (read-only)
-eval "$ENGINE docsync <doc> --path ."                  # audit one doc
-eval "$ENGINE docsync <doc> --reconcile --path ."      # reconcile one doc (preview → approve)
+mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
+mokata docsync --path .                          # sweep + audit the doc tree (read-only)
+mokata docsync '<doc>' --path .                  # audit one doc (its path, single-quoted)
+mokata docsync '<doc>' --reconcile --path .      # reconcile one doc (preview → approve)
 ```
 
 Read the audit, name the Blocking discrepancies and their stale sections first, and — where the fix

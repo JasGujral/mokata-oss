@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional
 
@@ -270,8 +271,13 @@ def disclose_first_use(root: str, tool: str, *, ledger: Any = None,
                        out: Optional[Callable[[str], None]] = None) -> bool:
     """(h) Fire the once-per-repo disclosed + ledgered notice the FIRST time a PATH-detected
     external graph binary is USED. Returns True on the firing use, False forever after. Backed by
-    an atomic O_EXCL marker under temp_local (run-state; ungated)."""
-    emit = out or print
+    an atomic O_EXCL marker under temp_local (run-state; ungated).
+
+    0.0.26 O11 — the default channel is STDERR (the `deprecation` notice precedent). It was
+    `print`, i.e. stdout, so on a machine with code-review-graph installed the first
+    `mokata query --json` in a repo printed this sentence ahead of the JSON: the "one parseable
+    line" contract broke, and only for full-mode users."""
+    emit = out or (lambda m: print(m, file=sys.stderr))
     sdir = state_dir(root)
     try:
         os.makedirs(sdir, exist_ok=True)
@@ -285,9 +291,19 @@ def disclose_first_use(root: str, tool: str, *, ledger: Any = None,
         return False                             # already disclosed for this repo
     except OSError:
         return False
-    emit(f"note: using a detected external code graph '{tool}' (read-only). It was found on "
-         f"PATH and is being used to answer structural queries; pin it durably with "
-         f"`mokata graph adopt` or ignore this to keep it read-only.")
-    if ledger is not None:
+    from ..detect import ENV_BOUND_COMMANDS
+    where = "in mokata's own environment" if tool in ENV_BOUND_COMMANDS else "on PATH"
+    emit(f"note: using a detected external code graph '{tool}' (read-only). It was found "
+         f"{where} and is being used to answer structural queries; pin it "
+         f"durably with `mokata graph adopt` or ignore this to keep it read-only.")
+    # 0.0.26 O11 — (h) says LEDGERED, and the one production caller (`layer.select_backends`)
+    # passed no ledger, so outside the unit test that hands one in it never was. With no ledger
+    # given, the repo's own audit ledger records it — opened only HERE, on the one firing use.
+    try:
+        if ledger is None:
+            from ..govern.ledger import AuditLedger
+            ledger = AuditLedger.from_mokata_dir(os.path.join(root, MOKATA_DIR))
         ledger.record("graph_first_use", tool=tool, disclosed=True, scope="repo")
+    except OSError:
+        pass                                     # the notice was shown; the audit is best-effort
     return True

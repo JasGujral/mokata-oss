@@ -80,6 +80,7 @@ import os
 import re
 
 import _support
+from mokata import repo_walk as _repo_walk
 
 __all__ = [
     "IMPLEMENTATIONS", "REMOVAL_PENDING", "REMOVAL_LANDED", "REMOVAL_OVERDUE",
@@ -370,9 +371,14 @@ def release_claim_corpus(root):
         # same file compare unequal on Windows and the corpus quietly holds both.
         rel_dir = _support.posix_rel(dirpath, root)
         rel_dir = "" if rel_dir == "." else rel_dir
+        # ⚠ The venv rule is STRUCTURAL, via the product's own `repo_walk.is_python_env`
+        # (0.0.23 B1 `VENV-NOT-PRUNED`, one source of truth): a name list holds `.venv` and
+        # `.venv-test` and so walked straight into Jas's `.venv312` — 4 drifting "releases" out
+        # of site-packages (attrs, click, requests), at any depth, under any spelling (O16).
         dirnames[:] = [d for d in dirnames
                        if d != "__pycache__"
-                       and ("%s/%s" % (rel_dir, d) if rel_dir else d) not in _NOT_CONTENT]
+                       and ("%s/%s" % (rel_dir, d) if rel_dir else d) not in _NOT_CONTENT
+                       and not _repo_walk.is_python_env(os.path.join(dirpath, d))]
         for name in filenames:
             if not name.endswith(RELEASE_CLAIM_SUFFIXES):
                 continue

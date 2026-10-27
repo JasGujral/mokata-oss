@@ -1,0 +1,34 @@
+{
+ "skill": "session",
+ "triggers": [
+  "package this session",
+  "hand off their session state to a teammate"
+ ],
+ "positive": [
+  "Package this session so I can continue on my laptop",
+  "Hand off my session state to a teammate",
+  "Pull the session bundle I pushed from my other machine",
+  "Push this session under the tag auth-work",
+  "Share this session with Priya so she can resume it"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Pick up where I left off on this machine",
+   "expect": "resume"
+  },
+  {
+   "prompt": "Push my branch to origin"
+  },
+  {
+   "prompt": "Share the brainstorm doc with the team",
+   "expect": "vault"
+  },
+  {
+   "prompt": "Flush the team write journal",
+   "expect": "sync"
+  },
+  {
+   "prompt": "Book a therapy session"
+  }
+ ]
+}

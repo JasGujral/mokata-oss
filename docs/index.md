@@ -23,11 +23,12 @@ and a full audit trail — with **every durable write human-gated** (the model p
 mint the approval in your own terminal with `mokata approve <id>` — a model can never approve
 its own write) and **nothing leaving your machine** unless you wire it.
 
-Five of those gates are enforced by a hook rather than by mokata's own tools, so they hold for
+Six of those gates are enforced by a hook rather than by mokata's own tools, so they hold for
 your agent's **native** edits too: no approved approach, no persisted spec, no failing test, or a
-write outside the scope the spec authorized, and the write is blocked outright — and ahead of all
-four, `self-protect` refuses any write to an installed package tree or outside your workspace at
-all. And because no code path writes memory without a human-minted approval, mokata's memory
+write outside the scope the spec authorized, and the write is blocked outright; after three failed
+fixes at one failure, the fourth is blocked until a new approach is approved (`fix-breaker`); and
+ahead of all of them, `self-protect` refuses any write to an installed package tree or outside your
+workspace at all. And because no code path writes memory without a human-minted approval, mokata's memory
 **cannot be poisoned** by content you never approved.
 
 It keeps working when the session gets long or busy. Each Claude session is bound to its own
@@ -41,13 +42,13 @@ your machine with the diff of each session, any point in time, branches and PRs
 You don't have to adopt all of it at once — `mokata init --mode seatbelt` wires just the gates
 and the graph, `--mode memory` adds persistent memory, `--mode full` turns on everything.
 
-mokata is pure Python (≥ 3.10) — the engine is stdlib-only, and the MCP SDK is its single
+mokata is pure Python (≥ 3.12) — the engine is stdlib-only, and the MCP SDK is its single
 runtime dependency, so the MCP server works out of the box. It is Apache-2.0 under
 **MoStack**, and is built clean-room (no dependency on any other framework).
 
-**Start here → [Getting started](getting-started.md).** One instruction sets mokata up **and**
-updates it — in your repo run `uv tool install --upgrade mokata` (or `pipx install --force mokata`),
-then `mokata setup claude` → restart Claude Code → `mokata doctor`. `setup claude` runs
+**Start here → [Getting started](getting-started.md).** One install line and one setup — in your
+repo run `uv tool install "mokata[full]"` (or `pipx install "mokata[full]"`),
+then `mokata setup claude --mode full` → restart Claude Code → `mokata doctor`. `setup claude` runs
 `mokata init` for you on a new repo and only refreshes the wiring on an existing one. The
 alternative is the Claude Code **plugin** — inside Claude Code run
 `/plugin marketplace add JasGujral/mokata-oss`, then `/plugin install mokata@mostack` (its MCP
@@ -94,15 +95,15 @@ This site follows the [Diátaxis](https://diataxis.fr/) model:
 | E | TDD & execution | RED-before-GREEN, model routing, bug/debug/optimize engines, execution-mode selector; a run can take **its own worktree and branch** — always offered, never automatic — and `worktree list` joins your worktrees against their sessions with a staleness verdict per row; `worktree clean` and `worktree remove` tidy them — previewed, human-gated, and never touching a live session |
 | F | Token governance | tracker, JIT retrieval, handback caps, output density, budget, cache-stable prefixes |
 | G | Rules & governance | 4-tier rules, taxonomy, sync/async hooks, Karpathy gates, rule-learning, skill authoring |
-| I | Safety & audit | secret protection, human-minted single-use approvals, **15 backed gates (six of them frontend/backend domain gates run by `mokata gate check`) — and the hook stops 5 things on your agent's native writes** (`self-protect` plus the four run-state gates), audit ledger, lethal-trifecta gate, revert, resume |
+| I | Safety & audit | secret protection, human-minted single-use approvals, **15 backed gates (six of them frontend/backend domain gates run by `mokata gate check`) — and the hook stops 6 things on your agent's native writes** (`self-protect`, the four run-state gates and the `fix-breaker`), audit ledger, lethal-trifecta gate, revert, resume |
 | J | Distribution | cross-harness boundary, shareable stack manifests, portable sessions (transport derived from the repo's mode); `release-notes-check` **refuses the cut** when the notes announce a different version than the tag, or quietly drop a fact the changelog declared as a known limitation |
 | K | Config | per-layer/tool toggles, profiles, local-first, committed config, trust dial, doctor (incl. the DSN deep-check and retrieval-stack line), reset |
 | L | Composability | standalone commands, mid-pipeline entry, direct skills, catalog, chaining, suggestions |
-| M | MCP surface | 70 tools (46 read · 23 write · 1 opt-in approve), every call bounded with a `timed_out` status that names the operation, typed annotations, structured `response_format`, cursor pagination, and a loud `AWAITING APPROVAL` head so waiting-on-a-human never reads as a hang |
+| M | MCP surface | 70 tools (46 read · 23 write · 1 opt-in approve), every call answers within its budget (a long one says `running` and a same-argument re-call joins it — never run twice), typed annotations, structured `response_format`, cursor pagination, and a loud `AWAITING APPROVAL` head so waiting-on-a-human never reads as a hang |
 | + | Sessions & subagents | each Claude session bound to its own run (parallel-safe); the gate state re-anchored after compaction; one context budget; subagent contracts (read-only, depth, a structured hand-back); shell writes meet the same gates as native edits; session notes drafted from the record and kept only on approval |
 | + | Review window | `mokata ide` + `/mokata:review-window` — a read-only, localhost-only page: what each session wrote, the diff at any point in time from mokata's own write snapshots, the live tree, branch compare and GitHub PRs by URL; re-focuses on the asking session; `--demo` sample data ([guide](how-to/review-agent-work.md)) |
 
-Counts in the box today: **30 Agent Skills** (16 curated + 14 domain) · **38 slash commands** ·
+Counts in the box today: **30 Agent Skills** (16 curated + 14 domain) · **39 slash commands** ·
 **71 CLI subcommands** · **70 MCP tools** · **15 backed gates** · **1 runtime dependency**.
 
 Published docs: <https://mokata.ai/> · Source & issues:

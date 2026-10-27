@@ -1,0 +1,4 @@
+/* P41 — the "code: worktree …" chip next to the focus chip (brand accent; reuses .chip). */
+.code-tree-chip { margin-left: 8px; color: var(--accent); border-color: var(--accent);
+                  font-family: var(--mono); max-width: 40ch; overflow: hidden;
+                  text-overflow: ellipsis; white-space: nowrap; }

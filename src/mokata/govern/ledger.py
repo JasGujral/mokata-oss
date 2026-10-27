@@ -38,7 +38,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from .. import MOKATA_DIR as MOKATA_DIR_NAME, TEMP_LOCAL_DIRNAME
-from ..oslock import file_lock
+from ..oslock import DEFAULT_TIMEOUT as LOCK_WAIT_SECONDS, LockTimeout, file_lock
 
 AUDIT_DIRNAME = "audit"
 LEDGER_FILENAME = "ledger.jsonl"
@@ -80,7 +80,12 @@ class _ReentrantFileLock:
 
     @contextmanager
     def hold(self) -> Iterator[None]:
-        self._rlock.acquire()
+        # O14 — BOUNDED, like the file lock under it. The MCP server now runs parallel tool calls on
+        # parallel threads, so this in-process half is contended for real; an unbounded `acquire()`
+        # was the one wait in the append path that could never give up. Same bound, same error.
+        if not self._rlock.acquire(timeout=LOCK_WAIT_SECONDS):
+            raise LockTimeout(f"timed out after {LOCK_WAIT_SECONDS}s acquiring the in-process "
+                              f"ledger lock (held by another call in this process): {self._path}")
         try:
             if self._depth == 0:
                 self._file_cm = file_lock(self._path)

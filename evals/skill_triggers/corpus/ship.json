@@ -1,0 +1,35 @@
+{
+ "skill": "ship",
+ "triggers": [
+  "needs verifying and landing",
+  "finish, merge, release, or wrap up a change"
+ ],
+ "positive": [
+  "Review passed; verify it's truly done and let me choose how to land it",
+  "Wrap up this change and merge it",
+  "Finish the run — confirm everything is done before I decide how to land it",
+  "We're done coding and it has been reviewed; verify it is truly done and land it",
+  "Is this change ready to merge? Verify and then hand me the landing options"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Plan a canary rollout with abort thresholds for users",
+   "expect": "shipping"
+  },
+  {
+   "prompt": "Tests are still red, fix them",
+   "expect": "develop"
+  },
+  {
+   "prompt": "Do the two-pass review of this diff",
+   "expect": "review"
+  },
+  {
+   "prompt": "Ship a parcel to Berlin"
+  },
+  {
+   "prompt": "Pin our CI actions to commit shas",
+   "expect": "ci-cd"
+  }
+ ]
+}

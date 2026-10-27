@@ -235,7 +235,7 @@ def _tier(sd: str, rid: str, drafts: Dict[str, Any]) -> int:
     return 1 if os.path.isfile(os.path.join(sd, APPROACH_PREFIX + rid + ".json")) else 0
 
 
-def local_runs(root: str) -> Dict[str, Any]:
+def local_runs(root: str, focus: Optional[str] = None) -> Dict[str, Any]:
     """The run chooser. PLAN-VISIBLE (0.0.25): runs that hold a plan or a spec come FIRST, then
     the rest by recency — and a run with a spec (emitted, or drafted and awaiting approval)
     ahead of a run with only an approach. A long-lived repo collects thousands of runs; ordered
@@ -262,19 +262,26 @@ def local_runs(root: str) -> Dict[str, Any]:
                      "has_plan": rid in planned,
                      "sessions": by_run.get(rid, []), "updated": _recency(root, rid)})
     return {"sample": False, "source": "local", "runs": rows,
-            "default": _default_run(root, ids, planned),
+            "default": _default_run(root, ids, planned, focus),
             "counts": {"total": len(every), "with_plan": len(planned),
                        "with_spec": sum(1 for t in tier.values() if t == 2), "listed": len(ids)},
             "team": team_mode(root)}
 
 
-def _default_run(root: str, ids: List[str], planned: "set | None" = None) -> Optional[str]:
-    """THE resolver's run when this store holds it AND it has a plan or spec; else the first
-    listed run (the list is already best-first: spec, then plan, then recency); else the
-    resolver's run. A run with nothing to show is never preferred over one with a plan — that
-    was the 'plan not visible' report."""
+def _default_run(root: str, ids: List[str], planned: "set | None" = None,
+                 focus: Optional[str] = None) -> Optional[str]:
+    """The run the FOCUSED session is bound to (its own claim — kept or carried across a resume,
+    O10) when this store lists it; else THE resolver's run when this store holds it AND it has a
+    plan or spec; else the first listed run (the list is already best-first: spec, then plan, then
+    recency); else the resolver's run. A run with nothing to show is never preferred over one with
+    a plan — that was the 'plan not visible' report."""
+    from ..run_intent import CLAIM_BOUND, session_claim
     from ..run_resolver import resolve_run
     planned = planned or set()
+    if focus:
+        claim, mine = session_claim(root, focus)
+        if claim == CLAIM_BOUND and mine in ids:
+            return mine
     rid = resolve_run(root).run_id
     if rid in ids and rid in planned:
         return rid
@@ -570,7 +577,8 @@ def _mark(ts: str, kind: str, stage: str, label: str, **extra: Any) -> Dict[str,
 
 def lifecycle(root: str, run_id: str) -> Dict[str, Any]:
     from ..govern.resume import CHECKPOINT_PREFIX, PipelineCheckpoint
-    from ..progress_events import GATE_BLOCK, REVIEW_VERDICT, RUN_FINISHED, STAGE_ENTER
+    from ..progress_events import (GATE_BLOCK, REVIEW_VERDICT, RUN_FINISHED, SESSION_RESUMED,
+                                   STAGE_ENTER)
     from ..tdd_state import load as load_tdd, state_key as tdd_key
     rid = check_local_run(root, run_id)
     stages = lifecycle_stages()
@@ -594,6 +602,11 @@ def lifecycle(root: str, run_id: str) -> Dict[str, Any]:
             marks.append(_mark(ts, "review_verdict", "review",
                                "review passed" if ok else "review did not pass", passed=ok,
                                independent=bool(data.get("independent"))))
+        elif typ == SESSION_RESUMED:
+            sid, frm = _clip(data.get("session")), _clip(data.get("from"))
+            marks.append(_mark(ts, "resumed", stage, f"session {sid[:8]} resumed" +
+                               (f" (from {frm[:8]})" if frm and frm != sid else ""),
+                               session=sid, resumed_from=frm))
         elif typ == RUN_FINISHED:
             finished_at = finished_at or ts
             marks.append(_mark(ts, "run_finished", "ship",
@@ -665,6 +678,7 @@ def lifecycle(root: str, run_id: str) -> Dict[str, Any]:
     firsts = [t for t in [_parse_ts(registered)] + [_parse_ts(v) for v in entered.values()] if t]
     started = min(firsts) if firsts else (min(times) if times else 0.0)
     return {"sample": False, "run": rid, "stages": rows,
+            "sessions": _sessions_by_run(root).get(rid, []),
             "current": stages[idx] if 0 <= idx < len(stages) and not
             (finished_at and not regressed) else None,
             "finished": bool(finished_at) and not regressed, "finished_at": finished_at,

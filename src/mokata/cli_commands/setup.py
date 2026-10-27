@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import argparse
 import sys
+from typing import Optional
 
 from ..adoption_modes import (
     mode_names,
-    offer_mode_extras,
     profile_for_mode,
     render_outcome,
     render_quickstart,
+    wire_mode,
 )
 from ._common import (
     Surface,
@@ -201,13 +202,13 @@ def _wire_or_disclose(args: argparse.Namespace, profile: str) -> None:
 
 
 def _init_with_mode(args: argparse.Namespace, mode: str, profile: str) -> int:
-    """G1 — the mode-flavoured init: the SAME `init_repo` write, then the mode's consented
-    offers, then its printed quickstart.
+    """G1 — the mode-flavoured init: the SAME `init_repo` write, then the mode's detect-and-wire
+    step, then its printed quickstart.
 
     `--mode` never routes through the wizard: the mode IS the answer the wizard would ask for,
     and re-asking it would be a second config axis wearing a prompt. The durable write stays
-    human-gated by `init_repo` (P2); the offers are interactive-only, so a `--yes`/CI init in
-    ANY mode reaches neither the ask nor `pip` (the DB.S4 posture)."""
+    human-gated by `init_repo` (P2); the dependency step installs nothing in ANY mode (0.0.26 L1:
+    the installer fetches `mokata[full]`, setup only detects and wires)."""
     result = init_repo(
         root=args.path,
         profile=profile,
@@ -229,12 +230,17 @@ def _init_with_mode(args: argparse.Namespace, mode: str, profile: str) -> int:
 
 
 def _mode_dependencies(args: argparse.Namespace, mode: str):
-    """0.0.25 I-02 — the mode's optional dependencies, one consent, then the outcome table.
-    Shared by `init --mode` and `setup <harness> --mode` so the two routes cannot drift.
-    `--yes` is NOT consent to a network install; `--with-deps` is (the DB.S4 posture)."""
-    interactive = sys.stdin.isatty() and not args.yes
-    outcome = offer_mode_extras(args.path, mode, interactive=interactive,
-                                with_deps=getattr(args, "with_deps", False))
+    """The mode's optional dependencies: detect, wire, warm — then the outcome table. Shared by
+    `init --mode` and `setup <harness> --mode` so the two routes cannot drift.
+
+    0.0.26 L1 — NEVER installs: the extras come from the install line (`uv tool install
+    "mokata[full]"`), and a missing one is reported with that ONE line for this installer. The
+    `--with-deps` flag that consented to a self-install is gone with the self-install."""
+    rerun = ""
+    if getattr(args, "plugin", False):
+        from ..adoption_modes import plugin_setup_command
+        rerun = plugin_setup_command(mode)
+    outcome = wire_mode(args.path, mode, rerun=rerun)
     table = render_outcome(outcome)
     if table:
         print(table)
@@ -276,11 +282,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # instruction (Jas 2026-10-16). A mode is a profile alias plus its dependencies + quickstart,
     # exactly as on `init --mode`; the two routes share `_mode_dependencies`.
     mode = getattr(args, "mode", None)
-    if getattr(args, "with_deps", False) and not mode:
-        print("error: --with-deps needs --mode memory|full (it installs that mode's "
-              "dependencies)", file=sys.stderr)
-        return 2
     profile = profile_for_mode(mode) if mode else args.profile
+    if getattr(args, "plugin", False):
+        return _setup_plugin_route(args, mode, profile)
     try:
         result = setup_harness(
             harness=args.harness,
@@ -293,6 +297,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
             force=args.force,
             ide_bridge=getattr(args, "ide_bridge", False),
             http_gates=getattr(args, "http_gates", False),
+            skills_only=getattr(args, "skills_only", False),
         )
     except SetupError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -304,6 +309,55 @@ def cmd_setup(args: argparse.Namespace) -> int:
         outcome = _mode_dependencies(args, mode)
         print(render_quickstart(mode, outcome))
     return 0
+
+
+def _setup_plugin_route(args: argparse.Namespace, mode: Optional[str], profile: str) -> int:
+    """0.0.26 L8 (MP.S1) — `setup claude --mode <m> --plugin`: the plugin route's end state.
+
+    The Claude Code plugin IS the harness wiring (commands, skills, hooks, MCP server), so this
+    writes none of it — a second, project-scope copy would pin hooks to one uv cache path and
+    outlive the next plugin update. It only (1) initializes the repo if it has no `.mokata/`
+    (human-gated by `init_repo`, P2) and (2) runs the mode's detect-and-wire step — embedder on +
+    model warm-up, code-review-graph pinned — in the environment it runs in, which on this route
+    is the plugin's pinned `mokata[full]` (`uvx --from "mokata[full]==<v>"`)."""
+    if not mode:
+        print("error: --plugin needs --mode (seatbelt / standard / memory / full)", file=sys.stderr)
+        return 2
+    from ..config import Surface
+    if not Surface.is_initialized(args.path):
+        result = init_repo(root=args.path, profile=profile, assume_yes=args.yes, force=args.force)
+        if result.aborted:
+            print(f"\n{result.message}", file=sys.stderr)
+            return 1
+    if not _plugin_worktree_settings(args):
+        return 1
+    outcome = _mode_dependencies(args, mode)
+    print(render_quickstart(mode, outcome))
+    return 0
+
+
+def _plugin_worktree_settings(args: argparse.Namespace) -> bool:
+    """0.0.26 P31 — the plugin carries hooks, not project settings, so the plugin route still sets
+    Claude Code's session-worktree settings (`worktree.baseRef`, `.worktreeinclude`, .gitignore)
+    itself: shown first, written only on the human's yes (P2). False = the human declined."""
+    from pathlib import Path
+    from ..harness_setup import _default_confirm
+    from ..worktree_setup import STATE_WRITE, apply_rows, plan_rows, render_rows
+    settings = Path(args.path).resolve() / ".claude" / "settings.json"
+    rows = plan_rows(args.path, settings)
+    for line in render_rows(rows):
+        print(line)
+    if not any(r.state == STATE_WRITE for r in rows):
+        return True
+    if not args.yes and not _default_confirm("\nSet these session-worktree settings? [y/N] "):
+        print("session worktree settings NOT written (declined).", file=sys.stderr)
+        return False
+    touched = apply_rows(args.path, settings)
+    for p in touched:
+        print(f"  wrote {p}")
+    from ..harness_setup import _record_setup_ledger
+    _record_setup_ledger(args.path, "setup-worktrees", touched, harness="claude", scope="project")
+    return True
 
 
 def cmd_unsetup(args: argparse.Namespace) -> int:
@@ -321,10 +375,6 @@ def cmd_unsetup(args: argparse.Namespace) -> int:
         print(f"\n{result.message}", file=sys.stderr)
         return 1
     return 0
-
-
-_WITH_DEPS_HELP = ("with --mode memory|full: install that mode's optional dependencies without "
-                   "asking (the opt-in for --yes / CI; --yes alone installs nothing)")
 
 
 def register(sub, common):
@@ -348,12 +398,12 @@ def register(sub, common):
         choices=mode_names(),
         help="graduated adoption on-ramp: seatbelt (the gates) / memory (gates + persistent "
              "memory) / full (everything). An alias for a profile plus a printed quickstart; "
-             "memory and full additionally OFFER the local embeddings model when interactive",
+             "memory and full additionally detect and wire what `mokata[embeddings]` / "
+             "`mokata[full]` installed (setup never installs)",
     )
     p_init.add_argument(
         "--yes", action="store_true", help="non-interactive; skip the write prompt"
     )
-    p_init.add_argument("--with-deps", action="store_true", help=_WITH_DEPS_HELP)
     p_init.add_argument(
         "--force", action="store_true", help="overwrite an existing manifest"
     )
@@ -416,15 +466,27 @@ def register(sub, common):
                               help=f"profile to init with if not already set up "
                                    f"(default: {DEFAULT_PROFILE})")
     p_setup_axis.add_argument("--mode", default=None, choices=mode_names(),
-                              help="seatbelt / memory / full: a profile plus that mode's optional "
-                                   "dependencies (one question) and a printed quickstart")
-    p_setup.add_argument("--with-deps", action="store_true", help=_WITH_DEPS_HELP)
+                              help="seatbelt / memory / full: a profile, plus detecting and "
+                                   "wiring what `mokata[full]` installed (embedder, code graph, "
+                                   "model warm-up), and a printed quickstart. Never installs: a "
+                                   "missing package is named with ONE install line")
+    p_setup_axis.add_argument("--skills-only", dest="skills_only", action="store_true",
+                              help="refresh ONLY the vendored commands + Agent Skills from this "
+                                   "mokata (after an upgrade; `mokata update` says when). No init, "
+                                   "MCP, hooks or settings.json; installs no dependency")
     p_setup.add_argument("--no-hooks", action="store_true",
                          help="skip wiring mokata's hooks (SessionStart briefing + "
                               "user-prompt-submit per-turn recall + secret-guard + run-state "
                               "gate-guard + dirty-track + run-bind + pre-compact + subagent-start + "
-                              "subagent-stop + stop + session-end) — this also skips the MCP tool grant, "
+                              "subagent-stop + stop + stop-gate + session-end) — this also skips the MCP tool grant, "
                               "which shares settings.json")
+    p_setup.add_argument("--plugin", action="store_true",
+                         help="the Claude Code plugin route: the plugin already wires commands, "
+                              "skills, hooks and the MCP server, so only init the repo (if "
+                              "needed) and detect + wire the --mode (embedder, code graph, model "
+                              "warm-up). Run it through the plugin's pinned environment: "
+                              "uvx --from \"mokata[full]==<plugin version>\" mokata setup claude "
+                              "--mode full --plugin")
     p_setup.add_argument("--no-grant", action="store_true",
                          help="don't grant Claude Code permission for mokata's MCP tools / "
                               "enable the server in settings.json (default: grant, so Claude "

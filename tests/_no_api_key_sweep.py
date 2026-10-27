@@ -22,9 +22,11 @@ THE RULES (each has a positive control in the test file — a rule nothing can t
                          read three calls later is the same read, and the AST cannot follow it.
   R3 credential store  — `.credentials.json`, the macOS keychain service `Claude Code-credentials`,
                          or `find-generic-password` (the keychain read).
-  R4 headless spawn    — an argv literal `["claude", …, "-p"|"--print", …]` or a command string
-                         `claude -p` / `claude --print`: a `-p` spawn is the Agent-SDK path, and
-                         the row's baseline is "no `-p` spawn in src/mokata".
+  R4 headless spawn    — an argv literal `["claude", …, "-p"|"--print"|"--bare", …]` or a command
+                         string `claude -p` / `--print` / `--bare`: a `-p` spawn is the Agent-SDK
+                         path (it uses an API key UNASKED when one is set), and `--bare` skips the
+                         login entirely (`claude --help`, 2.1.308: "Anthropic auth is strictly
+                         ANTHROPIC_API_KEY or apiKeyHelper ... OAuth and keychain are never read"). Baseline: none in src/mokata.
   R5 API endpoint      — a constant naming `api.anthropic.com` / `api.openai.com`.
   R6 eval import       — `src/mokata` importing `bench` (the harness may import the product;
                          the product must never import the harness).
@@ -50,8 +52,8 @@ KEY_NAME = re.compile(r"[A-Z][A-Z0-9_]*_(?:API_KEY|AUTH_TOKEN|OAUTH_TOKEN)")
 KEY_NAME_IN_TEXT = re.compile(r"\b[A-Z][A-Z0-9_]*_(?:API_KEY|AUTH_TOKEN|OAUTH_TOKEN)\b")
 CREDENTIAL_MARKERS = (".credentials.json", "claude code-credentials", "find-generic-password")
 ENDPOINTS = ("api.anthropic.com", "api.openai.com")
-HEADLESS_CMD = re.compile(r"\bclaude\s+(?:-p|--print)\b")
-PRINT_FLAGS = frozenset({"-p", "--print"})
+HEADLESS_CMD = re.compile(r"\bclaude\s+(?:-p|--print|--bare)\b")
+PRINT_FLAGS = frozenset({"-p", "--print", "--bare"})
 EVAL_PACKAGES = frozenset({"bench"})
 
 #: The non-Python file types the text sweep reads. Binary/compiled files are skipped.
@@ -71,10 +73,18 @@ class Finding:
 
 
 #: THE ALLOW-LIST. Each entry is (rule, path, detail) -> the REASON it is not a violation.
-#: ⛔ It is EMPTY for src/mokata and that is the claim this guard exists to keep true. Adding an
-#: entry is an owner decision (Jas's hard rule), not a builder's convenience; the test also fails
-#: on a STALE entry, so an allowance cannot outlive the code it excused.
-ALLOW: Dict[Tuple[str, str, str], str] = {}
+#: ⛔ Adding an entry is an owner decision (Jas's hard rule), not a builder's convenience; the test
+#: also fails on a STALE entry, so an allowance cannot outlive the code it excused.
+#: 0.0.26 L4 (pending Jas's ruling): ONE file, the runtime half of this guard. `billing_env.py`
+#: names the two variables that would move Claude Code OFF the user's login, to WARN that they are
+#: set — presence only, never the value (pinned by `test_l4_billing_env.py` with a sentinel). A
+#: key READ anywhere else, or any other key name, is still a violation.
+_BILLING_WARNING = ("presence-only: warns that this variable would move Claude Code off the "
+                    "user's login (doctor + IDE terminal); never reads out, logs or sends the value")
+ALLOW: Dict[Tuple[str, str, str], str] = {
+    ("R2", "src/mokata/billing_env.py", "ANTHROPIC_API_KEY"): _BILLING_WARNING,
+    ("R2", "src/mokata/billing_env.py", "ANTHROPIC_AUTH_TOKEN"): _BILLING_WARNING,
+}
 
 
 def _const_str(node: ast.AST) -> Optional[str]:

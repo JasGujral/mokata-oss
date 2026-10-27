@@ -15,8 +15,8 @@ spending more than the work is worth" — not billing.
 Instead of dumping whole files into context, `jit_retrieve(layer, identifiers)` pulls the
 relevant **reference snippets** for a set of identifiers via the knowledge layer and
 reports the reduction vs the file-dump baseline (`tokens_retrieved` vs
-`tokens_if_dumped`, `saved`, `saved_pct`). On a small sample this is routinely a 60%+
-reduction.
+`tokens_if_dumped`, `saved`, `saved_pct`). That figure is measured on your repo, call by
+call. mokata makes no general savings claim until its A/B benchmark (`bench/ab`) backs one.
 
 ## Sub-agent handback cap (F3)
 

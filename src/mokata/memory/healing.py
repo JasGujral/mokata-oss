@@ -59,6 +59,12 @@ CODE_ANCHOR_STALE = "code_anchor_stale"
 # nothing about the item is wrong or expired; it is ASKING to be acted on. Approve = done (the item
 # is archived, never deleted); reject/defer = leave it, and it comes back on the next sweep.
 INTENTION_DUE = "intention_due"
+# R5 (0.0.26) — a learning whose `retire_when` predicate FIRED (memory/grounding.py): the file it
+# was about is gone, the symbol no longer resolves, the commit it waited for landed, or its date
+# passed. Its own kind, resolved by the refresh verbs (keep / update / consolidate / replace /
+# delete — `MemoryStore.refresh`), every one human-gated. Nothing is retired by silence.
+RETIRE_DUE = "retire_due"
+REFRESH_VERBS = ("keep", "update", "consolidate", "replace", "delete")
 
 # R5 — the near-dup bar, deliberately CONSERVATIVE. Cosine over the embedding the gated write
 # already stamped; 0.97 is close to identity for a normalized embedding, so paraphrases of one fact
@@ -221,8 +227,13 @@ class HealingProposal:
     # sentence about relations the shared table may not actually hold, and a human resolving a
     # conflict against invented context is worse off than one shown none.
     subgraph: Optional[ConflictSubgraph] = None
+    # R5 — set ONLY on a RETIRE_DUE proposal: the predicate that fired, verbatim, so `keep` can
+    # drop exactly that predicate and the human sees exactly what fired.
+    predicate: Optional[str] = None
 
     def diff(self) -> str:
+        if self.kind == RETIRE_DUE:
+            return f"{self.old.value!r} (retire_when {self.predicate} fired) -> refresh"
         if self.kind == INTENTION_DUE:
             return f"{self.old.value!r} (due: {self.rationale}) -> done"
         if self.kind == CODE_ANCHOR_STALE:
@@ -296,7 +307,8 @@ def detect_issues(active_items: List[MemoryItem],
                   now: Optional[str] = None,
                   conflicts: Optional[Sequence[ConflictRecord]] = None,
                   anchor_staleness: Optional[Sequence["AnchorStaleness"]] = None,
-                  intentions_due: Optional[Sequence[Any]] = None
+                  intentions_due: Optional[Sequence[Any]] = None,
+                  retire_due: Optional[Sequence[Any]] = None
                   ) -> List[HealingProposal]:
     """Return healing proposals for the given ACTIVE items (and cross-writer conflicts, DB.S6, and
     moved code anchors, H-6).
@@ -353,6 +365,11 @@ def detect_issues(active_items: List[MemoryItem],
         proposals.append(HealingProposal(
             kind=INTENTION_DUE, subject=d.item.subject, mtype=d.item.mtype, old=d.item, new=None,
             rationale=d.reason))
+    # R5 — the store evaluates `retire_when` (it owns the root + graph); this only renders it.
+    for r in retire_due or ():
+        proposals.append(HealingProposal(
+            kind=RETIRE_DUE, subject=r.item.subject, mtype=r.item.mtype, old=r.item, new=None,
+            rationale=r.reason, predicate=r.predicate))
     return proposals
 
 
@@ -470,6 +487,16 @@ def render_proposal(p: HealingProposal) -> str:
             "  defer   — decide later (the write stays conflicted, nothing is lost)",
             "Default is DEFER — a conflict is never resolved by silence, and 'discard' is a "
             "word you have to say: it throws away a write you already approved.",
+        ]
+    elif p.kind == RETIRE_DUE:
+        lines += [
+            "Nothing changes unless you act. Refresh it with one verb:",
+            "  keep        — still true (drops the fired predicate; the learning stays)",
+            "  update      — rewrite it in place (same entry, new value — grounded again)",
+            "  consolidate — fold it into another entry (that entry takes the merged value)",
+            "  replace     — a new learning supersedes it (grounded; the old one is kept as history)",
+            "  delete      — remove it (the audit ledger and git history are the archive)",
+            "Default is DEFER — every verb is human-gated; nothing is retired by silence.",
         ]
     elif p.kind == INTENTION_DUE:
         lines += [

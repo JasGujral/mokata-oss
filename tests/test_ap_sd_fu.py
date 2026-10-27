@@ -17,6 +17,8 @@ import types
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata.brainstorm import persist_approach                       # noqa: E402
 from mokata.engine import Spec, AcceptanceCriterion                  # noqa: E402
@@ -31,9 +33,9 @@ from test_ap_sd import _decision, _deferral, _session_with_decisions  # noqa: E4
 def _spec():
     """A spec whose scope declares ONLY an authorized surface — the deferred list is NOT
     hand-written; it must come from the approved approach's decisions[]."""
-    return Spec(title="add a retry helper",
-                criteria=[AcceptanceCriterion(id="AC1", text="retry wraps a failing call")],
-                scope=SpecScope(authorized=("src/retry.py",), deferred=()))
+    return with_tasks(Spec(title="add a retry helper",
+                           criteria=[AcceptanceCriterion(id="AC1", text="retry wraps a failing call")],
+                           scope=SpecScope(authorized=("src/retry.py",), deferred=())))
 
 
 class _CaptureGate:
@@ -96,7 +98,7 @@ def _emit(store, gate):
 
 
 def commit_spec_via(store, spec, gate):
-    return commit_spec(store, spec, gate=gate, human_approved=True)
+    return commit_spec(store, with_tasks(spec), gate=gate, human_approved=True)
 
 
 if __name__ == "__main__":

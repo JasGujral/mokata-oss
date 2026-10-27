@@ -82,6 +82,14 @@ DECLARED_DIVERGENCES = {
 #: split into axes below — a per-flag regex over the raw text would match a flag in a comment.
 _DISCOVER_CALL = re.compile(r"unittest\s+discover\b(?P<tail>[^\n;)]*)")
 
+#: `scripts/shard_tests.py run ... -s tests -t tests` (0.0.26 O6, WINDOWS-CI-TIME) — ci.yml's unit
+#: step since the suite was sharded. It builds the suite with the same `TestLoader.discover` call and
+#: runs one shard of it; the N matrix legs together are that SELECTION exactly
+#: (`tests/test_o6_shard_tests.py` proves every module lands in one shard, and that the matrix lists
+#: every shard). So it is read as the `discover` it partitions, on every selection axis — a shard
+#: call with a different `-s`/`-t` is a different selection and still reds.
+_SHARD_CALL = re.compile(r"shard_tests\.py\s+run\b(?P<tail>[^\n;)]*)")
+
 _OPT = {
     "source": re.compile(r"(?:^|\s)-s\s+(\S+)"),
     "top_level": re.compile(r"(?:^|\s)-t\s+(\S+)"),
@@ -159,6 +167,10 @@ def invocations(text, where):
     out = []
     for m in _DISCOVER_CALL.finditer(code):
         inv = _one(m.group("tail"), where)
+        if inv is not None:
+            out.append(inv)
+    for m in _SHARD_CALL.finditer(code):
+        inv = _one(m.group("tail"), where + " (sharded)")
         if inv is not None:
             out.append(inv)
     return tuple(out)

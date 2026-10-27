@@ -87,9 +87,9 @@ def _surfaces() -> List[CommandSurface]:
         CommandSurface("skill", slash=("skill-author",),
                        note="authoring a skill (RED-GREEN-for-docs, human-gated write) → "
                             "slash drives the gated author path"),
-        CommandSurface("upgrade", slash=("upgrade",),
-                       note="upgrading mokata (human-gated pip / plugin steps) → slash "
-                            "drives the gated path"),
+        CommandSurface("update", slash=("update",),
+                       note="updating mokata (the plan, one confirm, the installer's command, "
+                            "then skills + wiring) → slash shows the plan, runs on the user's yes"),
         CommandSurface("version", slash=("version",),
                        note="version + how-to-update (offline; opt-in check) → slash"),
         CommandSurface("ide", slash=("review-window",),
@@ -152,7 +152,9 @@ def _surfaces() -> List[CommandSurface]:
         CommandSurface("query", mcp_read=("query",),
                        note="structural code query (graph/grep) → read tool"),
         CommandSurface("status", mcp_read=("status",), note="stack summary → read tool"),
-        CommandSurface("doctor", mcp_read=("doctor",), note="config diagnosis → read tool"),
+        CommandSurface("doctor", slash=("doctor",), mcp_read=("doctor",),
+                       note="config diagnosis → read tool; `/mokata:doctor` also reports the "
+                            "plugin route's install health through its pinned launcher"),
         CommandSurface("coverage", mcp_read=("coverage",),
                        note="capability coverage + gaps → read tool"),
         CommandSurface("budget", mcp_read=("budget",), note="token savings → read tool"),

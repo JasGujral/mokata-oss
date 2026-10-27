@@ -1,0 +1,35 @@
+{
+ "skill": "browser-testing",
+ "triggers": [
+  "end-to-end or browser test",
+  "DevTools-observable surface",
+  "running browser"
+ ],
+ "positive": [
+  "The checkout page throws a console error only in the running browser; capture it with DevTools",
+  "Write an end-to-end browser test for the signup flow",
+  "A failed network request shows up in DevTools when I submit the form; investigate the runtime",
+  "The modal's rendering state is wrong in the browser but unit tests pass",
+  "Use the connected browser MCP to check the page's runtime behaviour after login"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Add a unit test for the pure tax calculation function",
+   "expect": "test"
+  },
+  {
+   "prompt": "Install a new Playwright server for browser automation"
+  },
+  {
+   "prompt": "Speed up the slow SQL query in the reporting backend",
+   "expect": "performance"
+  },
+  {
+   "prompt": "Our pytest suite fails with an ImportError in the backend",
+   "expect": "debug"
+  },
+  {
+   "prompt": "Write the docs page for the browser extension settings"
+  }
+ ]
+}

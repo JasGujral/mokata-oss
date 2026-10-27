@@ -18,8 +18,8 @@ Resolve the bundled engine (read `~/.mokata/plugin-root` → `ROOT`, or a `mokat
 
 ```bash
 PY="$(command -v python3 || command -v python)"
-ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
-eval "$ENGINE chain <skill> <skill> [...] --path ."   # e.g. chain spec test develop
+mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
+mokata chain '<skill>' '<skill>' [...] --path .   # e.g. chain spec test develop
 ```
 
 The output lists each step with the gate it applies. Walk the chain by invoking each

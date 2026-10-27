@@ -669,6 +669,9 @@ class _BusyOnSwitch:
     "the store still works" is proven against a real store (the MS.S4 fake idiom, extended)."""
 
     busy = sqlite3.OperationalError("database is locked")
+    # What the driver itself attaches on the 3.12 floor (0.0.26 L12): the classifier reads the
+    # code, not the message, so the fake carries it exactly as a real refusal does.
+    busy.sqlite_errorcode = 5            # SQLITE_BUSY
 
     def __init__(self, real, mode="wal", exc=None):
         self._real, self._mode, self._exc = real, mode, exc or self.busy

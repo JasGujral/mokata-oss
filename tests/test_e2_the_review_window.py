@@ -296,7 +296,10 @@ class SampleNeverPassesForReal(unittest.TestCase):
         with open(os.path.join(STATIC, "index.html"), encoding="utf-8") as fh:
             html = fh.read()
         self.assertIn('id="sample-banner"', html)
-        for section in ("sessions-empty", "timeline-empty", "compare-empty", "diff-empty"):
+        # P33: the session list's empty state is the Sessions screen's (`s1-empty`) — the
+        # left-panel list (`sessions-empty`) is gone, one session list remains.
+        # P34: the bottom timeline is gone — a write is picked on the Sessions screen (`tl-empty`).
+        for section in ("s1-empty", "tl-empty", "compare-empty", "diff-empty"):
             self.assertIn(f'id="{section}"', html, f"no empty state for {section}")
 
     def test_the_wordmarks_are_the_canonical_brand_files_not_redrawn(self):

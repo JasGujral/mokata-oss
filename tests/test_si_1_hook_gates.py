@@ -53,6 +53,8 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 import _support                                                     # noqa: E402
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 from mokata import gate_hook as G                                  # noqa: E402
 from mokata import hook_cli                                        # noqa: E402
 from mokata import tdd_state as T                                  # noqa: E402
@@ -93,7 +95,8 @@ def _approve(root, run=RUN):
 
 
 def _emit_spec(root, run=RUN):
-    _raw_store(root).write(G.SPEC_PREFIX + run, {"criteria": [{"id": "AC1", "text": "it works"}]})
+    _raw_store(root).write(G.SPEC_PREFIX + run,
+                           sealed({"criteria": [{"id": "AC1", "text": "it works"}]}))
 
 
 def _record_red(root, run=RUN, test_id="test_login"):

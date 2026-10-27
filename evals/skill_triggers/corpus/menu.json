@@ -1,0 +1,34 @@
+{
+ "skill": "menu",
+ "triggers": [
+  "every /mokata command and bundled skill on one screen"
+ ],
+ "positive": [
+  "Show me every /mokata command and bundled skill on one screen",
+  "What mokata commands are there? Show the palette",
+  "Open the mokata command palette",
+  "List all mokata commands with their gate markers",
+  "Give me the menu of mokata commands and skills"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Give me a 60-second demo of what mokata does",
+   "expect": "tour"
+  },
+  {
+   "prompt": "List the published documentation topics",
+   "expect": "docs"
+  },
+  {
+   "prompt": "Plan the dinner menu for Saturday"
+  },
+  {
+   "prompt": "Show the governed rules and memory",
+   "expect": "govern"
+  },
+  {
+   "prompt": "Open the live dashboard for this run",
+   "expect": "watch"
+  }
+ ]
+}

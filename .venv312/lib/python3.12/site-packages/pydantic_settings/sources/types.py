@@ -1,0 +1,109 @@
+"""Type definitions for pydantic-settings sources."""
+
+from __future__ import annotations as _annotations
+
+from collections.abc import Sequence
+from importlib.resources.abc import Traversable as Traversable  # noqa: PLC0414  (explicit re-export)
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from pydantic._internal._dataclasses import PydanticDataclass
+    from pydantic.main import BaseModel
+
+    PydanticModel = PydanticDataclass | BaseModel
+else:
+    PydanticModel = Any
+
+
+class EnvNoneType(str):
+    pass
+
+
+class NoDecode:
+    """Annotation to prevent decoding of a field value."""
+
+
+class ForceDecode:
+    """Annotation to force decoding of a field value."""
+
+
+EnvPrefixTarget = Literal['variable', 'alias', 'all']
+DotenvType = Path | str | Sequence[Path | str]
+PathType = Path | str | Sequence[Path | str]
+# Config file sources (json/toml/yaml) additionally accept packaged resources exposed as a
+# `Traversable` (e.g. `importlib.resources.files(...).joinpath(...)`), including non-filesystem
+# ones such as a file inside a zip/wheel.
+# See https://github.com/pydantic/pydantic-settings/issues/299
+ConfigFileSourceType = Path | str | Traversable | Sequence[Path | str | Traversable]
+DotenvFiltering = Literal['match_prefix', 'only_existing']
+DEFAULT_PATH: PathType = Path()
+
+# This is used as the default value for `_env_file` in the `BaseSettings` class and
+# `env_file` in `DotEnvSettingsSource` so that the default can be distinguished from `None`.
+# See the docstring of `BaseSettings` for more details.
+ENV_FILE_SENTINEL: DotenvType = Path()
+
+
+class _CliSubCommand:
+    pass
+
+
+class _CliPositionalArg:
+    pass
+
+
+class _CliVariadicArg:
+    pass
+
+
+class _CliImplicitFlag:
+    pass
+
+
+class _CliToggleFlag(_CliImplicitFlag):
+    pass
+
+
+class _CliDualFlag(_CliImplicitFlag):
+    pass
+
+
+class _CliExplicitFlag:
+    pass
+
+
+class _CliUnknownArgs:
+    pass
+
+
+class SecretVersion:
+    def __init__(self, version: str) -> None:
+        self.version = version
+
+    def __repr__(self) -> str:
+        return f'{self.__class__.__name__}({self.version!r})'
+
+
+__all__ = [
+    'DEFAULT_PATH',
+    'ENV_FILE_SENTINEL',
+    'ConfigFileSourceType',
+    'DotenvFiltering',
+    'DotenvType',
+    'EnvNoneType',
+    'EnvPrefixTarget',
+    'ForceDecode',
+    'NoDecode',
+    'PathType',
+    'PydanticModel',
+    'SecretVersion',
+    '_CliDualFlag',
+    '_CliExplicitFlag',
+    '_CliImplicitFlag',
+    '_CliPositionalArg',
+    '_CliSubCommand',
+    '_CliToggleFlag',
+    '_CliUnknownArgs',
+    '_CliVariadicArg',
+]

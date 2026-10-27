@@ -5,8 +5,9 @@ The claims under test:
                 same init via `--profile` (the alias claim, proven byte-for-byte).
   * QUICKSTART— each mode prints its own 5-minute quickstart naming a runnable command, with
                 slash commands in the BARE `/<name>` form (doc 85 §3).
-  * CONSENT   — memory/full fire the DB.S4 ask through the EXISTING primitive; seatbelt
-                STRUCTURALLY never invokes it; `--yes`/non-TTY never reaches pip in any mode.
+  * CONSENT   — no mode installs or asks (0.0.26 L1: the installer fetches `mokata[full]`);
+                memory/full detect and wire, seatbelt STRUCTURALLY never enters the step;
+                `--yes`/non-TTY never reaches pip in any mode.
   * COEXIST   — `--profile` + `--mode` is a usage error; bare `mokata init` is unchanged.
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
@@ -27,6 +28,15 @@ import _support  # noqa: F401  — puts src/ on the path
 from mokata import adoption_modes, extras_install, harness_setup
 from mokata.cli_commands import setup as setup_cmd
 from mokata.init import init_repo
+
+
+def setUpModule():
+    # 0.0.26 L1: a `--mode memory|full` init WARMS the semantic model (a ~30 MB download on a cold
+    # cache). No test in this module may touch the network for it; the warm-up's own behaviour is
+    # graded with an injected `warm_fn` in test_l1_full_installs_in_one_go.
+    p = mock.patch.object(adoption_modes, "_warm_model", return_value="model2vec:stub")
+    p.start()
+    unittest.addModuleCleanup(p.stop)
 
 
 def _init_args(path, **over):
@@ -67,7 +77,12 @@ class TestG1ModeResolvesProfile(unittest.TestCase):
     def _assert_alias(self, mode):
         expected = self.GROUNDED[mode]
         self.assertEqual(adoption_modes.profile_for_mode(mode), expected)
-        with tempfile.TemporaryDirectory() as via_mode, tempfile.TemporaryDirectory() as via_prof:
+        # The alias claim is about the INIT write. What the mode then WIRES depends on what the
+        # installer fetched (0.0.26 L1: setup detects, never installs) — so the packages are made
+        # absent here and the wiring is graded in test_l1_full_installs_in_one_go.
+        absent = {k: (lambda: False) for k in adoption_modes._PRESENT}
+        with tempfile.TemporaryDirectory() as via_mode, tempfile.TemporaryDirectory() as via_prof, \
+                mock.patch.dict(adoption_modes._PRESENT, absent):
             rc, _ = _run_init(via_mode, mode=mode, profile="standard")
             self.assertEqual(rc, 0)
             res = init_repo(root=via_prof, profile=expected, assume_yes=True,
@@ -119,9 +134,9 @@ class TestG1QuickstartPrinted(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             rc, out = _run_init(d, mode=mode)
             self.assertEqual(rc, 0)
-            # 0.0.25 I-02: the banner follows the OUTCOME — a `--yes` init without
-            # `--with-deps` installs nothing, so full/memory print the PARTIALLY form. The body
-            # (every runnable command) is unchanged and is what this asserts.
+            # The banner follows the OUTCOME (0.0.25 I-02) — "everything wired" or PARTIALLY,
+            # depending on what this environment has installed. The body (every runnable
+            # command) is unchanged and is what this asserts.
             body = adoption_modes.render_quickstart(mode).strip().splitlines()[1:]
             self.assertIn("\n".join(body), out)
             return out
@@ -169,64 +184,59 @@ class _Spy:
         return self.ret
 
 
+def _crg_built():
+    from mokata.knowledge.crg_build import BuildResult
+    return BuildResult(ok=True, summary="1 files")
+
+
 class TestG1Consent(unittest.TestCase):
-    """All consent through the DB.S4 primitives; seatbelt never enters the flow."""
+    """0.0.26 L1: no mode's setup installs or asks — memory/full DETECT and WIRE what the
+    installer fetched; seatbelt never enters the step."""
 
-    def test_g1_memory_mode_offers_embeddings(self):
-        """Interactive -> ONE ask, and the install lands on the shared install_extras."""
-        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as home:
-            asked, installs = [], []
-            res = adoption_modes.offer_mode_extras(
-                d, "memory", interactive=True, user_home=home, out=lambda _s: None,
-                prompt_fn=lambda q: (asked.append(q), True)[1],
-                probes={"embeddings": (lambda: False, lambda: True)},
-                embedder_wired_fn=lambda _r: False, wire_embedder_fn=lambda root, **k: True,
-                install_fn=lambda specs, **kw: installs.append(specs) or
-                mock.Mock(ok=True, deferred=False, fix="", message="installed"))
-            self.assertEqual(len(asked), 1, "the ask must fire exactly once")
-            self.assertEqual(installs, [["mokata[embeddings]"]])
-            self.assertTrue(res.embeddings_installed)
+    _ALL = {"embeddings": lambda: True, "code-graph": lambda: True, "graph-ts": lambda: True,
+            "lexical": lambda: True}
 
-    def test_g1_full_mode_offers_embeddings_and_graph(self):
-        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as home:
-            asked, installs, adopted = [], [], []
-            res = adoption_modes.offer_mode_extras(
-                d, "full", interactive=True, user_home=home, out=lambda _s: None,
-                prompt_fn=lambda q: (asked.append(q), True)[1],
-                probes={"embeddings": (lambda: False, lambda: True),
-                        "code-graph": (lambda: False, lambda: True)},
-                graph_pinned_fn=lambda _r: False, embedder_wired_fn=lambda _r: False,
-                wire_embedder_fn=lambda root, **k: True,
-                install_fn=lambda specs, **kw: installs.append(specs) or
-                mock.Mock(ok=True, deferred=False, fix="", message="installed"),
-                adopt_fn=lambda root, **kw: adopted.append(kw) or mock.Mock(committed=True))
-            self.assertEqual(len(asked), 1, "full mode asks ONE dependency question")
-            self.assertEqual(installs, [["mokata[embeddings]", "code-review-graph"]],
-                             "both extras in ONE installer run")
-            self.assertEqual(len(adopted), 1, "full mode pins the graph on that one consent")
-            self.assertTrue(res.complete)
+    def _wire(self, mode, **kw):
+        base = dict(out=lambda _s: None, present=self._ALL, warm_fn=lambda: "model2vec:m",
+                    crg_command_fn=lambda: "/bin/crg", graph_pinned_fn=lambda _r: False,
+                    embedder_wired_fn=lambda _r: False, install_line_fn=lambda e: "LINE",
+                    # O13: the builds are graded in test_o13
+                    build_index_fn=lambda root, out: _crg_built(),
+                    build_search_fn=lambda root, out: (True, "built", False),
+                    rg_command_fn=lambda: "/bin/rg")
+        base.update(kw)
+        with tempfile.TemporaryDirectory() as d:
+            return adoption_modes.wire_mode(d, mode, **base)
+
+    def test_g1_memory_mode_wires_embeddings(self):
+        wired = []
+        res = self._wire("memory", wire_embedder_fn=lambda root, **k: wired.append(root) or True)
+        self.assertEqual(["embeddings"], [r.key for r in res.rows])
+        self.assertEqual(1, len(wired))
+        self.assertTrue(res.complete)
+
+    def test_g1_full_mode_wires_embeddings_graph_and_ts(self):
+        adopted = []
+        res = self._wire("full", wire_embedder_fn=lambda root, **k: True,
+                         adopt_fn=lambda root, **kw: adopted.append(kw) or
+                         mock.Mock(committed=True))
+        self.assertEqual(["embeddings", "meaning-index", "code-graph", "code-graph-index",
+                          "graph-ts", "lexical"], [r.key for r in res.rows])
+        self.assertEqual(len(adopted), 1, "full mode pins the graph")
+        self.assertTrue(res.complete)
 
     def test_g1_seatbelt_never_offers(self):
-        """STRUCTURAL: the flow is not invoked — not merely suppressed downstream."""
-        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as home:
-            with mock.patch.object(extras_install, "offer_extra") as oe, \
-                 mock.patch.object(extras_install, "install_extras") as ie, \
-                 mock.patch.object(extras_install, "offer_embeddings") as oem:
-                res = adoption_modes.offer_mode_extras(
-                    d, "seatbelt", interactive=True, user_home=home, out=lambda _s: None)
-            self.assertEqual(res.rows, [])
-            oe.assert_not_called()
-            ie.assert_not_called()
-            oem.assert_not_called()
-            self.assertFalse(adoption_modes.mode_spec("seatbelt").offers_embeddings)
-
-    def test_g1_seatbelt_records_no_decline(self):
-        """Never offering is not the same as declining: no decline ledger entry is written."""
-        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as home:
-            adoption_modes.offer_mode_extras(d, "seatbelt", interactive=True,
-                                             user_home=home, out=lambda _s: None)
-            self.assertFalse(os.path.exists(
-                os.path.join(home, ".mokata", "extra_declines.json")))
+        """STRUCTURAL: the step is not invoked — not merely suppressed downstream."""
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(extras_install, "offer_extra") as oe, \
+                mock.patch.object(extras_install, "install_extras") as ie, \
+                mock.patch.object(extras_install, "offer_embeddings") as oem:
+            res = adoption_modes.wire_mode(d, "seatbelt", out=lambda _s: None)
+        self.assertEqual(res.rows, [])
+        oe.assert_not_called()
+        ie.assert_not_called()
+        oem.assert_not_called()
+        self.assertFalse(adoption_modes.mode_spec("seatbelt").offers_embeddings)
 
     def test_g1_yes_never_reaches_pip(self):
         """--yes / non-TTY init in ANY mode: zero pip, zero ask (the DB.S4 posture holds).
@@ -274,31 +284,13 @@ class TestG1Consent(unittest.TestCase):
                                  f"a --yes init spawned something other than the "
                                  f"`{harness_setup.MCP_COMMAND}` probe: {stray}")
 
-    def test_g1_non_interactive_flag_skips_offers_structurally(self):
-        with tempfile.TemporaryDirectory() as d:
-            with mock.patch.object(extras_install, "install_extras") as ie:
-                res = adoption_modes.offer_mode_extras(
-                    d, "full", interactive=False, out=lambda _s: None,
-                    probes={"embeddings": (lambda: False, lambda: False),
-                            "code-graph": (lambda: False, lambda: False)},
-                    graph_pinned_fn=lambda _r: False, embedder_wired_fn=lambda _r: False,
-                    wire_embedder_fn=lambda root, **k: True)
-            ie.assert_not_called()
-            self.assertFalse(res.asked)
-            self.assertIn("non-interactive", res.skipped_reason)
-            self.assertTrue(all(r.status == adoption_modes.NOT_ASKED for r in res.rows))
-
-    def test_g1_offer_failure_never_breaks_init(self):
-        """DEGRADE_CLEAN — an already-successful init is never undone by an optional extra."""
-        with tempfile.TemporaryDirectory() as d:
-            def _boom(specs, **kw):
-                raise RuntimeError("index unreachable")
-            res = adoption_modes.offer_mode_extras(
-                d, "memory", interactive=False, with_deps=True, out=lambda _s: None,
-                probes={"embeddings": (lambda: False, lambda: False)}, install_fn=_boom,
-                embedder_wired_fn=lambda _r: False)
-            self.assertFalse(res.embeddings_installed)
-            self.assertTrue(res.notes)
+    def test_g1_wiring_failure_never_breaks_init(self):
+        """DEGRADE_CLEAN — an already-successful init is never undone by an optional step."""
+        def _boom():
+            raise RuntimeError("probe exploded")
+        res = self._wire("memory", present={"embeddings": _boom})
+        self.assertFalse(res.complete)
+        self.assertTrue(res.notes)
 
 
 # --------------------------------------------------------------------------- coexistence

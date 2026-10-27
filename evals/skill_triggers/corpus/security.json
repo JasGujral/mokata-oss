@@ -1,0 +1,34 @@
+{
+ "skill": "security",
+ "triggers": [
+  "authentication, authorization, input handling, secrets, cryptography",
+  "untrusted input"
+ ],
+ "positive": [
+  "Add password reset to our auth service and handle the tokens securely",
+  "This handler builds a SQL query from user input; harden it",
+  "We store API secrets in the config; fix how credentials are handled",
+  "Add authorization checks to the admin service",
+  "Parse untrusted XML from a partner upload safely"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Add a React Server Function that reads protected data",
+   "expect": "frontend-security"
+  },
+  {
+   "prompt": "Rename internal helper functions in the math module"
+  },
+  {
+   "prompt": "Change the button colour and contrast on the marketing page",
+   "expect": "frontend-a11y"
+  },
+  {
+   "prompt": "Set up home security cameras"
+  },
+  {
+   "prompt": "Pin all GitHub Actions to shas for Scorecard",
+   "expect": "ci-cd"
+  }
+ ]
+}

@@ -17,10 +17,11 @@ page also closes it on `pagehide`; the server kills every terminal when it exits
 
 PLATFORMS. POSIX uses the stdlib (`os.openpty`, `termios`, `fcntl`). The child becomes a session
 leader with the pty as its controlling terminal through a tiny stdlib launcher (`_LAUNCHER`), so the
-spawn itself stays `subprocess.Popen` (no `fork` in a threaded server). Windows would need ConPTY,
-which the stdlib does not wrap and mokata takes no dependency for: there the terminal reports
-`NOT_ON_PLATFORM` as its own state — never a silent blank — and the IDE keeps working as a
-companion of the user's own terminal (doc 109 §17.2, "Running in the Desktop Code tab").
+spawn itself stays `subprocess.Popen` (no `fork` in a threaded server). Windows (0.0.26 O5) uses
+ConPTY through `pywinpty` (`WinTerminal`, the same interface), an OPTIONAL dependency installed by the
+`ide` extra on Windows only. Without it the terminal reports `NO_WINPTY` as its own state through
+`/api/term/caps` — never a silent blank — and the IDE keeps working as a companion of the user's own
+terminal (doc 109 §17.2, "Running in the Desktop Code tab"). The IDE never installs it itself.
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
@@ -38,6 +39,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from ..billing_env import terminal_preface
 from ..errors import MokataError
 from ..quiet_spawn import hidden
 
@@ -48,9 +50,9 @@ IDLE_SECS = 45.0                   # no poll for this long: the page is gone —
 READ_WAIT_MAX = 20.0               # the longest a long-poll read may hold
 KILL_GRACE = 1.5                   # SIGHUP → SIGKILL
 PROGRAMS = ("claude", "shell")
-NOT_ON_PLATFORM = ("the embedded terminal is not available on Windows yet (it needs ConPTY, which "
-                   "mokata does not take a dependency for) — run `claude` in your own terminal; "
-                   "this window follows it the same way")
+NO_WINPTY = ("the embedded terminal on Windows needs the optional `pywinpty` package (ConPTY), "
+             "which is not installed — `pip install \"mokata[ide]\"` adds it, or run `claude` in "
+             "your own terminal; this window follows it the same way")
 _SID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$")
 
 # The child side: become a session leader, take the pty (fd 0) as the controlling terminal, exec
@@ -70,10 +72,23 @@ class TerminalRefused(MokataError, ValueError):
     unsupported platform) — answered 4xx with the reason, nothing spawned."""
 
 
+def _windows() -> bool:
+    return os.name == "nt"
+
+
+def _winpty() -> Any:
+    """The `winpty` module (pywinpty), or None. Imported only when a terminal is asked about."""
+    try:
+        import winpty  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    return winpty if hasattr(winpty, "PtyProcess") else None
+
+
 def available() -> Tuple[bool, str]:
     """(usable here, why not). The reason is shown by the page as the terminal's own state."""
-    if os.name == "nt":
-        return False, NOT_ON_PLATFORM
+    if _windows():
+        return (True, "") if _winpty() is not None else (False, NO_WINPTY)
     try:
         import fcntl  # noqa: F401
         import termios  # noqa: F401
@@ -85,6 +100,8 @@ def available() -> Tuple[bool, str]:
 
 
 def _shell() -> List[str]:
+    if _windows():
+        return [os.environ.get("COMSPEC") or "cmd.exe"]
     sh = os.environ.get("SHELL") or ""
     if sh and os.path.isabs(sh) and os.access(sh, os.X_OK):
         return [sh]
@@ -97,7 +114,11 @@ def default_programs() -> Dict[str, Callable[[Optional[str]], Optional[List[str]
         exe = shutil.which("claude")
         if not exe:
             return None
-        return [exe, "--resume", resume] if resume else [exe]
+        argv = [exe, "--resume", resume] if resume else [exe]
+        if _windows() and exe.lower().endswith((".cmd", ".bat")):
+            # an npm-installed `claude.cmd` is a batch file: CreateProcess (ConPTY) runs it via cmd
+            argv = [os.environ.get("COMSPEC") or "cmd.exe", "/c", *argv]
+        return argv
 
     def shell(_resume: Optional[str]) -> Optional[List[str]]:
         return _shell()
@@ -138,7 +159,8 @@ class Terminal:
         self.started = time.time()
         self.last_poll = self.started
         self.exit_code: Optional[int] = None
-        self._buf = bytearray()
+        # L4 — a billing-credential notice (names only) is the ring's first line, before any output.
+        self._buf = bytearray(terminal_preface(program))
         self._base = 0                     # absolute offset of _buf[0]
         self._cond = threading.Condition()
         self._closed = False
@@ -201,6 +223,11 @@ class Terminal:
             return False
         if not data:
             return False
+        self._push(data)
+        return True
+
+    def _push(self, data: bytes) -> None:
+        """Append output to the bounded ring and wake readers (shared by both backends)."""
         with self._cond:
             self._buf.extend(data)
             over = len(self._buf) - MAX_BUFFER
@@ -208,7 +235,6 @@ class Terminal:
                 del self._buf[:over]
                 self._base += over
             self._cond.notify_all()
-        return True
 
     def read(self, after: int, wait: float) -> Dict[str, Any]:
         """Output after absolute offset `after`, waiting up to `wait` s for some. `truncated`: the
@@ -289,6 +315,98 @@ class Terminal:
             self.exit_code = self.proc.poll()
 
 
+class WinTerminal(Terminal):
+    """Windows: one ConPTY (pywinpty's `PtyProcess`) + one reader thread + the SAME bounded ring and
+    the same read/write/resize/close interface as the POSIX `Terminal`. pywinpty speaks `str`; the
+    ring and the page speak UTF-8 bytes, so output is encoded and input decoded incrementally (a
+    character split across two posts is never mangled). Closing the pseudo-console ends every
+    process attached to it — the program and anything it started — so no orphan outlives its window."""
+
+    def __init__(self, tid: str, program: str, argv: List[str], cwd: str, cols: int, rows: int):
+        import codecs
+        winpty = _winpty()
+        if winpty is None:
+            raise TerminalRefused(NO_WINPTY)
+        self.id = tid
+        self.program = program
+        self.cols, self.rows = cols, rows
+        self.started = time.time()
+        self.last_poll = self.started
+        self.exit_code: Optional[int] = None
+        self._buf = bytearray(terminal_preface(program))     # L4 — see Terminal.__init__
+        self._base = 0
+        self._cond = threading.Condition()
+        self._closed = False
+        self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self.pty = winpty.PtyProcess.spawn(list(argv), cwd=cwd, env=child_env(),
+                                           dimensions=(rows, cols))
+        self._reader = threading.Thread(target=self._read_loop, name=f"mokata-term-{tid}",
+                                        daemon=True)
+        self._reader.start()
+
+    def _read_loop(self) -> None:
+        while not self._closed:
+            try:
+                text = self.pty.read(65536)
+            except (EOFError, OSError, ValueError):
+                break
+            if text:
+                self._push(text.encode("utf-8", "replace") if isinstance(text, str) else bytes(text))
+            elif not self.pty.isalive():
+                break
+        code = getattr(self.pty, "exitstatus", None)
+        with self._cond:
+            self.exit_code = code if isinstance(code, int) else -1
+            self._cond.notify_all()
+
+    def write(self, data: bytes) -> int:
+        if not self.alive:
+            raise TerminalRefused("the terminal has ended")
+        self.last_poll = time.time()
+        chunk = data[:MAX_INPUT]
+        try:
+            self.pty.write(self._decoder.decode(chunk))
+        except (OSError, EOFError) as exc:
+            raise TerminalRefused(f"the terminal is not accepting input ({exc})") from exc
+        return len(chunk)
+
+    def resize(self, cols: int, rows: int) -> None:
+        self.cols, self.rows = cols, rows
+        if self.alive:
+            try:
+                self.pty.setwinsize(rows, cols)
+            except (OSError, EOFError):
+                pass
+
+    def close(self) -> None:
+        if not self._closed:
+            try:
+                if self.pty.isalive():
+                    self.pty.terminate(force=True)
+            except (OSError, EOFError):
+                pass
+        with self._cond:
+            self._closed = True
+            self._cond.notify_all()
+        try:
+            self.pty.close(force=True)
+        except TypeError:
+            self.pty.close()
+        except (OSError, EOFError):
+            pass
+        self._reader.join(timeout=2.0)
+        if self.exit_code is None:
+            code = getattr(self.pty, "exitstatus", None)
+            self.exit_code = code if isinstance(code, int) else -1
+
+
+def _make_terminal(tid: str, program: str, argv: List[str], cwd: str, cols: int,
+                   rows: int) -> Terminal:
+    """The platform's backend behind the one interface."""
+    cls = WinTerminal if _windows() else Terminal
+    return cls(tid, program, argv, cwd, cols, rows)
+
+
 class TerminalHost:
     """Every terminal of one IDE server. Thread-safe; one reaper thread while any terminal exists."""
 
@@ -335,8 +453,8 @@ class TerminalHost:
                 raise TerminalRefused(f"at most {MAX_TERMINALS} terminals are open at once — "
                                       "close one first")
             tid = secrets.token_urlsafe(9)
-            term = Terminal(tid, program, argv, self.root, _clamp(cols, 10, 500, 100),
-                            _clamp(rows, 4, 300, 30))
+            term = _make_terminal(tid, program, argv, self.root, _clamp(cols, 10, 500, 100),
+                                  _clamp(rows, 4, 300, 30))
             self._terms[tid] = term
             if self._reaper is None or not self._reaper.is_alive():
                 self._reaper = threading.Thread(target=self._reap_loop, name="mokata-term-reaper",
@@ -386,5 +504,5 @@ class TerminalHost:
                     return
 
 
-__all__ = ["TerminalHost", "Terminal", "TerminalRefused", "available", "default_programs",
-           "child_env", "MAX_TERMINALS", "MAX_BUFFER", "IDLE_SECS", "PROGRAMS", "NOT_ON_PLATFORM"]
+__all__ = ["TerminalHost", "Terminal", "WinTerminal", "TerminalRefused", "available", "default_programs",
+           "child_env", "MAX_TERMINALS", "MAX_BUFFER", "IDLE_SECS", "PROGRAMS", "NO_WINPTY"]

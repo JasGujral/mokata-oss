@@ -10,7 +10,23 @@
 #   - A5 unified config + constitution surface     -> config.py
 #   - A7 `mokata init` onboarding                  -> init.py, profiles.py, cli.py
 
-__version__ = "0.0.25"
+__version__ = "0.0.26"
+
+# PY-FLOOR-3.12 (0.0.26 L12). The ONE interpreter floor, equal to pyproject's `requires-python`,
+# the launchers' ladders (hooks/mokata-plugin-env.sh `_mk_py_ok`, mokata-hook-launch.cmd, launch.sh)
+# and the docs — `tests/test_l12_python_floor.py` reds when they part. pip refuses to INSTALL mokata
+# on an older Python; this line is for every route that RUNS the source without installing it (the
+# plugin's checkout on PYTHONPATH, a clone): one clear sentence instead of a SyntaxError or an
+# ImportError from deep inside. Written in syntax every Python 3 parses.
+PYTHON_FLOOR = (3, 12)
+import sys as _sys  # noqa: E402
+
+if _sys.version_info[:2] < PYTHON_FLOOR:
+    raise SystemExit(
+        "mokata needs Python %d.%d or newer; this is Python %d.%d (%s). Install Python %d.%d+ "
+        "(python.org, your package manager, or `uv python install %d.%d`) and run mokata with it."
+        % (PYTHON_FLOOR + tuple(_sys.version_info[:2]) + (_sys.executable,) + PYTHON_FLOOR
+           + PYTHON_FLOOR))
 
 # The directory, relative to a repo root, that holds mokata's committed config.
 MOKATA_DIR = ".mokata"

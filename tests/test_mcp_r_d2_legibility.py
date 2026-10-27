@@ -26,6 +26,8 @@ import unittest
 from unittest import mock
 
 import _support  # noqa: F401
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 from _support import mcp_commit
 
 from mokata import awaiting as A                                   # noqa: E402
@@ -142,7 +144,7 @@ class TestAmendAwaitingBlock(unittest.TestCase):
         commands — the exact three things Jas needed and could not see."""
         with _Repo() as repo:
             _setup_run(repo)
-            out = TW.spec_amend(**_amend_args(repo))
+            out = call_planned(TW.spec_amend, **_amend_args(repo))
             self.assertEqual(out["status"], "proposed")
             self.assertFalse(out["committed"])
 
@@ -175,7 +177,7 @@ class TestAmendAwaitingBlock(unittest.TestCase):
         has NO proposal to approve, so it must name `--abort` as the operative way out."""
         with _Repo() as repo:
             _setup_run(repo)
-            out = TW.spec_amend(**_amend_args(repo, mapped=False))
+            out = call_planned(TW.spec_amend, **_amend_args(repo, mapped=False))
             self.assertEqual(out["status"], "blocked")
             self.assertFalse(out["committed"])
 
@@ -228,7 +230,7 @@ class TestAmendAwaitingBlock(unittest.TestCase):
         warning. Now the regression rides `awaiting_blocks`, so both survive."""
         with _Repo() as repo:
             _setup_run(repo)
-            out = TW.spec_amend(**dict(_amend_args(repo), approve=True))
+            out = call_planned(TW.spec_amend, **dict(_amend_args(repo), approve=True))
             self.assertIn("no longer commit", out["note"],
                           "the approve/confirm demotion warning must survive")
             self.assertIn("REGRESSED", out["awaiting_blocks"])
@@ -256,7 +258,7 @@ class TestDescriptionContract(unittest.TestCase):
                 self.assertRegex(desc, r"HUMAN DECLINED|DECLINED this call")
                 self.assertRegex(desc, r"NOT a stuck server")
                 # (c) a real server error
-                self.assertRegex(desc, r"timed_out")
+                self.assertRegex(desc, r'status "running"')
                 self.assertRegex(desc, r'status "error"')
                 # the CLI fallback, in the decline case where it is the recovery
                 self.assertIn(A.LIST_CMD, desc)
@@ -313,7 +315,7 @@ class TestDoctorPending(unittest.TestCase):
         answer to 'I came back and everything is blocked and I don't know why'."""
         with _Repo() as repo:
             _setup_run(repo)
-            out = TW.spec_amend(**_amend_args(repo, secrets=True))
+            out = call_planned(TW.spec_amend, **_amend_args(repo, secrets=True))
             pid = out["proposal_id"]
 
             lines = A.pending_lines(repo.path, quiet_when_ok=False)
@@ -358,7 +360,7 @@ class TestDoctorPending(unittest.TestCase):
         with _Repo() as repo:
             _setup_run(repo)
             before_code, before_out = _doctor(repo.path)
-            TW.spec_amend(**_amend_args(repo))
+            call_planned(TW.spec_amend, **_amend_args(repo))
             after_code, after_out = _doctor(repo.path)
             self.assertEqual(before_code, after_code,
                              "a pending proposal must NOT change doctor's exit code")
@@ -373,7 +375,7 @@ class TestDoctorPending(unittest.TestCase):
     def test_mcp_r_d2_doctor_renders_the_pending_and_liveness_sections(self):
         with _Repo() as repo:
             _setup_run(repo)
-            TW.spec_amend(**_amend_args(repo))
+            call_planned(TW.spec_amend, **_amend_args(repo))
             _code, out = _doctor(repo.path)
             self.assertIn("mokata pending:", out)
             self.assertIn("mokata liveness:", out)
@@ -386,7 +388,7 @@ class TestDoctorPending(unittest.TestCase):
         text = "\n".join(A.liveness_lines())
         self.assertIn(f"{MCP_SURFACE_TIMEOUT_SECONDS:g}s", text)
         self.assertIn(f"{BASELINE_MCP_TIMEOUT_SECONDS:g}s", text)
-        self.assertIn("timed_out", text)
+        self.assertIn("`running`", text)
         # no probe, no subprocess, no measurement — it takes no root and reads no repo
         import inspect
         self.assertNotIn("subprocess", inspect.getsource(A.liveness_lines))
@@ -482,7 +484,7 @@ class TestNotifyOnWait(unittest.TestCase):
         prompt — so no harness notification fires — and mokata's OWN channels must carry it."""
         with _Repo() as repo:
             _setup_run(repo)
-            out = TW.spec_amend(**_amend_args(repo))
+            out = call_planned(TW.spec_amend, **_amend_args(repo))
             channels = A.signal_wait(repo.path, tool="spec_amend",
                                      proposal_id=out["proposal_id"])
             # the tool result is the unconditional channel — it is why a wait is legible even on a
@@ -554,7 +556,7 @@ class TestSecretSafety(unittest.TestCase):
         statusline, never in a tool result a transcript may retain."""
         with _Repo() as repo:
             _setup_run(repo)
-            out = TW.spec_amend(**_amend_args(repo, secrets=True))
+            out = call_planned(TW.spec_amend, **_amend_args(repo, secrets=True))
             pid = out["proposal_id"]
 
             # the planted secrets ARE really in the stored proposal — otherwise this proves nothing
@@ -617,7 +619,7 @@ class TestGatesUnchanged(unittest.TestCase):
             self.assertTrue(G.check_write(repo.path, "src/api/items.py",
                                           content="def get_item(i): pass").allowed)
 
-            out = TW.spec_amend(**_amend_args(repo))
+            out = call_planned(TW.spec_amend, **_amend_args(repo))
             self.assertFalse(out["committed"], "a propose must never commit")
 
             # mid-amend, development writes STAY blocked — the regression is real, not cosmetic
@@ -627,7 +629,7 @@ class TestGatesUnchanged(unittest.TestCase):
 
             # and only a HUMAN-minted approval commits it
             approval.approve(repo.path, out["proposal_id"], actor="jas", ledger=repo.ledger())
-            done = TW.spec_amend(**dict(_amend_args(repo), proposal_id=out["proposal_id"]))
+            done = call_planned(TW.spec_amend, **dict(_amend_args(repo), proposal_id=out["proposal_id"]))
             self.assertTrue(done["committed"], done)
             self.assertEqual(done["version"], 2)
 
@@ -636,9 +638,9 @@ class TestGatesUnchanged(unittest.TestCase):
         awaiting keys — byte-identical to pre-D2."""
         with _Repo() as repo:
             _setup_run(repo)
-            out = TW.spec_amend(**_amend_args(repo))
+            out = call_planned(TW.spec_amend, **_amend_args(repo))
             approval.approve(repo.path, out["proposal_id"], actor="jas", ledger=repo.ledger())
-            done = TW.spec_amend(**dict(_amend_args(repo), proposal_id=out["proposal_id"]))
+            done = call_planned(TW.spec_amend, **dict(_amend_args(repo), proposal_id=out["proposal_id"]))
             self.assertTrue(done["committed"])
             self.assertEqual([k for k in done if k.startswith("awaiting")], [],
                              "a committed write is not a wait")

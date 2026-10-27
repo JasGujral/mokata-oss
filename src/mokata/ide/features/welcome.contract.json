@@ -1,0 +1,310 @@
+{
+ "schemas": {
+  "Capability": {
+   "type": "object",
+   "required": [
+    "key",
+    "label",
+    "state",
+    "detail",
+    "fix",
+    "action",
+    "action_label",
+    "cost",
+    "enables",
+    "ready"
+   ],
+   "properties": {
+    "key": {
+     "enum": [
+      "lexical",
+      "graph",
+      "meaning",
+      "sessions",
+      "gates"
+     ]
+    },
+    "label": {
+     "type": "string"
+    },
+    "state": {
+     "enum": [
+      "ready",
+      "limited",
+      "not-ready",
+      "building",
+      "failed",
+      "needs-setup"
+     ]
+    },
+    "detail": {
+     "type": "string"
+    },
+    "fix": {
+     "type": "string"
+    },
+    "action": {
+     "enum": [
+      "",
+      "build-graph",
+      "build-meaning",
+      "init"
+     ]
+    },
+    "action_label": {
+     "type": "string"
+    },
+    "cost": {
+     "type": [
+      "object",
+      "null"
+     ]
+    },
+    "enables": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "required": [
+       "screen",
+       "label",
+       "now"
+      ]
+     }
+    },
+    "ready": {
+     "type": "boolean"
+    }
+   }
+  }
+ },
+ "routes": [
+  {
+   "path": "/api/welcome",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "sync_ms": "optional: how long (0..2000 ms) to wait for the answer before the 202 job handle (default 300)"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "sample",
+       "repo",
+       "initialized",
+       "capabilities",
+       "first_run"
+      ],
+      "properties": {
+       "sample": {
+        "type": "boolean"
+       },
+       "repo": {
+        "type": "object",
+        "required": [
+         "name",
+         "path",
+         "files",
+         "bytes",
+         "languages"
+        ]
+       },
+       "initialized": {
+        "type": "boolean"
+       },
+       "capabilities": {
+        "type": "array",
+        "items": {
+         "$ref": "#/schemas/Capability"
+        }
+       },
+       "missing": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        }
+       },
+       "first_run": {
+        "type": "boolean"
+       }
+      }
+     }
+    },
+    "202": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/JobHandle"
+     }
+    }
+   },
+   "probes": [
+    {
+     "status": 200
+    },
+    {
+     "query": {
+      "sync_ms": "0",
+      "probe": "202"
+     },
+     "status": 202
+    }
+   ]
+  },
+  {
+   "path": "/api/welcome/consent",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "action": "build-graph | build-meaning | init"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "action",
+       "available",
+       "token",
+       "sample"
+      ],
+      "properties": {
+       "action": {
+        "type": "string"
+       },
+       "available": {
+        "type": "boolean"
+       },
+       "note": {
+        "type": "string"
+       },
+       "title": {
+        "type": "string"
+       },
+       "text": {
+        "type": "string"
+       },
+       "writes": {
+        "type": "array"
+       },
+       "cost": {
+        "type": "object"
+       },
+       "token": {
+        "type": "string"
+       },
+       "kind": {
+        "type": "string"
+       },
+       "sample": {
+        "type": "boolean"
+       }
+      }
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "action": "init"
+     },
+     "status": 200
+    },
+    {
+     "query": {
+      "action": "nope"
+     },
+     "status": 400
+    },
+    {
+     "query": {
+      "action": "init"
+     },
+     "status": 400,
+     "demo": true
+    }
+   ]
+  },
+  {
+   "path": "/api/welcome/run",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "action": "build-graph | build-meaning | init",
+     "confirm": "the token of the consent the human was shown (GET /api/welcome/consent)"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "properties": {
+       "id": {
+        "type": "string"
+       },
+       "job": {
+        "$ref": "#/schemas/JobSnapshot"
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "note": {
+        "type": "string"
+       }
+      }
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    },
+    "409": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {
+      "action": "init",
+      "confirm": "forged"
+     },
+     "status": 409
+    },
+    {
+     "body": {
+      "action": "nope",
+      "confirm": ""
+     },
+     "status": 400
+    },
+    {
+     "body": {
+      "action": "init",
+      "confirm": "x"
+     },
+     "status": 200,
+     "demo": true
+    }
+   ]
+  }
+ ]
+}

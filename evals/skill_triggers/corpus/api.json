@@ -1,0 +1,35 @@
+{
+ "skill": "api",
+ "triggers": [
+  "route, handler, endpoint, or public interface",
+  "request/response shape",
+  "a status code"
+ ],
+ "positive": [
+  "Add a new GET /orders/{id} endpoint to the orders API and define its request/response shape",
+  "Change the response shape of the /users handler so it includes the email field",
+  "Our login route should return a 401 status code instead of 400 on bad credentials",
+  "Rename a parameter in the public interface of our payments client and check who calls it",
+  "Design the request/response contract for a new webhook endpoint before we write any code"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Refactor the internals of the cache module; nothing outside the file changes"
+  },
+  {
+   "prompt": "Tweak the colour contrast and focus outline of the settings form",
+   "expect": "frontend-a11y"
+  },
+  {
+   "prompt": "Add a database index so the nightly report query stops timing out",
+   "expect": "performance"
+  },
+  {
+   "prompt": "Delete the legacy v1 module and migrate every caller off the old shape",
+   "expect": "deprecation"
+  },
+  {
+   "prompt": "Rename a local variable inside one private function"
+  }
+ ]
+}

@@ -165,6 +165,9 @@ draws no map is never a block.
   a gate that blocked the failing test would block the fix.
 - **Gates fire only inside an active mokata run** (an approach approved and/or a spec emitted).
   Hand-editing a repo outside a run is never policed: guardrails on the pipeline, not house arrest.
+- **Another session's run never polices you.** A window that never started a pipeline is not
+  gated by a run another session's registration owns; it is told so once. Runs started from the
+  terminal (owned by no session) and `MOKATA_SESSION_ID` pins still apply.
 - **Ambiguity fails OPEN.** If two runs have state in one repo and none is pinned (two Claude Code
   windows on one tree), mokata will not guess which run your edits belong to — every run-state gate
   turns **off** for that window, and says so once. Pin one with `MOKATA_SESSION_ID`, or give the

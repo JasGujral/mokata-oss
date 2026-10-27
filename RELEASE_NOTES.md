@@ -1,71 +1,60 @@
-mokata **0.0.25**. Set up or upgrade with one instruction, in your repo:
-`uv tool install --upgrade mokata` (or `pipx install --force mokata`), then
+mokata **0.0.26**. Set up or upgrade with one instruction, in your repo:
+`uv tool install --upgrade "mokata[full]"` (or `pipx install --force "mokata[full]"`), then
 `mokata setup claude --mode full`.
-Requires **Python ≥ 3.10**, and for the Claude Code integration **Claude Code ≥ 2.1.0**. The plugin
+Requires **Python ≥ 3.12**, and for the Claude Code integration **Claude Code ≥ 2.1.198**. The plugin
 route needs **[`uv`](https://docs.astral.sh/uv/) on your PATH**.
 
 ---
 
-## 0.0.25 — "Install in one step, domain stacks, and the CLI↔IDE bridge."
+## 0.0.26 — "Stable sessions, a worktree per session, and an IDE at multi-million-line scale."
 
-**One instruction installs your mode.** `mokata setup claude --mode seatbelt|memory|full` asks one
-question for the mode's dependencies, installs them with the installer that owns your mokata (uv
-tool, pipx, pip or uv pip), and ends with a table: what is installed, what failed, and the one
-command that fixes it. `--with-deps` installs without asking; `--yes` alone installs nothing. Full
-mode tells you up front that the code graph's first index takes minutes and up to ~1 GB on a
-~1M-line repository.
+**⚠ Before you upgrade.** Python 3.12+ and Claude Code 2.1.198+ are now required. Specs approved by
+0.0.25 need re-approving with a task plan — `mokata doctor` names each run and the command
+(`mokata spec migrate <run>`). Run `mokata setup claude` once after upgrading.
 
-**`mokata upgrade` uses your installer too** — `uv tool upgrade mokata` on the documented route,
-where the old pip-only upgrade failed.
+**🔒 Security fix.** 19 slash-command templates passed your or the repository's text through `eval`,
+a shell-injection path through `$ARGUMENTS`. They now pass it as single-quoted arguments, and CI runs
+six security lints on every pull request. The posture is published in `docs/security.md`.
 
-**The review window grew up.** `mokata ide` now:
-- follows a live session (`mokata setup claude --ide-bridge` wires observe-only `http` hooks) and
-  joins a CLI session; `mokata query` prints links that open the IDE at the line;
-- shows a run's plan and spec — runs with a spec first — including a spec still waiting for
-  `mokata approve <id>`, and your saved plan files;
-- explains its call graph: what a symbol is, what each view answers, a picker as you type;
-- has a health panel: what is missing, degraded or out of sync, buttons to force-rebuild the code
-  graph, the AST index and the search index, and **Update mokata** on a confirmed click (checking for
-  an update is a button — the only time the IDE goes online);
-- calculates impact for the rest of a file's changed functions when you ask;
-- stays responsive on a million-line repository and runs nothing while idle.
+**The MCP server is stable.** Tool calls no longer block each other, a call still working answers
+`running` and can be re-joined, and a retried spec amend is answered from the record instead of being
+applied twice. Spec registration and amend stay on your run after a resume, a long idle or a dropped
+connection (`/mcp` reconnect) — and never take another window's session.
 
-The embedded terminal is **opt-in**: `mokata ide --terminal`, only from your own terminal, never
-inside a Claude Code session.
+**Every session in its own worktree.** Each Claude Code session edits its own git worktree; runs,
+approvals and the IDE share one `.mokata/` store, and code answers follow the worktree you are in. A
+worktree that is behind its base cannot be merged: the IDE offers an approve-gated **Sync** first,
+and `/ship` always rebases and re-runs the suite before you merge or open a pull request.
 
-**Frontend and backend work routes to its own skills and gates.** React (`frontend-react`,
-`frontend-perf`, `frontend-security`) and NestJS (`backend-nestjs`) skills; `react-web` and
-`nestjs-api` stacks; UI acceptance criteria carry a state matrix (default, loading, empty, error,
-disabled); six backed domain gates run with `mokata gate check <gate>`.
+**Plans you can hold the agent to.** A spec carries a task plan, approved and sealed with a hash;
+writes outside the active task are blocked. A session that claims "done" without the evidence is sent
+back with what is missing; the third failed fix at one failure, or a sixth review round, stops for a
+new approach. Memory writes must cite things that exist.
 
-**Fixed on Windows:** cmd windows flashing while the IDE ran or from pyenv-win `.bat` shims. Run
-`mokata setup claude` once after upgrading so the shims are unwired; `mokata doctor` says if any remain.
+**The IDE works on multi-million-line repositories.** One navigation; every session in one place;
+heavy work as visible jobs with progress and Cancel; go-to-definition, outline, search (every hit,
+paged) and meaning search from the code graph at kubernetes scale; graph views that draw in about a
+second and never more than 150 nodes. Approve proposed writes in the window with a one-time code from
+your terminal. Closing the IDE with work running asks first. A repo nobody set up opens on Welcome
+and writes nothing until you confirm.
 
-**Fixed with code-review-graph 2.3.9:** mokata's handshake was refused, so every query silently fell
-back to the built-in reader while the status bar said otherwise, and answers cut at 100 were shown
-as complete.
-
-**Faster hooks:** gate hooks p95 68–128 ms (was 117–320), observe hooks outside a repo 25–38 ms
-(was 80–100), on Linux. `mokata setup claude --http-gates` (off by default) runs the gates as one
-`http` hook to the IDE server — every gated call is refused while the IDE is not running.
+**Full mode, built in one go.** `mokata setup claude --mode full` ends with code-review-graph's
+index, the meaning-search index and ripgrep word search ready. The per-prompt hook no longer takes
+5–6 s with code-review-graph (~75 ms p95), and code-review-graph's blast radius is mapped correctly.
 
 ## Re-scheduled
 
-- **The CI ceiling re-derived from the public mirror** (`INTERNAL-ONLY-TESTS-RUN-ON-NO-RUNNER`),
-  open since the v0.0.21 notes, is **built in 0.0.25** (`scripts/ci_ceiling.py`). Contributor-facing.
-- **code-review-graph's blast radius** — the correct mapping of its traversal result is re-scheduled
-  to **0.0.26** (tracked as `CRG-BLAST-EMPTY`); until then the built-in reader answers it.
-- **The declared Python floor** now has a weekly Python 3.10 workflow (`python-floor.yml`); it has not
-  run on a release runner yet.
+- **Read-only code intelligence in the IDE** — references, hover and call hierarchy from a language
+  server, behind workspace trust — is scheduled for **0.0.27** (tracked as `ID-LSP-READONLY-EARLIER`).
+  Until then go-to-definition and callers come from the code graph.
 
-### Known limitations
-- **On Windows, `--ide-bridge` costs ~1 s per hook while the IDE is closed.** Windows retries a
-  refused localhost connection; the hook still fails open. The bridge is off by default.
-
-- **code-review-graph's blast radius is answered by mokata's AST reader**: CRG's traversal returned every blast radius empty, so impact under CRG is Python-only until a correct mapping exists.
-- **A blast radius is cut at 20,000 references or 2 s**; on a function called from tens of thousands of places the IDE says "not determined — cut at …".
-- **Observe hooks inside a mokata repo take 54–125 ms** (p95, Linux) against a 50 ms budget; macOS and Windows timings are not measured.
-- **Follow mode is unproven against a real `claude` session**; "edits appear within 1 s" has not been measured end to end.
-- **The embedded terminal is POSIX-only**; on Windows the IDE says it is not available.
-- **CI runs Python 3.12 only.** The weekly Python 3.10 floor workflow has not run on a release runner yet.
-- **The clean-machine install workflow and the Windows no-console-window test have not run on a release runner yet.**
+## Known limitations
+- **Not yet run on the macOS and Windows CI legs.** Tested on Linux and by hand on macOS; Windows
+  setup, the Windows IDE terminal and the `.cmd` hook launcher are not yet verified on a real desktop.
+- **Hook timings are measured on Linux only.**
+- **Follow mode is unproven against a real `claude` session** end to end.
+- **Runs created before 0.0.26 keep the previous re-entry behaviour** for a resumed or idle window
+  until a new run is registered.
+- **A restarted MCP server is recognised only when Claude sits within two launcher processes of its
+  hooks**; a deeper chain (e.g. the Windows `py.exe` stub) refuses as ambiguous, as in 0.0.25.
+- **The clean-machine install workflow has not run on a release runner yet.**

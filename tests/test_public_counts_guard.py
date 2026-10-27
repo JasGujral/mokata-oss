@@ -144,14 +144,17 @@ class DerivationTest(unittest.TestCase):
 
     def test_the_hook_lane_and_the_backed_set_are_two_overlapping_sets(self):
         """`spec-scope` is run-state and NOT backed; `self-protect` is backed and runs ahead of
-        all four. So the copy may say "the hook stops 5 things", never "5 of the 9"."""
+        all four. So the copy may say "the hook stops 6 things", never "6 of the 9". (0.0.26 R4:
+        the `fix-breaker` loop gate is enforced by the same hook on the same native writes.)"""
         facts = pc.derived_facts(ROOT)
         backed = facts["backed_gates"].members
         run_state = facts["run_state_gates"].members
         self.assertIn("spec-scope", run_state)
         self.assertNotIn("spec-scope", backed)
         self.assertFalse(run_state <= backed, "the hook lane is a subset after all — reword §4")
-        self.assertEqual(facts["hook_enforced"].members, run_state | {"self-protect"})
+        from mokata import gate_hook
+        self.assertEqual(facts["hook_enforced"].members,
+                         run_state | {"self-protect"} | set(gate_hook.NATIVE_WRITE_LOOP_GATES))
 
 
 @unittest.skipUnless(os.path.exists(SYNC_SH),
@@ -252,7 +255,7 @@ class TheTreeTest(unittest.TestCase):
 #:
 #: Module-level rather than a class attribute because the two directions no longer share a class:
 #: direction 1 is synthetic and runs on the mirror, direction 2 reads the corpus and cannot.
-WORDS_IN_USE = {"one": 1, "four": 4, "five": 5, "ten": 10}
+WORDS_IN_USE = {"one": 1, "four": 4, "five": 5, "six": 6, "ten": 10}
 
 
 class PlantedOffenderTest(unittest.TestCase):
@@ -297,7 +300,7 @@ class PlantedOffenderTest(unittest.TestCase):
         findings = pc.grade("overrides/home.html", offender, self.facts)
         self.assertEqual(2, len(findings), findings)
         self.assertIn("states backed_gates = 10, the code derives %d" % self.facts["backed_gates"].value, findings[0])
-        self.assertIn("states hook_enforced = 4, the code derives 5", findings[1])
+        self.assertIn("states hook_enforced = 4, the code derives %d" % self.facts["hook_enforced"].value, findings[1])
 
     def test_the_count_gate_reads_a_claim_THAT_WRAPS_across_a_line(self):
         """Prose wraps, and this stage's own repaired paragraph wraps mid-claim: `there are
@@ -343,7 +346,7 @@ class PlantedOffenderTest(unittest.TestCase):
     def test_the_count_gate_reads_numbers_written_as_words(self):
         findings = pc.grade("x.md", "Four of those gates are enforced by a hook.\n", self.facts)
         self.assertEqual(1, len(findings), findings)
-        self.assertIn("states hook_enforced = 4, the code derives 5", findings[0])
+        self.assertIn("states hook_enforced = 4, the code derives %d" % self.facts["hook_enforced"].value, findings[0])
 
     def test_the_count_gate_stays_silent_on_correct_text(self):
         """The negative control: the landing summary line, with every number taken FROM the
@@ -381,6 +384,7 @@ class PlantedOffenderTest(unittest.TestCase):
             "one": ("**1 runtime dependency**", "runtime_dependencies"),
             "four": ("**4 run-state gates**", "run_state_gates"),
             "five": ("**5 of those gates are enforced by a hook**", "hook_enforced"),
+            "six": ("**6 of them frontend/backend domain gates**", "domain_gates"),
             "ten": ("**10 domain skills**", "domain_skills"),
         }
         self.assertEqual(set(probes), set(WORDS_IN_USE), "add a probe for every pinned word")

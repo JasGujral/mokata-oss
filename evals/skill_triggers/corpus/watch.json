@@ -1,0 +1,34 @@
+{
+ "skill": "watch",
+ "triggers": [
+  "live, clickable dashboard of the run"
+ ],
+ "positive": [
+  "Open the live, clickable dashboard of the run",
+  "Watch the run live with its parallel lanes",
+  "Show me the live gate feed dashboard",
+  "Open the run dashboard",
+  "I want to watch the pipeline live"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Show the 7-phase tracker as text",
+   "expect": "progress"
+  },
+  {
+   "prompt": "Open the review window with the live diff",
+   "expect": "review-window"
+  },
+  {
+   "prompt": "Recommend a smart watch"
+  },
+  {
+   "prompt": "Resume the run",
+   "expect": "resume"
+  },
+  {
+   "prompt": "Show governance state",
+   "expect": "govern"
+  }
+ ]
+}

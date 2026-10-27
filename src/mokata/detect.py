@@ -31,6 +31,35 @@ from typing import Dict, Optional
 from .repo_walk import prune_source_dirs
 
 
+#: 0.0.26 O15 `CRG-RESOLUTION-HERMETIC` — commands that are a PYTHON PACKAGE mokata is coupled to
+#: by version (an extra of mokata itself), so the only copy mokata may run is the one installed
+#: in ITS OWN environment. Measured on Jas's Mac at checkpoint 2: a `uv tool` mokata[full] put a
+#: code-review-graph on PATH, a fresh core venv with NO code-review-graph found that one through
+#: `shutil.which`, used it unpinned and unchecked, and the suite printed DEGRADED and stalled.
+#: A copy found only on PATH, outside this environment, is REPORTED (doctor / setup), never run.
+ENV_BOUND_COMMANDS = ("code-review-graph",)
+
+
+def env_scripts_dirs() -> tuple:
+    """The scripts directories of the environment running mokata — where its own extras' commands
+    land (`<prefix>/bin`, `<prefix>\\Scripts`), whether or not they are on PATH."""
+    dirs = []
+    for d in (sysconfig.get_path("scripts"), os.path.dirname(sys.executable),
+              os.path.join(sys.prefix, "Scripts" if os.name == "nt" else "bin")):
+        if d and d not in dirs:
+            dirs.append(d)
+    return tuple(dirs)
+
+
+def find_env_command(name: str) -> Optional[str]:
+    """`name` in mokata's OWN environment's scripts dirs only — never PATH."""
+    for d in env_scripts_dirs():
+        found = shutil.which(name, path=d)
+        if found:
+            return found
+    return None
+
+
 def find_command(name: str) -> Optional[str]:
     """`name` on PATH, else in the scripts dir of the interpreter running mokata (0.0.25 I-02).
 
@@ -38,7 +67,13 @@ def find_command(name: str) -> Optional[str]:
     `pipx inject mokata X`, `pip install X` beside a Homebrew mokata — puts its executable in that
     env's scripts dir, which is often not on PATH. Without this second look the extra is installed,
     importable, and still reported absent: measured at 0.0.25 I-02 (`doctor` said "floor 'ast'"
-    with code-review-graph installed in the uv tool env)."""
+    with code-review-graph installed in the uv tool env).
+
+    0.0.26 O15: an `ENV_BOUND_COMMANDS` name resolves through `crg_resolve.resolve_crg` instead —
+    mokata's own environment only, version-checked; a refused or outside copy answers None."""
+    if name in ENV_BOUND_COMMANDS:
+        from .crg_resolve import resolve_crg
+        return resolve_crg().path
     hit = shutil.which(name)
     if hit:
         return hit

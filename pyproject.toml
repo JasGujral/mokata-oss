@@ -4,16 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mokata"
-version = "0.0.25"
+version = "0.0.26"
 description = "The memory + seatbelt for your AI coding agent. Spec-driven TDD for Claude Code — knowledge-aware, human-gated, local-first."
 readme = "README.md"
-requires-python = ">=3.10"
+# PY-FLOOR-3.12 (0.0.26 L12, Jas 2026-10-22: "we can force mokata to support 3.12 and onwards").
+# Every CI leg runs 3.12; 3.10/3.11 had become a promise only a weekly job kept, and the code carried
+# shims for them (tomllib, `fromisoformat('…Z')`, sqlite error codes, regex possessives). The
+# launchers, `mokata doctor` and the docs say 3.12+ too — `tests/test_l12_python_floor.py` reds
+# when any of them parts from this line.
+requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
 authors = [{ name = "MoStack" }]
 keywords = ["claude-code", "tdd", "spec-driven", "framework", "ai-assisted-coding"]
 classifiers = [
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
@@ -21,8 +24,8 @@ classifiers = [
 # The MCP SDK is the ONE unconditional runtime dependency (Stage 3b.1). mokata is plugin-first
 # (Stage 21), so its primary surface — the `mokata-mcp` server that exposes mokata as native
 # Claude Code tools — must work from a plain `pip install mokata`, not only from the `[mcp]`
-# extra. With the Python >= 3.10 floor (TM.S0) the SDK installs everywhere mokata does, so the
-# old `python_version >= "3.10"` env marker is gone. The SDK stays LAZILY imported
+# extra. With the Python floor (3.12 since 0.0.26 L12) the SDK installs everywhere mokata does, so
+# no `python_version` env marker is needed. The SDK stays LAZILY imported
 # (mcp_server.build_server), so the core and CLI still import and run in a stripped/broken env
 # with it absent — where `mokata-mcp` then fails LOUD with a fix. Every OTHER external tool
 # mokata orchestrates remains optional with a built-in fallback (see capability router /
@@ -43,7 +46,19 @@ schema = ["jsonschema>=4.0"]
 # `mokata ide` (0.0.22 E2, ADR doc 85 §1b) — the read-only review window. All three already arrive
 # with the `mcp` dependency (mcp 1.2 requires these floors); they are DECLARED here so mokata never
 # leans on a transitive. Without them `mokata ide` prints this install line.
-ide = ["starlette>=0.27", "uvicorn>=0.23.1", "sse-starlette>=1.6.1"]
+# 0.0.26 O5 — `pywinpty` (MIT, ConPTY) backs the embedded terminal on Windows ONLY; elsewhere the
+# stdlib pty does. Absent on Windows, `/api/term/caps` says so and the rest of the IDE works.
+# 0.0.26 P1 — `pygments` (BSD-2, pure Python, ~600 lexers) is the IDE's server-side highlighter;
+# absent, every view is plain text and says so with this install line.
+# 0.0.26 O13 — `ripgrep` (MIT/Unlicense) is the IDE's word/regex search engine and the lexical
+# graph floor's fast path; absent, both run on the pure-Python floor and say so. PINNED to 14.1.0
+# and GATED to the machines it ships a WHEEL for (Windows x64, macOS x64/arm64, Linux x64/aarch64,
+# glibc and musl), because every other release ships a Rust SDIST that pip would try to compile —
+# one missing wheel must never break the one-line `mokata[full]` install. Measured from PyPI's
+# file list 2026-10-21: 15.x has wheels for linux-x64 (glibc 2.39+) and macOS arm64 ONLY.
+ide = ["starlette>=0.27", "uvicorn>=0.23.1", "sse-starlette>=1.6.1", "pygments>=2.15",
+       "pywinpty>=2.0; sys_platform == \"win32\"",
+       "ripgrep==14.1.0; platform_machine == \"x86_64\" or platform_machine == \"AMD64\" or platform_machine == \"aarch64\" or platform_machine == \"arm64\""]
 # `[mcp]` is a no-op ALIAS of the default MCP SDK dependency above (same spec), kept so an
 # existing `pip install "mokata[mcp]"` still resolves cleanly.
 mcp = ['mcp>=1.2,<2']
@@ -77,6 +92,27 @@ embeddings = ["model2vec>=0.3", "numpy>=1.24"]
 # tree-sitter-typescript 3.1 MB (cp39-abi3). Both MIT, both wheels, no compiler. The costing
 # said "ONE MIT abi3 wheel, 2.41 MB", which was one wheel's DOWNLOAD size.
 graph-ts = ["tree-sitter>=0.23", "tree-sitter-typescript>=0.23"]
+# 0.0.26 L1 (`FULL-INSTALLS-EVERYTHING-IN-ONE-GO`, Jas 2026-10-21: "install everything at one
+# go"). `--mode full` in ONE install line: the INSTALLER fetches every full-mode package at install
+# time, so `mokata setup claude --mode full` only detects and wires — it never rebuilds the env it
+# is running from (the Windows `mokata.exe` self-lock that left Jas's run "PARTIALLY wired").
+#   = embeddings + graph-ts + code-review-graph + ide.
+# `ide` is in because the IDE companion preview is launch scope (doc 113 Lane P) and costs nothing
+# new: its three packages already arrive with `mcp`. The lines are SPELLED OUT, not
+# `mokata[embeddings,...]`: a self-referencing extra makes `pipx inject`/`pip install` of the
+# extra's requirements re-resolve mokata itself (install_route's rule), and
+# `test_full_extra_is_the_union` pins this list to the union of the others so it cannot drift.
+# code-review-graph declares `tree-sitter>=0.23,<1`; measured 2026-10-21 in a fresh venv:
+# tree-sitter 0.26.0 + tree-sitter-typescript 0.23.2 + code-review-graph 2.3.9 import together.
+full = [
+    "model2vec>=0.3", "numpy>=1.24",
+    "tree-sitter>=0.23", "tree-sitter-typescript>=0.23",
+    "code-review-graph",
+    "starlette>=0.27", "uvicorn>=0.23.1", "sse-starlette>=1.6.1",
+    "pywinpty>=2.0; sys_platform == \"win32\"",
+    "pygments>=2.15",
+    "ripgrep==14.1.0; platform_machine == \"x86_64\" or platform_machine == \"AMD64\" or platform_machine == \"aarch64\" or platform_machine == \"arm64\"",
+]
 
 [project.scripts]
 mokata = "mokata.cli:main"
@@ -86,7 +122,9 @@ mokata-mcp = "mokata.mcp_server:main"
 # The hook entry point (Stage 53b). Claude Code launches the SessionStart briefing +
 # PreToolUse secret-guard as `mokata-hook <subcommand>` — resolved on PATH exactly like
 # mokata-mcp, with no bare `python3` / `sh` / launch.sh resolution to fail on.
-mokata-hook = "mokata.hook_cli:main"
+# 0.0.26 O3 (ruling U13) — the console script runs the stdlib-only FRONT DOOR: observe hooks are
+# spooled and drained off the harness's clock; every other subcommand goes to `mokata.hook_cli.main`.
+mokata-hook = "mokata_emit:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -109,6 +147,8 @@ exclude = ["bench", "bench.*"]
 #   hooks/hooks.json, hooks/launch.sh, hooks/*.py
 #   skills/<name>/SKILL.md
 mokata = [
+    # 0.0.26 L3 CC-COMPAT — the Claude Code surface manifest the minimum version is derived from.
+    "claude_code_compat.json",
     "stacks/*.json",
     "templates/*",
     "templates/commands/*",
@@ -124,4 +164,9 @@ mokata = [
     # 0.0.23 C3 — the vendored graph libraries (Cytoscape.js + fcose + dagre, MIT) with their
     # LICENSE files and VERSIONS.json pins. Explicit depth, like every glob above.
     "ide/static/vendor/*",
+    # 0.0.26 P0 — the IDE's HTTP contract (core + one file per feature) and the feature frontends
+    # the page loads by listing static/features/.
+    "ide/*.json",
+    "ide/features/*.json",
+    "ide/static/features/*",
 ]

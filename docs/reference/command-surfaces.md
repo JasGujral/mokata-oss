@@ -47,7 +47,7 @@ interactive phase → a `/mokata:…` **slash** command.
 | `playbook` | `/mokata:playbook` | — | — |
 | `resume` | `/mokata:resume` | — | — |
 | `skill` (author) | `/mokata:skill-author` | — | — (gated via slash) |
-| `upgrade` | `/mokata:upgrade` | — | — (gated via slash) |
+| `update` | `/mokata:update` | — | — (runs on the user's yes) |
 | `version` | `/mokata:version` | — | — |
 | `init` | `/mokata:init` | — | `init` |
 | `setup` | `/mokata:setup` | — | — (the guided first-run wizard; gated via slash) |

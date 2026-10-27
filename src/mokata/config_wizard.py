@@ -76,6 +76,9 @@ SETTINGS: Tuple[Setting, ...] = (
             "output-density compression (F4)"),
     Setting("settings.graph.required", "graph.required", "true | false", "true",
             "REFUSE a degraded (grep-floor) blast radius as decision input (GR.S3) — opt-out"),
+    Setting("settings.specs.commit", "specs.commit", "true | false", "false",
+            "also commit each APPROVED spec to tracked .mokata/specs/ so CI checks spec drift "
+            "(L7b) — opt-in"),
 )
 
 

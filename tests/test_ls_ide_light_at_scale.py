@@ -9,7 +9,8 @@ SIGTERM could not stop the server; the first ⌘P re-parsed every file (17–19 
 buffered rg's whole output; an unknown run's plan answered 500; and the status bar named the
 configured graph while every answer came from the floor. What must be true for the user, each:
 
-  * a heavy question that runs long answers "timed out — <what to do>" (503), not a 500 or silence;
+  * a heavy question that runs long answers at once with a JOB handle (202; 0.0.26 P32 replaced the
+    20 s deadline + 503), never a 500 or silence;
   * the status bar, the tree and the state answer while heavy questions are stuck;
   * a request whose browser left stops its work; identical requests in flight share one answer;
   * SIGTERM stops the server promptly even with heavy work running;
@@ -133,11 +134,12 @@ class _Slow:
         self.calls += 1
         self.started.set()
         end = time.monotonic() + self.cap
+        from mokata.knowledge.cancel import Cancelled, checkpoint
         try:
             while time.monotonic() < end:
-                nav.check_abandoned()
+                checkpoint()
                 time.sleep(0.01)
-        except nav.Abandoned:
+        except Cancelled:
             self.stopped_by_cancel.set()
             raise
         return {"sample": False, "path": "x", "symbols": [], "status": "covered"}
@@ -159,20 +161,24 @@ class HeavyQuestionsNeverStallThePage(unittest.TestCase):
         self.live = _Live(self.root)
         self.addCleanup(self.live.stop)
 
-    def test_a_slow_impact_answers_timed_out_with_what_to_do(self):
-        from mokata.ide import server
-        slow = _Slow(cap=5.0)
+    def test_a_slow_impact_answers_a_job_handle_at_once_and_cancel_stops_it(self):
+        """P32: no deadline and no 503 — past the sync window the page gets the job's handle
+        (202), and the job's Cancel really stops the work."""
+        slow = _Slow(cap=10.0)
         self.live.state.source.impact = slow
-        with mock.patch.object(server, "HEAVY_DEADLINE_SECS", 0.5):
-            t0 = time.monotonic()
-            r = self.live.get("/api/impact?path=src/app/core.py&lines=1-3")
-            took = time.monotonic() - t0
-        self.assertEqual(503, r.status_code, r.text)
+        t0 = time.monotonic()
+        r = self.live.get("/api/impact?path=src/app/core.py&lines=1-3")
+        took = time.monotonic() - t0
+        self.assertEqual(202, r.status_code, r.text)
         body = r.json()
-        self.assertTrue(body["timed_out"])
-        self.assertIn("Focus", body["note"])
-        self.assertIn("src/app/core.py", body["note"])
-        self.assertLess(took, 3.0, "the deadline, not the work, decides when the page hears")
+        self.assertIn(body["state"], ("queued", "running"))
+        self.assertIn("src/app/core.py", body["label"])
+        self.assertLess(took, 2.0, "the sync window, not the work, decides when the page hears")
+        import httpx
+        c = httpx.post(self.live.base + f"/api/jobs/{body['job']}/cancel", json={},
+                       headers=dict(self.live.headers, Origin=self.live.base), timeout=5)
+        self.assertEqual("cancelled", c.json()["job"]["state"])
+        self.assertTrue(slow.stopped_by_cancel.wait(3.0), "Cancel did not stop the work")
 
     def test_light_routes_answer_while_heavy_questions_are_stuck(self):
         self.live.state.source.impact = _Slow(cap=10.0)
@@ -190,28 +196,44 @@ class HeavyQuestionsNeverStallThePage(unittest.TestCase):
                 self.assertEqual(200, r.status_code)
                 self.assertLess(time.monotonic() - t0, 3.0)
 
-    def test_a_request_whose_browser_left_stops_its_work(self):
-        from mokata.ide import server
+    def test_a_request_whose_page_left_stops_its_work(self):
+        """P32: the page's event stream is what keeps its jobs wanted — when it closes, a query
+        job nobody else wants is cancelled and the work stops."""
+        import httpx
         slow = _Slow(cap=10.0)
         self.live.state.source.impact = slow
-        with mock.patch.object(server, "HEAVY_DEADLINE_SECS", 30.0):
-            self.live.abandon("/api/impact?path=src/app/core.py&lines=1-2", 0.4)
-            self.assertTrue(slow.started.is_set())
-            self.assertTrue(slow.stopped_by_cancel.wait(3.0),
-                            "the work kept running for a client that had gone")
+        with httpx.Client(headers=self.live.headers, timeout=10) as cl:
+            with cl.stream("GET", self.live.base + "/api/events?client=page-1") as ev:
+                lines = ev.iter_lines()        # kept: a dropped iterator closes the stream
+                self.assertEqual("event: changed", next(lines))
+                r = cl.get(self.live.base + "/api/impact?path=src/app/core.py&lines=1-2",
+                           headers={"x-mokata-client": "page-1"})
+                self.assertEqual(202, r.status_code)
+                self.assertTrue(slow.started.wait(3.0))
+                time.sleep(0.5)
+                self.assertFalse(slow.stopped_by_cancel.is_set(), "cancelled while still wanted")
+        # P32: the page has RECONNECT_S to come back (an EventSource reconnects by itself)
+        self.assertTrue(slow.stopped_by_cancel.wait(10.0),
+                        "the work kept running for a page that had gone")
 
     def test_identical_questions_in_flight_share_one_answer(self):
-        slow = _Slow(cap=0.6)
+        slow = _Slow(cap=0.8)
         self.live.state.source.impact = slow
         got = []
         ts = [threading.Thread(target=lambda: got.append(
-            self.live.get("/api/impact?path=src/app/core.py&lines=1-2").status_code))
+            self.live.get("/api/impact?path=src/app/core.py&lines=1-2")))
             for _ in range(3)]
         for t in ts:
             t.start()
         for t in ts:
             t.join()
-        self.assertEqual([200, 200, 200], got)
+        self.assertEqual([202, 202, 202], [r.status_code for r in got])
+        self.assertEqual(1, len({r.json()["job"] for r in got}), "one job for one question")
+        time.sleep(1.2)
+        # P32: the pages that waited fetch the finished answer by naming the job
+        jid = got[0].json()["job"]
+        again = self.live.get(f"/api/impact?path=src/app/core.py&lines=1-2&job={jid}")
+        self.assertEqual(200, again.status_code)
         self.assertEqual(1, slow.calls, "a refresh re-asking must join the running answer")
 
 
@@ -403,23 +425,21 @@ class TheGraphViewsSayWhatTheyLeftOut(unittest.TestCase):
         def counting(root, kind, target, depth=2, layer=None):
             asked.append((kind, target))
             return real(root, kind, target, depth, layer)
-        with mock.patch.object(V, "MAX_NODES", 36), mock.patch.object(nav, "run", counting):
+        with mock.patch.object(V, "PAGE_NODES", 36), mock.patch.object(nav, "run", counting):
             g = V.ripple(self.root, "hub", 2)
-        self.assertTrue(g["truncated"])
+        self.assertTrue(g["more"])
         callers_asked = [t for k, t in asked if k == "callers"]
         self.assertLessEqual(len(callers_asked), 8,
-                             f"kept asking after the picture was full: {len(callers_asked)}")
-        self.assertIn("depth 1 fits", g["truncation_note"])
+                             f"kept asking after the page was full: {len(callers_asked)}")
+        self.assertIn("Continue", g["more_note"])        # P37: a page, never a stop
 
-    def test_a_megahub_at_depth_one_says_its_caller_count_and_points_at_focus(self):
+    def test_a_megahub_at_depth_one_says_how_many_it_shows_and_offers_the_next_page(self):
         _hub_repo(self.root, 30, second=False)
-        with mock.patch.object(V, "MAX_NODES", 10):
+        with mock.patch.object(V, "PAGE_NODES", 10):
             g = V.ripple(self.root, "hub", 1)
-        self.assertTrue(g["truncated"])
-        note = g["truncation_note"]
-        self.assertIn("30 direct callers", note)
-        self.assertIn("Focus", note)
-        self.assertNotIn("lower the depth", note)
+        self.assertTrue(g["more"])
+        self.assertEqual(30, g["direct_callers"])
+        self.assertIn("showing 10 affected so far", g["more_note"])
 
     def test_the_untested_chain_list_discloses_its_cap(self):
         _hub_repo(self.root, 60, second=False)
@@ -504,7 +524,7 @@ class TheGraphViewsSayWhatTheyLeftOut(unittest.TestCase):
         _hub_repo(self.root, 0)
         real = nav.run
 
-        def fake(root, kind, target, depth=2, layer=None):
+        def fake(root, kind, target, depth=2, layer=None, budget="default"):
             if kind == "callers":
                 return QueryResult(kind=kind, target=target, backend="ast", basis=BASIS_STRUCTURAL,
                                    references=[Reference(path=f"src/c{i}.py", line=1, symbol=f"c{i}")
@@ -515,7 +535,7 @@ class TheGraphViewsSayWhatTheyLeftOut(unittest.TestCase):
                                             for i in range(300)])
                 r.truncated, r.total = True, 85000       # the knowledge lane's cut fields
                 return r
-            return real(root, kind, target, depth, layer)
+            return real(root, kind, target, depth, layer, budget)
         with mock.patch.object(nav, "run", fake):
             out = nav.impact(self.root, "src/app/hub.py", "1-2")
         sym = out["symbols"][0]
@@ -533,7 +553,7 @@ class TheGraphViewsSayWhatTheyLeftOut(unittest.TestCase):
 @unittest.skipUnless(shutil.which("rg"), "rg is not on PATH")
 class ACommonWordSearch(unittest.TestCase):
 
-    def test_rg_is_stopped_at_the_cap_and_the_answer_is_in_path_order(self):
+    def test_rg_is_stopped_at_a_full_page_and_the_answer_is_in_path_order(self):
         d = tempfile.mkdtemp(prefix="mk-lane-s-rg-")
         self.addCleanup(shutil.rmtree, d, True)
         for name in ("e", "b", "d", "a", "c"):
@@ -546,12 +566,12 @@ class ACommonWordSearch(unittest.TestCase):
             procs.append(p)
             return p
         answers = []
-        with mock.patch.object(search, "MAX_MATCHES", 50), \
-                mock.patch.object(search.subprocess, "Popen", spy):
+        with mock.patch.object(search.subprocess, "Popen", spy):
             for _ in range(3):
-                answers.append(search.text(d, "needle"))
+                answers.append(search.text(d, "needle", page=50))    # P36: a page, not a stop
         self.assertEqual("rg", answers[0]["engine"])
-        self.assertTrue(answers[0]["truncated"])
+        self.assertTrue(answers[0]["more"])
+        self.assertEqual(50, answers[0]["next_offset"])
         self.assertEqual(["src/a.py"], [f["path"] for f in answers[0]["files"]])
         self.assertEqual(answers[0], answers[1])
         self.assertEqual(answers[0], answers[2])
@@ -612,6 +632,14 @@ class ThePageAsksImpactOncePerFileVersion(unittest.TestCase):
         self.assertIn("IMPACT_AHEAD", load, "background asks are bounded")
         self.assertIn("wantImpact(f);", js[js.index("function showFile("):], "the file opened is asked")
         self.assertIn("IMPACT_CACHE_MAX", js)
+
+
+def setUpModule():
+    # 0.0.26 O11 — this module's expectations are the CORE install's: no external code graph on
+    # the machine. Pinned, so a venv with code-review-graph (`mokata[full]`) means the same thing;
+    # what is true WITH it present is graded in test_o11_crg_present (and the sibling below, if any).
+    from _support import hide_external_graphs
+    hide_external_graphs()
 
 
 if __name__ == "__main__":

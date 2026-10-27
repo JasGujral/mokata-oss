@@ -35,7 +35,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 30
+    # QUALITY-AT-SCALE-CANCELLED-AT-ITS-OWN-CEILING (re-derived 2026-10-21, for 0.0.26). 30 was
+    # never derived: the completed runs are 23m33s–30m01s (#1–#8), so the slowest that ever
+    # FINISHED already sat at the cap, and #9, #10, #12, #13 (Sep 23 → Oct 21) were all CANCELLED at
+    # 30m19s with no test failing — four weeks of "red" that measured nothing. 1.5 x 30m01s = 45.
+    # ⚠ If the next runs keep climbing toward 45, the arms got slower: read that as a finding.
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash

@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   test:
-    name: ${{ matrix.os }} · py${{ matrix.python }} · jsonschema=${{ matrix.jsonschema }}
+    name: ${{ matrix.os }} · py${{ matrix.python }} · jsonschema=${{ matrix.jsonschema }} · shard ${{ matrix.shard }}/4
     # Stage 66 — cross-platform parity across Windows + Linux. Trimmed (0.0.9rc1) to a light
     # matrix: py3.12 only, and macOS dropped, because macOS runners bill at 10x and the full
     # matrix exhausts the private repo's monthly Actions allotment. Both jsonschema legs are
@@ -84,7 +84,25 @@ jobs:
     # too few. Tightening on n=1 would repeat that mistake with a smaller number. 70 stands until
     # there is a spread to derive from; `CI-CEILING-IS-DERIVED-ONCE-AND-NEVER-RE-DERIVED` is the
     # open row that owns getting one.
-    timeout-minutes: 70
+    #
+    # 70 -> 89 (0.0.25 cut). CI #166 on mirror `main` (run 39560673950): every test GREEN, but
+    # this job's own CI-CEILING step failed the windows py3.12/present leg — 3547 s (59m07s)
+    # against 70 (1.18x, under the 1.2x floor). 1.5 x 3547 s = 88.7 -> **89**. That leg was ~2x
+    # Linux and growing with every release: raising the ceiling only moved the cliff.
+    #
+    # 89 -> 45 (0.0.26 O6, WINDOWS-CI-TIME): the unit suite is SHARDED, four legs per OS in
+    # parallel (`scripts/shard_tests.py`, balanced on the measured per-module record
+    # `scripts/shard_durations.json`), so this ceiling bounds ONE SHARD, not the suite. Derived
+    # from the record, not chosen: worst shard 1275 s on the recording box (incl. shard 1's
+    # once-per-leg steps) x 1.8 provisional imbalance x 0.638 (Windows scale: CI #166's 3547 s
+    # less 300 s overhead, over the record's 5086 s) + 300 s overhead = ~1764 s -> 1.5x = 45.
+    # The 1.8 is the worst/mean the local 4-shard run actually showed (1091 s vs 602 s mean; the
+    # record was measured on a contended box), so a worst Windows shard could reach ~30 min
+    # before real Windows shard clocks exist; 29 (the balanced prediction) was too tight.
+    # This is provisional until `shard_tests.py absorb` of the first sharded CI run: absorb drops the
+    # imbalance allowance and `tests/test_o6_shard_tests.py` then derives the tighter number
+    # (it reds if the record stops clearing this, or this sits >5 above what the record derives).
+    timeout-minutes: 45
     # Every `run:` step uses bash on both OSes — windows-latest defaults to pwsh, which would
     # break the `mktemp -d` / `|| true` POSIX steps. windows-latest ships Git Bash.
     defaults:
@@ -96,12 +114,18 @@ jobs:
         os: ["ubuntu-latest", "windows-latest"]
         python: ["3.12"]
         jsonschema: ["absent", "present"]
+        # WINDOWS-CI-TIME (0.0.26 O6): the unit suite runs as FOUR shards per leg, in parallel —
+        # `scripts/shard_tests.py` splits `discover -s tests -t tests` by MEASURED per-module time
+        # (`scripts/shard_durations.json`), every module in exactly one shard. The gate's
+        # wall-clock is the slowest shard, not the whole suite. `4` is written three times — this
+        # list, the `--of 4` on the unit step, and the job name — and
+        # `tests/test_o6_shard_tests.py` reds when they part. The macOS includes carry it too.
+        shard: [1, 2, 3, 4]
         # PY312-ONLY (0.0.24, owner ruling 2026-10-17): every leg runs Python 3.12. The three
         # 3.10 "floor" legs (added 0.0.16 / 0.0.18 stage 17) are gone — they doubled the Windows
-        # wall-clock of the PR gate. `requires-python = ">=3.10"` is KEPT and is now a promise
-        # that NO workflow exercises; that is a deliberate, disclosed trade (CHANGELOG known
-        # limitations), and `tests/test_ci_matrix_floor.py` pins it so nobody believes the floor
-        # is tested. The macOS leg below is 3.12 too.
+        # wall-clock of the PR gate. Since 0.0.26 L12 (PY-FLOOR-3.12) `requires-python` is
+        # ">=3.12": the floor IS this Python, so every PR tests it (`tests/test_ci_matrix_floor.py`
+        # pins that they stay equal). The macOS leg below is 3.12 too.
         include:
           # MACOS-IS-THE-CUT-MACHINE-AND-HAS-NO-LEG (0.0.22 B1). Every cut is taken on macOS, and
           # until now nothing ran the suite there: two host-dependent reds surfaced in ONE day on
@@ -111,9 +135,13 @@ jobs:
           # BLOCKING, like every leg (POLICY_BLOCKING in tests/test_ci_matrix_floor.py). It runs on
           # the MIRROR ONLY (ruling R5, the billing ruling): the guard step below refuses — loudly,
           # never as a green skip — anywhere else.
-          - os: "macos-latest"
-            python: "3.12"
-            jsonschema: "present"
+          # One include PER SHARD: an include that overwrites `os` matches no crossed leg and is
+          # added as exactly one new leg, so a single entry would be one UNSHARDED-named leg
+          # running shard nothing.
+          - { os: "macos-latest", python: "3.12", jsonschema: "present", shard: 1 }
+          - { os: "macos-latest", python: "3.12", jsonschema: "present", shard: 2 }
+          - { os: "macos-latest", python: "3.12", jsonschema: "present", shard: 3 }
+          - { os: "macos-latest", python: "3.12", jsonschema: "present", shard: 4 }
     steps:
       - name: "macOS leg is mirror-only (0.0.22 ruling R5)"
         # A red, not a skip: a skipped leg reads GREEN, and a green macOS tick that ran nothing is
@@ -166,7 +194,9 @@ jobs:
         # `jsonschema: present` only: `mcp` hard-requires `jsonschema>=4.20.0`, so the `absent` leg
         # deliberately breaks the SDK's own import (disposition BROKEN). Demanding a usable SDK
         # there would red a leg for doing exactly what it is designed to do.
-        if: matrix.jsonschema == 'present'
+        # Shard 1 only (0.0.26 O6): once per leg, not once per shard; `shard_durations.json`'s
+        # `fixed` block preloads shard 1 with this time so the balancer gives it fewer modules.
+        if: matrix.jsonschema == 'present' && matrix.shard == 1
         env:
           MOKATA_REQUIRE_MCP_SDK: '1'
         run: python -m unittest discover -s tests -t tests -p "test_mcp_sdk_2_breaks_the_server.py" -v
@@ -197,22 +227,32 @@ jobs:
         # On windows-latest this is also the first real exercise of oslock's `msvcrt` branch under
         # genuine contention (POSIX takes `fcntl`; the Windows half has only ever been dead code in
         # CI). One jsonschema leg per OS is enough — file locking is orthogonal to jsonschema, and
-        # the unit-suite step re-runs it on every leg regardless.
-        if: matrix.jsonschema == 'present'
+        # the unit-suite step re-runs it on every leg regardless (in whichever shard holds it).
+        # Shard 1 only, like the MCP check above.
+        if: matrix.jsonschema == 'present' && matrix.shard == 1
         timeout-minutes: 20
         run: python -m unittest discover -s tests -t tests -p "test_ms_s7_stress.py" -v
-      - name: Run unit test suite
+      - name: Run unit test suite (this shard)
         # MOKATA_REQUIRE_MCP_SDK carries into the whole suite so the NINE converted MCP gates
         # cannot skip either — under `mcp` 2.0.0 this suite reported `OK (skipped=8)` for fifteen
         # days. Empty on the `absent` leg, where a broken SDK is the point of the leg.
+        #
+        # WINDOWS-CI-TIME (0.0.26 O6): `shard_tests.py run` builds the suite with the SAME loader
+        # call `python -m unittest discover -s tests -t tests` makes and runs this shard's modules
+        # of it; the four shards together are that selection exactly (`-s`/`-t` are passed
+        # through, and `tests/_invocation_parity.py` reads them). `--record` keeps the shard's unit
+        # seconds for the tag-ceiling job below.
         env:
           MOKATA_REQUIRE_MCP_SDK: ${{ matrix.jsonschema == 'present' && '1' || '' }}
-        run: python -m unittest discover -s tests -t tests
+        run: python scripts/shard_tests.py run --shard ${{ matrix.shard }} --of 4 -s tests -t tests --record ci-clock/unit.json
       - name: Run integration suite (the release gate)
+        # Shard 1 only (0.0.26 O6) — once per leg; its time preloads shard 1 in the balancer.
+        if: matrix.shard == 1
         env:
           MOKATA_REQUIRE_MCP_SDK: ${{ matrix.jsonschema == 'present' && '1' || '' }}
         run: python -m unittest discover -s tests/integration -t tests/integration
       - name: Playbook smoke run (fresh init)
+        if: matrix.shard == 1
         run: |
           tmp="$(mktemp -d)"
           mokata init --profile standard --yes --path "$tmp"
@@ -220,16 +260,154 @@ jobs:
       - name: This job's ceiling still clears this leg (CI-CEILING)
         # The ceiling above was derived by hand and owed re-deriving "whenever the suite grows".
         # This leg measures itself and reds while the ceiling is still a one-line edit: under
-        # 1.2x headroom it prints the 1.5x value to set (`scripts/ci_ceiling.py`).
-        run: python scripts/ci_ceiling.py --since "$MOKATA_CLOCK_T0" --workflow .github/workflows/ci.yml --job test
-      - name: The TAG gate's ceiling still clears this suite (CI-CEILING, ubuntu legs)
-        # ⭐ The one that would have saved v0.0.23: release.yml's `test` job was CANCELLED at its
-        # 22-minute ceiling with no test failing (run 38966278058), so the tag never published.
-        # An ubuntu leg here runs a SUPERSET of that job (same image, same Python, install + unit
-        # + integration, plus the MCP / stress / smoke steps), so if this leg still clears
-        # release.yml's ceiling the tag gate does too — measured on every PR, before a tag.
-        if: runner.os == 'Linux'
-        run: python scripts/ci_ceiling.py --since "$MOKATA_CLOCK_T0" --workflow .github/workflows/release.yml --job test
+        # 1.2x headroom it prints the 1.5x value to set (`scripts/ci_ceiling.py`). Per SHARD: each
+        # shard leg measures itself against the one job ceiling, and `--record` keeps its time.
+        run: python scripts/ci_ceiling.py --since "$MOKATA_CLOCK_T0" --workflow .github/workflows/ci.yml --job test --record ci-clock/job.json --group "${{ matrix.os }}-${{ matrix.jsonschema }}"
+      - name: Keep this shard's clock (tag-ceiling job; `shard_tests.py absorb` re-balances on it)
+        # EVERY leg, not only ubuntu: the ubuntu shards re-assemble the tag gate's time below, and
+        # a Windows run's per-module seconds are what `scripts/shard_tests.py absorb` re-bases the
+        # balancer on (Windows is the slow OS, and it is not uniformly slower). Kilobytes, 7 days.
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-clock-${{ matrix.os }}-${{ matrix.jsonschema }}-${{ matrix.shard }}
+          path: ci-clock/
+          if-no-files-found: error
+          retention-days: 7
+
+  tag-ceiling:
+    # ⭐ The one that would have saved v0.0.23: release.yml's `test` job was CANCELLED at its
+    # 22-minute ceiling with no test failing (run 38966278058), so the tag never published.
+    # Until 0.0.26 an ubuntu leg of `test` ran a SUPERSET of that job and measured release.yml's
+    # ceiling itself. Sharded (O6), no single leg runs the whole suite any more — so this job
+    # RE-ASSEMBLES the unsharded leg from the ubuntu shards' records: the per-leg steps once (the
+    # largest job-minus-unit time) plus every shard's unit seconds. Same image, same Python as the
+    # tag gate; measured on every PR, before a tag. A missing shard is CANNOT-ANSWER (exit 2),
+    # never a partial sum that reads CLEARS.
+    name: tag gate ceiling (re-assembled from the ubuntu shards)
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Bounded by construction: checkout + one artifact download + a stdlib script, ~20 s.
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Collect the ubuntu shards' clocks
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ci-clock-ubuntu-latest-*
+          path: ci-clock
+      - name: The TAG gate's ceiling still clears this suite (CI-CEILING)
+        run: python3 scripts/ci_ceiling.py --from-shards ci-clock --workflow .github/workflows/release.yml --job test
+
+  ide-e2e:
+    # IDE-E2E-IN-CI (0.0.26 O9). The browser end-to-end for `mokata ide` was run by hand, so a page
+    # that rendered blank or threw on load could ship behind a green suite — no unit test loads the
+    # page. `tests/e2e_ide/` builds SMALL fixture repos, starts `mokata ide --foreground` (this
+    # checkout's src/) per flow and drives headless Chromium through the core flows: render + the
+    # review's diff, ⌘P open, graph nodes, health, palette (>commands, /mokata, @symbol, :line),
+    # tabs (close all / Alt+W / reopen / Alt+1), find (count, step, clean close), search (word,
+    # P36 paging + Load more), the Activity drawer (a job listed and finished), the worktrees panel
+    # (listed, Merge only PROPOSED — P2), and a repo mokata was never set up in. Every flow ends
+    # with ZERO console errors / uncaught errors / unexpected HTTP errors. The big-repo scale suite
+    # (tests/e2e_scale) stays nightly/manual. ubuntu only: the browser and the page are the same
+    # everywhere; the server's OS behaviour is the unit legs' job. `MOKATA_REQUIRE_E2E=1` turns
+    # "no browser" into a failure — a skipped e2e reads green and tested nothing.
+    name: ide e2e · headless Chromium
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Measured locally: install ~1 min, the e2e ~25 s. 10 is a backstop for a wedged browser.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install the e2e set (playwright + mokata's runtime and [ide] deps), hash-pinned
+        # No mokata install: the e2e runs THIS checkout's src/ (PYTHONPATH), so every package the
+        # job fetches is hash-pinned in requirements/e2e.txt — no editable-install site added.
+        run: pip install --require-hashes -r requirements/e2e.txt
+      - name: Install the Chromium build that playwright version pins
+        run: python -m playwright install --with-deps chromium
+      - name: IDE end-to-end in a real browser
+        env:
+          MOKATA_REQUIRE_E2E: '1'
+        # Run as a SCRIPT, not `unittest discover`: it is not part of the suite the release
+        # preflight mirrors (`tests/_preflight_parity.py` reads every `discover -s tests…` as that
+        # suite) and it never imports `tests/_support.py`, so it needs no PyYAML. It exits 2 when
+        # it finds no flow — a runner that ran nothing never reads green.
+        run: python tests/e2e_ide/run_e2e.py -v
+
+  skill-evals:
+    # SE.S1/S2 (0.0.26 L5) — A BROKEN SKILL TRIGGER REDS THE BUILD. Claude Code picks a skill from
+    # its listing text (description + when_to_use); an edit that drops the phrases a skill fires on,
+    # or drifts it into another skill's vocabulary, ships silently unless something grades it.
+    # `scripts/skill_evals.py gate` grades every shipped skill/command against the near-miss corpus
+    # (evals/skill_triggers/corpus/) and the replay mocks (evals/skill_triggers/replay/) — no model,
+    # no API key, no network: mokata never needs a key, and neither does its CI. The live tier
+    # (`claude plugin eval` on the owner's own login) runs at the cut, never here.
+    name: skill-evals (trigger corpus + replay mocks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Measured locally (0.0.26 L5, 2 vCPU, load ~6): median of 5 = 2.1 s. No install step (stdlib
+    # + src/ on the path). x100 for a cold runner -> 5.
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Skill-trigger gate (lint + corpus + replay; exit 1 on any finding)
+        run: python scripts/skill_evals.py gate
+
+  security-lint:
+    # SA.S1 (0.0.26 L6) — WHAT MOKATA SHIPS IS LINTED LIKE CODE. Hooks + an MCP server + skills is
+    # the maximum-privilege plugin shape, and a skill is text the model acts on. Six lints over the
+    # shipped tree (scripts/security_lint.py): unquoted user args / eval in skill+command shell, prompt-
+    # injection markers + hidden characters + HTML comments, secrets in shipped files (mokata's own
+    # 4-layer scanner), agentskills.io conformance, the MCP server's exact-version pin, and the
+    # version lockstep. Exit 1 on any finding, 2 when a lint cannot run. Offline: no install, no key.
+    name: security-lint (SA.S1 shipped-surface lints)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Measured locally (0.0.26 L6, 2 vCPU, load ~6): median of 5 = 5.5 s. No install step (stdlib +
+    # src/ on the path). x50 for a cold runner -> 5.
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Security lints (exit 1 on a finding, 2 when a lint cannot run)
+        run: python scripts/security_lint.py
+
+  spec-drift:
+    # SD.S1 (0.0.26 L7) — DRIFT BETWEEN THE SPEC/ACs, THE DOCS AND THE CODE REDS THE BUILD. `mokata
+    # docsync` with no target sweeps the public doc tree against the code (commands, slash forms,
+    # skill counts, install path) and then checks the saved spec's AC anchors + AC-tagged tests
+    # against the tree; any Blocking finding exits 1. Read-only: CI never reconciles — the fix is
+    # `mokata docsync <doc> --reconcile` (human-gated) or `mokata spec amend`.
+    name: spec-drift (docsync)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Measured locally (0.0.26 L7, 2 vCPU, load ~6): median of 5 = 0.7 s, plus `pip install .`
+    # (~30 s cold). x10 -> 5.
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install mokata
+        # Non-editable on purpose: the editable self-install population is a counted, alert-
+        # reconciled set (test_pinned_dependency_property); this job needs only the package.
+        run: pip install .
+      - name: docsync sweep + saved-spec drift (exit 1 on a Blocking finding)
+        run: python -m mokata docsync
 
   hooks-execute:
     # HOOK-SHELL-AGNOSTIC — the deliverable that string assertions cannot replace.

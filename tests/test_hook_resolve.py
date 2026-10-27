@@ -80,6 +80,8 @@ def _stripped_env(**extra):
                         "PYTHONPATH")}
     env["PATH"] = ""
     env["MOKATA_PYTHON_DIRS"] = ""
+    env["MOKATA_UV_DIRS"] = ""          # 0.0.26 L8: nor uv where its installers put it
+    env.pop("CLAUDE_PLUGIN_DATA", None)
     env.update(extra)
     return env
 
@@ -207,7 +209,8 @@ class TestPluginMcpRegistration(unittest.TestCase):
         data = json.loads(PLUGIN_MANIFEST.read_text(encoding="utf-8"))
         spec = data["mcpServers"]["mokata"]
         self.assertEqual(spec["command"], "uvx")
-        self.assertEqual(spec["args"], ["--from", "mokata==" + data["version"], "mokata-mcp"])
+        # 0.0.26 L8: the `full` extra — the plugin route reaches the one-line install's end state.
+        self.assertEqual(spec["args"], ["--from", "mokata[full]==" + data["version"], "mokata-mcp"])
 
     def test_doctor_names_an_unresolvable_plugin_mcp_registration(self):
         with tempfile.TemporaryDirectory() as d:
@@ -418,16 +421,16 @@ class TestNoBehaviourChange(unittest.TestCase):
                 {"hooks": [{"type": "command", "command": cmd}]}), cmd)
 
     @needs_sh
-    def test_shim_delegates_to_the_console_script_when_it_resolves(self):
-        # The resolved-OK path: behaviour is EXACTLY today's — same subcommand, same args,
-        # same exit code (including the security block).
-        for code in (0, BLOCK_EXIT):
-            with tempfile.TemporaryDirectory() as d:
-                _fake_console_script(d, exit_code=code)
-                env = _stripped_env(PATH=d)
-                res = _run_wired(f'"{SHIM}"', env, extra="secret-guard --path x.py")
-                self.assertEqual(res.returncode, code, res.stderr)
-                self.assertIn("FAKE_HOOK_RAN secret-guard --path x.py", res.stdout)
+    def test_shim_never_runs_a_PATH_console_script_of_another_install(self):
+        """0.0.26 L8 (MP.S1): a `mokata-hook` on PATH may be ANOTHER version (a CLI install) — the
+        plugin's hooks run the plugin's own version. The exit code is still the subcommand's own."""
+        with tempfile.TemporaryDirectory() as d:
+            _fake_console_script(d, exit_code=0)
+            env = _stripped_env(PATH=d, MOKATA_PYTHON=sys.executable)
+            res = _run_wired(f'"{SHIM}"', env,
+                             extra=f'secret-guard --text "{FAKE_SECRET}" --path x.py')
+            self.assertNotIn("FAKE_HOOK_RAN", res.stdout)
+            self.assertEqual(res.returncode, BLOCK_EXIT, res.stderr)
 
     @needs_sh
     def test_shim_honours_an_explicit_override(self):

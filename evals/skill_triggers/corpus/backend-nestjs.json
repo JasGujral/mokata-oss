@@ -1,0 +1,33 @@
+{
+ "skill": "backend-nestjs",
+ "triggers": [
+  "controller, module, provider, guard, pipe or DTO",
+  "@nestjs/core"
+ ],
+ "positive": [
+  "Add a roles guard to the NestJS orders controller",
+  "Create a DTO with validation pipes for the create-user endpoint in our Nest app",
+  "Split the NestJS payments module into its own provider and module",
+  "Our @nestjs/core service needs a new injectable provider for the mailer",
+  "Wire a new pipe that transforms query params in the Nest controller"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Add a middleware to our plain Express server that logs every request"
+  },
+  {
+   "prompt": "Build a React checkout page with a cart component",
+   "expect": "frontend-react"
+  },
+  {
+   "prompt": "Write a tiny TypeScript utility library for date parsing with no framework"
+  },
+  {
+   "prompt": "Set up a Fastify route for health checks"
+  },
+  {
+   "prompt": "Harden the login handler against SQL injection in our Go service",
+   "expect": "security"
+  }
+ ]
+}

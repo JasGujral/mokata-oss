@@ -1,0 +1,13 @@
+/* mokata ide — graph at scale (0.0.26 P37): the status line, the basis in the legend and the
+   on-canvas message. Colours from app.css variables only. */
+.g-status { position: absolute; left: 16px; right: 16px; bottom: 52px; z-index: 12; display: flex; gap: 10px;
+  align-items: center; background: var(--panel); border: 1px solid var(--line2); border-radius: 6px;
+  padding: 4px 8px; color: var(--text2); }
+.g-status .g-status-text { flex: 1; min-width: 0; }
+.g-legend-basis b { color: var(--text); }
+.g-msg { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); z-index: 14; max-width: 560px;
+  display: flex; flex-direction: column; gap: 6px; background: var(--panel); border: 1px solid var(--line2);
+  border-radius: 8px; padding: 12px 14px; color: var(--text); }
+.g-msg code { word-break: break-all; }
+.g-msg .btn { align-self: flex-start; }
+@media (max-width: 700px) { .g-status { bottom: 88px; } }

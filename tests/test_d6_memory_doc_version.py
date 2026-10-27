@@ -492,7 +492,11 @@ class NoBehaviourChange(unittest.TestCase):
                           # reason as the two groups above — it defaults to `[]`, so every legacy
                           # doc round-trips byte-identically and an older reader carries it in
                           # `extra`. `MEMORY_DOC_VERSION` does not move.
-                          | {"derives_from"})
+                          | {"derives_from"}
+                          # R5 (0.0.26) — `retire_when` expiry predicates. Additive under doc v1
+                          # for the same reason: defaults to `[]`, an older reader carries it in
+                          # `extra`, `MEMORY_DOC_VERSION` does not move.
+                          | {"retire_when"})
         self.assertEqual({DOC_VERSION_KEY},
                          set(item.to_dict()) - before_d6 - added_since_d6)
 

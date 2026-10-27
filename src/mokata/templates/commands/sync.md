@@ -31,19 +31,21 @@ reported.
 - Read the cached plugin root: `cat ~/.mokata/plugin-root` → `ROOT`. If missing/empty, search the
   Claude Code plugins directory for a `mokata` plugin containing `src/mokata/__init__.py`. (If a
   `mokata` CLI is on PATH, use it directly.)
-- Build the engine command with the **absolute interpreter**:
+- Define the engine as a shell FUNCTION on the **absolute interpreter** — arguments then reach
+  it as separate words, never re-parsed by `eval`:
 
   ```bash
   PY="$(command -v python3 || command -v python)"
-  ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
+  mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
   ```
 
 ## 2. Flush + reconcile
 
 ```bash
 # interactive: prompts per conflict (keep local / keep remote)
+mokata sync
 # --yes: non-interactive flush; conflicts are DEFERRED (never silently overwritten)
-eval "$ENGINE sync ${ARGUMENTS}"
+mokata sync --yes
 ```
 
 If `$ARGUMENTS` is empty, run the bare `sync` (interactive — it asks per conflict); pass `--yes`

@@ -231,7 +231,7 @@ class T(unittest.TestCase):
 
 CONVERTED_SITES = (
     ("test_ci_matrix_floor", "EveryLegRunsOnePython", "test_a_the_pr_gate_runs_only_the_gate_python", "i-skipTest"),
-    ("test_ci_matrix_floor", "EveryLegRunsOnePython", "test_c_the_declared_floor_is_UNTESTED_and_that_is_pinned", "i-skipTest"),
+    ("test_ci_matrix_floor", "EveryLegRunsOnePython", "test_c_the_declared_floor_IS_the_gate_python_and_every_gate_runs_it", "i-skipTest"),
     ("test_repo_hardening", "TestRepoHardening", "test_all_github_yaml_parses", "i-skipUnless"),
     ("test_stage58_ci_check", "TestAction", "test_action_yml_is_a_valid_composite_action", "ii-weakened"),
     ("test_stage58_ci_check", "TestAction", "test_example_workflow_is_least_privilege", "ii-weakened"),

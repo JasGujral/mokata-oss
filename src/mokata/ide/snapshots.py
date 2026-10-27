@@ -30,7 +30,7 @@ import os
 import time
 import zlib
 from dataclasses import dataclass
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from ..tdd_state import state_dir
 
@@ -113,25 +113,41 @@ def read_object(root: str, sha: str) -> Optional[bytes]:
 
 
 def capture(root: str, path: str, kind: str, session_id: Optional[str] = None,
-            run_id: Optional[str] = None, cwd: Optional[str] = None) -> Optional[Snapshot]:
+            run_id: Optional[str] = None, cwd: Optional[str] = None,
+            observed: Optional[Tuple[str, int, float, Optional[bytes]]] = None
+            ) -> Optional[Snapshot]:
     """Record the CURRENT content of `path` as a `kind` snapshot. None when it is outside the repo
-    or anything fails."""
+    or anything fails.
+
+    `observed` = `(state, size, t, data)` is the file AS SOMEONE ELSE SAW IT, at time `t` — the
+    `mokata-hook` front door reads it at hook time and spools it (0.0.26 O3), so a drained AFTER
+    snapshot is what the file held when the tool finished, not whatever the working tree holds by
+    the time the drainer runs. With `observed`, the working tree is NEVER read."""
     try:
         rel = rel_path(root, path, cwd)
         if rel is None:
             return None
-        from ..repo_paths import path_of
-        ab = path_of(root, rel)
         sha, state, size = "", ABSENT, 0
-        if os.path.isfile(ab):
-            size = os.path.getsize(ab)
-            if size > MAX_FILE_BYTES:
+        if observed is not None:
+            o_state, size, t, data = observed
+            if o_state == OK and data is not None and len(data) <= MAX_FILE_BYTES:
+                sha, state = _write_object(root, data), OK
+            elif o_state == TOO_LARGE:
                 state = TOO_LARGE
             else:
-                with open(ab, "rb") as fh:
-                    sha = _write_object(root, fh.read())
-                state = OK
-        t = time.time()
+                state, size = ABSENT, 0
+        else:
+            from ..repo_paths import path_of
+            ab = path_of(root, rel)
+            if os.path.isfile(ab):
+                size = os.path.getsize(ab)
+                if size > MAX_FILE_BYTES:
+                    state = TOO_LARGE
+                else:
+                    with open(ab, "rb") as fh:
+                        sha = _write_object(root, fh.read())
+                    state = OK
+            t = time.time()
         snap = Snapshot(f"{int(t * 1000)}-{(sha or state)[:10]}-{kind[0]}", t, session_id or "",
                         run_id or "", rel, kind, sha, state, size)
         _append(root, snap)

@@ -143,15 +143,20 @@ class TestExceedingTheBudget(unittest.TestCase):
             self.assertLess(secs, STALL / 2,
                             f"the hook paid {secs:.1f}s against a {TEST_BUDGET}s budget — unbounded")
 
-    def test_exceeding_the_budget_emits_NOTHING_not_a_partial_pack(self):
+    def test_exceeding_the_budget_SAYS_SO_and_sends_no_partial_pack(self):
         """A partial pack is worse than no pack: it is context the model will trust, cut at
-        wherever the clock happened to stop. The degrade is silence."""
+        wherever the clock happened to stop. So no pack — but never a SILENT cut either (0.0.26
+        O12, coordinator ruling): the turn is told its memory was skipped and why. This test used
+        to pin `out == ""`, which pinned the bug: a user whose recall timed out every turn had no
+        way to know."""
         with _Repo() as repo:
             with mock.patch.object(hook_cli, "_HOOK_WORK_BUDGET_SECS", TEST_BUDGET):
                 with mock.patch.object(hook_cli, "_build_injection_for", self._stall()):
                     rc, out, _secs = _run(repo.path)
             self.assertEqual(rc, 0)
-            self.assertEqual(out, "", "a timed-out hook must emit no channel at all")
+            ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+            self.assertEqual(hook_cli.RECALL_TIMEOUT_LINE.format(secs=TEST_BUDGET), ctx,
+                             "a timed-out hook says what was skipped — and nothing else")
 
     def test_a_dropped_pack_is_never_recorded_as_injected(self):
         """S4's ledger suppresses an item for the rest of the session once it has been handed over.
@@ -231,12 +236,12 @@ class TestTheLedgerWriteStaysOutsideTheWorker(unittest.TestCase):
                            "suppress items on a turn that then failed to hand them over")
 
 
-class TestTheDegradeIsSilentByDesign(unittest.TestCase):
+class TestTheDegradeNeverReachesStderr(unittest.TestCase):
 
-    def test_a_timeout_writes_nothing_to_stderr_either(self):
-        """The hook is FAIL-OPEN and this event is on the human's turn. A warning every time a
-        slow machine trips the budget would train the user to ignore the channel — the same
-        reasoning `build_injection`'s own SUPPRESS-OK arm records (doc 84 / D5 register)."""
+    def test_a_timeout_writes_nothing_to_stderr(self):
+        """The hook is FAIL-OPEN and this event is on the human's turn: a traceback or warning on
+        stderr is noise in their transcript. The timeout is said in the injected CONTEXT (above),
+        the one channel this hook owns — never on stderr."""
         with _Repo() as repo:
             err = io.StringIO()
             def _slow(*_a, **_kw):

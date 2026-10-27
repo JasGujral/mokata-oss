@@ -197,7 +197,7 @@ def _save_emit_args(surface: Any, proposal_id: Any, args: Dict[str, Any]) -> Non
         return
     try:
         keep = {k: args.get(k) for k in ("title", "criteria", "tests", "approach", "domains",
-                                          "scope")}
+                                          "scope", "tasks", "clarifications", "assumptions")}
         surface.state.write(EMIT_ARGS_PREFIX + proposal_id, keep)
     except Exception:  # noqa: BLE001 — never fail the proposal over a convenience copy
         pass
@@ -213,13 +213,59 @@ def _saved_emit_args(surface: Any, proposal_id: str) -> Optional[Dict[str, Any]]
         return None
     return {"title": data.get("title") or "", "criteria": data.get("criteria") or [],
             "tests": data.get("tests") or [], "approach": data.get("approach") or "",
-            "domains": data.get("domains") or [], "scope": data.get("scope") or {}}
+            "domains": data.get("domains") or [], "scope": data.get("scope") or {},
+            "tasks": data.get("tasks") or [], "clarifications": data.get("clarifications") or [],
+            "assumptions": data.get("assumptions") or []}
+
+
+def _same_spec(landed: Any, spec: Any) -> bool:
+    """The spec on record says what `spec` says: title, criteria (id + text), authorized scope and
+    the R2 task plan. Derived fields (anchors, domains, the plan-hash seal) are added at commit and
+    are not part of the comparison."""
+    def shape(sp: Any) -> Any:
+        scope = getattr(sp, "scope", None)
+        return (sp.title, sorted((c.id, c.text) for c in sp.criteria),
+                sorted(getattr(scope, "authorized", ()) or ()) if scope is not None else None,
+                [t.to_dict() for t in getattr(sp, "tasks", ()) or ()])
+    return landed is not None and shape(landed) == shape(spec)
+
+
+def _retry_of_redeemed(path: str, tool: str, args: Dict[str, Any], proposal_id: str,
+                       store: Any, spec: Any) -> Optional[Dict[str, Any]]:
+    """O14 — a RE-CALL of a spec write whose approval this exact call already redeemed: the client's
+    retry after a lost or late reply. Answered from the record, with NO side effect — before this a
+    retried `spec_amend` redeem re-ran its regression (re-opening the amendment that had just landed,
+    v2 -> v3, and wiping the passed checkpoints) and then refused the burnt approval: the run was
+    left regressed with nothing to approve. None when this is not such a retry."""
+    from .consent import _redeemed_retry
+    used = _redeemed_retry(path, tool, args, proposal_id)
+    if used is None:
+        return None
+    from ..engine.emit import spec_version
+    from ..engine.spec_gate import load_emitted_spec
+    if _same_spec(load_emitted_spec(store), spec):
+        # `committed` is about THIS call, which wrote nothing: one approval, one write.
+        return {"status": "unchanged", "committed": False, "already_applied": True,
+                "reason_code": approval.REFUSED_USED,
+                "proposal_id": used.proposal_id, "version": spec_version(store),
+                "reason": ("this approval's write already landed — this call is a retry of a "
+                           "completed write; nothing was changed now"),
+                "next": "carry on from the spec on record (`spec_show`)."}
+    return {"status": "refused", "committed": False, "reason_code": approval.REFUSED_USED,
+            "proposal_id": used.proposal_id,
+            "reason": ("that approval was already used, and the spec on record is NOT the one it "
+                       "licensed — its write did not land (it was refused or failed). Nothing was "
+                       "changed now."),
+            "hint": ("re-call with no proposal_id for a fresh proposal, then ask the human to run "
+                     "`mokata approve <id>`.")}
 
 
 def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
               tests: Optional[list] = None, approach: str = "", domains: Optional[list] = None,
               scope: Optional[dict] = None, approve: bool = False,
-              confirm: Optional[bool] = None, proposal_id: str = "") -> Dict[str, Any]:
+              confirm: Optional[bool] = None, proposal_id: str = "",
+              tasks: Optional[list] = None, clarifications: Optional[list] = None,
+              assumptions: Optional[list] = None) -> Dict[str, Any]:
     """SI-DEV.0 — EMIT the spec: persist it as this run's `emitted_spec` and append it to the
     shared `spec_corpus`, in ONE human-gated commit. The in-harness half of `/mokata:spec`, and the
     only way a spec reaches disk.
@@ -253,10 +299,19 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
     what is declared here — a write outside `authorized`, or one spelling a deferred `marker`, is
     blocked until the spec is AMENDED (`spec_amend`). Declare what you are NOT building, in the
     words the code would use. Omit `scope` and the spec is not policed at all (the honest default —
-    but then "we deferred that" is a note, not a gate)."""
+    but then "we deferred that" is a note, not a gate).
+
+    R2 (0.0.26) — `tasks` is the PLAN, required: `[{"id": "T1", "title": "...", "ac_ids": ["AC1"],
+    "scope": ["src/api/items.py"], "files"?, "depends_on"?, "consumes"?, "produces"?,
+    "parallel"?}]` — every criterion in >= 1 task, each task with its write scope (a subset of
+    `scope.authorized` when one is declared). It is approved WITH the criteria and sealed by a
+    SHA-256 plan hash; develop then works task by task inside the ACTIVE task's scope, and every
+    later stage refuses a plan whose hash changed. R3 — `clarifications` (AT MOST 5: `{id,
+    question, recommended, answer}`) and `assumptions` (`{id, text, for?}`) record the capped
+    clarify; a sixth question is refused, and an unanswered one needs an assumption."""
     from ..engine.emit import (EMIT_KIND, EMIT_TARGET, EMIT_TOOL, REEMIT_GATE, note_supersede,
                                preview_content, reemit_verdict, replacement_preview, spec_commit,
-                               spec_from_payload)
+                               spec_for_emit)
     from ..engine.completeness import run_completeness_gate, standalone_note
 
     surface = _surface(path)
@@ -272,14 +327,18 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
                              "domains, scope) and this proposal_id.")}
         title, criteria, tests = saved["title"], saved["criteria"], saved["tests"]
         approach, domains, scope = saved["approach"], saved["domains"], saved["scope"] or None
+        tasks, clarifications = saved["tasks"], saved["clarifications"]
+        assumptions = saved["assumptions"]
     payload = {"title": title, "criteria": criteria or [], "tests": tests or [],
-               "approach": approach, "domains": domains or [], "scope": scope}
+               "approach": approach, "domains": domains or [], "scope": scope,
+               "tasks": tasks, "clarifications": clarifications, "assumptions": assumptions}
     try:
-        spec, test_refs = spec_from_payload(payload)
+        spec, test_refs = spec_for_emit(payload)
     except ValueError as exc:
         return {"status": "error", "committed": False, "reason": str(exc),
                 "hint": ("send the spec as title + criteria [{id, text}] + tests "
-                         "[{name, ac_ids}] — every criterion mapped to a test.")}
+                         "[{name, ac_ids}] + tasks [{id, title, ac_ids, scope}] — every "
+                         "criterion mapped to a test and covered by a task.")}
 
     # STATE-SCOPE — resolve the PIPELINE's run ONCE, here, and use its store for every run-scoped
     # read and for the write. This is the same run `_consent`/`_propose` file the proposal under
@@ -288,6 +347,14 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
     # minting a second evidence run out of the writing session. See `consent._evidence_store` for
     # why the read and the write must move together.
     store, run_id = _evidence_store(surface, path)
+    args = {"path": path, "title": title, "criteria": criteria or [], "tests": tests or [],
+            "approach": approach, "domains": domains or [], "scope": scope or {},
+            "tasks": tasks or [], "clarifications": clarifications or [],
+            "assumptions": assumptions or []}
+    # O14 — a retried redeem is answered from the record, before any gate runs or counts a cycle.
+    retry = _retry_of_redeemed(path, EMIT_TOOL, args, proposal_id, store, spec)
+    if retry is not None:
+        return retry
 
     # Gate 1 — completeness. The SAME gate the engine pipeline runs. It fires BEFORE the consent
     # boundary on purpose: an incomplete spec is not a write awaiting permission, it is a spec that
@@ -403,8 +470,6 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
                                 "cycle is on the audit ledger).")}
 
     # Gate 2 — the human. Same consent boundary as every other durable write (SI.3/SI.4).
-    args = {"path": path, "title": title, "criteria": criteria or [], "tests": tests or [],
-            "approach": approach, "domains": domains or [], "scope": scope or {}}
     gate = _consent(path, EMIT_TOOL, args, proposal_id, surface=surface)
     if gate.refused:
         return _refused(gate)
@@ -439,7 +504,8 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
         # same write is consent theatre, and P16 fatigue is a weakening of the gate, not a
         # hardening of it. Empty blocks drop out, so a first, attached emit's preview is byte-
         # identical to what it was.
-        preview = "\n\n".join(b for b in (alone, replaces, _spec_preview(spec, test_refs)) if b)
+        preview = "\n\n".join(b for b in (alone, replaces, _spec_preview(spec, test_refs),
+                                           _committed_line(store, run_id)) if b)
         proposed = _propose(
             path, EMIT_TOOL, args, payload,
             target="state/emitted_spec.json", summary=summary, preview=preview,
@@ -449,7 +515,7 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
 
     out = _gated_write(_mokata_dir(path), EMIT_KIND, EMIT_TARGET,
                        preview_content(store, spec),
-                       lambda: spec_commit(store, spec, run_id=run_id),
+                       lambda: spec_commit(store, spec, run_id=run_id, tests=test_refs),
                        gate, _policy(path, EMIT_TOOL, human_approved=True, surface=surface))
     out["ac_count"] = len(spec.criteria)
     out["corpus_size"] = out.pop("result", None)
@@ -468,7 +534,11 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
         # The supersede goes on the ledger, as `spec_amend`'s already does: no archive-READ tool
         # ships in this stage, so `mokata audit` is what makes the superseded spec reachable.
         note_supersede(ledger, run_id, verdict, spec.title)
+        # R2 — the SHA-tied ledger marker of the plan the human just approved.
+        from ..engine.emit import note_plan_approved
+        note_plan_approved(ledger, run_id, store)
         out["version"] = verdict.version
+        out["tasks"] = len(spec.tasks)
         if verdict.replaces:
             out["superseded"] = verdict.archive
             out["replaces_version"] = verdict.from_version
@@ -484,7 +554,9 @@ def spec_amend(path: str = ".", title: str = "", criteria: Optional[list] = None
                tests: Optional[list] = None, approach: str = "", domains: Optional[list] = None,
                scope: Optional[dict] = None, reason: str = "", item: str = "",
                approve: bool = False, confirm: Optional[bool] = None,
-               proposal_id: str = "") -> Dict[str, Any]:
+               proposal_id: str = "", tasks: Optional[list] = None,
+               clarifications: Optional[list] = None,
+               assumptions: Optional[list] = None) -> Dict[str, Any]:
     """SI-DEV — AMEND the spec. The ONE road back when a write is out of scope, and deliberately
     NOT a text edit: it is a FORCED PHASE REGRESSION.
 
@@ -502,13 +574,14 @@ def spec_amend(path: str = ".", title: str = "", criteria: Optional[list] = None
     A user asking for something the spec deferred is authorization to ASK — which is this tool —
     never authorization to build. Do not work around a block; amend, or stop."""
     from ..engine.amend import AMEND_TOOL, begin_amend, finish_amend
-    from ..engine.emit import spec_from_payload
+    from ..engine.emit import spec_for_emit
 
     surface = _surface(path)
     payload = {"title": title, "criteria": criteria or [], "tests": tests or [],
-               "approach": approach, "domains": domains or [], "scope": scope}
+               "approach": approach, "domains": domains or [], "scope": scope,
+               "tasks": tasks, "clarifications": clarifications, "assumptions": assumptions}
     try:
-        spec, test_refs = spec_from_payload(payload)
+        spec, test_refs = spec_for_emit(payload)
     except ValueError as exc:
         return {"status": "error", "committed": False, "reason": str(exc)}
 
@@ -521,6 +594,14 @@ def spec_amend(path: str = ".", title: str = "", criteria: Optional[list] = None
     # reads: a regression opened on the writing process would block nothing and could never be
     # closed by the `--abort` the answer names.
     store, run_id = _evidence_store(surface, path)
+    args = {"path": path, "title": title, "criteria": criteria or [], "tests": tests or [],
+            "approach": approach, "domains": domains or [], "scope": scope or {},
+            "tasks": tasks or [], "clarifications": clarifications or [],
+            "assumptions": assumptions or [], "reason": reason, "item": item}
+    # O14 — a retried redeem is answered BEFORE the regression below, never re-run through it.
+    retry = _retry_of_redeemed(path, AMEND_TOOL, args, proposal_id, store, spec)
+    if retry is not None:
+        return retry
     ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
     layer = KnowledgeLayer.from_surface(surface)
 
@@ -549,9 +630,6 @@ def spec_amend(path: str = ".", title: str = "", criteria: Optional[list] = None
 
     # Gate 3 — the HUMAN (SI.3). While this is pending, the run is REGRESSED and writes are blocked:
     # that is not a gap in the enforcement, it IS the enforcement.
-    args = {"path": path, "title": title, "criteria": criteria or [], "tests": tests or [],
-            "approach": approach, "domains": domains or [], "scope": scope or {},
-            "reason": reason, "item": item}
     gate = _consent(path, AMEND_TOOL, args, proposal_id, surface=surface)
     if gate.refused:
         return _refused(gate)
@@ -560,12 +638,15 @@ def spec_amend(path: str = ".", title: str = "", criteria: Optional[list] = None
             path, AMEND_TOOL, args,
             {"gate": "scope", "from_version": plan.from_version, "to_version": plan.to_version,
              "diff": plan.diff.to_dict(), "scope_widened": plan.scope_widened,
+             **({"lens_basis": plan.lens_basis} if plan.lens_basis else {}),
              "red_owed": list(plan.red_owed),
              "regressed": True},
             target="state/emitted_spec.json",
             summary=(f"amend the spec v{plan.from_version} -> v{plan.to_version}"
                      f"{' — releases: ' + item if item else ''}"),
-            preview=f"{plan.diff.render()}\n\nwhy: {reason or '(none given)'}",
+            preview=("\n\n".join(b for b in (plan.diff.render(),
+                                              f"why: {reason or '(none given)'}",
+                                              _committed_line(store, run_id)) if b)),
             # MCP-R.D2 (B-AMEND-STUCK): the regression rides the SHARED awaiting head, as
             # `awaiting_blocks`, instead of being appended afterwards as `note`. Two reasons, both
             # bugs in the old line: (1) it landed LAST, under the payload, which is exactly how the
@@ -588,6 +669,7 @@ def spec_amend(path: str = ".", title: str = "", criteria: Optional[list] = None
             "version": outcome.version, "diff": outcome.diff.to_dict() if outcome.diff else {},
             "scope_widened": outcome.scope_widened,
             "impact": _impact_summary(outcome.impact),
+            **({"lens_basis": plan.lens_basis} if plan.lens_basis else {}),
             "red_owed": list(outcome.red_owed),
             "next": (f"spec v{outcome.version} is on record (v{outcome.version - 1} superseded, "
                      f"the diff ledgered). Implementation of the NEW criteria is blocked until "
@@ -606,6 +688,17 @@ def _impact_summary(impact: Any) -> Optional[Dict[str, Any]]:
             "degraded": impact.degraded, "note": impact.note}
 
 
+def _committed_line(store: Any, run_id: Any) -> str:
+    """L7b — the TRACKED write an approval also makes when `settings.specs.commit` is on, named in
+    the preview so the human approves it knowingly. "" when the setting is off (byte-identical)."""
+    from ..committed_specs import committed_path_for
+    from ..engine.emit import _repo_root, _reemit_run
+    root = _repo_root(store)
+    where = committed_path_for(root, _reemit_run(store, run_id or "")) if root else None
+    return (f"also commits the approved spec to {where} (settings.specs.commit — tracked in git)"
+            if where else "")
+
+
 def _spec_preview(spec: Any, tests: List[Any]) -> str:
     """What the human sees in their own terminal before approving the emit."""
     by_ac = {}
@@ -620,6 +713,16 @@ def _spec_preview(spec: Any, tests: List[Any]) -> str:
     for c in spec.criteria:
         lines.append(f"  {c.id}: {c.text}")
         lines.append(f"      -> {', '.join(by_ac.get(c.id, [])) or '(unmapped)'}")
+    # R2 + R3 — the plan and the clarify record are approved WITH the criteria, so the human sees
+    # them here, before `mokata approve`.
+    for t in getattr(spec, "tasks", None) or []:
+        deps = f" after {', '.join(t.depends_on)}" if t.depends_on else ""
+        lines.append(f"  task {t.id}: {t.title} [{', '.join(t.ac_ids)}] scope "
+                     f"{', '.join(t.scope)}{deps}")
+    for q in getattr(spec, "clarifications", None) or []:
+        lines.append(f"  {q.id}: {q.question} -> {q.answer or '(unanswered)'}")
+    for a in getattr(spec, "assumptions", None) or []:
+        lines.append(f"  assumption {a.id}: {a.text}")
     return "\n".join(lines)
 
 

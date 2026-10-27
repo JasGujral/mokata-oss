@@ -329,11 +329,15 @@ class Idempotent(_Base):
         # The cost (a later decision judged against an earlier baseline) is filed as
         # H-6-ANCHOR-KEYED-PER-FILE in doc 84; it over-proposes, which is the safe direction.
         store = self.store()
-        store.remember(_item("first rule", about_code=["src/pay.py"]), assume_yes=True)
+        # Distinct VALUES on purpose: R5's write-time overlap would (correctly) fold two entries
+        # that share kind + value + citation + scope into one, and this test needs two decisions.
+        store.remember(_item("first rule", "the rate is fixed", about_code=["src/pay.py"]),
+                       assume_yes=True)
         self.write("src/pay.py", "RATE = 2\n")
         self.assertEqual(1, len(self.anchor_props()))
 
-        store.remember(_item("second rule", about_code=["src/pay.py"]), assume_yes=True)
+        store.remember(_item("second rule", "payments are audited", about_code=["src/pay.py"]),
+                       assume_yes=True)
         props = self.anchor_props()
         self.assertEqual({"first rule", "second rule"}, {p.subject for p in props})
 

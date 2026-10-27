@@ -631,7 +631,11 @@ class TestDoctorTierLine(unittest.TestCase):
             self.assertIn(lexical, text)
         self.assertIn("NOT meaning", self._lines(HASHING_ID, "fts5"),
                       "the hashing tier is never allowed to read as real semantic recall")
-        self.assertIn("no embedder configured", self._lines("off", "fts5"))
+        # The plain note is for the package being ABSENT; installed-but-off names the setup run
+        # (0.0.26 L1, graded in test_l1_full_installs_in_one_go).
+        from mokata.memory import tier_report as _T
+        with mock.patch.object(_T, "_model2vec_installed", return_value=False):
+            self.assertIn("no embedder configured", self._lines("off", "fts5"))
 
     def test_db_s4_doctor_tier_is_informational_only(self):
         # It must never flip doctor's exit. `report.ok` derives from findings, and this emits none.

@@ -1,0 +1,24 @@
+/* mokata ide — S0 Welcome (0.0.26 P39). Brand colours from app.css variables. */
+#view-welcome { padding: 16px 20px; overflow: auto; max-width: 980px; }
+.wl-head h2 { margin: 0 0 2px; font-size: 16px; color: var(--text); }
+.wl-sub { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
+.wl-rows { list-style: none; margin: 0; padding: 0; }
+.wl-row { border-left: 3px solid var(--line2); padding: 8px 12px; margin: 8px 0; background: var(--panel2); border-radius: 0 6px 6px 0; }
+.wl-row.wl-ready { border-left-color: var(--accent); }
+.wl-row.wl-limited, .wl-row.wl-building, .wl-row.wl-needs-setup, .wl-row.wl-not-ready { border-left-color: var(--amber); }
+.wl-row.wl-failed { border-left-color: var(--del); }
+.wl-rhead { display: flex; gap: 8px; align-items: baseline; }
+.wl-state { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); min-width: 9em; }
+.wl-ready .wl-state { color: var(--accent); }
+.wl-failed .wl-state { color: var(--del); }
+.wl-limited .wl-state, .wl-building .wl-state, .wl-needs-setup .wl-state, .wl-not-ready .wl-state { color: var(--amber); }
+.wl-detail { color: var(--text2); margin-top: 2px; }
+.wl-cost { margin-top: 2px; }
+.wl-acts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.wl-fix { user-select: all; font-family: var(--mono); color: var(--accent); }
+.wl-open:disabled { opacity: .45; cursor: default; }
+.wl-consent { border: 1px solid var(--amber-line); border-radius: 6px; padding: 10px 12px; margin: 8px 0 12px; background: var(--panel); }
+.wl-consent h3 { margin: 0 0 6px; font-size: 13px; color: var(--text); }
+.wl-writes { margin: 2px 0 6px 18px; padding: 0; color: var(--text2); }
+.wl-plan { max-height: 240px; overflow: auto; white-space: pre-wrap; background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; padding: 8px; color: var(--text2); }
+.wl-foot { margin-top: 14px; }

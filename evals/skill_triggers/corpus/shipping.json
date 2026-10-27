@@ -1,0 +1,35 @@
+{
+ "skill": "shipping",
+ "triggers": [
+  "rollout strategy (staged, canary, blue-green, feature-flagged)",
+  "rollback or abort thresholds"
+ ],
+ "positive": [
+  "Plan a staged rollout of the new checkout with a canary",
+  "Define rollback thresholds for the release — abort if errors double",
+  "Add a pre-launch checklist for the payments launch",
+  "Should we use blue-green or a feature flag to launch this to users?",
+  "Is this ready to go to users, and how do we back it out?"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Merge my finished change after verifying it",
+   "expect": "ship"
+  },
+  {
+   "prompt": "Add a step to the CI pipeline that builds the docker image",
+   "expect": "ci-cd"
+  },
+  {
+   "prompt": "Implement the failing test for the cart",
+   "expect": "develop"
+  },
+  {
+   "prompt": "Compare shipping carriers for our e-commerce store"
+  },
+  {
+   "prompt": "Tag the release in git",
+   "expect": "git"
+  }
+ ]
+}

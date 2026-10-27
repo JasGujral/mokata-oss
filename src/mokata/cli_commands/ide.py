@@ -12,7 +12,8 @@ def cmd_ide(args: argparse.Namespace) -> int:
     root = os.path.realpath(find_project_root(args.path or os.getcwd()))
     if args.foreground:
         from ..ide.server import serve
-        print("mokata ide: serving in the foreground (Ctrl-C to stop) — the pairing link follows")
+        print("mokata ide: serving in the foreground (Ctrl-C to stop) — the pairing link follows",
+              flush=True)
         import secrets
         token = secrets.token_urlsafe(24)
         port = args.port or 0
@@ -22,9 +23,16 @@ def cmd_ide(args: argparse.Namespace) -> int:
         if not port:
             from ..ide.server import free_port
             port = free_port()
+        # `flush=True` because `serve()` below never returns: the link is the one thing this mode
+        # exists to hand over, and it must not depend on a buffer being pushed out by whatever
+        # the server happens to print next. (Measured: today it does get out through a pipe
+        # either way — this is the guarantee, not a repair of a seen defect.)
         print(f"  http://127.0.0.1:{port}/pair?t={token}"
-              + (f"&focus={args.session}" if args.session else ""))
-        return serve(root, port, args.session, args.demo, None, token, terminal=_terminal_wanted(args))
+              + (f"&focus={args.session}" if args.session else ""), flush=True)
+        # P38: a foreground window at a human TTY may print one-time approval codes to this
+        # terminal (re-checked by the server; never in a detached child, never in CLAUDECODE).
+        return serve(root, port, args.session, args.demo, None, token, terminal=_terminal_wanted(args),
+                     approve_here=not args.demo)
     try:
         from ..ide.launch import open_or_focus
         launched = open_or_focus(root, args.session, demo=args.demo, browser=not args.no_browser,

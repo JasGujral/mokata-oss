@@ -1,0 +1,49 @@
+/* mokata ide — Activity chip, drawer and the in-place job strip (0.0.26 P32). */
+.activity-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 180px; white-space: nowrap;
+  font-size: 12px; color: var(--muted); background: none; border: 1px solid var(--line2); border-radius: 4px;
+  padding: 2px 8px; cursor: pointer; overflow: hidden; }
+.activity-chip .act-label { overflow: hidden; text-overflow: ellipsis; }
+.activity-chip .act-count { font-family: var(--mono); display: none; }
+.activity-chip .act-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+.activity-chip.busy { color: var(--text); border-color: var(--accent); }
+.activity-chip.busy .act-dot, .job-spin { width: 9px; height: 9px; border-radius: 50%; background: none;
+  border: 2px solid var(--accent); border-right-color: transparent; animation: mk-spin .8s linear infinite; flex: none; }
+.activity-chip.partial { border-style: dashed; }
+.activity-chip.failed { color: var(--del); border-color: var(--del); }
+.activity-chip.failed .act-dot { background: var(--del); }
+.activity-chip.done { color: var(--accent); }
+.activity-chip.done .act-dot { background: var(--accent); }
+@keyframes mk-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .activity-chip.busy .act-dot, .job-spin { animation: none; border-right-color: var(--accent); } }
+@media (max-width: 1000px) {
+  .activity-chip .act-label { display: none; }
+  .activity-chip .act-count { display: inline; }
+}
+
+.act-drawer { position: fixed; top: 52px; right: 14px; width: min(460px, calc(100vw - 28px)); max-height: 70vh;
+  overflow: auto; z-index: 60; background: var(--panel); border: 1px solid var(--line2); border-radius: 6px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .35); padding: 10px 12px; }
+.act-dhead { display: flex; align-items: center; justify-content: space-between; }
+.act-dhead h2 { font-size: 13px; margin: 0; }
+.act-list { list-style: none; margin: 6px 0 0; padding: 0; }
+.act-sec { margin-top: 8px; text-transform: uppercase; letter-spacing: .04em; }
+.act-row { border-top: 1px solid var(--line); padding: 7px 0; }
+.act-head { display: flex; align-items: baseline; gap: 8px; }
+.act-head b { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.act-state { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.act-row.running .act-state, .act-row.queued .act-state, .act-row.partial .act-state { color: var(--accent); }
+.act-row.failed .act-state { color: var(--del); }
+.act-row.cancelled .act-state { color: var(--amber); }
+.act-bar { height: 3px; background: var(--line); border-radius: 2px; margin: 4px 0; overflow: hidden; }
+.act-bar span { display: block; height: 100%; background: var(--accent); }
+.act-note { overflow-wrap: anywhere; }
+.act-acts { display: flex; gap: 6px; margin-top: 4px; align-items: center; }
+.act-empty { padding: 10px 0; }
+
+/* The strip a view shows IN its own region while its job runs (§5.4: never in a side panel). */
+.job-strip { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text2);
+  background: var(--panel); border: 1px solid var(--line2); border-radius: 4px; padding: 5px 8px; }
+.job-strip .job-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-strip.bad { border-color: var(--del); color: var(--del); }
+.job-strip.on-canvas { position: absolute; top: 10px; left: 10px; right: 10px; z-index: 15; }
+.stale { opacity: .55; }

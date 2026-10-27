@@ -6,7 +6,7 @@ Every mokata MCP tool result carries a `status`, and the agent branches on it wi
 tests — `mcp/server` and the D0 suite both import them from here.
 
 The vocabulary is a SUPERSET, not a rename: it names the canonical dispatch outcomes the front door
-speaks (the three the wrapper adds — `running`, `timed_out`, plus the reclaimed `error` — alongside
+speaks (the two the wrapper adds — `running`, plus the reclaimed `error` — alongside
 the propose/consent statuses tools already emit: `proposed`, `refused`, `blocked`, `committed`,
 `degraded`). Tools keep their own finer-grained sub-statuses (`ok`, `noop`, `unchanged`, …) — those
 are NOT dispatch outcomes and are passed through byte-identical, so no existing caller breaks.
@@ -26,11 +26,10 @@ COMMITTED = "committed"     # an approved write landed
 DEGRADED = "degraded"       # a capability ran on its documented fallback (honest, not silent)
 
 # Dispatch outcomes the `_serve` front door adds (MCP-R.D0):
-RUNNING = "running"         # a long op is in flight (reserved for the R4 progress surface)
-TIMED_OUT = "timed_out"     # the op exceeded mokata's bounded MCP-surface budget
+RUNNING = "running"         # O14: still working past the reply budget; re-call (same args) to join
 ERROR = "error"            # an uncaught exception / non-dict return, reclaimed into mokata's voice
 
 # The whole vocabulary — import THIS, never a bare string.
 STATUS_VOCAB = frozenset({
-    PROPOSED, REFUSED, BLOCKED, RUNNING, TIMED_OUT, DEGRADED, COMMITTED, ERROR,
+    PROPOSED, REFUSED, BLOCKED, RUNNING, DEGRADED, COMMITTED, ERROR,
 })

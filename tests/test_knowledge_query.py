@@ -75,7 +75,11 @@ class TestGrepStructuralQueries(unittest.TestCase):
             # 0.0.25 K — `truncated` / `total` joined on purpose: a BOUNDED answer (the AST blast
             # radius cap, the adopted graph's result cap) must be representable, or it reads as
             # complete. They are not a second copy of anything `basis` says.
-            {"kind", "target", "references", "backend", "basis", "note", "truncated", "total"},
+            # 0.0.26 P35 — `definitions` / `candidates` joined on purpose: an AMBIGUOUS name
+            # (kubernetes `HandleError`: several definitions) is answered over all of them and
+            # must say how many and which, or the merge reads as one function's callers.
+            {"kind", "target", "references", "backend", "basis", "note", "truncated", "total",
+             "definitions", "candidates"},
         )
         self.assertFalse(any(f.name == "degraded" for f in dataclasses.fields(QueryResult)),
                          "`degraded` must stay DERIVED — a second stored copy is the defect")

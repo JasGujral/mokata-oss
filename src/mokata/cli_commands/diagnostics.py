@@ -17,7 +17,7 @@ from ._common import (
 def cmd_doctor(args: argparse.Namespace) -> int:
     from ..legibility import _color_enabled
     # DOC-ONBOARD — `--wiring`: the WIRING-ONLY check, answered BEFORE a Surface is loaded.
-    # This is what `mokata upgrade` runs the instant the new package lands and what a user runs
+    # This is what a user runs the instant a new package lands (`mokata update`'s follow-up) and
     # when the wiring is the broken thing; demanding an initialized `.mokata/` first would make
     # the diagnostic unavailable in exactly the cases it exists for. Read-only.
     if getattr(args, "wiring", False):
@@ -27,6 +27,20 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         for line in lines:
             print(line)
         return 0 if ok else 1
+    # 0.0.26 L8 (MP.S1) — `--plugin`: the plugin route's health, answered BEFORE a Surface is
+    # loaded (a plugin-only user may not have initialized any repo yet). Read-only; what
+    # `/mokata:doctor` runs through the plugin's pinned launcher.
+    if getattr(args, "plugin", False):
+        from ..plugin_cache import read_plugin_root
+        from ..plugin_runtime import plugin_route_report
+        root = getattr(args, "plugin_root", None) or read_plugin_root()
+        rep = plugin_route_report(root)
+        if not root:
+            print("mokata plugin route: no plugin root recorded (~/.mokata/plugin-root) — the "
+                  "plugin's SessionStart hook has not run on this machine; pass --plugin-root.")
+        for line in rep.lines(ascii_only=not _color_enabled()):
+            print(line)
+        return 0 if (rep.ok and root) else 1
     surface = _load_surface(args.path)
     report = diagnose(surface)
     # DB.S1 — the DSN DEEP-CHECK. For a TEAM-connected repo, classify the shared-DB connection into
@@ -188,6 +202,14 @@ def register(sub, common):
                        help="check ONLY the harness hook wiring — are mokata's gates wired, "
                             "launchable, and current? (works on an uninitialized repo; exit 1 "
                             "if a gate would not fire OR the wiring is out of date)")
+    p_doc.add_argument("--plugin", action="store_true",
+                       help="check ONLY the Claude Code plugin route — uv found, the pinned "
+                            "package resolved, plugin/package versions match, the MCP server "
+                            "running, the hooks firing (works on an uninitialized repo; exit 1 "
+                            "if any check fails)")
+    p_doc.add_argument("--plugin-root", default=None,
+                       help="the plugin checkout to check (default: the one the plugin's "
+                            "SessionStart recorded in ~/.mokata/plugin-root)")
     p_doc.add_argument("--matrix", action="store_true",
                        help="also print the full capability coverage matrix "
                             "(pass/degraded/fail); read-only, does not change the exit code")

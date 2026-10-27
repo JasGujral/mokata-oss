@@ -12,7 +12,7 @@ stops the agent shipping the wrong thing.
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/JasGujral/mokata-oss/actions/workflows/ci.yml/badge.svg)](https://github.com/JasGujral/mokata-oss/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/github/v/release/JasGujral/mokata-oss?label=version)](https://github.com/JasGujral/mokata-oss/releases/latest)
-[![Python](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue.svg)](pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
 [![Docs](https://img.shields.io/badge/docs-mkdocs-blue.svg)](https://mokata.ai/)
 [![local-first](https://img.shields.io/badge/local--first-no%20telemetry-success.svg)](docs/concepts/governance.md)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/JasGujral/mokata-oss/badge)](https://securityscorecards.dev/viewer/?uri=github.com/JasGujral/mokata-oss)
@@ -22,40 +22,62 @@ stops the agent shipping the wrong thing.
 
 ## Install
 
-**One instruction — the same for a first setup and for every update.** Run it in your repo:
+**One install line, one setup.** Run them in your repo:
 
 ```bash
-uv tool install --upgrade mokata       # installs mokata, or upgrades it (or: pipx install --force mokata)
-mokata setup claude --mode full        # wires the repo + installs full mode's dependencies (one question)
+uv tool install "mokata[full]"         # mokata + everything full mode uses, fetched by the installer
+mokata setup claude --mode full        # detects and wires it all — installs nothing
 # restart Claude Code, then check:
 mokata doctor
 ```
 
-`--mode full` asks **one** question before installing its optional dependencies — the local
-semantic-memory model and the code-review-graph structural graph (about 360 MB, all local, no API
-key) — through the same installer you used, so they survive its upgrades. It ends with a table of
-what is active and, for anything that is not, the one command that fixes it. Scripted or CI:
-`mokata setup claude --mode full --yes --with-deps` (`--yes` alone never installs anything).
-Prefer less? `--mode seatbelt` (just the gates) or `--mode memory` (gates + persistent memory).
+Same with pipx: `pipx install "mokata[full]"` · with pip (inside a dedicated venv):
+`pip install "mokata[full]"`. Updating later: `uv tool upgrade mokata` (or `pipx upgrade mokata`)
+keeps the extra, then re-run `mokata setup claude --mode full`. Or just `mokata update`: it
+shows the release notes and that command, asks once, and does both.
+
+`mokata[full]` bundles the local semantic-memory model runtime, the code-review-graph structural
+graph, the TypeScript parser and the IDE companion's web stack (about 360 MB, all local, no API
+key). `--mode full` never rebuilds its own environment: it switches the semantic tier on, warms the
+model (a ~30 MB one-time download from huggingface.co — if that is blocked, it says why), and pins
+code-review-graph as the code graph. It ends with a table of what is active and, for anything that
+is not, the cause and the ONE line that fixes it for the installer you used.
+Prefer less? `--mode seatbelt` (just the gates) or `--mode memory` (gates + persistent memory, with
+`mokata[embeddings]`).
 
 `mokata setup claude` runs `mokata init` for you on a repo that has no `.mokata/` yet, and on a
 repo that has one it leaves your config, memory and ledger alone and refreshes only the wiring —
 new commands (e.g. `/review-window`) appear and stale ones are removed. Re-run it after every
-upgrade. Needs [`uv`](https://docs.astral.sh/uv/) (or `pipx`) and **Python ≥ 3.10**; mokata gets
+upgrade. Needs [`uv`](https://docs.astral.sh/uv/) (or `pipx`) and **Python ≥ 3.12**; mokata gets
 its own environment, never your project's, and works on your existing Claude Code sign-in — no
-API key.
+API key. **Requires Claude Code ≥ 2.1.198** — `mokata doctor` names any feature an older one lacks.
 
-**Alternative · the Claude Code plugin** — two commands inside Claude Code, nothing installed into
-your project (the plugin starts its MCP server through `uvx`, so `uv` must be on PATH):
+**Or, entirely inside Claude Code · the plugin** — two in-app commands, no `pip`, no terminal:
 
 ```text
 /plugin marketplace add JasGujral/mokata-oss
 /plugin install mokata@mostack
 ```
 
-Use one route per repo — the plugin *or* `mokata setup claude`, not both; both wire the same
-hooks. Plain `pip install mokata` also works, but inside a project venv this mixes mokata's deps
-into yours; `mokata doctor` warns when it finds that, or an older copy shadowing it on PATH.
+The plugin runs everything — its MCP server, its hooks, `/mokata:doctor` and the review window
+(`/mokata:review-window`, the IDE preview) — from ONE pinned environment,
+`uvx --from "mokata[full]==<plugin version>"`, so the plugin and the Python package can never be
+different versions. It needs [`uv`](https://docs.astral.sh/uv/) (not Python: uv fetches one if you
+have none); without it, the first session tells you the one install line for your OS. The first
+start fetches `mokata[full]` once (about 100 packages, ~400 MB in uv's cache — seconds on a fast
+link, minutes on a slow one); if `/mcp` shows mokata failed meanwhile, reconnect it when the
+download ends. Finish full mode in a repo with the one command the first briefing names:
+`uvx --from "mokata[full]==<plugin version>" mokata setup claude --mode full --plugin` (or ask
+`/mokata:init full`). `/mokata:doctor` checks the route: uv found · package resolved · versions
+match · MCP server running · hooks firing.
+
+**Which to choose.** Live in Claude Code and want nothing on your PATH → **the plugin**. Want the
+`mokata` command in your terminal too (CI, scripts, `mokata ide` from a shell, other AI tools) →
+**`uv tool install "mokata[full]"`**. Both end in the same full mode — code graph, search by
+meaning, lexical search, the gates. Use one route per repo; if both are wired, the CLI route's
+hooks take over and the plugin's stand down. Plain `pip install mokata` also works, but inside a
+project venv this mixes mokata's deps into yours; `mokata doctor` warns when it finds that, or an
+older copy shadowing it on PATH.
 
 Every route, step by step: [Getting started](docs/getting-started.md) ·
 [Install mokata](docs/how-to/install-mokata.md) ·
@@ -74,7 +96,7 @@ Every route, step by step: [Getting started](docs/getting-started.md) ·
 
 > **Contributing (developers).** Only clone if you're working on mokata itself — end users never
 > need to: `git clone https://github.com/JasGujral/mokata-oss.git && cd mokata-oss && pip install -e .`
-> (on Python ≥ 3.10 this also pulls the MCP SDK). See [CONTRIBUTING.md](CONTRIBUTING.md).
+> (this also pulls the MCP SDK). See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
@@ -168,7 +190,8 @@ axis. See [Getting started](docs/getting-started.md).
 > `mokata init` = **your repo** (`.mokata/`). `mokata setup claude` = **your agent** (`.claude/`,
 > and it runs `init` for you). ⚠ Since 0.0.19 the non-interactive **`mokata init --yes`** does
 > both — it wires the harness too, which matters if you call it from CI. Upgrading? The same instruction as setup —
-> `uv tool install --upgrade mokata`, then `mokata setup claude`, which refreshes the wiring and
+> `mokata update` (or `uv tool upgrade mokata`, then
+> `mokata setup claude`), which refreshes the wiring and
 > keeps your config; a package upgrade alone leaves the old wiring in place.
 > Decision table + upgrade runbook:
 > [Which setup command do I need?](https://mokata.ai/how-to/which-setup-command/)
@@ -210,7 +233,7 @@ The CLI exposes 69 subcommands, including:
 - **Memory & knowledge** — `memory` (`edit`/`export`/`import`/`migrate`/`reembed`/`consolidate`/`promote`/`review`), `govern`.
 - **Session lifecycle & portability** — `sessions`, `resume`, `enter`, `session` (`save`/`push`/`pull`/`list`/`name`), `worktree create` (give a window its own working tree).
 - **Team, stacks & sharing** — `team` (`init`/`join`/`adopt`/`connect`/`disconnect`), `mode`, `sync`, `stacks` (`list`/`search`/`show`/`install`), `vault`.
-- **Setup, config & distribution** — `init`, `setup`/`unsetup`, `reconfigure`, `tour`, `config`, `bootstrap`, `validate`, `route`, `detect`, `reset`, `suggest`, `mcp`, `ci-check`, `export`/`import`, `version`/`upgrade`, `release-check`.
+- **Setup, config & distribution** — `init`, `setup`/`unsetup`, `reconfigure`, `tour`, `config`, `bootstrap`, `validate`, `route`, `detect`, `reset`, `suggest`, `mcp`, `ci-check`, `export`/`import`, `version`/`update`, `release-check`.
 
 Full list with flags: the [CLI reference](https://mokata.ai/reference/cli/).
 

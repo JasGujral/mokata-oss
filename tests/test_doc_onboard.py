@@ -1,13 +1,12 @@
-"""DOC-ONBOARD — self-healing onboarding: upgrade finishes the job, stale wiring is LOUD
+"""DOC-ONBOARD — self-healing onboarding: stale wiring is LOUD
 where users actually look, and the fix is findable by the error string.
 
 THE LOAD-BEARING CONSTRAINT these tests encode: when the harness wiring is a dead bare name,
 mokata's own code NEVER RUNS. So remediation cannot live only inside mokata — it has to ride
 the channels that still execute:
 
-  1. the UPGRADE CLI (run by pip/the shell, not the hook) — `mokata upgrade` finishes the job:
-     after the human-gated pip upgrade it refreshes the harness wiring through the SAME gated
-     preview-diff `setup` uses, then runs the doctor wiring check and reports;
+  1. the UPDATE CLI (run by the shell, not the hook) — `mokata update` prints the upgrade line
+     AND its follow-up `mokata setup claude` (0.0.26 L2: print-only; tests/test_l2_mok_update.py);
   2. the SessionStart BRIEFING (when the harness IS alive) — one line, only when drifted;
   3. the MCP STATUS surface (covers hooks-dead-but-MCP-alive) — the same verdict, structured;
   4. DOCS keyed to the literal error string (found by search, not by mokata).
@@ -37,7 +36,6 @@ from mokata.govern.doctor import (
     wiring_check_lines,
     wiring_drift_findings,
 )
-from mokata.version import finish_upgrade, upgrade_steps, upgrade_tail_commands
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
@@ -102,115 +100,6 @@ class WiringCase(unittest.TestCase):
         self.root.mkdir()
         self.home.mkdir()
         self.addCleanup(self._tmp.cleanup)
-
-
-# =====================================================================================
-# 1 — `mokata upgrade` FINISHES THE JOB
-# =====================================================================================
-class TestUpgradeFinishesTheJob(WiringCase):
-    def test_pip_steps_carry_the_wiring_refresh_and_the_doctor_check(self):
-        # A hand-upgrader reading `upgrade_steps` sees the SAME steps the CLI runs — the
-        # documented story and the automated one can't diverge.
-        steps = upgrade_steps("pip")
-        self.assertTrue(steps[0].endswith("-m pip install --upgrade mokata"), steps[0])
-        joined = " ".join(steps)
-        self.assertIn("mokata setup claude", joined)
-        self.assertIn("mokata doctor --wiring", joined)
-
-    def test_source_route_gets_the_same_tail(self):
-        joined = " ".join(upgrade_steps("source"))
-        self.assertIn("git pull", joined)
-        self.assertIn("mokata setup claude", joined)
-        self.assertIn("mokata doctor --wiring", joined)
-
-    def test_plugin_route_names_the_check_it_can_actually_use(self):
-        # `mokata setup claude` is NOT the plugin remedy (the plugin rewires itself), so the
-        # plugin tail names the verification step only — never a fix that doesn't apply.
-        joined = " ".join(upgrade_steps("plugin"))
-        self.assertIn("marketplace update", joined)
-        self.assertIn("mokata doctor --wiring", joined)
-        self.assertNotIn("mokata setup claude", joined)
-
-    def test_the_tail_runs_the_UPGRADED_code_not_this_process(self):
-        # The load-bearing detail: `pip install -U` replaced site-packages, but THIS process
-        # still holds the OLD modules in memory. Re-wiring in-process would write the OLD
-        # wiring. The tail therefore spawns the freshly-installed mokata.
-        setup_cmd, doctor_cmd = upgrade_tail_commands(root="/repo")
-        self.assertEqual(setup_cmd[:3], [sys.executable, "-m", "mokata"])
-        self.assertEqual(doctor_cmd[:3], [sys.executable, "-m", "mokata"])
-        self.assertIn("setup", setup_cmd)
-        self.assertIn("claude", setup_cmd)
-        self.assertIn("--wiring", doctor_cmd)
-
-    def test_the_wiring_refresh_is_the_setup_gate_never_a_silent_write(self):
-        # It reuses `mokata setup claude`, whose own preview-diff + y/N gate owns the write.
-        # Without --yes nothing suppresses that gate, so nothing can be written unapproved.
-        setup_cmd, _doctor = upgrade_tail_commands(root="/repo", assume_yes=False)
-        self.assertNotIn("--yes", setup_cmd)
-        gated, _d2 = upgrade_tail_commands(root="/repo", assume_yes=True)
-        self.assertIn("--yes", gated)      # explicit approval propagates, still previewed
-
-    def test_finish_upgrade_runs_both_steps_and_reports(self):
-        seen = []
-
-        def runner(cmd):
-            seen.append(cmd)
-            return 0
-
-        out = []
-        tail = finish_upgrade(root=str(self.root), runner=runner, out=out.append)
-        self.assertEqual(len(seen), 2)
-        self.assertIn("setup", seen[0])
-        self.assertIn("--wiring", seen[1])
-        self.assertTrue(tail.wiring_refreshed)
-        self.assertIs(tail.doctor_ok, True)
-        self.assertTrue(any("wiring" in line.lower() for line in out))
-
-    def test_a_declined_wiring_refresh_skips_the_doctor_and_says_so(self):
-        # Declining the setup gate is a legitimate human answer, not a failure: nothing was
-        # written, so there is nothing to verify — and the user is told the wiring is untouched.
-        def runner(cmd):
-            return 1 if "setup" in cmd else 0
-
-        out = []
-        tail = finish_upgrade(root=str(self.root), runner=runner, out=out.append)
-        self.assertFalse(tail.wiring_refreshed)
-        self.assertIsNone(tail.doctor_ok)
-        self.assertIn("mokata setup claude", "\n".join(out))
-
-    def test_cmd_upgrade_runs_the_tail_after_an_approved_pip_upgrade(self):
-        seen = []
-        from mokata.version import UpgradeRun
-        with mock.patch("mokata.version.run_upgrade",
-                        side_effect=lambda *a, **k: seen.append("pip") or UpgradeRun([], 0)), \
-             mock.patch("mokata.version._default_tail_runner",
-                        side_effect=lambda cmd: seen.append(cmd) or 0):
-            rc, out = run_cli(["upgrade", "--method", "pip", "--path", str(self.root),
-                               "--yes"])
-        self.assertEqual(rc, 0)
-        self.assertEqual(seen[0], "pip")
-        self.assertIn("setup", seen[1])
-        self.assertIn("--wiring", seen[2])
-
-    def test_declining_the_pip_gate_leaves_everything_untouched(self):
-        # The pre-existing contract, re-pinned: decline -> no pip, and now also NO tail
-        # (nothing was upgraded, so there is nothing to finish).
-        with mock.patch("mokata.version._default_tail_runner",
-                        side_effect=AssertionError("tail ran without an upgrade")):
-            rc, out = run_cli(["upgrade", "--method", "pip", "--path", str(self.root)],
-                              stdin="")
-        self.assertEqual(rc, 0)
-        self.assertIn("not run", out.lower())
-
-    def test_no_refresh_opts_out(self):
-        from mokata.version import UpgradeRun
-        with mock.patch("mokata.version.run_upgrade", side_effect=lambda *a, **k: UpgradeRun([], 0)), \
-             mock.patch("mokata.version._default_tail_runner",
-                        side_effect=AssertionError("tail ran under --no-refresh")):
-            rc, out = run_cli(["upgrade", "--method", "pip", "--path", str(self.root),
-                               "--yes", "--no-refresh"])
-        self.assertEqual(rc, 0)
-        self.assertIn("mokata setup claude", out)      # still names the step you must run
 
 
 # =====================================================================================
@@ -497,7 +386,7 @@ class TestWhichCommandWhenDocs(unittest.TestCase):
     def test_it_carries_the_upgrade_runbook(self):
         text = self.PAGE.read_text(encoding="utf-8").lower()
         self.assertIn("upgrade", text)
-        self.assertIn("mokata upgrade", text)
+        self.assertIn("mokata update", text)
 
     def test_it_is_in_the_nav(self):
         nav = (ROOT / "mkdocs.yml").read_text(encoding="utf-8")

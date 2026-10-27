@@ -26,6 +26,8 @@ import time
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata.init import init_repo
 
@@ -63,7 +65,7 @@ def _repo(root, *, empty_runs=0, spec=True, draft=False):
     st = _store(root, SPEC_RUN)
     st.write("approved_approach", _approach("add shipping to checkout"))
     if spec:
-        spec_commit(st, Spec("shipping fee", [AcceptanceCriterion("AC1", "50+ ships free")]),
+        commit_planned(st, Spec("shipping fee", [AcceptanceCriterion("AC1", "50+ ships free")]),
                     version=1, run_id=SPEC_RUN)
     old = time.time() - 3600
     from mokata.tdd_state import state_dir

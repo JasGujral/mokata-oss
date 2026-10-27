@@ -157,7 +157,10 @@ class MeaningUnavailableIsSaid(unittest.TestCase):
             self.assertIs(False, res["available"])
             self.assertEqual("not-installed", res["state"])
             self.assertIn("semantic unavailable", res["note"])
-            self.assertEqual("pip install 'mokata[embeddings]'", res["install"])
+            # 0.0.26 L1: the line is THIS installer's, never a hard-coded `pip install '…'`.
+            from mokata.install_route import plan_extra_install
+            self.assertEqual(plan_extra_install("embeddings").display, res["install"])
+            self.assertIn("model2vec", res["install"])
             self.assertEqual([], res["results"], "a word hit exists — and is NOT returned as meaning")
             self.assertFalse(os.path.exists(SR.index_dir(d)), "nothing is indexed or written")
 
@@ -340,11 +343,13 @@ class TheEndpoints(unittest.TestCase):
 
 class ThePage(unittest.TestCase):
 
-    def test_three_tabs_and_an_unavailable_state_that_names_the_fix(self):
+    def test_one_box_with_toggles_and_an_unavailable_state_that_names_the_fix(self):
         with open(os.path.join(STATIC, "index.html"), encoding="utf-8") as fh:
             html = fh.read()
-        for needle in ('data-skind="word"', 'data-skind="regex"', 'data-skind="meaning"',
-                       'id="sr-meaning-state"', 'id="s-changed"', 'src="/static/search.js"'):
+        # 0.0.26 P36 — one box: regex / case / meaning are toggles; the scope is a select
+        for needle in ('data-stoggle="regex"', 'data-stoggle="case"', 'data-stoggle="meaning"',
+                       'id="sr-meaning-state"', 'id="s-scope"', 'data-sscope="changed"',
+                       'data-sscope="session"', 'src="/static/search.js"'):
             self.assertIn(needle, html)
         with open(os.path.join(STATIC, "search.js"), encoding="utf-8") as fh:
             js = fh.read()

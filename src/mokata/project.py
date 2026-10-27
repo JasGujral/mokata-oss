@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional
 
 PROJECT_SETTINGS_KEY = "project"        # settings.project.id
 _PREFIX = "p_"                          # a short, readable id token
@@ -65,12 +65,108 @@ def _has_git_dir(root: str) -> bool:
         cur = parent
 
 
+_UNPARSED = object()
+#: Environment that redirects or injects git config — `git` itself is asked when any is set
+#: (`GIT_CONFIG_COUNT` only when one of its injected keys IS `remote.origin.url`).
+_GIT_CONFIG_ENV = ("GIT_DIR", "GIT_COMMON_DIR", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS")
+
+
+def _env_overrides_remote() -> bool:
+    if any(os.environ.get(k) for k in _GIT_CONFIG_ENV):
+        return True
+    try:
+        count = int(os.environ.get("GIT_CONFIG_COUNT") or 0)
+    except ValueError:
+        return True
+    for i in range(count):
+        key = os.environ.get(f"GIT_CONFIG_KEY_{i}", "")
+        name, _, rest = key.partition(".")
+        sub, _, var = rest.rpartition(".")
+        if name.lower() == "remote" and sub == "origin" and var.lower() == "url":
+            return True
+    return False
+
+
+def _git_config_path(root: str) -> Optional[str]:
+    """The repo's shared `config` file (a linked worktree's `.git` FILE and its `commondir` are
+    followed), or None when there is no `.git` above `root`."""
+    cur = os.path.abspath(root)
+    while True:
+        dot = os.path.join(cur, ".git")
+        if os.path.isdir(dot):
+            gitdir = dot
+            break
+        if os.path.isfile(dot):
+            with open(dot, "r", encoding="utf-8", errors="replace") as fh:
+                line = fh.read().strip()
+            if not line.startswith("gitdir:"):
+                return None
+            gitdir = os.path.join(cur, line[len("gitdir:"):].strip())
+            break
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return None
+        cur = parent
+    try:
+        with open(os.path.join(gitdir, "commondir"), "r", encoding="utf-8") as fh:
+            gitdir = os.path.join(gitdir, fh.read().strip())
+    except OSError:
+        pass
+    return os.path.join(gitdir, "config")
+
+
+def _remote_from_config_file(root: str) -> Any:
+    """`remote.origin.url` read straight from the repo's config file — what `git config --get`
+    answers for an ordinary repo, without a `git` process on the per-prompt hook's path (0.0.26 O12).
+    `_UNPARSED` whenever the file could say something this reader does not model (an include, a
+    quoted or escaped value, a GIT_* override in the environment): the caller then asks `git`."""
+    if _env_overrides_remote():
+        return _UNPARSED
+    try:
+        path = _git_config_path(root)
+        if path is None:
+            return None
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return _UNPARSED
+    if "[include" in text.lower():
+        return _UNPARSED
+    url = None
+    in_origin = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line[0] in "#;":
+            continue
+        if line.startswith("["):
+            head = line[1:line.find("]")] if "]" in line else ""
+            name, _, sub = head.partition(" ")
+            in_origin = name.strip().lower() == "remote" and sub.strip() == '"origin"'
+            if "]" in line and line[line.find("]") + 1:].strip():
+                return _UNPARSED                    # a key on the header line
+            continue
+        if not in_origin:
+            continue
+        key, eq, value = line.partition("=")
+        if key.strip().lower() != "url" or not eq:
+            continue
+        value = value.strip()
+        if any(c in value for c in '"\\#;'):
+            return _UNPARSED
+        url = value                                  # last one wins, as `git config --get`
+    return url or None
+
+
 def _git_remote(root: str, git: Optional[GitRunner] = None) -> Optional[str]:
     """The repo's `origin` remote URL, or None (no git / no remote). Never raises. With the default
-    runner we first check for a `.git` so a non-repo costs no subprocess; an injected runner (tests)
-    is always called."""
-    if git is None and not _has_git_dir(root):
-        return None
+    runner the config file is read directly (`_remote_from_config_file`) and `git` runs only when
+    that reader declines; an injected runner (tests) is always called."""
+    if git is None:
+        if not _has_git_dir(root):
+            return None
+        found = _remote_from_config_file(root)
+        if found is not _UNPARSED:
+            return found
     run = git or _default_git
     rc, out = run(["config", "--get", "remote.origin.url"], root)
     url = (out or "").strip()

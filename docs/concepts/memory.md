@@ -159,12 +159,14 @@ The **embedder is a pluggable seam** wired by `settings.memory.embedder`, and th
   no torch, CPU-fast, ~30MB, runs locally, no API key). This is what makes semantic recall
   *actually semantic*.
 
-**The extra is consented, never assumed.** mokata **asks once** — during the onboarding
-wizard, and on `mokata init --mode memory|full` when interactive — then installs, **verifies
-the import**, and records the decision. It **fails closed**: with no TTY it does not install,
-because "nobody answered" is not consent. A **decline is remembered** (user-scoped), so mokata
-never nags; `pip install 'mokata[embeddings]'` any time. `--mode seatbelt` structurally never
-offers it. `settings.memory.embedder = auto` then picks the extra when it is usable and
+**The extra is consented, never assumed.** The consent is the install itself:
+`uv tool install "mokata[full]"` (or `mokata[embeddings]`) fetches it, and
+`mokata setup claude --mode memory|full` only **detects** it, switches the tier on and **warms
+the model** (a ~30 MB one-time download; when that is blocked, setup and `mokata doctor` say
+why — offline, proxy, TLS). Setup never installs anything itself; when the package is missing it
+prints the one install line for your installer. The interactive onboarding wizard still
+**asks once** (fail-closed off a TTY, a decline remembered). `--mode seatbelt` structurally never
+touches it. `settings.memory.embedder = auto` then picks the extra when it is usable and
 **falls back to hashing** when it isn't.
 
 Vectors from two different embedders are not comparable, so a vector index is **stamped** with
@@ -204,6 +206,58 @@ still holds. Threaded through `recall_relevant` (`RetrievalHit.explain(query)`) 
 
 Nothing reaches a backend without approval. The write API takes a `confirm` callback or an
 `assume_yes` flag; a declined write commits nothing.
+
+## Grounded writes — citations must resolve
+
+A learning that cites code is checked **before** it is stored. Every citation must resolve
+against the repo, or the write is **refused** and the refusal names the unresolved citation —
+nothing is written and no approval is requested:
+
+| Citation | Where it comes from | How it is checked |
+|---|---|---|
+| a path (`src/a.py`, `src/a.py:120`, `docs/x.md#L3-L9`) | `about_code`, or a relative path in the value | the file exists inside the repo; a line anchor is within the file |
+| a commit (`commit 3f2a91c`) | the value, or `retire_when: after:<sha>` | `git cat-file --batch-check` — one call for all of them |
+| a symbol (`BillingService.refund`) | `about_code`, or `retire_when: removed:<symbol>` | the adopted code graph, when one is adopted; otherwise accepted and the basis says **not verified** |
+| a link (`https://…`) | the value | well-formed only — mokata never fetches it (it does not go online by itself) |
+
+The check costs one stat, line count or graph lookup per citation and never walks the repo, so it
+stays fast on large repositories. In prose only unambiguous forms count as citations — a relative
+path with a `/` and a source suffix or a line anchor, a hex id after `commit`/`sha`/`rev`, a URL —
+so ordinary text such as "a/b testing" is never mistaken for one. Episodic conversation turns are
+records of what was said and are not grounded.
+
+Text inside `<private>…</private>` is **excluded** from what is stored (replaced with a visible
+marker) before the secret scan and the approval prompt; an unbalanced tag refuses the write. The
+secret guard still blocks any credential that was not tagged.
+
+### Overlap — update, don't duplicate
+
+Before a write lands, mokata scores it against existing entries on five dimensions: kind,
+subject, value, shared citations and scope. At **4–5/5** the write **updates the existing entry
+in place** (the approval prompt says so and shows both); at **2–3/5** it lands as a new entry and
+the prompt suggests consolidating. At least one of subject, value or citations has to match —
+kind and scope alone never count. Either way the human approves what happens.
+
+### `retire_when` — when a learning should be retired
+
+A learning can carry **expiry predicates**, checked like any other citation when it is written:
+
+- `deleted:<path>` — the file is gone;
+- `removed:<symbol>` — the code graph no longer resolves the symbol;
+- `after:<commit>` — the commit is now in `HEAD`'s history;
+- `date:<YYYY-MM-DD>` — the date has passed.
+
+When one fires, the learning surfaces as a `retire_due` proposal. Resolve it with one **refresh
+verb**, each going through the same approval gate as every memory write:
+
+- **keep** — still true; drop the fired predicate;
+- **update** — rewrite it in place (grounded again);
+- **consolidate** — fold it into another entry;
+- **replace** — a new learning supersedes it;
+- **delete** — remove it (the audit ledger and git history keep the record).
+
+Nothing is retired automatically, and a predicate mokata cannot evaluate (no graph, an unknown
+commit) never fires.
 
 ## Self-healing by surfacing (C5)
 

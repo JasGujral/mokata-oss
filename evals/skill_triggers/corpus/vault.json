@@ -1,0 +1,34 @@
+{
+ "skill": "vault",
+ "triggers": [
+  "Share design artifacts (brainstorm/spec) with the team"
+ ],
+ "positive": [
+  "Push this brainstorm to the team vault",
+  "Search the vault for the auth spec",
+  "Pull the payments spec from the vault",
+  "Share our spec with the team through the vault",
+  "List the design artifacts in the vault"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Package my whole session for a teammate",
+   "expect": "session"
+  },
+  {
+   "prompt": "Store my AWS credentials in HashiCorp Vault"
+  },
+  {
+   "prompt": "Join the team's shared stack",
+   "expect": "team"
+  },
+  {
+   "prompt": "Write the spec for this change",
+   "expect": "spec"
+  },
+  {
+   "prompt": "Flush the team journal",
+   "expect": "sync"
+  }
+ ]
+}

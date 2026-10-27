@@ -28,7 +28,7 @@ Both consume the ONE `AnchorVerdict` and neither derives a predicate of its own 
 computes no hash, opens no record and never touches `fingerprint_forces_refresh`. A refusal costs
 more than a proposal (it stops a human's approval), so a bridge that failed LOUD where H-6 itself
 declines would be strictly worse than no bridge. "Refuse whenever unsure" is the false claim
-`knowledge/about_code.py:8-11` forbids, wearing a safety costume: a symbol anchor on the AST/grep
+`memory/grounding.py` (`_check_symbol`) forbids, wearing a safety costume: a symbol anchor on the AST/grep
 floor is not evidence of staleness, it is an absence of evidence, and refusing on it would make an
 un-adopted install unusable while proving nothing. The equality is asserted across the FULL verdict
 matrix, both shapes, rather than at whichever points are convenient.

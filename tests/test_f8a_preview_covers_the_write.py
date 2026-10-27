@@ -107,11 +107,13 @@ def written_counts(root):
     }
 
 
-_ENGINE_INIT = re.compile(r'^\s*eval\s+"\$ENGINE\s+(init\s+[^"]*)"\s*$')
+# 0.0.26 L6 — the template calls the engine as a `mokata` shell FUNCTION (no `eval` of a command
+# string: user/repo text reaches it as single-quoted words), so a run is a `mokata init …` line.
+_ENGINE_INIT = re.compile(r"^\s*mokata\s+(init\s+[^#]*?)\s*(?:#.*)?$")
 
 
 def init_invocations(template_text):
-    """Every `$ENGINE init ...` the template RUNS, as argv lists. Commented lines are not runs and
+    """Every `mokata init ...` the template RUNS, as argv lists. Commented lines are not runs and
     are not collected — a `#`-prefixed variant is prose about a flag, not an invocation."""
     found = []
     for line in template_text.splitlines():
@@ -463,15 +465,15 @@ class TheTemplatePreviewsTheRunItRuns(unittest.TestCase):
     def test_f8a_the_invariant_catches_the_drift_it_was_written_for(self):
         """§7i — the grader, shown failing on the tree as it stood at `a7b5402`: previewed
         `--preview`, ran `--yes`."""
-        before = self.text.replace('init --profile <profile> --yes --preview --path .',
-                                   'init --profile <profile> --preview --path .')
+        before = self.text.replace("init --profile '<profile>' --yes --preview --path .",
+                                   "init --profile '<profile>' --preview --path .")
         self.assertNotEqual(self.text, before, "re-anchor: the previewed command moved")
         self.assertTrue(template_drift(before))
 
     def test_f8a_the_invariant_catches_a_flag_added_to_the_run_alone(self):
         """The forward-looking half — `--force` reaching step 5 and not step 3."""
-        drifted = self.text.replace('init --profile <profile> --yes --path .',
-                                    'init --profile <profile> --yes --force --path .')
+        drifted = self.text.replace("init --profile '<profile>' --yes --path .",
+                                    "init --profile '<profile>' --yes --force --path .")
         self.assertNotEqual(self.text, drifted, "re-anchor: the executed command moved")
         problems = template_drift(drifted)
         self.assertTrue(problems)

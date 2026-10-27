@@ -1,9 +1,10 @@
 """docsync — keep the docs TRUE to the code (`mokata docsync [target]`).
 
 Two targeting modes: `mokata docsync <path>` audits (or, with `--reconcile`, reconciles) exactly
-that doc; `mokata docsync` with no target sweeps + drift-detects the whole public doc tree. Two
-output modes: AUDIT is read-only (default) — it reports doc↔code discrepancies with a severity and
-highlights stale sections, exiting non-zero on a Blocking finding; RECONCILE (`--reconcile`)
+that doc; `mokata docsync` with no target sweeps + drift-detects the whole public doc tree, then
+checks the repo's SAVED spec against the code (SD.S1: stale AC anchors, ACs whose tests are gone).
+Two output modes: AUDIT is read-only (default) — it reports doc↔code discrepancies with a severity
+and highlights stale sections, exiting non-zero on a Blocking finding; RECONCILE (`--reconcile`)
 previews the fix as a diff and writes ONLY through the human gate (`--yes` to approve
 non-interactively). The engine lives in :mod:`mokata.docsync`; this is the thin CLI over it.
 """
@@ -83,10 +84,15 @@ def cmd_docsync(args: argparse.Namespace) -> int:
         print(render_findings(str(target), findings, degradation))
         return 1 if has_blocking(findings) else 0
 
-    # No target — sweep the doc tree (targeting mode ii).
+    # No target — sweep the doc tree (targeting mode ii), then the saved spec (SD.S1): CI runs
+    # exactly this, so drift between the docs, the spec's ACs and the code fails the build.
+    from ..docsync import render_spec_drift, spec_drift
     results = sweep(root=args.path, facts=facts, degradation=degradation)
     print(render_sweep(results, degradation))
-    return 1 if any(has_blocking(v) for v in results.values()) else 0
+    spec = spec_drift(args.path)
+    print(render_spec_drift(spec))
+    drifted = any(has_blocking(v) for v in results.values()) or has_blocking(spec.findings)
+    return 1 if drifted else 0
 
 
 def read_yes_no_prompt(text: str) -> bool:
@@ -101,7 +107,8 @@ def register(sub, common):
     )
     p.add_argument(
         "target", nargs="?", default=None,
-        help="a doc to audit/reconcile; omit to sweep + drift-detect the whole doc tree",
+        help="a doc to audit/reconcile; omit to sweep the whole doc tree AND check the saved spec "
+             "against the code",
     )
     p.add_argument(
         "--reconcile", action="store_true",

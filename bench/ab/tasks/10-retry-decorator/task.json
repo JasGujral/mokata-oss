@@ -1,0 +1,6 @@
+{
+  "id": "10-retry-decorator",
+  "title": "A retry decorator",
+  "prompt": "Implement `retry(times, exceptions=(Exception,))` in retry.py: a decorator that re-calls the function up to `times` attempts in total on the listed exceptions and re-raises the last one; other exceptions propagate immediately. Add tests.",
+  "max_turns": 40
+}

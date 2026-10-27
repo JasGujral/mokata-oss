@@ -10,7 +10,6 @@
   MK.onRefresh = () => { for (const f of hooks("onRefresh")) f(); };
   for (const w of hooks("wire")) w();
   MK.setMode("review");
-  MK.setPanel("changes", true);
   MK.api("/api/caps").then((c) => {
     if (!c || c.error) return;
     MK.$("st-graph").textContent = c.graph || "—";

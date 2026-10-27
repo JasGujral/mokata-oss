@@ -52,6 +52,7 @@ Never raises: every reader degrades to "no intent" and every writer to a no-op.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from typing import Any, Optional
@@ -220,7 +221,147 @@ def bind_registered(root: str, session_id: str, run_id: str) -> bool:
     return True
 
 
+def run_claimants(root: str, run_id: Optional[str]) -> "frozenset":
+    """INT-2a (B-F4) — the Claude sessions whose OWN registration bound them to `run_id`.
+
+    One `scandir` of the run-state dir plus one small read per `run_intent__*` record (one per
+    session that ever asked for a pipeline — bounded by sessions, never by the repo). Empty when
+    nothing claims the run (a CLI-registered or env-pinned run) and on any read fault: an empty set
+    means "nobody owns it", which keeps today's policing — the fault never widens an exemption."""
+    if not run_id:
+        return frozenset()
+    found = set()
+    try:
+        d = state_dir(root)
+        store = StateStore(d)
+        with os.scandir(d) as entries:
+            names = [e.name for e in entries
+                     if e.name.startswith(INTENT_PREFIX) and e.name.endswith(".json")]
+        for name in names:
+            sid = name[len(INTENT_PREFIX):-len(".json")]
+            try:
+                data = store.read(_key(sid))
+            except Exception:  # noqa: BLE001 — one unreadable record is one unknown claimant
+                continue
+            if isinstance(data, dict) and str(data.get("run_id") or "").strip() == run_id:
+                found.add(sid)
+    except OSError:
+        return frozenset()
+    return frozenset(found)
+
+
+#: How many resume times one record keeps (newest kept) — the IDE's "resumed" markers.
+MAX_RESUMES = 20
+
+
+def resume_facts(root: str, session_id: Optional[str]) -> "tuple":
+    """`(resumed_from, resumes)` recorded for this session by a resume (O10): the predecessor
+    session whose claim it carried ("" when none — or when the id was KEPT across the resume) and
+    the epoch times it was resumed. Read-only; anything unreadable reads as `("", [])`."""
+    if not session_id:
+        return "", []
+    try:
+        data = StateStore(state_dir(root)).read(_key(session_id))
+    except (OSError, ValueError):
+        return "", []
+    if not isinstance(data, dict):
+        return "", []
+    frm = data.get("resumed_from")
+    times = data.get("resumes")
+    out = []
+    for t in times if isinstance(times, list) else []:
+        try:
+            out.append(float(t))
+        except (TypeError, ValueError):
+            continue
+    return (frm if isinstance(frm, str) else ""), out
+
+
+def carry_claim(root: str, session_id: str, from_session: str,
+                now: Optional[float] = None) -> "tuple":
+    """IDE-RESUME-LOSES-RUN (0.0.26 O10) — the resumed conversation `session_id` continues
+    `from_session` (proven by the transcript, never inferred from the repo), so it carries that
+    session's claim: BOUND -> bound to the same run (ONE identity across the break); OPEN -> the same
+    open intent, with the predecessor's original `at`, so it expires exactly when the original would
+    have (a resume can never extend how long a pipeline holds a session). Records `resumed_from` and
+    the resume time. Returns the carried `(state, run_id)`; `(CLAIM_NONE, None)` when there is
+    nothing to carry or `session_id` already holds a claim of its own (never overwritten)."""
+    if not session_id or not from_session or session_id == from_session:
+        return CLAIM_NONE, None
+    ts = time.time() if now is None else float(now)
+    own, _ = session_claim(root, session_id, now=ts)
+    if own != CLAIM_NONE:
+        return CLAIM_NONE, None
+    state, rid = session_claim(root, from_session, now=ts)
+    if state == CLAIM_NONE:
+        return CLAIM_NONE, None
+    try:
+        store = StateStore(state_dir(root))
+        prev = store.read(_key(from_session)) or {}
+        rec = {"at": prev.get("at", ts) if state == CLAIM_OPEN else ts,
+               "via": f"resume:{from_session}", "resumed_from": from_session, "resumes": [ts]}
+        if rid:
+            rec["run_id"] = rid
+        store.write(_key(session_id), rec)
+    except (OSError, ValueError, TypeError) as exc:
+        _say_degraded("a resumed session did NOT carry its predecessor's run, so its edits are "
+                      "not attributed to that run", exc)
+        return CLAIM_NONE, None
+    if rid:
+        from .run_resolver import bind_session_run
+        bind_session_run(root, session_id, rid)
+    return state, rid
+
+
+def mark_resumed(root: str, session_id: str, now: Optional[float] = None) -> bool:
+    """The session id was KEPT across a resume (current Claude Code: `--resume`/`--continue` reuse
+    it) and its claim is already its own: record WHEN it resumed, so the IDE can mark the break.
+    The claim itself is untouched — a bound claim never depended on its MCP process being alive."""
+    if not session_id:
+        return False
+    ts = time.time() if now is None else float(now)
+
+    def merge(cur):
+        cur = dict(cur) if isinstance(cur, dict) else {}
+        times = cur.get("resumes") if isinstance(cur.get("resumes"), list) else []
+        cur["resumes"] = (list(times) + [ts])[-MAX_RESUMES:]
+        return cur
+    try:
+        store = StateStore(state_dir(root))
+        if not store.exists(_key(session_id)):
+            return False
+        store.update(_key(session_id), merge, default={})
+        return True
+    except (OSError, ValueError, TypeError):
+        return False                       # a lost marker loses a UI hint, never a claim
+
+
+def bind_from_hook(payload: Any) -> Optional[str]:
+    """The `run-bind` hook's whole job, on one PostToolUse payload: bind THIS Claude Code session to
+    the run its own `session_save(register=true)` returned. The run id bound, or None (no session id,
+    nothing registered, no mokata repo, or the write failed — each leaves the gate where it was).
+
+    One place for both callers: `hook_cli.run_bind_main` and the `mokata-hook` front door
+    (`mokata_emit.run_bind`, 0.0.26 O3), which calls it SYNCHRONOUSLY — the phase gate reads this
+    binding on the very next tool call — without loading the hook dispatcher."""
+    if not isinstance(payload, dict):
+        return None
+    sid = payload.get("session_id")
+    if not isinstance(sid, str) or not sid.strip():
+        return None
+    rid = registered_run(payload.get("tool_name"), payload.get("tool_response"))
+    if not rid:
+        return None
+    import os
+    from .repo_identity import resolve_mokata_root
+    root = resolve_mokata_root(payload.get("cwd") or os.getcwd()).root
+    if root and bind_registered(root, sid.strip(), rid):
+        return rid
+    return None
+
+
 __all__ = ["INTENT_PREFIX", "INTENT_TTL_SECS", "REGISTERING_SKILLS", "REGISTER_TOOL_RE",
-           "CLAIM_NONE", "CLAIM_OPEN", "CLAIM_BOUND", "pipeline_in_prompt",
+           "CLAIM_NONE", "CLAIM_OPEN", "CLAIM_BOUND", "MAX_RESUMES", "pipeline_in_prompt",
            "pipeline_in_skill_call", "record_intent", "session_claim", "registered_run",
-           "bind_registered"]
+           "bind_registered", "bind_from_hook", "carry_claim", "mark_resumed", "resume_facts",
+           "run_claimants"]

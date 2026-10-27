@@ -1,0 +1,34 @@
+{
+ "skill": "skill-author",
+ "triggers": [
+  "Author a new mokata skill test-first"
+ ],
+ "positive": [
+  "Author a new mokata skill test-first for our migration workflow",
+  "Write a new mokata skill called db-migrate, RED-GREEN for docs",
+  "Create a mokata skill with a required doc assertion",
+  "I want to author a skill for mokata",
+  "Add a new skill to mokata, test-first"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Teach mokata our team's naming conventions",
+   "expect": "onboard"
+  },
+  {
+   "prompt": "List all mokata skills on one screen",
+   "expect": "menu"
+  },
+  {
+   "prompt": "Improve my public speaking skills"
+  },
+  {
+   "prompt": "Install a community stack for Django",
+   "expect": "stacks"
+  },
+  {
+   "prompt": "Write failing tests for the spec",
+   "expect": "test"
+  }
+ ]
+}

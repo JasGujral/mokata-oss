@@ -25,7 +25,7 @@ REQUIRES = [
     'model2vec>=0.3; extra == "embeddings"',
     'numpy>=1.24; extra == "embeddings"',
     'tree-sitter>=0.23; extra == "graph-ts"',
-    'tomli>=2; python_version < "3.11" and extra == "embeddings"',
+    'pywin32>=300; sys_platform == "win32" and extra == "embeddings"',
 ]
 
 RECEIPT = """[tool]
@@ -79,7 +79,7 @@ class TestDetection(unittest.TestCase):
 class TestExtraRequirements(unittest.TestCase):
     def test_reads_only_the_named_extra_and_keeps_other_markers(self):
         self.assertEqual(R.extra_requirements("embeddings", REQUIRES),
-                         ["model2vec>=0.3", "numpy>=1.24", 'tomli>=2; python_version < "3.11"'])
+                         ["model2vec>=0.3", "numpy>=1.24", 'pywin32>=300; sys_platform == "win32"'])
 
     def test_live_metadata_matches_pyproject(self):
         reqs = R.extra_requirements("embeddings")
@@ -147,53 +147,27 @@ class TestUvToolPlan(unittest.TestCase):
         self.assertIn("uv", plan.reason)
 
 
-RICH_RECEIPT = """[tool]
-requirements = [
-    { name = "mokata", specifier = "==0.0.24" },
-    { name = "mokata", extras = ["embeddings"] },
-    { name = "code-review-graph", git = "https://x/y?rev=1" },
-    { name = "m", directory = "C:\\\\Users\\\\j\\\\src" },
-]
-python = "3.12"
-entrypoints = [
-    { name = "mokata", install-path = "C:\\\\x\\\\mokata.exe", from = "mokata" }, # c
-]
+class TestTheReceiptIsReadByTheStdlib(unittest.TestCase):
+    """0.0.26 L12 (PY-FLOOR-3.12): the receipt is read by `tomllib` — on the 3.12 floor there is
+    no Python without it, so the 3.10-era subset reader (`_ReceiptReader`) is gone. A receipt it
+    cannot read is still refused, never guessed: the plan shows the command instead of running."""
 
-[tool.options]
-exclude-newer = "2026-01-01T00:00:00Z"
-"""
-
-
-class TestReceiptOnThePythonFloor(unittest.TestCase):
-    """Measured at I-03: `uv tool install` built the env on Python 3.10 (no tomllib), and every
-    extra failed with "could not read uv's tool receipt". uv's receipt subset is read without it."""
-
-    def test_the_floor_reader_agrees_with_tomllib(self):
-        try:
-            import tomllib
-        except ImportError:
-            self.skipTest("tomllib is the reference and needs 3.11+")
-        for text in (RECEIPT, RICH_RECEIPT):
-            self.assertEqual(R._ReceiptReader(text).document(), tomllib.loads(text))
-
-    def test_a_plan_is_made_without_tomllib(self):
-        import builtins
-        real = builtins.__import__
-
-        def no_tomllib(name, *a, **kw):
-            if name == "tomllib":
-                raise ImportError("3.10")
-            return real(name, *a, **kw)
-        with _Env("uv-receipt.toml", RECEIPT) as p, \
-                unittest.mock.patch.object(builtins, "__import__", no_tomllib):
+    def test_a_receipt_plans_the_pinned_reinstall(self):
+        with _Env("uv-receipt.toml", RECEIPT) as p:
             plan = R.plan_install(["mokata[embeddings]"], prefix=p, which=_which("uv"),
                                   platform="linux", requires=REQUIRES)
         self.assertTrue(plan.runnable, plan.reason)
         self.assertEqual(plan.argv[3], "mokata==0.0.24")
 
-    def test_outside_the_subset_is_refused_not_guessed(self):
-        with self.assertRaises(ValueError):
-            R._ReceiptReader("[[tool]]\nx = 1\n").document()
+    def test_an_unreadable_receipt_is_refused_not_guessed(self):
+        with _Env("uv-receipt.toml", "[[tool]\nx = = 1\n") as p:
+            plan = R.plan_install(["mokata[embeddings]"], prefix=p, which=_which("uv"),
+                                  platform="linux", requires=REQUIRES)
+        self.assertFalse(plan.runnable)
+        self.assertIn("receipt", plan.reason)
+
+    def test_the_subset_reader_is_gone(self):
+        self.assertFalse(hasattr(R, "_ReceiptReader"), "no 3.10 shim survives the 3.12 floor")
 
 
 class TestOtherRoutes(unittest.TestCase):

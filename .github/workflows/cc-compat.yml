@@ -1,0 +1,80 @@
+name: cc-compat (weekly)
+
+# CC-COMPAT (doc 84, launch-gating; 0.0.26 L3). Claude Code ships often; mokata depends on its hook
+# events and payload fields, settings shape (hooks incl. `type: "http"`, statusLine, mcpServers), the
+# plugin manifest, skill/command frontmatter and a few `claude` CLI flags. Every one of those is a
+# row in `src/mokata/claude_code_compat.json`, with the version that introduced it.
+#
+# This job installs the LATEST Claude Code from npm and runs the live contract suite
+# (`tests/test_l3_cc_contract_live.py`) against it:
+#   * `claude --version` meets the manifest's floor;
+#   * every CLI surface mokata invokes or prints still appears in `claude ... --help`;
+#   * `claude plugin validate --strict` accepts the shipped plugin.json / marketplace.json and
+#     EVERY hook shape mokata generates (plugin hooks.json, `mokata setup claude` settings.json,
+#     `--ide-bridge` POSIX http + Windows exec form, `--http-gates`) plus the shipped skills and
+#     commands — with a firing control proving the validator still reads hook bodies.
+# Plus the offline manifest/docs suite (`test_l3_cc_compat.py`, `test_e1_claude_code_floor.py`).
+#
+# NO LOGIN, NO API KEY: nothing here authenticates (`--version`, `--help`, `plugin validate` only),
+# the suite runs `claude` with a throwaway config dir and an env scrubbed of every credential, and
+# this workflow references no secret. The npm install is DELIBERATELY unpinned — tracking the newest
+# release is the point; the version it got is printed and kept in the job summary.
+#
+# A FINDING TOOL: a red here is a Claude Code change that will reach users; file a doc 84 row.
+# Fridays 05:17 UTC — off the hour and clear of the Mon–Thu weekly jobs.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 5"
+
+permissions:
+  contents: read
+
+jobs:
+  cc-compat:
+    name: mokata against the latest Claude Code
+    if: github.repository == 'JasGujral/mokata-oss' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Measured locally (2.1.306): the live suite 24 s, the offline suite 5 s, the npm install
+    # ~30 s. x10 for a cold runner and a slow registry -> 15.
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install mokata
+        run: pip install .
+
+      - name: Install the suite's own requirements (PyYAML — `_support` refuses without it)
+        run: pip install --require-hashes -r requirements/ci.txt
+
+      - name: Install the latest Claude Code (no login, no key)
+        run: |
+          set -euo pipefail
+          npm install -g @anthropic-ai/claude-code@latest
+          v="$(claude --version)"
+          echo "installed: $v"
+          echo "Claude Code under test: \`$v\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Offline manifest + docs agreement
+        working-directory: tests
+        run: python -m unittest -v test_l3_cc_compat test_e1_claude_code_floor
+
+      - name: Live contract suite against the latest Claude Code
+        env:
+          MOKATA_CC_CONTRACT: require
+        run: python -m unittest discover -s tests -t tests -p "test_l3_cc_contract_live.py" -v
+
+      - name: The skill-eval suite loads in the latest `claude plugin eval` (zero runs, $0, no login)
+        # SE.S1/S2 (0.0.26 L5): the cut's live tier runs `claude plugin eval` on the generated
+        # suite; this proves every generated case still LOADS under the newest Claude Code
+        # (`--max-cost-usd 0` stops before the first run; the script asserts nothing ran).
+        run: python scripts/skill_evals_live.py validate

@@ -1,0 +1,34 @@
+{
+ "skill": "performance",
+ "triggers": [
+  "hot path, a database query, a cache, or a batch/loop",
+  "latency/throughput/size budget"
+ ],
+ "positive": [
+  "The orders database query is slow; add a cache and record before/after",
+  "The acceptance criterion says p95 latency under 50ms for search",
+  "This batch loop over a million rows is the hot path; optimize it with measurements",
+  "Add an index to speed up the users query and log the before/after to the ledger",
+  "Our throughput budget is 1k req/s; tune the hot path"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Fix the wrong total in the invoice; it's a correctness bug",
+   "expect": "bug"
+  },
+  {
+   "prompt": "The React bundle exceeds its size budget",
+   "expect": "frontend-perf"
+  },
+  {
+   "prompt": "Add a new column to the report"
+  },
+  {
+   "prompt": "Write the ADR for picking Redis",
+   "expect": "docs-adr"
+  },
+  {
+   "prompt": "Review the performance of our sales team this quarter"
+  }
+ ]
+}

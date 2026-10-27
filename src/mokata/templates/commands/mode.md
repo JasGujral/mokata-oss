@@ -23,19 +23,21 @@ Show or set mokata's **run mode** — a first-class, visible property of every s
 - Read the cached plugin root: `cat ~/.mokata/plugin-root` → `ROOT`. If missing/empty, search the
   Claude Code plugins directory for a `mokata` plugin containing `src/mokata/__init__.py`. (If a
   `mokata` CLI is on PATH, use it directly.)
-- Build the engine command with the **absolute interpreter**:
+- Define the engine as a shell FUNCTION on the **absolute interpreter** — arguments then reach
+  it as separate words, never re-parsed by `eval`:
 
   ```bash
   PY="$(command -v python3 || command -v python)"
-  ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
+  mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
   ```
 
 ## 2. Show or set the mode
 
 ```bash
 # no argument → show the current mode + the team-readiness preflight
+mokata mode
 # `set local` / `set team` → change it (team is gated fail-closed; local is the default)
-eval "$ENGINE mode ${ARGUMENTS}"
+mokata mode set local          # or: mokata mode set team
 ```
 
 Show the output **verbatim**. With no `$ARGUMENTS` it prints the current mode line + the team

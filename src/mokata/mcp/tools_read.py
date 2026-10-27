@@ -424,7 +424,8 @@ def lat_check(path: str = ".", response_format: str = "concise") -> Dict[str, An
     anchors → no drift). Read-only. `response_format` {concise (default), detailed}: concise
     answers with `has_drift`; detailed adds the rendered `report` (P22)."""
     from ..knowledge import lat_check as _lat
-    report = _lat(_surface(path).root)
+    from ..tree_scope import code_root
+    report = _lat(code_root(_surface(path).root))     # P41: the session's worktree's files
     return apply_response_format(response_format,
                                  {"has_drift": report.has_drift, "report": LazyRender(report.render)})
 
@@ -471,7 +472,8 @@ def ci_check(path: str = ".", files: str = "", symbols: str = "") -> Dict[str, A
     # silently degrading to the unscoped default (which returned PASS over an unchecked change).
     fl = validate_comma_list(files, "files")
     sy = validate_comma_list(symbols, "symbols") or None
-    res = CI.run_ci_check(path, fl, changed_symbols=sy)
+    from ..tree_scope import code_root
+    res = CI.run_ci_check(code_root(path), fl, changed_symbols=sy)   # P41: the session's tree
     # D5 — `degraded` rides the structured response too: an agent reading this dict must be able to
     # tell "checked, and clean" from "could not check" without parsing the prose.
     return {"blocked": res.blocked, "degraded": res.degraded, "overall": res.overall,
@@ -1070,7 +1072,7 @@ def review_record(path: str = ".", passed: bool = False, failed: bool = False,
         return {"recorded": False, "status": "error", "run": None,
                 "reason": "blocking must be a whole number of Blocking findings (0 or more)",
                 "hint": "pass blocking=<count of Blocking findings>, or omit it."}
-    from ..progress_events import verdict_contradiction
+    from ..progress_events import ReviewLoopCapped, verdict_contradiction
     contradiction = verdict_contradiction(bool(passed), blocking)
     if contradiction:
         return {"recorded": False, "status": "error", "run": None, "satisfies_gate": False,
@@ -1081,6 +1083,12 @@ def review_record(path: str = ".", passed: bool = False, failed: bool = False,
         event = record_review_verdict(surface, passed=passed, independent=independent,
                                       findings=findings or None, blocking=blocking,
                                       run_id=(run or "").strip() or _CURRENT_RUN)
+    except ReviewLoopCapped as exc:
+        # R4 — not a recording FAULT: the loop is over its cap and round six escalates. Nothing was
+        # recorded, on purpose; the message is the escalation the review skill relays to the human.
+        return {"recorded": False, "status": "escalate", "run": None, "satisfies_gate": False,
+                "reason": str(exc), "message": str(exc),
+                "hint": "stop the review/fix loop and hand it to the human."}
     except Exception as exc:                 # noqa: BLE001
         # Same posture as the CLI's record path: a recording failure is REPORTED, not raised — the
         # review skill must never break on the act of writing down its own verdict. REVIEW-FIX.R4
@@ -1276,7 +1284,14 @@ def progress_mark(path: str = ".", stage: str = "", run: str = "") -> Dict[str, 
             return {"recorded": False, "status": "refused", "run": None,
                     "message": f"mokata progress: not recording '{stage}' — "
                                + unresolved_reason(res)}
-        ProgressLog.from_surface(surface).append_event(STAGE_ENTER, stage, run_id=res.run_id)
+        # R2 (0.0.26) — the stage ATTESTS the approved plan hash, or is refused (nothing recorded).
+        from ..plan_tasks import stage_attestation
+        attested, refusal = stage_attestation(surface.root, res.run_id, stage)
+        if refusal:
+            return {"recorded": False, "status": "refused", "run": res.run_id,
+                    "message": f"mokata progress: {refusal}"}
+        ProgressLog.from_surface(surface).append_event(STAGE_ENTER, stage, run_id=res.run_id,
+                                                       data=attested)
         if stage == "ship" and res.run_id:
             try:
                 from ..govern.resume import PipelineCheckpoint

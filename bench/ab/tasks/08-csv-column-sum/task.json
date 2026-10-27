@@ -1,0 +1,6 @@
+{
+  "id": "08-csv-column-sum",
+  "title": "Sum a CSV column robustly",
+  "prompt": "`column_sum(path, column)` in csvsum.py crashes on blank or non-numeric cells. Make it skip those cells (and raise KeyError for an unknown column). Add tests.",
+  "max_turns": 40
+}

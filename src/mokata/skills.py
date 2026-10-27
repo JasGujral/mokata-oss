@@ -435,6 +435,32 @@ DEVELOP_SCOPE_BINDING = (
     "request is outside the approved spec and names a deferred item, and offer to amend "
     "(`spec_amend`). If they say yes, the amendment re-gates the scope; if they say no, the work "
     "does not happen. Those are the only two roads.\n"
+    "\n## Task by task, against the approved plan hash\n"
+    "The spec carries a TASK PLAN (`tasks[]`, each with its ACs and its own write `scope`) and the "
+    "SHA-256 of the plan the human approved. Work ONE task at a time: `mokata spec task status` "
+    "shows the active task, `mokata spec task start <id>` switches to one whose dependencies are "
+    "done, `mokata spec task done <id>` closes it. An implementation write outside the ACTIVE "
+    "task's scope is blocked (gate `spec-scope`) — finish or switch the task; widening a task is a "
+    "plan change (`spec_amend`). If the plan on record no longer matches its approved hash, every "
+    "stage refuses (develop writes, `progress mark`, ship) until the plan is re-approved — never "
+    "edit the spec on disk.\n"
+)
+
+# R2 + R3 (0.0.26) — the spec carries its TASK PLAN and its capped CLARIFY record, approved together
+# with the ACs (no new phase). Enforced at the wire (`plan_tasks`): a spec without tasks[], a task
+# with no AC/scope/test, or a sixth clarification is refused; the plan hash then binds the stages.
+SPEC_PLAN_AND_CLARIFY = (
+    "\n\n## Clarify (capped), then the task plan\n"
+    "Before drafting ACs, close the high-impact unknowns — AT MOST FIVE clarifying questions, ONE "
+    "at a time, each WITH your recommended answer (a fact the code can answer is looked up, never "
+    "asked). Record them in the payload's `clarifications: [{id, question, recommended, answer}]`; "
+    "a sixth is refused. Past the cap, proceed on STATED assumptions: `assumptions: [{id, text, "
+    "for?}]` — an unanswered clarification must be covered by one. Then plan the work as "
+    "`tasks: [{id, title, ac_ids, scope, files?, depends_on?, consumes?, produces?, parallel?}]`: "
+    "every AC in at least one task, every task naming its ACs and the globs it may write (`scope`, "
+    "a subset of `scope.authorized` when one is declared), every task covered by a test. The plan "
+    "is approved WITH the ACs and sealed with a SHA-256 plan hash; develop then works task by task "
+    "inside the active task's scope, and every later stage refuses a plan whose hash changed."
 )
 
 DEVELOP_AMEND_LOOP = (
@@ -573,6 +599,15 @@ WORKTREE_MERGE_READY_HANDOFF = (
     "on that branch, then from the MAIN checkout run `git merge <branch>`. mokata never merges, so "
     "that command is the human's to run and only after they choose it; PR creation is out of scope "
     "here. The worktree stays until the human removes it — do not clean it up unasked. "
+    "SYNC BEFORE YOU LAND (always — merge OR pull request): the base branch moved while this "
+    "worktree lived, so FIRST bring the branch up to date with it — fetch the base (`git fetch "
+    "origin <base>` when it has a remote), then, inside the worktree, `git rebase <base>` (or "
+    "`origin/<base>`). On a conflict, STOP: show the conflicting files and resolve them with the "
+    "human — never `--skip`, never drop their commits. Then RE-RUN the full test suite on the "
+    "rebased branch: the green you verified in step 1 was against the OLD base and no longer "
+    "counts. Only then present the landing options; for a PR the push after a rebase is "
+    "`git push --force-with-lease`, on the human's explicit choice. The IDE's Worktrees screen "
+    "does the same rebase as a gated Sync, and refuses to merge a branch that is behind its base. "
     "If there is NO binding, this section does not apply: print no handoff prose, raise no error, "
     "and land the run exactly as you otherwise would."
 )
@@ -581,6 +616,72 @@ WORKTREE_MERGE_READY_HANDOFF = (
 # Stage 6r — develop's finish names the next step EXPLICITLY. The generic PROGRESS_INSTRUCTION
 # ends with a `/mokata:<next>` placeholder; for the develop→review transition that is exactly
 # the advisory hand-off that let 0.0.8 skip review. Name it, mark it required, offer to run it.
+# R4 (0.0.26) — the 3-fix BREAKER, in the words develop and debug both carry. The count is RECORDED
+# (`mokata progress fix-attempt`) and ENFORCED by the gate-guard hook (gate `fix-breaker`), so the
+# fourth blind fix is blocked in code, not merely discouraged here.
+FIX_BREAKER_CLAUSE = (
+    "\n\n## Three failed fixes — then stop (the breaker)\n"
+    "Every time a fix you made is checked and the SAME failure is still there, record it: "
+    "`mokata progress fix-attempt --failure \"<the failing test id or the error line>\" --failed` "
+    "(and `--passed` once it is fixed). After THREE failed fix attempts at the same failure, STOP "
+    "fixing: three failures say the APPROACH is wrong, and a fourth guess on top of three is how a "
+    "codebase is buried. The breaker trips at the third — implementation writes for the run are "
+    "then BLOCKED (gate `fix-breaker`) and the ruling is ledgered — and you ESCALATE instead: "
+    "root-cause it with `/mokata:debug` (reproduce, trace the real path, name the cause before any "
+    "fix) and bring the human a NEW approach to approve (`/mokata:brainstorm`, the "
+    "approach-approval gate). An approved new approach clears the breaker; otherwise only the human "
+    "lifts it (`mokata gate override fix-breaker`)."
+)
+
+# R1 (0.0.26) — the Stop evidence gate, said where the claim is made. Enforced by the Stop and
+# SubagentStop hooks (gate `stop-evidence`, fail-closed) from RECORDED state; this is the WHY the
+# model reads first, and the one command that records the evidence.
+STOP_EVIDENCE_CLAUSE = (
+    "\n\n## \"Done\" is a claim the run's record must back\n"
+    "Record every test run as you make it: `mokata progress test-run --passed|--failed --command "
+    "\"<the command>\" --test <test id> --ac <AC>=<test id>` (a failed run records the tests RED, a "
+    "passed run records them GREEN). Do not end a turn saying the work is done, complete or that "
+    "all tests pass unless that record shows it: no test still RED, every acceptance criterion of "
+    "the emitted spec mapped to a test recorded GREEN, a last recorded test run that PASSED and is "
+    "newer than your last write, and — once the run is in review — a recorded review verdict. "
+    "mokata's Stop hook checks exactly that record (gate `stop-evidence`) and sends a claim it "
+    "cannot back straight back to you with the missing evidence named; it FAILS CLOSED — a record "
+    "it cannot read blocks too. If something is NOT done, say what is not done instead of claiming "
+    "it is. A subagent's `status: done` handback that changed implementation must name the test it "
+    "ran and that test must have passed."
+)
+
+# R4 (0.0.26) — the review LOOP cap. Enforced where the verdict is recorded (`review_record` /
+# `mokata progress record-review` refuse round six with an escalation, ledgered), said here so the
+# reviewer plans for it — including the round-4 model-tier bump and deferring Minor findings.
+def model_tier_clause(*roles: str, extra: str = "") -> str:
+    """R6 (0.0.26) — the model tier each role this skill spawns MUST name, rendered from the ONE
+    table (`model_tiers.DEFAULTS` / `FLOORS`) so a skill can never drift from what the gate-guard
+    enforces (gate `model-tier`)."""
+    from .model_tiers import skill_line
+    return ("\n\n## Model tier — name it on every spawn\n"
+            "When this phase spawns a subagent, " + "; ".join(skill_line(r) for r in roles) + "."
+            + (" " + extra if extra else "")
+            + " A role-tagged spawn that names no tier, or one below its role's floor, is BLOCKED "
+            "by the gate-guard (gate `model-tier`). The tier is recorded for the run, with the "
+            "subagent's measured model and token usage from its own transcript "
+            "(`mokata progress models`). Tiers are Claude Code's own model aliases inside your "
+            "login — no API key.")
+
+
+REVIEW_LOOP_CAP_CLAUSE = (
+    "\n\n## Five rounds, then the human (the review-loop cap)\n"
+    "A review that fails, is fixed and is re-reviewed is a LOOP, and it is capped. Only BLOCKING "
+    "findings keep the loop going: DEFER Minor findings — list them in the verdict, never fail a "
+    "round on them. At ROUND 4, raise the reviewer one model tier — rounds 1–3 run on the "
+    "`reviewer` tier, round 4 onward on the `final-reviewer` tier; name the model in the verdict "
+    "— a reviewer that missed it three times is the wrong reviewer. After FIVE failed review rounds in a row, round "
+    "six does not run: recording it is refused and ledgered (gate `review-loop`) and you ESCALATE — "
+    "stop the review/fix loop and hand the human what each round found, what was fixed, and what "
+    "keeps failing. Only the human continues it (`mokata gate override review-loop`)."
+)
+
+
 DEVELOP_NEXT_STEP_INSTRUCTION = (
     "When develop completes, name the next step EXPLICITLY — do NOT use the generic "
     "`/mokata:<next>` placeholder for this transition. Print `✓ develop done — <one-line "
@@ -596,7 +697,8 @@ _SKILLS: List[Skill] = [
     Skill(
         name="brainstorm",
         summary="mokata · Explore approaches with the user; HARD-GATE the spec behind approval.",
-        prompt=BRAINSTORM_PROTOCOL,
+        prompt=BRAINSTORM_PROTOCOL + model_tier_clause("explorer", extra=(
+            "Only when you DELEGATE codebase exploration; exploring yourself needs no spawn.")),
         gate=Gate("approach-approval",
                   "HARD-GATE: no spec until exactly one approach is explicitly approved.",
                   "human"),
@@ -703,6 +805,7 @@ _SKILLS: List[Skill] = [
             "you do not declare is a deferral nothing can enforce."
             + SPEC_AWARENESS_CLAUSE
             + SPEC_QUALITY_LOOP
+            + SPEC_PLAN_AND_CLARIFY          # R2 + R3 (0.0.26) — tasks[] + plan hash, capped clarify
         ),
         gate=Gate("completeness",
                   "No spec is complete until every acceptance criterion maps to a test "
@@ -806,6 +909,9 @@ _SKILLS: List[Skill] = [
             + DEVELOP_DOMAIN_ENGAGE
             + DEVELOP_LIVE_EVIDENCE         # 0.0.23 D1 — LIVE-EVIDENCE + DEV-CC passive
             + WORKTREE_RUN_START_OFFER      # WT.S4 — layered ON TOP, disturbs no prior clause
+            + FIX_BREAKER_CLAUSE            # R4 (0.0.26) — three failed fixes, then escalate
+            + STOP_EVIDENCE_CLAUSE          # R1 (0.0.26) — a "done" the record must back
+            + model_tier_clause("implementer", "explorer")   # R6 (0.0.26)
         ),
         gate=Gate("no-code-without-failing-test",
                   "Implementation is allowed only against an existing failing test; the "
@@ -827,7 +933,10 @@ _SKILLS: List[Skill] = [
         name="review",
         summary="mokata · Two-pass review: against the spec, then quality.",
         prompt=(REVIEW_TWO_PASS_CONTENT + REVIEW_AXES_AND_SEVERITY + REVIEW_DOMAIN_AXES
-                + INDEPENDENT_REVIEW_CLAUSE),
+                + INDEPENDENT_REVIEW_CLAUSE + REVIEW_LOOP_CAP_CLAUSE
+                + model_tier_clause("reviewer", "final-reviewer", extra=(
+                    "Review rounds 1–3 run as `reviewer` (never below mid-tier); round 4 onward, "
+                    "and the closing review you expect ship to read, run as `final-reviewer`."))),
         gate=Gate("spec-then-quality",
                   "Review checks the diff against the spec (no extra features) first, "
                   "then quality. Findings are surfaced for human-gated fixes.",
@@ -855,6 +964,9 @@ _SKILLS: List[Skill] = [
             "about code you haven't read. Form hypotheses and rule them out against the "
             "actual source; after N strikes without a root cause, escalate to a stronger "
             "model. Root-cause before fix."
+            + FIX_BREAKER_CLAUSE            # R4 (0.0.26) — failed FIXES, beside failed hypotheses
+            + model_tier_clause("debugger", extra=(
+                "Escalating \"to a stronger model\" means exactly this tier."))
         ),
         gate=Gate("repro-first",
                   "No fix before the bug is reproduced and the root cause is identified.",
@@ -993,17 +1105,17 @@ _SKILLS: List[Skill] = [
             "Tell the user which mokata version is installed and how to update it. Run "
             "`mokata version` — it prints the version, profile, install method, and Python "
             "OFFLINE (no network). If they want to know whether a newer release exists, run "
-            "`mokata version --check` (or `mokata upgrade --check`): this is OPT-IN and the "
-            "ONLY outbound call — it is accounted and degrades clean offline (a blocked or "
-            "failed check just says it couldn't check; it never errors). To update: if "
-            "mokata is installed as a Claude Code plugin, run `/plugin marketplace update "
-            "mostack` then reinstall it; if it's a pip install, `mokata upgrade` proposes a "
-            "HUMAN-GATED `pip install -U mokata` (it never runs the upgrade or a network "
-            "check on its own). Never check for updates or upgrade unless the user asks."
+            "`mokata version --check`: this is OPT-IN and the ONLY outbound call — it is "
+            "accounted and degrades clean offline (a blocked or failed check just says it "
+            "couldn't check; it never errors). To update, run `mokata update --check` and show "
+            "the plan (installer, latest version, release notes, the ONE command that keeps the "
+            "extras); only when the user says to update, run `mokata update --yes` — it runs that "
+            "command and then refreshes the vendored commands/skills and the wiring. Never check "
+            "for updates or update unless the user asks."
         ),
         gate=Gate("version-display",
-                  "Read-only version display; the update check is opt-in and the upgrade "
-                  "is human-gated — nothing leaves the machine or changes without asking.",
+                  "Read-only version display; the update check is opt-in and `mokata update` "
+                  "asks before it runs — nothing leaves the machine or changes without asking.",
                   "check"),
         ground=False,                # informational; no code-grounding discipline needed
     ),

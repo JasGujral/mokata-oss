@@ -1,0 +1,35 @@
+{
+ "skill": "brainstorm",
+ "triggers": [
+  "exploring an approach",
+  "weighing options or trade-offs",
+  "describing a NEW problem/feature"
+ ],
+ "positive": [
+  "I'm exploring an approach for offline sync — can we weigh the options before any code?",
+  "Let's think through the trade-offs between a queue and a cron job for this new feature",
+  "I have a new problem: users want shared shopping lists. How should we approach it?",
+  "Before implementation, help me explore approaches for rate limiting the public API",
+  "Weighing options: should notifications be push or polling? Talk it through with me"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Fix the typo on line 12 of README.md"
+  },
+  {
+   "prompt": "The approach is approved, now write the acceptance criteria for it",
+   "expect": "spec"
+  },
+  {
+   "prompt": "Continue implementing the approved plan and make the failing test pass",
+   "expect": "develop"
+  },
+  {
+   "prompt": "Run git status for me"
+  },
+  {
+   "prompt": "Review my finished diff before I merge it",
+   "expect": "review"
+  }
+ ]
+}

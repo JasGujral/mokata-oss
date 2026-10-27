@@ -158,6 +158,16 @@ class _Fixture:
                                         supersedes=[self.target.id])
         self.backend.put(self.target)
         self.backend.put(self.source)
+        # 0.0.26 O13 — a BUILT code-review-graph index (its metadata as 2.3.9 records it), for the
+        # read-only `crg_build.probe_db` (`probe_index` reads through it).
+        import sqlite3
+        os.makedirs(os.path.join(root, ".code-review-graph"))
+        crg = sqlite3.connect(os.path.join(root, ".code-review-graph", "graph.db"))
+        crg.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT)")
+        crg.executemany("INSERT INTO metadata VALUES (?, ?)",
+                        [("last_updated", "2026-10-21T10:00:00"), ("build_state", "complete")])
+        crg.commit()
+        crg.close()
 
     def connect(self):
         """A connection through the ONE factory, for the two subjects that take a `conn`."""
@@ -242,7 +252,9 @@ def assert_write_free(case, binding):
 
 def _bindings():
     """Built lazily so `MissingEvidence`/`KeyError` surface inside a test, not at import."""
+    from mokata.knowledge import crg_build, crg_nodes
     return [
+
         # ---- memory/_sqlite.py -------------------------------------------------------------
         Binding(
             ("memory/_sqlite.py", "_current_mode"),
@@ -312,7 +324,50 @@ def _bindings():
             # it really ran iff the server's line came through the queue, followed by the EOF mark
             evidence=lambda fx, r: r == [b'{"jsonrpc": "2.0"}\n', None],
             neuter=(StdioMcpClient, "_pump")),
+        # ---- knowledge/crg_build.py (0.0.26 O13) — read on every query against the graph.
+        # 0.0.26 P32 — the read moved into `probe_db` (it also probes a side-built rebuild).
+        Binding(
+            ("knowledge/crg_build.py", "probe_db"),
+            run=lambda fx: crg_build.probe_db(crg_build.db_path(fx.root)),
+            # it really read the seeded metadata: only a completed build's record says BUILT
+            evidence=lambda fx, r: r == crg_build.INDEX_BUILT,
+            neuter=(crg_build, "probe_db")),
+        # ---- 0.0.26 P35 — two more READ-ONLY reads of code-review-graph's graph.db.
+        Binding(
+            ("knowledge/crg_build.py", "had_complete_build"),
+            run=lambda fx: crg_build.had_complete_build(crg_build.db_path(fx.root)),
+            # it really read `last_updated`: only the seeded completed build says True
+            evidence=lambda fx, r: r is True,
+            neuter=(crg_build, "had_complete_build")),
+        # ---- 0.0.26 P37 — the update-attempt record compares this READ-ONLY read of
+        # `metadata.last_updated` with the value the attempt began from.
+        Binding(
+            ("knowledge/crg_build.py", "_meta_value"),
+            run=lambda fx: crg_build._meta_value(crg_build.db_path(fx.root), "build_state"),
+            evidence=lambda fx, r: r == "complete",
+            neuter=(crg_build, "_meta_value")),
+        Binding(
+            ("knowledge/crg_build.py", "_last_updated"),
+            run=lambda fx: crg_build._last_updated(crg_build.db_path(fx.root)),
+            evidence=lambda fx, r: isinstance(r, str) and bool(r),
+            neuter=(crg_build, "_last_updated")),
+        Binding(
+            ("knowledge/crg_nodes.py", "_select"),
+            run=_run_crg_select,
+            evidence=lambda fx, r: r == ("complete",),
+            neuter=(crg_nodes, "_select")),
     ]
+
+
+def _run_crg_select(fx):
+    """`crg_nodes._select` over the fixture's built index, on a read-only connection."""
+    from mokata.knowledge import crg_build, crg_nodes
+    conn = _sqlite.connect_sqlite_readonly(crg_build.db_path(fx.root))
+    try:
+        cur = crg_nodes._select(conn, "SELECT value FROM metadata WHERE key = 'build_state'")
+        return cur.fetchone() if cur is not None else None
+    finally:
+        conn.close()
 
 
 def _run_cert_pump(fx):
@@ -348,24 +403,67 @@ _SHARED_DB_SUBSTRATE = "refused (a) — reads a shared Postgres/pgvector DB; its
                        "whatever it did. The SQLite twin of this read IS bound."
 
 REFUSED = {
+    ("briefing_cache.py", "store"): "writes — 0.0.26 O12b: the briefing's background-refreshed answers under temp_local/briefing/ are its whole purpose, so it cannot be bound as write-free",
+    ("briefing_cache.py", "derived"): "writes — 0.0.26 O12b: caching the memory-derived briefing lines under temp_local/briefing/ is its purpose, so it cannot be bound as write-free",
+    ("briefing_cache.py", "_acquire"): "writes — 0.0.26 O12b: the briefing refresher's lock file is its purpose, so it cannot be bound as write-free",
+    ("briefing_cache.py", "_release"): "writes — 0.0.26 O12b: removing the briefing refresher's own lock file is its purpose, so it cannot be bound as write-free",
+    ("knowledge/structure_cache.py", "store"): "writes — 0.0.26 O12: the briefing's cached structure line under temp_local/briefing/ is its whole purpose, so it cannot be bound as write-free",
+    ("knowledge/structure_cache.py", "_acquire"): "writes — 0.0.26 O12: the structure refresher's lock file under temp_local/briefing/ is its purpose, so it cannot be bound as write-free",
+    ("knowledge/structure_cache.py", "_release"): "writes — 0.0.26 O12: removing the structure refresher's own lock file is its purpose, so it cannot be bound as write-free",
+    ("memory/graph_anchors.py", "CachedGraphScorer.request_warm"): "writes — 0.0.26 O12: appending the prompt's unverdicted tokens to the recall-graph lookup queue under temp_local/recall_graph/ is its purpose, so it cannot be bound as write-free",
+    ("memory/graph_anchors.py", "_acquire"): "writes — 0.0.26 O12: the recall-graph warmer's lock file under temp_local/recall_graph/ is its purpose, so it cannot be bound as write-free",
+    ("memory/graph_anchors.py", "_release"): "writes — 0.0.26 O12: removing the warmer's own lock file is its purpose, so it cannot be bound as write-free",
+    ("memory/graph_anchors.py", "_take_wanted"): "writes — 0.0.26 O12: claiming (rename) and deleting the lookup queue is its purpose, so it cannot be bound as write-free",
+    ("memory/graph_anchors.py", "_write_cache"): "writes — 0.0.26 O12: the recall-graph verdict cache under temp_local/recall_graph/ is its whole purpose, so it cannot be bound as write-free",
+    ("_updater.py", "write_result"):
+        "writes — 0.0.26 L2: the detached updater records the update's outcome under ~/.mokata/update/ so the next mokata/IDE start can report it; that record is its whole purpose",
+    ("update.py", "launch_detached"):
+        "writes — 0.0.26 L2: it stages the updater script and its job file under ~/.mokata/update/ by purpose (the click/confirm is the consent); cannot be bound as write-free",
+    ("update.py", "take_result"):
+        "writes — 0.0.26 L2: the update result is reported ONCE, so reading it removes it; cannot be bound as write-free",
+    ("ide/handoff.py", "_write"):
+        "writes — 0.0.26 P37: the job handoff record (handed / cancelled / the worker's progress and outcome) is its whole purpose, so it cannot be bound as write-free",
+    ("ide/handoff.py", "_prune"):
+        "writes — 0.0.26 P37: removing handoff records past KEEP_RECORDS is its purpose, so it cannot be bound as write-free",
+    ("ide/handoff.py", "_spawn"):
+        "writes — 0.0.26 P37: it opens the detached worker's log beside its record, so it cannot be bound as write-free",
+    ("ide/workspace.py", "save"):
+        "writes — 0.0.26 P2: the IDE's tab/scroll/focus restore record under temp_local/ide/ is its whole purpose, so it cannot be bound as write-free",
+    ("ide/workspace.py", "load"):
+        "writes — 0.0.26 P2: a corrupt or other-schema restore file is moved aside (os.replace) and reported rather than overwritten — user-owned state is never silently lost — so loading cannot be bound as write-free",
     ("ide/health.py", "_rebuild_ast"):
         "writes — 0.0.25: the health panel's force re-parse deletes and rebuilds mokata's AST edge cache under temp_local/knowledge_ast/ by purpose, so it cannot be bound as write-free",
     ("ide/health.py", "_rebuild_search"):
         "writes — 0.0.25: the health panel's force rebuild deletes and re-embeds the IDE's semantic index under temp_local/ide/semantic/ by purpose, so it cannot be bound as write-free",
-    ("ide/search.py", "build_index"):
-        "writes — 0.0.23 C2: the IDE's local semantic index under temp_local/ide/semantic/ is its whole purpose, so it cannot be bound as write-free",
+    ("knowledge/crg_build.py", "_lock_holder"): "writes — 0.0.26 O13: code-review-graph build run-state under temp_local/crg-build/ (lock / last outcome / builder log) or the tool's own partial index is this site's purpose, so it cannot be bound as write-free",
+    ("knowledge/crg_build.py", "_release"): "writes — 0.0.26 O13: code-review-graph build run-state under temp_local/crg-build/ (lock / last outcome / builder log) or the tool's own partial index is this site's purpose, so it cannot be bound as write-free",
+    ("knowledge/crg_build.py", "_spawn_worker"): "writes — 0.0.26 O13: code-review-graph build run-state under temp_local/crg-build/ (lock / last outcome / builder log) or the tool's own partial index is this site's purpose, so it cannot be bound as write-free",
+    ("knowledge/crg_build.py", "_write_json"): "writes — 0.0.26 O13: code-review-graph build run-state under temp_local/crg-build/ (lock / last outcome / builder log) or the tool's own partial index is this site's purpose, so it cannot be bound as write-free",
+    ("knowledge/crg_build.py", "_remove_db"): "writes — 0.0.26 O13/P32: removing a PARTIAL graph.db, or a cancelled/failed side-built rebuild copy, is this site's purpose, so it cannot be bound as write-free",
+    ("knowledge/crg_build.py", "_seed_beside"): "writes — 0.0.26 P37: copying the index beside itself and restoring the complete marker in the COPY is this site's purpose, so it cannot be bound as write-free",
+    ("knowledge/crg_build.py", "_end_update"): "writes — 0.0.26 P37: removing (or marking ended) the update-attempt record `temp_local/crg-build/update.json` once an incremental update finished is this site's purpose, so it cannot be bound as write-free",
+    ("knowledge/crg_build.py", "_drop_next"): "writes — 0.0.26 P32: removing the side-build directory of a finished, cancelled or failed rebuild is this site's purpose, so it cannot be bound as write-free",
+    ("knowledge/crg_build.py", "swap_in"): "writes — 0.0.26 P32 (R39): replacing the index in use with a COMPLETE side-built rebuild (one os.replace) is this site's purpose, so it cannot be bound as write-free",
+    ("ide/search.py", "_write_index"):
+        "writes — 0.0.23 C2 / 0.0.26 O13: the IDE's local semantic index under temp_local/ide/semantic/ is its whole purpose, so it cannot be bound as write-free",
     ("harness_cert.py", "record_result"):
         "writes — 0.0.23 D12: the owner's `record` action writes the certification matrix doc by purpose (atomic tmp + replace), so it cannot be bound as write-free",
     ("ide/bus.py", "ensure_bridge"):
         "writes — 0.0.25 ID.S3: it creates the IDE live-bridge record (port + hook token) under temp_local/ide/ by purpose, so it cannot be bound as write-free",
     ("ide/server.py", "_remove_record"):
         "writes — 0.0.22 E2's review window: it is a writer by purpose (the snapshot store / the server record under temp_local/), so it cannot be bound as write-free",
+    ("ide/statedir.py", "note_repo"):
+        "writes — 0.0.26 P29: it writes the `repo.txt` label of an un-set-up repo's user-level IDE state dir by purpose, so it cannot be bound as write-free",
+    ("ide/firstrun.py", "_move_record"):
+        "writes — 0.0.26 P39: after a consented `mokata init` it moves this IDE's own server record into the now-governed repo by purpose, so it cannot be bound as write-free",
     ("ide/server.py", "_write_record"):
         "writes — 0.0.22 E2's review window: it is a writer by purpose (the snapshot store / the server record under temp_local/), so it cannot be bound as write-free",
     ("ide/snapshots.py", "_append"):
         "writes — 0.0.22 E2's review window: it is a writer by purpose (the snapshot store / the server record under temp_local/), so it cannot be bound as write-free",
     ("ide/snapshots.py", "_maybe_prune"):
         "writes — 0.0.22 E2's review window: it is a writer by purpose (the snapshot store / the server record under temp_local/), so it cannot be bound as write-free",
+    ("session_index.py", "_write_file"):
+        "writes — 0.0.26 P33's session index: a writer by purpose (one row per session under temp_local/sessions/), so it cannot be bound as write-free",
     ("ide/snapshots.py", "_write_object"):
         "writes — 0.0.22 E2's review window: it is a writer by purpose (the snapshot store / the server record under temp_local/), so it cannot be bound as write-free",
     ("ide/snapshots.py", "capture_before_first_write"):
@@ -523,6 +621,10 @@ REFUSED = {
     # once-migrated marker entry went with it — there is no migration left to record.
     ("plans.py", "write_plan_file"): "writes — the plan draft under temp_local/",
     ("plugin_cache.py", "record_plugin_root"): "writes — the machine-local cache under ~/.mokata",
+    ("plugin_runtime.py", "_write"): "writes — the plugin route's runtime records under "
+        "${CLAUDE_PLUGIN_DATA} (0.0.26 L8)",
+    ("plugin_runtime.py", "record_runtime"): "writes — records the pinned runtime and deletes "
+        "another version's record (0.0.26 L8)",
     ("progress_events.py", "ProgressLog.append_event"): "writes — appends a run-telemetry event "
         "under temp_local/",
     ("govern/evidence.py", "record_evidence"): "writes — appends gate-outcome evidence under "

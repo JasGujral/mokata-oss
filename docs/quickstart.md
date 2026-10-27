@@ -10,12 +10,13 @@ Python package you can run as a CLI anywhere. The full narrative lives in
 
 ### In Claude Code (recommended)
 
-**One instruction — the same for a first setup and for every update.** Runs on your existing
+**One install line, one setup** (update later with `uv tool upgrade mokata`, which keeps the
+extra, then the same setup). Runs on your existing
 Claude Code sign-in — **no API key** — and mokata gets its own environment, never your project's:
 
 ```bash
-uv tool install --upgrade mokata   # installs mokata, or upgrades it (or: pipx install --force mokata)
-mokata setup claude                # wires the repo — runs `mokata init` too if the repo has no .mokata/
+uv tool install "mokata[full]"     # mokata + everything full mode uses (or: pipx install "mokata[full]")
+mokata setup claude --mode full    # detects + wires it all, installs nothing — runs `mokata init` too if needed
 # restart Claude Code, then:
 mokata doctor
 ```
@@ -36,7 +37,7 @@ Options: `--profile`, `--scope`; reverse with `mokata unsetup claude`.
 The plugin's commands are namespaced (`/mokata:<name>`); its MCP server starts through `uvx`, so
 [`uv`](https://docs.astral.sh/uv/) must be on PATH. See [Install the plugin](how-to/install-plugin.md).
 
-> Plain `pip install mokata` works too (Python ≥ 3.10; the MCP SDK is a default dep) — but inside
+> Plain `pip install mokata` works too (Python ≥ 3.12; the MCP SDK is a default dep) — but inside
 > a project venv this mixes mokata's deps into yours — prefer the above. Every route:
 > [Install mokata](how-to/install-mokata.md).
 
@@ -91,7 +92,7 @@ inspection, and wiring into other harnesses rather than writing code on its own.
 
 > **Contributing (developers only).** To work on mokata itself, clone the repo and install it
 > editable — end users never need this: `git clone https://github.com/JasGujral/mokata-oss.git
-> && cd mokata-oss && pip install -e .` (on Python ≥ 3.10 this also pulls the MCP SDK).
+> && cd mokata-oss && pip install -e .` (this also pulls the MCP SDK).
 
 The rest of this quickstart shows the **CLI** path; inside Claude Code the slash commands
 above do the same thing.

@@ -87,6 +87,10 @@ def cmd_approve(args: argparse.Namespace) -> int:
         print(f"error: proposal '{p.proposal_id}' was already used — an approval licenses exactly "
               f"one write.")
         return 1
+    if p.status == approval.STATUS_REJECTED:
+        print(f"proposal '{p.proposal_id}' was rejected (by {p.approved_by or 'a human'}) — it "
+              f"licenses nothing. Ask the model to re-run the write to see it again.")
+        return 0 if getattr(args, "reject", False) else 1
     if p.expired():
         print(f"error: proposal '{p.proposal_id}' has expired. Ask the model to re-run the write.")
         return 1
@@ -95,6 +99,17 @@ def cmd_approve(args: argparse.Namespace) -> int:
     print("mokata · a durable write is waiting for your approval:\n")
     print(approval.render(p))
     print()
+
+    if getattr(args, "reject", False):
+        # 0.0.26 P38 — the NO, on the same bar as the yes: shown in full, re-confirmed at a TTY
+        # (fails closed off one), ledgered. Rejecting an unredeemed approval takes it back.
+        decision = confirmed(args.yes, "", f"REJECT this {p.tool} write? It will not be written.")
+        if not decision:
+            print(f"nothing was rejected — {decline_notice(decision)}.")
+            return 1
+        res = approval.reject(root, p.proposal_id, actor=args.actor, ledger=_ledger(root))
+        print(("rejected: " if res.ok else "error: ") + f"{p.proposal_id} — {res.message}")
+        return 0 if res.ok else 1
 
     if p.status == approval.STATUS_APPROVED:
         print(f"already approved (by {p.approved_by or 'you'}) — the model can redeem it once.")
@@ -185,6 +200,9 @@ def register(sub, common):
     p_approve.add_argument("--list", dest="list_pending", action="store_true",
                            help="list the writes waiting on you — id, tool and age, read-only "
                                 "(the same as passing no id; this is the spelling mokata emits)")
+    p_approve.add_argument("--reject", action="store_true",
+                           help="REJECT the proposal instead (same re-confirmation; ledgered); "
+                                "an approval not yet redeemed is taken back")
     p_approve.add_argument("--actor", default="human",
                            help="who is approving (default: human; recorded to the ledger)")
     p_approve.add_argument("--yes", action="store_true",

@@ -1,0 +1,35 @@
+{
+ "skill": "docs",
+ "triggers": [
+  "published documentation topics",
+  "site URLs"
+ ],
+ "positive": [
+  "List the published mokata documentation topics with their site URLs",
+  "Where is the mokata docs page about hooks? Give me the URL",
+  "Show me the documentation topics mokata has published",
+  "Resolve the 'install' docs topic to its site URL",
+  "What's the mokata docs link for the IDE?"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Check whether our README still matches the code",
+   "expect": "docsync"
+  },
+  {
+   "prompt": "Write an ADR for the decision to use SQLite",
+   "expect": "docs-adr"
+  },
+  {
+   "prompt": "Show me every mokata command on one screen",
+   "expect": "menu"
+  },
+  {
+   "prompt": "Fetch the Django docs about middleware"
+  },
+  {
+   "prompt": "Give me a quick 60-second demo of mokata",
+   "expect": "tour"
+  }
+ ]
+}

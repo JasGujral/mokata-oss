@@ -100,8 +100,9 @@ holds **4 run-state gates** *outside* mokata's own tools, on the harness's nativ
 That is what makes them structural rather than advisory. Note that this is **not** "four of the
 nine": three of them are in the table above, and `spec-scope` is a run-state gate the hook
 enforces without being a Contract-citable one. The hook lane and the backed set are two
-overlapping sets, so the honest phrasing is *the hook stops 5 things* — those four plus
-`self-protect`, which runs ahead of all of them — never *5 of the 9*.
+overlapping sets, so the honest phrasing is *the hook stops 6 things* — those four, the
+`fix-breaker` loop gate (three failed fixes at one failure block the fourth), plus `self-protect`,
+which runs ahead of all of them — never *6 of the 9*.
 
 Everything else a skill states as its headline (`ship-readiness`, demoted to advisory in 0.0.17
 because nothing in the package executes it, `red-before-green`, `spec-then-quality`,

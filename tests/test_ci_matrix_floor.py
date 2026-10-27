@@ -1,17 +1,13 @@
-"""THE CI PYTHON AXIS — every workflow leg runs Python 3.12, and the declared floor is UNTESTED.
+"""THE CI PYTHON AXIS — every workflow leg runs Python 3.12, and 3.12 IS the declared floor.
 
 0.0.24 (owner ruling 2026-10-17): the PR gate (`ci.yml`) and the tag-time gate (`release.yml`)
-run Python 3.12 ONLY. The 3.10 "floor" legs that 0.0.16 and 0.0.18 stage 17 added to close
-`CI-MATRIX-FLOOR-GAP` were removed to cut the gate's wall-clock — the Windows legs dominate it.
-
-`pyproject.toml` still declares `requires-python = ">=3.10"`. That promise is exercised by NO
-PR-gate or tag-gate leg, which reopens exactly the gap that let the ISO-dialect split ship green
-(`datetime.fromisoformat` learned the Zulu designator in 3.11, so a 3.12-only gate cannot see a
-bug of that shape). The owner chose that trade knowingly; this file's job is to keep it VISIBLE:
-it pins that no GATE leg runs the floor, so the day someone believes a PR was tested on the floor,
-a red says otherwise. 0.0.25 Lane C (ruling U2 as recommended) brought the floor back WEEKLY —
-`.github/workflows/python-floor.yml`, graded by `tests/test_c_02_python_floor_leg.py` — which
-tests the promise without gating a merge; the gates here are unchanged.
+run Python 3.12 ONLY; the 3.10 "floor" legs were removed for the Windows wall-clock, which left
+`requires-python = ">=3.10"` a promise no gate tested (the ISO-dialect split and the uv receipt
+both shipped as 3.10-only bugs). 0.0.26 L12 (PY-FLOOR-3.12, Jas 2026-10-22) closed that the other
+way: the floor was RAISED to 3.12, so the gate Python and the floor are the same version and every
+PR tests the floor. This file pins that they stay equal — raising one without the other reopens
+the gap. The weekly `.github/workflows/python-floor.yml` (graded by
+`tests/test_c_02_python_floor_leg.py`) still reads the floor out of pyproject and runs it.
 
 Kept from the earlier file: per-leg provenance, graded against the workflow in both directions,
 and the failure policy — every leg BLOCKS; nothing swallows its own failure.
@@ -159,14 +155,14 @@ class EveryLegRunsOnePython(unittest.TestCase):
         versions = [str(v) for v in self.release["jobs"]["test"]["strategy"]["matrix"]["python"]]
         self.assertEqual([GATE_PYTHON], versions)
 
-    def test_c_the_declared_floor_is_UNTESTED_and_that_is_pinned(self):
-        """★ The disclosed trade. If a floor leg comes back TO A GATE, edit this test on purpose.
-        (The weekly floor leg is not a gate; `test_c_02_python_floor_leg` grades it.)"""
-        self.assertEqual(self.floor, "3.10",
-                         "the declared floor moved — re-read this file's premise before editing it")
+    def test_c_the_declared_floor_IS_the_gate_python_and_every_gate_runs_it(self):
+        """★ PY-FLOOR-3.12. A gate on a Python above the floor would leave the floor untested again;
+        a floor above the gate would promise users a Python no gate runs."""
+        self.assertEqual(GATE_PYTHON, self.floor,
+                         "requires-python and the gate Python parted — the floor is untested again")
         everywhere = ({p for _o, p, _j in _expand(self.ci["jobs"]["test"])}
                       | {str(v) for v in self.release["jobs"]["test"]["strategy"]["matrix"]["python"]})
-        self.assertNotIn(self.floor, everywhere)
+        self.assertEqual({self.floor}, everywhere)
 
     def test_d_both_operating_systems_still_run_both_jsonschema_states(self):
         legs = _expand(self.ci["jobs"]["test"])
@@ -174,12 +170,6 @@ class EveryLegRunsOnePython(unittest.TestCase):
             self.assertEqual({"absent", "present"},
                              {j for o, p, j in legs if o == os_name and p == GATE_PYTHON},
                              "%s stopped running both jsonschema legs" % os_name)
-
-    def test_e_the_untested_floor_is_disclosed_in_the_changelog(self):
-        text = _read(os.path.join(_ROOT, "CHANGELOG.md"))
-        top = text[:text.index("\n## [", text.index("## [") + 1)] if text.count("## [") > 1 else text
-        self.assertIn("Python 3.12 only", top,
-                      "the newest CHANGELOG section must disclose that CI runs Python 3.12 only")
 
 
 class EveryLegSaysWhetherItHasEverRun(unittest.TestCase):

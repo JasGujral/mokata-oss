@@ -81,7 +81,12 @@ class Surface:
 
     @property
     def mokata_dir(self) -> str:
-        return os.path.join(self.root, MOKATA_DIR)
+        """The ONE `.mokata/` of this repo — the main checkout's, from a linked worktree too (0.0.26
+        P31, SESSION-WORKTREES: every session runs in its own worktree, and its runs, approvals and
+        snapshots must be the same store the IDE and every other session read). `root` itself stays
+        THIS tree: the working tree and the branch are per-tree."""
+        from .repo_identity import canonical_mokata_dir
+        return canonical_mokata_dir(os.path.join(self.root, MOKATA_DIR))
 
     @property
     def temp_local_dir(self) -> str:

@@ -9,6 +9,8 @@ import unittest
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata.engine import run_completeness_gate
 from mokata.engine.spec import AcceptanceCriterion, Spec, TestRef
@@ -220,7 +222,7 @@ class TestD8Persistence(_Tmp):
                           out=lambda *_a: None)
                 surface = Surface.load(self.tmp)
                 ledger = AuditLedger(os.path.join(self.tmp, "audit.jsonl"))
-                out = emit_spec(surface, _spec(2), [TestRef("t1", ["AC1"])], ledger=ledger,
+                out = emit_planned(surface, _spec(2), [TestRef("t1", ["AC1"])], ledger=ledger,
                                 run_id=run, assume_yes=True)
                 self.assertFalse(out.committed)           # still refused (hard gate)
                 root = os.path.join(self.tmp, ".mokata", "temp_local", "evidence")
@@ -245,7 +247,7 @@ class TestD8Persistence(_Tmp):
         with mock.patch.dict(os.environ, {session.SESSION_ID_ENV: "pipe-run"}):
             session.reset_for_test()
             try:
-                run_pipeline(handoff, _spec(1), [], store=state)
+                run_pipeline(handoff, with_tasks(_spec(1)), [], store=state)
             finally:
                 session.reset_for_test()
         root = os.path.join(self.tmp, ".mokata", "temp_local", "evidence")

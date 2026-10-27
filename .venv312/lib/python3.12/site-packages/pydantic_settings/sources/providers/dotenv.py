@@ -1,0 +1,226 @@
+"""Dotenv file settings source."""
+
+from __future__ import annotations as _annotations
+
+import logging
+import os
+import warnings
+from collections.abc import Mapping
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from dotenv import dotenv_values
+from pydantic._internal._typing_extra import (  # type: ignore[attr-defined]
+    get_origin,
+)
+from typing_inspection.introspection import is_union_origin
+
+from ...utils import _settings_debug_enabled, logger
+from ..types import ENV_FILE_SENTINEL, DotenvFiltering, DotenvType, EnvPrefixTarget
+from ..utils import (
+    InitState,
+    _annotation_is_complex,
+    _get_field_annotation_and_metadata,
+    _resolve_config_file,
+    _union_is_complex,
+    parse_env_vars,
+)
+from .env import EnvSettingsSource
+
+if TYPE_CHECKING:
+    from pydantic_settings.main import BaseSettings
+
+
+class DotEnvSettingsSource(EnvSettingsSource):
+    """
+    Source class for loading settings values from env files.
+    """
+
+    def __init__(
+        self,
+        settings_cls: type[BaseSettings],
+        env_file: DotenvType | None = ENV_FILE_SENTINEL,
+        env_file_encoding: str | None = None,
+        dotenv_filtering: DotenvFiltering | None = None,
+        case_sensitive: bool | None = None,
+        env_prefix: str | None = None,
+        env_prefix_target: EnvPrefixTarget | None = None,
+        env_nested_delimiter: str | None = None,
+        env_nested_max_split: int | None = None,
+        env_ignore_empty: bool | None = None,
+        env_parse_none_str: str | None = None,
+        env_parse_enums: bool | None = None,
+        env_file_depth: int | None = None,
+        _init_state: InitState | None = None,
+    ) -> None:
+        self.env_file = env_file if env_file != ENV_FILE_SENTINEL else settings_cls.model_config.get('env_file')
+        self.env_file_encoding = (
+            env_file_encoding if env_file_encoding is not None else settings_cls.model_config.get('env_file_encoding')
+        )
+        self.env_file_depth = (
+            env_file_depth if env_file_depth is not None else settings_cls.model_config.get('env_file_depth', 0)
+        )
+        self.dotenv_filtering = (
+            dotenv_filtering if dotenv_filtering is not None else settings_cls.model_config.get('dotenv_filtering')
+        )
+        super().__init__(
+            settings_cls,
+            case_sensitive,
+            env_prefix,
+            env_prefix_target,
+            env_nested_delimiter,
+            env_nested_max_split,
+            env_ignore_empty,
+            env_parse_none_str,
+            env_parse_enums,
+            _init_state,
+        )
+
+    def _load_env_vars(self) -> Mapping[str, str | None]:
+        return self._read_env_files()
+
+    @staticmethod
+    def _static_read_env_file(
+        file_path: Path,
+        *,
+        encoding: str | None = None,
+        case_sensitive: bool = False,
+        ignore_empty: bool = False,
+        parse_none_str: str | None = None,
+    ) -> Mapping[str, str | None]:
+        encoding = encoding if encoding is not None else 'utf-8'
+        file_vars: dict[str, str | None] = dotenv_values(file_path, encoding=encoding)
+        return parse_env_vars(file_vars, case_sensitive, ignore_empty, parse_none_str)
+
+    def _read_env_file(
+        self,
+        file_path: Path,
+    ) -> Mapping[str, str | None]:
+        return self._static_read_env_file(
+            file_path,
+            encoding=self.env_file_encoding,
+            case_sensitive=self.case_sensitive,
+            ignore_empty=self.env_ignore_empty,
+            parse_none_str=self.env_parse_none_str,
+        )
+
+    def _read_env_files(self) -> Mapping[str, str | None]:
+        env_files = self.env_file
+        if env_files is None:
+            return {}
+
+        if isinstance(env_files, (str, os.PathLike)):
+            env_files = [env_files]
+
+        debug = _settings_debug_enabled() and logger.isEnabledFor(logging.DEBUG)
+
+        dotenv_vars: dict[str, str | None] = {}
+        for env_file in env_files:
+            env_path = _resolve_config_file(env_file, self.env_file_depth, allow_fifo=True)
+            if env_path is not None:
+                if debug:
+                    logger.debug('Loading env file: %s', env_path.resolve())
+                dotenv_vars.update(self._read_env_file(env_path))
+            elif debug:
+                logger.debug('Env file not found, skipping: %s', Path(env_file).expanduser().resolve())
+
+        return dotenv_vars
+
+    def __call__(self) -> dict[str, Any]:  # noqa: C901
+        data: dict[str, Any] = super().__call__()
+        if self.dotenv_filtering == 'only_existing':
+            # This case behaves like the EnvSettingsSource, only return existing fields
+            return data
+        if self.dotenv_filtering == 'match_prefix':
+            # In this case add all env vars that match the prefix, stripping the prefix.
+            prefix = self._apply_case_sensitive(self.env_prefix)
+            for env_name, env_value in self.env_vars.items():
+                if env_name.startswith(prefix):
+                    # Slice with the case-normalized prefix: `str.lower()` can change
+                    # length (e.g. `'İ'` lowers to two code points), so the raw
+                    # `env_prefix` length would under-strip and leave a partial prefix.
+                    normalized_env_name = env_name[len(prefix) :]
+                    if (
+                        self.env_nested_delimiter
+                        and self.env_nested_delimiter in normalized_env_name
+                        and normalized_env_name.partition(self.env_nested_delimiter)[0] in data
+                    ):
+                        continue
+                    if normalized_env_name not in data:
+                        data[normalized_env_name] = env_value
+            return data
+
+        is_extra_allowed = self.config.get('extra') != 'forbid'
+        # `env_vars` keys are case-normalised, so the prefix must be too before it
+        # is matched against them.
+        env_prefix = self._apply_case_sensitive(self.env_prefix)
+
+        # As `extra` config is allowed in dotenv settings source, We have to
+        # update data with extra env variables from dotenv file.
+        for env_name, env_value in self.env_vars.items():
+            if not env_value or env_name in data or (self.env_prefix and env_name in self.settings_cls.model_fields):
+                continue
+            env_used = False
+            for field_name, field in self.settings_cls.model_fields.items():
+                annotation, metadata = _get_field_annotation_and_metadata(field)
+                for _, field_env_name, _ in self._extract_field_info(field, field_name):
+                    if env_name == field_env_name or (
+                        (
+                            _annotation_is_complex(annotation, metadata, self._init_state)
+                            or (
+                                is_union_origin(get_origin(annotation))
+                                and _union_is_complex(annotation, metadata, self._init_state)
+                            )
+                        )
+                        # A var only belongs to a complex field when it sits at the nested
+                        # delimiter boundary (`db<delim>...`, matching what explode_env_vars
+                        # consumes). A bare name-prefix match (e.g. `dbx_token` vs field `db`)
+                        # must not claim the var, otherwise it is silently dropped instead of
+                        # being kept as an extra.
+                        and self.env_nested_delimiter
+                        and env_name.startswith(f'{field_env_name}{self.env_nested_delimiter}')
+                    ):
+                        env_used = True
+                        break
+                if env_used:
+                    break
+            if not env_used:
+                if is_extra_allowed and env_name.startswith(env_prefix):
+                    # env_prefix should be respected and removed from the env_name
+                    normalized_env_name = env_name[len(env_prefix) :]
+                    data[normalized_env_name] = env_value
+                else:
+                    data[env_name] = env_value
+        return data
+
+    def __repr__(self) -> str:
+        return (
+            f'{self.__class__.__name__}(env_file={self.env_file!r}, env_file_encoding={self.env_file_encoding!r}, '
+            f'env_file_depth={self.env_file_depth!r}, env_nested_delimiter={self.env_nested_delimiter!r}, '
+            f'env_prefix_len={self.env_prefix_len!r})'
+        )
+
+
+def read_env_file(
+    file_path: Path,
+    *,
+    encoding: str | None = None,
+    case_sensitive: bool = False,
+    ignore_empty: bool = False,
+    parse_none_str: str | None = None,
+) -> Mapping[str, str | None]:
+    warnings.warn(
+        'read_env_file will be removed in the next version, use DotEnvSettingsSource._static_read_env_file if you must',
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return DotEnvSettingsSource._static_read_env_file(
+        file_path,
+        encoding=encoding,
+        case_sensitive=case_sensitive,
+        ignore_empty=ignore_empty,
+        parse_none_str=parse_none_str,
+    )
+
+
+__all__ = ['DotEnvSettingsSource', 'read_env_file']

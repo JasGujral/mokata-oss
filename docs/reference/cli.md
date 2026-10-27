@@ -140,6 +140,7 @@ the **`/mokata:setup`** guided wizard (Stage 56) drives the same detect → ask 
 | `--scope {project,user}` | install into this repo (default) or `~/.claude` (every project) |
 | `--profile {minimal,standard,full,custom}` | profile to init with if not already set up |
 | `--no-hooks` | wire only commands + MCP; skip the hooks |
+| `--skills-only` | rewrite ONLY the vendored commands + Agent Skills from this mokata (and remove the ones it no longer ships) — no init, MCP, hooks or `settings.json`. `mokata update` offers it when they differ |
 | `--yes` | non-interactive; skip the confirmation prompt |
 | `--force` | re-init even if a manifest already exists |
 
@@ -327,6 +328,45 @@ authorized file — is an **exit-2 block** naming the deferred item. Your levers
 `mokata gate override spec-scope --reason "<why>"`. A spec with no scope section is **not policed**
 (fail-open) — every spec written before this feature is in that case.
 
+**The task plan and the plan hash (0.0.26).** Every spec carries its **task plan**:
+`tasks: [{id, title, ac_ids, scope, files?, depends_on?, consumes?, produces?, parallel?}]`. Every
+acceptance criterion must be in at least one task, every task names its criteria and the globs it
+may write (`scope` — a subset of `scope.authorized` when the spec declares one), and dependencies
+must exist and not cycle. A spec without a plan is refused before any gate runs. The plan is
+approved **with** the criteria in the same `mokata approve` (no extra phase), and the committer
+seals it with a **SHA-256 plan hash** (shown by `spec show`, and recorded on the audit ledger as
+`plan_approved`). Every later stage attests that hash: implementation writes, `progress mark
+develop|review|ship`, the review verdict (stamped with the plan it reviewed) and ship. If the
+spec on record no longer hashes to its approved value, each of them **refuses** until a human
+re-approves the plan (re-emit, or `spec amend` once work is under way). This refusal is not
+overridable. A spec approved by an earlier mokata (no plan, no hash) is refused the same way: run
+`mokata spec migrate <run>` to give it a one-task plan.
+
+**Capped clarify (0.0.26).** The spec records the clarifying questions asked before it was written:
+`clarifications: [{id, question, recommended, answer, category?}]`, **at most 5**, each with the
+answer the model recommended. A sixth is refused. A question left unanswered must be covered by a
+stated assumption, `assumptions: [{id, text, for?}]`. Both are approved and hashed with the spec. The
+brainstorm's question list holds the same cap of 5.
+
+### `mokata spec migrate <run> [--yes]`
+**Bring a spec approved before 0.0.26 forward.** 0.0.26 blocks a run whose spec has no task plan
+(`mokata doctor` names each one). `migrate` proposes a one-task plan: task `T1` covers every
+acceptance criterion and is scoped to the spec's existing `scope.authorized` (or the whole repo if
+it declared none). The criteria and scope do not change. It prints the plan, then asks for the usual
+approval: a yes at the terminal, your own `--yes`, or off a TTY a proposal you approve with
+`mokata approve <id>` before re-running the command. Approving seals the plan hash, and the run's
+implementation writes are allowed again. It refuses a run that already has a task plan; change a
+plan with `mokata spec amend`.
+
+### `mokata spec task status | start <id> | done <id> [--run <id>]`
+**Develop works task by task.** The **active task** is the one you started, or else the first open
+task whose dependencies are done. An implementation write outside the active task's `scope` is
+blocked by the `spec-scope` gate, and the block names the task that owns the file. `start <id>`
+switches to a task (its dependencies must be done). `done <id>` closes one. Once every task is done,
+writes inside any task's scope stay allowed (review fixes) and nothing outside them is. Each move
+first attests the plan hash and exits **3** on a plan that is not the approved one. The cursor is
+run-state (like the TDD record), so moving it needs no approval.
+
 ### `mokata spec amend --file <spec.json> --reason <why> [--item <id>] [--yes]` · `mokata spec amend --abort`
 **A FORCED PHASE REGRESSION — not a text edit.** The only road back when a write is out of scope.
 Calling it regresses the run `develop → SPEC` **immediately**: development writes are blocked
@@ -363,6 +403,47 @@ content-preserving) — frugal, OFF by default; also settable via `settings.gove
 Read-only run-progress tracker (done/current/pending + `[done/total]`). **`--lanes`** renders
 the **parallel-aware** multi-lane view (one line per concurrent subagent lane; sequential → one
 lane), derived from run-state + the execmode ledger records. Degrades cleanly with no active run.
+
+### `mokata progress test-run --passed|--failed [--command "<cmd>"] [--test <id>]… [--ac <AC>=<id>]… [--run <id>]`
+Records one test run as the evidence the `stop-evidence` loop gate reads:
+
+- the run's **last test run** (when it ran, whether it passed, and the command);
+- the named tests, recorded **RED** if `--failed` and **GREEN** if `--passed`, in the run's TDD
+  record (this is also the failing test on record that the TDD gate licenses implementation
+  against);
+- each `--ac AC=test` pair, added to the run's AC→test map. The spec emit seeds that map from the
+  tests the completeness gate mapped.
+
+This is run-state, so it is ungated. Exit **0** means recorded. Exit **1** means nothing was
+recorded (no run, or a malformed `--ac`).
+
+### `mokata progress fix-attempt --failure "<signature>" --failed|--passed [--run <id>]`
+Records one fix attempt at a failure for the `fix-breaker` loop gate. The signature is the failing
+test id or the error line. Whitespace, case and memory addresses are normalised, so the same failure
+re-run still counts as the same failure.
+
+- The third `--failed` at one signature **trips the breaker**, and the trip is written to the audit
+  ledger. The command exits **3**, and the `gate-guard` hook blocks implementation writes for the
+  run.
+- The block clears when a **new approach is approved** through the approach-approval gate, or when
+  a human runs `mokata gate override fix-breaker`.
+- `--passed` clears a count that has not tripped yet.
+
+Exit **0** means recorded. Exit **1** means nothing was recorded.
+
+`mokata progress record-review` exits **3** (`ESCALATE`) when the run already has five failed
+review rounds in a row (the `review-loop` gate). The sixth round is not recorded, and the human
+decides how to continue.
+
+### `mokata progress models [--run <id>]`
+Read-only. Shows the model tier each mokata role uses in this repo (the default, this repo's
+`settings.models` override, and any floor). For the run, it also shows the tier each role's
+subagent was spawned with and what those subagents actually used (models, input and output tokens,
+read from their own transcripts).
+
+Tiers are Claude Code aliases (`haiku`, `sonnet`, `opus`). Set one with
+`mokata config set settings.models.<role> <tier>`; a tier below a role's floor is refused
+(`reviewer` ≥ sonnet, `final-reviewer` = opus).
 
 ### `mokata sessions`
 List past + active runs — for each: the run id, `[done/total]` phases, the last passed gate,
@@ -446,12 +527,16 @@ harness and before a session starts.
 
 ## Knowledge (Part B)
 
-### `mokata query <kind> <target> [--depth N] [--json]`
+### `mokata query <kind> <target> [--depth N] [--full] [--json]`
 Run a structural query. Navigation kinds — `defs` (where a symbol is defined) / `refs`
 (everywhere it is referenced) / `callers` / `callees` / `implementers` / `imports`; impact kind —
 `blast_radius`, to which `--depth` (default 2) applies. Uses the graph if present, else the AST
 floor, else the grep floor; the answer always names the backend that produced it. `--json` prints
 the answer as one JSON line (backend, `basis`, references) — the same bytes `mokata ide` shows.
+A blast radius is bounded (20,000 references / 2 s) and says `truncated` when the bound cuts it;
+`--full` walks that radius again with the full budget (hard ceiling 60 s, Ctrl-C cancels) — only
+when you ask. `--full` applies to `blast_radius` only. In `mokata ide`, a cut radius on the Review
+page offers the same walk as **Calculate the full blast radius**.
 
 ### `mokata index`
 Build/refresh the per-file freshness index (incremental); report added/changed/removed and
@@ -466,7 +551,13 @@ Adopt or inspect the code graph. `mokata graph adopt [code-review-graph|serena]`
 `code-review-graph`) pins a real structural graph into the manifest through the human gate (the
 embedded AST floor stays the fallback, so adoption is recommended, never required). `mokata graph
 status` reports which backend actually answers today (graph or floor), and whether semantic
-search is available.
+search is available. It says **active** only when code-review-graph's index for this repo is
+built; otherwise it names the state — *detected, unbuilt*, *building* (with its start time), or
+*index build FAILED* (with the error). `mokata graph build` builds that index now (or, when it exists,
+brings it up to date incrementally; `--full` rebuilds from scratch), in the foreground with
+progress and no time limit; Ctrl+C stops it and removes a partial index. You rarely need it:
+`setup --mode full` builds the index, and on a repo where it was never built the first structural
+query starts ONE background build and is answered by the AST floor meanwhile.
 
 ### `mokata spec-check --symbols <a,b> [--files <x,y>] [--text <desc>] [--phase <p>] [--allow-degraded] [--reason <why>] [--yes]`
 **Regression guard (Stage 37).** Cross-check a change's touch-set against the **saved specs**
@@ -491,7 +582,9 @@ those files. `--comment-file` writes the **PR review-comment body** (markdown); 
 it report-only (always exit 0). **READ-ONLY** — it *surfaces* blocks and *produces* the comment; it
 never posts to GitHub (the workflow's own `GITHUB_TOKEN` does). **DEGRADE-CLEAN — it never
 false-blocks:** an uninitialized repo, no saved spec, no spec corpus, or a repo that doesn't tag
-tests with AC ids all PASS. Used by the reusable [`mokata-check` GitHub Action](../how-to/mokata-as-a-pr-check.md). (MCP: `ci_check`, read-only.)
+tests with AC ids all PASS. A third leg, **spec-drift**, checks the **committed specs**
+(`.mokata/specs/`, opt-in `settings.specs.commit`) against the code. With none committed it prints
+"no committed specs — spec drift not checked" (exit 0, never silent). Used by the reusable [`mokata-check` GitHub Action](../how-to/mokata-as-a-pr-check.md). (MCP: `ci_check`, read-only.)
 
 ## Memory (Part C)
 
@@ -702,7 +795,7 @@ outside a run is never policed):
 | `approach-approval` | the run is **registered but still in brainstorm** — no approach approved and no spec emitted — so an implementation write is running ahead of the design decision |
 | `spec-persisted` | an approach is approved for this run but **no spec is emitted** |
 | `no-code-without-failing-test` | the spec is emitted but **no failing test is on record** |
-| `spec-scope` | the write falls **outside the spec's authorized surface**, its content **spells a deferred marker** (even inside an authorized file), or a **`mokata spec amend` is in progress** (the run has regressed to SPEC — every development write is blocked until the amendment lands or is aborted) |
+| `spec-scope` | the write falls **outside the spec's authorized surface** or **outside the active task's scope**, its content **spells a deferred marker** (even inside an authorized file), a **`mokata spec amend` is in progress** (the run has regressed to SPEC — every development write is blocked until the amendment lands or is aborted), or the **plan on record no longer matches its approved hash** (not overridable — re-approve the plan) |
 
 A **test file is always writable** — you must be able to write the failing test. RED is the
 *permission* to implement, not the prohibition.
@@ -712,6 +805,12 @@ what to do, and the override. Shell writes are policed too: the gate-guard also 
 limit: only the **`claude`** harness declares
 the `hooks` capability, so on `cursor`/`gemini`/`cowork`/`windsurf` the gate-guard is never wired and
 the run-state gates enforce **nothing** (`mokata harness` shows the matrix).
+
+Three **loop gates** take the same override: `stop-evidence` (the `Stop`/`SubagentStop` hooks
+send back a "done" the run's recorded evidence does not back, fail-closed), `fix-breaker` (three
+failed fix attempts at one failure block implementation writes until a new approach is approved) and `review-loop` (a sixth review
+round after five failed ones is refused). `mokata gate status` lists them under their own heading.
+See [governance: loop gates](../concepts/governance.md#loop-gates-a-done-must-be-backed-three-fixes-then-stop-five-reviews-then-you).
 
 Overrides follow P14 exactly: **explicit** (you name the gate and give a `--reason`),
 **re-confirmed** (an interactive y/N), **session-scoped** (it expires with the session — nothing to
@@ -770,6 +869,16 @@ Off a TTY it **fails closed**: a non-interactive shell cannot approve by acciden
 non-interactive *human* flow (CI, a script) passes `--yes` — that is your own environment saying it,
 which is exactly the thing a tool parameter is not. The **secret-guard still hard-blocks** an
 approved write: approval is a methodology gate, never a security override.
+
+`mokata approve <id> --reject` is the **no**, on the same bar: shown in full, re-confirmed (fails
+closed off a TTY), ledgered (`decision: rejected`). A rejected proposal licenses nothing; an
+approval the model has not redeemed yet can be taken back the same way.
+
+**From the IDE.** The window shows every waiting write as a card — the write in full, and this
+command with a Copy button — and updates live when you approve it here. Approve / Reject *in the
+window* works only when `mokata ide --foreground` runs in your own terminal: the window then prints a
+**one-time code** to that terminal and you type it back. See
+[Approving from the IDE](../security.md#approving-from-the-ide) for why.
 
 ### `mokata rules`
 Show the 4-tier rules and their line budgets; exit non-zero if a tier is over cap.
@@ -981,8 +1090,13 @@ Keep the docs **true to the code**. With no target it **sweeps** the public doc 
 drift-detects; with a `path` it **audits** exactly that doc. The audit is **read-only** — it
 cross-references each claim against the code (skill counts, command names, install/getting-started
 path, version examples, and — with a code graph wired — symbols) and reports every discrepancy with
-a severity (**Blocking / Minor / Info**), highlighting the stale section. A Blocking finding exits
-non-zero so a release doc gate can act on it. With `--reconcile` it proposes the fixes, **previews
+a severity (**Blocking / Minor / Info**), highlighting the stale section. With no target it then
+checks every **saved spec** against the code too: an acceptance criterion whose code anchor no
+longer resolves (file or symbol gone) and — in a repo that tags tests with AC ids — an AC whose test
+is gone are Blocking; no saved spec is reported as *skipped*, never as clean. The saved specs include
+the **committed** ones in `.mokata/specs/` (opt-in `settings.specs.commit`), which is what a CI
+checkout has; without them it says "no committed specs — spec drift not checked". A Blocking finding exits
+non-zero, so CI (mokata's own `spec-drift` job) and a release doc gate can act on it. With `--reconcile` it proposes the fixes, **previews
 the diff, and writes ONLY on approval** through the universal write gate (`--yes` approves
 non-interactively); a decline writes nothing — there is no silent-write path, and it reconciles the
 **doc** to match the code, never the reverse. Backs `/mokata:docsync`.
@@ -1008,7 +1122,7 @@ every section shows what will appear there when it is empty. Security: loopback 
 pairing link that becomes an HttpOnly cookie, Host and Origin checks, nothing outside the repo is
 read. Started from a session it exits after 30 idle minutes; `--foreground` serves until Ctrl-C.
 Needs the `[ide]` extra (`pip install "mokata[ide]"`) — normally already present with mokata's MCP
-SDK. Requires Claude Code 2.1.0+ for the per-session features (`mokata doctor` checks).
+SDK. Requires Claude Code 2.1.198+ for the per-session features (`mokata doctor` checks).
 
 ### `mokata doctor [--wiring] [--matrix]`
 Diagnose the manifest/config: missing providers, broken adapters, role conflicts, bad
@@ -1027,8 +1141,7 @@ dropped silently, so wired has never implied firing) and that the wiring is the 
 version of mokata writes** (a `pip install -U` leaves `settings.json` as the previous version
 wrote it, so a hook added or a matcher widened since your last `mokata setup claude` is simply
 absent). Exits non-zero if either answer is no. Unlike the full `doctor` it needs **no
-initialized repo**, so it is runnable the moment a `pip install` finishes — which is exactly
-when `mokata upgrade` runs it. See
+initialized repo**, so it is runnable the moment an upgrade finishes. See
 [`mokata-hook: command not found`](../how-to/fix-mokata-hook-command-not-found.md).
 
 It is also where **a degrade stops being invisible**. Seven honesty surfaces ride it:
@@ -1173,32 +1286,33 @@ source), and the Python version. **Offline by default** — local-first, zero ne
 published release; it is accounted in the audit ledger and **degrades clean** offline (a
 blocked/failed check just says it couldn't check — it never errors the command).
 
-### `mokata upgrade [--check] [--method auto|pip|plugin] [--yes] [--scope project|user] [--no-refresh]`
-Upgrade mokata — **and finish the job.** Installing the package was never the whole upgrade:
-`pip install -U mokata` replaces the code and leaves `.claude/settings.json` carrying the wiring
-the *previous* version wrote, so a gate added since your last `mokata setup claude` is silently
-missing. So the **pip** path runs three steps, each ending where you decide:
+### `mokata update [--check] [--offline] [--yes] [--method auto|plugin]`
+Update mokata **in one action**. It shows the plan, asks `Update now? [Y/n]` once, runs it, and
+finishes the job:
 
-1. it proposes `pip install -U mokata` and runs it only after you confirm;
-2. it re-runs `mokata setup claude`, which **previews the settings change and asks again** —
-   the same gate `setup` always uses; nothing is ever written silently;
-3. it runs `mokata doctor --wiring` and reports.
+- the **installer** (uv tool / pipx / pip / uv pip / the plugin / a source checkout) and the
+  **installed** version;
+- the **latest** release — ONE outbound call to the release feed, accounted in the audit ledger;
+- **what changed** — the release notes of every version in between;
+- the **command** that upgrades AND keeps your extras: `uv tool upgrade mokata`; `pipx upgrade
+  mokata` (`--include-injected` when packages were injected); `python -m pip install --upgrade
+  "mokata[<extras you have>]"`; `uv pip install --python <py> --upgrade "mokata[...]"`. A pinned
+  uv tool install is said, and the command reinstalls without the pin;
+- after a successful run, **`mokata update --finish` with the new mokata**: it refreshes the
+  commands and skills vendored into `.claude/` and re-wires (`setup claude`) only if the wiring
+  is not what the new version writes.
 
-**Human-gated end to end** — decline either gate and nothing is written. `--yes` approves both
-non-interactively (the plan is still printed); `--no-refresh` skips steps 2–3 and prints the
-commands you now owe; `--scope` picks the scope for the re-wiring (default `project`).
+Your yes (or `--yes`) is the consent for all of it. On **Windows** mokata's files are locked
+while it runs, so the command runs from a small detached updater (no console window) the moment
+this command exits; the next `mokata` command (or `mokata ide`) reports "updated to X" or the
+error and the command to run by hand. If a Claude Code session is using mokata's MCP server,
+close it first — it holds mokata's files too.
 
-The re-wiring runs as a **subprocess of the freshly-installed mokata**, not in this process:
-after `pip install -U`, the running process still holds the *old* modules in memory, so
-re-wiring in-place would faithfully write the wiring of the version you just upgraded away from.
-
-The **plugin** path only **prints** the Claude Code steps (`/plugin marketplace update mostack` +
-reinstall), because the CLI cannot upgrade the plugin itself; a **source** checkout likewise only
-prints its steps (`git pull` + reinstall). Both printed recipes end with the same verification
-step the pip path runs. `--check` is the one **outbound** call — it just reports whether a newer
-release exists (the same opt-in check as `version --check`) and upgrades nothing. `--method`
-overrides install-method detection. Inside Claude Code, the `/mokata:version` command surfaces
-the same. Full runbook:
+`--check` prints the plan and runs nothing; `--offline` does the same without asking the release
+feed. When the feed is unreachable it says so and prints the command instead of running it. A
+source checkout gets `git pull`; the plugin gets Claude Code's `/plugin` steps. With nothing
+newer but vendored commands/skills that differ from this mokata, it offers to refresh just those.
+The IDE health panel's "Update now" runs the same plan. Full runbook:
 [Which setup command do I need?](../how-to/which-setup-command.md#upgrading-mokata)
 
 ### `mokata govern [--open] [--live] [--once]`

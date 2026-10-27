@@ -11,7 +11,7 @@ session's writes before you approve or ship them — not for editing.
 From inside a Claude Code session, type:
 
 ```text
-/mokata:review-window
+/review-window
 ```
 
 mokata's prompt hook opens the window in your browser and focuses it on **that session** — its
@@ -55,7 +55,7 @@ readable.
 - **It does not outlive its use.** Started from a session, it exits after 30 idle minutes;
   `mokata ide --foreground` serves until you press Ctrl-C.
 
-The per-session features need Claude Code 2.1.0 or newer; `mokata doctor` tells you if yours is
+The per-session features need Claude Code 2.1.198 or newer; `mokata doctor` tells you if yours is
 older.
 
 ## Related

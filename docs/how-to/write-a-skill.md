@@ -37,5 +37,13 @@ open("src/mokata/templates/commands/clarify.md", "w").write(command_markdown(get
 Each skill runs standalone (`mokata run clarify`) and applies only its own gate. See the
 [skills reference](../reference/skills.md).
 
-> Authoring one **from inside Claude Code** is the same protocol, gated: `/mokata:skill-author` (or
+> Authoring one **from inside Claude Code** is the same protocol, gated: `/skill-author` (or
 > `mokata skill`) drives the RED-GREEN-for-docs loop and human-gates the write.
+
+**Give it trigger evals.** Every shipped skill and command needs a corpus at
+`evals/skill_triggers/corpus/<name>.json` — the `triggers` phrases its description must keep,
+at least five `positive` prompts that should fire it and five `near_miss` prompts that must not
+(at least one naming the skill that should win instead, as `expect`). CI's `skill-evals` job runs
+`python scripts/skill_evals.py gate` (no model, no API key) and goes red on a skill without one, a
+description that stops firing on its prompts, or one that starts firing on its near-misses;
+`python scripts/skill_evals.py seed-replay` refreshes the replay mocks after a deliberate change.

@@ -1,0 +1,36 @@
+{
+ "skill": "develop",
+ "triggers": [
+  "failing test is on record",
+  "minimum implementation",
+  "approved, spec-backed change"
+ ],
+ "positive": [
+  "The failing test is on record; write the minimum implementation to turn it green",
+  "Implement the approved, spec-backed change for the export feature",
+  "Continue coding strictly against the approved plan until the red tests pass",
+  "Make the failing test for parse_date pass with the smallest change",
+  "Build the approved feature now that the spec and failing tests exist"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Let's explore whether we even need a cache here",
+   "expect": "brainstorm"
+  },
+  {
+   "prompt": "Write failing tests for the acceptance criteria",
+   "expect": "test"
+  },
+  {
+   "prompt": "Review the diff now that tests are green",
+   "expect": "review"
+  },
+  {
+   "prompt": "Develop the photos from my film camera"
+  },
+  {
+   "prompt": "This endpoint keeps erroring with 500s and nobody knows why; root-cause it",
+   "expect": "debug"
+  }
+ ]
+}

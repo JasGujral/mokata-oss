@@ -27,8 +27,8 @@ gate/decision feed. No network, no server, no external assets. It lives under gi
 
 ```bash
 PY="$(command -v python3 || command -v python)"
-ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
-eval "$ENGINE watch --once --path ."          # write a single snapshot (add --open to open it)
+mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
+mokata watch --once --path .          # write a single snapshot (add --open to open it)
 ```
 
 It respects `settings.ux.progress` (default `terminal` writes no HTML) and degrades clean with

@@ -1,0 +1,3831 @@
+{
+ "version": 1,
+ "about": "The mokata IDE's HTTP contract (0.0.26 P0, ID-API-CONTRACT). Every route the server answers is listed here (core) or in src/mokata/ide/features/<name>.contract.json (a feature); tests/test_p0_ide_api_contract.py boots the app on a fixture repo, sends every probe, and holds each answer to its entry. `version` changes only when an existing route changes shape incompatibly (the release bumps it, not a stage); adding a route does not bump it. Response schemas are a subset of JSON Schema (type, required, properties, items, enum, $ref to #/schemas) checked by mokata.ide.contract.validate; they pin each answer's keys and types, not its values. A governance route (runs, plan, lifecycle) on a repo mokata has not set up answers 200 with the NotInitialized state (0.0.26 P29); tests/test_p29_ide_uninitialized_repo.py holds every route to this contract on such a repo.",
+ "how_to_add_a_route": [
+  "1. ROUTE: add src/mokata/ide/features/<name>.py with `def routes(reg, ctx):` calling `reg.register(path, handler, kind=..., feature=\"<name>\")` - do not edit server.py's list. Kinds: json (a sync read `handler(request) -> dict`, wrapped by the server's _json: 400 on ctx.bad_request, job=<kind> (+ job_label=) to run it as a job: the result, or 202 with the job's handle), read (async GET returning a Response), action (async POST), stream, page, static, hook. Every route is mounted behind the same guard (Host, pairing, Origin on POST). A path+method another feature owns is refused when the app is built.",
+  "2. CONTRACT: add src/mokata/ide/features/<name>.contract.json: {\"routes\": [{path, method, kind, params, responses: {\"<status>\": {media, schema}}, probes: [{query|body|path, status, demo?}]}]} - one probe per declared status; `demo: true` runs it on the SAMPLE server (use it for anything that would go online, start work, or needs SAMPLE data). Shared schemas live in this file's `schemas` (e.g. {\"$ref\": \"#/schemas/Error\"}).",
+  "3. TEST: the contract test needs no edit - it probes every entry. Add your own business test for what the route MEANS; the contract only pins its shape.",
+  "4. FRONTEND (optional): static/features/<name>.js (and .css) are loaded by the page automatically; call window.mokataIDE.register({id, commands, panels, keybindings}) there (see static/registry.js)."
+ ],
+ "schemas": {
+  "Error": {
+   "type": "object",
+   "required": [
+    "error"
+   ],
+   "properties": {
+    "error": {
+     "type": "string"
+    },
+    "note": {
+     "type": "string"
+    }
+   }
+  },
+  "NotInitialized": {
+   "type": "object",
+   "required": [
+    "command",
+    "lights_up",
+    "note",
+    "sample",
+    "state"
+   ],
+   "properties": {
+    "command": {
+     "type": "string"
+    },
+    "lights_up": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "required": [
+       "key",
+       "what"
+      ],
+      "properties": {
+       "key": {
+        "type": "string"
+       },
+       "what": {
+        "type": "string"
+       }
+      }
+     }
+    },
+    "note": {
+     "type": "string"
+    },
+    "sample": {
+     "type": "boolean"
+    },
+    "state": {
+     "enum": [
+      "not-initialized"
+     ]
+    }
+   }
+  },
+  "JobSnapshot": {
+   "type": "object",
+   "required": [
+    "id",
+    "kind",
+    "label",
+    "scope",
+    "state",
+    "done",
+    "total",
+    "unit",
+    "elapsed",
+    "eta",
+    "partial_ref",
+    "note",
+    "error",
+    "keep",
+    "cancellable",
+    "watchers"
+   ],
+   "properties": {
+    "id": {
+     "type": "string"
+    },
+    "kind": {
+     "type": "string"
+    },
+    "label": {
+     "type": "string"
+    },
+    "scope": {
+     "type": "string"
+    },
+    "state": {
+     "enum": [
+      "queued",
+      "running",
+      "partial",
+      "done",
+      "failed",
+      "cancelled"
+     ]
+    },
+    "done": {
+     "type": [
+      "integer",
+      "null"
+     ]
+    },
+    "total": {
+     "type": [
+      "integer",
+      "null"
+     ]
+    },
+    "unit": {
+     "type": "string"
+    },
+    "elapsed": {
+     "type": "number"
+    },
+    "eta": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "partial_ref": {
+     "type": "integer"
+    },
+    "note": {
+     "type": "string"
+    },
+    "error": {
+     "type": "string"
+    },
+    "keep": {
+     "type": "boolean"
+    },
+    "cancellable": {
+     "type": "boolean"
+    },
+    "watchers": {
+     "type": "integer"
+    }
+   }
+  },
+  "JobHandle": {
+   "type": "object",
+   "required": [
+    "job",
+    "kind",
+    "label",
+    "state",
+    "done",
+    "total",
+    "unit",
+    "note",
+    "error",
+    "elapsed",
+    "partial_ref",
+    "partial"
+   ],
+   "properties": {
+    "job": {
+     "type": "string"
+    },
+    "kind": {
+     "type": "string"
+    },
+    "label": {
+     "type": "string"
+    },
+    "state": {
+     "enum": [
+      "queued",
+      "running",
+      "partial",
+      "done",
+      "failed",
+      "cancelled"
+     ]
+    },
+    "done": {
+     "type": [
+      "integer",
+      "null"
+     ]
+    },
+    "total": {
+     "type": [
+      "integer",
+      "null"
+     ]
+    },
+    "unit": {
+     "type": "string"
+    },
+    "note": {
+     "type": "string"
+    },
+    "error": {
+     "type": "string"
+    },
+    "elapsed": {
+     "type": "number"
+    },
+    "partial_ref": {
+     "type": "integer"
+    },
+    "partial": {
+     "type": [
+      "object",
+      "null"
+     ]
+    }
+   }
+  }
+ },
+ "routes": [
+  {
+   "path": "/pair",
+   "method": "GET",
+   "kind": "page",
+   "params": {
+    "query": {
+     "t": "the pairing token",
+     "focus": "optional session to focus"
+    }
+   },
+   "responses": {
+    "303": {
+     "media": "redirect"
+    },
+    "401": {
+     "media": "text"
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "t": "tok"
+     },
+     "status": 303
+    },
+    {
+     "query": {
+      "t": "wrong"
+     },
+     "status": 401
+    }
+   ]
+  },
+  {
+   "path": "/",
+   "method": "GET",
+   "kind": "page",
+   "params": {},
+   "responses": {
+    "200": {
+     "media": "html"
+    }
+   },
+   "probes": [
+    {
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/static/{name}",
+   "method": "GET",
+   "kind": "static",
+   "params": {
+    "path": {
+     "name": "a whitelisted file (STATIC_FILES)"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "js"
+    },
+    "404": {
+     "media": "text"
+    }
+   },
+   "probes": [
+    {
+     "path": {
+      "name": "app.js"
+     },
+     "status": 200
+    },
+    {
+     "path": {
+      "name": "registry.js"
+     },
+     "status": 200
+    },
+    {
+     "path": {
+      "name": "nope.js"
+     },
+     "status": 404
+    }
+   ]
+  },
+  {
+   "path": "/static/vendor/{name}",
+   "method": "GET",
+   "kind": "static",
+   "params": {
+    "path": {
+     "name": "a vendored file (VENDOR_FILES)"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "js"
+    },
+    "404": {
+     "media": "text"
+    }
+   },
+   "probes": [
+    {
+     "path": {
+      "name": "cytoscape.min.js"
+     },
+     "status": 200
+    },
+    {
+     "path": {
+      "name": "VERSIONS.json"
+     },
+     "status": 404
+    }
+   ]
+  },
+  {
+   "path": "/static/features/{name}",
+   "method": "GET",
+   "kind": "static",
+   "params": {
+    "path": {
+     "name": "a static/features/*.js|css file"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "js"
+    },
+    "404": {
+     "media": "text"
+    }
+   },
+   "probes": [
+    {
+     "path": {
+      "name": "core-commands.js"
+     },
+     "status": 200
+    },
+    {
+     "path": {
+      "name": "nope.js"
+     },
+     "status": 404
+    }
+   ]
+  },
+  {
+   "path": "/api/ping",
+   "method": "GET",
+   "kind": "read",
+   "params": {},
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "demo",
+       "focus",
+       "ok",
+       "pages",
+       "pid",
+       "root",
+       "terminal"
+      ],
+      "properties": {
+       "demo": {
+        "type": "boolean"
+       },
+       "focus": {},
+       "ok": {
+        "type": "boolean"
+       },
+       "pages": {
+        "type": "number"
+       },
+       "pid": {
+        "type": "number"
+       },
+       "root": {
+        "type": "string"
+       },
+       "terminal": {
+        "type": "boolean"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/state",
+   "method": "GET",
+   "kind": "json",
+   "params": {},
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "branches",
+       "focus",
+       "focus_row",
+       "git",
+       "repo",
+       "sample"
+      ],
+      "properties": {
+       "branches": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        }
+       },
+       "focus": {},
+       "git": {
+        "type": "boolean"
+       },
+       "repo": {
+        "type": "string"
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "focus_row": {
+        "description": "the focused session's row (P33), or null"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/live",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "mokata": "1 = include the files mokata setup wrote (hidden by default, G23)"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "added",
+       "files",
+       "hidden_mokata",
+       "note",
+       "removed",
+       "sample",
+       "title"
+      ],
+      "properties": {
+       "added": {
+        "type": "number"
+       },
+       "files": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "required": [
+          "added",
+          "binary",
+          "hunks",
+          "old_path",
+          "path",
+          "removed",
+          "status"
+         ],
+         "properties": {
+          "added": {
+           "type": "number"
+          },
+          "binary": {
+           "type": "boolean"
+          },
+          "hunks": {
+           "type": "array"
+          },
+          "old_path": {
+           "type": "string"
+          },
+          "path": {
+           "type": "string"
+          },
+          "removed": {
+           "type": "number"
+          },
+          "status": {
+           "type": "string"
+          }
+         }
+        }
+       },
+       "note": {
+        "type": "string"
+       },
+       "removed": {
+        "type": "number"
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "title": {
+        "type": "string"
+       },
+       "hidden_mokata": {
+        "type": "number"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "status": 200
+    },
+    {
+     "query": {
+      "mokata": "1"
+     },
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/session",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "id": "a session id"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "added",
+       "files",
+       "note",
+       "removed",
+       "sample",
+       "title"
+      ],
+      "properties": {
+       "added": {
+        "type": "number"
+       },
+       "files": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "required": [
+          "added",
+          "binary",
+          "hunks",
+          "old_path",
+          "path",
+          "removed",
+          "status"
+         ],
+         "properties": {
+          "added": {
+           "type": "number"
+          },
+          "binary": {
+           "type": "boolean"
+          },
+          "hunks": {
+           "type": "array"
+          },
+          "old_path": {
+           "type": "string"
+          },
+          "path": {
+           "type": "string"
+          },
+          "removed": {
+           "type": "number"
+          },
+          "status": {
+           "type": "string"
+          }
+         }
+        }
+       },
+       "note": {
+        "type": "string"
+       },
+       "removed": {
+        "type": "number"
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "title": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "id": "S-1"
+     },
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/timeline",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "session": "optional session id"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "entries",
+       "sample"
+      ],
+      "properties": {
+       "entries": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "required": [
+          "id",
+          "kind",
+          "path",
+          "run",
+          "session",
+          "sha",
+          "size",
+          "state",
+          "t"
+         ],
+         "properties": {
+          "id": {
+           "type": "string"
+          },
+          "kind": {
+           "type": "string"
+          },
+          "path": {
+           "type": "string"
+          },
+          "run": {
+           "type": "string"
+          },
+          "session": {
+           "type": "string"
+          },
+          "sha": {
+           "type": "string"
+          },
+          "size": {
+           "type": "number"
+          },
+          "state": {
+           "type": "string"
+          },
+          "t": {
+           "type": "number"
+          }
+         }
+        }
+       },
+       "sample": {
+        "type": "boolean"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "status": 200
+    },
+    {
+     "query": {
+      "session": "S-1"
+     },
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/between",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "a": "snapshot id",
+     "b": "snapshot id"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "added",
+       "files",
+       "note",
+       "removed",
+       "sample",
+       "title"
+      ],
+      "properties": {
+       "added": {
+        "type": "number"
+       },
+       "files": {
+        "type": "array"
+       },
+       "note": {
+        "type": "string"
+       },
+       "removed": {
+        "type": "number"
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "title": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "a": "x",
+      "b": "y"
+     },
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/compare",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "base": "git ref",
+     "head": "git ref or empty for the working tree"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "added",
+       "files",
+       "note",
+       "removed",
+       "sample",
+       "title"
+      ],
+      "properties": {
+       "added": {
+        "type": "number"
+       },
+       "files": {
+        "type": "array"
+       },
+       "note": {
+        "type": "string"
+       },
+       "removed": {
+        "type": "number"
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "title": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "base": "HEAD",
+      "head": ""
+     },
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/pr",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "url": "a PR URL"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "added",
+       "files",
+       "note",
+       "removed",
+       "sample",
+       "title"
+      ],
+      "properties": {
+       "added": {
+        "type": "number"
+       },
+       "files": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "required": [
+          "added",
+          "binary",
+          "hunks",
+          "old_path",
+          "path",
+          "removed",
+          "status"
+         ],
+         "properties": {
+          "added": {
+           "type": "number"
+          },
+          "binary": {
+           "type": "boolean"
+          },
+          "hunks": {
+           "type": "array"
+          },
+          "old_path": {
+           "type": "string"
+          },
+          "path": {
+           "type": "string"
+          },
+          "removed": {
+           "type": "number"
+          },
+          "status": {
+           "type": "string"
+          }
+         }
+        }
+       },
+       "note": {
+        "type": "string"
+       },
+       "removed": {
+        "type": "number"
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "title": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {
+      "url": ""
+     },
+     "status": 200,
+     "demo": true
+    }
+   ]
+  },
+  {
+   "path": "/api/tree",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "dir": "optional: the directory whose children to list, repo-relative ('' = the root)",
+     "filter": "optional: a case-insensitive substring matched against EVERY path (basename hits first); when set, `dir` is ignored",
+     "offset": "optional: the page to start at — the previous answer's `next`",
+     "sync_ms": "optional: how long (0..2000 ms) to wait for the answer before the 202 job handle (default 300)"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "count",
+       "entries",
+       "mode",
+       "next",
+       "offset",
+       "pruned",
+       "sample",
+       "total"
+      ],
+      "properties": {
+       "count": {
+        "type": "number"
+       },
+       "entries": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "required": [
+          "kind",
+          "name",
+          "path"
+         ],
+         "properties": {
+          "kind": {
+           "type": "string"
+          },
+          "name": {
+           "type": "string"
+          },
+          "path": {
+           "type": "string"
+          },
+          "files": {
+           "type": "number"
+          }
+         }
+        }
+       },
+       "mode": {
+        "type": "string"
+       },
+       "next": {
+        "type": [
+         "number",
+         "null"
+        ]
+       },
+       "offset": {
+        "type": "number"
+       },
+       "pruned": {
+        "type": "string"
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "total": {
+        "type": "number"
+       }
+      }
+     }
+    },
+    "202": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/JobHandle"
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "status": 200
+    },
+    {
+     "query": {
+      "filter": "core"
+     },
+     "status": 200
+    },
+    {
+     "query": {
+      "offset": "x"
+     },
+     "status": 400
+    },
+    {
+     "query": {
+      "sync_ms": "0",
+      "probe": "202"
+     },
+     "status": 202
+    }
+   ]
+  },
+  {
+   "path": "/api/file",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "path": "repo-relative path",
+     "outline": "optional: 1 = include the file's outline (`outline`, the /api/outline answer) in the same response"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "changes",
+       "changes_against",
+       "lines",
+       "path",
+       "sample",
+       "text"
+      ],
+      "properties": {
+       "changes": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "required": [
+          "end",
+          "kind",
+          "start"
+         ],
+         "properties": {
+          "end": {
+           "type": "number"
+          },
+          "kind": {
+           "type": "string"
+          },
+          "start": {
+           "type": "number"
+          }
+         }
+        }
+       },
+       "changes_against": {
+        "type": "string"
+       },
+       "lines": {
+        "type": "number"
+       },
+       "path": {
+        "type": "string"
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "text": {
+        "type": "string"
+       },
+       "windowed": {
+        "type": "boolean"
+       },
+       "outline": {
+        "type": "object"
+       },
+       "viewing": {
+        "type": "object",
+        "required": [
+         "kind",
+         "session",
+         "changed_here"
+        ]
+       }
+      }
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "path": "src/app/core.py"
+     },
+     "status": 200
+    },
+    {
+     "query": {
+      "path": "../etc/passwd"
+     },
+     "status": 400
+    }
+   ]
+  },
+  {
+   "path": "/api/outline",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "path": "repo-relative path"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "backend",
+       "basis",
+       "note",
+       "path",
+       "sample",
+       "symbols"
+      ],
+      "properties": {
+       "backend": {
+        "type": "string"
+       },
+       "basis": {
+        "type": "string"
+       },
+       "note": {
+        "type": "string"
+       },
+       "path": {
+        "type": "string"
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "symbols": {
+        "type": "array"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "path": "src/app/core.py"
+     },
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/impact",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "path": "repo-relative path",
+     "lines": "changed line ranges",
+     "symbols": "comma-separated names (max 40)",
+     "sync_ms": "optional: how long (0..2000 ms) to wait for the answer before the 202 job handle (default 300)"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "is_test",
+       "on_demand",
+       "path",
+       "pending",
+       "sample",
+       "status",
+       "symbols",
+       "symbols_capped",
+       "symbols_changed"
+      ],
+      "properties": {
+       "is_test": {
+        "type": "boolean"
+       },
+       "on_demand": {
+        "type": "boolean"
+       },
+       "path": {
+        "type": "string"
+       },
+       "pending": {
+        "type": "array"
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "status": {
+        "type": "string"
+       },
+       "symbols": {
+        "type": "array"
+       },
+       "symbols_capped": {
+        "type": "boolean"
+       },
+       "symbols_changed": {
+        "type": "number"
+       }
+      }
+     }
+    },
+    "202": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/JobHandle"
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "path": "src/app/core.py",
+      "lines": "1-3"
+     },
+     "status": 200
+    },
+    {
+     "query": {
+      "path": "src/app/core.py",
+      "lines": "1-9",
+      "sync_ms": "0"
+     },
+     "status": 202
+    }
+   ]
+  },
+  {
+   "path": "/api/quickopen",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "q": "the typed text",
+     "changed": "changed paths to rank first"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "changed",
+       "files",
+       "matcher",
+       "matcher_note",
+       "q",
+       "sample",
+       "symbols",
+       "symbols_state"
+      ],
+      "properties": {
+       "changed": {
+        "type": "array"
+       },
+       "files": {
+        "type": "array"
+       },
+       "matcher": {
+        "type": "string"
+       },
+       "matcher_note": {
+        "type": "string"
+       },
+       "q": {
+        "type": "string"
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "symbols": {
+        "type": "array"
+       },
+       "symbols_state": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {
+      "q": "core",
+      "changed": []
+     },
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/query",
+   "method": "GET",
+   "kind": "read",
+   "params": {
+    "query": {
+     "kind": "a mokata query kind",
+     "target": "symbol",
+     "depth": "1..6",
+     "sync_ms": "optional: how long (0..2000 ms) to wait for the answer before the 202 job handle (default 300)"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "backend",
+       "basis",
+       "degraded",
+       "kind",
+       "note",
+       "references",
+       "target",
+       "total",
+       "truncated"
+      ],
+      "properties": {
+       "backend": {
+        "type": "string"
+       },
+       "basis": {
+        "type": "string"
+       },
+       "degraded": {
+        "type": "boolean"
+       },
+       "kind": {
+        "type": "string"
+       },
+       "note": {
+        "type": "string"
+       },
+       "references": {
+        "type": "array"
+       },
+       "target": {
+        "type": "string"
+       },
+       "total": {},
+       "truncated": {
+        "type": "boolean"
+       }
+      }
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    },
+    "202": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/JobHandle"
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "kind": "callers",
+      "target": "parse"
+     },
+     "status": 200
+    },
+    {
+     "query": {
+      "kind": "nope",
+      "target": "x"
+     },
+     "status": 400
+    },
+    {
+     "query": {
+      "kind": "refs",
+      "target": "total",
+      "sync_ms": "0"
+     },
+     "status": 202
+    }
+   ]
+  },
+  {
+   "path": "/api/caps",
+   "method": "GET",
+   "kind": "json",
+   "params": {},
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "graph",
+       "matcher",
+       "more",
+       "sample"
+      ],
+      "properties": {
+       "graph": {
+        "type": "string"
+       },
+       "matcher": {
+        "type": "string"
+       },
+       "more": {
+        "type": "object",
+        "required": [
+         "search",
+         "semantic"
+        ]
+       },
+       "sample": {
+        "type": "boolean"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/health",
+   "method": "GET",
+   "kind": "read",
+   "params": {
+    "query": {
+     "full": "1 for the slow checks",
+     "sync_ms": "optional: how long (0..2000 ms) to wait for the finished checks (default 300); past it the answer is still 200 — the CHECKING shape, with the job in `pending`",
+     "job": "optional: the `pending` job id a page waited for — answers its finished rows"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "full",
+       "jobs",
+       "problems",
+       "rows",
+       "sample"
+      ],
+      "properties": {
+       "full": {
+        "type": "boolean"
+       },
+       "problems": {
+        "type": "number"
+       },
+       "rows": {
+        "type": "array"
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "jobs": {
+        "type": "array",
+        "items": {
+         "$ref": "#/schemas/JobSnapshot"
+        }
+       },
+       "checking": {
+        "type": "boolean"
+       },
+       "pending": {
+        "$ref": "#/schemas/JobHandle"
+       },
+       "initialized": {
+        "type": "boolean"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "status": 200
+    },
+    {
+     "query": {
+      "full": "1",
+      "sync_ms": "0"
+     },
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/health/action",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "action": "rebuild/update action",
+     "confirm": "the confirmation text"
+    }
+   },
+   "responses": {
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {
+      "action": "nope"
+     },
+     "status": 400
+    }
+   ]
+  },
+  {
+   "path": "/api/health/check-update",
+   "method": "POST",
+   "kind": "action",
+   "params": {},
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "message",
+       "ok"
+      ],
+      "properties": {
+       "message": {
+        "type": "string"
+       },
+       "ok": {
+        "type": "boolean"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {},
+     "status": 200,
+     "demo": true
+    }
+   ]
+  },
+  {
+   "path": "/api/search",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "q": "text or regex",
+     "mode": "word|regex",
+     "case": "bool",
+     "only": "optional paths",
+     "sync_ms": "optional: how long (0..2000 ms) to wait before the 202 job handle (default 300)",
+     "offset": "optional: the previous page's next_offset (default 0) — 0.0.26 P36 paging"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "count",
+       "engine",
+       "engine_note",
+       "files",
+       "large_files",
+       "mode",
+       "more",
+       "next_offset",
+       "offset",
+       "q",
+       "sample",
+       "total"
+      ],
+      "properties": {
+       "engine": {
+        "type": "string"
+       },
+       "engine_note": {
+        "type": "string"
+       },
+       "files": {
+        "type": "array"
+       },
+       "mode": {
+        "type": "string"
+       },
+       "q": {
+        "type": "string"
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "total": {
+        "type": "number"
+       },
+       "offset": {
+        "type": "number"
+       },
+       "count": {
+        "type": "number"
+       },
+       "more": {
+        "type": "boolean"
+       },
+       "next_offset": {
+        "type": [
+         "number",
+         "null"
+        ]
+       },
+       "large_files": {
+        "type": "array"
+       }
+      }
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    },
+    "202": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/JobHandle"
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {
+      "q": "parse"
+     },
+     "status": 200
+    },
+    {
+     "body": {
+      "q": "(",
+      "mode": "regex"
+     },
+     "status": 400
+    },
+    {
+     "body": {
+      "q": "total",
+      "sync_ms": 0
+     },
+     "status": 202
+    },
+    {
+     "body": {
+      "q": "parse",
+      "offset": -1
+     },
+     "status": 400
+    }
+   ]
+  },
+  {
+   "path": "/api/meaning",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "q": "a meaning query",
+     "only": "optional paths",
+     "sync_ms": "optional: how long (0..2000 ms) to wait before the 202 job handle (default 300)"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "available",
+       "kind",
+       "note",
+       "q",
+       "results",
+       "sample",
+       "state"
+      ],
+      "properties": {
+       "available": {
+        "type": "boolean"
+       },
+       "kind": {
+        "type": "string"
+       },
+       "note": {
+        "type": "string"
+       },
+       "q": {
+        "type": "string"
+       },
+       "results": {
+        "type": "array"
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "state": {
+        "type": "string"
+       }
+      }
+     }
+    },
+    "202": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/JobHandle"
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {
+      "q": "parse"
+     },
+     "status": 200,
+     "demo": true
+    },
+    {
+     "body": {
+      "q": "total",
+      "sync_ms": 0
+     },
+     "status": 202,
+     "demo": true
+    }
+   ]
+  },
+  {
+   "path": "/api/semantic",
+   "method": "GET",
+   "kind": "json",
+   "params": {},
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "oneOf": [
+       {
+        "type": "object",
+        "required": [
+         "available",
+         "install",
+         "note",
+         "sample",
+         "state"
+        ],
+        "properties": {
+         "available": {
+          "type": "boolean"
+         },
+         "install": {
+          "type": "string"
+         },
+         "note": {
+          "type": "string"
+         },
+         "sample": {
+          "type": "boolean"
+         },
+         "state": {
+          "type": "string",
+          "enum": [
+           "not-installed"
+          ]
+         }
+        }
+       },
+       {
+        "type": "object",
+        "required": [
+         "available",
+         "can_fetch",
+         "detail",
+         "install",
+         "note",
+         "sample",
+         "state"
+        ],
+        "properties": {
+         "available": {
+          "type": "boolean"
+         },
+         "can_fetch": {
+          "type": "boolean"
+         },
+         "detail": {
+          "type": "string"
+         },
+         "install": {
+          "type": "string"
+         },
+         "note": {
+          "type": "string"
+         },
+         "sample": {
+          "type": "boolean"
+         },
+         "state": {
+          "type": "string",
+          "enum": [
+           "model-not-local"
+          ]
+         }
+        }
+       },
+       {
+        "type": "object",
+        "required": [
+         "available",
+         "dim",
+         "embedder",
+         "sample",
+         "state"
+        ],
+        "properties": {
+         "available": {
+          "type": "boolean"
+         },
+         "dim": {
+          "type": "integer"
+         },
+         "embedder": {
+          "type": "string"
+         },
+         "sample": {
+          "type": "boolean"
+         },
+         "state": {
+          "type": "string",
+          "enum": [
+           "ready"
+          ]
+         }
+        }
+       },
+       {
+        "type": "object",
+        "required": [
+         "available",
+         "sample",
+         "state"
+        ],
+        "properties": {
+         "available": {
+          "type": "boolean"
+         },
+         "sample": {
+          "type": "boolean"
+         },
+         "state": {
+          "type": "string",
+          "enum": [
+           "sample"
+          ]
+         }
+        }
+       }
+      ]
+     }
+    }
+   },
+   "probes": [
+    {
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/semantic/fetch",
+   "method": "POST",
+   "kind": "action",
+   "params": {},
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "available",
+       "sample",
+       "state"
+      ],
+      "properties": {
+       "available": {
+        "type": "boolean"
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "state": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {},
+     "status": 200,
+     "demo": true
+    }
+   ]
+  },
+  {
+   "path": "/api/graph",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "view": "ripple|focus|path|untested",
+     "symbol": "symbol",
+     "to": "target (path view)",
+     "depth": "hops",
+     "sync_ms": "optional: how long (0..2000 ms) to wait for the answer before the 202 job handle (default 300)",
+     "page": "optional: which page of PAGE_NODES nodes (1..; default 1) — a later page resumes the walk (P37: no hard cap)"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "answer_bases",
+       "bases",
+       "basis",
+       "callees_basis",
+       "callers_basis",
+       "center",
+       "defs",
+       "defs_basis",
+       "draw",
+       "edges",
+       "more",
+       "nodes",
+       "page",
+       "page_nodes",
+       "sample",
+       "symbol",
+       "view"
+      ],
+      "properties": {
+       "answer_bases": {
+        "type": "array"
+       },
+       "bases": {
+        "type": "object",
+        "required": []
+       },
+       "basis": {
+        "type": "string"
+       },
+       "callees_basis": {
+        "type": "string"
+       },
+       "callers_basis": {
+        "type": "string"
+       },
+       "center": {
+        "type": "string"
+       },
+       "defs": {
+        "type": "number"
+       },
+       "defs_basis": {
+        "type": "string"
+       },
+       "draw": {
+        "type": "object",
+        "required": [
+         "limit",
+         "total",
+         "shown",
+         "clusters"
+        ]
+       },
+       "edges": {
+        "type": "array"
+       },
+       "more": {
+        "type": "boolean"
+       },
+       "nodes": {
+        "type": "array"
+       },
+       "page": {
+        "type": "number"
+       },
+       "page_nodes": {
+        "type": "number"
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "symbol": {
+        "type": "string"
+       },
+       "view": {
+        "type": "string"
+       }
+      }
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    },
+    "202": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/JobHandle"
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "view": "focus",
+      "symbol": "parse"
+     },
+     "status": 200
+    },
+    {
+     "query": {
+      "view": "bad",
+      "symbol": "x"
+     },
+     "status": 400
+    },
+    {
+     "query": {
+      "view": "ripple",
+      "symbol": "total",
+      "depth": "3",
+      "sync_ms": "0"
+     },
+     "status": 202
+    }
+   ]
+  },
+  {
+   "path": "/api/runs",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "source": "local|…"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "oneOf": [
+       {
+        "type": "object",
+        "required": [
+         "counts",
+         "default",
+         "runs",
+         "sample",
+         "source",
+         "team"
+        ],
+        "properties": {
+         "counts": {
+          "type": "object",
+          "required": [
+           "listed",
+           "total",
+           "with_plan",
+           "with_spec"
+          ],
+          "properties": {
+           "listed": {
+            "type": "number"
+           },
+           "total": {
+            "type": "number"
+           },
+           "with_plan": {
+            "type": "number"
+           },
+           "with_spec": {
+            "type": "number"
+           }
+          }
+         },
+         "default": {},
+         "runs": {
+          "type": "array"
+         },
+         "sample": {
+          "type": "boolean"
+         },
+         "source": {
+          "type": "string"
+         },
+         "team": {
+          "type": "object",
+          "required": [
+           "configured",
+           "note"
+          ],
+          "properties": {
+           "configured": {
+            "type": "boolean"
+           },
+           "note": {
+            "type": "string"
+           }
+          }
+         }
+        }
+       },
+       {
+        "$ref": "#/schemas/NotInitialized"
+       }
+      ]
+     }
+    }
+   },
+   "probes": [
+    {
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/plan",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "run": "run id",
+     "source": "local|…",
+     "version": "spec version"
+    }
+   },
+   "responses": {
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    },
+    "200": {
+     "media": "json",
+     "schema": {
+      "oneOf": [
+       {
+        "type": "object",
+        "required": [
+         "amendment",
+         "approach",
+         "label",
+         "run",
+         "sample",
+         "source",
+         "spec",
+         "versions"
+        ],
+        "properties": {
+         "amendment": {
+          "type": "object",
+          "required": [
+           "open"
+          ],
+          "properties": {
+           "open": {
+            "type": "boolean"
+           }
+          }
+         },
+         "approach": {
+          "type": "object",
+          "required": [
+           "approved_at",
+           "approver",
+           "cons",
+           "decisions",
+           "domains",
+           "name",
+           "pros",
+           "questions",
+           "state",
+           "summary",
+           "targets",
+           "topic"
+          ],
+          "properties": {
+           "approved_at": {
+            "type": "string"
+           },
+           "approver": {
+            "type": "string"
+           },
+           "cons": {
+            "type": "array",
+            "items": {
+             "type": "string"
+            }
+           },
+           "decisions": {
+            "type": "array",
+            "items": {
+             "type": "object",
+             "required": [
+              "about_code",
+              "deferred",
+              "id",
+              "rationale",
+              "statement"
+             ]
+            }
+           },
+           "domains": {
+            "type": "array"
+           },
+           "name": {
+            "type": "string"
+           },
+           "pros": {
+            "type": "array",
+            "items": {
+             "type": "string"
+            }
+           },
+           "questions": {
+            "type": "array",
+            "items": {
+             "type": "object",
+             "required": [
+              "answer",
+              "text"
+             ]
+            }
+           },
+           "state": {
+            "type": "string"
+           },
+           "summary": {
+            "type": "string"
+           },
+           "targets": {
+            "type": "array",
+            "items": {
+             "type": "string"
+            }
+           },
+           "topic": {
+            "type": "string"
+           }
+          }
+         },
+         "label": {
+          "type": "string"
+         },
+         "run": {
+          "type": "string"
+         },
+         "sample": {
+          "type": "boolean"
+         },
+         "source": {
+          "type": "string"
+         },
+         "spec": {
+          "type": "object",
+          "required": [
+           "anchor_lines",
+           "approach",
+           "criteria",
+           "current_version",
+           "domains",
+           "scope",
+           "state",
+           "superseded",
+           "tests",
+           "title",
+           "version"
+          ],
+          "properties": {
+           "anchor_lines": {
+            "type": "array",
+            "items": {
+             "type": "string"
+            }
+           },
+           "approach": {
+            "type": "string"
+           },
+           "criteria": {
+            "type": "array",
+            "items": {
+             "type": "object",
+             "required": [
+              "id",
+              "test",
+              "text"
+             ]
+            }
+           },
+           "current_version": {
+            "type": "number"
+           },
+           "domains": {
+            "type": "array"
+           },
+           "scope": {
+            "type": "object",
+            "required": [
+             "authorized",
+             "deferred"
+            ],
+            "properties": {
+             "authorized": {
+              "type": "array"
+             },
+             "deferred": {
+              "type": "array"
+             }
+            }
+           },
+           "state": {
+            "type": "string"
+           },
+           "superseded": {
+            "type": "boolean"
+           },
+           "tests": {
+            "type": "object",
+            "required": [
+             "failing",
+             "passing"
+            ],
+            "properties": {
+             "failing": {
+              "type": "array"
+             },
+             "passing": {
+              "type": "array"
+             }
+            }
+           },
+           "title": {
+            "type": "string"
+           },
+           "version": {
+            "type": "number"
+           }
+          }
+         },
+         "versions": {
+          "type": "array",
+          "items": {
+           "type": "object",
+           "required": [
+            "ac_count",
+            "current",
+            "key",
+            "malformed",
+            "present",
+            "title",
+            "version"
+           ],
+           "properties": {
+            "ac_count": {
+             "type": "number"
+            },
+            "current": {
+             "type": "boolean"
+            },
+            "key": {
+             "type": "string"
+            },
+            "malformed": {
+             "type": "boolean"
+            },
+            "present": {
+             "type": "boolean"
+            },
+            "title": {
+             "type": "string"
+            },
+            "version": {
+             "type": "number"
+            }
+           }
+          }
+         }
+        }
+       },
+       {
+        "$ref": "#/schemas/NotInitialized"
+       }
+      ]
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "run": "nope"
+     },
+     "status": 400
+    },
+    {
+     "query": {
+      "run": "run-parser-fix"
+     },
+     "status": 200,
+     "demo": true
+    }
+   ]
+  },
+  {
+   "path": "/api/lifecycle",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "run": "run id"
+    }
+   },
+   "responses": {
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    },
+    "200": {
+     "media": "json",
+     "schema": {
+      "oneOf": [
+       {
+        "type": "object",
+        "required": [
+         "amendment",
+         "current",
+         "finished",
+         "finished_at",
+         "marks",
+         "regressed",
+         "run",
+         "sample",
+         "stages",
+         "started",
+         "started_basis",
+         "test_record"
+        ],
+        "properties": {
+         "amendment": {
+          "type": "object",
+          "required": [
+           "open"
+          ],
+          "properties": {
+           "open": {
+            "type": "boolean"
+           }
+          }
+         },
+         "current": {
+          "type": "string"
+         },
+         "finished": {
+          "type": "boolean"
+         },
+         "finished_at": {
+          "type": "string"
+         },
+         "marks": {
+          "type": "array",
+          "items": {
+           "type": "object",
+           "required": [
+            "kind",
+            "label",
+            "stage",
+            "t",
+            "ts"
+           ],
+           "properties": {
+            "kind": {
+             "type": "string"
+            },
+            "label": {
+             "type": "string"
+            },
+            "reason": {
+             "type": "string"
+            },
+            "stage": {
+             "type": "string"
+            },
+            "t": {
+             "type": "number"
+            },
+            "ts": {
+             "type": "string"
+            }
+           }
+          }
+         },
+         "regressed": {
+          "type": "boolean"
+         },
+         "run": {
+          "type": "string"
+         },
+         "sample": {
+          "type": "boolean"
+         },
+         "stages": {
+          "type": "array",
+          "items": {
+           "type": "object",
+           "required": [
+            "amendments",
+            "blocks",
+            "entered",
+            "evidence",
+            "stage",
+            "status"
+           ],
+           "properties": {
+            "amendments": {
+             "type": "number"
+            },
+            "blocks": {
+             "type": "number"
+            },
+            "entered": {
+             "type": "string"
+            },
+            "evidence": {
+             "type": "string"
+            },
+            "stage": {
+             "type": "string"
+            },
+            "status": {
+             "type": "string"
+            }
+           }
+          }
+         },
+         "started": {
+          "type": "number"
+         },
+         "started_basis": {
+          "type": "string"
+         },
+         "test_record": {
+          "type": "object",
+          "required": [
+           "failing",
+           "passing"
+          ],
+          "properties": {
+           "failing": {
+            "type": "number"
+           },
+           "passing": {
+            "type": "number"
+           }
+          }
+         }
+        }
+       },
+       {
+        "$ref": "#/schemas/NotInitialized"
+       }
+      ]
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "run": "nope"
+     },
+     "status": 400
+    },
+    {
+     "query": {
+      "run": "run-parser-fix"
+     },
+     "status": 200,
+     "demo": true
+    }
+   ]
+  },
+  {
+   "path": "/api/saved-plans",
+   "method": "GET",
+   "kind": "json",
+   "params": {},
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "dirs",
+       "plans",
+       "total"
+      ],
+      "properties": {
+       "dirs": {
+        "type": "object",
+        "required": [
+         "exported",
+         "internal"
+        ],
+        "properties": {
+         "exported": {
+          "type": "string"
+         },
+         "internal": {
+          "type": "string"
+         }
+        }
+       },
+       "plans": {
+        "type": "array"
+       },
+       "total": {
+        "type": "number"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/saved-plan",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "plan": "plan file name",
+     "where": "internal|repo"
+    }
+   },
+   "responses": {
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "plan": "nope.md"
+     },
+     "status": 400
+    }
+   ]
+  },
+  {
+   "path": "/api/focus",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "session": "session id or null"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "focus"
+      ],
+      "properties": {
+       "focus": {}
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {
+      "session": null
+     },
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/events",
+   "method": "GET",
+   "kind": "stream",
+   "params": {
+    "headers": {
+     "last-event-id": "resume after this event id"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "sse"
+    }
+   },
+   "probes": [
+    {
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/bus",
+   "method": "POST",
+   "kind": "hook",
+   "params": {
+    "body": {
+     "*": "a neutral event or a Claude Code hook payload"
+    }
+   },
+   "responses": {
+    "204": {
+     "media": "empty"
+    }
+   },
+   "probes": [
+    {
+     "body": {},
+     "status": 204
+    }
+   ]
+  },
+  {
+   "path": "/api/gate",
+   "method": "POST",
+   "kind": "hook",
+   "params": {
+    "body": {
+     "*": "a PreToolUse hook payload"
+    }
+   },
+   "responses": {
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "raw": "not json",
+     "status": 400
+    }
+   ]
+  },
+  {
+   "path": "/open",
+   "method": "GET",
+   "kind": "page",
+   "params": {
+    "query": {
+     "path": "repo-relative path",
+     "line": "line number"
+    }
+   },
+   "responses": {
+    "303": {
+     "media": "redirect"
+    },
+    "400": {
+     "media": "text"
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "path": "src/app/core.py",
+      "line": "3"
+     },
+     "status": 303
+    },
+    {
+     "query": {
+      "path": "/etc/passwd"
+     },
+     "status": 400
+    }
+   ]
+  },
+  {
+   "path": "/api/term/caps",
+   "method": "GET",
+   "kind": "read",
+   "params": {},
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "available",
+       "max",
+       "open",
+       "programs",
+       "reason"
+      ],
+      "properties": {
+       "available": {
+        "type": "boolean"
+       },
+       "max": {
+        "type": "number"
+       },
+       "open": {
+        "type": "number"
+       },
+       "programs": {
+        "type": "object",
+        "required": [],
+        "properties": {}
+       },
+       "reason": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/term/open",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "program": "claude|shell",
+     "cols": "int",
+     "rows": "int",
+     "resume": "session id"
+    }
+   },
+   "responses": {
+    "409": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {},
+     "status": 409
+    }
+   ]
+  },
+  {
+   "path": "/api/term/input",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "id": "terminal id",
+     "data": "text"
+    }
+   },
+   "responses": {
+    "404": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {
+      "id": "x",
+      "data": "a"
+     },
+     "status": 404
+    },
+    {
+     "body": {},
+     "status": 400
+    }
+   ]
+  },
+  {
+   "path": "/api/term/resize",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "id": "terminal id",
+     "cols": "int",
+     "rows": "int"
+    }
+   },
+   "responses": {
+    "404": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {
+      "id": "x"
+     },
+     "status": 404
+    }
+   ]
+  },
+  {
+   "path": "/api/term/close",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "id": "terminal id"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "closed"
+      ],
+      "properties": {
+       "closed": {
+        "type": "boolean"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {
+      "id": "x"
+     },
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/term/out",
+   "method": "GET",
+   "kind": "stream",
+   "params": {
+    "query": {
+     "id": "terminal id",
+     "after": "byte offset",
+     "wait": "seconds"
+    }
+   },
+   "responses": {
+    "404": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "id": "x"
+     },
+     "status": 404
+    }
+   ]
+  },
+  {
+   "path": "/api/join",
+   "method": "GET",
+   "kind": "json",
+   "params": {},
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "joined",
+       "sessions"
+      ],
+      "properties": {
+       "joined": {},
+       "sessions": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "required": [
+          "alive",
+          "branch",
+          "claim",
+          "files",
+          "id",
+          "known_by",
+          "last",
+          "last_seen",
+          "phase",
+          "scope",
+          "short",
+          "writes"
+         ],
+         "properties": {
+          "alive": {},
+          "branch": {
+           "type": "string"
+          },
+          "claim": {
+           "type": "string"
+          },
+          "files": {
+           "type": "number"
+          },
+          "id": {
+           "type": "string"
+          },
+          "known_by": {
+           "type": "array"
+          },
+          "last": {
+           "type": "number"
+          },
+          "last_seen": {
+           "type": "string"
+          },
+          "phase": {
+           "type": "string"
+          },
+          "scope": {
+           "type": "string"
+          },
+          "short": {
+           "type": "string"
+          },
+          "writes": {
+           "type": "number"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/join",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "session": "session id or null to leave"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "joined"
+      ],
+      "properties": {
+       "joined": {}
+      }
+     }
+    },
+    "404": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {
+      "session": null
+     },
+     "status": 200
+    },
+    {
+     "body": {
+      "session": "nope"
+     },
+     "status": 404
+    }
+   ]
+  },
+  {
+   "path": "/api/context",
+   "method": "GET",
+   "kind": "json",
+   "params": {},
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "items",
+       "joined",
+       "max"
+      ],
+      "properties": {
+       "items": {
+        "type": "array"
+       },
+       "joined": {},
+       "max": {
+        "type": "number"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/context",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "kind": "file|selection|…",
+     "path": "repo-relative path",
+     "lines": "range",
+     "session": "target session"
+    }
+   },
+   "responses": {
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {
+      "kind": "nope",
+      "session": null
+     },
+     "status": 400
+    }
+   ]
+  },
+  {
+   "path": "/api/context/clear",
+   "method": "POST",
+   "kind": "action",
+   "params": {},
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "cleared"
+      ],
+      "properties": {
+       "cleared": {
+        "type": "number"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {},
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/sessions",
+   "method": "GET",
+   "kind": "read",
+   "params": {},
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "bus",
+       "count",
+       "live_window_secs",
+       "needs_you",
+       "reads",
+       "risk_formula",
+       "sample",
+       "sessions",
+       "waiting"
+      ],
+      "properties": {
+       "bus": {
+        "type": "boolean"
+       },
+       "count": {
+        "type": "number"
+       },
+       "live_window_secs": {
+        "type": "number"
+       },
+       "needs_you": {
+        "type": "array"
+       },
+       "reads": {
+        "type": "string"
+       },
+       "risk_formula": {
+        "type": "string"
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "sessions": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "required": [
+          "claim",
+          "files",
+          "first",
+          "gates",
+          "id",
+          "last",
+          "last_iso",
+          "ledger",
+          "needs_you",
+          "risk",
+          "run",
+          "secret_hits",
+          "short",
+          "status",
+          "status_basis",
+          "tokens",
+          "writes"
+         ],
+         "properties": {
+          "claim": {
+           "type": "string"
+          },
+          "files": {
+           "type": "array"
+          },
+          "first": {
+           "type": "number"
+          },
+          "gates": {
+           "type": "object",
+           "required": [
+            "blocked",
+            "by_gate",
+            "fired"
+           ]
+          },
+          "id": {
+           "type": "string"
+          },
+          "last": {
+           "type": "number"
+          },
+          "last_iso": {
+           "type": "string"
+          },
+          "ledger": {
+           "type": "array"
+          },
+          "needs_you": {
+           "type": "array"
+          },
+          "risk": {
+           "type": "number"
+          },
+          "run": {
+           "type": "string"
+          },
+          "secret_hits": {
+           "type": "number"
+          },
+          "short": {
+           "type": "string"
+          },
+          "status": {
+           "type": "string"
+          },
+          "status_basis": {
+           "type": "string"
+          },
+          "tokens": {
+           "type": "object",
+           "required": [
+            "estimated",
+            "measured"
+           ]
+          },
+          "writes": {
+           "type": "number"
+          }
+         }
+        }
+       },
+       "waiting": {
+        "type": "number"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/timelapse",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "session": "session id"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "count",
+       "files",
+       "reads",
+       "run",
+       "sample",
+       "session",
+       "steps",
+       "truncated",
+       "unmeasured"
+      ],
+      "properties": {
+       "count": {
+        "type": "number"
+       },
+       "files": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        }
+       },
+       "reads": {
+        "type": "string"
+       },
+       "run": {
+        "type": "string"
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "session": {
+        "type": "string"
+       },
+       "steps": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "required": [
+          "added",
+          "i",
+          "kind",
+          "measured",
+          "path",
+          "removed",
+          "snap",
+          "state",
+          "t"
+         ],
+         "properties": {
+          "added": {},
+          "i": {
+           "type": "number"
+          },
+          "kind": {
+           "type": "string"
+          },
+          "measured": {
+           "type": "boolean"
+          },
+          "path": {
+           "type": "string"
+          },
+          "removed": {},
+          "snap": {
+           "type": "string"
+          },
+          "state": {
+           "type": "string"
+          },
+          "t": {
+           "type": "number"
+          }
+         }
+        }
+       },
+       "truncated": {
+        "type": "boolean"
+       },
+       "unmeasured": {
+        "type": "number"
+       }
+      }
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "session": "S-1"
+     },
+     "status": 200
+    },
+    {
+     "status": 400
+    }
+   ]
+  },
+  {
+   "path": "/api/treemap",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "session": "optional session id",
+     "size": "loc|change"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "changed",
+       "count",
+       "dirs",
+       "files",
+       "heat_scale",
+       "height",
+       "not_on_disk",
+       "omitted",
+       "sample",
+       "session",
+       "size",
+       "sized_by",
+       "total_files",
+       "width"
+      ],
+      "properties": {
+       "changed": {
+        "type": "number"
+       },
+       "count": {
+        "type": "number"
+       },
+       "dirs": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "required": [
+          "depth",
+          "h",
+          "path",
+          "w",
+          "weight",
+          "x",
+          "y"
+         ],
+         "properties": {
+          "depth": {
+           "type": "number"
+          },
+          "h": {
+           "type": "number"
+          },
+          "path": {
+           "type": "string"
+          },
+          "w": {
+           "type": "number"
+          },
+          "weight": {
+           "type": "number"
+          },
+          "x": {
+           "type": "number"
+          },
+          "y": {
+           "type": "number"
+          }
+         }
+        }
+       },
+       "files": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "required": [
+          "added",
+          "bytes",
+          "h",
+          "heat",
+          "loc",
+          "path",
+          "removed",
+          "unmeasured",
+          "w",
+          "weight",
+          "writes",
+          "x",
+          "y"
+         ],
+         "properties": {
+          "added": {
+           "type": "number"
+          },
+          "bytes": {
+           "type": "number"
+          },
+          "h": {
+           "type": "number"
+          },
+          "heat": {
+           "type": "number"
+          },
+          "loc": {
+           "type": "number"
+          },
+          "path": {
+           "type": "string"
+          },
+          "removed": {
+           "type": "number"
+          },
+          "unmeasured": {
+           "type": "number"
+          },
+          "w": {
+           "type": "number"
+          },
+          "weight": {
+           "type": "number"
+          },
+          "writes": {
+           "type": "number"
+          },
+          "x": {
+           "type": "number"
+          },
+          "y": {
+           "type": "number"
+          }
+         }
+        }
+       },
+       "heat_scale": {
+        "type": "string"
+       },
+       "height": {
+        "type": "number"
+       },
+       "not_on_disk": {
+        "type": "array"
+       },
+       "omitted": {
+        "type": "number"
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "session": {
+        "type": "string"
+       },
+       "size": {
+        "type": "string"
+       },
+       "sized_by": {
+        "type": "string"
+       },
+       "total_files": {
+        "type": "number"
+       },
+       "width": {
+        "type": "number"
+       }
+      }
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "status": 200
+    },
+    {
+     "query": {
+      "size": "x"
+     },
+     "status": 400
+    }
+   ]
+  },
+  {
+   "path": "/api/open",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "path": "repo-relative path",
+     "line": "int",
+     "session": "session id"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "demo",
+       "line",
+       "pages",
+       "path"
+      ],
+      "properties": {
+       "demo": {
+        "type": "boolean"
+       },
+       "line": {
+        "type": "number"
+       },
+       "pages": {
+        "type": "number"
+       },
+       "path": {
+        "type": "string"
+       }
+      }
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {
+      "path": "src/app/core.py",
+      "line": 2
+     },
+     "status": 200
+    },
+    {
+     "body": {},
+     "status": 400
+    }
+   ]
+  }
+ ]
+}

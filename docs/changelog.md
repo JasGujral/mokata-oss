@@ -90,8 +90,9 @@ was **not** fixed here and stayed disclosed.
 
 **"Memory intelligence at scale."** Memory that ages, summarizes itself, heals across writers and
 carries typed edges — **proven at 100,000 items on live Postgres** rather than asserted — plus an
-upgrade path that finishes the job and gates that hold on Windows. `mokata upgrade` does the
-package install **and** refreshes the harness wiring (a bare `pip install -U` leaves the old wiring
+upgrade path that finishes the job and gates that hold on Windows. The `upgrade` command (since
+replaced by `mokata update`, the one verb) did the
+package install **and** refreshed the harness wiring (a bare `pip install -U` leaves the old wiring
 in place); **stale wiring is now visible** where you already are, and `mokata doctor --wiring` is
 the wiring-only check. Memory **summaries are written, not templated**; items carry usage signals
 and bi-temporal validity windows; scope filtering moves **into the database**; two teammates

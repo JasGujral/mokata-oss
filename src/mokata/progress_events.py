@@ -61,7 +61,12 @@ GATE_BLOCK = "gate_block"
 #: it returned (or why it returned none). Written by the SubagentStop hook. What lets a review that
 #: says it was independent be checked against a subagent that was actually seen to finish.
 SUBAGENT_FINISHED = "subagent_finished"
-PROGRESS_EVENT_TYPES = (STAGE_ENTER, RUN_FINISHED, REVIEW_VERDICT, GATE_BLOCK, SUBAGENT_FINISHED)
+#: 0.0.26 O10 (IDE-RESUME-LOSES-RUN) — a Claude Code session RESUMED inside this run: either the id
+#: was kept (`from` == `session`) or a new id carried its predecessor's claim. Written by the
+#: SessionStart hook; what lets the run's lifecycle read across the break as one story.
+SESSION_RESUMED = "session_resumed"
+PROGRESS_EVENT_TYPES = (STAGE_ENTER, RUN_FINISHED, REVIEW_VERDICT, GATE_BLOCK, SUBAGENT_FINISHED,
+                        SESSION_RESUMED)
 
 #: How a finished run was LANDED — the four options `/mokata:ship` step 3 presents to the human.
 #: A finish names one; "finished, somehow" is not a record anybody can audit.
@@ -371,6 +376,8 @@ def record_review_verdict(surface: Any, *, passed: bool, independent: bool,
     the CLI says so, and the remedy is to re-record with an explicit `--run <run id>`."""
     if run_id is _CURRENT_RUN:
         run_id = _resolve_verdict_run(surface)
+    if run_id:
+        _refuse_past_review_cap(surface, run_id)
     data: Dict[str, Any] = {"passed": bool(passed), "independent": bool(independent)}
     if findings is not None:
         data["findings"] = findings
@@ -384,8 +391,39 @@ def record_review_verdict(surface: Any, *, passed: bool, independent: bool,
         if problem:
             raise ValueError(problem)
         data["blocking"] = blocking
+    # R2 (0.0.26) — the verdict is stamped with the plan hash it reviewed (when the run has a sealed
+    # spec), so ship can refuse a review of a plan that is no longer the approved one.
+    if run_id:
+        from .plan_tasks import attest_run
+        att = attest_run(getattr(surface, "root", "") or "", run_id)
+        if att is not None and att.approved:
+            data["plan_hash"] = att.approved
     return ProgressLog.from_surface(surface).append_event(
         REVIEW_VERDICT, "review", run_id=run_id, data=data)
+
+
+class ReviewLoopCapped(MokataError):
+    """R4 (0.0.26) — `record_review_verdict` refused a review round past the cap: the run's last
+    `loop_guard.REVIEW_ROUND_CAP` verdicts all FAILED, so the next round escalates to the human
+    instead of running. The human's P14 override (`mokata gate override review-loop`) lifts it."""
+
+
+def _refuse_past_review_cap(surface: Any, run_id: str) -> None:
+    """Raise `ReviewLoopCapped` when `run_id` already has `REVIEW_ROUND_CAP` failed rounds in a row
+    and no `review-loop` override. Counted on the SAME bounded backward scan ship's gate reads."""
+    from .loop_guard import (GATE_REVIEW_LOOP, REVIEW_ROUND_CAP, failed_review_streak,
+                             review_loop_message)
+    log = ProgressLog.from_surface(surface)
+    streak = failed_review_streak(log.read_events_backward(), run_id)
+    if streak < REVIEW_ROUND_CAP:
+        return
+    from .gate_hook import read_override
+    if GATE_REVIEW_LOOP in read_override(surface.root, run_id):
+        return
+    from .loop_guard import ledger
+    ledger(surface.root, decision="review-loop-capped", gate=GATE_REVIEW_LOOP, run=run_id,
+           failed_rounds=streak)
+    raise ReviewLoopCapped(review_loop_message(streak))
 
 
 def verdict_contradiction(passed: bool, blocking: Optional[int]) -> str:
@@ -435,6 +473,17 @@ def record_gate_block(state_root: str, run_id: str, gate: str, path: str) -> Opt
     return ProgressLog.from_state_dir(state_root).append_event(
         GATE_BLOCK, current_stage(state_root, run_id), run_id=run_id,
         data={"gate": gate, "path": path})
+
+
+def record_session_resumed(state_root: str, run_id: str, session: str,
+                           from_session: str) -> Optional[Dict]:
+    """O10 — `session` resumed inside `run_id`, continuing `from_session` (the same id when Claude
+    Code kept it). Observability tier (append-only, UNGATED). None when there is no run."""
+    if not run_id or not session:
+        return None
+    return ProgressLog.from_state_dir(state_root).append_event(
+        SESSION_RESUMED, current_stage(state_root, run_id), run_id=run_id,
+        data={"session": session, "from": from_session or session})
 
 
 def record_subagent_finished(state_root: str, run_id: str, contract: Dict[str, Any],
@@ -736,8 +785,8 @@ def _event_age_hours(event: Dict[str, Any]) -> Optional[float]:
     if not isinstance(ts, str) or not ts:
         return None
     # THE one ISO lexer (`memory.lifecycle.parse_iso`): same never-raise contract this function
-    # already had, same naive-is-UTC reading, and it lexes a `…Z` stamp on the declared 3.10 floor
-    # where a bare `fromisoformat` does not. Imported inside the function deliberately — this module
+    # already had, same naive-is-UTC reading (a `…Z` stamp is the stdlib's on the 3.12 floor).
+    # Imported inside the function deliberately — this module
     # loads today WITHOUT pulling `mokata.memory`, and a top-level import would drag that whole
     # package (backends, embeddings, vector store) into every importer of this light module.
     from .memory.lifecycle import parse_iso
@@ -837,6 +886,29 @@ class ReviewGate:
     readable: bool = True
 
 
+def _plan_ship_block(surface: Any, run_id: str, verdict: Dict[str, Any],
+                     independent: bool) -> Optional[ReviewGate]:
+    """R2 — the ship stage's plan attestation, or None when it holds (or the run has no spec)."""
+    from .plan_tasks import attest_run
+    att = attest_run(getattr(surface, "root", "") or "", run_id)
+    if att is None:
+        return None
+    if not att.ok:
+        return ReviewGate(present=True, passed=False, independent=independent, blocks=True,
+                          message=f"ship refused — {att.reason}",
+                          unblock="re-approve the plan (/mokata:spec, or `spec_amend`), then "
+                                  "re-run /mokata:review against it")
+    reviewed = verdict.get("plan_hash")
+    if reviewed != att.approved:
+        what = (f"a different plan ({reviewed[:19]}…)" if isinstance(reviewed, str) and reviewed
+                else "no recorded plan (a verdict from before plan attestation)")
+        return ReviewGate(present=True, passed=False, independent=independent, blocks=True,
+                          message=f"the passing review was of {what}, not the approved plan "
+                                  f"({att.approved[:19]}…)",
+                          unblock="re-run /mokata:review against the approved plan")
+    return None
+
+
 def ship_review_gate(surface: Any, run_id: Optional[str] = None) -> ReviewGate:
     """Derive ship's review gate from the PERSISTED verdict (Stage 6r).
 
@@ -910,6 +982,12 @@ def ship_review_gate(surface: Any, run_id: Optional[str] = None) -> ReviewGate:
             unblock=f"run /mokata:review again — the verdict is older than the "
                     f"{bound:g}h freshness bound (`mokata config set "
                     f"settings.review.verdict_max_age_hours <hours>` changes it; `off` disables)")
+    # R2 (0.0.26) — ship attests the plan: the spec on record must still hash to its approved
+    # value, and the passing review must have been OF that plan (its stamped hash). Both BLOCK;
+    # the remedies differ (re-approve the plan / re-run review against it).
+    plan_block = _plan_ship_block(surface, run_id, v, independent)
+    if plan_block is not None:
+        return plan_block
     if independent:
         # SUBAGENT-REVIEW-INSTRUCTED (0.0.22 D4) — "independent" was a claim nothing checked.
         # DERIVED here, never stored beside the verdict (§7f — a second stored fact drifts): was a

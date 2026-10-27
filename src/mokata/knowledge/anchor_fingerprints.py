@@ -25,13 +25,13 @@ THE ANCHOR-SHAPE SPLIT (decision #1, LOCKED). An `about_code` anchor is a free-s
   * A SYMBOL-SHAPED anchor needs an AUTHORITATIVE resolver even to learn which file to hash. On the
     AST/grep floor it DECLINES.
 
-This RESPECTS `about_code.py:8-11`'s fail-OPEN, no-false-claim rule rather than weakening it. That
-rule forbids manufacturing a claim from a DEGRADED GRAPH; a changed file hash is not a claim from
+This RESPECTS the no-false-claim rule of `memory/grounding.py` (`_check_symbol`) rather than
+weakening it. That rule forbids manufacturing a claim from a DEGRADED GRAPH; a changed file hash is not a claim from
 the graph at all. Declining symbol anchors on the floor is the same rule applied to the shape that
 genuinely does depend on one. Two shapes, two claims, two evidence bars.
 
 WHAT THE SYMBOL ARM DELIBERATELY DOES NOT CLAIM. "This symbol no longer resolves" is
-`about_code.check_about_code_anchors`'s verdict and it already owns it; a second, differently-worded
+`memory/grounding.py`'s write-time verdict and it already owns it; a second, differently-worded
 opinion on the same fact is the second-vocabulary failure this codebase refuses elsewhere. The
 symbol arm therefore compares the SAME kind of evidence the path arm does — a file content hash —
 and differs only in HOW the file is found: the graph names the definition site, or nobody does.
@@ -53,6 +53,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
+from ..repo_identity import tree_temp_local_dir as _tree_temp_local  # P31: one shared state
 import json
 import os
 from dataclasses import dataclass
@@ -131,7 +132,7 @@ class AnchorVerdict:
 # ==========================================================================================
 def record_dir(root: str) -> str:
     from .. import MOKATA_DIR, TEMP_LOCAL_DIRNAME
-    return os.path.join(root, MOKATA_DIR, TEMP_LOCAL_DIRNAME, RECORD_DIRNAME)
+    return os.path.join(_tree_temp_local(root), RECORD_DIRNAME)
 
 
 def record_path(root: str) -> str:

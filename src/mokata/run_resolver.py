@@ -105,7 +105,9 @@ Stdlib-only. Copyright 2026 MoStack. Licensed under the Apache License, Version 
 
 from __future__ import annotations
 
+import math
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Optional, Set, Tuple
 
@@ -534,8 +536,109 @@ def _session_bound_run(root: str, claude_session_id: str) -> Optional[str]:
         return None
     evidence = _evidence_runs(root)
     if rid not in evidence and len(evidence) == 1:
+        # ⚠ RESUME-REGISTERS-ON-ANOTHER-SESSIONS-RUN (0.0.26 O16, Jas 2026-10-27: "registering
+        # session on later resume"). The re-entry carve-out handed a session's OWN bare run over to
+        # the one evidence run — right when that evidence run is an ABANDONED pipeline this window
+        # re-entered, wrong when it is a LIVE PARALLEL session's run. Measured before this fix: a
+        # session resumed mid-brainstorm (bare run A, its own registration) in a repo where another
+        # live window had reached spec on run B resolved — on the MCP side only, the hook side said
+        # A — to B, so its approve/spec writes landed on, or were refused by, someone else's run.
+        # PARALLEL RUNS (Jas 2026-10-09): a session never borrows another live session's run.
+        # Three shapes keep the session's OWN run; only a fresh window re-entering an idle,
+        # unshipped pipeline hands over (the case the carve-out was written for):
+        #   * the evidence run is held by another LIVE session (a parallel window), or
+        #   * it already SHIPPED (a finished pipeline is nobody's re-entry target), or
+        #   * THIS session was RESUMED — a resumed conversation continues the run it registered,
+        #     it is not a new window re-entering someone else's ("later resume", Jas 2026-10-27).
+        #   * (O18, "left the chat open for long — maybe the connection broke") the evidence run
+        #     was REGISTERED by another session AFTER this session registered its own: a pipeline
+        #     that did not exist when this window started cannot be the one it came to re-enter.
+        other = next(iter(evidence))
+        if (_held_by_another_live_session(root, other, claude_session_id)
+                or _run_is_shipped(root, other)
+                or _was_resumed(root, claude_session_id)
+                or _registered_after_mine(root, other, rid)):
+            return rid
         return None
     return rid
+
+
+def _run_created_at(root: str, run_id: str) -> Optional[float]:
+    """When `run_id` was REGISTERED — its checkpoint's write-once `created_at` (O18), or None. A
+    legacy checkpoint has no age, and no age keeps the pre-existing carve-out (claim times are
+    not run ages: a later claimant would make an old run look new)."""
+    try:
+        data = StateStore(state_dir(root)).read(CHECKPOINT_PREFIX + run_id)
+        val = data.get("created_at") if isinstance(data, dict) else None
+        if isinstance(val, (int, float)) and not isinstance(val, bool) and math.isfinite(val):
+            return float(val)
+    except Exception:  # noqa: BLE001 — an unreadable checkpoint has no age
+        return None
+    return None
+
+
+def _registered_after_mine(root: str, run_id: str, me_run: Optional[str]) -> bool:
+    """True when `run_id` (the one evidence run) was REGISTERED after this session's own run
+    `me_run` — a pipeline that did not exist when this window started its own cannot be the one it
+    came to re-enter. Run ages, never claim times: a re-registration, a second claimant or a resume
+    never makes an old run look new. Any unknown age reads False — the pre-existing carve-out."""
+    if not me_run:
+        return False
+    try:
+        mine, theirs = _run_created_at(root, me_run), _run_created_at(root, run_id)
+        return mine is not None and theirs is not None and theirs > mine
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _was_resumed(root: str, claude_session_id: Optional[str]) -> bool:
+    """True when this conversation has been resumed (O10's record: a kept id's resume times, or a
+    carried claim's predecessor). Read-only; unreadable reads False."""
+    try:
+        from .run_intent import resume_facts
+        resumed_from, resumes = resume_facts(root, claude_session_id)
+        return bool(resumed_from) or bool(resumes)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+#: A session row written within this window, with no end on its open segment, is LIVE — the same
+#: window the IDE uses (`ide/session_views.LIVE_SECS`), kept here so the resolver imports no IDE.
+SESSION_LIVE_SECS = 15 * 60
+
+
+def _held_by_another_live_session(root: str, run_id: str, me: Optional[str]) -> bool:
+    """True when some OTHER Claude session's own registration bound it to `run_id` and that session
+    is live (P33 index: open segment, heartbeat inside SESSION_LIVE_SECS). Read-only; any failure
+    reads False, which keeps the pre-existing carve-out — the conservative direction for re-entry."""
+    try:
+        from . import session_index as SI
+        from .run_intent import INTENT_PREFIX
+        now = time.time()
+        with os.scandir(state_dir(root)) as entries:
+            for entry in entries:
+                name = entry.name
+                if not (name.startswith(INTENT_PREFIX) and name.endswith(".json")):
+                    continue
+                sid = name[len(INTENT_PREFIX):-len(".json")]
+                if not sid or sid == me:
+                    continue
+                try:
+                    data = StateStore(state_dir(root)).read(name[:-len(".json")])
+                except Exception:  # noqa: BLE001 — an unreadable claim is no claim
+                    continue
+                if not isinstance(data, dict) or data.get("run_id") != run_id:
+                    continue
+                rec = SI.read(root, sid)
+                if not rec:
+                    continue
+                segs = rec.get("segments") or []
+                open_seg = bool(segs) and not segs[-1].get("end")
+                if open_seg and now - float(rec.get("heartbeat") or 0) <= SESSION_LIVE_SECS:
+                    return True
+        return False
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def process_session_run(root: str, *, lookup=None, pid: Optional[int] = None) -> Optional[str]:
@@ -642,14 +745,26 @@ def maybe_bind_on_session_start(root: str, claude_session_id: Optional[str],
     """SessionStart writer for the session binding (the only in-scope process that sees Claude
     Code's `session_id` at a session boundary — the MCP registrar cannot, harness gap #25642).
 
-    Binds `claude_session_id` -> the run ONLY when BOTH hold: `source` is `startup`/`resume` (never
+    A session holding its OWN bound claim (`run_intent`) is bound to that run first, on any source
+    but `clear`, whatever is live (O10). Otherwise it binds `claude_session_id` -> the run ONLY when
+    BOTH hold: `source` is `startup`/`resume` (never
     `clear` — the clean badge is the point of `/clear`), AND exactly ONE live run exists (the R-MCP
     narrowing). Ambiguous (2+ live) or zero live ⇒ NO binding, so resolution falls through to the
     rungs below — the narrowing can only ever REMOVE ambiguity, never manufacture a wrong pick.
     Returns the bound run_id (or None). Never raises: SessionStart is async/observability and must
     never block."""
     try:
-        if not claude_session_id or source not in _BINDING_SOURCES:
+        if not claude_session_id or source == "clear":
+            return None
+        # O10 (IDE-RESUME-LOSES-RUN) — a session whose OWN claim is bound (its registration, or a
+        # claim a resume carried from its predecessor) is bound to THAT run, live process or not:
+        # the one-live-run guess below must never re-point a resumed session at another window's run.
+        from .run_intent import CLAIM_BOUND, session_claim
+        claim, claimed = session_claim(root, claude_session_id)
+        if claim == CLAIM_BOUND and claimed:
+            bind_session_run(root, claude_session_id, claimed)
+            return claimed
+        if source not in _BINDING_SOURCES:
             return None
         candidates = run_ids(state_dir(root))
         survivors = live_runs(root, candidates) if candidates else []

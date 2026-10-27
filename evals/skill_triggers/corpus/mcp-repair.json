@@ -1,0 +1,36 @@
+{
+ "skill": "mcp-repair",
+ "triggers": [
+  "mcp isn't working",
+  "tools are missing",
+  "/mcp doesn't list mokata"
+ ],
+ "positive": [
+  "mokata mcp isn't working after the update",
+  "The mokata MCP server won't start — fix it",
+  "mokata's tools are missing in Claude Code",
+  "/mcp doesn't list mokata anymore",
+  "mokata isn't connected; its MCP tools don't show up"
+ ],
+ "near_miss": [
+  {
+   "prompt": "First-time setup: wire mokata into Claude Code",
+   "expect": "setup"
+  },
+  {
+   "prompt": "Write a new MCP server in TypeScript for our Jira"
+  },
+  {
+   "prompt": "Upgrade mokata to the newest version",
+   "expect": "update"
+  },
+  {
+   "prompt": "Our own app's API is not working, debug it",
+   "expect": "debug"
+  },
+  {
+   "prompt": "Which mokata version is installed right now?",
+   "expect": "version"
+  }
+ ]
+}

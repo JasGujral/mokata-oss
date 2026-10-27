@@ -15,6 +15,8 @@ from contextlib import redirect_stdout
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata import gate_hook as G
 from mokata import hook_cli
@@ -83,7 +85,7 @@ class CpS1TheSessionIsReAnchoredAfterCompaction(unittest.TestCase):
             self.assertIn("BLOCKED [approach-approval]", nxt())
             store.write(APPROACH_PREFIX + "rA", {"run_id": "rA"})
             self.assertIn("BLOCKED [spec-persisted]", nxt())
-            store.write(SPEC_PREFIX + "rA", {"run_id": "rA"})
+            store.write(SPEC_PREFIX + "rA", sealed({"run_id": "rA"}))
             self.assertIn("BLOCKED [no-code-without-failing-test]", nxt())
             record(store, "rA", red=["tests/test_a.py::t"])
             self.assertIn("ALLOWED", nxt())
@@ -96,7 +98,7 @@ class CpS1TheSessionIsReAnchoredAfterCompaction(unittest.TestCase):
             _bind(d, "S1", "rA")
             store = StateStore(state_dir(d))
             store.write(APPROACH_PREFIX + "rA", {"run_id": "rA"})
-            store.write(SPEC_PREFIX + "rA", {"run_id": "rA"})
+            store.write(SPEC_PREFIX + "rA", sealed({"run_id": "rA"}))
             record(store, "rA", red=["tests/test_a.py::t"])
             store.write(amend_key("rA"), {"status": "open", "from_version": 1, "to_version": 2})
             line = RA.build_reanchor(d, "S1", "compact")

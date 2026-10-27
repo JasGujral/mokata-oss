@@ -66,6 +66,10 @@ DEGRADE_FAMILY = {
     "SubagentUnavailable": FAILURE_UNREACHABLE,     # → sequential flow
     "BackendError": FAILURE_UNREACHABLE,            # knowledge query → the grep floor
     "CrgUnavailable": FAILURE_UNREACHABLE,          # code-review-graph down → the AST floor
+    # 0.0.26 O2 — the graph is healthy and holds no node for the target. Inherits BackendError's
+    # class; the layer catches it BEFORE the degrade path, so it never reaches `note_degraded` and
+    # never renders the "unreachable" sentence — the floor answers with a note naming both backends.
+    "GraphNotIndexed": FAILURE_UNREACHABLE,
     # A1 (0.0.19) — the SIBLING, and the pairing is the point. `CrgUnavailable` says the tool
     # COULD NOT answer; this says it DID NOT — it is running, its pipe is open, and nothing came
     # back inside the bound. Two facts, two classes, two remedies (doc 85 §7g). It is deliberately
@@ -80,6 +84,12 @@ DEGRADE_FAMILY = {
 # and `failure_class` is "" — honest, because there is no remediation to name. Listed explicitly
 # so that adding a class forces a decision about which side of the line it is on.
 HARD_ERRORS = {
+    # 0.0.26 P0 — the IDE contract and route registry. HARD: a route two features own, or a
+    # contract that does not parse, refuses to build the app — there is no floor to fall back to.
+    "ContractError", "RouteConflict",
+    # 0.0.26 R5 — an unbalanced `<private>` tag on a memory write. HARD: the write is refused; the
+    # only "fallback" would be storing text the author marked private.
+    "UnbalancedPrivateTag",
     "MokataError", "AuthoringError", "BrainstormError", "BrainstormGateError", "BugError",
     # 0.0.23 D15 — an intention's due condition that cannot be STORED (no condition, a date that
     # is not a date). HARD: the remember call returns an error and writes nothing — there is no
@@ -105,6 +115,10 @@ HARD_ERRORS = {
     "MemoryError", "MemoryShareError", "MigrateError", "NetworkEgressBlocked", "OptimizeError",
     "PhaseError", "PlanError", "ProvisionError", "RedBeforeGreenError", "RefineError",
     "RefineGateError",
+    # 0.0.26 R4 — the review loop is over its cap (five failed rounds in a row). HARD: round six is
+    # not recorded and there is no floor — the CLI exits 3 (ESCALATE), the MCP twin answers
+    # `status: "escalate"`, and the human decides (`mokata gate override review-loop`).
+    "ReviewLoopCapped",
     # DB.S4 — the re-embed migration could not OPEN the vector index. Hard, not degraded, and
     # deliberately unlike every other memory path: a recall has a floor to fall to (lexical), a
     # MIGRATION has none. Silently doing nothing while reporting success is how a user ends up
@@ -152,12 +166,18 @@ HARD_ERRORS = {
     "BadPattern",
     # 0.0.23 C3 — a graph-view request with a missing or unknown parameter. HARD: answered 400.
     "BadRequest",
-    # 0.0.25 lane S — the IDE's heavy lane. `TimedOut`: a heavy question passed its deadline; HARD,
-    # answered 503 with what to do — no weaker answer is substituted (a partial impact shown as
-    # the answer would be the overclaim). `ClientGone` / `Abandoned`: the browser that asked left,
-    # so the wait (ClientGone) and then the work (Abandoned, at its next graph question) stop;
-    # nobody reads either — there is no answer to degrade.
-    "TimedOut", "ClientGone", "Abandoned",
+    # 0.0.26 P32 — a health action (rebuild an index, update mokata) that ran and reported failure.
+    # HARD: its job ends `failed` with the action's own message (the Activity drawer and the panel
+    # show it); nothing is retried behind the human's back. (P32 removed lane S's `TimedOut`,
+    # `ClientGone` and `Abandoned` with the deadline they served.)
+    "ActionFailed",
+    # 0.0.26 P39 — the Welcome screen's gate: `ConsentStale` (the click carried a token for a plan
+    # that is not the one in force — never shown, or changed since) and `Unavailable` (the action
+    # cannot run here now: already set up, a dependency missing, a build running). HARD: answered
+    # 409 / `available: false` with the reason; nothing starts, and there is no weaker action to
+    # run in its place — a consent is for exactly what was shown.
+    "ConsentStale",
+    "Unavailable",
     # 0.0.25 ID2 — the embedded terminal refuses a request it will not serve (a program outside the
     # closed set, the cap reached, an unknown id, a platform with no pty). HARD: answered 4xx with
     # the reason; nothing is spawned, and there is no weaker process to start instead.
@@ -192,7 +212,11 @@ CLASSED_HARD_ERRORS = {"ProvisionError": FAILURE_SCHEMA,
 #                   Nothing degraded and nothing failed: the compare-and-set did precisely its job,
 #                   the group is left untouched in the shared store, and the human is asked. Caught
 #                   one frame up, unconditionally; it never escapes `team_journal`.
-CONTROL_SIGNALS = {"_GroupRollback"}
+#   Cancelled       0.0.26 P32 — a job's Cancel (or its last viewer leaving): raised at the next
+#                   checkpoint of the walk doing the work (`knowledge.cancel.checkpoint`) and caught
+#                   by the job runner that armed the flag, which marks the job `cancelled`. Nothing
+#                   failed; an `except MokataError` in the layer must not swallow it and carry on.
+CONTROL_SIGNALS = {"_GroupRollback", "Cancelled"}
 
 
 def _exception_classes():
@@ -547,6 +571,15 @@ def _live_classes():
     from mokata.execmode import tasks
     from mokata.govern import authoring, graph_required, revert, secret_ignore, tdd
     from mokata.knowledge import crg_client, query
+    # 0.0.26 P0 — `ContractError` (the IDE contract), `RouteConflict` (the IDE route registry).
+    from mokata.ide import contract as _ide_contract, routes as _ide_routes  # noqa: F401
+    # 0.0.26 P32 — `ActionFailed` (a health action's job), `Cancelled` (a job's cancel signal).
+    from mokata.ide import health as _ide_health  # noqa: F401
+    # 0.0.26 P39 — `ConsentStale`, `Unavailable` (the Welcome screen's gate).
+    from mokata.ide import firstrun as _ide_firstrun  # noqa: F401
+    from mokata.knowledge import cancel as _cancel  # noqa: F401
+    # 0.0.26 R5 — `UnbalancedPrivateTag` (the memory `<private>` tag refusal).
+    from mokata.memory import private as _private  # noqa: F401
     # DB.S4 adds `embed` (ModelUnavailable) and `reembed` (ReembedError) to the sweep's reach.
     # DB.S7a adds `edges` (EdgeKindError — the closed typed-edge set's hard refusal).
     from mokata.memory import (backends, edges, embed, item, migrate, reembed,
@@ -576,6 +609,9 @@ def _live_classes():
     mods += (ide_search,)
     mods += (ide_server,)
     mods += (ide_terminal, ide_context)
+    mods += (_ide_contract, _ide_routes)
+    mods += (_ide_health, _cancel, _ide_firstrun)
+    mods += (_private,)
     live = {"MokataError": MokataError}
     for mod in mods:
         for name in dir(mod):

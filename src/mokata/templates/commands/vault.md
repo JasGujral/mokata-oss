@@ -26,7 +26,7 @@ engine instead:
 
   ```bash
   PY="$(command -v python3 || command -v python)"
-  ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
+  mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
   ```
 
 ## 2. Pick the sub-action from `$ARGUMENTS`
@@ -36,20 +36,20 @@ If `$ARGUMENTS` is empty, infer the sub-action from the conversation (what the u
 - **`list`** — browse what's in the vault (read-only):
 
   ```bash
-  eval "$ENGINE vault list --path ."
+  mokata vault list --path .
   ```
 
 - **`search <query>`** — find an entry by name/title/body (read-only). Quote a multi-word
   query:
 
   ```bash
-  eval "$ENGINE vault search \"payments redesign\" --path ."
+  mokata vault search "payments redesign" --path .
   ```
 
 - **`pull <name> [dest]`** — fetch an artifact to read/review (read-only on the vault):
 
   ```bash
-  eval "$ENGINE vault pull <name> --dest <dest-or-default> --path ."
+  mokata vault pull '<name>' --dest '<dest-or-default>' --path .
   ```
 
   Then **Read** the pulled file and summarize it for review.
@@ -69,9 +69,9 @@ If `$ARGUMENTS` is empty, infer the sub-action from the conversation (what the u
 4. Only after approval, apply:
 
    ```bash
-   eval "$ENGINE vault push <name> <file> --yes --path ."
+   mokata vault push '<name>' '<file>' --yes --path .
    # add --force ONLY to version a changed entry, after the user confirms:
-   # eval "$ENGINE vault push <name> <file> --yes --force --path ."
+   # mokata vault push '<name>' '<file>' --yes --force --path .
    # optionally: --kind brainstorm|spec  --author <name>
    ```
 

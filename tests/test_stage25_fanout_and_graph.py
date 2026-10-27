@@ -134,9 +134,16 @@ def _graph_surface(d, present):
     return Surface.load(d, detector=Detector(overrides=overrides, cache=False))
 
 
+def _index_built():
+    from unittest import mock
+    from mokata.knowledge import crg_build
+    return mock.patch.object(crg_build, "index_built", lambda _root: True)
+
+
 class TestGraphGuidance(unittest.TestCase):
     def test_hint_when_graph_active(self):
-        with tempfile.TemporaryDirectory() as d:
+        # 0.0.26 O13 (F2): "active" only with a BUILT index — the other states: test_o13.
+        with tempfile.TemporaryDirectory() as d, _index_built():
             surface = _graph_surface(d, present=True)
             hint = graph_guidance(surface)
             self.assertIn("code graph active", hint)
@@ -151,7 +158,7 @@ class TestGraphGuidance(unittest.TestCase):
             self.assertIn("--profile full", hint)        # a concrete next step
 
     def test_hint_reflects_configured_path(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory() as d, _index_built():
             init_repo(root=d, profile="full", assume_yes=True, out=_silent)
             # configure the graph tool with an endpoint (Stage 24A config block)
             from mokata import config_cmd
@@ -203,6 +210,14 @@ class TestDoctorAndStatusHints(unittest.TestCase):
             out = buf.getvalue()
             self.assertIn("no codebase graph wired", out)
             self.assertIn("code graph: floor '", out)
+
+
+def setUpModule():
+    # 0.0.26 O11 — this module's expectations are the CORE install's: no external code graph on
+    # the machine. Pinned, so a venv with code-review-graph (`mokata[full]`) means the same thing;
+    # what is true WITH it present is graded in test_o11_crg_present (and the sibling below, if any).
+    from _support import hide_external_graphs
+    hide_external_graphs()
 
 
 if __name__ == "__main__":

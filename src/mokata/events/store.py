@@ -36,6 +36,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
+from ..repo_identity import temp_local_dir as _shared_temp_local  # P31: one shared state
 import json
 import os
 from dataclasses import dataclass
@@ -81,7 +82,7 @@ CREATE INDEX IF NOT EXISTS events_type    ON events (type, seq);
 
 
 def events_dir(root: str) -> str:
-    return os.path.join(root, MOKATA_DIR, TEMP_LOCAL_DIRNAME, EVENTS_DIRNAME)
+    return os.path.join(_shared_temp_local(root), EVENTS_DIRNAME)
 
 
 def events_path(root: str) -> str:

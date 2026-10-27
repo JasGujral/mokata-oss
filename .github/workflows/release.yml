@@ -96,7 +96,7 @@ jobs:
       fail-fast: false
       matrix:
         # PY312-ONLY (0.0.24, owner ruling 2026-10-17): the tag-time gate runs the same single
-        # Python as the PR gate. `requires-python = ">=3.10"` is kept and is untested — disclosed.
+        # Python as the PR gate — mokata's floor since 0.0.26 L12 (`requires-python = ">=3.12"`).
         python: ["3.12"]
         jsonschema: ["absent", "present"]
     steps:

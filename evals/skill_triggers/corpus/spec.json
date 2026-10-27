@@ -1,0 +1,35 @@
+{
+ "skill": "spec",
+ "triggers": [
+  "acceptance criteria",
+  "write or define the spec"
+ ],
+ "positive": [
+  "The approach is approved; turn it into testable acceptance criteria",
+  "Write the spec for the CSV export change",
+  "Define acceptance criteria for the refinements we picked",
+  "No persisted spec exists yet and we're about to plan tests; write one",
+  "Map each acceptance criterion to a test for the login change"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Do a specification review of this vendor's PDF for typos"
+  },
+  {
+   "prompt": "We haven't picked an approach yet, explore options",
+   "expect": "brainstorm"
+  },
+  {
+   "prompt": "Write the failing tests for the emitted spec",
+   "expect": "test"
+  },
+  {
+   "prompt": "Split the approved spec into subtasks",
+   "expect": "decompose"
+  },
+  {
+   "prompt": "Review the diff against the spec",
+   "expect": "review"
+  }
+ ]
+}

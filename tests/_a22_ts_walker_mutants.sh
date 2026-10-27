@@ -79,8 +79,8 @@ mutant "D01 ★ THE ROW'S OWN EXAMPLE: an arrow-function component is no longer 
   '_FUNCTION_VALUES = frozenset({"function_expression", "function"})' "$T"
 
 mutant "D02 methods are typed as functions — the kind stops distinguishing them" "$W" \
-  '                    edges.defs.append((name, _line(child), KIND_METHOD))' \
-  '                    edges.defs.append((name, _line(child), KIND_FUNCTION))' "$T"
+  '                edges.defs.append((name, _line(child), KIND_METHOD))' \
+  '                edges.defs.append((name, _line(child), KIND_FUNCTION))' "$T"
 
 mutant "D03 an interface method signature is not a definition" "$W" \
   '_METHOD_NODES = frozenset({"method_definition", "method_signature"})' \
@@ -97,12 +97,12 @@ mutant "I01 ★ a type-only import is recorded as a runtime edge" "$W" \
     return False' "$T"
 
 mutant "I02 a re-export stops being an import edge — the dependency disappears" "$W" \
-  '            if kind == "export_statement" and _named_child(child, "string") is not None:' \
-  '            if False:' "$T"
+  '        if kind == "export_statement" and _named_child(child, "string") is not None:' \
+  '        if False:' "$T"
 
 mutant "I03 local names are dropped, so an alias and a namespace bind nothing" "$W" \
-  '                toks |= _local_names(_named_child(child, "import_clause"), source)' \
-  '                pass' "$T"
+  '            toks |= _local_names(_named_child(child, "import_clause"), source)' \
+  '            pass' "$T"
 
 # ==== M. the module-token rule — the thing that does not transfer ===============================
 

@@ -55,7 +55,7 @@ def symbols_in_files(root: str, files: List[str]) -> List[str]:
 # ----------------------------------------------------------------- result model
 @dataclass
 class CheckLeg:
-    name: str                       # "completeness" | "spec-awareness"
+    name: str                       # "completeness" | "spec-awareness" | "spec-drift"
     status: str                     # "pass" | "block" | "skip"
     summary: str
     detail: List[str] = field(default_factory=list)
@@ -204,7 +204,11 @@ def _spec_awareness_leg(surface: Any, changed_files: List[str],
     from .memory import MemoryStore
     from .memory.store import MemoryError
 
-    specs = load_spec_corpus(surface.state)
+    specs = list(load_spec_corpus(surface.state))
+    # L7b — the COMMITTED specs join the corpus (on a CI checkout they are the whole corpus).
+    from .committed_specs import load_committed
+    titles = {sp.title for sp in specs}
+    specs += [sp for sp in load_committed(surface.root).specs if sp.title not in titles]
     degraded: List[str] = []
     try:
         store = MemoryStore.from_surface(surface)
@@ -248,6 +252,31 @@ def _spec_awareness_leg(surface: Any, changed_files: List[str],
                  "deviation gate (`mokata spec-check`), or re-plan so they aren't broken"))
 
 
+def _committed_specs_leg(root: str) -> CheckLeg:
+    """L7b (D1) — drift of the COMMITTED specs (`.mokata/specs/`, opt-in `settings.specs.commit`)
+    against this checkout: each AC's code anchors must still resolve and, where the repo tags tests
+    with AC ids, each AC must still have its test (`docsync.audit_spec`, the same audit `mokata
+    docsync` runs). No committed specs → a visible SKIP naming the opt-in, never a silent pass; an
+    unreadable committed spec → BLOCK (a spec nobody can read is not a spec that holds)."""
+    from .committed_specs import load_committed
+    from .docsync import audit_spec
+    committed = load_committed(root)
+    if not committed.present:
+        return CheckLeg("spec-drift", "skip", committed.note)
+    detail: List[str] = [f"{name}: present but unreadable — NOT checked"
+                         for name in committed.skipped]
+    for spec in committed.specs:
+        for f in audit_spec(spec, root):
+            detail.append(f"{spec.title} · {f.section}: {f.message}")
+    if detail:
+        return CheckLeg("spec-drift", "block",
+                        f"the committed specs and the code disagree ({committed.note})",
+                        detail=detail,
+                        unblock=("amend the spec (`mokata spec amend`, which updates the committed "
+                                 "copy) or restore the code/test it points at"))
+    return CheckLeg("spec-drift", "pass", f"committed specs match the code ({committed.note})")
+
+
 # ----------------------------------------------------------------- the check
 def run_ci_check(root: str, changed_files: List[str],
                  changed_symbols: Optional[List[str]] = None) -> CICheckResult:
@@ -272,5 +301,6 @@ def run_ci_check(root: str, changed_files: List[str],
     legs = [
         _completeness_leg(root, surface.state),
         _spec_awareness_leg(surface, changed_files, symbols),
+        _committed_specs_leg(root),
     ]
     return CICheckResult(legs=legs, initialized=True)

@@ -232,6 +232,8 @@ _KNOWN_SHAPES = (
 # ambiguity errs toward SCANNING, which is what makes this sound rather than merely convenient.
 _NAME_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
                         "0123456789+/_-")
+_ENV_NAME_RE = re.compile(r"[A-Z][A-Z0-9]*(?:_[A-Z][A-Z0-9]*){3,}")
+_DECL_NAME_RE = re.compile(r"\b(?:def|class|func|function|fn)\s+([A-Za-z_][A-Za-z0-9_]*)")
 # Characters that turn a following `=` into a COMPOUND operator (`==`, `!=`, `<=`, `>=`, `+=`,
 # `:=`, …). A comparison is not a binding, so its left operand is not a name.
 _OP_LEAD = "=!<>+-*/%&|^:"
@@ -277,13 +279,21 @@ def _binding_name_spans(line: str) -> List[tuple]:
         end = i
         while end > 0 and line[end - 1] in " \t":
             end -= 1
-        if end > 0 and line[end - 1] in "'\"":              # closing quote of a quoted key
+        if end > 1 and line[end - 1] == "]" and line[end - 2] in "'\"":
+            end -= 2                                        # `d["key"] = v` — a subscript key
+        elif end > 0 and line[end - 1] in "'\"":            # closing quote of a quoted key
             end -= 1
         start = end
         while start > 0 and line[start - 1] in _NAME_CHARS:
             start -= 1
         if start < end:
             spans.append((start, end))
+    # A DECLARED name is a name too (0.0.26 O14b): `class R18_APathologicalTsFileIsNeverARaw500(`
+    # and Go's `func schema_k8sio_api_core_v1_PodSpec(` were judged as candidate credentials.
+    # Only the identifier immediately after a declaration keyword is masked; the known-shape floor
+    # still runs on the RAW line, so a credential shape is caught wherever it sits.
+    for m in _DECL_NAME_RE.finditer(line):
+        spans.append(m.span(1))
     return spans
 
 
@@ -538,6 +548,37 @@ def _has_word_structure(tok: str) -> bool:
             and len(wordish) / len(alpha) >= _WORDISH_SEGMENT_FRACTION)
 
 
+def _is_alphabet_listing(tok: str) -> bool:
+    """A character-set CONSTANT written out in order — `"0123456789abc…XYZ-_"`, an unambiguous
+    code alphabet `"ABCDEFGHJKMNPQRSTUVWXYZ23456789"` (0.0.26 O14b: both in mokata's own `src/`,
+    both walled by secret-guard). Its code points almost never step DOWN: a listing descends only
+    where one class ends and the next begins. A generated key descends at about every other
+    character, so allowing one descent per ten characters costs nothing measurable: for a random
+    20-char run the chance of <= 2 descents is on the order of 1e-9."""
+    descents = sum(1 for a, b in zip(tok, tok[1:]) if ord(b) < ord(a))
+    return descents <= len(tok) // 10
+
+
+def _is_env_var_name(tok: str) -> bool:
+    """A SCREAMING_SNAKE environment-variable / constant NAME written where it is not bound
+    (prose, a quoted string): `MOKATA_G2_JUDGE_API_KEY` (0.0.26 O14b). Three-letter words (`API`,
+    `KEY`) sit below `_MIN_WORD`, so the word-structure term could not see it. Narrow on purpose:
+    at least four `_`-separated pieces, every piece vowel-bearing or a short letter+digit tag
+    (`G2`, `V1`), and at least two pieces genuinely word-shaped. A generated key carries no
+    separators; one deliberately chunked into vowel-bearing words is the documented limitation of
+    `_has_word_structure`, which this does not widen."""
+    if not _ENV_NAME_RE.fullmatch(tok):
+        return False
+    pieces = tok.split("_")
+    for piece in pieces:
+        if any(c in _VOWELS for c in piece):
+            continue
+        if len(piece) <= 3 and piece[0].isalpha() and piece[1:].isdigit():
+            continue
+        return False
+    return sum(1 for piece in pieces if _is_wordish(piece)) >= 2
+
+
 def _scan_entropy(text: str) -> List[Finding]:
     """Backstop for a rich-alphabet, high-entropy run that has no word structure (a
     generated-looking key/token). The blocking test is a CONJUNCTION — high entropy AND a
@@ -584,6 +625,10 @@ def _scan_entropy(text: str) -> List[Finding]:
             if _is_lowercase_slug(sub):         # path component / temp dir / slug
                 continue
             if _is_pure_hex(sub):               # git SHA / md5 / sha256 hex digest
+                continue
+            if _is_alphabet_listing(sub):       # a character-set constant, in order
+                continue
+            if _is_env_var_name(sub):           # SCREAMING_SNAKE env-var / constant name
                 continue
             if _shannon(sub) >= 3.5:
                 out.append(Finding("entropy", "high-entropy-token",

@@ -12,6 +12,8 @@ import unittest
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata.brainstorm import APPROACH_STATE_KEY, PIPELINE_PHASES, Handoff
 from mokata.engine import spec_quality as SQ
@@ -213,7 +215,7 @@ class OnlyAPassingSpecReachesConsent(unittest.TestCase):
             surface = self._surface(d)
             spec = _spec("")
             asked = []
-            out = emit_spec(surface, spec, _tests(spec), run_id="r1",
+            out = emit_planned(surface, spec, _tests(spec), run_id="r1",
                             confirm=lambda t: asked.append(t) or True)
             self.assertFalse(out.committed)
             self.assertTrue(out.blocked_by_quality)
@@ -225,7 +227,7 @@ class OnlyAPassingSpecReachesConsent(unittest.TestCase):
             surface = self._surface(d)
             surface.state.write(APPROACH_STATE_KEY, _handoff(cons=["lag"]).to_dict())
             spec = _spec("the lag stays under a second")
-            out = emit_spec(surface, spec, _tests(spec), run_id="r1", assume_yes=True)
+            out = emit_planned(surface, spec, _tests(spec), run_id="r1", assume_yes=True)
             self.assertTrue(out.committed, out.reason)
             self.assertTrue(out.quality.passed)
             self.assertIn("angle-unaddressed", [f.code for f in out.quality.advisories])
@@ -236,7 +238,7 @@ class OnlyAPassingSpecReachesConsent(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             surface = self._surface(d)
             spec = _spec("x")
-            out = emit_spec(surface, spec, _tests(spec), run_id="r1", assume_yes=True)
+            out = emit_planned(surface, spec, _tests(spec), run_id="r1", assume_yes=True)
             self.assertTrue(out.committed, out.reason)
 
     def test_the_mcp_surface_refuses_with_the_same_findings(self):
@@ -250,7 +252,7 @@ class OnlyAPassingSpecReachesConsent(unittest.TestCase):
                 mock.patch("mokata.brainstorm.load_approved_approach", return_value=None), \
                 mock.patch.object(T, "AuditLedger"):
             gate.return_value = mock.Mock(passed=True, warnings=[])
-            out = T.spec_emit(title="t", criteria=[{"id": "AC-1", "text": ""}],
+            out = call_planned(T.spec_emit, title="t", criteria=[{"id": "AC-1", "text": ""}],
                               tests=[{"name": "t", "ac_ids": ["AC-1"]}])
         self.assertEqual(("blocked", "spec-quality"), (out["status"], out["gate"]))
         self.assertEqual("untestable", out["quality"]["findings"][0]["code"])

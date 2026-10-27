@@ -279,7 +279,9 @@ class TheAskSiteIsREACHED(FreshNoticeGuard):
         be.close()
         rendered = "\n".join(n.render() for n in degrade.emitted_notices())
         self.assertIn("could not be loaded", rendered)
-        self.assertIn("mokata doctor", rendered)
+        # 0.0.26 L1: the fix names the network CAUSE and the setup run that warms the model.
+        self.assertIn("mokata setup claude --mode full", rendered)
+        self.assertNotIn("pip install", rendered.split("could not be loaded", 1)[1])
 
 
 class TheSuccessPathIsUnchanged(FreshNoticeGuard):

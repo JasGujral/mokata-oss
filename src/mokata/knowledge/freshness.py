@@ -53,6 +53,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
+from ..repo_identity import tree_temp_local_dir as _tree_temp_local  # P31: one shared state
 import os
 import time
 from dataclasses import dataclass, field
@@ -215,7 +216,7 @@ def _sid(session_id: Optional[str]) -> str:
 # ==========================================================================================
 def _dirty_dir(root: str) -> str:
     from .. import MOKATA_DIR, TEMP_LOCAL_DIRNAME
-    return os.path.join(root, MOKATA_DIR, TEMP_LOCAL_DIRNAME, DIRTY_DIRNAME)
+    return os.path.join(_tree_temp_local(root), DIRTY_DIRNAME)
 
 
 def _dirty_path(root: str, session_id: Optional[str]) -> str:
