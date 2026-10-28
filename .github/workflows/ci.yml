@@ -267,7 +267,7 @@ jobs:
         # EVERY leg, not only ubuntu: the ubuntu shards re-assemble the tag gate's time below, and
         # a Windows run's per-module seconds are what `scripts/shard_tests.py absorb` re-bases the
         # balancer on (Windows is the slow OS, and it is not uniformly slower). Kilobytes, 7 days.
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ci-clock-${{ matrix.os }}-${{ matrix.jsonschema }}-${{ matrix.shard }}
           path: ci-clock/
