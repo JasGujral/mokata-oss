@@ -333,7 +333,9 @@ class SkillsDrift(_Repo):
     def test_crlf_on_disk_is_not_drift(self):
         self.refresh()
         p = Path(self.root, ".claude", "commands", "spec.md")
-        p.write_bytes(p.read_bytes().replace(b"\n", b"\r\n"))
+        # normalise first: on Windows setup may already have written CRLF, and doubling it
+        # (`\r\r\n`) is not the CRLF-checkout case this test is about (0.0.26 CI, windows shard 3)
+        p.write_bytes(p.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
         self.assertFalse(self.project()["drift"])
 
     def test_update_prints_the_skills_only_refresh_when_up_to_date(self):

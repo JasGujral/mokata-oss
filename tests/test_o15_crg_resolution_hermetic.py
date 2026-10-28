@@ -62,6 +62,13 @@ def _fake(dirpath, version="2.3.9", serve_hangs=True, log=None):
     return tool
 
 
+
+def _nc(text):
+    """Windows paths are case-insensitive and `shutil.which` returns the PATHEXT spelling
+    (`code-review-graph.CMD`) of a fake written as `.cmd` (0.0.26 CI, windows shard 3). Lowercase
+    on Windows only — elsewhere case is meaningful and the comparison stays exact."""
+    return text.lower() if os.name == "nt" else text
+
 class _Dirs(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="o15-")
@@ -93,7 +100,7 @@ class TheProductRunsOnlyItsOwnCodeReviewGraph(_Dirs):
                           "a code-review-graph from another environment was adopted silently")
         said = res.describe()
         self.assertIn("outside mokata's environment", said)
-        self.assertIn(outside, said)
+        self.assertIn(_nc(outside), _nc(said))
         self.assertIn("NOT used", said)
         self.assertIn("mokata[full]", said)
 
@@ -102,7 +109,7 @@ class TheProductRunsOnlyItsOwnCodeReviewGraph(_Dirs):
         own = _fake(self.env_bin)
         res = resolve_crg(version_of=lambda: "2.3.9")
         self.assertTrue(res.ok)
-        self.assertEqual(own, res.path)
+        self.assertEqual(_nc(own), _nc(res.path))
         self.assertEqual("2.3.9", res.version)
         self.assertIsNotNone(res.outside, "the shadowing copy on PATH must still be named")
 
@@ -168,7 +175,7 @@ class TheProductRunsOnlyItsOwnCodeReviewGraph(_Dirs):
         client = CodeReviewGraphClient(root=self.tmp)
         with self.assertRaises(CrgUnavailable) as cm:
             client._default_run_cli(["--version"])
-        self.assertIn(outside, str(cm.exception))
+        self.assertIn(_nc(outside), _nc(str(cm.exception)))
         with self.assertRaises(CrgUnavailable):
             client._default_call_tool("query_graph_tool", {})
 
@@ -190,7 +197,7 @@ class DoctorAndSetupSayWhichBinary(_Dirs):
         f = crg_resolution_findings()
         self.assertEqual(["code-review-graph-outside-env"], [x.code for x in f])
         self.assertEqual("warning", f[0].severity)
-        self.assertIn(outside, f[0].detail)
+        self.assertIn(_nc(outside), _nc(f[0].detail))
 
     def test_doctor_names_a_refused_version(self):
         from mokata.govern.doctor import crg_resolution_findings
@@ -216,7 +223,7 @@ class DoctorAndSetupSayWhichBinary(_Dirs):
         outside = _fake(self.outside_bin)
         self.assertFalse(adoption_modes._present_crg())
         cause = adoption_modes._crg_missing_cause("code-review-graph is not in the environment")
-        self.assertIn(outside, cause)
+        self.assertIn(_nc(outside), _nc(cause))
         self.assertIn("not used", cause)
 
 
