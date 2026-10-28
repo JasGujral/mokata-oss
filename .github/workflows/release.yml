@@ -91,7 +91,11 @@ jobs:
     # so nothing published. Its slowest completed leg: 1240.6s (`test (3.12, present)`) -> 1861s
     # -> **32**. Re-derive again whenever the suite grows; a ceiling the suite can reach is a red
     # that says nothing about the code.
-    timeout-minutes: 32
+    #
+    # 32 -> 45 (0.0.26 cut). The PR gate's `tag-ceiling` job (ci.yml) re-assembled this job from
+    # the ubuntu shards of CI #172 (run 40631802534, PR #87): 1799 s against 32 min = 1.07x, under
+    # the 1.2x alarm — the same cliff that cancelled v0.0.23. 1.5 x 1799 s = 2698.5 s -> **45**.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:

@@ -45,7 +45,9 @@ jobs:
     # 0.0.26 L12. Plus the G4 server-half step (16s here,
     # all four clients, on a contended box; 60s allowed): (1240.6 + 60) x 1.5 = 1951s -> **33**. The last
     # step re-derives it from this job's own clock (`scripts/ci_ceiling.py`) on every run.
-    timeout-minutes: 33
+    # 33 -> 47 (0.0.26 cut): the reference class grew — release.yml `test` re-assembled at 1799 s
+    # (CI #172, run 40631802534). (1799 + 60) x 1.5 = 2788.5 s -> **47**.
+    timeout-minutes: 47
     defaults:
       run:
         shell: bash
