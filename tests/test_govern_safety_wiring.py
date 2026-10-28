@@ -18,6 +18,8 @@ import unittest
 from contextlib import redirect_stdout
 
 from _support import sample_manifest_data, approve_with_lenses  # noqa: F401  (path fix side-effect)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata import MOKATA_DIR
 from mokata.brainstorm import PIPELINE_PHASES, Approach, BrainstormSession
@@ -82,7 +84,7 @@ class TestKarpathyPipelineWiring(unittest.TestCase):
     def test_gates_fire_per_phase_and_are_audited_when_enabled(self):
         with tempfile.TemporaryDirectory() as d:
             led = AuditLedger(os.path.join(d, "l.jsonl"))
-            run = run_pipeline(handoff(), spec2(), FULL_TESTS,
+            run = run_pipeline(handoff(), with_tasks(spec2()), FULL_TESTS,
                                store=StateStore(os.path.join(d, "state")),
                                ledger=led, manifest=make_manifest())
             fired = {e["gate"] for e in led.entries() if e["kind"] == "karpathy_gate"}
@@ -93,7 +95,7 @@ class TestKarpathyPipelineWiring(unittest.TestCase):
     def test_skipped_and_not_audited_without_a_manifest(self):
         with tempfile.TemporaryDirectory() as d:
             led = AuditLedger(os.path.join(d, "l.jsonl"))
-            run = run_pipeline(handoff(), spec2(), FULL_TESTS,
+            run = run_pipeline(handoff(), with_tasks(spec2()), FULL_TESTS,
                                store=StateStore(os.path.join(d, "state")), ledger=led)
             self.assertEqual(
                 [e for e in led.entries() if e["kind"] == "karpathy_gate"], [])
@@ -102,7 +104,7 @@ class TestKarpathyPipelineWiring(unittest.TestCase):
     def test_a_disabled_gate_does_not_fire_or_audit(self):
         with tempfile.TemporaryDirectory() as d:
             led = AuditLedger(os.path.join(d, "l.jsonl"))
-            run_pipeline(handoff(), spec2(), FULL_TESTS,
+            run_pipeline(handoff(), with_tasks(spec2()), FULL_TESTS,
                          store=StateStore(os.path.join(d, "state")), ledger=led,
                          manifest=make_manifest(overrides={"think-first": False}))
             fired = {e["gate"] for e in led.entries() if e["kind"] == "karpathy_gate"}
@@ -112,7 +114,7 @@ class TestKarpathyPipelineWiring(unittest.TestCase):
     def test_phases_still_logged_normally_no_regression(self):
         with tempfile.TemporaryDirectory() as d:
             led = AuditLedger(os.path.join(d, "l.jsonl"))
-            run_pipeline(handoff(), spec2(), FULL_TESTS,
+            run_pipeline(handoff(), with_tasks(spec2()), FULL_TESTS,
                          store=StateStore(os.path.join(d, "state")), ledger=led,
                          manifest=make_manifest())
             phases = [e["phase"] for e in led.entries() if e["kind"] == "phase"]

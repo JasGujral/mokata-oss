@@ -1,0 +1,35 @@
+{
+ "skill": "bug",
+ "triggers": [
+  "concrete reproducer or bug report",
+  "regression test then a fix"
+ ],
+ "positive": [
+  "Here's a reproducer: calling total([]) returns None instead of 0. Please fix it",
+  "Bug report: dates before 1970 crash the parser; here are the exact steps to reproduce",
+  "This known defect needs a regression test first and then a fix",
+  "Turn this reported failure into a captured regression test and a guarded fix",
+  "Steps to reproduce attached — uploading a 0-byte file 500s. Fix the bug"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Something is broken in prod and we don't know why yet — root-cause it",
+   "expect": "debug"
+  },
+  {
+   "prompt": "Add a dark mode toggle to the app"
+  },
+  {
+   "prompt": "Can you make the CSV export faster?",
+   "expect": "optimize"
+  },
+  {
+   "prompt": "Write failing tests for the approved spec",
+   "expect": "test"
+  },
+  {
+   "prompt": "Clean up and refactor the billing module",
+   "expect": "refine"
+  }
+ ]
+}

@@ -13,8 +13,8 @@
 #   L01-L06 ★★★ the ledger projection: un-wired (§7i), able to fail the canonical append, a root
 #     derivation that accepts anything, and the toggle's §7e decision — the one place doubt
 #     resolves, a handler forbidden to re-decide it, and the public emit's own swallow.
-#   M01-M03 ★★★ MCP dispatch: no duration, `ok` from "did it raise", and the one-exit property
-#     that keeps `timed_out` evented.
+#   M01-M03 ★★★ MCP dispatch: no duration, `ok` from "did it raise", and the still-working exit
+#     that keeps `running` evented (0.0.26 O14 — it was `timed_out`).
 #   G01-G02 ★★★ the seventh type: un-wired, and one row per finding instead of per kind.
 #   R01-R04 ★★★ clean resume: the additive loop restored, the clear moved outside the commit
 #     closure so a DECLINED pull wipes the session, the derived clear set narrowed back to one
@@ -265,18 +265,16 @@ mutant "L06 ★★★ the PUBLIC emit stops swallowing — the observability lan
         raise' "$T"
 
 mutant "M01 ★★★ the duration is never measured — doc 99's criterion back at zero" "$MS" \
-  '        _emit_tool_call(call_path, op, kind, out, elapsed_ms)' \
-  '        _emit_tool_call(call_path, op, kind, out, 0)' "$T"
+  '            _emit_tool_call(call_path, op, kind, out, call.elapsed_ms)' \
+  '            _emit_tool_call(call_path, op, kind, out, 0)' "$T"
 
 mutant "M02 ★★★ ok comes from 'did it raise' — a refusal recorded as a success" "$MS" \
-  '        ok = status not in ("error", "timed_out", "refused")' \
+  '        ok = status not in ("error", "running", "refused")' \
   '        ok = True' "$T"
 
-mutant "M03 ★★★ the one-exit property goes — timed_out stops being evented (§7e)" "$MS" \
-  '        if worker.is_alive():                             # R1 — over budget, still running
-            out = _timed_out(op, budget)' \
-  '        if worker.is_alive():
-            return _timed_out(op, budget)' "$T"
+mutant "M03 ★★★ the still-working exit goes silent — \`running\` stops being evented (§7e)" "$MS" \
+  '            _emit_tool_call(call_path, op, kind, out, int(elapsed * 1000))' \
+  '            pass' "$T"
 
 # ==== G · the seventh type =====================================================================
 

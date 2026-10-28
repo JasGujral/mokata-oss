@@ -375,7 +375,7 @@ def q07_read_surface_bounded(fx: Fixture,
         took = time.time() - started
         if took > slowest:
             slowest, slowest_tool = took, name
-        if not isinstance(res, dict) or res.get("status") == ST.TIMED_OUT:
+        if not isinstance(res, dict) or res.get("status") == ST.RUNNING:
             bad.append(name)
     ok = not bad and slowest < MS.MCP_SURFACE_TIMEOUT_SECONDS
     return EvalResult(
@@ -421,11 +421,10 @@ def q09_hung_body(fx: Fixture, specs: List[Tuple[str, str, Callable[..., Any]]])
         started = time.time()
         res = _call("eval_hang", "read", hangs, path=fx.path)
         elapsed = time.time() - started
-    ok = (res.get("status") == ST.TIMED_OUT
-          and res.get("isError") is True
-          and res.get("committed") is False
+    ok = (res.get("status") == ST.RUNNING                     # O14 — disclosed, never cut
+          and res.get("isError") is False
           and "eval_hang" in res.get("reason", "")
-          and "mokata" in res.get("hint", "")                 # the CLI fallback is named
+          and "same arguments" in res.get("hint", "")         # how to collect the result
           and elapsed < budget + 2.0)
     return EvalResult(
         "Q09", "Does a body that never returns still answer inside the budget (fault injection)?",
@@ -756,7 +755,7 @@ class TestExitCriteriaSweep(unittest.TestCase):
 
     def test_exit_status_vocab_is_the_doc_88_set(self):
         self.assertEqual(ST.STATUS_VOCAB, frozenset({
-            "proposed", "refused", "blocked", "running", "timed_out", "degraded",
+            "proposed", "refused", "blocked", "running", "degraded",
             "committed", "error"}))
 
 

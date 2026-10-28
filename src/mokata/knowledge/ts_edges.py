@@ -315,82 +315,95 @@ def extract_edges(tree, source: bytes) -> FileEdges:
         ident = _named_child(node, "identifier", "type_identifier", "property_identifier")
         return _text(ident, source) if ident is not None else None
 
-    def walk(node, scope: str):
-        for child in node.named_children:
-            kind = child.type
+    # 0.0.26 O13 — an EXPLICIT stack, not recursion: measured on microsoft/TypeScript (68k files),
+    # one deeply nested test file blew Python's recursion limit (RecursionError at depth ~1000) and
+    # took the whole meaning-index build down with it. `descend` pushes a child's children as a
+    # frame that is drained before the parent's remaining siblings — the same pre-order the
+    # recursive walk produced, so every edge comes out in the same order.
+    stack = [(iter(tree.root_node.named_children), "")]
 
-            if kind == "import_statement":
-                spec = _import_specifier_string(child, source)
-                edge_kind = IMPORT_TYPE if _is_type_only(child) else IMPORT_VALUE
-                toks = module_tokens(spec) if spec else set()
-                toks |= _local_names(_named_child(child, "import_clause"), source)
-                for token in sorted(toks):
-                    edges.imports.append((token, _line(child), edge_kind))
+    def descend(node, scope: str) -> None:
+        stack.append((iter(node.named_children), scope))
+
+    while stack:
+        it, scope = stack[-1]
+        child = next(it, None)
+        if child is None:
+            stack.pop()
+            continue
+        kind = child.type
+
+        if kind == "import_statement":
+            spec = _import_specifier_string(child, source)
+            edge_kind = IMPORT_TYPE if _is_type_only(child) else IMPORT_VALUE
+            toks = module_tokens(spec) if spec else set()
+            toks |= _local_names(_named_child(child, "import_clause"), source)
+            for token in sorted(toks):
+                edges.imports.append((token, _line(child), edge_kind))
+            continue
+
+        if kind == "export_statement" and _named_child(child, "string") is not None:
+            # A RE-EXPORT (`export {x} from "./util"`) is an import edge: this module depends
+            # on that one at runtime, whatever it does with the names afterwards.
+            spec = _import_specifier_string(child, source)
+            edge_kind = IMPORT_TYPE if _is_type_only(child) else IMPORT_VALUE
+            toks = module_tokens(spec) if spec else set()
+            # The re-exported NAMES too, for symmetry with the Python walker: `_import_edges`
+            # records `alias.name` for `from x import y`, and a re-export is that plus a
+            # re-publication. Dropping them here would make `imports(helper)` answer for
+            # `import {helper} from "./util"` and stay silent for
+            # `export {helper} from "./util"` — one fact, two answers, decided by which line
+            # the author happened to write.
+            toks |= _local_names(_named_child(child, "export_clause"), source)
+            for token in sorted(toks):
+                edges.imports.append((token, _line(child), edge_kind))
+            descend(child, scope)
+            continue
+
+        if kind in _CLASS_NODES:
+            name = declared_name(child)
+            if name:
+                bases = (_interface_heritage(child, source)
+                         if kind == "interface_declaration"
+                         else _heritage(child, source))
+                edges.classes.append((name, _line(child), bases))
+                edges.defs.append((name, _line(child), KIND_CLASS))
+                descend(child, name)
                 continue
 
-            if kind == "export_statement" and _named_child(child, "string") is not None:
-                # A RE-EXPORT (`export {x} from "./util"`) is an import edge: this module depends
-                # on that one at runtime, whatever it does with the names afterwards.
-                spec = _import_specifier_string(child, source)
-                edge_kind = IMPORT_TYPE if _is_type_only(child) else IMPORT_VALUE
-                toks = module_tokens(spec) if spec else set()
-                # The re-exported NAMES too, for symmetry with the Python walker: `_import_edges`
-                # records `alias.name` for `from x import y`, and a re-export is that plus a
-                # re-publication. Dropping them here would make `imports(helper)` answer for
-                # `import {helper} from "./util"` and stay silent for
-                # `export {helper} from "./util"` — one fact, two answers, decided by which line
-                # the author happened to write.
-                toks |= _local_names(_named_child(child, "export_clause"), source)
-                for token in sorted(toks):
-                    edges.imports.append((token, _line(child), edge_kind))
-                walk(child, scope)
+        if kind in _FUNCTION_NODES:
+            name = declared_name(child)
+            if name:
+                edges.defs.append((name, _line(child), KIND_FUNCTION))
+                descend(child, name)
                 continue
 
-            if kind in _CLASS_NODES:
-                name = declared_name(child)
-                if name:
-                    bases = (_interface_heritage(child, source)
-                             if kind == "interface_declaration"
-                             else _heritage(child, source))
-                    edges.classes.append((name, _line(child), bases))
-                    edges.defs.append((name, _line(child), KIND_CLASS))
-                    walk(child, name)
-                    continue
-
-            if kind in _FUNCTION_NODES:
-                name = declared_name(child)
-                if name:
-                    edges.defs.append((name, _line(child), KIND_FUNCTION))
-                    walk(child, name)
-                    continue
-
-            if kind in _METHOD_NODES:
-                name = declared_name(child)
-                if name:
-                    edges.defs.append((name, _line(child), KIND_METHOD))
-                    walk(child, name)
-                    continue
-
-            if kind == "variable_declarator":
-                value = child.child_by_field_name("value")
-                name = declared_name(child)
-                if name and value is not None and value.type in _FUNCTION_VALUES:
-                    # `export const Panel = () => …` — a definition, and on modern React the ONLY
-                    # kind a component file has.
-                    edges.defs.append((name, _line(child), KIND_FUNCTION))
-                    walk(child, name)
-                    continue
-
-            if kind in ("call_expression", "new_expression"):
-                callee = _callee_name(child, source)
-                if callee:
-                    edges.calls.append((callee, _line(child), scope))
-                walk(child, scope)
+        if kind in _METHOD_NODES:
+            name = declared_name(child)
+            if name:
+                edges.defs.append((name, _line(child), KIND_METHOD))
+                descend(child, name)
                 continue
 
-            walk(child, scope)
+        if kind == "variable_declarator":
+            value = child.child_by_field_name("value")
+            name = declared_name(child)
+            if name and value is not None and value.type in _FUNCTION_VALUES:
+                # `export const Panel = () => …` — a definition, and on modern React the ONLY
+                # kind a component file has.
+                edges.defs.append((name, _line(child), KIND_FUNCTION))
+                descend(child, name)
+                continue
 
-    walk(tree.root_node, "")
+        if kind in ("call_expression", "new_expression"):
+            callee = _callee_name(child, source)
+            if callee:
+                edges.calls.append((callee, _line(child), scope))
+            descend(child, scope)
+            continue
+
+        descend(child, scope)
+
     return edges
 
 

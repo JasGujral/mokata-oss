@@ -20,6 +20,8 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata.brainstorm import Approach, BrainstormGateError, BrainstormSession
 from mokata.brainstorm_impact import DesignFitVerdict, compute_impact
@@ -165,7 +167,7 @@ class TestMcpParity(unittest.TestCase):
             s = _session_with_impact(layer)
             s.approve("jas", "a")                          # approved with a degraded radius
             save_brainstorm_progress(s, surface.state)
-            out = tools_write.spec_emit(
+            out = call_planned(tools_write.spec_emit, 
                 path=root, title="bill users",
                 criteria=[{"id": "AC1", "text": "charge on submit"}],
                 tests=[{"name": "test_charge", "ac_ids": ["AC1"]}], approach="a")
@@ -197,7 +199,7 @@ class TestMcpParity(unittest.TestCase):
             s = _session_with_impact(_Layer(_TABLE, uses_graph=True, degraded=False))
             s.approve("jas", "a")
             save_brainstorm_progress(s, surface.state)
-            out = tools_write.spec_emit(
+            out = call_planned(tools_write.spec_emit, 
                 path=root, title="bill users",
                 criteria=[{"id": "AC1", "text": "charge on submit"}],
                 tests=[{"name": "test_charge", "ac_ids": ["AC1"]}], approach="a")
@@ -217,7 +219,7 @@ class TestMcpParity(unittest.TestCase):
             s = _session_with_impact(_Layer(_TABLE, uses_graph=True, degraded=False))
             s.approve("jas", "a")
             save_brainstorm_progress(s, surface.state)
-            out = tools_write.spec_emit(
+            out = call_planned(tools_write.spec_emit, 
                 path=root, title="bill users",
                 criteria=[{"id": "AC1", "text": "charge on submit"}],
                 tests=[{"name": "test_charge", "ac_ids": ["AC1"]}], approach="a")
@@ -380,11 +382,51 @@ class TheDerivationFailsCLOSED(unittest.TestCase):
         self.assertTrue(hasattr(GR, "derive_graph_degraded_detail"), "the CONTROL")
 
 
+class TestMcpParityWithCrgPresent(unittest.TestCase):
+    """0.0.26 O11 sibling of `TestMcpParity.test_a_session_CLAIMING_health_cannot_buy_it`, with
+    code-review-graph installed and never built (the `mokata[full]` first run). Measured before the
+    fix: CRG's "graph is empty" / "not a project root" replies normalized to ZERO callers — a
+    healthy structural zero — and the re-run lens AGREED with the false claim, so the gate passed
+    `graph-required` and stopped at `completeness` instead."""
+
+    def _claimed_health_is_refused(self, failing):
+        from _support import crg_present_failing, crg_present_unbuilt
+        from mokata.mcp import tools_write
+        from mokata.brainstorm import save_brainstorm_progress
+        calls = (crg_present_failing if failing else crg_present_unbuilt)(self)
+        with tempfile.TemporaryDirectory() as root:
+            surface = _init(root)
+            s = _session_with_impact(_Layer(_TABLE, uses_graph=True, degraded=False))
+            s.approve("jas", "a")
+            save_brainstorm_progress(s, surface.state)
+            out = call_planned(tools_write.spec_emit, 
+                path=root, title="bill users",
+                criteria=[{"id": "AC1", "text": "charge on submit"}],
+                tests=[{"name": "test_charge", "ac_ids": ["AC1"]}], approach="a")
+        self.assertTrue(calls, "code-review-graph was never asked — the sibling grades nothing")
+        self.assertEqual("graph-required", out.get("gate"),
+                         "an unbuilt code-review-graph's non-answer bought the pass")
+
+    def test_in_a_project_the_empty_graph_does_not_buy_a_pass(self):
+        self._claimed_health_is_refused(failing=False)
+
+    def test_a_failing_graph_does_not_buy_a_pass(self):
+        self._claimed_health_is_refused(failing=True)
+
+
 def _init(root):
     from mokata.init import init_repo
     from mokata.config import Surface
     init_repo(root=root, profile="standard", assume_yes=True, out=lambda _: None)
     return Surface.load(root)
+
+
+def setUpModule():
+    # 0.0.26 O11 — this module's expectations are the CORE install's: no external code graph on
+    # the machine. Pinned, so a venv with code-review-graph (`mokata[full]`) means the same thing;
+    # what is true WITH it present is graded in test_o11_crg_present (and the sibling below, if any).
+    from _support import hide_external_graphs
+    hide_external_graphs()
 
 
 if __name__ == "__main__":

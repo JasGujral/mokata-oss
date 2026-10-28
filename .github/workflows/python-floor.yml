@@ -1,15 +1,14 @@
 name: python-floor (weekly)
 
-# THE DECLARED PYTHON FLOOR, EXERCISED AGAIN — weekly, not per PR (0.0.25 Lane C, ruling U2 as
-# recommended: "weekly 3.10 leg; cheap; keeps the floor honest without slowing PR CI").
+# THE DECLARED PYTHON FLOOR, EXERCISED AGAIN — weekly, not per PR (0.0.25 Lane C, ruling U2).
 #
-# `pyproject.toml` declares `requires-python = ">=3.10"`. At 0.0.24 (owner ruling 2026-10-17) the
-# 3.10 legs left `ci.yml` and `release.yml` to cut the PR gate's Windows wall-clock, and the floor
-# became a promise no workflow exercised (`tests/test_ci_matrix_floor.py` pinned that, so nobody
-# would believe otherwise). That gap is not hypothetical: `datetime.fromisoformat` learned the
-# Zulu designator in 3.11, and a 3.12-only gate cannot see a bug of that shape. 0.0.25 I-03 then
-# MET one in a real install — `uv tool install .` built its env on 3.10, which has no `tomllib`, so
-# every extra failed with "could not read uv's tool receipt" (`RECEIPT-UNREADABLE-ON-3.10`).
+# 0.0.26 L12 (PY-FLOOR-3.12, Jas 2026-10-22: "we can force mokata to support 3.12 and onwards"):
+# `pyproject.toml` declares `requires-python = ">=3.12"`, the version every PR and tag leg already
+# runs. Until then the floor was 3.10 and this job was the only place it was tested — it MET real
+# 3.10-only bugs (`fromisoformat` without '…Z', no `tomllib`: `RECEIPT-UNREADABLE-ON-3.10`), and
+# the code carried shims for them. Those shims are deleted; the floor now equals the gate Python.
+# The job stays as the floor leg: the preflight below reads the floor out of pyproject.toml, so
+# the day the floor moves again this job tests the new one, and the G4 server half runs here.
 #
 # This job runs the FULL unit suite on the floor interpreter, on ubuntu, once a week and on demand.
 # It is NOT a PR gate and gates nothing in the publish path (release.yml declares its own chain),
@@ -42,12 +41,13 @@ jobs:
     # CI-JOBS-WITHOUT-A-TIMEOUT. No completed run of THIS job exists yet, so it is derived from
     # the reference class it copies: release.yml's `test` job runs the same suite on the same
     # runner image (install + unit + integration); its slowest completed leg is 1240.6s
-    # (`test (3.12, present)`, run 38966278058). 3.10 is NOT slower for this suite on CI: CI #141
-    # (0.0.20) measured windows py3.10 present 32m05s vs py3.12 present 33m54s, and all four
-    # ubuntu legs (3.10 and 3.12) inside 17m18s-18m45s. Plus the G4 server-half step (16s here,
+    # (`test (3.12, present)`, run 38966278058) — the same interpreter as this floor leg since
+    # 0.0.26 L12. Plus the G4 server-half step (16s here,
     # all four clients, on a contended box; 60s allowed): (1240.6 + 60) x 1.5 = 1951s -> **33**. The last
     # step re-derives it from this job's own clock (`scripts/ci_ceiling.py`) on every run.
-    timeout-minutes: 33
+    # 33 -> 47 (0.0.26 cut): the reference class grew — release.yml `test` re-assembled at 1799 s
+    # (CI #172, run 40631802534). (1799 + 60) x 1.5 = 2788.5 s -> **47**.
+    timeout-minutes: 47
     defaults:
       run:
         shell: bash
@@ -57,7 +57,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.10"
+          python-version: "3.12"
 
       - name: "Preflight — this IS the declared floor (a leg on the wrong Python reads GREEN)"
         # The floor is read out of pyproject.toml, never typed here: raising the floor without
@@ -83,7 +83,7 @@ jobs:
         run: pip install .
 
       - name: Install test tooling (hash-pinned; PyYAML + jsonschema, compiled for the floor)
-        # Both files are `uv pip compile --python-version 3.10` outputs (requirements/README.md).
+        # Both files are `uv pip compile --python-version 3.12` outputs (requirements/README.md).
         # PyYAML: without it the workflow-lint tests RAISE (stage 10). jsonschema: `mcp`
         # hard-requires it, and the MCP gates below must RUN, not skip.
         run: |
@@ -97,7 +97,7 @@ jobs:
         run: |
           set -euo pipefail
           if ! python -m unittest discover -s tests -t tests; then
-            echo "::error::the unit suite is RED on the declared Python floor and GREEN on 3.12 (the PR gate). Either fix the 3.10 incompatibility or raise requires-python — the floor is a promise to users, and this job is the only place it is tested."
+            echo "::error::the unit suite is RED on the declared Python floor and GREEN on 3.12 (the PR gate). Either fix the floor incompatibility or raise requires-python — the floor is a promise to users, and this job is the only place it is tested."
             exit 1
           fi
 

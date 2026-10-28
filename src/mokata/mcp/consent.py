@@ -209,6 +209,13 @@ def _consent(path: str, tool: str, args: Dict[str, Any],
                             proposal_id=proposal_id)
 
 
+def _redeemed_retry(path: str, tool: str, args: Dict[str, Any],
+                    proposal_id: str) -> Optional[approval.Proposal]:
+    """O14 — the already-redeemed proposal this exact call names (a client RETRY), or None. Read-only;
+    see `approval.used_for`."""
+    return approval.used_for(path, proposal_id, tool=tool, args=args, run_id=_approval_run(path))
+
+
 def _require(gate: approval.Consent) -> approval.Proposal:
     """The structural tripwire under every commit path in this module.
 

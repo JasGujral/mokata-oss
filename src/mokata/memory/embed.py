@@ -34,7 +34,7 @@ import math
 import os
 import re
 import zlib
-from typing import Callable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..degrade import FAILURE_ENGINE
 from ..errors import DegradedCapability
@@ -197,6 +197,20 @@ class Model2VecEmbedder:
         norm = math.sqrt(sum(v * v for v in vec))
         return [v / norm for v in vec] if norm else vec
 
+    def embed_many(self, texts: List[str]) -> Any:
+        """0.0.26 O13 — the SAME vectors as calling the embedder once per text (L2-normalized), in
+        ONE model call, as a float32 numpy matrix `(len(texts), dim)`: a bulk index (the IDE's
+        meaning index over a million-line repo) pays one encode per batch instead of one per chunk,
+        and never round-trips a vector through Python floats. model2vec requires numpy, so it is
+        always importable when this class is."""
+        import numpy as np
+        arr = np.asarray(self._model.encode([t or "" for t in texts]), dtype=np.float32)
+        if arr.ndim != 2:
+            arr = arr.reshape(len(texts), -1)
+        norms = np.linalg.norm(arr, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        return arr / norms
+
 
 def _load_model2vec(model_name: str):
     """Import model2vec and load the static model, BOUNDED and offline-first.
@@ -221,6 +235,13 @@ def _load_model2vec(model_name: str):
     saved = {k: os.environ.get(k) for k in bounds}
     os.environ.update(bounds)
     try:
+        # 0.0.26 O13 — OFFLINE-FIRST, as this docstring always claimed: a model already in the
+        # local cache is loaded from disk with no network call. Measured: with the model cached and
+        # a proxy refusing huggingface.co, the online-first load failed and `setup --mode full`
+        # reported the semantic tier BLOCKED on a machine that had everything it needed.
+        local = cached_model_dir(model_name)
+        if local:
+            return StaticModel.from_pretrained(local)
         return StaticModel.from_pretrained(model_name)
     except Exception as exc:
         # DEGRADE_CLEAN, and deliberately broad with no narrow class to name: the raisables span
@@ -360,10 +381,65 @@ def detect_embedder(*, degrade_out: Optional[Callable[[str], None]] = None
             note_degraded(
                 "memory-embedder", FAILURE_ENGINE,
                 fallback="semantic recall is TOKEN-HASH (hashing) — the model could not be loaded",
-                fix="run `mokata doctor`; the model is fetched once — connect to the network "
-                    "once and re-run, or `pip install -U mokata[embeddings]`",
+                # 0.0.26 L1: name WHY (offline / proxy / TLS / timeout) — the package is there,
+                # so reinstalling it is never the fix.
+                fix=(model_fetch_cause(str(exc)) + "; then re-run `" + _setup_full()
+                   + "` (it warms the model once)"),
                 detail=str(exc), out=degrade_out)
         return HashingEmbedder()
+
+
+#: The files model2vec's `StaticModel.from_pretrained` reads from a model directory.
+MODEL_FILES = ("config.json", "model.safetensors", "tokenizer.json")
+
+
+def cached_model_dir(model_name: str) -> Optional[str]:
+    """The LOCAL directory holding `model_name`'s model files, or None — no network, ever.
+
+    0.0.26 cut (install-e2e, all 9 legs): `snapshot_download(local_files_only=True)` is the wrong
+    question. huggingface_hub ≥ 1.x answers it with `IncompleteSnapshotError` whenever the cached
+    snapshot lacks ANY file of the repo (`.gitattributes`, the README) — and model2vec's own fetch
+    downloads only the files it needs, so a freshly-fetched model always read as "not on this
+    machine" and the meaning-search index never built. Ask for exactly the files model2vec loads."""
+    try:
+        from huggingface_hub import try_to_load_from_cache   # type: ignore
+    except ImportError:
+        return None
+    dirs = set()
+    for name in MODEL_FILES:
+        try:
+            path = try_to_load_from_cache(model_name, name)
+        except Exception:  # noqa: BLE001 — optional extra's error tree; unreadable = not cached
+            return None
+        if not isinstance(path, str) or not os.path.isfile(path):
+            return None
+        dirs.add(os.path.dirname(path))
+    return dirs.pop() if len(dirs) == 1 else None
+
+
+def model_fetch_cause(error: str, environ: Optional[Dict[str, str]] = None) -> str:
+    """Name WHY the semantic model could not be fetched, from the loader's error text — so
+    "semantic off" always says why (0.0.26 L1, `DOCTOR-SEMANTIC-OFF-SAYS-NOT-WHY`). Pure."""
+    env = os.environ if environ is None else environ
+    low = error.lower()
+    for var in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"):
+        if str(env.get(var, "")).strip().lower() in ("1", "true", "yes", "on"):
+            return (f"offline mode is on ({var}={env.get(var)}) and the model is not cached — "
+                    f"unset it for one run")
+    if "proxy" in low or " 407" in low or "407 " in low:
+        return ("a proxy refused the download from huggingface.co — check HTTPS_PROXY, or set "
+                "HF_ENDPOINT to a reachable mirror")
+    if "ssl" in low or "certificate" in low:
+        return ("TLS to huggingface.co failed (a proxy re-signing traffic?) — point "
+                "REQUESTS_CA_BUNDLE / SSL_CERT_FILE at your CA bundle")
+    if "timeout" in low or "timed out" in low:
+        return "huggingface.co did not answer in time — offline, or blocked by a firewall"
+    if any(k in low for k in ("connection", "resolve", "getaddrinfo", "unreachable",
+                              "localentrynotfound", "offline", "max retries")):
+        return "huggingface.co is unreachable from this machine — offline, or blocked by a firewall"
+    if " 401" in low or " 403" in low or "forbidden" in low:
+        return "huggingface.co refused the download (HTTP 401/403) — a proxy or firewall policy"
+    return f"the model could not be loaded: {error}"
 
 
 def _extra_is_installed() -> bool:
@@ -373,6 +449,23 @@ def _extra_is_installed() -> bool:
         import model2vec                                          # noqa: F401  # type: ignore
         return True
     except ImportError:
+        return False
+
+
+#: The `memory.embedder` names that resolve to a LOADED MODEL when the extra is present.
+MODEL_EMBEDDER_NAMES = ("auto", "model2vec", "embeddings")
+
+
+def would_load_model(name: Optional[str]) -> bool:
+    """Would `make_embedder(name)` load an embedding MODEL here? Answered WITHOUT importing the
+    extra (`find_spec` only) — the per-prompt hook asks this so it never pays a model load
+    (0.0.26 O12: ~390 ms + numpy for potion-base-8M, measured)."""
+    if name not in MODEL_EMBEDDER_NAMES:
+        return False
+    import importlib.util
+    try:
+        return importlib.util.find_spec("model2vec") is not None
+    except (ImportError, ValueError):
         return False
 
 
@@ -412,7 +505,7 @@ def make_embedder(name: Optional[str], *,
     """
     if name in ("hashing", "local"):
         return HashingEmbedder()
-    if name in ("auto", "model2vec", "embeddings"):
+    if name in MODEL_EMBEDDER_NAMES:
         asked_for_the_extra = semantic_store or name in ("model2vec", "embeddings")
         embedder = detect_embedder(degrade_out=degrade_out)
         if asked_for_the_extra and getattr(embedder, "embedder_id", None) == HASHING_ID \
@@ -433,3 +526,9 @@ def make_embedder(name: Optional[str], *,
                 out=degrade_out)
         return embedder
     return None
+
+
+def _setup_full() -> str:
+    """0.0.26 L8 — `setup --mode full` as THIS route runs it (the plugin route has no CLI)."""
+    from ..adoption_modes import setup_command_for
+    return setup_command_for("full")

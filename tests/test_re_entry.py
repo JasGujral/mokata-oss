@@ -40,6 +40,8 @@ import unittest
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata import approval as A
 from mokata import session as S
@@ -95,9 +97,9 @@ def _pipeline_repo(run_id="runA"):
         "approved_at": "2026-07-27T00:00:00Z",
         "prior_art": {"ran": True, "approach": "A1", "findings": [], "verdict": "none"},
         "domains": []})
-    out = TS.spec_emit(path=d, title="s", criteria=C1, tests=T1, approach="A1")
+    out = call_planned(TS.spec_emit, path=d, title="s", criteria=C1, tests=T1, approach="A1")
     _human_approves(d, out["proposal_id"])
-    TS.spec_emit(path=d, title="s", criteria=C1, tests=T1, approach="A1",
+    call_planned(TS.spec_emit, path=d, title="s", criteria=C1, tests=T1, approach="A1",
                  proposal_id=out["proposal_id"])
     return d
 
@@ -125,12 +127,12 @@ class TestReproFreshSessionReEntry(_Base):
 
     def test_a_human_approval_survives_an_mcp_restart(self):
         d = _pipeline_repo()
-        out = TS.spec_emit(path=d, title="s2", criteria=C2, tests=T2, approach="A1")
+        out = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2, approach="A1")
         pid = out["proposal_id"]
         self.assertEqual(_human_approves(d, pid).code, "approved")
 
         _re_enter(d, "runB")                      # the MCP server restarted / a second window
-        redeemed = TS.spec_emit(path=d, title="s2", criteria=C2, tests=T2, approach="A1",
+        redeemed = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2, approach="A1",
                                 proposal_id=pid)
         self.assertEqual(redeemed.get("status"), "committed",
                          "the human APPROVED this exact content in this exact repo; an MCP "
@@ -139,13 +141,13 @@ class TestReproFreshSessionReEntry(_Base):
 
     def test_re_proposing_the_same_content_does_not_mint_a_new_id_per_session(self):
         d = _pipeline_repo()
-        first = TS.spec_emit(path=d, title="s2", criteria=C2, tests=T2,
+        first = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2,
                              approach="A1")["proposal_id"]
         _re_enter(d, "runB")
-        second = TS.spec_emit(path=d, title="s2", criteria=C2, tests=T2,
+        second = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2,
                               approach="A1")["proposal_id"]
         _re_enter(d, "runC")
-        third = TS.spec_emit(path=d, title="s2", criteria=C2, tests=T2,
+        third = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2,
                              approach="A1")["proposal_id"]
 
         self.assertEqual([first, first], [second, third],
@@ -162,7 +164,7 @@ class TestReproAmendDismissLoop(_Base):
 
     def test_a_re_call_names_the_proposal_already_awaiting_the_human(self):
         d = _pipeline_repo("runX")
-        first = TS.spec_amend(path=d, title="s", criteria=C2, tests=T2, approach="A1",
+        first = call_planned(TS.spec_amend, path=d, title="s", criteria=C2, tests=T2, approach="A1",
                               reason="need more")
         self.assertEqual(first["status"], "proposed")
         pid1 = first["proposal_id"]
@@ -174,7 +176,7 @@ class TestReproAmendDismissLoop(_Base):
         # The model re-calls with a REWORDED reason (a different write, so a different id — that is
         # content-binding working). The wedge is that the answer says nothing about pid1, which is
         # the proposal actually holding the run regressed.
-        again = TS.spec_amend(path=d, title="s", criteria=C2, tests=T2, approach="A1",
+        again = call_planned(TS.spec_amend, path=d, title="s", criteria=C2, tests=T2, approach="A1",
                               reason="need more (rephrased)")
         self.assertNotEqual(again["proposal_id"], pid1)
         self.assertIn(pid1, again.get("awaiting_also_pending", []),
@@ -185,7 +187,7 @@ class TestReproAmendDismissLoop(_Base):
 
     def test_the_regressed_answer_names_both_roads_out(self):
         d = _pipeline_repo("runX")
-        out = TS.spec_amend(path=d, title="s", criteria=C2, tests=T2, approach="A1", reason="r")
+        out = call_planned(TS.spec_amend, path=d, title="s", criteria=C2, tests=T2, approach="A1", reason="r")
         self.assertEqual(out["awaiting_blocks"], AMEND_REGRESSED_NOTE)
         self.assertEqual(out["awaiting_abort_command"], AMEND_ABORT_CMD)
         self.assertEqual(out["awaiting_approve_command"],
@@ -237,9 +239,9 @@ class TestPropertiesPreserved(_Base):
 
     def test_different_content_is_a_different_proposal(self):
         d = _pipeline_repo()
-        a = TS.spec_emit(path=d, title="s2", criteria=C2, tests=T2, approach="A1")["proposal_id"]
+        a = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2, approach="A1")["proposal_id"]
         _re_enter(d, "runB")
-        b = TS.spec_emit(path=d, title="DIFFERENT", criteria=C2, tests=T2,
+        b = call_planned(TS.spec_emit, path=d, title="DIFFERENT", criteria=C2, tests=T2,
                          approach="A1")["proposal_id"]
         self.assertNotEqual(a, b, "change an argument, change the hash, change the id — "
                                   "'approve X then commit Y' stays arithmetically impossible")
@@ -250,29 +252,35 @@ class TestPropertiesPreserved(_Base):
         key cannot reach it — but it is the property the whole gate rests on, so it is pinned
         against the change that touches its substrate."""
         d = _pipeline_repo()
-        pid = TS.spec_emit(path=d, title="s2", criteria=C2, tests=T2,
+        pid = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2,
                            approach="A1")["proposal_id"]
         _human_approves(d, pid)
-        first = TS.spec_emit(path=d, title="s2", criteria=C2, tests=T2, approach="A1",
+        first = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2, approach="A1",
                              proposal_id=pid)
         self.assertEqual(first["status"], "committed")
-        second = TS.spec_emit(path=d, title="s2", criteria=C2, tests=T2, approach="A1",
+        second = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2, approach="A1",
                               proposal_id=pid)
-        self.assertEqual(second["status"], "refused")
+        # O14 — the burnt approval licenses nothing more; the retry is answered from the record
+        self.assertFalse(second["committed"])
+        self.assertEqual(second["status"], "unchanged")
+        self.assertTrue(second["already_applied"])
         self.assertEqual(second["reason_code"], A.REFUSED_USED)
 
     def test_a_cross_session_approval_still_licenses_exactly_one_write(self):
         d = _pipeline_repo()
-        pid = TS.spec_emit(path=d, title="s2", criteria=C2, tests=T2,
+        pid = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2,
                            approach="A1")["proposal_id"]
         _human_approves(d, pid)
         _re_enter(d, "runB")
-        first = TS.spec_emit(path=d, title="s2", criteria=C2, tests=T2, approach="A1",
+        first = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2, approach="A1",
                              proposal_id=pid)
         self.assertEqual(first["status"], "committed")
-        second = TS.spec_emit(path=d, title="s2", criteria=C2, tests=T2, approach="A1",
+        second = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2, approach="A1",
                               proposal_id=pid)
-        self.assertEqual(second["status"], "refused")
+        # O14 — the burnt approval licenses nothing more; the retry is answered from the record
+        self.assertFalse(second["committed"])
+        self.assertEqual(second["status"], "unchanged")
+        self.assertTrue(second["already_applied"])
         self.assertFalse(second["committed"])
         # It refuses as `already-used` — the SPECIFIC answer. Under RE-ENTRY alone this could only
         # promise "refused": the commit landed under THIS session's state scope, the repo then held
@@ -294,7 +302,7 @@ class TestTheRoadsOutActuallyWork(_Base):
 
     def test_abort_resolves_the_pipeline_after_a_re_entry(self):
         d = _pipeline_repo("runY")
-        out = TS.spec_amend(path=d, title="s", criteria=C2, tests=T2, approach="A1", reason="r")
+        out = call_planned(TS.spec_amend, path=d, title="s", criteria=C2, tests=T2, approach="A1", reason="r")
         self.assertEqual(out["status"], "proposed")
         _re_enter(d, "runZ")                       # the bare checkpoint that used to break this
         _enter_session("runY")                     # back in the pipeline's own window
@@ -352,7 +360,7 @@ class TestTheFiledResidual(_Base):
     def test_amend_from_a_second_session_now_reaches_the_consent_boundary(self):
         d = _pipeline_repo("runY")
         _re_enter(d, "runZ")
-        out = TS.spec_amend(path=d, title="s", criteria=C2, tests=T2, approach="A1", reason="r")
+        out = call_planned(TS.spec_amend, path=d, title="s", criteria=C2, tests=T2, approach="A1", reason="r")
         self.assertEqual(out["status"], "proposed",
                          "STATE-SCOPE: the amendment resolves the pipeline's own spec, so it "
                          "reaches the human gate instead of dying at `spec-persisted`")
@@ -379,7 +387,7 @@ class TestTheFiledResidual(_Base):
     def test_the_model_still_cannot_mint_consent(self):
         d = _pipeline_repo()
         _re_enter(d, "runB")
-        out = TS.spec_emit(path=d, title="s2", criteria=C2, tests=T2, approach="A1",
+        out = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2, approach="A1",
                            approve=True, confirm=True)
         self.assertEqual(out["status"], "proposed")
         self.assertFalse(out["committed"])
@@ -394,7 +402,7 @@ class TestTheFiledResidual(_Base):
         surface.state.write("emitted_spec", {"title": "other", "criteria": [], "version": 1})
         self.assertIsNone(resolve_run_id(d))
 
-        out = TS.spec_emit(path=d, title="s2", criteria=C2, tests=T2, approach="A1")
+        out = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2, approach="A1")
         self.assertEqual(out["status"], "proposed")
         self.assertFalse(out["committed"])
         # ...and the proposal is keyed to this PROCESS (the narrowest key there is), never to a run

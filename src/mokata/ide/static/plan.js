@@ -16,7 +16,7 @@
 
   // --- mdLite ---
   // A deliberately tiny Markdown subset for run text: paragraphs, "- " bullets, "#" headings,
-  // **bold** and `code`. It creates elements and text nodes only — there is no markup path.
+  // **bold**, `code` and ``` fenced code blocks. It creates elements and text nodes only — there is no markup path.
   function mdInline(parent, text) {
     const re = /(\*\*([^*]+)\*\*|`([^`]+)`)/g;
     let last = 0;
@@ -29,9 +29,29 @@
     if (last < text.length) parent.append(document.createTextNode(text.slice(last)));
     return parent;
   }
+  // 0.0.26 P1: a ``` fenced block is a code block — <pre class="md-code"> with its text set as
+  // text, then coloured by the server's lexer (MK.hl.snippet, by the fence's language).
+  const FENCE = /^```[ \t]*([\w+#.-]*)[^\n]*\n([\s\S]*?)^```[ \t]*$/gm;
   function mdLite(text) {
+    const src = String(text || "").replace(/\r\n/g, "\n");
     const frag = document.createDocumentFragment();
-    const blocks = String(text || "").replace(/\r\n/g, "\n").split(/\n{2,}/);
+    let last = 0;
+    let m;
+    FENCE.lastIndex = 0;
+    while ((m = FENCE.exec(src))) {
+      if (m.index > last) frag.append(mdBlocks(src.slice(last, m.index)));
+      const pre = el("pre", "md-code", m[2].replace(/\n$/, ""));
+      if (m[1]) pre.dataset.fence = m[1];
+      frag.append(pre);
+      if (typeof MK !== "undefined" && MK.hl) MK.hl.snippet(pre, m[1] || "");
+      last = FENCE.lastIndex;
+    }
+    if (last < src.length) frag.append(mdBlocks(src.slice(last)));
+    return frag;
+  }
+  function mdBlocks(text) {
+    const frag = document.createDocumentFragment();
+    const blocks = String(text || "").split(/\n{2,}/);
     for (const block of blocks) {
       const lines = block.split("\n").filter((l) => l.trim());
       let para = [];
@@ -71,7 +91,7 @@
   function focusRun() {
     const ids = ((P.runs && P.runs.runs) || []).map((r) => r.id);
     const ui = MK.ui;
-    const row = ((ui.state && ui.state.sessions) || []).find((s) => s.id === ui.focus);
+    const row = ui.state && ui.state.focus_row && ui.state.focus_row.id === ui.focus ? ui.state.focus_row : null;
     if (row && row.run && ids.includes(row.run)) return row.run;
     if (P.runs && P.runs.default && ids.includes(P.runs.default)) return P.runs.default;
     return ids[0] || null;
@@ -113,9 +133,14 @@
     showFile(false);
     const box = $("plan-state");
     if (P.runs && P.runs.state === "team-unreachable") { showState(P.runs.note, "unreachable"); clearPlan(); return; }
+    if (P.runs && P.runs.state === "not-initialized") { showNotSetUp(P.runs); clearPlan(); return; }
+    if (!P.run && P.runs && P.runs.error) {   // P39 (R33, §5.4 rule 4): what failed + Retry + CLI twin
+      showError(`could not list runs: ${P.runs.error}`, () => refreshAll(), "mokata plan list");
+      clearPlan();
+      return;
+    }
     if (!P.run) {
-      showState(P.runs && P.runs.error ? `could not list runs: ${P.runs.error}`
-        : "No run yet. A run appears here once a brainstorm registers it (/mokata:brainstorm); its plan once the approach is approved, its spec once it is emitted.", "");
+      showState("No run yet. A run appears here once a brainstorm registers it (/mokata:brainstorm); its plan once the approach is approved, its spec once it is emitted.", "");
       clearPlan();
       return;
     }
@@ -125,8 +150,9 @@
     MK.markSample(res);
     P.plan = res;
     box.hidden = true;
-    if (res.error) { showState(`could not read this run: ${res.note || res.error}`, ""); clearPlan(); return; }
+    if (res.error) { showError(`could not read this run: ${res.note || res.error}`, () => loadPlan(), "mokata plan show"); clearPlan(); return; }
     if (res.state === "team-unreachable") { showState(res.note, "unreachable"); clearPlan(); return; }
+    if (res.state === "not-initialized") { showNotSetUp(res); clearPlan(); return; }
     renderPlan(res);
   }
 
@@ -137,6 +163,24 @@
     box.replaceChildren();
     if (kind === "unreachable") box.append(el("b", "", "Team store unreachable"), el("br"));
     box.append(document.createTextNode(text || ""));
+  }
+  function showError(text, retry, cli) {
+    const box = $("plan-state");
+    box.hidden = false;
+    box.className = "empty big";
+    MK.regionSay(box, "error", text, { retry, cli });
+  }
+  // 0.0.26 P29 — a repo mokata has not set up: the one command, and what it lights up here.
+  function showNotSetUp(res) {
+    const box = $("plan-state");
+    box.hidden = false;
+    box.className = "empty big not-set-up";
+    box.replaceChildren(el("b", "", "mokata is not set up in this repo"), el("br"),
+      document.createTextNode("Run "), el("code", "hp-fix", res.command || "mokata setup claude"),
+      document.createTextNode(" in a terminal here. Navigation, search, outline and blast radius already work; setup adds:"));
+    const ul = el("ul", "small not-set-up-list");
+    for (const f of res.lights_up || []) ul.append(el("li", "", f.what));
+    box.append(ul);
   }
   function clearPlan() {
     $("plan-approach").replaceChildren();
@@ -352,8 +396,12 @@
       ul.append(MK.wrapLi(b));
     }
     const dirs = P.files.dirs || {};
-    $("plan-files-note").textContent = P.files.error ? `could not list plan files: ${P.files.error}`
-      : (P.files.plans || []).length ? "Saved at approval; `mokata plan export` copies one into your repo."
+    if (P.files.error) {
+      MK.regionSay($("plan-files-note"), "error", `could not list plan files: ${P.files.error}`,
+                   { retry: () => loadFiles(), cli: "mokata plan list" });
+      return;
+    }
+    $("plan-files-note").textContent = (P.files.plans || []).length ? "Saved at approval; `mokata plan export` copies one into your repo."
       : `No saved plan files yet (${dirs.internal || ".mokata/temp_local/plans"}, ${dirs.exported || "plans"}).`;
   }
 
@@ -376,7 +424,7 @@
     P.file = { slug, where };
     $("plan-title").textContent = res.path || slug;
     $("plan-source-badge").textContent = res.sample ? "SAMPLE" : where === "exported" ? "plan file · your repo" : "plan file · mokata";
-    if (res.error) { box.append(el("p", "empty", `could not read this plan: ${res.note || res.error}`)); return; }
+    if (res.error) { MK.regionSay(box, "error", `could not read this plan: ${res.note || res.error}`, { retry: () => openFile(slug, where), cli: `mokata plan show ${slug}` }); return; }
     section(box, "Saved plan", `${res.path} · ${fmtT(res.updated)}`);
     const back = el("button", "pill", "← back to the run");
     back.type = "button";
@@ -424,17 +472,15 @@
     const res = await MK.api("/api/lifecycle?run=" + encodeURIComponent(run)).catch(() => null);
     if (gen !== P.lcGen) return;
     MK.markSample(res);
-    P.lc = res && !res.error ? res : null;
+    P.lc = res && !res.error && res.state !== "not-initialized" ? res : null;
     renderStrip();
     renderDetail();
   }
 
-  function stripVisible() { return ["review", "navigate"].includes(MK.ui.mode); }
-
   function renderStrip() {
     const box = $("lifecycle");
     const lc = P.lc;
-    box.hidden = !stripVisible() || !lc;
+    box.hidden = !lc;              // P34: the S1 header — shown with the Sessions screen
     if (!lc) return;
     const row = ((P.runs && P.runs.runs) || []).find((r) => r.id === lc.run);
     $("lc-run").textContent = `run ${String(lc.run).slice(0, 8)}${row && row.title ? " · " + row.title : ""}`;
@@ -524,6 +570,5 @@
       };
     }
     $("lc-run").onclick = () => MK.openPlan(P.lc && P.lc.run);
-    $("lc-more").onclick = () => MK.setPanel("sessions", true);
   };
 })();

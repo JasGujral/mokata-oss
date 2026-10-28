@@ -19,10 +19,10 @@ Resolve the bundled engine (read `~/.mokata/plugin-root` → `ROOT`, or a `mokat
 
 ```bash
 PY="$(command -v python3 || command -v python)"
-ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
-eval "$ENGINE playbook --path ."                       # sequential (default)
-eval "$ENGINE playbook --parallel --path ."            # parallel subagents (degrades clean)
-eval "$ENGINE playbook --parallel --fanout --dense --path ."
+mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
+mokata playbook --path .                       # sequential (default)
+mokata playbook --parallel --path .            # parallel subagents (degrades clean)
+mokata playbook --parallel --fanout --dense --path .
 ```
 
 It announces the active stage (banner) at the start and on completion, and reports each

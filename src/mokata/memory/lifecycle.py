@@ -98,18 +98,15 @@ _SECONDS_PER_DAY = 86400.0
 
 
 # ------------------------------------------------------------------ the ONE ISO lexer
-# THE dialect gap, and why this is a lexer rather than a try/except: `datetime.fromisoformat` only
-# learned the Zulu designator ('…Z') in Python 3.11. mokata's declared floor is 3.10, where every
-# `…Z` stamp — the dialect Postgres, a teammate's client and half the ISO-8601 world emit — raises
-# ValueError. At the ranking inputs below that fault is SILENT: `parse_iso` absorbs it to None, the
-# term degrades to 0.0, and a recency signal that exists simply stops counting. Nothing logs, no
-# test fails, and the ordering is quietly wrong on the interpreter the package claims to support.
+# THE dialect gap, and why this is a lexer rather than a try/except: `datetime.fromisoformat` reads
+# an UPPER-case Zulu designator ('…Z') from Python 3.11 (so on mokata's 3.12 floor, 0.0.26 L12), but
+# NO Python reads the lower-case '…z' that RFC 3339 allows and hand-edited docs and some clients
+# emit. At the ranking inputs below that fault would be SILENT: `parse_iso` absorbs it to None, the
+# term degrades to 0.0, and a recency signal that exists simply stops counting.
 #
-# It is normalized UNCONDITIONALLY — no `sys.version_info` branch anywhere in this path. A
-# version-gated fix ships two lexers and guarantees that whichever one CI does not run is the one
-# that rots; an unconditional rewrite means 3.10 and 3.12 lex the same bytes the same way, so a
-# test that passes on either is evidence about both. On 3.11+ the rewrite is a no-op in meaning:
-# '+00:00' is what that interpreter already parses '…Z' into.
+# It is normalized UNCONDITIONALLY — no `sys.version_info` branch anywhere in this path (one lexer,
+# every interpreter). For '…Z' the rewrite is a no-op in meaning: '+00:00' is what the stdlib
+# parses it into. (Until 0.0.26 the floor was 3.10, where even '…Z' raised; that is history.)
 _ZULU = ("Z", "z")
 _UTC_OFFSET = "+00:00"
 
@@ -153,9 +150,9 @@ def parse_iso(value: Any) -> Optional[datetime]:
     both with the same silent 0.0. That is fine for the first and a correctness bug for the second.
     `_normalize_iso` closes the Zulu case AHEAD of the absorber, so the one dialect gap that used to
     reach it — and the only one mokata's own writers and Postgres actually emit — no longer can.
-    The absorber is back to meaning what it says: this input was malformed. It is NOT a general
-    dialect shim, and the remaining 3.10 gaps (week dates, comma fractional seconds) still land in
-    it silently — tracked as PARSE-ISO-ABSORBS in doc 84, and NOT closed by this fix.
+    The absorber is back to meaning what it says: this input was malformed. On the 3.12 floor the
+    stdlib also reads week dates and comma fractional seconds, which the old 3.10 floor did not
+    (PARSE-ISO-ABSORBS in doc 84 — closed by the floor, 0.0.26 L12).
     """
     if not value:
         return None

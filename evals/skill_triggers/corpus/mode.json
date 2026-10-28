@@ -1,0 +1,35 @@
+{
+ "skill": "mode",
+ "triggers": [
+  "run mode (local | team)",
+  "team-readiness preflight"
+ ],
+ "positive": [
+  "What's my mokata run mode — local or team?",
+  "Switch the run mode to team",
+  "Run the team-readiness preflight before I switch to team mode",
+  "Set mokata back to local mode",
+  "Am I ready for team mode? Show the preflight"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Switch this run to parallel subagents",
+   "expect": "exec"
+  },
+  {
+   "prompt": "Join my team's shared stack",
+   "expect": "team"
+  },
+  {
+   "prompt": "Change mokata's profile to full",
+   "expect": "init"
+  },
+  {
+   "prompt": "Turn on dark mode in VS Code"
+  },
+  {
+   "prompt": "Flush the pending journal writes to the shared database",
+   "expect": "sync"
+  }
+ ]
+}

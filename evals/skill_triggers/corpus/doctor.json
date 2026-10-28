@@ -1,0 +1,34 @@
+{
+ "skill": "doctor",
+ "triggers": [
+  "Check mokata's install"
+ ],
+ "positive": [
+  "Check mokata's install, something seems off",
+  "Run the mokata doctor",
+  "Is my mokata plugin install healthy? Check uv, the pinned package and hooks",
+  "Diagnose the mokata install from inside Claude Code",
+  "Check that mokata's wiring and config are installed correctly"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Repair the mokata MCP server, its tools aren't connecting",
+   "expect": "mcp-repair"
+  },
+  {
+   "prompt": "Update mokata to the newest release in one go",
+   "expect": "update"
+  },
+  {
+   "prompt": "Check our app's health endpoint returns 200"
+  },
+  {
+   "prompt": "Run mokata's guided first-run setup and wire my tools",
+   "expect": "setup"
+  },
+  {
+   "prompt": "Show the installed version of mokata and how to update",
+   "expect": "version"
+  }
+ ]
+}

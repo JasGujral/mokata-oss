@@ -41,8 +41,6 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 from __future__ import annotations
 
 import json
-import threading
-import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -170,13 +168,17 @@ def red_owed_for(diff: SpecDiff, tests: List[TestRef]) -> Tuple[str, ...]:
 # ======================================================================================
 
 def open_amend(store: Any, run_id: str, *, reason: str = "", item: str = "",
-               from_version: int = 0, ledger: Any = None) -> AmendRecord:
+               from_version: int = 0, ledger: Any = None,
+               lens: Optional[Dict[str, Any]] = None) -> AmendRecord:
     """Regress the run: `develop -> SPEC`. Development writes are blocked from this moment.
 
     Two persisted facts, in the order that keeps them safe: the marker FIRST (so a crash between the
-    two leaves the run blocked, not silently open), then the checkpoint rollback."""
+    two leaves the run blocked, not silently open), then the checkpoint rollback. `lens` carries a
+    gate-2 verdict already earned by this same open amendment forward (O14, `_lens_fingerprint`)."""
     record = {"run_id": run_id, "status": STATUS_OPEN, "reason": reason, "item": item,
               "from_version": from_version, "to_version": from_version + 1, "red_owed": []}
+    if lens:
+        record["lens"] = lens
     store.write(amend_key(run_id), record)
     PipelineCheckpoint(store, run_id, ledger=ledger).regress(REGRESSED_PHASES)
     return amend_from_state(record)
@@ -226,6 +228,7 @@ class AmendPlan:
     impact: Optional[Any] = None
     red_owed: Tuple[str, ...] = ()
     request: Optional[DeviationRequest] = None
+    lens_basis: str = ""                # O14b — what gate 2's answer rests on (graph / floor)
 
     @property
     def to_version(self) -> int:
@@ -242,73 +245,36 @@ class AmendPlan:
                             scope_widened=self.diff.widens_scope)
 
 
-# How long gate 2's BLAST-RADIUS LENS may spend before `spec amend` stops waiting for it.
-# (OSS #66, #69, #70, #73 — "amend spec getting stuck" / "spec_amend still failing often".)
-#
-# WHY IT EXISTS. `compute_impact` is degrade-clean on EXCEPTIONS and has never been bounded in
-# TIME — the same disease `hook_cli._HOOK_WORK_BUDGET_SECS` was written for, one command over. It
-# loops `layer.blast_radius(t, depth=2)` once per newly-authorized target, and nothing in that path
-# carries a clock. So a scope-widening amendment on a real repo sat there:
-#
-#     MEASURED 2026-09-13 on a 3,000-file checkout, on the GREP FLOOR (`uses_graph=False`):
-#         1 target  →   7.07 s
-#         3 targets →  14.62 s        (~4.9 s per target after the first)
-#
-# ⭐ THE SLOW PATH IS THE DEGRADED PATH, which is what makes this bite exactly when a user is least
-# able to diagnose it: the lexical floor answers `blast_radius` by walking the corpus per target,
-# and the floor is what you are on when the graph is unreachable — which is the state #73's own
-# transcript shows (`code-graph: DEGRADED — fell back to 'ast'`). Six targets on a larger repo is
-# comfortably past a minute.
-#
-# WHAT THAT COST. On the MCP surface `MCP_SURFACE_TIMEOUT_SECONDS = 60.0` killed the call and
-# returned `timed_out` with no reason a reader could act on (#70: *"MCP times out (60s budget, even
-# with a fresh graph)"*). On the CLI there is NO bound at all, so the command simply never came
-# back (#66: *"never emits a proposal, incl. after graph rebuild"*; #73: `--yes`, one degrade line,
-# then nothing).
-#
-# WHY 20 s. Measured against the numbers above, and chosen for its RELATIONSHIP to the harness's
-# kill rather than as a performance target: it clears a one- or two-target widening on a 3,000-file
-# repo even on the lexical floor, and it is a THIRD of the MCP surface's 60 s — so mokata's own
-# verdict always arrives FIRST and the user gets a named reason and a remedy instead of a bare
-# `timed_out`. A sub-budget equal to the surface's whole budget can never fire in time to help.
-#
-# ⛔ AND IT STILL FAILS CLOSED. The refusal below is the point of gate 2: an unknown blast radius on
-# a scope-WIDENING amendment is refused, never approved as if the lens had run and found nothing.
-# What the budget changes is that the refusal ARRIVES, with a cause — it does not make the gate
-# permissive, and a timeout is given its own verdict because "the lens is broken" and "the lens is
-# working and slower than an interactive command can wait" have opposite remedies (§7g).
-_LENS_BUDGET_SECS = 20.0
+# Gate 2's BLAST-RADIUS LENS has NO CLOCK (0.0.26 O14b, Jas's U10 overrule: no arbitrary limits;
+# long work is visible). It had a 20 s budget (0.0.20, OSS #66/#69/#70/#73) whose one job was to
+# answer before the MCP surface's 60 s kill — but that kill is gone (O14: a long MCP call answers
+# `running` and the re-call joins the same work), and the budget then only REFUSED real work: every
+# widening amendment on a repo without a working graph was refused for being slow (measured: a
+# django copy, 2 targets → `blast-radius-timeout` at 20.4 s, run left regressed). The lens now runs
+# to completion and the answer says which BASIS it was computed on (`lens_basis`), so a lexical
+# answer is never mistaken for a structural one. A lens that RAISES still fails closed.
 
 
-def _bounded_lens(work, timeout: float):
-    """Run `work` on a daemon thread; return `(value, timed_out)`.
+def _lens_basis(layer: Any, impact: Any) -> str:
+    """Which basis gate 2's answer rests on, in the words a reader acts on."""
+    backend = getattr(layer, "backend_name", "") or "none"
+    if getattr(layer, "uses_graph", False) and not getattr(impact, "degraded", False):
+        return f"structural — the code graph ({backend}) answered"
+    why = (f"the code graph ({backend}) did not answer" if getattr(layer, "uses_graph", False)
+           else f"no code graph is in use ({backend})")
+    return (f"the lexical floor — {why}, so the blast radius is a text-reference estimate; "
+            f"`mokata doctor` names the fix")
 
-    ⚠ TWO RETURN VALUES, NOT ONE — and that is the difference from `hook_cli._bounded`, which
-    collapses "it raised" and "it ran long" into `None` because its caller treats both as silence.
-    Here they must NOT collapse: a raise is gate 2's FAULT arm and a timeout is its own arm, with a
-    different remedy. Sharing one representation is exactly the §7g this gate already avoids
-    elsewhere.
 
-    `is_alive()` decides, not the holder: a worker can finish in the instant between the join
-    expiring and the check, and a LATE answer past the budget is refused for being late rather than
-    accepted for having arrived. The abandoned thread is a daemon and dies with the process — safe
-    because `compute_impact` is READ-ONLY (it queries the graph and scores; it writes nothing)."""
-    holder = {}
-
-    def _run():
-        try:
-            holder["value"] = work()
-        except BaseException as exc:                  # noqa: BLE001 — re-raised in the caller
-            holder["error"] = exc
-
-    thread = threading.Thread(target=_run, daemon=True)
-    thread.start()
-    thread.join(timeout)
-    if thread.is_alive():
-        return None, True
-    if "error" in holder:
-        raise holder["error"]
-    return holder.get("value"), False
+def _lens_fingerprint(spec: Spec, diff: SpecDiff, from_version: int) -> str:
+    """What gate 2's verdict is a verdict ABOUT: the widened targets, the approach they are judged
+    against, and the spec version they widen. A change to any of them is a different question."""
+    import hashlib
+    blob = json.dumps({"targets": [sorted(getattr(diff, f, ()) or ()) for f in
+                                   ("authorized_added", "undeferred", "added_criteria")],
+                       "approach": spec.approach or spec.title, "from": from_version},
+                      sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def begin_amend(surface: Any, spec: Spec, tests: List[TestRef], *, run_id: str,
@@ -337,8 +303,15 @@ def begin_amend(surface: Any, spec: Spec, tests: List[TestRef], *, run_id: str,
     # --- THE REGRESSION. From here until the amendment lands (or is aborted), the hook blocks
     # development writes. Only log the deviation on the FIRST call, so a propose->approve->re-call
     # round-trip leaves one surfaced deviation, not two.
-    already_open = amend_from_state(store.read(amend_key(run_id))).is_open
-    open_amend(store, run_id, reason=reason, item=item, from_version=from_version, ledger=ledger)
+    prior = store.read(amend_key(run_id))
+    already_open = amend_from_state(prior).is_open
+    # O14 — gate 2's verdict for exactly this amendment, if this open amendment already earned it.
+    fingerprint = _lens_fingerprint(spec, diff, from_version) if diff.widens_scope else ""
+    earned = (prior.get("lens") if already_open and isinstance(prior, dict) else None)
+    if not (isinstance(earned, dict) and earned.get("fp") == fingerprint):
+        earned = None
+    open_amend(store, run_id, reason=reason, item=item, from_version=from_version, ledger=ledger,
+               lens=earned)
 
     req = DeviationRequest(
         what=f"amend the spec v{from_version} -> v{from_version + 1}:\n{diff.render()}",
@@ -363,36 +336,20 @@ def begin_amend(surface: Any, spec: Spec, tests: List[TestRef], *, run_id: str,
 
     # --- gate 2: the BLAST RADIUS (Lens-1), re-run ONLY when the amendment WIDENS what may be
     # touched. Narrowing cannot widen impact, so re-running the lens would cost tokens for no answer.
-    if diff.widens_scope:
+    if diff.widens_scope and earned is not None:
+        # O14 — the propose call already ran this lens on THIS amendment (same spec, same diff,
+        # same base version) and it passed; the redeem re-ran it from scratch, so a widen that
+        # answered in 18s at propose was REFUSED at redeem when the second run crossed the 20s
+        # budget, after the human had approved it. The earned verdict is reused instead.
+        from ..brainstorm_impact import ApproachImpact
+        plan.impact = ApproachImpact.from_dict(earned.get("impact") or {})
+    elif diff.widens_scope:
         try:
             from ..brainstorm_impact import compute_impact
             targets = list(diff.authorized_added) + list(diff.added_criteria)
-            started = time.monotonic()
-            plan.impact, lens_timed_out = _bounded_lens(
-                lambda: compute_impact(spec.approach or spec.title, targets, layer=layer),
-                _LENS_BUDGET_SECS)
-            if lens_timed_out:
-                # ⛔ ITS OWN ARM, not the fault arm below. The lens is NOT broken here — it is
-                # working and slower than an interactive command can wait, and those have opposite
-                # remedies, so they get opposite messages (§7g). Still FAIL-CLOSED: the blast radius
-                # of the newly-authorized surface is unknown either way.
-                on_floor = getattr(layer, "uses_graph", True) is False
-                plan.ok = False
-                plan.gate = "blast-radius-timeout"
-                plan.reason_text = (
-                    "gate 2 (blast radius) did not answer within %.0fs on a scope-WIDENING "
-                    "amendment over %d target(s) — %.1fs elapsed. The impact of the newly-"
-                    "authorized surface is UNKNOWN, so the amendment is REFUSED rather than "
-                    "approved as if the lens had run and found nothing.%s Either widen less (amend "
-                    "fewer targets at a time), or override deliberately: "
-                    "mokata gate override spec-scope --reason \"<why>\"."
-                    % (_LENS_BUDGET_SECS, len(targets), time.monotonic() - started,
-                       (" ⚠ THE LIKELY CAUSE IS THE LEXICAL FLOOR: this repo has no structural "
-                        "code graph, so each target is answered by walking the corpus (measured at "
-                        "~5s per target on a 3,000-file repo). `mokata doctor` will name the "
-                        "provider to install, and the lens becomes near-instant.")
-                       if on_floor else ""))
-                return plan
+            # O14b — no clock: as long as it needs (see `_lens_basis`). On MCP a long lens answers
+            # `running` and the re-call joins it; on the CLI it is the command doing its work.
+            plan.impact = compute_impact(spec.approach or spec.title, targets, layer=layer)
         except Exception as exc:
             # D5 — FAIL CLOSED. The old handler set `impact=None`, left `ok=True`, and let the
             # amendment through: a scope-WIDENING change approved exactly as if the blast-radius
@@ -422,7 +379,14 @@ def begin_amend(surface: Any, spec: Spec, tests: List[TestRef], *, run_id: str,
         if ledger is not None and plan.impact is not None:
             ledger.record("impact", phase="spec-amend", approach=spec.approach or spec.title,
                           widened=list(diff.authorized_added) + list(diff.undeferred))
+        if plan.impact is not None and hasattr(plan.impact, "to_dict"):
+            record = store.read(amend_key(run_id))
+            if isinstance(record, dict) and record.get("status") == STATUS_OPEN:
+                record["lens"] = {"fp": fingerprint, "impact": plan.impact.to_dict()}
+                store.write(amend_key(run_id), record)
 
+    if diff.widens_scope and plan.impact is not None:
+        plan.lens_basis = _lens_basis(layer, plan.impact)
     plan.red_owed = red_owed_for(diff, tests)
     return plan
 
@@ -443,7 +407,8 @@ def finish_amend(plan: AmendPlan, *, store: Any, gate: Any = None, ledger: Any =
 
     def commit() -> None:
         spec_commit(store, plan.spec, version=plan.to_version,
-                    archive_key=archive_key(plan.run_id, plan.from_version))
+                    archive_key=archive_key(plan.run_id, plan.from_version),
+                    run_id=plan.run_id)
 
     out = wgate.submit(
         WriteRequest(EMIT_KIND, EMIT_TARGET, content=preview_content(store, plan.spec),
@@ -466,6 +431,9 @@ def finish_amend(plan: AmendPlan, *, store: Any, gate: Any = None, ledger: Any =
                       superseded=archive_key(plan.run_id, plan.from_version),
                       red_owed=list(plan.red_owed), scope_widened=plan.scope_widened,
                       **plan.diff.to_dict())
+        # R2 — the amended plan is RE-APPROVED: its new hash goes on the ledger too.
+        from .emit import note_plan_approved
+        note_plan_approved(ledger, plan.run_id, store)
 
     close_amend(store, plan.run_id, red_owed=plan.red_owed, reason=plan.reason, item=plan.item,
                 from_version=plan.from_version, to_version=plan.to_version, ledger=ledger)

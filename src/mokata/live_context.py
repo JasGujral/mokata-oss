@@ -22,8 +22,7 @@ Never raises; every probe that fails is omitted, and the block is omitted when n
 from __future__ import annotations
 
 import os
-import subprocess
-from typing import List, Optional
+from typing import Any, List, Optional
 
 #: The row's cap.
 MAX_LINES = 6
@@ -37,6 +36,7 @@ _INSTRUCTION_FILES = ("CLAUDE.md", "AGENTS.md", os.path.join(".claude", "CLAUDE.
 
 def git_line(root: str, timeout: float = GIT_TIMEOUT_SECS) -> Optional[str]:
     """`git: <branch> (ahead N, behind M) · K modified · U untracked`, or None."""
+    import subprocess          # O12b: only the background refresher / `mokata bootstrap` runs git
     try:
         p = subprocess.run(["git", "-C", root, "status", "--porcelain=v1", "--branch"],
                            capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -79,15 +79,20 @@ def instruction_line(root: str) -> Optional[str]:
     return "- instructions: " + ", ".join(found) + " (read before non-trivial work)"
 
 
+_ASK_GIT = object()
+
+
 def live_context_lines(surface, structure_line: Optional[str] = None,
-                       max_lines: int = MAX_LINES) -> List[str]:
+                       max_lines: int = MAX_LINES, git: Any = _ASK_GIT) -> List[str]:
     """The block's lines (header first), or [] when nothing is known. ≤ `max_lines` incl. header
-    (`settings.context.live_lines`; 0 turns the block off)."""
+    (`settings.context.live_lines`; 0 turns the block off). `git` is the git line already in hand
+    (0.0.26 O12b: the SessionStart hook passes the background-refreshed one, so it runs no `git`)."""
     if max_lines <= 1:
         return []
     body: List[str] = []
     try:
-        for line in (git_line(surface.root), test_line(surface.manifest),
+        for line in (git_line(surface.root) if git is _ASK_GIT else git,
+                     test_line(surface.manifest),
                      instruction_line(surface.root)):
             if line:
                 body.append(line)

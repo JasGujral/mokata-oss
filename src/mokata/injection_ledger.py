@@ -34,6 +34,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
+from .repo_identity import temp_local_dir as _shared_temp_local  # P31: one shared state
 import os
 from typing import Iterable, List, Optional, Set
 
@@ -57,7 +58,7 @@ def _sid(session_id: Optional[str]) -> str:
 
 def ledger_dir(root: str) -> str:
     from . import MOKATA_DIR, TEMP_LOCAL_DIRNAME
-    return os.path.join(root, MOKATA_DIR, TEMP_LOCAL_DIRNAME, LEDGER_DIRNAME)
+    return os.path.join(_shared_temp_local(root), LEDGER_DIRNAME)
 
 
 def _ledger_path(root: str, session_id: Optional[str]) -> str:

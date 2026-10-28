@@ -92,7 +92,7 @@ def unknown_command_message(token: str, *, known: Any, initialized: bool) -> str
     if close:
         lines.append(f"Did you mean '{close}'?  (try `mokata {close} --help`)")
     if not initialized:
-        lines.append("Next: run `mokata init` (or `/mokata:setup` inside Claude Code) to set up "
+        lines.append("Next: run `mokata init` (or `/setup` inside Claude Code) to set up "
                      "this repo — it detects your tools and wires them with your approval.")
     else:
         nxt = _fresh_next_step()

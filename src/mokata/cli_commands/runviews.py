@@ -56,8 +56,16 @@ def cmd_progress_mark(args: argparse.Namespace) -> int:
         if res.ambiguous:
             print(f"mokata progress: not recording '{args.stage}' — " + unresolved_reason(res))
             return 0
+        # R2 (0.0.26) — a stage after approval ATTESTS the plan hash: entering it on a plan that
+        # is not the approved one is refused (nothing recorded, exit 3); otherwise the stage event
+        # carries the hash it attested.
+        from ..plan_tasks import stage_attestation
+        attested, refusal = stage_attestation(surface.root, run_id, args.stage)
+        if refusal:
+            print(f"mokata progress: {refusal}")
+            return 3
         ProgressLog.from_surface(surface).append_event(
-            STAGE_ENTER, args.stage, run_id=run_id)
+            STAGE_ENTER, args.stage, run_id=run_id, data=attested)
         # B-LIFE — entering `ship` is the run's terminal END-OF-RUN signal: stamp the checkpoint's
         # `completed_at` (once, additive, run-state class) so a finished run is reported as
         # finished-THEN, not current-NOW. Best-effort: a stamp failure never blocks recording the
@@ -188,6 +196,11 @@ def review_record_failed_line(exc: BaseException) -> str:
 # and argparse owns 2 for usage errors besides.
 RECORD_REVIEW_FAILED_EXIT = 1
 
+# R4 (0.0.26) — the review loop hit its cap (`loop_guard.REVIEW_ROUND_CAP` failed rounds in a row):
+# 3, distinct from 1 (the recording itself failed) and 2 (the review gate blocks), because the
+# remedy is neither a retry nor a re-review — it is a human.
+REVIEW_LOOP_CAPPED_EXIT = 3
+
 
 def cmd_progress_record_review(args: argparse.Namespace) -> int:
     # Stage 6r — persist the closing review's verdict as a `review_verdict` event in the SAME
@@ -198,7 +211,7 @@ def cmd_progress_record_review(args: argparse.Namespace) -> int:
     # REVIEW-FIX.R1 — `--run` names the run the verdict belongs to (the record-key ship reads back
     # with); omitted, it resolves session-awarely. A verdict that lands run-less satisfies NO gate,
     # so say that here rather than let ship discover it later.
-    from ..progress_events import _CURRENT_RUN, record_review_verdict
+    from ..progress_events import _CURRENT_RUN, ReviewLoopCapped, record_review_verdict
     passed = args.passed and not args.failed        # --failed wins if somehow both slip through
     try:
         surface = _load_surface(args.path)
@@ -214,6 +227,10 @@ def cmd_progress_record_review(args: argparse.Namespace) -> int:
             return 0
         print(review_runless_line(verdict, kind))
         return 0
+    except ReviewLoopCapped as exc:
+        # R4 — the review loop is over its cap: round six escalates to the human, nothing recorded.
+        print(f"mokata review: ESCALATE — {exc}")
+        return REVIEW_LOOP_CAPPED_EXIT
     except Exception as exc:
         # REVIEW-FIX.R4 — this used to print "…; continuing." and return 0: a review whose verdict
         # could NOT be written exited GREEN, so nothing checking the exit code could tell a recorded
@@ -226,6 +243,94 @@ def cmd_progress_record_review(args: argparse.Namespace) -> int:
         # message and TRUE in the exit code, instead of silent in both.
         print(review_record_failed_line(exc))
         return RECORD_REVIEW_FAILED_EXIT
+
+
+def cmd_progress_fix_attempt(args: argparse.Namespace) -> int:
+    """R4 (0.0.26) — record one fix attempt at a failure; the third FAILED one trips the breaker.
+
+    Run-state, like the TDD record (UNGATED, under temp_local). Exit 0 recorded, 3 the breaker IS
+    tripped (the caller must stop fixing and escalate; a new approach clears it), 1 nothing
+    recorded."""
+    from ..loop_guard import ESCALATE, FIX_BREAKER_LIMIT, record_fix_attempt
+    from ..run_resolver import resolve_run_for_process, unresolved_reason
+    try:
+        surface = _load_surface(args.path)
+        res = resolve_run_for_process(surface.root, run_id=getattr(args, "run", None))
+        if not res.run_id:
+            print("mokata fix-attempt: not recorded — " + unresolved_reason(res))
+            return 1
+        row = record_fix_attempt(surface.root, res.run_id, args.failure, passed=args.passed)
+    except ValueError as exc:
+        print(f"mokata fix-attempt: not recorded — {exc}")
+        return 1
+    if args.passed and not row["tripped"]:
+        print(f"mokata fix-attempt: \"{row['signature']}\" fixed — its count is clear "
+              f"(run {res.run_id[:8]}).")
+        return 0
+    if row["tripped"]:
+        print(f"mokata fix-attempt: BREAKER TRIPPED — {row['attempts']} failed fixes at "
+              f"\"{row['signature']}\" (run {res.run_id[:8]}). {ESCALATE}. Implementation writes "
+              f"stay blocked until a NEW approach is approved (/mokata:brainstorm) or a human "
+              f"overrides `fix-breaker`.")
+        return 3
+    print(f"mokata fix-attempt: {row['attempts']} of {FIX_BREAKER_LIMIT} failed fixes at "
+          f"\"{row['signature']}\" (run {res.run_id[:8]}).")
+    return 0
+
+
+def cmd_progress_test_run(args: argparse.Namespace) -> int:
+    """R1 (0.0.26) — record one test run: the run's last suite run, the named tests RED (failed) or
+    GREEN (passed), and AC→test pairs. The Stop evidence gate reads exactly this record. Run-state
+    (UNGATED, temp_local). Exit 0 recorded, 1 nothing recorded."""
+    from ..run_resolver import resolve_run_for_process, unresolved_reason
+    from ..test_runs import parse_ac_pairs, record_test_run
+    try:
+        surface = _load_surface(args.path)
+        res = resolve_run_for_process(surface.root, run_id=getattr(args, "run", None))
+        if not res.run_id:
+            print("mokata test-run: not recorded — " + unresolved_reason(res))
+            return 1
+        suite = record_test_run(surface.root, res.run_id, passed=args.passed,
+                                command=args.command or "", tests=args.test or (),
+                                ac_map=parse_ac_pairs(args.ac or ()))
+    except ValueError as exc:
+        print(f"mokata test-run: not recorded — {exc}")
+        return 1
+    verdict = "PASSED" if suite["passed"] else "FAILED"
+    named = f" · {len(suite['tests'])} test(s) recorded {'GREEN' if suite['passed'] else 'RED'}" \
+        if suite["tests"] else ""
+    print(f"mokata test-run: {verdict} recorded (run {res.run_id[:8]}){named}.")
+    return 0
+
+
+def cmd_progress_models(args: argparse.Namespace) -> int:
+    """R6 (0.0.26) — each role's model tier here (defaults, this repo's overrides, floors), and for
+    the run: the tier each role's subagent was spawned with and what it actually used. Read-only."""
+    from ..model_tiers import DEFAULTS, FLOORS, ROLES, configured, read_record
+    from ..run_resolver import resolve_run_for_process
+    surface = _load_surface(args.path)
+    tiers = configured(surface.root)
+    print("mokata model tiers (Claude Code aliases; your own login, no API key):")
+    for role in ROLES:
+        note = [] if tiers[role] == DEFAULTS[role] else [f"default {DEFAULTS[role]}"]
+        if role in FLOORS:
+            note.append(f"floor {FLOORS[role]}")
+        print(f"  {role:16} {tiers[role]:7} {'(' + ', '.join(note) + ')' if note else ''}".rstrip())
+    res = resolve_run_for_process(surface.root, run_id=getattr(args, "run", None))
+    if not res.run_id:
+        return 0
+    rec = read_record(surface.root, res.run_id)
+    print(f"run {res.run_id[:8]}: {len(rec['spawns'])} role spawn(s), "
+          f"{len(rec['usage'])} subagent usage record(s)")
+    for row in rec["spawns"][-20:]:
+        print(f"  spawned {row.get('role')} on {row.get('model')}")
+    tot_in = sum(int(r.get("input_tokens", 0) or 0) for r in rec["usage"])
+    tot_out = sum(int(r.get("output_tokens", 0) or 0) for r in rec["usage"])
+    if rec["usage"]:
+        models = sorted({m for r in rec["usage"] for m in (r.get("models") or {})})
+        print(f"  measured: {tot_in} input / {tot_out} output tokens across "
+              f"{len(rec['usage'])} subagent(s) · models: {', '.join(models) or 'not stated'}")
+    return 0
 
 
 def cmd_progress_review_status(args: argparse.Namespace) -> int:
@@ -600,6 +705,51 @@ def register(sub, common):
                        help="the run this verdict belongs to (default: the run resolved for this "
                             "session; ship reads back the SAME run)")
     p_rec.set_defaults(func=cmd_progress_record_review)
+
+    # R4 (0.0.26) — `mokata progress fix-attempt --failure SIG --failed|--passed`: the 3-fix breaker's
+    # record (run-state, UNGATED). The develop/debug skills record each fix attempt here.
+    p_fix = prog_sub.add_parser(
+        "fix-attempt", parents=[common],
+        help="record one fix attempt at a failure; three FAILED attempts at the same failure trip "
+             "the breaker (implementation writes blocked until it is fixed or a human overrides)",
+    )
+    p_fix.add_argument("--failure", required=True,
+                       help="the failure the fix aimed at: the failing test id or the error line")
+    fix_outcome = p_fix.add_mutually_exclusive_group(required=True)
+    fix_outcome.add_argument("--failed", action="store_true", help="the failure is still there")
+    fix_outcome.add_argument("--passed", action="store_true", help="the fix worked")
+    p_fix.add_argument("--run", default=None,
+                       help="the run (default: the run resolved for this session)")
+    p_fix.set_defaults(func=cmd_progress_fix_attempt)
+
+    # R1 (0.0.26) — `mokata progress test-run`: the recorded test evidence the Stop gate reads.
+    p_tr = prog_sub.add_parser(
+        "test-run", parents=[common],
+        help="record a test run (passed/failed, the command, the tests and the ACs they prove) — "
+             "the evidence the Stop gate reads before a 'done'",
+    )
+    tr_outcome = p_tr.add_mutually_exclusive_group(required=True)
+    tr_outcome.add_argument("--passed", action="store_true", help="the run passed")
+    tr_outcome.add_argument("--failed", action="store_true", help="the run failed")
+    p_tr.add_argument("--command", default="", help="the command that ran the tests")
+    p_tr.add_argument("--test", action="append", default=None,
+                      help="a test id this run covered (repeatable): RED if --failed, GREEN if "
+                           "--passed")
+    p_tr.add_argument("--ac", action="append", default=None,
+                      help="AC=TEST — map an acceptance criterion to a test id (repeatable)")
+    p_tr.add_argument("--run", default=None,
+                      help="the run (default: the run resolved for this session)")
+    p_tr.set_defaults(func=cmd_progress_test_run)
+
+    # R6 (0.0.26) — `mokata progress models`: the tier per role, and the run's recorded tiers/usage.
+    p_models = prog_sub.add_parser(
+        "models", parents=[common],
+        help="show the model tier each mokata role uses here, and what the run's subagents were "
+             "spawned with and actually used (read-only)",
+    )
+    p_models.add_argument("--run", default=None,
+                          help="the run (default: the run resolved for this session)")
+    p_models.set_defaults(func=cmd_progress_models)
 
     p_rs = prog_sub.add_parser(
         "review-status", parents=[common],

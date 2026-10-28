@@ -67,7 +67,7 @@ from .cli_commands.setup import (
 )
 from .cli_commands.core import (
     cmd_bootstrap, cmd_validate, cmd_release_check, cmd_route, cmd_detect, cmd_status,
-    cmd_version, cmd_upgrade,
+    cmd_version, cmd_update,
 )
 from .cli_commands.knowledge import (
     cmd_brainstorm, cmd_onboard, cmd_query, _split_csv, cmd_spec_check, cmd_ci_check,
@@ -256,6 +256,21 @@ def _path_arg(raw: List[str]) -> str:
     return "."
 
 
+def _report_update_result() -> None:
+    """0.0.26 L2 — the detached updater (Windows) finished after the `mokata update` that started
+    it exited: the first interactive `mokata` command afterwards says how it went, once. Only to a
+    terminal — a statusline or hook invocation must not swallow the one report."""
+    try:
+        if not sys.stderr.isatty():
+            return
+    except (AttributeError, ValueError, OSError):
+        return
+    from .update import render_result, take_result
+    res = take_result()
+    if res:
+        print(render_result(res), file=sys.stderr)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     _survive_a_narrow_stdio()
     parser = build_parser()
@@ -278,6 +293,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(onboarding.unknown_command_message(
             token, known=known, initialized=Surface.is_initialized(root)))
         return 2
+    if token != "update":
+        _report_update_result()
     args = parser.parse_args(raw)
     # argparse stores --path before the subcommand; subcommands read args.path.
     if not hasattr(args, "path"):
@@ -290,7 +307,7 @@ __all__ = [
     "_SCOPE_CURRENT", "_cli_ask", "_profile_for", "_ledger_for", "cmd_init", "cmd_tour",
     "cmd_reconfigure", "cmd_setup", "cmd_unsetup", "cmd_bootstrap", "cmd_validate",
     "cmd_release_check", "cmd_route", "cmd_detect", "cmd_status", "cmd_version",
-    "cmd_upgrade", "cmd_brainstorm", "cmd_onboard", "cmd_query", "_split_csv",
+    "cmd_update", "cmd_brainstorm", "cmd_onboard", "cmd_query", "_split_csv",
     "cmd_spec_check", "cmd_ci_check", "_git_changed_files", "cmd_memory", "_memory_edit",
     "cmd_vault", "cmd_session", "_search_skills", "cmd_skills", "cmd_skill",
     "_skill_author", "cmd_run", "cmd_enter", "cmd_rules", "cmd_budget", "cmd_bench",

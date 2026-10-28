@@ -430,8 +430,9 @@ Postgres `ts_rank`, with an honest degrade to Jaccard when FTS5 is absent), an o
 
 The semantic tier is **real and shipping, not a stub**: `pip install "mokata[embeddings]"` wires a
 local static-embedding model (model2vec, numpy-only — no torch, no network at query time), which
-mokata auto-detects. It is **consented and opt-in**, never default-on: `mokata init --mode memory`
-and `--mode full` *offer* it once, interactively, and `--mode seatbelt` structurally never asks.
+mokata auto-detects. It is **opt-in**, never default-on: you opt in by installing the extra
+(`mokata[embeddings]`, or `mokata[full]`), and `--mode memory|full` then switches it on and warms
+the model — setup never installs anything itself. `--mode seatbelt` structurally never touches it.
 With no embedder configured the semantic tier is simply **off** and the lexical floor still
 answers. The embedder also stays a **pluggable seam** — any `text -> list[float]` callable works,
 and every vector is stamped with its embedder's id so two embedders' vectors can never be compared

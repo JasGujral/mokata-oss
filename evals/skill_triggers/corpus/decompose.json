@@ -1,0 +1,34 @@
+{
+ "skill": "decompose",
+ "triggers": [
+  "independent subtasks + a dependency plan"
+ ],
+ "positive": [
+  "Split the approved spec into independent subtasks with a dependency plan",
+  "Decompose this spec into subtasks we can run in parallel",
+  "Break the approved spec into pieces and show which depend on which",
+  "Give me a dependency plan of subtasks for the approved spec, then I'll confirm the run",
+  "Decompose the work into independent subtasks"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Explain how compost decomposes in a garden"
+  },
+  {
+   "prompt": "Write acceptance criteria for the new export feature",
+   "expect": "spec"
+  },
+  {
+   "prompt": "Plan a manual chain of skills to run in order",
+   "expect": "chain"
+  },
+  {
+   "prompt": "Switch the execution mode to parallel subagents",
+   "expect": "exec"
+  },
+  {
+   "prompt": "Show me the run's progress tracker",
+   "expect": "progress"
+  }
+ ]
+}

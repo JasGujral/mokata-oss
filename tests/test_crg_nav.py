@@ -281,22 +281,24 @@ class TestEveryNavIntentHasAnOp(unittest.TestCase):
         c = crg_client.CodeReviewGraphClient(call_tool=call_tool)
         self.assertEqual(len(c.query("refs", "target", root=".")), 1)
 
-    def test_crg_declares_it_cannot_back_defs(self):
-        """The ONE navigation intent code-review-graph has no op for. It is declared, not
-        guessed at — mapping "where is X defined" onto semantic search would be a fuzzy answer
+    def test_crg_declares_it_cannot_back_defs_without_its_node_table(self):
+        """The MCP interface has no definition-site op; `defs` is read from the graph's node table
+        (0.0.26 P35). A client with no node table (an injected transport) declares it cannot
+        answer — mapping "where is X defined" onto semantic search would be a fuzzy answer
         wearing a structural label."""
         c = crg_client.CodeReviewGraphClient(call_tool=lambda _t, _p: {})
         self.assertFalse(c.supports_kind("defs"))
+        with_nodes = crg_client.CodeReviewGraphClient(call_tool=lambda _t, _p: {},
+                                                      nodes=lambda _root: None)
+        self.assertTrue(with_nodes.supports_kind("defs"))
         for kind in ("callers", "callees", "imports", "implementers", "refs"):
             self.assertTrue(c.supports_kind(kind), kind)
 
-    def test_crg_declares_it_cannot_back_blast_radius_yet(self):
-        """0.0.25 — `traverse_graph_tool` answered every blast radius EMPTY (rows under a key the
-        parser does not read) and walks edges both ways. An empty impact reads as "nothing is
-        affected", so the kind is declared unmapped and the AST floor answers it."""
-        c = crg_client.CodeReviewGraphClient(
-            call_tool=lambda _t, _p: (_ for _ in ()).throw(AssertionError("asked CRG")))
-        self.assertFalse(c.supports_kind("blast_radius"))
+    def test_crg_backs_blast_radius(self):
+        """0.0.26 O2 (ruling U9) — blast radius is mapped again, correctly (a directed `callers_of`
+        walk), so the client declares it."""
+        c = crg_client.CodeReviewGraphClient(call_tool=lambda _t, _p: {})
+        self.assertTrue(c.supports_kind("blast_radius"))
 
 
 # ======================================================================================

@@ -1,0 +1,34 @@
+{
+ "skill": "reconfigure",
+ "triggers": [
+  "add/remove an integration, switch a backend, change profile"
+ ],
+ "positive": [
+  "Add the code-review-graph integration to my existing mokata setup",
+  "Remove the Obsidian integration I wired earlier",
+  "Switch mokata's memory backend to Postgres",
+  "Change what mokata has wired — drop the vault integration",
+  "Reconfigure mokata to add a new tool integration"
+ ],
+ "near_miss": [
+  {
+   "prompt": "First-time setup on a brand new machine",
+   "expect": "setup"
+  },
+  {
+   "prompt": "mokata's MCP server won't start",
+   "expect": "mcp-repair"
+  },
+  {
+   "prompt": "Reconfigure my router's Wi-Fi password"
+  },
+  {
+   "prompt": "Move mokata from local to team run mode",
+   "expect": "mode"
+  },
+  {
+   "prompt": "Upgrade mokata to the latest",
+   "expect": "update"
+  }
+ ]
+}

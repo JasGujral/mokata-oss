@@ -1,0 +1,213 @@
+{
+ "schemas": {
+  "ApprovalCard": {
+   "type": "object",
+   "required": [
+    "proposal_id",
+    "tool",
+    "target",
+    "summary",
+    "run",
+    "status",
+    "expires_in",
+    "render",
+    "command",
+    "reject_command",
+    "decidable"
+   ],
+   "properties": {
+    "proposal_id": {
+     "type": "string"
+    },
+    "tool": {
+     "type": "string"
+    },
+    "target": {
+     "type": "string"
+    },
+    "status": {
+     "type": "string"
+    },
+    "expires_in": {
+     "type": "integer"
+    },
+    "render": {
+     "type": "string"
+    },
+    "command": {
+     "type": "string"
+    },
+    "reject_command": {
+     "type": "string"
+    },
+    "decidable": {
+     "type": "boolean"
+    }
+   }
+  }
+ },
+ "routes": [
+  {
+   "path": "/api/approvals",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "id": "optional: one proposal id, answered in any state with its ledger rows"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "sample",
+       "pending",
+       "approve_here",
+       "one"
+      ],
+      "properties": {
+       "sample": {
+        "type": "boolean"
+       },
+       "pending": {
+        "type": "array",
+        "items": {
+         "$ref": "#/schemas/ApprovalCard"
+        }
+       },
+       "approve_here": {
+        "type": "object",
+        "required": [
+         "available",
+         "reason"
+        ],
+        "properties": {
+         "available": {
+          "type": "boolean"
+         },
+         "reason": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "status": 200
+    },
+    {
+     "query": {
+      "id": "p-000000000000"
+     },
+     "status": 200
+    },
+    {
+     "status": 200,
+     "demo": true
+    }
+   ]
+  },
+  {
+   "path": "/api/approvals/code",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "id": "proposal id",
+     "decision": "approve | reject"
+    }
+   },
+   "responses": {
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    },
+    "409": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {},
+     "status": 400
+    },
+    {
+     "body": {
+      "id": "p-000000000000",
+      "decision": "approve"
+     },
+     "status": 409
+    },
+    {
+     "body": {
+      "id": "p-000000000000",
+      "decision": "approve"
+     },
+     "status": 409,
+     "demo": true
+    }
+   ]
+  },
+  {
+   "path": "/api/approvals/decide",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "id": "proposal id",
+     "decision": "approve | reject",
+     "code": "the one-time code printed in the server's terminal"
+    }
+   },
+   "responses": {
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    },
+    "409": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {
+      "id": "p-000000000000"
+     },
+     "status": 400
+    },
+    {
+     "body": {
+      "id": "p-000000000000",
+      "decision": "reject",
+      "code": "ABCD-EFGH"
+     },
+     "status": 409
+    },
+    {
+     "body": {
+      "id": "p-000000000000",
+      "decision": "approve",
+      "code": "x"
+     },
+     "status": 409,
+     "demo": true
+    }
+   ]
+  }
+ ]
+}

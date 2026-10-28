@@ -16,7 +16,7 @@ WHAT THIS FILE GRADES, and the order is the argument:
   4. the 65-kind register is TOTAL over a sweep of the tree, so a new ledger kind reds until
      somebody classifies it — the SI.6 / D5 pattern, third use;
   5. the ledger projects every mapped kind and NOTHING ELSE, and cannot fail the append;
-  6. MCP dispatch carries a REAL duration, on every outcome including `timed_out`;
+  6. MCP dispatch carries a REAL duration, on every outcome including `running` (O14);
   7. the seventh type comes from the gate, because the ledger cannot hold it;
   8. clean resume CLEARS before it loads — the doc 42 rule `hydrate_bundle` never honoured;
   9. the progress log is absorbed as a superset, which it promised in 0.0.16;
@@ -627,7 +627,7 @@ class TheMcpDispatchCarriesARealDuration(unittest.TestCase):
         self.assertGreaterEqual(rows[0].duration_ms, 20)
 
     def test_ok_is_read_from_the_STATUS_and_not_from_did_it_raise(self):
-        """A `refused`, an `error` and a `timed_out` are all non-exceptional RETURNS here.
+        """A `refused`, an `error` and a `running` are all non-exceptional RETURNS here.
         Calling them successes would make the event say the opposite of what the caller saw."""
         root = a_repo()
 
@@ -640,7 +640,7 @@ class TheMcpDispatchCarriesARealDuration(unittest.TestCase):
 
     def test_EVERY_outcome_is_evented_including_the_one_that_matters_most(self):
         """⛔ The wrapper had FOUR returns and the instrumentation went on one exit, so every
-        outcome reaches the store. An instrument that goes quiet on `timed_out` is quiet exactly
+        outcome reaches the store. An instrument that goes quiet on `running` is quiet exactly
         where the trouble is (§7e)."""
         from unittest import mock
         root = a_repo()
@@ -980,6 +980,16 @@ _PRINT_REGISTER = {
     "hook_cli.py": "the hook PROTOCOL — a JSON payload on stdout that Claude Code reads. Not a "
                    "diagnostic at all; routing it through a logger would break the hook",
     "agent_skills.py": "inside `if __name__ == \"__main__\"` — a developer script's own output",
+    "knowledge/crg_build.py": "the background builder's `main()` — a process entry point "
+                              "(`python -m mokata.knowledge.crg_build`) whose stdout IS the "
+                              "build log file `_spawn_worker` opens; progress lines + one verdict "
+                              "line (0.0.26 O13)",
+    "knowledge/graph_adopt.py": "`disclose_first_use`'s default emitter: the ONE once-per-repo "
+                                "first-use notice for a PATH-detected graph, on stderr so it "
+                                "never precedes `--json` output (0.0.26 O11)",
+    "update.py": "`mokata update`'s foreground installer spawn: the could-not-start line on "
+                 "stderr beside the installer's own inherited stdio — CLI command output "
+                 "(0.0.26 L2)",
 }
 
 _CLI_SURFACES = ("cli.py", "menu.py", "onboard.py", "onboarding.py", "dashboard.py")

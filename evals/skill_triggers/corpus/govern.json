@@ -1,0 +1,34 @@
+{
+ "skill": "govern",
+ "triggers": [
+  "see the governed state",
+  "what mokata is currently enforcing or remembering"
+ ],
+ "positive": [
+  "Show me the governed state — active rules and memory by kind",
+  "What is mokata currently enforcing or remembering for this repo?",
+  "What's the read/write ratio and are there pending self-healing proposals?",
+  "Before I decide, let me review governance: which rules are active?",
+  "List the pending proposals and the governed rules"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Teach mokata our convention that all money is stored in cents",
+   "expect": "onboard"
+  },
+  {
+   "prompt": "Delete the memory about the old database rule"
+  },
+  {
+   "prompt": "Show me where the run is in the pipeline",
+   "expect": "progress"
+  },
+  {
+   "prompt": "Explain how the US government enforces regulations"
+  },
+  {
+   "prompt": "Show me the installed mokata version",
+   "expect": "version"
+  }
+ ]
+}

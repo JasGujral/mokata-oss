@@ -101,9 +101,17 @@ def _emitted(stdout):
 _LEDGER_REL = "/".join((".mokata", "temp_local", LEDGER_DIRNAME)) + "/"
 
 
+# 0.0.26 O12 — the SECOND run-state leaf a turn may move: the graph tier's off-prompt-path verdict
+# cache and its lookup queue (`memory.graph_anchors`). Written only where a graph tool is installed.
+from mokata.memory.graph_anchors import DIRNAME as _RECALL_GRAPH_DIRNAME  # noqa: E402
+_RECALL_GRAPH_REL = "/".join((".mokata", "temp_local", _RECALL_GRAPH_DIRNAME)) + "/"
+_RUN_STATE_LEAVES = (_LEDGER_REL, _RECALL_GRAPH_REL)
+
+
 def _governed_snapshot(root):
-    """The tree MINUS the S4 ledger leaf — everything a per-turn injection must not touch."""
-    return {k: v for k, v in tree_snapshot(root).items() if _LEDGER_REL not in k}
+    """The tree MINUS the run-state leaves — everything a per-turn injection must not touch."""
+    return {k: v for k, v in tree_snapshot(root).items()
+            if not any(leaf in k for leaf in _RUN_STATE_LEAVES)}
 
 
 _MANY_RULES = [(f"rule{n}", f"always run the deploy tests before releasing, rule {n}")
@@ -253,7 +261,8 @@ class TestP2AFullInjectionTurnWritesNothing(unittest.TestCase):
 
     def test_the_carve_out_is_exactly_one_leaf(self):
         """The exclusion above is only honest if it is narrow. Across a run of turns, EVERY path
-        that changes must be inside `injection_ledger/` — nothing else may move."""
+        that changes must be inside `injection_ledger/` (or, where a graph tool is installed, the
+        O12 `recall_graph/` run-state cache) — nothing else may move."""
         with tempfile.TemporaryDirectory() as d:
             _repo(d, rules=_MANY_RULES, items=_MANY_ITEMS)
             _run_hook(QUERY, d)                            # warm
@@ -264,9 +273,9 @@ class TestP2AFullInjectionTurnWritesNothing(unittest.TestCase):
             changed = {k for k in set(before) | set(after) if before.get(k) != after.get(k)}
         self.assertTrue(changed, "nothing changed at all — the ledger is not being written")
         for path in changed:
-            self.assertIn(_LEDGER_REL, path,
-                          f"{path} changed outside the S4 ledger leaf — the read-only carve-out "
-                          f"is being used to hide a real write")
+            self.assertTrue(any(leaf in path for leaf in _RUN_STATE_LEAVES),
+                            f"{path} changed outside the S4 ledger / O12 recall-graph leaves — the "
+                            f"read-only carve-out is being used to hide a real write")
 
     def test_the_read_counter_does_not_move_across_a_session_of_turns(self):
         with tempfile.TemporaryDirectory() as d:

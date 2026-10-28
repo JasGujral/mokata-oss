@@ -7,6 +7,7 @@ loses state. Built on the state store + the spine's PIPELINE_PHASES.
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Sequence
 
@@ -38,11 +39,32 @@ class PipelineCheckpoint:
         # only records the WHEN when present.
         ca = data.get("completed_at") if isinstance(data, dict) else None
         self.completed_at: Optional[str] = ca if isinstance(ca, str) and ca else None
+        # O18 — WHEN the run was registered (epoch secs), stamped once by `ensure_registered` and
+        # carried by every save. The re-entry carve-out compares run AGES with it. Additive: a
+        # legacy checkpoint reads None.
+        cr = data.get("created_at") if isinstance(data, dict) else None
+        self.created_at: Optional[float] = (float(cr) if isinstance(cr, (int, float))
+                                            and not isinstance(cr, bool) else None)
 
     def _save(self) -> None:
         payload = {"run_id": self.run_id, "passed": self.passed}
         if self.completed_at:
             payload["completed_at"] = self.completed_at
+        # O18 — `created_at` is WRITE-ONCE and owned by the STORED record: kept from it when it has
+        # one (an object loaded before another process registered the run must not erase it),
+        # stamped now when the checkpoint is being created by ANY path (register, mark_passed,
+        # emit, a phase gate). A legacy checkpoint that exists without it stays without it.
+        try:
+            stored = self.store.read(self.key)
+        except Exception:  # noqa: BLE001 — an unreadable record: keep what this object holds
+            stored = {}
+        if stored is None:
+            self.created_at = self.created_at if self.created_at is not None else time.time()
+        elif isinstance(stored, dict) and isinstance(stored.get("created_at"), (int, float)) \
+                and not isinstance(stored.get("created_at"), bool):
+            self.created_at = float(stored["created_at"])
+        if self.created_at is not None:
+            payload["created_at"] = self.created_at
         self.store.write(self.key, payload)
 
     def ensure_registered(self) -> bool:

@@ -97,7 +97,9 @@ class TestDispatcherFailsVisibly(unittest.TestCase):
 class TestEntryPointDeclared(unittest.TestCase):
     def test_pyproject_declares_mokata_hook(self):
         txt = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        self.assertIn('mokata-hook = "mokata.hook_cli:main"', txt)
+        # 0.0.26 O3 (U13): the entry point is the stdlib-only front door, which hands every
+        # non-observe subcommand to `mokata.hook_cli.main` (tests/test_o3_hook_emitter.py).
+        self.assertIn('mokata-hook = "mokata_emit:main"', txt)
 
 
 # --- the plugin hooks.json uses the console entry point (no python3 / sh) -------------

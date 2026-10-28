@@ -19,10 +19,10 @@ Resolve the bundled engine (read `~/.mokata/plugin-root` → `ROOT`, or a `mokat
 
 ```bash
 PY="$(command -v python3 || command -v python)"
-ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
-eval "$ENGINE exec --path ."                          # show the resolved mode (honors the saved default)
-eval "$ENGINE exec --parallel --isolation --path ."   # fresh-subagent isolation + two-stage review
-eval "$ENGINE exec --parallel --fanout --path ."      # concurrent fan-out
+mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
+mokata exec --path .                          # show the resolved mode (honors the saved default)
+mokata exec --parallel --isolation --path .   # fresh-subagent isolation + two-stage review
+mokata exec --parallel --fanout --path .      # concurrent fan-out
 ```
 
 With no flags it reports the mode resolved from `settings.execution.default` (asking once if

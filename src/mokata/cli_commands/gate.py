@@ -48,7 +48,7 @@ def _resolve(args: argparse.Namespace):
 
 def cmd_gate_status(args: argparse.Namespace) -> int:
     """What the gates would decide here, and what is overridden (read-only)."""
-    from ..gate_hook import GATES, read_override
+    from ..gate_hook import GATES, LOOP_GATES, read_override
 
     surface, run_id, run = _resolve(args)
     print("mokata run-state gates (enforced on native Write/Edit by the gate-guard hook):")
@@ -66,19 +66,38 @@ def cmd_gate_status(args: argparse.Namespace) -> int:
     for gate in GATES:
         state = "OVERRIDDEN (this session)" if gate in overrides else "enforced"
         print(f"  {gate:32} {state}")
+    print("mokata loop gates (a 'done' stop, the 3-fix breaker, the 5-round review cap):")
+    for gate in LOOP_GATES:
+        state = "OVERRIDDEN (this session)" if gate in overrides else "enforced"
+        print(f"  {gate:32} {state}")
     if overrides:
         print("\n  The override expires with this session — a new session enforces again.")
     return 0
 
 
+# What each override stops enforcing, in the re-confirmation's words. The default is the four
+# write gates' sentence; the R1/R4 gates (0.0.26) guard a stop and two loops, not a write.
+_WHAT_STOPS = {
+    None: ("the gate-guard hook will ALLOW native Write/Edit to\n"
+           "  implementation files that this gate would otherwise block."),
+    "stop-evidence": ("the Stop/SubagentStop hooks will let a session or subagent\n"
+                      "  stop as \"done\" without the run's evidence (every AC named by a test,\n"
+                      "  no test still RED)."),
+    "fix-breaker": ("the gate-guard hook will ALLOW implementation writes after\n"
+                    "  three failed fix attempts at the same failure (the breaker)."),
+    "review-loop": ("review verdicts may be recorded past five failed rounds in\n"
+                    "  a row (the review-loop cap)."),
+}
+
+
 def cmd_gate_override(args: argparse.Namespace) -> int:
     """Explicitly, re-confirmedly, session-scopedly, ledgeredly stop enforcing ONE gate (P14)."""
-    from ..gate_hook import GATES, OVERRIDE_PREFIX, read_override
+    from ..gate_hook import OVERRIDABLE, OVERRIDE_PREFIX, read_override
     from ..prompt import confirmed, decline_notice
 
     gate = args.gate
-    if gate not in GATES:
-        print(f"error: unknown gate '{gate}' (expected one of: {', '.join(GATES)})")
+    if gate not in OVERRIDABLE:
+        print(f"error: unknown gate '{gate}' (expected one of: {', '.join(OVERRIDABLE)})")
         return 1
 
     surface, run_id, run = _resolve(args)
@@ -95,8 +114,7 @@ def cmd_gate_override(args: argparse.Namespace) -> int:
 
     # Re-confirmation (P14): restate EXACTLY what stops being enforced, then require a yes.
     plan = (f"Override the '{gate}' gate for this session (run {run_id[:8]}).\n"
-            f"  What stops being enforced: the gate-guard hook will ALLOW native Write/Edit to\n"
-            f"  implementation files that this gate would otherwise block.\n"
+            f"  What stops being enforced: {_WHAT_STOPS.get(gate, _WHAT_STOPS[None])}\n"
             f"  Scope: THIS session only — a new session enforces again.\n"
             f"  Reason (recorded to the audit ledger): {args.reason}\n"
             f"  The secret-guard is unaffected — security blocks are never overridable.")

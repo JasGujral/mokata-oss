@@ -173,6 +173,12 @@ able to write the failing test. Note the matchers **differ**: the gate-guard doe
 `Bash`, so a `sed -i` through the shell is not policed (a known, documented hole; the
 *secret*-guard does match `Bash`).
 
+Two hooks run on `Stop`. `mokata-hook stop` drafts the session note in the background and never
+blocks. `mokata-hook stop-gate` is the **`stop-evidence`** loop gate. It runs synchronously and
+answers with `{"decision": "block", "reason": …}` when a stop claims the work is done but the run's
+record does not back it. It fails closed, and after three blocks in a row it lets the stop through
+with a message you see. Wire both (`mokata setup claude` does).
+
 `SessionStart` injects the bootstrap briefing (the `--plugin-root` lets `/init` locate
 the bundled engine — manual setup has no `${CLAUDE_PLUGIN_ROOT}`). Just let `mokata setup
 claude` write the whole block for you to get the absolute-path form automatically.

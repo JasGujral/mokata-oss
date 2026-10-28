@@ -84,9 +84,10 @@ mutant() {
 # ---- the bound itself --------------------------------------------------------------------------
 
 mutant "M01 the budget is removed — the body is unbounded again (the shipped bug)" "$H" \
-  '        pack = _bounded(lambda: _build_injection_for(surface, prompt, root, session_id, budget),
-                        _HOOK_WORK_BUDGET_SECS)' \
-  '        pack = _build_injection_for(surface, prompt, root, session_id, budget)' "$T"
+  '        pack = _bounded(lambda: _build_injection_for(surface, prompt, root, session_id, budget,
+                                                     graph),
+                        _HOOK_WORK_BUDGET_SECS, over_budget=over)' \
+  '        pack = _build_injection_for(surface, prompt, root, session_id, budget, graph)' "$T"
 
 mutant "M02 the budget is set AT the harness kill — it can never fire in time" "$H" \
   '_HOOK_WORK_BUDGET_SECS = 5.0' \
@@ -108,9 +109,9 @@ equivalent "M05 [EQUIVALENT] the no-result check is dropped — an empty/absent 
 
 equivalent "M06 [EQUIVALENT] _bounded reads the holder unconditionally — a LATE pack is handed back and emitted" "$H" \
   '    if thread.is_alive():
-        return None                  # over budget — refuse it for RUNNING, not for being empty
-    return holder.get("value")' \
-  '    return holder.get("value")' "$T"
+        # over budget — refuse it for RUNNING, not for being empty.' \
+  '    if False:
+        # over budget — refuse it for RUNNING, not for being empty.' "$T"
 
 # ---- the abandoned worker must not record ---------------------------------------------------------
 
@@ -118,11 +119,11 @@ equivalent "M06 [EQUIVALENT] _bounded reads the holder unconditionally — a LAT
 mutant "M07 the ledger write moves INSIDE the bounded worker — a dropped pack is recorded" "$H" \
   '    return build_injection(surface, prompt, budget=budget,
                            exclude_ids=already_injected(root, session_id=session_id),
-                           evidence_lines=evidence)' \
+                           evidence_lines=evidence, graph_scorer=graph_scorer)' \
   '    from .injection_ledger import record_injected
     pack = build_injection(surface, prompt, budget=budget,
                            exclude_ids=already_injected(root, session_id=session_id),
-                           evidence_lines=evidence)
+                           evidence_lines=evidence, graph_scorer=graph_scorer)
     record_injected(root, pack.item_ids, session_id=session_id)
     return pack' "$T"
 

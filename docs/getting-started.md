@@ -1,7 +1,9 @@
 # Getting started with mokata
 
-No clone required. **One instruction sets mokata up and the same one updates it** — install or
-upgrade the isolated `mokata` CLI, then `mokata setup claude`. The Claude Code plugin is the
+No clone required. **One install line, one setup**: `uv tool install "mokata[full]"` installs the
+isolated `mokata` CLI and everything full mode uses in one go, then `mokata setup claude --mode
+full` detects and wires it. To update later: `uv tool upgrade mokata` (it keeps the extra), then
+the same setup. The Claude Code plugin is the
 alternative. Pick the path that matches how you work.
 
 ## Path A — In Claude Code (recommended)
@@ -9,11 +11,12 @@ alternative. Pick the path that matches how you work.
 You get the full spec-driven TDD workflow (brainstorm → spec → develop → review → ship) as slash
 commands and Agent Skills inside Claude Code, plus the bundled MCP server.
 
-**A1 · Set up or update — the same instruction every time**, in your repo:
+**A1 · Set up — one install line, one setup**, in your repo (update later with
+`uv tool upgrade mokata` / `pipx upgrade mokata`, then the same setup):
 
 ```bash
-uv tool install --upgrade mokata   # installs mokata, or upgrades it (or: pipx install --force mokata)
-mokata setup claude                # wires the repo — runs `mokata init` too if the repo has no .mokata/
+uv tool install "mokata[full]"     # mokata + everything full mode uses (or: pipx install "mokata[full]")
+mokata setup claude --mode full    # detects + wires it all, installs nothing — runs `mokata init` too if needed
 # restart Claude Code, then:
 mokata doctor
 ```
@@ -38,7 +41,7 @@ The plugin's commands are namespaced (`/mokata:<name>`). Its MCP server starts t
 [`uv`](https://docs.astral.sh/uv/) must be on your PATH. Details:
 [Install the plugin](how-to/install-plugin.md).
 
-> **Plain pip, last.** `pip install mokata` (Python 3.10+) installs the same CLI — but inside a
+> **Plain pip, last.** `pip install mokata` (Python 3.12+) installs the same CLI — but inside a
 > project venv this mixes mokata's deps into yours — prefer the above. `mokata doctor` warns when
 > mokata is installed inside the repo's own environment. All routes:
 > [Install mokata](how-to/install-mokata.md).
@@ -53,7 +56,7 @@ Then, inside Claude Code, start with `/brainstorm` (a new problem) or `/refine`
 (existing code). If the MCP tools ever stop showing up, just tell Claude "mokata mcp isn't working"
 and the `/mcp-repair` repair skill will re-register it (you'll need to restart Claude Code after).
 
-> **Python version.** mokata requires **Python ≥ 3.10**; the MCP server ships and runs out of the
+> **Python version.** mokata requires **Python ≥ 3.12**; the MCP server ships and runs out of the
 > box on a plain `pip install mokata`.
 
 ### Approving a write
@@ -160,7 +163,7 @@ Only clone if you're working on mokata itself; end users never need to.
 ```bash
 git clone https://github.com/JasGujral/mokata-oss.git
 cd mokata-oss
-pip install -e .            # editable install (Python 3.10+ also pulls the MCP SDK)
+pip install -e .            # editable install (also pulls the MCP SDK)
 python -m unittest discover -s tests -t tests
 ```
 

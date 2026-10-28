@@ -14,7 +14,7 @@ P4 IS THE NON-NEGOTIABLE PIN, and it is the reason this file is longer than the 
 
 A refusal costs more than a proposal — it stops a human's approval — so a bridge that fails LOUD
 where H-6 itself declines is strictly worse than no bridge. "Refuse whenever unsure" is the false
-claim `about_code.py:8-11` forbids, wearing a safety costume. Both surfaces therefore consume the
+claim `memory/grounding.py` (`_check_symbol`) forbids, wearing a safety costume. Both surfaces therefore consume the
 ONE `AnchorVerdict`, and the equality is asserted across the FULL verdict matrix rather than at the
 two or three points that happen to be convenient.
 

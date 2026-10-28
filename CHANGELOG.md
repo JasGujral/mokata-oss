@@ -10,6 +10,152 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.26] — 2026-10-27
+
+**Stability: a stable MCP server, sessions that keep their run, every session in its own worktree,
+and an IDE that works on multi-million-line repositories.** Python 3.12+ and Claude Code 2.1.198+
+are now required.
+
+### ⚠ Upgrade notes
+- **Python 3.12 or newer is required** (`requires-python >=3.12`); pip refuses older interpreters.
+- **Claude Code 2.1.198 or newer is required.** `mokata doctor` names any Claude Code surface your
+  version lacks.
+- **Specs approved by 0.0.25 must be re-approved with a task plan.** A spec now carries `tasks[]`;
+  `mokata doctor` names each affected run and the command (`mokata spec migrate <run>`, or re-emit /
+  amend the spec).
+- **Run `mokata setup claude` once after upgrading** so the new hooks, session-worktree settings and
+  `.worktreeinclude` are wired (shown before you confirm).
+
+### Security
+- **Slash commands no longer `eval` a command string.** User or repository text reached the engine
+  through `eval` in 19 command templates, a shell-injection path through `$ARGUMENTS` and command
+  slots. It now arrives as single-quoted arguments.
+- Per-PR security lints in CI: unquoted shell arguments, prompt-injection markers and hidden
+  characters, secrets in shipped files, agentskills.io conformance, the MCP server's exact-version
+  pin and the version lockstep. An opt-in manual `mcp-scan` workflow.
+- A published security posture (`docs/security.md`): what runs where, what is written, no network by
+  default, no API key, TTY-gated approvals, threat model.
+- `mokata doctor` warns when `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` is set (Claude Code ranks
+  either above your Claude login); it names the variable, never its value.
+
+### Fixed — sessions, runs and the MCP server
+- **The MCP server no longer freezes while one tool works.** Tool calls run off the event loop, so
+  parallel calls, pings and cancellations are answered at once. A call still working at its budget
+  answers `running`; calling again with the same arguments joins the same work.
+- **Spec amend is stable.** A retried `spec_amend`/`spec_emit` after a lost reply is answered from the
+  record (`already_applied`) instead of re-opening an amendment that had landed; approval reuses the
+  blast-radius verdict from the proposal (django: redeem 9 s → 0.3 s); a busy state lock answers a
+  retryable `state-busy` instead of waiting without bound; the JSON-RPC stream is isolated from stray
+  output.
+- **Registration and amend no longer land on another run after a resume, a long idle or a dropped
+  connection.** An MCP server Claude Code restarts (dropped connection, `/mcp` reconnect), or that
+  starts after the session-start hook, keeps the session it serves; a resumed, idle or parallel
+  window keeps the run it registered; the MCP and hook sides always agree. It never takes another
+  window's session, a closed session in the same terminal tab, or the parent of a nested
+  print-mode Claude. Re-entering an existing spec from a fresh window still lands on that spec.
+- **A resumed session keeps its run at any stage**, including under a new session id
+  (`--fork-session`), and its develop changes show in the IDE.
+- A Claude Code window that never started a pipeline is no longer blocked by a run another session
+  owns; it is told once that the gates are off for it.
+
+### Added — workflow
+- **Session worktrees.** Every Claude Code session works in its own git worktree
+  (`.claude/worktrees/`, branched from HEAD); main-checkout edits are refused until it enters one
+  (`mokata config set settings.sessions.worktree off` to turn it off). Runs, approvals and the IDE
+  share one `.mokata/` store; change attribution is exact (`git diff` from the worktree's base).
+  `--resume` keeps the binding. Code answers (`query`, `decompose`, `ci_check`, spec impact) follow
+  the worktree the session edits.
+- **Sync before ship.** A worktree behind its base cannot be merged: the IDE offers an
+  approve-gated **Sync** (rebase; a conflict aborts and leaves the branch unchanged). `/ship` always
+  says: fetch, rebase, re-run the full suite, then merge or open the pull request.
+- **Task plan + plan-hash attestation.** A spec carries `tasks[]`, each with its criteria and write
+  scope; the plan is approved with the spec and sealed with a SHA-256 hash. A write outside the
+  active task's scope is blocked; a changed plan blocks implementation, `progress mark` and ship until
+  re-approved. `mokata spec task status|start|done`.
+- **Capped clarify:** at most 5 recorded clarifying questions, each with its recommended answer;
+  unanswered ones proceed on stated `assumptions[]`.
+- **Stop evidence gate:** a session or subagent that ends its turn claiming done is sent back with
+  the missing evidence named (a RED test, an AC with no passing test, a stale or failed last run, a
+  review with no verdict). Fail-closed; released with an audit row after three blocks in a row.
+- **3-fix breaker and review-loop cap:** the third failed fix at the same failure blocks
+  implementation writes until a new approach is approved; after five failed review rounds the sixth
+  is refused with an escalation.
+- **Model tier per role:** every role mokata spawns names its Claude Code model tier (explorer haiku,
+  implementer sonnet, debugger opus, reviewer/final-reviewer with floors); below-floor spawns are
+  blocked; tiers and measured usage are recorded (`mokata progress models`).
+- **Grounded memory writes:** a learning citing a path, line, commit, symbol or link that does not
+  resolve is refused; `retire_when` expiry predicates with a human-gated refresh; near-duplicates
+  update the existing entry; `<private>…</private>` text is never stored.
+- **Opt-in committed specs** (`mokata config set settings.specs.commit true`): approved specs also
+  land in tracked `.mokata/specs/<run>.json`; `mokata ci-check` and `mokata docsync` check them
+  against the code (`spec-drift`).
+- **Approve in the IDE, safely:** every proposed durable write is a card with the full write and its
+  `mokata approve <id>` command; from `mokata ide --foreground` you approve in the window with a
+  one-time code printed to your terminal. `mokata approve <id> --reject`.
+- **`mokata update`** shows the plan and release notes and asks one `Update now? [Y/n]`.
+- **Plugin route installs a complete mokata** (one pinned `mokata[full]` environment through uv);
+  `/mokata:doctor` and `mokata doctor --plugin`.
+- **A/B benchmark** (`python -m bench.ab`, replay mode in CI, live runs on your own login); product
+  docs may make no performance claim a committed result does not back.
+- CI gates skill triggers with near-miss eval corpora (no model, no API key).
+
+### Added / Changed — the IDE
+- **One navigation:** Sessions · Review · Code · Search · Impact · Plan · Worktrees; one **Viewing ▾**
+  context (a session, uncommitted changes, a write, two branches or a PR) that Review, the Code
+  gutter and Search follow; `?` lists every key.
+- **Every session in one place:** the Sessions screen lists every Claude Code session that ran in the
+  repo (including read-only, blocked and pre-upgrade ones), with its changed files and diffs.
+- **Multi-million-line repositories:** heavy work runs as visible jobs with progress, Cancel and
+  partial results (no 20 s deadline); outline, symbols and go-to-definition (F12) from the code graph
+  in every language it indexes; search pages through every hit (no 2,000 cap), searches files over
+  1 MB and runs meaning search in 0.1–0.4 s warm on kubernetes; graph views draw the first ring of
+  "What breaks" in about 1 s on 7.3M lines and never draw more than 150 nodes.
+- **Closing the IDE with work running asks first:** finish in the background, cancel safely, or wait.
+- **Welcome / first run:** a repo nobody set up opens on Welcome — what works now, what doesn't and
+  its fix; nothing is written for a folder you merely open until you confirm.
+- Syntax highlighting (~600 languages) in files, diffs and spec code blocks; tabs with session
+  restore; one ⌘P palette with prefixes and in-file find.
+- The embedded terminal works on Windows (ConPTY via `pywinpty`, in `mokata[ide]`).
+
+### Changed — setup, hooks, code graph
+- **Full mode installs in one go:** `uv tool install "mokata[full]"` then `mokata setup claude --mode
+  full`. Setup only detects and wires, and ends with code-review-graph's index, the meaning-search
+  index and ripgrep word search built, each with progress and Ctrl+C to skip. `--with-deps` is
+  removed.
+- **The code graph builds itself:** the first structural query on an unbuilt index starts one
+  background build; `mokata graph build [--full]`. code-review-graph is "active" only when its index
+  is built. An index that ever completed is never discarded by a rebuild or an interrupted update.
+- **Faster hooks:** the per-prompt context hook no longer takes 5–6 s with code-review-graph
+  (~75 ms p95 on a quiet Linux box); SessionStart serves slow facts from a background cache
+  (~90 ms); observe hooks run through a stdlib-only emitter.
+- On Windows, `--ide-bridge` hooks no longer cost ~1 s each while the IDE is closed.
+
+### Fixed — code graph
+- **code-review-graph's blast radius is mapped correctly** (it was always empty and routed to the AST
+  reader). A blast radius cut at 20,000 references or 2 s can now be calculated fully on request.
+- With code-review-graph installed but unbuilt, every query answered "0 results, structural" and the
+  graph-required gate passed; unbuilt is now its own state and the floor answers.
+- `mokata ide` on a repo without `mokata init` answered 500 on health, graph, impact and query.
+
+### Removed
+- `--with-deps` on `mokata setup` / `mokata init` (setup no longer installs).
+- The warn-only `about_code` memory check (replaced by write grounding).
+
+### Known limitations
+- **This release has not run on the macOS and Windows CI legs.** It was tested on Linux (CI-equivalent
+  full suite) and on macOS by hand; Windows setup, the Windows IDE terminal and the `.cmd` hook
+  launcher are not yet verified on a real Windows desktop.
+- **Hook timings are measured on Linux only.**
+- **On Windows, a spec proposal can wait ~20 s** while another mokata process writes the same run's
+  state without pause (Windows' file lock is not fair); it then completes.
+- **Follow mode is unproven against a real `claude` session** end to end.
+- **Runs created before 0.0.26 keep the previous re-entry behaviour** for a resumed or idle window
+  until a new run is registered (they carry no creation time).
+- **A session's restarted MCP server is recognised only when Claude sits within two launcher
+  processes of its hooks.** A deeper launcher chain (e.g. the Windows `py.exe` stub) behaves as
+  0.0.25 did — it refuses as ambiguous and never picks another run.
+- **The clean-machine install workflow has not run on a release runner yet.**
+
 ## [0.0.25] — 2026-10-20
 
 **Install in one step, frontend/backend domain stacks, and the CLI↔IDE bridge.** `mokata setup claude

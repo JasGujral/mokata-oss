@@ -1,0 +1,34 @@
+{
+ "skill": "frontend-perf",
+ "triggers": [
+  "bundle-size, render-count or load-time budget",
+  "React web change is made in the name of speed"
+ ],
+ "positive": [
+  "Our React web page's bundle size is over budget; measure and cut it",
+  "The product list re-renders too often in React; there's a render-count budget in the AC",
+  "Speed up the load time of the Next.js landing page; it must stay under 2s",
+  "This React web change is for speed: memoize the expensive table",
+  "Audit the React dashboard's render performance and fix it on request"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Our Postgres query behind the API is slow",
+   "expect": "performance"
+  },
+  {
+   "prompt": "Speed up the React Native list screen on Android"
+  },
+  {
+   "prompt": "Make the app faster — I haven't measured anything, just guess"
+  },
+  {
+   "prompt": "Add a Server Function that reads the user's invoices",
+   "expect": "frontend-security"
+  },
+  {
+   "prompt": "Add alt text to the hero image",
+   "expect": "frontend-a11y"
+  }
+ ]
+}

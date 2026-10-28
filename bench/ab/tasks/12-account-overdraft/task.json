@@ -1,0 +1,6 @@
+{
+  "id": "12-account-overdraft",
+  "title": "Refuse an overdraft",
+  "prompt": "`Account.withdraw` in bank.py lets the balance go negative and accepts negative amounts. Make withdraw and deposit raise ValueError for non-positive amounts, and withdraw raise ValueError when funds are insufficient (balance unchanged). Add tests.",
+  "max_turns": 40
+}

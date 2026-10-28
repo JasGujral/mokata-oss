@@ -46,6 +46,7 @@ import re
 import shlex
 import shutil
 import sys
+import tomllib
 from dataclasses import dataclass, field
 from importlib import metadata as _md
 from importlib.util import find_spec
@@ -173,159 +174,9 @@ def _expand_self_extras(specs: Sequence[str],
 def _load_toml(path: str) -> Optional[dict]:
     try:
         with open(path, "rb") as fh:
-            raw = fh.read()
-    except OSError:
+            return tomllib.loads(fh.read().decode("utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
         return None
-    try:
-        import tomllib  # type: ignore[import-not-found]   # 3.11+
-    except ImportError:
-        # 3.10 — the declared floor — has no stdlib TOML reader, and `uv tool install` builds the
-        # env on whatever Python uv picks: measured at I-03, a fresh runner's tool env was 3.10.20
-        # and every extra failed with "could not read uv's tool receipt". uv writes receipts in a
-        # small, fixed subset of TOML, which `_ReceiptReader` reads.
-        try:
-            return _ReceiptReader(raw.decode("utf-8")).document()
-        except (ValueError, UnicodeDecodeError):
-            return None
-    try:
-        return tomllib.loads(raw.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
-        return None
-
-
-class _ReceiptReader:
-    """The TOML subset uv writes in `uv-receipt.toml`: `[table]` headers, `key = value` with keys
-    bare or quoted, values that are basic/literal strings, booleans, integers, arrays and inline
-    tables, and `#` comments. Anything outside that subset raises ValueError — the caller then
-    shows the command instead of running it (unsure is not a yes)."""
-
-    _ESC = {"b": "\b", "t": "\t", "n": "\n", "f": "\f", "r": "\r", '"': '"', "\\": "\\"}
-
-    def __init__(self, text: str) -> None:
-        self.s, self.i = text, 0
-
-    def _ws(self, newlines: bool = True) -> None:
-        while self.i < len(self.s):
-            c = self.s[self.i]
-            if c in " \t\r" or (newlines and c == "\n"):
-                self.i += 1
-            elif c == "#":
-                while self.i < len(self.s) and self.s[self.i] != "\n":
-                    self.i += 1
-            else:
-                return
-
-    def _peek(self) -> str:
-        return self.s[self.i] if self.i < len(self.s) else ""
-
-    def _expect(self, ch: str) -> None:
-        if self._peek() != ch:
-            raise ValueError(f"expected {ch!r} at {self.i}")
-        self.i += 1
-
-    def _key(self) -> str:
-        c = self._peek()
-        if c in "\"'":
-            return self._string()
-        m = re.match(r"[A-Za-z0-9_-]+", self.s[self.i:])
-        if not m:
-            raise ValueError(f"bad key at {self.i}")
-        self.i += m.end()
-        return m.group(0)
-
-    def _string(self) -> str:
-        q = self._peek()
-        self.i += 1
-        out = []
-        while True:
-            if self.i >= len(self.s):
-                raise ValueError("unterminated string")
-            c = self.s[self.i]
-            self.i += 1
-            if c == q:
-                return "".join(out)
-            if c == "\\" and q == '"':
-                e = self.s[self.i:self.i + 1]
-                self.i += 1
-                if e == "u" or e == "U":
-                    n = 4 if e == "u" else 8
-                    out.append(chr(int(self.s[self.i:self.i + n], 16)))
-                    self.i += n
-                elif e in self._ESC:
-                    out.append(self._ESC[e])
-                else:
-                    raise ValueError(f"bad escape \\{e}")
-            else:
-                out.append(c)
-
-    def _value(self):
-        self._ws()
-        c = self._peek()
-        if c in "\"'":
-            return self._string()
-        if c == "[":
-            self.i += 1
-            items = []
-            while True:
-                self._ws()
-                if self._peek() == "]":
-                    self.i += 1
-                    return items
-                items.append(self._value())
-                self._ws()
-                if self._peek() == ",":
-                    self.i += 1
-        if c == "{":
-            self.i += 1
-            table = {}
-            while True:
-                self._ws(newlines=False)
-                if self._peek() == "}":
-                    self.i += 1
-                    return table
-                k = self._key()
-                self._ws(newlines=False)
-                self._expect("=")
-                table[k] = self._value()
-                self._ws(newlines=False)
-                if self._peek() == ",":
-                    self.i += 1
-        for word, val in (("true", True), ("false", False)):
-            if self.s.startswith(word, self.i):
-                self.i += len(word)
-                return val
-        m = re.match(r"[+-]?\d+", self.s[self.i:])
-        if m:
-            self.i += m.end()
-            return int(m.group(0))
-        raise ValueError(f"unsupported value at {self.i}")
-
-    def document(self) -> dict:
-        doc: dict = {}
-        cur = doc
-        while True:
-            self._ws()
-            if self.i >= len(self.s):
-                return doc
-            if self._peek() == "[":
-                self.i += 1
-                if self._peek() == "[":
-                    raise ValueError("arrays of tables are not in the receipt subset")
-                cur = doc
-                while True:
-                    self._ws(newlines=False)
-                    cur = cur.setdefault(self._key(), {})
-                    self._ws(newlines=False)
-                    if self._peek() == ".":
-                        self.i += 1
-                        continue
-                    self._expect("]")
-                    break
-                continue
-            k = self._key()
-            self._ws(newlines=False)
-            self._expect("=")
-            cur[k] = self._value()
 
 
 def _receipt_reqs(entry: dict) -> Optional[_Req]:
@@ -399,12 +250,34 @@ def _uv_tool_argv(prefix: str, specs: Sequence[str], uv: str) -> Tuple[Optional[
 
 
 # ------------------------------------------------------------------ the plan
-def _display(argv: Sequence[str]) -> str:
+#: An argument needs no quoting in cmd.exe, PowerShell OR a POSIX shell only when it is made of
+#: these. Everything else is quoted (`[`/`]` are PowerShell wildcards, `<`/`>` are redirections in
+#: cmd and every shell, `,` builds an array in PowerShell, `;` ends a statement).
+_SHELL_SAFE = re.compile(r"^[A-Za-z0-9_\-./\\:+]+$")
+
+
+def quote_arg(arg: str, platform: Optional[str] = None) -> str:
+    """One argument, quoted so the line runs AS PRINTED in this platform's shells.
+
+    0.0.26 L1 (`WIN-FIX-LINE-POSIX-QUOTED`, doc 84): until 0.0.25 every printed line went through
+    `shlex.quote`, whose single quotes cmd.exe passes through LITERALLY — Jas's Windows run got
+    `'mokata[embeddings]'` and the line failed as printed. Windows: double quotes, which cmd and
+    PowerShell both strip (with `\"` for an inner quote, the CommandLineToArgvW rule). POSIX:
+    `shlex.quote`."""
+    platform = platform or sys.platform
+    if arg and _SHELL_SAFE.match(arg):
+        return arg
+    if platform.startswith("win"):
+        return '"' + arg.replace('"', '\\"') + '"'
+    return shlex.quote(arg)
+
+
+def _display(argv: Sequence[str], platform: Optional[str] = None) -> str:
     """A pasteable line. The executable is shown by its bare name when it is the one on PATH."""
     shown = list(argv)
     if shown and os.path.basename(shown[0]).split(".")[0] in ("uv", "pipx"):
         shown[0] = os.path.basename(shown[0]).split(".")[0]
-    return " ".join(shlex.quote(a) for a in shown)
+    return " ".join(quote_arg(a, platform) for a in shown)
 
 
 def plan_install(specs: Sequence[str], *,
@@ -427,15 +300,15 @@ def plan_install(specs: Sequence[str], *,
         argv, reason = _uv_tool_argv(prefix, specs, uv)
         if argv is None:
             fallback = ["uv", "tool", "install", "mokata"] + [x for s in specs for x in ("--with", s)]
-            return InstallPlan(UV_TOOL, specs, None, _display(fallback), reason=reason)
+            return InstallPlan(UV_TOOL, specs, None, _display(fallback, platform), reason=reason)
         if not which("uv"):
-            return InstallPlan(UV_TOOL, specs, None, _display(argv),
+            return InstallPlan(UV_TOOL, specs, None, _display(argv, platform),
                                reason="`uv` is not on PATH from this process")
         if platform.startswith("win"):
-            return InstallPlan(UV_TOOL, specs, argv, _display(argv), deferred=True,
+            return InstallPlan(UV_TOOL, specs, argv, _display(argv, platform), deferred=True,
                                reason="Windows locks the running mokata.exe; run this after "
                                       "setup exits")
-        return InstallPlan(UV_TOOL, specs, argv, _display(argv))
+        return InstallPlan(UV_TOOL, specs, argv, _display(argv, platform))
 
     reqs = _expand_self_extras(specs, requires)
     if not reqs:
@@ -457,7 +330,7 @@ def plan_install(specs: Sequence[str], *,
             cmds.append([pipx or "pipx", "inject", DIST, *libs])
         if apps:
             cmds.append([pipx or "pipx", "inject", "--include-apps", DIST, *apps])
-        shown = " && ".join(_display(c) for c in cmds)
+        shown = " && ".join(_display(c, platform) for c in cmds)
         if not pipx:
             return InstallPlan(PIPX, specs, None, shown,
                                reason="`pipx` is not on PATH from this process")
@@ -465,16 +338,118 @@ def plan_install(specs: Sequence[str], *,
 
     if inst == PIP:
         argv = [executable, "-m", "pip", "install", *reqs]
-        return InstallPlan(PIP, specs, argv, _display(argv))
+        return InstallPlan(PIP, specs, argv, _display(argv, platform))
 
     if inst == UV_PIP:
         argv = [which("uv") or "uv", "pip", "install", "--python", executable, *reqs]
-        return InstallPlan(UV_PIP, specs, argv, _display(argv))
+        return InstallPlan(UV_PIP, specs, argv, _display(argv, platform))
 
     show = [executable, "-m", "ensurepip"]
     return InstallPlan(NO_INSTALLER, specs, None,
-                       _display(show) + " && " + _display([executable, "-m", "pip", "install", *reqs]),
+                       _display(show, platform) + " && " + _display([executable, "-m", "pip", "install", *reqs], platform),
                        reason="this environment has no pip and no `uv` on PATH")
+
+# ------------------------------------------------------------------ mokata WITH an extra (0.0.26 L1)
+def _with_extra(req: _Req, extra: str) -> _Req:
+    extras = tuple(req.extras) + (() if extra in req.extras else (extra,))
+    return _Req(name=req.name, extras=extras, specifier=req.specifier, url=req.url)
+
+
+def _uv_tool_line(prefix: str, extra: str, drop_pin: bool = False) -> Optional[List[str]]:
+    """`uv tool install "mokata[<extra>]"` re-stating the receipt (python, pin, source, the user's
+    own `--with`s) so the rebuild changes nothing but the extra. None when the receipt cannot be
+    re-stated faithfully — the caller then shows the bare line."""
+    data = _load_toml(os.path.join(prefix, _UV_RECEIPT))
+    tool = (data or {}).get("tool") or {}
+    if not tool or tool.get("constraints") or tool.get("overrides") \
+            or tool.get("build-constraint-dependencies"):
+        return None
+    reqs: List[_Req] = []
+    for entry in tool.get("requirements") or []:
+        r = _receipt_reqs(entry) if isinstance(entry, dict) else None
+        if r is None:
+            return None
+        reqs.append(r)
+    mains = [r for r in reqs if _canon(r.name) == DIST]
+    if not mains:
+        return None
+    main = _with_extra(mains[0], extra) if extra else mains[0]
+    if drop_pin and main.specifier.strip().startswith("=="):
+        main = _Req(name=main.name, extras=main.extras, specifier="", url=main.url)
+    argv = ["uv", "tool", "install", main.render()]
+    py = tool.get("python")
+    if isinstance(py, str) and py:
+        argv += ["--python", py]
+    for r in reqs:
+        if r is not mains[0] and _canon(r.name) != DIST:
+            argv += ["--with", r.render()]
+    return argv
+
+
+def _pipx_main_package(prefix: str) -> Optional[str]:
+    """What the user gave `pipx install` (a name, a path, a URL), from pipx's own metadata."""
+    import json
+    try:
+        with open(os.path.join(prefix, _PIPX_METADATA), encoding="utf-8") as fh:
+            main = (json.load(fh) or {}).get("main_package") or {}
+    except (OSError, ValueError):
+        return None
+    spec = main.get("package_or_url")
+    return spec if isinstance(spec, str) and spec else None
+
+
+def plan_extra_install(extra: str, *,
+                       prefix: Optional[str] = None,
+                       executable: Optional[str] = None,
+                       which: Callable[[str], Optional[str]] = shutil.which,
+                       has_pip: Optional[bool] = None,
+                       platform: Optional[str] = None,
+                       requires: Optional[Sequence[str]] = None) -> InstallPlan:
+    """The ONE line that gives THIS environment `mokata[<extra>]`, by the installer that owns it.
+
+    0.0.26 L1 (`FULL-INSTALLS-EVERYTHING-IN-ONE-GO`). DISPLAY ONLY — `argv` is always None:
+    setup never rebuilds the environment it is running from (on Windows that env holds the locked
+    `mokata.exe`; that self-rebuild is what left Jas's full setup "PARTIALLY wired"). The human
+    runs this line, then `mokata setup claude --mode <m>` again, which only detects and wires.
+
+      uv-tool  ``uv tool install "mokata[full]"`` (+ the receipt's python / pin / source / --with)
+               — uv rebuilds a tool whose requirements changed (measured 2026-10-21).
+      pipx     ``pipx install --force "mokata[full]"`` — pipx records the extra, so
+               ``pipx upgrade`` keeps it (an `inject` would not be re-applied from the spec).
+      pip      ``<python> -m pip install <the extra's requirements>`` — never ``mokata[...]``:
+               pip would re-resolve mokata itself (install_route's pip rule).
+      uv-pip   ``uv pip install --python <python> <requirements>``.
+    """
+    prefix = sys.prefix if prefix is None else prefix
+    executable = executable or sys.executable
+    platform = platform or sys.platform
+    inst = detect_installer(prefix, which=which, has_pip=has_pip)
+    me = f"{DIST}[{extra}]"
+    if inst == UV_TOOL:
+        argv = _uv_tool_line(prefix, extra) or ["uv", "tool", "install", me]
+        return InstallPlan(UV_TOOL, [me], None, _display(argv, platform))
+    if inst == PIPX:
+        src = _pipx_main_package(prefix) or DIST
+        if src.startswith(("git+", "http:", "https:")):
+            spec = f"{me} @ {src}"
+        elif os.path.isabs(src) or src.startswith("."):
+            spec = f"{src}[{extra}]"                      # a local path: `<path>[full]`
+        else:
+            spec = me                                     # PyPI: never re-pin what pipx resolved
+        return InstallPlan(PIPX, [me], None, _display(["pipx", "install", "--force", spec], platform))
+    reqs = extra_requirements(extra, requires)
+    if inst == UV_PIP and reqs:
+        return InstallPlan(UV_PIP, [me], None, _display(
+            ["uv", "pip", "install", "--python", executable, *reqs], platform))
+    if inst == PIP and reqs:
+        return InstallPlan(PIP, [me], None, _display(
+            [executable, "-m", "pip", "install", *reqs], platform))
+    # No readable metadata (a source tree on PYTHONPATH), or no installer at all: the documented
+    # line. It names mokata itself, which is right for a fresh environment.
+    return InstallPlan(inst, [me], None, _display([executable, "-m", "pip", "install", me], platform),
+                       reason="" if inst in (PIP, UV_PIP) else
+                       "this environment has no pip and no `uv` on PATH")
+
 
 # ------------------------------------------------------------------ upgrading mokata itself
 def _editable_source(dist: str = DIST) -> Optional[str]:
@@ -504,68 +479,168 @@ def _editable_source(dist: str = DIST) -> Optional[str]:
     return None
 
 
+def installed_extras(requires: Optional[Sequence[str]] = None,
+                     have: Optional[Callable[[str], bool]] = None,
+                     platform: Optional[str] = None) -> List[str]:
+    """The user-facing extras this environment actually HAS (every requirement of the extra is
+    installed), as the smallest set that covers them: ``["full"]`` rather than ``["full",
+    "embeddings", "graph-ts", "ide"]``. Read from mokata's installed metadata, so a new extra or a
+    changed ``full`` needs no edit here. An extra whose requirements are all base dependencies
+    (``mcp``) is not one the user chose and is left out.
+
+    0.0.26 L2 (`MOK-UPDATE`): pip / uv pip have no record of the extras a user asked for, so the
+    upgrade line re-derives them — `pip install -U mokata` would keep the old extras' packages but
+    never install a package a NEW version adds to `[full]`."""
+    platform = platform or sys.platform
+    if requires is None:
+        try:
+            requires = _md.requires(DIST) or []
+        except _md.PackageNotFoundError:
+            requires = []
+    if have is None:
+        def have(name: str) -> bool:
+            try:
+                _md.distribution(name)
+                return True
+            except _md.PackageNotFoundError:
+                return False
+
+    def applies(marker: str) -> bool:
+        m = re.search(r"sys_platform\s*(==|!=)\s*['\"]([^'\"]+)['\"]", marker)
+        if not m:
+            return True
+        return (platform == m.group(2)) == (m.group(1) == "==")
+
+    base: set = set()
+    by_extra: Dict[str, set] = {}
+    for line in requires:
+        req, _, marker = line.partition(";")
+        name = _canon(re.split(r"[\[<>=!~;@ (]", req.strip(), maxsplit=1)[0])
+        m = _EXTRA_CLAUSE.search(marker)
+        if not m:
+            base.add(name)
+            continue
+        rest = _EXTRA_CLAUSE.sub(" ", marker)
+        if not applies(rest):
+            continue
+        by_extra.setdefault(_canon(m.group(1)), set()).add(name)
+    satisfied = {e: r for e, r in by_extra.items()
+                 if r and not r <= base and all(have(n) for n in r)}
+    kept: List[str] = []
+    covered: set = set()
+    for e in sorted(satisfied, key=lambda e: (-len(satisfied[e]), e)):
+        if satisfied[e] <= covered:
+            continue
+        kept.append(e)
+        covered |= satisfied[e]
+    return sorted(kept)
+
+
+def _pipx_metadata(prefix: str) -> dict:
+    import json
+    try:
+        with open(os.path.join(prefix, _PIPX_METADATA), encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+_WIN_LOCK = ("Windows locks mokata.exe while it runs — close mokata and the IDE, then run this")
+
+
 def plan_upgrade(*, prefix: Optional[str] = None,
                  executable: Optional[str] = None,
                  which: Callable[[str], Optional[str]] = shutil.which,
                  has_pip: Optional[bool] = None,
                  platform: Optional[str] = None,
                  installer: Optional[str] = None,
-                 editable: Optional[str] = "detect") -> InstallPlan:
-    """How to upgrade mokata ITSELF, by the installer that owns this environment (0.0.25).
+                 editable: Optional[str] = "detect",
+                 requires: Optional[Sequence[str]] = None,
+                 have: Optional[Callable[[str], bool]] = None) -> InstallPlan:
+    """The ONE command that upgrades mokata ITSELF and keeps its extras, by the installer that owns
+    this environment (0.0.26 L2, `MOK-UPDATE`). `display` is the line a human can paste; `argv` is
+    the same command resolved for `mokata update` to run on the human's yes (None when there is
+    nothing to run: a source checkout, no installer, the installer not on PATH). `specs[0]` names
+    what it installs, e.g. ``mokata[full]``.
 
-    Until 0.0.25 `mokata upgrade` always ran `sys.executable -m pip install -U mokata`, which on
-    the documented primary route (`uv tool install mokata`) has no pip and failed. Each installer
-    upgrades in its own way, and each keeps the extras it installed (measured 0.0.22 → 0.0.24 for
-    `uv tool upgrade`; `pipx upgrade` keeps injected packages; pip leaves other packages alone).
+    `deferred` (Windows): the environment holds the running, locked `mokata.exe` — the command
+    may only run AFTER this process exits, from the detached updater (`update.launch_detached`).
 
-    A dev checkout (editable install) is never upgraded for the user — it is their working tree.
-    Windows + uv tool is `deferred`: the running mokata.exe is locked (same rule as extras)."""
+      uv-tool  ``uv tool upgrade mokata`` — keeps the receipt's extras / --with (measured 0.0.22 →
+               0.0.24). A pinned receipt is re-stated without the pin + ``--upgrade``.
+      pipx     ``pipx upgrade mokata`` — keeps ``mokata[full]`` as installed; with injected
+               packages (0.0.25's extras route) ``--include-injected`` upgrades them too.
+      pip      ``<python> -m pip install --upgrade "mokata[<extras it has>]"`` — naming the extras
+               is what installs a package a newer `[full]` adds.
+      uv-pip   ``uv pip install --python <python> --upgrade "mokata[<extras>]"``.
+
+    A dev checkout (editable install) is never upgraded by an installer — it is ``git pull``."""
     prefix = sys.prefix if prefix is None else prefix
     executable = executable or sys.executable
     platform = platform or sys.platform
+    win = platform.startswith("win")
     src = _editable_source() if editable == "detect" else editable
+    inst = installer or detect_installer(prefix, which=which, has_pip=has_pip)
     if src:
-        return InstallPlan(installer or detect_installer(prefix, which=which, has_pip=has_pip),
-                           [DIST], None, "git pull",
+        return InstallPlan(inst, [DIST], None, "git pull",
                            reason=f"this is an editable install of a source checkout ({src}) — "
                                   "update it with git, not an installer")
-    inst = installer or detect_installer(prefix, which=which, has_pip=has_pip)
+
+    def plan(me: str, argv: List[str], tool: Optional[str], reason: str = "") -> InstallPlan:
+        shown = _display(argv, platform)
+        if tool is not None:
+            exe = which(tool)
+            if not exe:
+                return InstallPlan(inst, [me], None, shown,
+                                   reason=f"`{tool}` is not on PATH from this process")
+            argv = [exe] + argv[1:]
+        return InstallPlan(inst, [me], argv, shown, deferred=win,
+                           reason=reason + (". " if reason and win else "")
+                           + (_WIN_LOCK if win else ""))
+
     if inst == UV_TOOL:
-        uv = which("uv")
-        argv = [uv or "uv", "tool", "upgrade", DIST]
         data = _load_toml(os.path.join(prefix, _UV_RECEIPT)) or {}
-        for entry in (data.get("tool") or {}).get("requirements") or []:
-            if isinstance(entry, dict) and _canon(str(entry.get("name", ""))) == DIST \
-                    and str(entry.get("specifier", "")).strip().startswith("=="):
-                return InstallPlan(UV_TOOL, [DIST], None, "uv tool install mokata --upgrade",
-                                   reason=f"your uv tool install pins mokata{entry['specifier']};"
-                                          " `uv tool upgrade` keeps a pin — reinstall without it")
-        if not uv:
-            return InstallPlan(UV_TOOL, [DIST], None, _display(argv),
-                               reason="`uv` is not on PATH from this process")
-        if platform.startswith("win"):
-            return InstallPlan(UV_TOOL, [DIST], argv, _display(argv), deferred=True,
-                               reason="Windows locks the running mokata.exe; close mokata "
-                                      "(and the IDE), then run this")
-        return InstallPlan(UV_TOOL, [DIST], argv, _display(argv))
+        tool = data.get("tool") or {}
+        main = None
+        for entry in tool.get("requirements") or []:
+            if isinstance(entry, dict) and _canon(str(entry.get("name", ""))) == DIST:
+                main = entry
+                break
+        extras = tuple((main or {}).get("extras") or ())
+        me = _Req(DIST, extras=extras).render()
+        spec = str((main or {}).get("specifier") or "").strip()
+        if spec.startswith("=="):
+            # `uv tool upgrade` honours the pin, so it would upgrade nothing. Re-state the receipt
+            # (python, source, --with) without the pin; extras stay because they are re-stated.
+            argv = _uv_tool_line(prefix, "", drop_pin=True) or ["uv", "tool", "install", me]
+            return plan(me, argv + ["--upgrade"], "uv",
+                        f"your uv tool install pins mokata{spec}; `uv tool upgrade` keeps a pin — "
+                        "this reinstalls without it")
+        return plan(me, ["uv", "tool", "upgrade", DIST], "uv")
     if inst == PIPX:
-        pipx = which("pipx")
-        argv = [pipx or "pipx", "upgrade", DIST]
-        if not pipx:
-            return InstallPlan(PIPX, [DIST], None, _display(argv),
-                               reason="`pipx` is not on PATH from this process")
-        return InstallPlan(PIPX, [DIST], argv, _display(argv))
+        meta = _pipx_metadata(prefix)
+        main = meta.get("main_package") or {}
+        m = _SELF_EXTRA.match(str(main.get("package_or_url") or ""))
+        extras = tuple(e.strip() for e in m.group(1).split(",")) if m else ()
+        me = _Req(DIST, extras=extras).render()
+        argv = ["pipx", "upgrade", DIST]
+        if meta.get("injected_packages"):
+            argv = ["pipx", "upgrade", "--include-injected", DIST]
+        return plan(me, argv, "pipx")
+    extras = tuple(installed_extras(requires, have, platform))
+    me = _Req(DIST, extras=extras).render()
     if inst == PIP:
-        argv = [executable, "-m", "pip", "install", "--upgrade", DIST]
-        return InstallPlan(PIP, [DIST], argv, _display(argv))
+        return plan(me, [executable, "-m", "pip", "install", "--upgrade", me], None)
     if inst == UV_PIP:
-        argv = [which("uv") or "uv", "pip", "install", "--python", executable, "--upgrade", DIST]
-        return InstallPlan(UV_PIP, [DIST], argv, _display(argv))
-    return InstallPlan(NO_INSTALLER, [DIST], None, "uv tool install mokata --upgrade",
+        return plan(me, ["uv", "pip", "install", "--python", executable, "--upgrade", me], "uv")
+    return InstallPlan(NO_INSTALLER, [me], None,
+                       _display(["uv", "tool", "install", me, "--upgrade"], platform),
                        reason="this environment has no pip and no `uv` on PATH")
 
 
 __all__ = [
     "UV_TOOL", "PIPX", "PIP", "UV_PIP", "NO_INSTALLER", "INSTALLERS",
-    "InstallPlan", "detect_installer", "extra_requirements", "plan_install", "plan_upgrade",
+    "InstallPlan", "detect_installer", "extra_requirements", "installed_extras",
+    "plan_extra_install", "plan_install", "plan_upgrade", "quote_arg",
 ]

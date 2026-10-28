@@ -122,5 +122,7 @@ jobs:
           echo "ok — the real _McpStdioSession query wire round-tripped"
 
       - name: GR.S2 contract suite (regression under the real binary present)
+        env:
+          MOKATA_TEST_REAL_CRG: "1"   # O15: the suite runs with the graph off unless asked
         run: |
           python -m unittest discover -s tests -t tests -p "test_gr_s2_*.py" -v

@@ -231,6 +231,11 @@ class TestTheProductSideIsRoutedThroughTheChokePoint(unittest.TestCase):
         "src/mokata/docsync.py":
             "`resolve_command_route`: a doc path suffix-matched against `_PAGE_COMMAND_ROUTE`'s "
             "`/`-spelled keys. The value is whatever the caller was handed.",
+        "src/mokata/ide/workspace.py":
+            "0.0.26 P2 `clean_path`: a tab path the BROWSER sent in a workspace-state request "
+            "(or read back from the saved workspace file the browser wrote). It crosses in over "
+            "HTTP; nothing in this process produced it, and containment stays behind the routes' "
+            "own `nav.contained_rel`.",
     }
 
     def test_every_as_name_caller_row_still_resolves(self):

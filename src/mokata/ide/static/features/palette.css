@@ -1,0 +1,10 @@
+/* mokata ide — the palette's additions (0.0.26 P3, ID-PALETTE-FULL); the dialog is app.css's .qo-*. */
+#qo-prefixes .on { color: var(--accent); }
+.qo-row kbd { margin-left: 4px; white-space: nowrap; }
+.qo-row .desc { flex: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qo-row .tag { font-size: 10.5px; border: 1px solid var(--line2); border-radius: 4px; padding: 0 5px; color: var(--muted); }
+.qo-row .tag.gate { color: var(--accent); border-color: var(--accent); }
+.pal-toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 30; max-width: calc(100vw - 32px);
+  padding: 8px 14px; background: var(--panel); color: var(--text); border: 1px solid var(--accent); border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .3); }
+.pal-toast[hidden] { display: none; }

@@ -1,0 +1,111 @@
+name: plugin-route
+
+# 0.0.26 L8 — `MP.S1` / G-1: a stranger installs mokata inside Claude Code with two in-app commands
+# and no prior pip step (doc 86's launch exit). Unit tests drive the launchers with fakes; this job
+# runs the REAL Claude Code CLI on fresh ubuntu and windows runners:
+#
+#   1. `claude plugin validate --strict .` — the marketplace + plugin manifests, as Claude Code reads
+#      them (the CLI is pinned below; bump it deliberately);
+#   2. `claude plugin marketplace add <this checkout>` + `claude plugin install mokata@mostack` —
+#      headless and with NO login and NO API key (both work without either, checked at 2.1.306);
+#   3. `scripts/plugin_route_smoke.py` against the INSTALLED copy (the plugin cache): it spawns the
+#      manifest's MCP command exactly as Claude Code does (`uvx --from "mokata[full]==<v>"
+#      mokata-mcp`, no shell) and completes the MCP handshake, runs the SessionStart and
+#      secret-guard hooks through bash as hooks.json declares them (the gate must BLOCK on a
+#      planted secret, through the pinned runtime), runs the CLI launcher, and requires
+#      `doctor --plugin` to report every check healthy;
+#   4. `--full-mode`: the one-line install's END STATE reached on the plugin route — one pinned
+#      `setup claude --mode full --plugin`, then doctor must show code-review-graph live, model2vec
+#      as the semantic tier and TypeScript parsed (install-e2e.yml's own assertions).
+#
+# WHY NOT `claude mcp list`: it does not list a plugin's MCP servers outside a logged-in session
+# (checked at 2.1.306), and CI has no login. The smoke spawns the declared command instead — the
+# launcher CONTRACT, which is what a user's Claude Code executes.
+#
+# The checkout's own wheel is served to uv with UV_FIND_LINKS: on a release PR the pinned version
+# is not on PyPI yet. The manifests are used unmodified. What `mokata[full]` itself fetches is the
+# product's install path under test (the same residual as install-e2e.yml).
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 4"
+  pull_request:
+    paths:
+      - ".claude-plugin/**"
+      - "src/mokata/hooks/**"
+      - "src/mokata/plugin_runtime.py"
+      - "src/mokata/plugin_cache.py"
+      - "src/mokata/mcp/server.py"
+      - "src/mokata/hook_cli.py"
+      - "src/mokata/templates/commands/**"
+      - "scripts/plugin_route_smoke.py"
+      - "pyproject.toml"
+      - ".github/workflows/plugin-route.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  plugin:
+    name: plugin route · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    # A cold `mokata[full]` fetch is ~100 packages (~13 s on a fast link, measured at L8); the
+    # Claude Code npm install is ~20 s. 25 minutes leaves room for a slow index without hiding a hang.
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    env:
+      CLAUDE_CODE_VERSION: "2.1.306"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv (hash-pinned)
+        run: pip install --require-hashes -r requirements/uv.txt
+
+      - name: Install Claude Code (pinned; no login, no API key)
+        run: |
+          set -euo pipefail
+          npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+          claude --version
+          # A clean machine's view: nothing from the runner image's own Claude config is reused.
+          echo "CLAUDE_CONFIG_DIR=$RUNNER_TEMP/claude-config" >> "$GITHUB_ENV"
+          echo "UV_CACHE_DIR=$RUNNER_TEMP/uv-cache" >> "$GITHUB_ENV"
+
+      - name: Validate the manifests the way Claude Code reads them
+        run: claude plugin validate --strict .
+
+      - name: Add the marketplace and install the plugin (the two in-app commands, headless)
+        run: |
+          set -euo pipefail
+          here="$PWD"
+          if command -v cygpath >/dev/null 2>&1; then here="$(cygpath -w "$PWD")"; fi
+          claude plugin marketplace add "$here"
+          claude plugin install mokata@mostack
+          claude plugin list --json | tee "$RUNNER_TEMP/plugins.json"
+          python - "$RUNNER_TEMP/plugins.json" >> "$GITHUB_ENV" <<'PY'
+          import json, os, sys
+          rows = json.load(open(sys.argv[1], encoding="utf-8"))
+          row = next(r for r in rows if r["id"] == "mokata@mostack")
+          assert row["enabled"], row
+          root = row.get("installPath") or row["readFromFolder"]
+          if not os.path.isfile(os.path.join(root, ".claude-plugin", "plugin.json")):
+              root = row["readFromFolder"]
+          print(f"PLUGIN_ROOT={root}")
+          PY
+
+      - name: Build this checkout's wheel (served to uv; the pin may not be on PyPI yet)
+        run: uv build --wheel -o "$RUNNER_TEMP/dist" .
+
+      - name: The plugin route works — MCP handshake, hooks, launcher, doctor
+        run: python scripts/plugin_route_smoke.py --plugin-root "$PLUGIN_ROOT" --find-links "$RUNNER_TEMP/dist" --full-mode

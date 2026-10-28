@@ -34,12 +34,12 @@ import os
 import secrets
 import socket
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
-from ..tdd_state import state_dir
 
 RING = 512                 # events kept for resume (Last-Event-ID) and slow subscribers
+JOBS_KEPT = 64             # P32: the latest event of this many jobs (coalesced, beside the ring)
 TAIL_SECS = 0.5            # the stat-gated fallback cadence (store + timeline + fingerprint)
 DEDUPE_SECS = 2.0          # one edit reported by the http hook AND the timeline is one event
 MAX_BODY = 8 * 1024 * 1024 # a hook payload carries the written content; bounded read
@@ -47,8 +47,8 @@ HOOK_HEADER = "x-mokata-hook"
 BUS_PATH = "/api/bus"
 
 # The neutral vocabulary. Closed: anything else posted is dropped (never echoed to a page).
-EDIT, TURN_END, SESSION_START, SESSION_END, STORE, CHANGED, FOCUS = (
-    "edit", "turn_end", "session_start", "session_end", "event", "changed", "focus")
+EDIT, TURN_END, SESSION_START, SESSION_END, STORE, CHANGED, FOCUS, JOB = (
+    "edit", "turn_end", "session_start", "session_end", "event", "changed", "focus", "job")
 POSTABLE = (EDIT, TURN_END, SESSION_START, SESSION_END)
 
 # Claude Code → neutral. The file-mutating tools are the ones `dirty-track` already watches.
@@ -63,7 +63,8 @@ PORT_LO, PORT_SPAN = 20000, 10000
 # ------------------------------------------------------------------------------ the bridge record
 
 def bridge_path(root: str) -> str:
-    return os.path.join(os.path.dirname(state_dir(root)), "ide", "bridge.json")
+    from .statedir import ide_dir
+    return os.path.join(ide_dir(root), "bridge.json")
 
 
 def read_bridge(root: str) -> Optional[Dict[str, Any]]:
@@ -201,6 +202,10 @@ class EventBus:
 
     def __init__(self, cap: int = RING):
         self._ring: Deque[Dict[str, Any]] = deque(maxlen=cap)
+        # 0.0.26 P32 — `job` events are COALESCED: only the latest per job id is kept, beside the
+        # ring, so a 9-minute build's progress ticks can never push session events off it.
+        self._jobs: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        self._dropped = 0                  # the id of the newest event that fell off the ring
         self.seq = 0
         self._cond: Optional[asyncio.Condition] = None
         self._recent: Dict[Tuple[str, str], float] = {}
@@ -227,7 +232,16 @@ class EventBus:
             return None
         self.seq += 1
         out = dict(evt, id=self.seq, ts=now)
-        self._ring.append(out)
+        if evt.get("kind") == JOB:
+            jid = str((evt.get("job") or {}).get("id") or "")
+            self._jobs.pop(jid, None)
+            self._jobs[jid] = out
+            while len(self._jobs) > JOBS_KEPT:
+                self._jobs.popitem(last=False)
+        else:
+            if len(self._ring) == self._ring.maxlen:
+                self._dropped = self._ring[0]["id"]
+            self._ring.append(out)
         cond = self._condition()
         async with cond:
             cond.notify_all()
@@ -237,13 +251,25 @@ class EventBus:
         """A copy of the ring, oldest first (call on the loop: the copy is what crosses threads)."""
         return list(self._ring)
 
+    def job_events(self) -> List[Dict[str, Any]]:
+        """The latest `job` event of every job the bus still keeps (<= JOBS_KEPT), oldest first.
+        A page's FIRST stream opens at the bus's current seq, so a job that started — or even
+        finished — before the stream connected would never reach it (0.0.26 O9: a job started at
+        page load stayed "queued" in the Activity drawer forever). The stream sends these first."""
+        return sorted(self._jobs.values(), key=lambda e: e["id"])
+
     def after(self, seq: int) -> Tuple[List[Dict[str, Any]], bool]:
         """Events after `seq`, oldest first, and whether the caller MISSED some (fell off the ring)."""
         if seq >= self.seq:
             return [], False
-        oldest = self._ring[0]["id"] if self._ring else self.seq + 1
-        missed = seq + 1 < oldest
-        return [e for e in self._ring if e["id"] > seq], missed
+        # Missed = a RING event this subscriber had not seen fell off the ring. (Ids spent by
+        # coalesced job events were never on the ring, so a gap in ids is not a loss.)
+        missed = seq < self._dropped
+        ring = [e for e in self._ring if e["id"] > seq]
+        jobs = [e for e in self._jobs.values() if e["id"] > seq]
+        if not jobs:
+            return ring, missed
+        return sorted(ring + jobs, key=lambda e: e["id"]), missed
 
     async def wait_after(self, seq: int, timeout: float) -> Tuple[List[Dict[str, Any]], bool]:
         evts, missed = self.after(seq)

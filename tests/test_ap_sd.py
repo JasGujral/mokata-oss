@@ -21,6 +21,8 @@ import unittest
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 from _support import mcp_commit
 
 from mokata import gate_hook as G                                  # noqa: E402
@@ -284,7 +286,7 @@ def _emit_args(path, scope=None):
              approach="a")
     if scope is not None:
         a["scope"] = scope
-    return a
+    return planned(a)
 
 
 def _emitted_spec(repo):

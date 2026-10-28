@@ -1,0 +1,32 @@
+{
+ "skill": "frontend-react",
+ "triggers": [
+  ".jsx/.tsx file in a package that depends on react-dom or next"
+ ],
+ "positive": [
+  "Add a cart summary component to our React web app",
+  "Refactor the Next.js checkout page into server and client components",
+  "Write a new .tsx form component in the web package that uses react-dom",
+  "Our Next app's product page needs a filter sidebar",
+  "Convert this class component to hooks in the React web project"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Build a new screen in our React Native app"
+  },
+  {
+   "prompt": "Add a provider and a guard to the NestJS module",
+   "expect": "backend-nestjs"
+  },
+  {
+   "prompt": "Write a small TypeScript library with no React dependency"
+  },
+  {
+   "prompt": "Add an index to speed up the users query",
+   "expect": "performance"
+  },
+  {
+   "prompt": "Expo app with a native-only camera screen"
+  }
+ ]
+}

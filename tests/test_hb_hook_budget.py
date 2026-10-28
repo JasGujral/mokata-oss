@@ -35,7 +35,8 @@ import _support  # noqa: F401  (puts src/ on the path)
 
 from mokata import harvest as H
 from mokata import perf, schema
-from mokata.hook_cli import QUIET_OUTSIDE_MOKATA, _surely_not_mokata
+from mokata_emit import DEFERRED, QUIET_OUTSIDE_MOKATA, SYNC_OBSERVE
+from mokata_emit import surely_not_mokata as _surely_not_mokata
 from mokata.init import init_repo
 from mokata.quiet_spawn import hidden
 from mokata.repo_identity import resolve_mokata_root
@@ -308,28 +309,33 @@ class TheFastPathIsSoundAgainstTheResolver(unittest.TestCase):
 
     def test_outside_mokata_the_quiet_hooks_load_no_engine_and_say_nothing(self):
         """The plugin's hooks fire in every repo the user opens. Outside a mokata repo the quiet
-        observability hooks must exit 0 with no output, having imported only the dispatcher (the
-        plugin route; the per-project settings route always reaches its handler)."""
+        observability hooks must exit 0 with no output, having imported only the front door — and,
+        for the ones the front door spools (0.0.26 O3), not even the dispatcher, and spooling
+        nothing (the plugin route; the per-project settings route always reaches its handler)."""
         d = self.layouts["git repo, no mokata"]
         payload = json.dumps({"session_id": "S1", "cwd": d, "hook_event_name": "Stop",
                               "tool_name": "mcp__mokata__session_save",
                               "tool_response": {"registered": "r1"}})
-        code = ("import sys, json\nfrom mokata.hook_cli import main\nrc = main(sys.argv[1:])\n"
+        code = ("import sys, json\nfrom mokata_emit import main\nrc = main(sys.argv[1:])\n"
                 "sys.stderr.write('\\nMODS ' + json.dumps(sorted(m for m in sys.modules "
                 "if m.startswith('mokata'))) + ' ' + str('dataclasses' in sys.modules))\n"
                 "raise SystemExit(rc)")
+        spool = os.path.join(self._t.name, "quiet-spool")
         for sub in QUIET_OUTSIDE_MOKATA:
             for extra in (["--via-plugin"],):
-                env = dict(os.environ, PYTHONPATH=SRC)
+                env = dict(os.environ, PYTHONPATH=SRC, MOKATA_HOOK_SPOOL=spool)
                 p = subprocess.run([sys.executable, "-c", code, sub, *extra], input=payload,
                                    cwd=d, env=env, text=True, encoding="utf-8",
                                    capture_output=True, timeout=60, **hidden())
                 self.assertEqual(0, p.returncode, (sub, p.stderr))
                 self.assertEqual("", p.stdout, sub)
                 mods, dc = p.stderr.rsplit("MODS ", 1)[1].rsplit(" ", 1)
-                self.assertEqual(["mokata", "mokata.hook_cli"], json.loads(mods), sub)
+                want = (["mokata_emit"] if sub in DEFERRED + SYNC_OBSERVE
+                        else ["mokata", "mokata.hook_cli", "mokata_emit"])
+                self.assertEqual(want, json.loads(mods), sub)
                 self.assertEqual("False", dc, sub)
                 self.assertFalse(os.path.exists(os.path.join(d, ".mokata")), sub)
+                self.assertFalse(os.path.isdir(spool) and os.listdir(spool), sub)
 
     def test_in_a_mokata_repo_the_same_hooks_still_do_their_work(self):
         """The fast path must not swallow the real case: a bound session's Stop still drafts."""
@@ -345,10 +351,12 @@ class TheFastPathIsSoundAgainstTheResolver(unittest.TestCase):
             payload = json.dumps({"session_id": "S1", "cwd": d, "hook_event_name": "Stop",
                                   "last_assistant_message": "done"})
             env = dict(os.environ, PYTHONPATH=SRC)
-            p = subprocess.run([sys.executable, "-m", "mokata.hook_cli", "stop", "--via-plugin"],
+            env["MOKATA_HOOK_SPOOL"] = os.path.join(d, "spool")
+            p = subprocess.run([sys.executable, "-m", "mokata_emit", "stop", "--via-plugin"],
                                input=payload, cwd=d, env=env, text=True, encoding="utf-8",
                                capture_output=True, timeout=60, **hidden())
             self.assertEqual(0, p.returncode, p.stderr)
+            _wait_drained(env["MOKATA_HOOK_SPOOL"])
             drafts = H.drafts(d)
             self.assertEqual(1, len(drafts))
             self.assertIn("- last word: done", drafts[0].value)
@@ -401,8 +409,10 @@ def _payloads(d: str) -> dict:
         "gate-guard": dict(base, hook_event_name="PreToolUse", tool_name="Write", tool_input=write),
         "dirty-track": dict(base, hook_event_name="PostToolUse", tool_name="Write",
                             tool_input=write, tool_response={"success": True}),
+        # 0.0.26 O3: a REAL registration — run-bind is synchronous, so the timed path is the bind
+        # itself (a `session_save` that registered nothing is answered on the standard library).
         "run-bind": dict(base, hook_event_name="PostToolUse", tool_name="mcp__mokata__session_save",
-                         tool_input={}, tool_response={}),
+                         tool_input={"register": True}, tool_response={"registered": "r1"}),
         "user-prompt-submit": dict(base, hook_event_name="UserPromptSubmit",
                                    prompt="fix the parser bug"),
         "pre-compact": dict(base, hook_event_name="PreCompact", trigger="auto"),
@@ -410,10 +420,40 @@ def _payloads(d: str) -> dict:
                                agent_type="general"),
         "subagent-stop": dict(base, hook_event_name="SubagentStop", agent_id="A1"),
         "stop": dict(base, hook_event_name="Stop"),
+        # R1 (0.0.26) — the synchronous evidence gate, timed on a completion CLAIM (the path that
+        # resolves the run; without a claim it answers sooner).
+        "stop-gate": dict(base, hook_event_name="Stop",
+                          last_assistant_message="All tests pass — the feature is done."),
         "session-start": dict(base, hook_event_name="SessionStart", source="startup"),
         "session-end": dict(base, hook_event_name="SessionEnd", reason="exit"),
         "statusline": dict(base, model={"display_name": "Opus"}, workspace={"current_dir": d}),
     }
+
+
+def _wait_drained(spool: str, timeout: float = 60.0) -> None:
+    """Block until the O3 drainer has emptied `spool` (entries, in-flight work AND its lock)."""
+    import time
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not os.path.isdir(spool) or not os.listdir(spool):
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"spool not drained in {timeout}s: {os.listdir(spool)}")
+
+
+def _wait_refreshed(root: str, timeout: float = 60.0) -> None:
+    """Block until SessionStart's detached briefing refresher (0.0.26 O12b) has released its lock.
+    Like the drain, it is off the harness's clock, so it is let finish between calls, untimed."""
+    import time
+    lock = os.path.join(root, ".mokata", "temp_local", "briefing", "refresh.lock")
+    deadline = time.monotonic() + 1.0
+    while not os.path.exists(lock) and time.monotonic() < deadline:
+        if not os.path.isdir(os.path.dirname(lock)):
+            break
+        time.sleep(0.01)
+    deadline = time.monotonic() + timeout
+    while os.path.exists(lock) and time.monotonic() < deadline:
+        time.sleep(0.02)
 
 
 def _p95(xs):
@@ -423,7 +463,9 @@ def _p95(xs):
 
 class HookBudgetHoldsForEveryWiredHook(unittest.TestCase):
     """doc 109 §17.2, measured the way the harness experiences it: a fresh `mokata-hook <sub>`
-    process per call on the PLUGIN route (`--via-plugin`, the globally installed one — the heavier of
+    process per call — the console script's own target, the `mokata_emit` front door (0.0.26 O3:
+    observe hooks are spooled and drained by a detached process; the drain is let finish between
+    calls and is NOT timed, as it is not on the harness's clock) — on the PLUGIN route (`--via-plugin`, the globally installed one — the heavier of
     the two routes, it also checks for a settings-route twin), the payload on stdin, p95 over N calls
     after two warm-ups. Three fixtures:
     OUTSIDE a mokata repo (the plugin installed globally), a mokata REPO with no run, and a session
@@ -470,19 +512,24 @@ class HookBudgetHoldsForEveryWiredHook(unittest.TestCase):
         the same box at the same moment (`perf.interpreter_factor`)."""
         import statistics
         import time
-        env = dict(os.environ, PYTHONPATH=SRC, CLAUDE_PROJECT_DIR=d)
+        spool = os.path.join(self._t.name, "spool")
+        env = dict(os.environ, PYTHONPATH=SRC, CLAUDE_PROJECT_DIR=d, MOKATA_HOOK_SPOOL=spool)
         xs, floor = [], []
         for i in range(self.N + 2):
             t0 = time.perf_counter()
-            subprocess.run([sys.executable, "-m", "mokata.hook_cli", sub, "--via-plugin"],
+            subprocess.run([sys.executable, "-m", "mokata_emit", sub, "--via-plugin"],
                            input=body, cwd=d,
                            env=env, capture_output=True, timeout=60, **hidden())
             t1 = time.perf_counter()
+            _wait_drained(spool)
+            if sub == "session-start":
+                _wait_refreshed(d)             # O12b: SessionStart's detached refresher, untimed
+            t1b = time.perf_counter()
             subprocess.run(self.FLOOR, stdin=subprocess.DEVNULL, capture_output=True, timeout=60,
                            **hidden())
             if i >= 2:
                 xs.append((t1 - t0) * 1000.0)
-                floor.append((time.perf_counter() - t1) * 1000.0)
+                floor.append((time.perf_counter() - t1b) * 1000.0)
         return _p95(xs), statistics.median(floor)
 
     def _check(self, fixture: str, subs) -> None:
@@ -510,8 +557,16 @@ class HookBudgetHoldsForEveryWiredHook(unittest.TestCase):
     def test_every_wired_hook_has_a_kind_and_doc_109s_numbers_are_the_targets(self):
         from mokata.hook_cli import _SUBCOMMANDS
         self.assertEqual(set(_SUBCOMMANDS), set(perf.HOOK_KINDS))
-        self.assertEqual({"observe": 50.0, "gate": 150.0},
-                         {k: perf.HOOK_BUDGET_TARGETS_MS[k] for k in ("observe", "gate")})
+        # U14 (0.0.26): the `context` kind is RULED at 150 ms — no longer a proposal.
+        self.assertEqual({"observe": 50.0, "gate": 150.0, "context": 150.0},
+                         perf.HOOK_BUDGET_TARGETS_MS)
+        self.assertEqual({"session-start", "user-prompt-submit", "subagent-start", "statusline"},
+                         {s for s, k in perf.HOOK_KINDS.items() if k == "context"})
+        # U13: what the front door spools is the observe kind — nothing that answers — minus
+        # `run-bind`, which stays synchronous (the gate reads its binding on the next tool call).
+        self.assertEqual(set(DEFERRED) | set(SYNC_OBSERVE),
+                         {s for s, k in perf.HOOK_KINDS.items() if k == "observe"})
+        self.assertEqual(("run-bind",), SYNC_OBSERVE)
         for key, ceiling in perf.HOOK_BUDGET_GAPS_MS.items():
             sub, fixture = key.split("@")
             self.assertIn(fixture, ("outside", "repo", "bound"), key)

@@ -159,9 +159,17 @@ class ThePageAsksOnce(unittest.TestCase):
 
     def test_an_empty_search_box_asks_nothing(self):
         js = self._read("search.js")
-        run = js[js.index("async function run()"):]
-        guard, call = run.index("if (!q.trim())"), run.index('api("/api/search"')
+        run = js[js.index("function run()"):]          # 0.0.26 P36: run() asks via askWord
+        guard, call = run.index("if (!q.trim())"), run.index("askWord(q")
         self.assertLess(guard, call)
+
+
+def setUpModule():
+    # 0.0.26 O11 — this module's expectations are the CORE install's: no external code graph on
+    # the machine. Pinned, so a venv with code-review-graph (`mokata[full]`) means the same thing;
+    # what is true WITH it present is graded in test_o11_crg_present (and the sibling below, if any).
+    from _support import hide_external_graphs
+    hide_external_graphs()
 
 
 if __name__ == "__main__":

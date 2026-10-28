@@ -1,0 +1,35 @@
+{
+ "skill": "refine",
+ "triggers": [
+  "deep, steerable review of EXISTING code",
+  "what to refactor, harden, or clean up"
+ ],
+ "positive": [
+  "Do a deep review of the existing billing code and tell me what to refactor",
+  "What should we harden or clean up in this codebase? Focus on auth",
+  "Propose prioritized refinements for the existing parser, I'll pick a scoped set",
+  "Review the existing code for improvements and hand the chosen ones to spec",
+  "Steer a deep review of our legacy module: what would you clean up?"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Implement the refactor we agreed on yesterday",
+   "expect": "develop"
+  },
+  {
+   "prompt": "Brainstorm a brand-new notifications feature",
+   "expect": "brainstorm"
+  },
+  {
+   "prompt": "Review my finished diff before merge",
+   "expect": "review"
+  },
+  {
+   "prompt": "Refine this paragraph of my essay"
+  },
+  {
+   "prompt": "Make the hot loop faster with measurements",
+   "expect": "optimize"
+  }
+ ]
+}

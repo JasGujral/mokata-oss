@@ -65,6 +65,14 @@ THE_WORKFLOWS = (
     # 0.0.25 Lane C — the declared Python floor, weekly + manual (ruling U2 as recommended), with
     # the G4 harness-cert server half on the same interpreter.
     "python-floor.yml",
+    # 0.0.26 L3 — CC-COMPAT: the latest Claude Code (npm) against mokata's generated files, weekly.
+    "cc-compat.yml",
+    # 0.0.26 L8 — MP.S1: the REAL Claude Code CLI installs the plugin headless (ubuntu + windows),
+    # then the launcher contract is driven end to end. Path-filtered PR + weekly + manual.
+    "plugin-route.yml",
+    # 0.0.26 L6 — SA.S1: the third-party `mcp-scan` of the plugin's MCP server. Manual only (it needs
+    # the network and sends tool descriptions to the scanner's vendor), exact-version input.
+    "mcp-scan.yml",
 )
 
 GOOD_SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1"

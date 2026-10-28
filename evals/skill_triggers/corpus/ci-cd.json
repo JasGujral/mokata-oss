@@ -1,0 +1,35 @@
+{
+ "skill": "ci-cd",
+ "triggers": [
+  "CI/CD pipeline",
+  "GitHub Actions or other CI workflow",
+  "quality-gate step"
+ ],
+ "positive": [
+  "Add a lint step to our GitHub Actions workflow",
+  "Pin every action in the CI pipeline to a commit sha for the Scorecard",
+  "Our release workflow needs a quality-gate step that blocks on failing tests",
+  "Move the build and test jobs from Travis to GitHub Actions",
+  "Change how the CI/CD pipeline publishes the package on a tag"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Write a one-off local script to rename some files on my laptop"
+  },
+  {
+   "prompt": "Plan a canary rollout with rollback thresholds for the new checkout",
+   "expect": "shipping"
+  },
+  {
+   "prompt": "Squash my last three commits and pick a branching strategy",
+   "expect": "git"
+  },
+  {
+   "prompt": "Add a new field to the user model"
+  },
+  {
+   "prompt": "Why does this unit test fail on my machine?",
+   "expect": "debug"
+  }
+ ]
+}

@@ -1,0 +1,6 @@
+{
+  "id": "11-flatten-depth",
+  "title": "Flatten nested lists to a depth",
+  "prompt": "Implement `flatten(items, depth=None)` in flatten.py: flatten nested lists/tuples; `depth=None` flattens fully, `depth=1` one level; strings are never split. Add tests.",
+  "max_turns": 40
+}

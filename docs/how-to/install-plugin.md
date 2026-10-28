@@ -20,13 +20,50 @@
 
 `/plugin marketplace add` reads `.claude-plugin/marketplace.json` from the GitHub repo and
 registers it as a marketplace named `mostack` — a self-hosted marketplace needs no approval — and
-`@mostack` is that name. Nothing is installed into your project's Python environment: the
-plugin's hooks run from the plugin's own checkout, and its MCP server is launched with
-`uvx --from mokata==<plugin version> mokata-mcp`, pinned to the plugin's version.
+`@mostack` is that name. Nothing is installed into your project's Python environment and nothing
+needs `pip`.
 
-**Requirement: [`uv`](https://docs.astral.sh/uv/) on your PATH** (it provides `uvx`). Without
-it the commands, skills and hooks still load but the MCP server cannot start; `mokata doctor`
-names it.
+**One pinned version for everything.** The MCP server starts as
+`uvx --python ">=3.12" --from "mokata[full]==<plugin version>" mokata-mcp`. On its first start it records that
+environment's interpreter in the plugin's data directory (`~/.claude/plugins/data/mokata-mostack/`),
+and the plugin's hooks and its CLI launcher (`src/mokata/hooks/mokata-launch`, used by
+`/mokata:doctor` and `/mokata:review-window`) run that same interpreter — so the plugin, its MCP
+server, its hooks and the IDE are always the same mokata, with every `full` package (semantic
+memory model, code-review-graph, the TypeScript parser, the IDE's web stack). Before that first
+start the hooks use any Python 3 with the plugin's own source (same version, core only), or
+`uvx` when there is no Python at all.
+
+**Requirement: [`uv`](https://docs.astral.sh/uv/)** (it provides `uvx`; it fetches a Python if you
+have none). Without it the commands, skills and hooks load but the MCP server cannot start, and
+the first session says how to get uv:
+
+- macOS / Linux: `curl -LsSf https://astral.sh/uv/install.sh | sh` (or `brew install uv`)
+- Windows: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
+  (or `winget install --id=astral-sh.uv -e`)
+
+then restart Claude Code.
+
+**First start costs one download.** uv fetches `mokata[full]` once: about 100 packages, ~400 MB in
+uv's cache (13 s on a fast link when measured; minutes on a slow one). The first session says so.
+If `/mcp` shows mokata failed while it downloads, reconnect it there when the download ends.
+
+**Finish full mode in a repo** (the code graph, search by meaning, lexical search — the same end
+state as `uv tool install "mokata[full]"` + `mokata setup claude --mode full`): run the command the
+first briefing names, in the repo,
+
+```text
+uvx --python ">=3.12" --from "mokata[full]==<plugin version>" mokata setup claude --mode full --plugin
+```
+
+or `/mokata:init full`. `--plugin` initializes the repo if needed (human-gated), switches semantic
+memory on and warms its model, and pins code-review-graph — and writes no `.claude/` hooks or
+`.mcp.json`, because the plugin already is that wiring.
+
+**Check it:** `/mokata:doctor` reports the plugin route — uv found · package resolved · plugin and
+package versions match · MCP server running · hooks firing — and each failing check's fix.
+
+**The IDE preview:** `/mokata:review-window` opens mokata's review window from the plugin route —
+the same pinned `mokata[full]`, no extra install.
 
 From a local clone (contributors), the same route works with a path:
 `/plugin marketplace add ~/path/to/mokata-oss`. Claude Code caches one copy per plugin version,

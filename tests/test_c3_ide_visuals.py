@@ -8,7 +8,7 @@ Asserted:
     ring; a chain no test runs is `untested`, but ONLY when it is structural — lexical evidence
     is `unknown`, and a symbol the graph has no definition for claims nothing;
   * focus = callers left / callees right; the path tracer finds the shortest call path or says none;
-  * past MAX_NODES the answer says `truncated`;
+  * past a page (PAGE_NODES) the answer says `more`, and the next page resumes it (P37);
   * the bundle is reproducible: pinned versions, sha256s that match, LICENSE files, served from
     /static/vendor/ under the strict CSP, packaged into the wheel, and no CDN URL anywhere.
 """
@@ -154,13 +154,16 @@ class TheRipple(unittest.TestCase):
             self.assertEqual("unknown", g["nodes"][0]["coverage"])
             self.assertEqual([], g["untested_chains"])
 
-    def test_past_the_node_cap_the_answer_says_truncated(self):
+    def test_past_a_page_the_answer_says_more_and_the_next_page_resumes(self):
         with tempfile.TemporaryDirectory() as d:
             _fixture(d)
-            with mock.patch.object(V, "MAX_NODES", 2):
+            with mock.patch.object(V, "PAGE_NODES", 2):
                 g = V.ripple(d, "parse", 3)
-            self.assertTrue(g["truncated"])
-            self.assertLessEqual(len(g["nodes"]), 2)
+                self.assertTrue(g["more"])
+                self.assertLessEqual(len(g["nodes"]), 2)
+                g2 = V.ripple(d, "parse", 3, page=2)
+            self.assertGreater(len(g2["nodes"]), len(g["nodes"]))
+            self.assertEqual(2, g2["page"])
 
 
 class TheEndpoint(unittest.TestCase):
@@ -271,8 +274,9 @@ class ThePage(unittest.TestCase):
     def test_four_views_and_the_legend(self):
         with open(os.path.join(STATIC, "index.html"), encoding="utf-8") as fh:
             html = fh.read()
-        for v in ("ripple", "focus", "path", "untested"):
+        for v in ("ripple", "focus", "path"):            # P37 §5.1: three tabs + a toggle
             self.assertIn(f'data-gview="{v}"', html)
+        self.assertIn('data-gview-toggle="untested"', html)
         for needle in ("structural edge", "lexical edge", "reached by no test", 'id="cy"'):
             self.assertIn(needle, html)
         with open(os.path.join(STATIC, "graph.js"), encoding="utf-8") as fh:
@@ -281,6 +285,14 @@ class ThePage(unittest.TestCase):
         self.assertIn('"line-style": "dashed"', js)
         self.assertIn("fcose", js)
         self.assertIn("dagre", js)
+
+
+def setUpModule():
+    # 0.0.26 O11 — this module's expectations are the CORE install's: no external code graph on
+    # the machine. Pinned, so a venv with code-review-graph (`mokata[full]`) means the same thing;
+    # what is true WITH it present is graded in test_o11_crg_present (and the sibling below, if any).
+    from _support import hide_external_graphs
+    hide_external_graphs()
 
 
 if __name__ == "__main__":

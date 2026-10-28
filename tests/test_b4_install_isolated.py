@@ -231,18 +231,19 @@ def _read(rel):
 
 class InstallDocsLeadWithTheOneInstruction(unittest.TestCase):
     """INSTALL-ISOLATED-BY-DEFAULT, docs half — re-ordered at the 0.0.23 cut by the owner: every
-    page that tells a user how to install LEADS with the one instruction that both sets mokata up
-    and updates it (`uv tool install --upgrade mokata`, then `mokata setup claude`), then the
+    page that tells a user how to install LEADS with the one install line (0.0.26 L1,
+    `FULL-INSTALLS-EVERYTHING-IN-ONE-GO`: `uv tool install "mokata[full]"` — the installer fetches
+    everything — then `mokata setup claude --mode full`, which only detects and wires), then the
     plugin as the alternative, and plain pip last with the caveat. (README-ONE-JOB: the README's
     install block sits within the first screen.)"""
 
-    ONE = "uv tool install --upgrade mokata"
+    ONE = 'uv tool install "mokata[full]"'
 
     def test_order_one_instruction_then_plugin_then_pip(self):
         for rel in _INSTALL_DOCS:
             text = _read(rel)
             one = text.find(self.ONE)
-            setup = text.find("mokata setup claude", max(one, 0))
+            setup = text.find("mokata setup claude --mode full", max(one, 0))
             plugin = text.find("/plugin marketplace add JasGujral/mokata-oss")
             pip = text.find("pip install mokata")
             for name, at in (("the one instruction", one), ("setup claude", setup),
@@ -252,7 +253,8 @@ class InstallDocsLeadWithTheOneInstruction(unittest.TestCase):
             self.assertLess(setup, plugin, "%s: `mokata setup claude` must come before the plugin"
                             % rel)
             self.assertLess(plugin, pip, "%s: the plugin must come before plain pip" % rel)
-            self.assertIn("pipx install --force mokata", text, "%s: the pipx form is named" % rel)
+            self.assertIn('pipx install "mokata[full]"', text, "%s: the pipx form is named" % rel)
+            self.assertNotIn("--with-deps", text, "%s: --with-deps is gone (0.0.26 L1)" % rel)
             self.assertIn("/plugin install mokata@mostack", text, rel)
             # wrapped prose / blockquotes: drop the `> ` markers and collapse whitespace
             flat = " ".join(" ".join(l.lstrip("> ") for l in text.splitlines()).split())
@@ -289,5 +291,5 @@ class InstallDocsLeadWithTheOneInstruction(unittest.TestCase):
 
 class RequiresPython(unittest.TestCase):
     def test_pyproject_refuses_old_pythons(self):
-        # VENV-INSTALL-ERROR candidate cause: a <3.10 venv. pip refuses it via requires-python.
-        self.assertRegex(_read("pyproject.toml"), r'(?m)^requires-python\s*=\s*">=3\.10"')
+        # VENV-INSTALL-ERROR candidate cause: a <3.12 venv. pip refuses it via requires-python.
+        self.assertRegex(_read("pyproject.toml"), r'(?m)^requires-python\s*=\s*">=3\.12"')

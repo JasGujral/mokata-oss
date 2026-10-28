@@ -47,11 +47,11 @@ Every push and PR runs the **full unit + integration suite on `ubuntu-latest` an
 `jsonschema`-absent legs. (macOS runners bill at 10× and are dropped from the matrix.) A
 regression on either OS fails the build.
 
-**The declared floor runs on the same gate**, not only at release: three further legs pin
-Python 3.10 — `ubuntu` × jsonschema-present, `ubuntu` × jsonschema-absent, and `windows` ×
-jsonschema-present. They are targeted `include` entries rather than a version axis, so the
-floor is covered on both operating systems and both dependency states without doubling the
-matrix. Every floor leg blocks: none is `continue-on-error`.
+**The declared floor IS the gate Python.** mokata requires Python 3.12 or newer
+(`requires-python = ">=3.12"`), and every gate leg runs 3.12, so every push and PR tests the
+floor on both operating systems and both dependency states. On an older Python, pip refuses to
+install mokata, and every launcher (the plugin's hooks and `mokata-launch`) and `import mokata`
+itself say "mokata needs Python 3.12 or newer" and name the Python they found.
 
 To exercise the floor locally, use the provisioner rather than whatever Python is on your
 PATH — see [running the tests](../developer-guide.md#running-the-tests-both-jsonschema-states).

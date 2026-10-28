@@ -76,14 +76,16 @@ install that runs `pip` and may touch the network, so it goes through the same c
 as any durable change:
 
 ```bash
-pip install 'mokata[embeddings]'      # or accept the offer when mokata asks
+uv tool install "mokata[full]"        # or: pipx install "mokata[full]" · pip install "mokata[embeddings]"
+mokata setup claude --mode full       # detects it, switches the tier on, warms the model
 ```
 
-`mokata init --mode memory` and `--mode full` **offer** the local embeddings model when run
-interactively; `--mode seatbelt` structurally never does. The prompt **fails closed off a TTY** (an
-unanswered prompt is not consent), the install is one **bounded** subprocess, and success is decided
-by whether the module actually **imports** — not by pip's exit code. A **decline is remembered**
-(user-scoped, so it survives a re-clone) and you are not asked again.
+`--mode memory` and `--mode full` **never install**: they detect the extra, set
+`memory.embedder = auto`, and warm the model (a ~30 MB one-time download from huggingface.co).
+If the package is missing, the outcome table names the ONE install line for the installer that
+owns mokata's environment; if the download is blocked, it names why (offline, proxy, TLS,
+timeout). `--mode seatbelt` structurally never touches it. The interactive onboarding wizard
+still offers the extra once — fail-closed off a TTY, a decline remembered.
 
 Changed embedder? Vectors must never silently mix, so the runtime **refuses** a mismatched index
 (the semantic tier goes off and recall falls to lexical). The way out is the gated migration:
@@ -119,6 +121,54 @@ store = MemoryStore.from_surface(Surface.load("."))
 store.remember(MemoryItem.create("db.engine", "postgres"), assume_yes=True)
 store.remember_decision("api.style", "REST", assume_yes=True)
 ```
+
+### Citations must resolve
+
+If a fact cites code, mokata checks the citation before anything is stored. These are refused,
+and the message names the citation:
+
+```python
+store.remember(MemoryItem.create("billing", "refunds live in src/payments/refund.py:12"),
+               assume_yes=True)
+# refused: ungrounded memory write — 1 citation(s) do not resolve:
+#   'src/payments/refund.py:12' in value (no such file in the repo). Nothing was written. …
+```
+
+Paths and line anchors must exist in the repo, commits must resolve, links must be well-formed
+(they are not fetched), and symbols are checked through the code graph when one is adopted. Wrap
+anything that must not be stored in `<private>…</private>`.
+
+If the new fact overlaps an existing one on four or five of kind, subject, value, citations and
+scope, the write updates that entry instead of adding a near-duplicate. The approval prompt tells
+you which.
+
+### Retire a learning when its code changes
+
+Give a fact one or more `retire_when` predicates:
+
+```python
+store.remember(MemoryItem.create(
+    "billing", "refunds go through refund() in src/billing.py",
+    retire_when=["deleted:src/billing.py", "date:2027-01-01"]), assume_yes=True)
+```
+
+Over MCP, pass `retire_when=["deleted:src/billing.py"]` to `remember`. The four predicates are
+`deleted:<path>`, `removed:<symbol>`, `after:<commit>` and `date:<YYYY-MM-DD>`.
+
+When one fires, the fact shows up in `mokata memory` and in `detect_issues()` as `retire_due`.
+Choose a refresh verb:
+
+```bash
+mokata memory refresh                                    # list what fired
+mokata memory refresh billing --verb keep                # still true — drop the fired predicate
+mokata memory refresh billing --verb update --value "…"  # rewrite in place
+mokata memory refresh billing --verb consolidate --into <id> --value "…"
+mokata memory refresh billing --verb replace --value "…"
+mokata memory refresh billing --verb delete
+```
+
+Every verb asks for approval (or takes `--yes`). Over MCP, use `apply_proposal` with the verb as
+the `decision`; it is propose-only until you run `mokata approve <id>`.
 
 ## Self-healing (C5) — surface, then approve/edit/reject
 

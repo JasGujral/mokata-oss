@@ -15,7 +15,7 @@ pip install -r requirements/ci.txt                    # the TEST dependencies (P
 ```
 
 mokata has **no required runtime dependencies**; `jsonschema` is optional and degraded
-over. Python 3.10–3.13 are supported.
+over. Python 3.12 and newer are supported (3.12 is the floor and the CI Python).
 
 > ⚠ **A venv, and `requirements/ci.txt`, are both load-bearing for the test suite** — this is
 > not boilerplate. The suite asks the environment where *its* `mokata-mcp` is, so the console
@@ -45,7 +45,7 @@ pip install "jsonschema>=4.0"
 python -m unittest discover -s tests -t tests
 ```
 
-CI runs both states across Python 3.10–3.13 plus a `mokata playbook` smoke run.
+CI runs both states on Python 3.12 (the floor) plus a `mokata playbook` smoke run.
 
 ### And on the declared floor
 

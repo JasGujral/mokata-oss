@@ -1,0 +1,7341 @@
+{
+ "source": "seed",
+ "note": "corpus expectations, not live decisions; re-record with scripts/skill_evals_live.py (owner-run, own Claude Code login)",
+ "decisions": [
+  {
+   "target": "api",
+   "kind": "positive",
+   "prompt": "Add a new GET /orders/{id} endpoint to the orders API and define its request/response shape",
+   "expect": "api",
+   "chosen": "api",
+   "relied_on": [
+    "route, handler, endpoint, or public interface",
+    "request/response shape"
+   ],
+   "lexical": {
+    "target_score": 18.4609,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "api",
+   "kind": "positive",
+   "prompt": "Change the response shape of the /users handler so it includes the email field",
+   "expect": "api",
+   "chosen": "api",
+   "relied_on": [
+    "route, handler, endpoint, or public interface",
+    "request/response shape"
+   ],
+   "lexical": {
+    "target_score": 11.8134,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "api",
+   "kind": "positive",
+   "prompt": "Our login route should return a 401 status code instead of 400 on bad credentials",
+   "expect": "api",
+   "chosen": "api",
+   "relied_on": [
+    "route, handler, endpoint, or public interface",
+    "a status code"
+   ],
+   "lexical": {
+    "target_score": 8.7473,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "api",
+   "kind": "positive",
+   "prompt": "Rename a parameter in the public interface of our payments client and check who calls it",
+   "expect": "api",
+   "chosen": "api",
+   "relied_on": [
+    "route, handler, endpoint, or public interface"
+   ],
+   "lexical": {
+    "target_score": 11.7397,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "api",
+   "kind": "positive",
+   "prompt": "Design the request/response contract for a new webhook endpoint before we write any code",
+   "expect": "api",
+   "chosen": "api",
+   "relied_on": [
+    "route, handler, endpoint, or public interface",
+    "request/response shape",
+    "a status code"
+   ],
+   "lexical": {
+    "target_score": 18.5075,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "api",
+   "kind": "near_miss",
+   "prompt": "Refactor the internals of the cache module; nothing outside the file changes",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": -3.2119,
+    "target_rank": 52
+   }
+  },
+  {
+   "target": "api",
+   "kind": "near_miss",
+   "prompt": "Tweak the colour contrast and focus outline of the settings form",
+   "expect": "frontend-a11y",
+   "chosen": "frontend-a11y",
+   "relied_on": [
+    "colour/contrast choice"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 7
+   }
+  },
+  {
+   "target": "api",
+   "kind": "near_miss",
+   "prompt": "Add a database index so the nightly report query stops timing out",
+   "expect": "performance",
+   "chosen": "performance",
+   "relied_on": [
+    "hot path, a database query, a cache, or a batch/loop"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 16
+   }
+  },
+  {
+   "target": "api",
+   "kind": "near_miss",
+   "prompt": "Delete the legacy v1 module and migrate every caller off the old shape",
+   "expect": "deprecation",
+   "chosen": "deprecation",
+   "relied_on": [
+    "removes or retires a symbol, endpoint, flag, or module",
+    "migrates callers off an old shape"
+   ],
+   "lexical": {
+    "target_score": 0.9445,
+    "target_rank": 5
+   }
+  },
+  {
+   "target": "api",
+   "kind": "near_miss",
+   "prompt": "Rename a local variable inside one private function",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 13
+   }
+  },
+  {
+   "target": "backend-nestjs",
+   "kind": "positive",
+   "prompt": "Add a roles guard to the NestJS orders controller",
+   "expect": "backend-nestjs",
+   "chosen": "backend-nestjs",
+   "relied_on": [
+    "controller, module, provider, guard, pipe or DTO",
+    "@nestjs/core"
+   ],
+   "lexical": {
+    "target_score": 12.6395,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "backend-nestjs",
+   "kind": "positive",
+   "prompt": "Create a DTO with validation pipes for the create-user endpoint in our Nest app",
+   "expect": "backend-nestjs",
+   "chosen": "backend-nestjs",
+   "relied_on": [
+    "controller, module, provider, guard, pipe or DTO"
+   ],
+   "lexical": {
+    "target_score": 6.6562,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "backend-nestjs",
+   "kind": "positive",
+   "prompt": "Split the NestJS payments module into its own provider and module",
+   "expect": "backend-nestjs",
+   "chosen": "backend-nestjs",
+   "relied_on": [
+    "controller, module, provider, guard, pipe or DTO",
+    "@nestjs/core"
+   ],
+   "lexical": {
+    "target_score": 11.7397,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "backend-nestjs",
+   "kind": "positive",
+   "prompt": "Our @nestjs/core service needs a new injectable provider for the mailer",
+   "expect": "backend-nestjs",
+   "chosen": "backend-nestjs",
+   "relied_on": [
+    "controller, module, provider, guard, pipe or DTO",
+    "@nestjs/core"
+   ],
+   "lexical": {
+    "target_score": 12.2506,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "backend-nestjs",
+   "kind": "positive",
+   "prompt": "Wire a new pipe that transforms query params in the Nest controller",
+   "expect": "backend-nestjs",
+   "chosen": "backend-nestjs",
+   "relied_on": [
+    "controller, module, provider, guard, pipe or DTO"
+   ],
+   "lexical": {
+    "target_score": 6.6562,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "backend-nestjs",
+   "kind": "near_miss",
+   "prompt": "Add a middleware to our plain Express server that logs every request",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": -6.0502,
+    "target_rank": 53
+   }
+  },
+  {
+   "target": "backend-nestjs",
+   "kind": "near_miss",
+   "prompt": "Build a React checkout page with a cart component",
+   "expect": "frontend-react",
+   "chosen": "frontend-react",
+   "relied_on": [
+    ".jsx/.tsx file in a package that depends on react-dom or next"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 10
+   }
+  },
+  {
+   "target": "backend-nestjs",
+   "kind": "near_miss",
+   "prompt": "Write a tiny TypeScript utility library for date parsing with no framework",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": -4.6821,
+    "target_rank": 52
+   }
+  },
+  {
+   "target": "backend-nestjs",
+   "kind": "near_miss",
+   "prompt": "Set up a Fastify route for health checks",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": -0.2239,
+    "target_rank": 52
+   }
+  },
+  {
+   "target": "backend-nestjs",
+   "kind": "near_miss",
+   "prompt": "Harden the login handler against SQL injection in our Go service",
+   "expect": "security",
+   "chosen": "security",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 7
+   }
+  },
+  {
+   "target": "brainstorm",
+   "kind": "positive",
+   "prompt": "I'm exploring an approach for offline sync — can we weigh the options before any code?",
+   "expect": "brainstorm",
+   "chosen": "brainstorm",
+   "relied_on": [
+    "exploring an approach",
+    "weighing options or trade-offs"
+   ],
+   "lexical": {
+    "target_score": 16.612,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "brainstorm",
+   "kind": "positive",
+   "prompt": "Let's think through the trade-offs between a queue and a cron job for this new feature",
+   "expect": "brainstorm",
+   "chosen": "brainstorm",
+   "relied_on": [
+    "weighing options or trade-offs",
+    "describing a NEW problem/feature"
+   ],
+   "lexical": {
+    "target_score": 17.2973,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "brainstorm",
+   "kind": "positive",
+   "prompt": "I have a new problem: users want shared shopping lists. How should we approach it?",
+   "expect": "brainstorm",
+   "chosen": "brainstorm",
+   "relied_on": [
+    "exploring an approach",
+    "describing a NEW problem/feature"
+   ],
+   "lexical": {
+    "target_score": 8.3724,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "brainstorm",
+   "kind": "positive",
+   "prompt": "Before implementation, help me explore approaches for rate limiting the public API",
+   "expect": "brainstorm",
+   "chosen": "brainstorm",
+   "relied_on": [
+    "exploring an approach"
+   ],
+   "lexical": {
+    "target_score": 8.6826,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "brainstorm",
+   "kind": "positive",
+   "prompt": "Weighing options: should notifications be push or polling? Talk it through with me",
+   "expect": "brainstorm",
+   "chosen": "brainstorm",
+   "relied_on": [
+    "weighing options or trade-offs"
+   ],
+   "lexical": {
+    "target_score": 8.667,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "brainstorm",
+   "kind": "near_miss",
+   "prompt": "Fix the typo on line 12 of README.md",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 8
+   }
+  },
+  {
+   "target": "brainstorm",
+   "kind": "near_miss",
+   "prompt": "The approach is approved, now write the acceptance criteria for it",
+   "expect": "spec",
+   "chosen": "spec",
+   "relied_on": [
+    "acceptance criteria",
+    "write or define the spec"
+   ],
+   "lexical": {
+    "target_score": 1.3148,
+    "target_rank": 15
+   }
+  },
+  {
+   "target": "brainstorm",
+   "kind": "near_miss",
+   "prompt": "Continue implementing the approved plan and make the failing test pass",
+   "expect": "develop",
+   "chosen": "develop",
+   "relied_on": [
+    "failing test is on record",
+    "approved, spec-backed change"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 19
+   }
+  },
+  {
+   "target": "brainstorm",
+   "kind": "near_miss",
+   "prompt": "Run git status for me",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 1.1268,
+    "target_rank": 5
+   }
+  },
+  {
+   "target": "brainstorm",
+   "kind": "near_miss",
+   "prompt": "Review my finished diff before I merge it",
+   "expect": "review",
+   "chosen": "review",
+   "relied_on": [
+    "check/review a diff or change"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 10
+   }
+  },
+  {
+   "target": "browser-testing",
+   "kind": "positive",
+   "prompt": "The checkout page throws a console error only in the running browser; capture it with DevTools",
+   "expect": "browser-testing",
+   "chosen": "browser-testing",
+   "relied_on": [
+    "end-to-end or browser test",
+    "DevTools-observable surface",
+    "running browser"
+   ],
+   "lexical": {
+    "target_score": 23.1712,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "browser-testing",
+   "kind": "positive",
+   "prompt": "Write an end-to-end browser test for the signup flow",
+   "expect": "browser-testing",
+   "chosen": "browser-testing",
+   "relied_on": [
+    "end-to-end or browser test",
+    "running browser"
+   ],
+   "lexical": {
+    "target_score": 12.7938,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "browser-testing",
+   "kind": "positive",
+   "prompt": "A failed network request shows up in DevTools when I submit the form; investigate the runtime",
+   "expect": "browser-testing",
+   "chosen": "browser-testing",
+   "relied_on": [
+    "DevTools-observable surface"
+   ],
+   "lexical": {
+    "target_score": 11.626,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "browser-testing",
+   "kind": "positive",
+   "prompt": "The modal's rendering state is wrong in the browser but unit tests pass",
+   "expect": "browser-testing",
+   "chosen": "browser-testing",
+   "relied_on": [
+    "end-to-end or browser test",
+    "running browser"
+   ],
+   "lexical": {
+    "target_score": 9.4005,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "browser-testing",
+   "kind": "positive",
+   "prompt": "Use the connected browser MCP to check the page's runtime behaviour after login",
+   "expect": "browser-testing",
+   "chosen": "browser-testing",
+   "relied_on": [
+    "end-to-end or browser test",
+    "running browser"
+   ],
+   "lexical": {
+    "target_score": 14.5956,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "browser-testing",
+   "kind": "near_miss",
+   "prompt": "Add a unit test for the pure tax calculation function",
+   "expect": "test",
+   "chosen": "test",
+   "relied_on": [
+    "failing tests written"
+   ],
+   "lexical": {
+    "target_score": -4.1866,
+    "target_rank": 53
+   }
+  },
+  {
+   "target": "browser-testing",
+   "kind": "near_miss",
+   "prompt": "Install a new Playwright server for browser automation",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": -0.8188,
+    "target_rank": 48
+   }
+  },
+  {
+   "target": "browser-testing",
+   "kind": "near_miss",
+   "prompt": "Speed up the slow SQL query in the reporting backend",
+   "expect": "performance",
+   "chosen": "performance",
+   "relied_on": [
+    "hot path, a database query, a cache, or a batch/loop"
+   ],
+   "lexical": {
+    "target_score": -1.5363,
+    "target_rank": 50
+   }
+  },
+  {
+   "target": "browser-testing",
+   "kind": "near_miss",
+   "prompt": "Our pytest suite fails with an ImportError in the backend",
+   "expect": "debug",
+   "chosen": "debug",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.4377,
+    "target_rank": 9
+   }
+  },
+  {
+   "target": "browser-testing",
+   "kind": "near_miss",
+   "prompt": "Write the docs page for the browser extension settings",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 6.3197,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "bug",
+   "kind": "positive",
+   "prompt": "Here's a reproducer: calling total([]) returns None instead of 0. Please fix it",
+   "expect": "bug",
+   "chosen": "bug",
+   "relied_on": [
+    "concrete reproducer or bug report",
+    "regression test then a fix"
+   ],
+   "lexical": {
+    "target_score": 5.8678,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "bug",
+   "kind": "positive",
+   "prompt": "Bug report: dates before 1970 crash the parser; here are the exact steps to reproduce",
+   "expect": "bug",
+   "chosen": "bug",
+   "relied_on": [
+    "concrete reproducer or bug report"
+   ],
+   "lexical": {
+    "target_score": 7.3089,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "bug",
+   "kind": "positive",
+   "prompt": "This known defect needs a regression test first and then a fix",
+   "expect": "bug",
+   "chosen": "bug",
+   "relied_on": [
+    "regression test then a fix"
+   ],
+   "lexical": {
+    "target_score": 22.6465,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "bug",
+   "kind": "positive",
+   "prompt": "Turn this reported failure into a captured regression test and a guarded fix",
+   "expect": "bug",
+   "chosen": "bug",
+   "relied_on": [
+    "concrete reproducer or bug report",
+    "regression test then a fix"
+   ],
+   "lexical": {
+    "target_score": 27.673,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "bug",
+   "kind": "positive",
+   "prompt": "Steps to reproduce attached — uploading a 0-byte file 500s. Fix the bug",
+   "expect": "bug",
+   "chosen": "bug",
+   "relied_on": [
+    "concrete reproducer or bug report",
+    "regression test then a fix"
+   ],
+   "lexical": {
+    "target_score": 5.3569,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "bug",
+   "kind": "near_miss",
+   "prompt": "Something is broken in prod and we don't know why yet — root-cause it",
+   "expect": "debug",
+   "chosen": "debug",
+   "relied_on": [
+    "root-causing",
+    "something is broken and asks why"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 7
+   }
+  },
+  {
+   "target": "bug",
+   "kind": "near_miss",
+   "prompt": "Add a dark mode toggle to the app",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 11
+   }
+  },
+  {
+   "target": "bug",
+   "kind": "near_miss",
+   "prompt": "Can you make the CSV export faster?",
+   "expect": "optimize",
+   "chosen": "optimize",
+   "relied_on": [
+    "faster or lighter"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 6
+   }
+  },
+  {
+   "target": "bug",
+   "kind": "near_miss",
+   "prompt": "Write failing tests for the approved spec",
+   "expect": "test",
+   "chosen": "test",
+   "relied_on": [
+    "failing tests written"
+   ],
+   "lexical": {
+    "target_score": 5.1117,
+    "target_rank": 4
+   }
+  },
+  {
+   "target": "bug",
+   "kind": "near_miss",
+   "prompt": "Clean up and refactor the billing module",
+   "expect": "refine",
+   "chosen": "refine",
+   "relied_on": [
+    "what to refactor, harden, or clean up"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 6
+   }
+  },
+  {
+   "target": "chain",
+   "kind": "positive",
+   "prompt": "Plan a chain of skills to run in order: spec then test then develop",
+   "expect": "chain",
+   "chosen": "chain",
+   "relied_on": [
+    "chain of skills to run in order"
+   ],
+   "lexical": {
+    "target_score": 15.6677,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "chain",
+   "kind": "positive",
+   "prompt": "Set up a manual chain — brainstorm, then spec, each step keeping its own gate",
+   "expect": "chain",
+   "chosen": "chain",
+   "relied_on": [
+    "chain of skills to run in order"
+   ],
+   "lexical": {
+    "target_score": 16.3792,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "chain",
+   "kind": "positive",
+   "prompt": "I want to run these mokata skills in order as a chain",
+   "expect": "chain",
+   "chosen": "chain",
+   "relied_on": [
+    "chain of skills to run in order"
+   ],
+   "lexical": {
+    "target_score": 8.8835,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "chain",
+   "kind": "positive",
+   "prompt": "Chain these skills in order: refine, then spec, then test",
+   "expect": "chain",
+   "chosen": "chain",
+   "relied_on": [
+    "chain of skills to run in order"
+   ],
+   "lexical": {
+    "target_score": 9.2567,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "chain",
+   "kind": "positive",
+   "prompt": "Order a sequence of skills to run manually with gates between them",
+   "expect": "chain",
+   "chosen": "chain",
+   "relied_on": [
+    "chain of skills to run in order"
+   ],
+   "lexical": {
+    "target_score": 8.4376,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "chain",
+   "kind": "near_miss",
+   "prompt": "Run the full pipeline end to end as an integration check",
+   "expect": "playbook",
+   "chosen": "playbook",
+   "relied_on": [
+    "full pipeline end-to-end"
+   ],
+   "lexical": {
+    "target_score": 1.1268,
+    "target_rank": 15
+   }
+  },
+  {
+   "target": "chain",
+   "kind": "near_miss",
+   "prompt": "Split the approved spec into parallel subtasks",
+   "expect": "decompose",
+   "chosen": "decompose",
+   "relied_on": [
+    "independent subtasks + a dependency plan"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 27
+   }
+  },
+  {
+   "target": "chain",
+   "kind": "near_miss",
+   "prompt": "Enter the pipeline straight at the test phase",
+   "expect": "enter",
+   "chosen": "enter",
+   "relied_on": [
+    "Enter the pipeline at a phase"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 17
+   }
+  },
+  {
+   "target": "chain",
+   "kind": "near_miss",
+   "prompt": "Explain how a blockchain stores transactions",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 6
+   }
+  },
+  {
+   "target": "chain",
+   "kind": "near_miss",
+   "prompt": "Show me where the current run is in the pipeline",
+   "expect": "progress",
+   "chosen": "progress",
+   "relied_on": [
+    "Show where the run is"
+   ],
+   "lexical": {
+    "target_score": 1.1268,
+    "target_rank": 18
+   }
+  },
+  {
+   "target": "ci-cd",
+   "kind": "positive",
+   "prompt": "Add a lint step to our GitHub Actions workflow",
+   "expect": "ci-cd",
+   "chosen": "ci-cd",
+   "relied_on": [
+    "GitHub Actions or other CI workflow",
+    "quality-gate step"
+   ],
+   "lexical": {
+    "target_score": 14.2246,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "ci-cd",
+   "kind": "positive",
+   "prompt": "Pin every action in the CI pipeline to a commit sha for the Scorecard",
+   "expect": "ci-cd",
+   "chosen": "ci-cd",
+   "relied_on": [
+    "CI/CD pipeline",
+    "GitHub Actions or other CI workflow"
+   ],
+   "lexical": {
+    "target_score": 17.4404,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "ci-cd",
+   "kind": "positive",
+   "prompt": "Our release workflow needs a quality-gate step that blocks on failing tests",
+   "expect": "ci-cd",
+   "chosen": "ci-cd",
+   "relied_on": [
+    "GitHub Actions or other CI workflow",
+    "quality-gate step"
+   ],
+   "lexical": {
+    "target_score": 16.1754,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "ci-cd",
+   "kind": "positive",
+   "prompt": "Move the build and test jobs from Travis to GitHub Actions",
+   "expect": "ci-cd",
+   "chosen": "ci-cd",
+   "relied_on": [
+    "GitHub Actions or other CI workflow"
+   ],
+   "lexical": {
+    "target_score": 13.0409,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "ci-cd",
+   "kind": "positive",
+   "prompt": "Change how the CI/CD pipeline publishes the package on a tag",
+   "expect": "ci-cd",
+   "chosen": "ci-cd",
+   "relied_on": [
+    "CI/CD pipeline",
+    "GitHub Actions or other CI workflow"
+   ],
+   "lexical": {
+    "target_score": 13.2052,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "ci-cd",
+   "kind": "near_miss",
+   "prompt": "Write a one-off local script to rename some files on my laptop",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.8673,
+    "target_rank": 19
+   }
+  },
+  {
+   "target": "ci-cd",
+   "kind": "near_miss",
+   "prompt": "Plan a canary rollout with rollback thresholds for the new checkout",
+   "expect": "shipping",
+   "chosen": "shipping",
+   "relied_on": [
+    "rollout strategy (staged, canary, blue-green, feature-flagged)",
+    "rollback or abort thresholds"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 14
+   }
+  },
+  {
+   "target": "ci-cd",
+   "kind": "near_miss",
+   "prompt": "Squash my last three commits and pick a branching strategy",
+   "expect": "git",
+   "chosen": "git",
+   "relied_on": [
+    "branching or merge strategy",
+    "commit structure"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 10
+   }
+  },
+  {
+   "target": "ci-cd",
+   "kind": "near_miss",
+   "prompt": "Add a new field to the user model",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 14
+   }
+  },
+  {
+   "target": "ci-cd",
+   "kind": "near_miss",
+   "prompt": "Why does this unit test fail on my machine?",
+   "expect": "debug",
+   "chosen": "debug",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 1.6376,
+    "target_rank": 8
+   }
+  },
+  {
+   "target": "debug",
+   "kind": "positive",
+   "prompt": "The worker crashes every few hours and I have no idea why; help me root-cause it",
+   "expect": "debug",
+   "chosen": "debug",
+   "relied_on": [
+    "root-causing"
+   ],
+   "lexical": {
+    "target_score": 11.7397,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "debug",
+   "kind": "positive",
+   "prompt": "Something is broken in the export — it silently produces empty files. Why?",
+   "expect": "debug",
+   "chosen": "debug",
+   "relied_on": [
+    "something is broken and asks why"
+   ],
+   "lexical": {
+    "target_score": 8.667,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "debug",
+   "kind": "positive",
+   "prompt": "We get an intermittent KeyError in production; trace it to its cause before changing anything",
+   "expect": "debug",
+   "chosen": "debug",
+   "relied_on": [
+    "root-causing"
+   ],
+   "lexical": {
+    "target_score": 11.088,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "debug",
+   "kind": "positive",
+   "prompt": "Unexpected behaviour: the counter resets on refresh. Find out why",
+   "expect": "debug",
+   "chosen": "debug",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 7.3678,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "debug",
+   "kind": "positive",
+   "prompt": "This error started after the upgrade; reproduce it and root-cause it",
+   "expect": "debug",
+   "chosen": "debug",
+   "relied_on": [
+    "root-causing"
+   ],
+   "lexical": {
+    "target_score": 14.8124,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "debug",
+   "kind": "near_miss",
+   "prompt": "Add a new export format for XML",
+   "expect": "develop",
+   "chosen": "develop",
+   "relied_on": [],
+   "lexical": {
+    "target_score": -2.3846,
+    "target_rank": 53
+   }
+  },
+  {
+   "target": "debug",
+   "kind": "near_miss",
+   "prompt": "Make the search endpoint faster",
+   "expect": "optimize",
+   "chosen": "optimize",
+   "relied_on": [
+    "faster or lighter"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 11
+   }
+  },
+  {
+   "target": "debug",
+   "kind": "near_miss",
+   "prompt": "Explain how Python's garbage collector works in general",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 11
+   }
+  },
+  {
+   "target": "debug",
+   "kind": "near_miss",
+   "prompt": "Here is a reproducer and the bug report, write the regression test then fix",
+   "expect": "bug",
+   "chosen": "bug",
+   "relied_on": [
+    "concrete reproducer or bug report",
+    "regression test then a fix"
+   ],
+   "lexical": {
+    "target_score": 8.1581,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "debug",
+   "kind": "near_miss",
+   "prompt": "Show me the governed rules mokata is enforcing",
+   "expect": "govern",
+   "chosen": "govern",
+   "relied_on": [
+    "see the governed state",
+    "what mokata is currently enforcing or remembering"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 21
+   }
+  },
+  {
+   "target": "decompose",
+   "kind": "positive",
+   "prompt": "Split the approved spec into independent subtasks with a dependency plan",
+   "expect": "decompose",
+   "chosen": "decompose",
+   "relied_on": [
+    "independent subtasks + a dependency plan"
+   ],
+   "lexical": {
+    "target_score": 28.4679,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "decompose",
+   "kind": "positive",
+   "prompt": "Decompose this spec into subtasks we can run in parallel",
+   "expect": "decompose",
+   "chosen": "decompose",
+   "relied_on": [
+    "independent subtasks + a dependency plan"
+   ],
+   "lexical": {
+    "target_score": 9.1693,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "decompose",
+   "kind": "positive",
+   "prompt": "Break the approved spec into pieces and show which depend on which",
+   "expect": "decompose",
+   "chosen": "decompose",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 4.8604,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "decompose",
+   "kind": "positive",
+   "prompt": "Give me a dependency plan of subtasks for the approved spec, then I'll confirm the run",
+   "expect": "decompose",
+   "chosen": "decompose",
+   "relied_on": [
+    "independent subtasks + a dependency plan"
+   ],
+   "lexical": {
+    "target_score": 21.0003,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "decompose",
+   "kind": "positive",
+   "prompt": "Decompose the work into independent subtasks",
+   "expect": "decompose",
+   "chosen": "decompose",
+   "relied_on": [
+    "independent subtasks + a dependency plan"
+   ],
+   "lexical": {
+    "target_score": 12.2506,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "decompose",
+   "kind": "near_miss",
+   "prompt": "Explain how compost decomposes in a garden",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "decompose",
+   "kind": "near_miss",
+   "prompt": "Write acceptance criteria for the new export feature",
+   "expect": "spec",
+   "chosen": "spec",
+   "relied_on": [
+    "acceptance criteria",
+    "write or define the spec"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 20
+   }
+  },
+  {
+   "target": "decompose",
+   "kind": "near_miss",
+   "prompt": "Plan a manual chain of skills to run in order",
+   "expect": "chain",
+   "chosen": "chain",
+   "relied_on": [
+    "chain of skills to run in order"
+   ],
+   "lexical": {
+    "target_score": 3.411,
+    "target_rank": 5
+   }
+  },
+  {
+   "target": "decompose",
+   "kind": "near_miss",
+   "prompt": "Switch the execution mode to parallel subagents",
+   "expect": "exec",
+   "chosen": "exec",
+   "relied_on": [
+    "execution mode for a run",
+    "parallel subagents"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 16
+   }
+  },
+  {
+   "target": "decompose",
+   "kind": "near_miss",
+   "prompt": "Show me the run's progress tracker",
+   "expect": "progress",
+   "chosen": "progress",
+   "relied_on": [
+    "Show where the run is",
+    "7-phase tracker"
+   ],
+   "lexical": {
+    "target_score": 1.1268,
+    "target_rank": 14
+   }
+  },
+  {
+   "target": "deprecation",
+   "kind": "positive",
+   "prompt": "Remove the deprecated --legacy flag and everything that reads it",
+   "expect": "deprecation",
+   "chosen": "deprecation",
+   "relied_on": [
+    "removes or retires a symbol, endpoint, flag, or module"
+   ],
+   "lexical": {
+    "target_score": 9.7289,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "deprecation",
+   "kind": "positive",
+   "prompt": "Retire the old v1 payments module and migrate its callers to v2",
+   "expect": "deprecation",
+   "chosen": "deprecation",
+   "relied_on": [
+    "removes or retires a symbol, endpoint, flag, or module",
+    "migrates callers off an old shape"
+   ],
+   "lexical": {
+    "target_score": 20.4068,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "deprecation",
+   "kind": "positive",
+   "prompt": "Delete the compatibility shim for the old config format",
+   "expect": "deprecation",
+   "chosen": "deprecation",
+   "relied_on": [
+    "migrates callers off an old shape"
+   ],
+   "lexical": {
+    "target_score": 10.7506,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "deprecation",
+   "kind": "positive",
+   "prompt": "We're taking the XML export away; walk the blast radius before removing it",
+   "expect": "deprecation",
+   "chosen": "deprecation",
+   "relied_on": [
+    "removes or retires a symbol, endpoint, flag, or module"
+   ],
+   "lexical": {
+    "target_score": 21.7931,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "deprecation",
+   "kind": "positive",
+   "prompt": "Migrate every caller off the old fetchUser signature, then delete it",
+   "expect": "deprecation",
+   "chosen": "deprecation",
+   "relied_on": [
+    "migrates callers off an old shape"
+   ],
+   "lexical": {
+    "target_score": 17.3341,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "deprecation",
+   "kind": "near_miss",
+   "prompt": "Add a new optional parameter to fetchUser; nothing is removed",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 8.2938,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "deprecation",
+   "kind": "near_miss",
+   "prompt": "Rename variables inside a function without touching any callers",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "deprecation",
+   "kind": "near_miss",
+   "prompt": "Write a changelog entry and an ADR for choosing Postgres",
+   "expect": "docs-adr",
+   "chosen": "docs-adr",
+   "relied_on": [
+    "ADR / decision record / changelog"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 21
+   }
+  },
+  {
+   "target": "deprecation",
+   "kind": "near_miss",
+   "prompt": "Add a new feature flag for the beta checkout",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 5.5576,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "deprecation",
+   "kind": "near_miss",
+   "prompt": "Upgrade mokata to the latest version",
+   "expect": "update",
+   "chosen": "update",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 14
+   }
+  },
+  {
+   "target": "develop",
+   "kind": "positive",
+   "prompt": "The failing test is on record; write the minimum implementation to turn it green",
+   "expect": "develop",
+   "chosen": "develop",
+   "relied_on": [
+    "failing test is on record",
+    "minimum implementation"
+   ],
+   "lexical": {
+    "target_score": 23.0111,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "develop",
+   "kind": "positive",
+   "prompt": "Implement the approved, spec-backed change for the export feature",
+   "expect": "develop",
+   "chosen": "develop",
+   "relied_on": [
+    "approved, spec-backed change"
+   ],
+   "lexical": {
+    "target_score": 16.9375,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "develop",
+   "kind": "positive",
+   "prompt": "Continue coding strictly against the approved plan until the red tests pass",
+   "expect": "develop",
+   "chosen": "develop",
+   "relied_on": [
+    "failing test is on record",
+    "approved, spec-backed change"
+   ],
+   "lexical": {
+    "target_score": 20.6096,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "develop",
+   "kind": "positive",
+   "prompt": "Make the failing test for parse_date pass with the smallest change",
+   "expect": "develop",
+   "chosen": "develop",
+   "relied_on": [
+    "failing test is on record",
+    "approved, spec-backed change"
+   ],
+   "lexical": {
+    "target_score": 6.0326,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "develop",
+   "kind": "positive",
+   "prompt": "Build the approved feature now that the spec and failing tests exist",
+   "expect": "develop",
+   "chosen": "develop",
+   "relied_on": [
+    "failing test is on record",
+    "approved, spec-backed change"
+   ],
+   "lexical": {
+    "target_score": 11.2083,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "develop",
+   "kind": "near_miss",
+   "prompt": "Let's explore whether we even need a cache here",
+   "expect": "brainstorm",
+   "chosen": "brainstorm",
+   "relied_on": [
+    "exploring an approach"
+   ],
+   "lexical": {
+    "target_score": 0.1823,
+    "target_rank": 9
+   }
+  },
+  {
+   "target": "develop",
+   "kind": "near_miss",
+   "prompt": "Write failing tests for the acceptance criteria",
+   "expect": "test",
+   "chosen": "test",
+   "relied_on": [
+    "failing tests written"
+   ],
+   "lexical": {
+    "target_score": 5.1117,
+    "target_rank": 5
+   }
+  },
+  {
+   "target": "develop",
+   "kind": "near_miss",
+   "prompt": "Review the diff now that tests are green",
+   "expect": "review",
+   "chosen": "review",
+   "relied_on": [
+    "check/review a diff or change",
+    "tests are GREEN"
+   ],
+   "lexical": {
+    "target_score": 5.6225,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "develop",
+   "kind": "near_miss",
+   "prompt": "Develop the photos from my film camera",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "develop",
+   "kind": "near_miss",
+   "prompt": "This endpoint keeps erroring with 500s and nobody knows why; root-cause it",
+   "expect": "debug",
+   "chosen": "debug",
+   "relied_on": [
+    "root-causing"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 14
+   }
+  },
+  {
+   "target": "docs",
+   "kind": "positive",
+   "prompt": "List the published mokata documentation topics with their site URLs",
+   "expect": "docs",
+   "chosen": "docs",
+   "relied_on": [
+    "published documentation topics",
+    "site URLs"
+   ],
+   "lexical": {
+    "target_score": 26.6213,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "docs",
+   "kind": "positive",
+   "prompt": "Where is the mokata docs page about hooks? Give me the URL",
+   "expect": "docs",
+   "chosen": "docs",
+   "relied_on": [
+    "site URLs"
+   ],
+   "lexical": {
+    "target_score": 5.3569,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "docs",
+   "kind": "positive",
+   "prompt": "Show me the documentation topics mokata has published",
+   "expect": "docs",
+   "chosen": "docs",
+   "relied_on": [
+    "published documentation topics"
+   ],
+   "lexical": {
+    "target_score": 11.2289,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "docs",
+   "kind": "positive",
+   "prompt": "Resolve the 'install' docs topic to its site URL",
+   "expect": "docs",
+   "chosen": "docs",
+   "relied_on": [
+    "published documentation topics",
+    "site URLs"
+   ],
+   "lexical": {
+    "target_score": 19.1075,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "docs",
+   "kind": "positive",
+   "prompt": "What's the mokata docs link for the IDE?",
+   "expect": "docs",
+   "chosen": "docs",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 2.2842,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "docs",
+   "kind": "near_miss",
+   "prompt": "Check whether our README still matches the code",
+   "expect": "docsync",
+   "chosen": "docsync",
+   "relied_on": [
+    "docs still match the code"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 23
+   }
+  },
+  {
+   "target": "docs",
+   "kind": "near_miss",
+   "prompt": "Write an ADR for the decision to use SQLite",
+   "expect": "docs-adr",
+   "chosen": "docs-adr",
+   "relied_on": [
+    "architecturally significant decision",
+    "ADR / decision record / changelog"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 22
+   }
+  },
+  {
+   "target": "docs",
+   "kind": "near_miss",
+   "prompt": "Show me every mokata command on one screen",
+   "expect": "menu",
+   "chosen": "menu",
+   "relied_on": [
+    "every /mokata command and bundled skill on one screen"
+   ],
+   "lexical": {
+    "target_score": 1.8489,
+    "target_rank": 8
+   }
+  },
+  {
+   "target": "docs",
+   "kind": "near_miss",
+   "prompt": "Fetch the Django docs about middleware",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": -0.0568,
+    "target_rank": 53
+   }
+  },
+  {
+   "target": "docs",
+   "kind": "near_miss",
+   "prompt": "Give me a quick 60-second demo of mokata",
+   "expect": "tour",
+   "chosen": "tour",
+   "relied_on": [
+    "60-second read-only demo"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 13
+   }
+  },
+  {
+   "target": "docs-adr",
+   "kind": "positive",
+   "prompt": "Record an ADR for choosing Postgres over Mongo",
+   "expect": "docs-adr",
+   "chosen": "docs-adr",
+   "relied_on": [
+    "ADR / decision record / changelog"
+   ],
+   "lexical": {
+    "target_score": 6.6562,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "docs-adr",
+   "kind": "positive",
+   "prompt": "We decided to split the monolith at the billing boundary; write the decision record",
+   "expect": "docs-adr",
+   "chosen": "docs-adr",
+   "relied_on": [
+    "architecturally significant decision",
+    "ADR / decision record / changelog"
+   ],
+   "lexical": {
+    "target_score": 8.0405,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "docs-adr",
+   "kind": "positive",
+   "prompt": "Add a changelog entry and a decision record for the new caching strategy",
+   "expect": "docs-adr",
+   "chosen": "docs-adr",
+   "relied_on": [
+    "architecturally significant decision",
+    "ADR / decision record / changelog"
+   ],
+   "lexical": {
+    "target_score": 13.1767,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "docs-adr",
+   "kind": "positive",
+   "prompt": "This is an architecturally significant decision, persist why we chose event sourcing",
+   "expect": "docs-adr",
+   "chosen": "docs-adr",
+   "relied_on": [
+    "architecturally significant decision",
+    "ADR / decision record / changelog"
+   ],
+   "lexical": {
+    "target_score": 17.476,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "docs-adr",
+   "kind": "positive",
+   "prompt": "Future readers will ask why we picked gRPC; write that ADR now",
+   "expect": "docs-adr",
+   "chosen": "docs-adr",
+   "relied_on": [
+    "ADR / decision record / changelog"
+   ],
+   "lexical": {
+    "target_score": 12.2506,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "docs-adr",
+   "kind": "near_miss",
+   "prompt": "Check if the docs still match the code after the rename",
+   "expect": "docsync",
+   "chosen": "docsync",
+   "relied_on": [
+    "docs still match the code",
+    "docs may have gone stale"
+   ],
+   "lexical": {
+    "target_score": 1.5109,
+    "target_rank": 19
+   }
+  },
+  {
+   "target": "docs-adr",
+   "kind": "near_miss",
+   "prompt": "Fix the off-by-one in the pagination helper",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 19
+   }
+  },
+  {
+   "target": "docs-adr",
+   "kind": "near_miss",
+   "prompt": "List the published documentation topics and their URLs",
+   "expect": "docs",
+   "chosen": "docs",
+   "relied_on": [
+    "published documentation topics",
+    "site URLs"
+   ],
+   "lexical": {
+    "target_score": 3.0727,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "docs-adr",
+   "kind": "near_miss",
+   "prompt": "Write a README section explaining how to install the tool",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 26
+   }
+  },
+  {
+   "target": "docs-adr",
+   "kind": "near_miss",
+   "prompt": "Plan the rollout and rollback thresholds for the release",
+   "expect": "shipping",
+   "chosen": "shipping",
+   "relied_on": [
+    "rollout strategy (staged, canary, blue-green, feature-flagged)",
+    "rollback or abort thresholds"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 19
+   }
+  },
+  {
+   "target": "docsync",
+   "kind": "positive",
+   "prompt": "Do the docs still match the code after we renamed the CLI command?",
+   "expect": "docsync",
+   "chosen": "docsync",
+   "relied_on": [
+    "docs still match the code",
+    "docs may have gone stale"
+   ],
+   "lexical": {
+    "target_score": 20.8548,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "docsync",
+   "kind": "positive",
+   "prompt": "We bumped the command count; check whether the docs have gone stale",
+   "expect": "docsync",
+   "chosen": "docsync",
+   "relied_on": [
+    "docs still match the code",
+    "docs may have gone stale"
+   ],
+   "lexical": {
+    "target_score": 19.8917,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "docsync",
+   "kind": "positive",
+   "prompt": "Audit docs/install.md against the code and reconcile any drift",
+   "expect": "docsync",
+   "chosen": "docsync",
+   "relied_on": [
+    "docs still match the code",
+    "docs may have gone stale",
+    "drift"
+   ],
+   "lexical": {
+    "target_score": 19.8405,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "docsync",
+   "kind": "positive",
+   "prompt": "Before the release, verify the docs against what actually ships",
+   "expect": "docsync",
+   "chosen": "docsync",
+   "relied_on": [
+    "docs still match the code",
+    "docs may have gone stale"
+   ],
+   "lexical": {
+    "target_score": 11.7692,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "docsync",
+   "kind": "positive",
+   "prompt": "Sweep the doc tree for drift against the symbols this change touched",
+   "expect": "docsync",
+   "chosen": "docsync",
+   "relied_on": [
+    "docs still match the code",
+    "docs may have gone stale",
+    "drift"
+   ],
+   "lexical": {
+    "target_score": 18.0825,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "docsync",
+   "kind": "near_miss",
+   "prompt": "Write a brand-new tutorial from scratch about plugins",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": -1.7346,
+    "target_rank": 51
+   }
+  },
+  {
+   "target": "docsync",
+   "kind": "near_miss",
+   "prompt": "Change the code so it matches what the README says",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 6.0511,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "docsync",
+   "kind": "near_miss",
+   "prompt": "Record an ADR for the database decision",
+   "expect": "docs-adr",
+   "chosen": "docs-adr",
+   "relied_on": [
+    "architecturally significant decision",
+    "ADR / decision record / changelog"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 17
+   }
+  },
+  {
+   "target": "docsync",
+   "kind": "near_miss",
+   "prompt": "Open the published docs URL for hooks",
+   "expect": "docs",
+   "chosen": "docs",
+   "relied_on": [
+    "published documentation topics",
+    "site URLs"
+   ],
+   "lexical": {
+    "target_score": 2.2842,
+    "target_rank": 8
+   }
+  },
+  {
+   "target": "docsync",
+   "kind": "near_miss",
+   "prompt": "Sync my team's write journal to the shared DB",
+   "expect": "sync",
+   "chosen": "sync",
+   "relied_on": [
+    "team write journal"
+   ],
+   "lexical": {
+    "target_score": 1.8489,
+    "target_rank": 6
+   }
+  },
+  {
+   "target": "doctor",
+   "kind": "positive",
+   "prompt": "Check mokata's install, something seems off",
+   "expect": "doctor",
+   "chosen": "doctor",
+   "relied_on": [
+    "Check mokata's install"
+   ],
+   "lexical": {
+    "target_score": 5.7344,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "doctor",
+   "kind": "positive",
+   "prompt": "Run the mokata doctor",
+   "expect": "doctor",
+   "chosen": "doctor",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "doctor",
+   "kind": "positive",
+   "prompt": "Is my mokata plugin install healthy? Check uv, the pinned package and hooks",
+   "expect": "doctor",
+   "chosen": "doctor",
+   "relied_on": [
+    "Check mokata's install"
+   ],
+   "lexical": {
+    "target_score": 23.5425,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "doctor",
+   "kind": "positive",
+   "prompt": "Diagnose the mokata install from inside Claude Code",
+   "expect": "doctor",
+   "chosen": "doctor",
+   "relied_on": [
+    "Check mokata's install"
+   ],
+   "lexical": {
+    "target_score": 14.82,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "doctor",
+   "kind": "positive",
+   "prompt": "Check that mokata's wiring and config are installed correctly",
+   "expect": "doctor",
+   "chosen": "doctor",
+   "relied_on": [
+    "Check mokata's install"
+   ],
+   "lexical": {
+    "target_score": 11.0913,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "doctor",
+   "kind": "near_miss",
+   "prompt": "Repair the mokata MCP server, its tools aren't connecting",
+   "expect": "mcp-repair",
+   "chosen": "mcp-repair",
+   "relied_on": [
+    "mcp isn't working",
+    "tools are missing",
+    "/mcp doesn't list mokata"
+   ],
+   "lexical": {
+    "target_score": 6.9724,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "doctor",
+   "kind": "near_miss",
+   "prompt": "Update mokata to the newest release in one go",
+   "expect": "update",
+   "chosen": "update",
+   "relied_on": [
+    "Update mokata"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 24
+   }
+  },
+  {
+   "target": "doctor",
+   "kind": "near_miss",
+   "prompt": "Check our app's health endpoint returns 200",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 2.1172,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "doctor",
+   "kind": "near_miss",
+   "prompt": "Run mokata's guided first-run setup and wire my tools",
+   "expect": "setup",
+   "chosen": "setup",
+   "relied_on": [
+    "Guided first-run setup"
+   ],
+   "lexical": {
+    "target_score": 2.2842,
+    "target_rank": 7
+   }
+  },
+  {
+   "target": "doctor",
+   "kind": "near_miss",
+   "prompt": "Show the installed version of mokata and how to update",
+   "expect": "version",
+   "chosen": "version",
+   "relied_on": [
+    "installed version"
+   ],
+   "lexical": {
+    "target_score": 4.8534,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "enter",
+   "kind": "positive",
+   "prompt": "Enter the pipeline at the test phase; I already have a spec",
+   "expect": "enter",
+   "chosen": "enter",
+   "relied_on": [
+    "Enter the pipeline at a phase"
+   ],
+   "lexical": {
+    "target_score": 10.2734,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "enter",
+   "kind": "positive",
+   "prompt": "Start mokata at the review phase without forcing the earlier phases",
+   "expect": "enter",
+   "chosen": "enter",
+   "relied_on": [
+    "Enter the pipeline at a phase"
+   ],
+   "lexical": {
+    "target_score": 8.1562,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "enter",
+   "kind": "positive",
+   "prompt": "Jump into the pipeline at develop — only that phase's gates should apply",
+   "expect": "enter",
+   "chosen": "enter",
+   "relied_on": [
+    "Enter the pipeline at a phase"
+   ],
+   "lexical": {
+    "target_score": 12.0529,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "enter",
+   "kind": "positive",
+   "prompt": "Enter at the spec phase and run to the test phase",
+   "expect": "enter",
+   "chosen": "enter",
+   "relied_on": [
+    "Enter the pipeline at a phase"
+   ],
+   "lexical": {
+    "target_score": 6.6562,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "enter",
+   "kind": "positive",
+   "prompt": "I want to enter the pipeline mid-way, at the ship phase",
+   "expect": "enter",
+   "chosen": "enter",
+   "relied_on": [
+    "Enter the pipeline at a phase"
+   ],
+   "lexical": {
+    "target_score": 10.2734,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "enter",
+   "kind": "near_miss",
+   "prompt": "Pick up the run where I left off yesterday",
+   "expect": "resume",
+   "chosen": "resume",
+   "relied_on": [
+    "Pick up where you left off"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 28
+   }
+  },
+  {
+   "target": "enter",
+   "kind": "near_miss",
+   "prompt": "Show where the run currently is",
+   "expect": "progress",
+   "chosen": "progress",
+   "relied_on": [
+    "Show where the run is"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 30
+   }
+  },
+  {
+   "target": "enter",
+   "kind": "near_miss",
+   "prompt": "Press enter to continue in the terminal",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "enter",
+   "kind": "near_miss",
+   "prompt": "Run the whole story end to end as an integration check",
+   "expect": "playbook",
+   "chosen": "playbook",
+   "relied_on": [
+    "full pipeline end-to-end",
+    "smoke-test the whole brainstorm-to-ship story"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 32
+   }
+  },
+  {
+   "target": "enter",
+   "kind": "near_miss",
+   "prompt": "Plan a chain of skills in order",
+   "expect": "chain",
+   "chosen": "chain",
+   "relied_on": [
+    "chain of skills to run in order"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 21
+   }
+  },
+  {
+   "target": "exec",
+   "kind": "positive",
+   "prompt": "Switch this run's execution mode to parallel subagents",
+   "expect": "exec",
+   "chosen": "exec",
+   "relied_on": [
+    "execution mode for a run",
+    "parallel subagents"
+   ],
+   "lexical": {
+    "target_score": 16.7663,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "exec",
+   "kind": "positive",
+   "prompt": "Show me the execution mode for the current run",
+   "expect": "exec",
+   "chosen": "exec",
+   "relied_on": [
+    "execution mode for a run"
+   ],
+   "lexical": {
+    "target_score": 10.5841,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "exec",
+   "kind": "positive",
+   "prompt": "Should this run be sequential or use parallel subagents? Let me choose",
+   "expect": "exec",
+   "chosen": "exec",
+   "relied_on": [
+    "execution mode for a run",
+    "parallel subagents"
+   ],
+   "lexical": {
+    "target_score": 17.1027,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "exec",
+   "kind": "positive",
+   "prompt": "Run the next phase with parallel subagents and isolation",
+   "expect": "exec",
+   "chosen": "exec",
+   "relied_on": [
+    "execution mode for a run",
+    "parallel subagents"
+   ],
+   "lexical": {
+    "target_score": 8.9465,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "exec",
+   "kind": "positive",
+   "prompt": "Set the execution mode back to sequential",
+   "expect": "exec",
+   "chosen": "exec",
+   "relied_on": [
+    "execution mode for a run"
+   ],
+   "lexical": {
+    "target_score": 11.4033,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "exec",
+   "kind": "near_miss",
+   "prompt": "Show me the parallel lanes and the 7-phase tracker",
+   "expect": "progress",
+   "chosen": "progress",
+   "relied_on": [
+    "Show where the run is",
+    "7-phase tracker"
+   ],
+   "lexical": {
+    "target_score": 4.3738,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "exec",
+   "kind": "near_miss",
+   "prompt": "Switch the run mode from local to team",
+   "expect": "mode",
+   "chosen": "mode",
+   "relied_on": [
+    "run mode (local | team)",
+    "team-readiness preflight"
+   ],
+   "lexical": {
+    "target_score": 3.863,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "exec",
+   "kind": "near_miss",
+   "prompt": "Execute this shell script for me",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 17
+   }
+  },
+  {
+   "target": "exec",
+   "kind": "near_miss",
+   "prompt": "Split the spec into subtasks with a dependency plan",
+   "expect": "decompose",
+   "chosen": "decompose",
+   "relied_on": [
+    "independent subtasks + a dependency plan"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 30
+   }
+  },
+  {
+   "target": "exec",
+   "kind": "near_miss",
+   "prompt": "Open the live dashboard of the run",
+   "expect": "watch",
+   "chosen": "watch",
+   "relied_on": [
+    "live, clickable dashboard of the run"
+   ],
+   "lexical": {
+    "target_score": 1.1268,
+    "target_rank": 8
+   }
+  },
+  {
+   "target": "frontend-a11y",
+   "kind": "positive",
+   "prompt": "Add an accessible label and keyboard focus to the new dropdown component",
+   "expect": "frontend-a11y",
+   "chosen": "frontend-a11y",
+   "relied_on": [
+    "UI component, a view, a template, or a stylesheet"
+   ],
+   "lexical": {
+    "target_score": 5.8678,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "frontend-a11y",
+   "kind": "positive",
+   "prompt": "Check the colour contrast of the new button styles against WCAG AA",
+   "expect": "frontend-a11y",
+   "chosen": "frontend-a11y",
+   "relied_on": [
+    "colour/contrast choice"
+   ],
+   "lexical": {
+    "target_score": 19.4513,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "frontend-a11y",
+   "kind": "positive",
+   "prompt": "We're adding an image carousel to the homepage template; make it accessible",
+   "expect": "frontend-a11y",
+   "chosen": "frontend-a11y",
+   "relied_on": [
+    "UI component, a view, a template, or a stylesheet"
+   ],
+   "lexical": {
+    "target_score": 7.167,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "frontend-a11y",
+   "kind": "positive",
+   "prompt": "Add a form field for phone number to the signup view",
+   "expect": "frontend-a11y",
+   "chosen": "frontend-a11y",
+   "relied_on": [
+    "UI component, a view, a template, or a stylesheet"
+   ],
+   "lexical": {
+    "target_score": 14.5348,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "frontend-a11y",
+   "kind": "positive",
+   "prompt": "Change the stylesheet for the nav menu and keep it screen-reader friendly",
+   "expect": "frontend-a11y",
+   "chosen": "frontend-a11y",
+   "relied_on": [
+    "UI component, a view, a template, or a stylesheet"
+   ],
+   "lexical": {
+    "target_score": 4.5045,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "frontend-a11y",
+   "kind": "near_miss",
+   "prompt": "Change the database schema for the orders table",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.9209,
+    "target_rank": 12
+   }
+  },
+  {
+   "target": "frontend-a11y",
+   "kind": "near_miss",
+   "prompt": "Format the internal CLI's debug output columns",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": -4.6821,
+    "target_rank": 53
+   }
+  },
+  {
+   "target": "frontend-a11y",
+   "kind": "near_miss",
+   "prompt": "The React bundle is too big, measure and cut it",
+   "expect": "frontend-perf",
+   "chosen": "frontend-perf",
+   "relied_on": [
+    "bundle-size, render-count or load-time budget",
+    "React web change is made in the name of speed"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 25
+   }
+  },
+  {
+   "target": "frontend-a11y",
+   "kind": "near_miss",
+   "prompt": "Add a Server Function that reads protected data",
+   "expect": "frontend-security",
+   "chosen": "frontend-security",
+   "relied_on": [
+    "Server Function, a route handler, a page that reads protected data"
+   ],
+   "lexical": {
+    "target_score": 0.7479,
+    "target_rank": 15
+   }
+  },
+  {
+   "target": "frontend-a11y",
+   "kind": "near_miss",
+   "prompt": "Add an index to the users table to speed up login",
+   "expect": "performance",
+   "chosen": "performance",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 2.2842,
+    "target_rank": 6
+   }
+  },
+  {
+   "target": "frontend-perf",
+   "kind": "positive",
+   "prompt": "Our React web page's bundle size is over budget; measure and cut it",
+   "expect": "frontend-perf",
+   "chosen": "frontend-perf",
+   "relied_on": [
+    "bundle-size, render-count or load-time budget",
+    "React web change is made in the name of speed"
+   ],
+   "lexical": {
+    "target_score": 23.7387,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "frontend-perf",
+   "kind": "positive",
+   "prompt": "The product list re-renders too often in React; there's a render-count budget in the AC",
+   "expect": "frontend-perf",
+   "chosen": "frontend-perf",
+   "relied_on": [
+    "bundle-size, render-count or load-time budget",
+    "React web change is made in the name of speed"
+   ],
+   "lexical": {
+    "target_score": 13.1178,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "frontend-perf",
+   "kind": "positive",
+   "prompt": "Speed up the load time of the Next.js landing page; it must stay under 2s",
+   "expect": "frontend-perf",
+   "chosen": "frontend-perf",
+   "relied_on": [
+    "bundle-size, render-count or load-time budget",
+    "React web change is made in the name of speed"
+   ],
+   "lexical": {
+    "target_score": 12.1936,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "frontend-perf",
+   "kind": "positive",
+   "prompt": "This React web change is for speed: memoize the expensive table",
+   "expect": "frontend-perf",
+   "chosen": "frontend-perf",
+   "relied_on": [
+    "React web change is made in the name of speed"
+   ],
+   "lexical": {
+    "target_score": 12.1296,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "frontend-perf",
+   "kind": "positive",
+   "prompt": "Audit the React dashboard's render performance and fix it on request",
+   "expect": "frontend-perf",
+   "chosen": "frontend-perf",
+   "relied_on": [
+    "bundle-size, render-count or load-time budget",
+    "React web change is made in the name of speed"
+   ],
+   "lexical": {
+    "target_score": 17.214,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "frontend-perf",
+   "kind": "near_miss",
+   "prompt": "Our Postgres query behind the API is slow",
+   "expect": "performance",
+   "chosen": "performance",
+   "relied_on": [
+    "hot path, a database query, a cache, or a batch/loop"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 22
+   }
+  },
+  {
+   "target": "frontend-perf",
+   "kind": "near_miss",
+   "prompt": "Speed up the React Native list screen on Android",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.1314,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "frontend-perf",
+   "kind": "near_miss",
+   "prompt": "Make the app faster — I haven't measured anything, just guess",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": -1.3966,
+    "target_rank": 52
+   }
+  },
+  {
+   "target": "frontend-perf",
+   "kind": "near_miss",
+   "prompt": "Add a Server Function that reads the user's invoices",
+   "expect": "frontend-security",
+   "chosen": "frontend-security",
+   "relied_on": [
+    "Server Function, a route handler, a page that reads protected data"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 26
+   }
+  },
+  {
+   "target": "frontend-perf",
+   "kind": "near_miss",
+   "prompt": "Add alt text to the hero image",
+   "expect": "frontend-a11y",
+   "chosen": "frontend-a11y",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 20
+   }
+  },
+  {
+   "target": "frontend-react",
+   "kind": "positive",
+   "prompt": "Add a cart summary component to our React web app",
+   "expect": "frontend-react",
+   "chosen": "frontend-react",
+   "relied_on": [
+    ".jsx/.tsx file in a package that depends on react-dom or next"
+   ],
+   "lexical": {
+    "target_score": 6.9724,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "frontend-react",
+   "kind": "positive",
+   "prompt": "Refactor the Next.js checkout page into server and client components",
+   "expect": "frontend-react",
+   "chosen": "frontend-react",
+   "relied_on": [
+    ".jsx/.tsx file in a package that depends on react-dom or next"
+   ],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "frontend-react",
+   "kind": "positive",
+   "prompt": "Write a new .tsx form component in the web package that uses react-dom",
+   "expect": "frontend-react",
+   "chosen": "frontend-react",
+   "relied_on": [
+    ".jsx/.tsx file in a package that depends on react-dom or next"
+   ],
+   "lexical": {
+    "target_score": 16.6244,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "frontend-react",
+   "kind": "positive",
+   "prompt": "Our Next app's product page needs a filter sidebar",
+   "expect": "frontend-react",
+   "chosen": "frontend-react",
+   "relied_on": [
+    ".jsx/.tsx file in a package that depends on react-dom or next"
+   ],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "frontend-react",
+   "kind": "positive",
+   "prompt": "Convert this class component to hooks in the React web project",
+   "expect": "frontend-react",
+   "chosen": "frontend-react",
+   "relied_on": [
+    ".jsx/.tsx file in a package that depends on react-dom or next"
+   ],
+   "lexical": {
+    "target_score": 5.1807,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "frontend-react",
+   "kind": "near_miss",
+   "prompt": "Build a new screen in our React Native app",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.3952,
+    "target_rank": 9
+   }
+  },
+  {
+   "target": "frontend-react",
+   "kind": "near_miss",
+   "prompt": "Add a provider and a guard to the NestJS module",
+   "expect": "backend-nestjs",
+   "chosen": "backend-nestjs",
+   "relied_on": [
+    "controller, module, provider, guard, pipe or DTO",
+    "@nestjs/core"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 21
+   }
+  },
+  {
+   "target": "frontend-react",
+   "kind": "near_miss",
+   "prompt": "Write a small TypeScript library with no React dependency",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": -3.4823,
+    "target_rank": 52
+   }
+  },
+  {
+   "target": "frontend-react",
+   "kind": "near_miss",
+   "prompt": "Add an index to speed up the users query",
+   "expect": "performance",
+   "chosen": "performance",
+   "relied_on": [
+    "hot path, a database query, a cache, or a batch/loop"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 25
+   }
+  },
+  {
+   "target": "frontend-react",
+   "kind": "near_miss",
+   "prompt": "Expo app with a native-only camera screen",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": -4.6821,
+    "target_rank": 52
+   }
+  },
+  {
+   "target": "frontend-security",
+   "kind": "positive",
+   "prompt": "Add a Server Function in our Next.js app that updates the user's billing address",
+   "expect": "frontend-security",
+   "chosen": "frontend-security",
+   "relied_on": [
+    "Server Function, a route handler, a page that reads protected data"
+   ],
+   "lexical": {
+    "target_score": 7.7629,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "frontend-security",
+   "kind": "positive",
+   "prompt": "This React page renders user-controlled HTML from comments; make it safe",
+   "expect": "frontend-security",
+   "chosen": "frontend-security",
+   "relied_on": [
+    "Server Function, a route handler, a page that reads protected data",
+    "renders user-controlled HTML or URLs"
+   ],
+   "lexical": {
+    "target_score": 18.3757,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "frontend-security",
+   "kind": "positive",
+   "prompt": "Expose a new environment variable to the client in the Next app — is that a secret leak?",
+   "expect": "frontend-security",
+   "chosen": "frontend-security",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 15.9779,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "frontend-security",
+   "kind": "positive",
+   "prompt": "Add a route handler in the Next app that reads protected invoice data",
+   "expect": "frontend-security",
+   "chosen": "frontend-security",
+   "relied_on": [
+    "Server Function, a route handler, a page that reads protected data"
+   ],
+   "lexical": {
+    "target_score": 16.6382,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "frontend-security",
+   "kind": "positive",
+   "prompt": "Audit the React web app for injection sinks and secrets in the bundle",
+   "expect": "frontend-security",
+   "chosen": "frontend-security",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 22.5044,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "frontend-security",
+   "kind": "near_miss",
+   "prompt": "Harden the Go backend's auth service against brute force",
+   "expect": "security",
+   "chosen": "security",
+   "relied_on": [],
+   "lexical": {
+    "target_score": -3.8774,
+    "target_rank": 53
+   }
+  },
+  {
+   "target": "frontend-security",
+   "kind": "near_miss",
+   "prompt": "Change the button colour on the landing page",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.6572,
+    "target_rank": 5
+   }
+  },
+  {
+   "target": "frontend-security",
+   "kind": "near_miss",
+   "prompt": "Add biometric login to the React Native app",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.3383,
+    "target_rank": 6
+   }
+  },
+  {
+   "target": "frontend-security",
+   "kind": "near_miss",
+   "prompt": "Shrink the React bundle size and cut the render count",
+   "expect": "frontend-perf",
+   "chosen": "frontend-perf",
+   "relied_on": [
+    "bundle-size, render-count or load-time budget",
+    "React web change is made in the name of speed"
+   ],
+   "lexical": {
+    "target_score": 7.9573,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "frontend-security",
+   "kind": "near_miss",
+   "prompt": "Add a NestJS guard to the admin controller",
+   "expect": "backend-nestjs",
+   "chosen": "backend-nestjs",
+   "relied_on": [
+    "controller, module, provider, guard, pipe or DTO",
+    "@nestjs/core"
+   ],
+   "lexical": {
+    "target_score": 2.2842,
+    "target_rank": 6
+   }
+  },
+  {
+   "target": "git",
+   "kind": "positive",
+   "prompt": "Help me split this huge change into small atomic commits",
+   "expect": "git",
+   "chosen": "git",
+   "relied_on": [
+    "commit structure"
+   ],
+   "lexical": {
+    "target_score": 9.588,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "git",
+   "kind": "positive",
+   "prompt": "What branching or merge strategy should we use for release branches?",
+   "expect": "git",
+   "chosen": "git",
+   "relied_on": [
+    "branching or merge strategy"
+   ],
+   "lexical": {
+    "target_score": 14.5096,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "git",
+   "kind": "positive",
+   "prompt": "Update our .gitignore/.gitattributes policy for generated files",
+   "expect": "git",
+   "chosen": "git",
+   "relied_on": [
+    ".gitignore/.gitattributes policy"
+   ],
+   "lexical": {
+    "target_score": 12.2142,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "git",
+   "kind": "positive",
+   "prompt": "How should we tag versions for the next release in git?",
+   "expect": "git",
+   "chosen": "git",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 10.9988,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "git",
+   "kind": "positive",
+   "prompt": "Plan the commit structure for this feature before I land it",
+   "expect": "git",
+   "chosen": "git",
+   "relied_on": [
+    "commit structure"
+   ],
+   "lexical": {
+    "target_score": 11.7397,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "git",
+   "kind": "near_miss",
+   "prompt": "Add a lint step to the GitHub Actions workflow",
+   "expect": "ci-cd",
+   "chosen": "ci-cd",
+   "relied_on": [
+    "GitHub Actions or other CI workflow",
+    "quality-gate step"
+   ],
+   "lexical": {
+    "target_score": 3.0727,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "git",
+   "kind": "near_miss",
+   "prompt": "Fix the null check in the parser",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 26
+   }
+  },
+  {
+   "target": "git",
+   "kind": "near_miss",
+   "prompt": "Plan a staged rollout to users with rollback thresholds",
+   "expect": "shipping",
+   "chosen": "shipping",
+   "relied_on": [
+    "rollout strategy (staged, canary, blue-green, feature-flagged)",
+    "rollback or abort thresholds"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 26
+   }
+  },
+  {
+   "target": "git",
+   "kind": "near_miss",
+   "prompt": "Package this session so a teammate can resume it",
+   "expect": "session",
+   "chosen": "session",
+   "relied_on": [
+    "package this session",
+    "hand off their session state to a teammate"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 26
+   }
+  },
+  {
+   "target": "git",
+   "kind": "near_miss",
+   "prompt": "Explain how distributed version control differs from centralized in theory",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 2.7362,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "govern",
+   "kind": "positive",
+   "prompt": "Show me the governed state — active rules and memory by kind",
+   "expect": "govern",
+   "chosen": "govern",
+   "relied_on": [
+    "see the governed state"
+   ],
+   "lexical": {
+    "target_score": 24.4254,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "govern",
+   "kind": "positive",
+   "prompt": "What is mokata currently enforcing or remembering for this repo?",
+   "expect": "govern",
+   "chosen": "govern",
+   "relied_on": [
+    "what mokata is currently enforcing or remembering"
+   ],
+   "lexical": {
+    "target_score": 12.7289,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "govern",
+   "kind": "positive",
+   "prompt": "What's the read/write ratio and are there pending self-healing proposals?",
+   "expect": "govern",
+   "chosen": "govern",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 30.6154,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "govern",
+   "kind": "positive",
+   "prompt": "Before I decide, let me review governance: which rules are active?",
+   "expect": "govern",
+   "chosen": "govern",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 13.0685,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "govern",
+   "kind": "positive",
+   "prompt": "List the pending proposals and the governed rules",
+   "expect": "govern",
+   "chosen": "govern",
+   "relied_on": [
+    "see the governed state"
+   ],
+   "lexical": {
+    "target_score": 14.024,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "govern",
+   "kind": "near_miss",
+   "prompt": "Teach mokata our convention that all money is stored in cents",
+   "expect": "onboard",
+   "chosen": "onboard",
+   "relied_on": [
+    "teach mokata the project's rules"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 24
+   }
+  },
+  {
+   "target": "govern",
+   "kind": "near_miss",
+   "prompt": "Delete the memory about the old database rule",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 4.4014,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "govern",
+   "kind": "near_miss",
+   "prompt": "Show me where the run is in the pipeline",
+   "expect": "progress",
+   "chosen": "progress",
+   "relied_on": [
+    "Show where the run is"
+   ],
+   "lexical": {
+    "target_score": -1.622,
+    "target_rank": 53
+   }
+  },
+  {
+   "target": "govern",
+   "kind": "near_miss",
+   "prompt": "Explain how the US government enforces regulations",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.0727,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "govern",
+   "kind": "near_miss",
+   "prompt": "Show me the installed mokata version",
+   "expect": "version",
+   "chosen": "version",
+   "relied_on": [
+    "installed version"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 30
+   }
+  },
+  {
+   "target": "init",
+   "kind": "positive",
+   "prompt": "Initialize mokata in this repo with the standard profile",
+   "expect": "init",
+   "chosen": "init",
+   "relied_on": [
+    "Initialize mokata or switch profile"
+   ],
+   "lexical": {
+    "target_score": 9.9033,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "init",
+   "kind": "positive",
+   "prompt": "Switch mokata's profile from minimal to full",
+   "expect": "init",
+   "chosen": "init",
+   "relied_on": [
+    "Initialize mokata or switch profile"
+   ],
+   "lexical": {
+    "target_score": 15.4651,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "init",
+   "kind": "positive",
+   "prompt": "Set mokata up here — init, no pip",
+   "expect": "init",
+   "chosen": "init",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 6.6562,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "init",
+   "kind": "positive",
+   "prompt": "Initialize mokata with the minimal profile",
+   "expect": "init",
+   "chosen": "init",
+   "relied_on": [
+    "Initialize mokata or switch profile"
+   ],
+   "lexical": {
+    "target_score": 9.9033,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "init",
+   "kind": "positive",
+   "prompt": "Change the mokata profile to standard",
+   "expect": "init",
+   "chosen": "init",
+   "relied_on": [
+    "Initialize mokata or switch profile"
+   ],
+   "lexical": {
+    "target_score": 6.3197,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "init",
+   "kind": "near_miss",
+   "prompt": "mokata's MCP tools are missing after I restarted",
+   "expect": "mcp-repair",
+   "chosen": "mcp-repair",
+   "relied_on": [
+    "mcp isn't working",
+    "tools are missing",
+    "/mcp doesn't list mokata"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 25
+   }
+  },
+  {
+   "target": "init",
+   "kind": "near_miss",
+   "prompt": "Upgrade mokata to the newest release",
+   "expect": "update",
+   "chosen": "update",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 27
+   }
+  },
+  {
+   "target": "init",
+   "kind": "near_miss",
+   "prompt": "Write an __init__.py for this package",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "init",
+   "kind": "near_miss",
+   "prompt": "Add a new integration to what mokata has wired",
+   "expect": "reconfigure",
+   "chosen": "reconfigure",
+   "relied_on": [
+    "add/remove an integration, switch a backend, change profile"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 27
+   }
+  },
+  {
+   "target": "init",
+   "kind": "near_miss",
+   "prompt": "Join my team's shared mokata stack",
+   "expect": "team",
+   "chosen": "team",
+   "relied_on": [
+    "team join"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 30
+   }
+  },
+  {
+   "target": "mcp-repair",
+   "kind": "positive",
+   "prompt": "mokata mcp isn't working after the update",
+   "expect": "mcp-repair",
+   "chosen": "mcp-repair",
+   "relied_on": [
+    "mcp isn't working",
+    "/mcp doesn't list mokata"
+   ],
+   "lexical": {
+    "target_score": 11.604,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "mcp-repair",
+   "kind": "positive",
+   "prompt": "The mokata MCP server won't start — fix it",
+   "expect": "mcp-repair",
+   "chosen": "mcp-repair",
+   "relied_on": [
+    "mcp isn't working",
+    "/mcp doesn't list mokata"
+   ],
+   "lexical": {
+    "target_score": 18.5764,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "mcp-repair",
+   "kind": "positive",
+   "prompt": "mokata's tools are missing in Claude Code",
+   "expect": "mcp-repair",
+   "chosen": "mcp-repair",
+   "relied_on": [
+    "tools are missing"
+   ],
+   "lexical": {
+    "target_score": 14.2755,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "mcp-repair",
+   "kind": "positive",
+   "prompt": "/mcp doesn't list mokata anymore",
+   "expect": "mcp-repair",
+   "chosen": "mcp-repair",
+   "relied_on": [
+    "mcp isn't working",
+    "/mcp doesn't list mokata"
+   ],
+   "lexical": {
+    "target_score": 12.056,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "mcp-repair",
+   "kind": "positive",
+   "prompt": "mokata isn't connected; its MCP tools don't show up",
+   "expect": "mcp-repair",
+   "chosen": "mcp-repair",
+   "relied_on": [
+    "mcp isn't working",
+    "tools are missing",
+    "/mcp doesn't list mokata"
+   ],
+   "lexical": {
+    "target_score": 20.6863,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "mcp-repair",
+   "kind": "near_miss",
+   "prompt": "First-time setup: wire mokata into Claude Code",
+   "expect": "setup",
+   "chosen": "setup",
+   "relied_on": [
+    "Guided first-run setup"
+   ],
+   "lexical": {
+    "target_score": 1.5478,
+    "target_rank": 17
+   }
+  },
+  {
+   "target": "mcp-repair",
+   "kind": "near_miss",
+   "prompt": "Write a new MCP server in TypeScript for our Jira",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 8.8214,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "mcp-repair",
+   "kind": "near_miss",
+   "prompt": "Upgrade mokata to the newest version",
+   "expect": "update",
+   "chosen": "update",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 27
+   }
+  },
+  {
+   "target": "mcp-repair",
+   "kind": "near_miss",
+   "prompt": "Our own app's API is not working, debug it",
+   "expect": "debug",
+   "chosen": "debug",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 2.2842,
+    "target_rank": 6
+   }
+  },
+  {
+   "target": "mcp-repair",
+   "kind": "near_miss",
+   "prompt": "Which mokata version is installed right now?",
+   "expect": "version",
+   "chosen": "version",
+   "relied_on": [
+    "installed version"
+   ],
+   "lexical": {
+    "target_score": 2.1172,
+    "target_rank": 5
+   }
+  },
+  {
+   "target": "menu",
+   "kind": "positive",
+   "prompt": "Show me every /mokata command and bundled skill on one screen",
+   "expect": "menu",
+   "chosen": "menu",
+   "relied_on": [
+    "every /mokata command and bundled skill on one screen"
+   ],
+   "lexical": {
+    "target_score": 18.4858,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "menu",
+   "kind": "positive",
+   "prompt": "What mokata commands are there? Show the palette",
+   "expect": "menu",
+   "chosen": "menu",
+   "relied_on": [
+    "every /mokata command and bundled skill on one screen"
+   ],
+   "lexical": {
+    "target_score": 5.8678,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "menu",
+   "kind": "positive",
+   "prompt": "Open the mokata command palette",
+   "expect": "menu",
+   "chosen": "menu",
+   "relied_on": [
+    "every /mokata command and bundled skill on one screen"
+   ],
+   "lexical": {
+    "target_score": 7.3678,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "menu",
+   "kind": "positive",
+   "prompt": "List all mokata commands with their gate markers",
+   "expect": "menu",
+   "chosen": "menu",
+   "relied_on": [
+    "every /mokata command and bundled skill on one screen"
+   ],
+   "lexical": {
+    "target_score": 8.1581,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "menu",
+   "kind": "positive",
+   "prompt": "Give me the menu of mokata commands and skills",
+   "expect": "menu",
+   "chosen": "menu",
+   "relied_on": [
+    "every /mokata command and bundled skill on one screen"
+   ],
+   "lexical": {
+    "target_score": 8.152,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "menu",
+   "kind": "near_miss",
+   "prompt": "Give me a 60-second demo of what mokata does",
+   "expect": "tour",
+   "chosen": "tour",
+   "relied_on": [
+    "60-second read-only demo"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 27
+   }
+  },
+  {
+   "target": "menu",
+   "kind": "near_miss",
+   "prompt": "List the published documentation topics",
+   "expect": "docs",
+   "chosen": "docs",
+   "relied_on": [
+    "published documentation topics"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 27
+   }
+  },
+  {
+   "target": "menu",
+   "kind": "near_miss",
+   "prompt": "Plan the dinner menu for Saturday",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "menu",
+   "kind": "near_miss",
+   "prompt": "Show the governed rules and memory",
+   "expect": "govern",
+   "chosen": "govern",
+   "relied_on": [
+    "see the governed state"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 36
+   }
+  },
+  {
+   "target": "menu",
+   "kind": "near_miss",
+   "prompt": "Open the live dashboard for this run",
+   "expect": "watch",
+   "chosen": "watch",
+   "relied_on": [
+    "live, clickable dashboard of the run"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 33
+   }
+  },
+  {
+   "target": "mode",
+   "kind": "positive",
+   "prompt": "What's my mokata run mode — local or team?",
+   "expect": "mode",
+   "chosen": "mode",
+   "relied_on": [
+    "run mode (local | team)",
+    "team-readiness preflight"
+   ],
+   "lexical": {
+    "target_score": 14.4314,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "mode",
+   "kind": "positive",
+   "prompt": "Switch the run mode to team",
+   "expect": "mode",
+   "chosen": "mode",
+   "relied_on": [
+    "run mode (local | team)",
+    "team-readiness preflight"
+   ],
+   "lexical": {
+    "target_score": 7.8479,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "mode",
+   "kind": "positive",
+   "prompt": "Run the team-readiness preflight before I switch to team mode",
+   "expect": "mode",
+   "chosen": "mode",
+   "relied_on": [
+    "run mode (local | team)",
+    "team-readiness preflight"
+   ],
+   "lexical": {
+    "target_score": 16.0041,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "mode",
+   "kind": "positive",
+   "prompt": "Set mokata back to local mode",
+   "expect": "mode",
+   "chosen": "mode",
+   "relied_on": [
+    "run mode (local | team)"
+   ],
+   "lexical": {
+    "target_score": 8.604,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "mode",
+   "kind": "positive",
+   "prompt": "Am I ready for team mode? Show the preflight",
+   "expect": "mode",
+   "chosen": "mode",
+   "relied_on": [
+    "run mode (local | team)",
+    "team-readiness preflight"
+   ],
+   "lexical": {
+    "target_score": 10.4423,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "mode",
+   "kind": "near_miss",
+   "prompt": "Switch this run to parallel subagents",
+   "expect": "exec",
+   "chosen": "exec",
+   "relied_on": [
+    "execution mode for a run",
+    "parallel subagents"
+   ],
+   "lexical": {
+    "target_score": 1.1268,
+    "target_rank": 14
+   }
+  },
+  {
+   "target": "mode",
+   "kind": "near_miss",
+   "prompt": "Join my team's shared stack",
+   "expect": "team",
+   "chosen": "team",
+   "relied_on": [
+    "team join"
+   ],
+   "lexical": {
+    "target_score": 2.4849,
+    "target_rank": 5
+   }
+  },
+  {
+   "target": "mode",
+   "kind": "near_miss",
+   "prompt": "Change mokata's profile to full",
+   "expect": "init",
+   "chosen": "init",
+   "relied_on": [
+    "Initialize mokata or switch profile"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 33
+   }
+  },
+  {
+   "target": "mode",
+   "kind": "near_miss",
+   "prompt": "Turn on dark mode in VS Code",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 2.7362,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "mode",
+   "kind": "near_miss",
+   "prompt": "Flush the pending journal writes to the shared database",
+   "expect": "sync",
+   "chosen": "sync",
+   "relied_on": [
+    "team write journal"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 36
+   }
+  },
+  {
+   "target": "onboard",
+   "kind": "positive",
+   "prompt": "Teach mokata our project's rules: all money is stored in integer cents",
+   "expect": "onboard",
+   "chosen": "onboard",
+   "relied_on": [
+    "teach mokata the project's rules"
+   ],
+   "lexical": {
+    "target_score": 12.4513,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "onboard",
+   "kind": "positive",
+   "prompt": "Capture our guardrails and coding conventions into mokata's memory",
+   "expect": "onboard",
+   "chosen": "onboard",
+   "relied_on": [
+    "capturing institutional knowledge"
+   ],
+   "lexical": {
+    "target_score": 11.2583,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "onboard",
+   "kind": "positive",
+   "prompt": "Here's our domain glossary doc — ingest it so the skills reference it",
+   "expect": "onboard",
+   "chosen": "onboard",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 10.3893,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "onboard",
+   "kind": "positive",
+   "prompt": "I want to teach mokata the project's conventions for naming migrations",
+   "expect": "onboard",
+   "chosen": "onboard",
+   "relied_on": [
+    "teach mokata the project's rules"
+   ],
+   "lexical": {
+    "target_score": 11.7397,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "onboard",
+   "kind": "positive",
+   "prompt": "Onboard mokata with our institutional knowledge about the pricing formulas",
+   "expect": "onboard",
+   "chosen": "onboard",
+   "relied_on": [
+    "capturing institutional knowledge"
+   ],
+   "lexical": {
+    "target_score": 15.3233,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "onboard",
+   "kind": "near_miss",
+   "prompt": "Show me what rules mokata is enforcing right now",
+   "expect": "govern",
+   "chosen": "govern",
+   "relied_on": [
+    "what mokata is currently enforcing or remembering"
+   ],
+   "lexical": {
+    "target_score": 2.2842,
+    "target_rank": 5
+   }
+  },
+  {
+   "target": "onboard",
+   "kind": "near_miss",
+   "prompt": "Onboard our new hire to the HR system",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.0727,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "onboard",
+   "kind": "near_miss",
+   "prompt": "Join the team's shared memory and vault",
+   "expect": "team",
+   "chosen": "team",
+   "relied_on": [
+    "team join"
+   ],
+   "lexical": {
+    "target_score": 2.1172,
+    "target_rank": 9
+   }
+  },
+  {
+   "target": "onboard",
+   "kind": "near_miss",
+   "prompt": "Remember for this task only that I prefer tabs",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": -3.8774,
+    "target_rank": 53
+   }
+  },
+  {
+   "target": "onboard",
+   "kind": "near_miss",
+   "prompt": "Guided first-run setup: detect my tools and wire them",
+   "expect": "setup",
+   "chosen": "setup",
+   "relied_on": [
+    "Guided first-run setup"
+   ],
+   "lexical": {
+    "target_score": 5.4724,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "optimize",
+   "kind": "positive",
+   "prompt": "Make the CSV parser faster and prove it with a before/after benchmark",
+   "expect": "optimize",
+   "chosen": "optimize",
+   "relied_on": [
+    "faster or lighter"
+   ],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "optimize",
+   "kind": "positive",
+   "prompt": "Profiling shows the hot path in render_table; make it lighter and keep it only if it's measured faster",
+   "expect": "optimize",
+   "chosen": "optimize",
+   "relied_on": [
+    "faster or lighter",
+    "measured"
+   ],
+   "lexical": {
+    "target_score": 21.9813,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "optimize",
+   "kind": "positive",
+   "prompt": "Can you cut memory use in the importer? We can measure it with the benchmark script",
+   "expect": "optimize",
+   "chosen": "optimize",
+   "relied_on": [
+    "measured"
+   ],
+   "lexical": {
+    "target_score": 4.8534,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "optimize",
+   "kind": "positive",
+   "prompt": "Optimize this loop and prove the win before keeping it",
+   "expect": "optimize",
+   "chosen": "optimize",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 9.4513,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "optimize",
+   "kind": "positive",
+   "prompt": "Make the build step faster; here's a timing harness to measure before and after",
+   "expect": "optimize",
+   "chosen": "optimize",
+   "relied_on": [
+    "faster or lighter",
+    "measured"
+   ],
+   "lexical": {
+    "target_score": 4.9516,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "optimize",
+   "kind": "near_miss",
+   "prompt": "Make it faster even if the output format changes",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 4.5045,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "optimize",
+   "kind": "near_miss",
+   "prompt": "The worker crashes randomly, why?",
+   "expect": "debug",
+   "chosen": "debug",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 30
+   }
+  },
+  {
+   "target": "optimize",
+   "kind": "near_miss",
+   "prompt": "Add an index to the orders table — spec says p95 under 50ms",
+   "expect": "performance",
+   "chosen": "performance",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 36
+   }
+  },
+  {
+   "target": "optimize",
+   "kind": "near_miss",
+   "prompt": "The React page re-renders too much, budget is in the AC",
+   "expect": "frontend-perf",
+   "chosen": "frontend-perf",
+   "relied_on": [
+    "bundle-size, render-count or load-time budget",
+    "React web change is made in the name of speed"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 30
+   }
+  },
+  {
+   "target": "optimize",
+   "kind": "near_miss",
+   "prompt": "Optimize my resume for job applications",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "performance",
+   "kind": "positive",
+   "prompt": "The orders database query is slow; add a cache and record before/after",
+   "expect": "performance",
+   "chosen": "performance",
+   "relied_on": [
+    "hot path, a database query, a cache, or a batch/loop"
+   ],
+   "lexical": {
+    "target_score": 11.4033,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "performance",
+   "kind": "positive",
+   "prompt": "The acceptance criterion says p95 latency under 50ms for search",
+   "expect": "performance",
+   "chosen": "performance",
+   "relied_on": [
+    "latency/throughput/size budget"
+   ],
+   "lexical": {
+    "target_score": 10.6411,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "performance",
+   "kind": "positive",
+   "prompt": "This batch loop over a million rows is the hot path; optimize it with measurements",
+   "expect": "performance",
+   "chosen": "performance",
+   "relied_on": [
+    "hot path, a database query, a cache, or a batch/loop"
+   ],
+   "lexical": {
+    "target_score": 13.9329,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "performance",
+   "kind": "positive",
+   "prompt": "Add an index to speed up the users query and log the before/after to the ledger",
+   "expect": "performance",
+   "chosen": "performance",
+   "relied_on": [
+    "hot path, a database query, a cache, or a batch/loop"
+   ],
+   "lexical": {
+    "target_score": 8.5451,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "performance",
+   "kind": "positive",
+   "prompt": "Our throughput budget is 1k req/s; tune the hot path",
+   "expect": "performance",
+   "chosen": "performance",
+   "relied_on": [
+    "hot path, a database query, a cache, or a batch/loop",
+    "latency/throughput/size budget"
+   ],
+   "lexical": {
+    "target_score": 13.7138,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "performance",
+   "kind": "near_miss",
+   "prompt": "Fix the wrong total in the invoice; it's a correctness bug",
+   "expect": "bug",
+   "chosen": "bug",
+   "relied_on": [
+    "concrete reproducer or bug report",
+    "regression test then a fix"
+   ],
+   "lexical": {
+    "target_score": -2.3411,
+    "target_rank": 53
+   }
+  },
+  {
+   "target": "performance",
+   "kind": "near_miss",
+   "prompt": "The React bundle exceeds its size budget",
+   "expect": "frontend-perf",
+   "chosen": "frontend-perf",
+   "relied_on": [
+    "bundle-size, render-count or load-time budget",
+    "React web change is made in the name of speed"
+   ],
+   "lexical": {
+    "target_score": 7.3089,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "performance",
+   "kind": "near_miss",
+   "prompt": "Add a new column to the report",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 31
+   }
+  },
+  {
+   "target": "performance",
+   "kind": "near_miss",
+   "prompt": "Write the ADR for picking Redis",
+   "expect": "docs-adr",
+   "chosen": "docs-adr",
+   "relied_on": [
+    "ADR / decision record / changelog"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 36
+   }
+  },
+  {
+   "target": "performance",
+   "kind": "near_miss",
+   "prompt": "Review the performance of our sales team this quarter",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 2.7362,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "playbook",
+   "kind": "positive",
+   "prompt": "Run mokata's full pipeline end-to-end on this repo as an integration check",
+   "expect": "playbook",
+   "chosen": "playbook",
+   "relied_on": [
+    "full pipeline end-to-end"
+   ],
+   "lexical": {
+    "target_score": 28.6627,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "playbook",
+   "kind": "positive",
+   "prompt": "Smoke-test the whole brainstorm-to-ship story here",
+   "expect": "playbook",
+   "chosen": "playbook",
+   "relied_on": [
+    "smoke-test the whole brainstorm-to-ship story"
+   ],
+   "lexical": {
+    "target_score": 24.9086,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "playbook",
+   "kind": "positive",
+   "prompt": "Validate that my fresh install performs a complete run",
+   "expect": "playbook",
+   "chosen": "playbook",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 25.078,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "playbook",
+   "kind": "positive",
+   "prompt": "Run the full v1 story end to end",
+   "expect": "playbook",
+   "chosen": "playbook",
+   "relied_on": [
+    "full pipeline end-to-end",
+    "smoke-test the whole brainstorm-to-ship story"
+   ],
+   "lexical": {
+    "target_score": 21.9392,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "playbook",
+   "kind": "positive",
+   "prompt": "Do an end-to-end integration check of the whole mokata pipeline",
+   "expect": "playbook",
+   "chosen": "playbook",
+   "relied_on": [
+    "full pipeline end-to-end",
+    "smoke-test the whole brainstorm-to-ship story"
+   ],
+   "lexical": {
+    "target_score": 18.4633,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "playbook",
+   "kind": "near_miss",
+   "prompt": "Write the spec for this feature",
+   "expect": "spec",
+   "chosen": "spec",
+   "relied_on": [
+    "write or define the spec"
+   ],
+   "lexical": {
+    "target_score": -0.9245,
+    "target_rank": 52
+   }
+  },
+  {
+   "target": "playbook",
+   "kind": "near_miss",
+   "prompt": "Plan a chain of brainstorm then spec",
+   "expect": "chain",
+   "chosen": "chain",
+   "relied_on": [
+    "chain of skills to run in order"
+   ],
+   "lexical": {
+    "target_score": 2.7362,
+    "target_rank": 8
+   }
+  },
+  {
+   "target": "playbook",
+   "kind": "near_miss",
+   "prompt": "Give me a 60-second read-only demo",
+   "expect": "tour",
+   "chosen": "tour",
+   "relied_on": [
+    "60-second read-only demo"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 35
+   }
+  },
+  {
+   "target": "playbook",
+   "kind": "near_miss",
+   "prompt": "Write a football playbook for a 7-a-side team",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 2.6591,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "playbook",
+   "kind": "near_miss",
+   "prompt": "Enter the pipeline at the review phase",
+   "expect": "enter",
+   "chosen": "enter",
+   "relied_on": [
+    "Enter the pipeline at a phase"
+   ],
+   "lexical": {
+    "target_score": 2.1172,
+    "target_rank": 7
+   }
+  },
+  {
+   "target": "progress",
+   "kind": "positive",
+   "prompt": "Where is the run right now — which phase and which lanes?",
+   "expect": "progress",
+   "chosen": "progress",
+   "relied_on": [
+    "Show where the run is",
+    "7-phase tracker"
+   ],
+   "lexical": {
+    "target_score": 7.2722,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "progress",
+   "kind": "positive",
+   "prompt": "Show the 7-phase tracker and the user-stage arc",
+   "expect": "progress",
+   "chosen": "progress",
+   "relied_on": [
+    "Show where the run is",
+    "7-phase tracker"
+   ],
+   "lexical": {
+    "target_score": 17.95,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "progress",
+   "kind": "positive",
+   "prompt": "Show progress for the current run including parallel lanes",
+   "expect": "progress",
+   "chosen": "progress",
+   "relied_on": [
+    "Show where the run is"
+   ],
+   "lexical": {
+    "target_score": 13.6568,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "progress",
+   "kind": "positive",
+   "prompt": "Which phase are we in? Show the tracker",
+   "expect": "progress",
+   "chosen": "progress",
+   "relied_on": [
+    "Show where the run is",
+    "7-phase tracker"
+   ],
+   "lexical": {
+    "target_score": 8.2938,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "progress",
+   "kind": "positive",
+   "prompt": "Show me the run's progress",
+   "expect": "progress",
+   "chosen": "progress",
+   "relied_on": [
+    "Show where the run is"
+   ],
+   "lexical": {
+    "target_score": 7.8479,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "progress",
+   "kind": "near_miss",
+   "prompt": "Open the live clickable dashboard of the run",
+   "expect": "watch",
+   "chosen": "watch",
+   "relied_on": [
+    "live, clickable dashboard of the run"
+   ],
+   "lexical": {
+    "target_score": 1.1268,
+    "target_rank": 14
+   }
+  },
+  {
+   "target": "progress",
+   "kind": "near_miss",
+   "prompt": "Pick up where I left off",
+   "expect": "resume",
+   "chosen": "resume",
+   "relied_on": [
+    "Pick up where you left off"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 33
+   }
+  },
+  {
+   "target": "progress",
+   "kind": "near_miss",
+   "prompt": "Show me the governed rules",
+   "expect": "govern",
+   "chosen": "govern",
+   "relied_on": [
+    "see the governed state"
+   ],
+   "lexical": {
+    "target_score": 1.6376,
+    "target_rank": 12
+   }
+  },
+  {
+   "target": "progress",
+   "kind": "near_miss",
+   "prompt": "Track my weight-loss progress",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "progress",
+   "kind": "near_miss",
+   "prompt": "Switch the run to parallel subagents",
+   "expect": "exec",
+   "chosen": "exec",
+   "relied_on": [
+    "execution mode for a run",
+    "parallel subagents"
+   ],
+   "lexical": {
+    "target_score": 3.863,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "reconfigure",
+   "kind": "positive",
+   "prompt": "Add the code-review-graph integration to my existing mokata setup",
+   "expect": "reconfigure",
+   "chosen": "reconfigure",
+   "relied_on": [
+    "add/remove an integration, switch a backend, change profile"
+   ],
+   "lexical": {
+    "target_score": 5.3569,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "reconfigure",
+   "kind": "positive",
+   "prompt": "Remove the Obsidian integration I wired earlier",
+   "expect": "reconfigure",
+   "chosen": "reconfigure",
+   "relied_on": [
+    "add/remove an integration, switch a backend, change profile"
+   ],
+   "lexical": {
+    "target_score": 8.4296,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "reconfigure",
+   "kind": "positive",
+   "prompt": "Switch mokata's memory backend to Postgres",
+   "expect": "reconfigure",
+   "chosen": "reconfigure",
+   "relied_on": [
+    "add/remove an integration, switch a backend, change profile"
+   ],
+   "lexical": {
+    "target_score": 6.1454,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "reconfigure",
+   "kind": "positive",
+   "prompt": "Change what mokata has wired — drop the vault integration",
+   "expect": "reconfigure",
+   "chosen": "reconfigure",
+   "relied_on": [
+    "add/remove an integration, switch a backend, change profile"
+   ],
+   "lexical": {
+    "target_score": 7.7779,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "reconfigure",
+   "kind": "positive",
+   "prompt": "Reconfigure mokata to add a new tool integration",
+   "expect": "reconfigure",
+   "chosen": "reconfigure",
+   "relied_on": [
+    "add/remove an integration, switch a backend, change profile"
+   ],
+   "lexical": {
+    "target_score": 8.9404,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "reconfigure",
+   "kind": "near_miss",
+   "prompt": "First-time setup on a brand new machine",
+   "expect": "setup",
+   "chosen": "setup",
+   "relied_on": [
+    "Guided first-run setup"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 35
+   }
+  },
+  {
+   "target": "reconfigure",
+   "kind": "near_miss",
+   "prompt": "mokata's MCP server won't start",
+   "expect": "mcp-repair",
+   "chosen": "mcp-repair",
+   "relied_on": [
+    "mcp isn't working",
+    "/mcp doesn't list mokata"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 33
+   }
+  },
+  {
+   "target": "reconfigure",
+   "kind": "near_miss",
+   "prompt": "Reconfigure my router's Wi-Fi password",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "reconfigure",
+   "kind": "near_miss",
+   "prompt": "Move mokata from local to team run mode",
+   "expect": "mode",
+   "chosen": "mode",
+   "relied_on": [
+    "run mode (local | team)",
+    "team-readiness preflight"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 39
+   }
+  },
+  {
+   "target": "reconfigure",
+   "kind": "near_miss",
+   "prompt": "Upgrade mokata to the latest",
+   "expect": "update",
+   "chosen": "update",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 34
+   }
+  },
+  {
+   "target": "refine",
+   "kind": "positive",
+   "prompt": "Do a deep review of the existing billing code and tell me what to refactor",
+   "expect": "refine",
+   "chosen": "refine",
+   "relied_on": [
+    "deep, steerable review of EXISTING code",
+    "what to refactor, harden, or clean up"
+   ],
+   "lexical": {
+    "target_score": 14.448,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "refine",
+   "kind": "positive",
+   "prompt": "What should we harden or clean up in this codebase? Focus on auth",
+   "expect": "refine",
+   "chosen": "refine",
+   "relied_on": [
+    "what to refactor, harden, or clean up"
+   ],
+   "lexical": {
+    "target_score": 13.2397,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "refine",
+   "kind": "positive",
+   "prompt": "Propose prioritized refinements for the existing parser, I'll pick a scoped set",
+   "expect": "refine",
+   "chosen": "refine",
+   "relied_on": [
+    "deep, steerable review of EXISTING code"
+   ],
+   "lexical": {
+    "target_score": 22.7247,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "refine",
+   "kind": "positive",
+   "prompt": "Review the existing code for improvements and hand the chosen ones to spec",
+   "expect": "refine",
+   "chosen": "refine",
+   "relied_on": [
+    "deep, steerable review of EXISTING code"
+   ],
+   "lexical": {
+    "target_score": 15.4654,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "refine",
+   "kind": "positive",
+   "prompt": "Steer a deep review of our legacy module: what would you clean up?",
+   "expect": "refine",
+   "chosen": "refine",
+   "relied_on": [
+    "deep, steerable review of EXISTING code",
+    "what to refactor, harden, or clean up"
+   ],
+   "lexical": {
+    "target_score": 9.2842,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "refine",
+   "kind": "near_miss",
+   "prompt": "Implement the refactor we agreed on yesterday",
+   "expect": "develop",
+   "chosen": "develop",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 1.7918,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "refine",
+   "kind": "near_miss",
+   "prompt": "Brainstorm a brand-new notifications feature",
+   "expect": "brainstorm",
+   "chosen": "brainstorm",
+   "relied_on": [
+    "describing a NEW problem/feature"
+   ],
+   "lexical": {
+    "target_score": -6.488,
+    "target_rank": 53
+   }
+  },
+  {
+   "target": "refine",
+   "kind": "near_miss",
+   "prompt": "Review my finished diff before merge",
+   "expect": "review",
+   "chosen": "review",
+   "relied_on": [
+    "check/review a diff or change"
+   ],
+   "lexical": {
+    "target_score": 2.1172,
+    "target_rank": 7
+   }
+  },
+  {
+   "target": "refine",
+   "kind": "near_miss",
+   "prompt": "Refine this paragraph of my essay",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "refine",
+   "kind": "near_miss",
+   "prompt": "Make the hot loop faster with measurements",
+   "expect": "optimize",
+   "chosen": "optimize",
+   "relied_on": [
+    "faster or lighter"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 34
+   }
+  },
+  {
+   "target": "resume",
+   "kind": "positive",
+   "prompt": "Pick up where I left off on yesterday's run",
+   "expect": "resume",
+   "chosen": "resume",
+   "relied_on": [
+    "Pick up where you left off"
+   ],
+   "lexical": {
+    "target_score": 9.283,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "resume",
+   "kind": "positive",
+   "prompt": "Resume the last mokata run",
+   "expect": "resume",
+   "chosen": "resume",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 4.1995,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "resume",
+   "kind": "positive",
+   "prompt": "Where would my run resume if I continued now?",
+   "expect": "resume",
+   "chosen": "resume",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 5.6995,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "resume",
+   "kind": "positive",
+   "prompt": "Preview where run 42 resumes",
+   "expect": "resume",
+   "chosen": "resume",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 8.7722,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "resume",
+   "kind": "positive",
+   "prompt": "Continue the run I stopped on Friday from where I left off",
+   "expect": "resume",
+   "chosen": "resume",
+   "relied_on": [
+    "Pick up where you left off"
+   ],
+   "lexical": {
+    "target_score": 4.1995,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "resume",
+   "kind": "near_miss",
+   "prompt": "Pull the session bundle my teammate pushed",
+   "expect": "session",
+   "chosen": "session",
+   "relied_on": [
+    "package this session",
+    "hand off their session state to a teammate"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 39
+   }
+  },
+  {
+   "target": "resume",
+   "kind": "near_miss",
+   "prompt": "Show the 7-phase tracker",
+   "expect": "progress",
+   "chosen": "progress",
+   "relied_on": [
+    "Show where the run is",
+    "7-phase tracker"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 36
+   }
+  },
+  {
+   "target": "resume",
+   "kind": "near_miss",
+   "prompt": "Write my resume for a backend role",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.0727,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "resume",
+   "kind": "near_miss",
+   "prompt": "Enter the pipeline at the test phase",
+   "expect": "enter",
+   "chosen": "enter",
+   "relied_on": [
+    "Enter the pipeline at a phase"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 38
+   }
+  },
+  {
+   "target": "resume",
+   "kind": "near_miss",
+   "prompt": "Open the live dashboard",
+   "expect": "watch",
+   "chosen": "watch",
+   "relied_on": [
+    "live, clickable dashboard of the run"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 37
+   }
+  },
+  {
+   "target": "review",
+   "kind": "positive",
+   "prompt": "Tests are green — review the change against the spec, then for quality",
+   "expect": "review",
+   "chosen": "review",
+   "relied_on": [
+    "check/review a diff or change",
+    "tests are GREEN"
+   ],
+   "lexical": {
+    "target_score": 14.1088,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "review",
+   "kind": "positive",
+   "prompt": "Review my diff before I merge it",
+   "expect": "review",
+   "chosen": "review",
+   "relied_on": [
+    "check/review a diff or change"
+   ],
+   "lexical": {
+    "target_score": 9.4261,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "review",
+   "kind": "positive",
+   "prompt": "Check this change: does it meet the spec?",
+   "expect": "review",
+   "chosen": "review",
+   "relied_on": [
+    "check/review a diff or change"
+   ],
+   "lexical": {
+    "target_score": 3.9136,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "review",
+   "kind": "positive",
+   "prompt": "Implementation is finished, run the closing review",
+   "expect": "review",
+   "chosen": "review",
+   "relied_on": [
+    "check/review a diff or change"
+   ],
+   "lexical": {
+    "target_score": 12.0468,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "review",
+   "kind": "positive",
+   "prompt": "Do a two-pass review of the PR",
+   "expect": "review",
+   "chosen": "review",
+   "relied_on": [
+    "check/review a diff or change"
+   ],
+   "lexical": {
+    "target_score": 12.2842,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "review",
+   "kind": "near_miss",
+   "prompt": "Deeply review the existing legacy code and propose refactors",
+   "expect": "refine",
+   "chosen": "refine",
+   "relied_on": [
+    "deep, steerable review of EXISTING code",
+    "what to refactor, harden, or clean up"
+   ],
+   "lexical": {
+    "target_score": 1.3439,
+    "target_rank": 16
+   }
+  },
+  {
+   "target": "review",
+   "kind": "near_miss",
+   "prompt": "Open the review window with the live diff for this session",
+   "expect": "review-window",
+   "chosen": "review-window",
+   "relied_on": [
+    "Open the review window",
+    "live diff"
+   ],
+   "lexical": {
+    "target_score": 5.1899,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "review",
+   "kind": "near_miss",
+   "prompt": "Write a product review of my new headphones",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.8747,
+    "target_rank": 15
+   }
+  },
+  {
+   "target": "review",
+   "kind": "near_miss",
+   "prompt": "Help me explore a new feature idea",
+   "expect": "brainstorm",
+   "chosen": "brainstorm",
+   "relied_on": [
+    "exploring an approach",
+    "describing a NEW problem/feature"
+   ],
+   "lexical": {
+    "target_score": -1.2425,
+    "target_rank": 50
+   }
+  },
+  {
+   "target": "review",
+   "kind": "near_miss",
+   "prompt": "Implementation is half done; keep coding the approved plan",
+   "expect": "develop",
+   "chosen": "develop",
+   "relied_on": [
+    "minimum implementation",
+    "approved, spec-backed change"
+   ],
+   "lexical": {
+    "target_score": 1.5109,
+    "target_rank": 18
+   }
+  },
+  {
+   "target": "review-window",
+   "kind": "positive",
+   "prompt": "Open the review window for this session",
+   "expect": "review-window",
+   "chosen": "review-window",
+   "relied_on": [
+    "Open the review window"
+   ],
+   "lexical": {
+    "target_score": 16.3461,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "review-window",
+   "kind": "positive",
+   "prompt": "Show me the live diff for this session in the review window",
+   "expect": "review-window",
+   "chosen": "review-window",
+   "relied_on": [
+    "Open the review window",
+    "live diff"
+   ],
+   "lexical": {
+    "target_score": 17.5823,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "review-window",
+   "kind": "positive",
+   "prompt": "Open the review window at an earlier point in time",
+   "expect": "review-window",
+   "chosen": "review-window",
+   "relied_on": [
+    "Open the review window"
+   ],
+   "lexical": {
+    "target_score": 18.831,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "review-window",
+   "kind": "positive",
+   "prompt": "I want to see this session's PRs and live diff",
+   "expect": "review-window",
+   "chosen": "review-window",
+   "relied_on": [
+    "live diff"
+   ],
+   "lexical": {
+    "target_score": 13.9651,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "review-window",
+   "kind": "positive",
+   "prompt": "Pop open the review window",
+   "expect": "review-window",
+   "chosen": "review-window",
+   "relied_on": [
+    "Open the review window"
+   ],
+   "lexical": {
+    "target_score": 11.7734,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "review-window",
+   "kind": "near_miss",
+   "prompt": "Review my diff against the spec",
+   "expect": "review",
+   "chosen": "review",
+   "relied_on": [
+    "check/review a diff or change"
+   ],
+   "lexical": {
+    "target_score": 5.1899,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "review-window",
+   "kind": "near_miss",
+   "prompt": "Open the live run dashboard",
+   "expect": "watch",
+   "chosen": "watch",
+   "relied_on": [
+    "live, clickable dashboard of the run"
+   ],
+   "lexical": {
+    "target_score": 5.8089,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "review-window",
+   "kind": "near_miss",
+   "prompt": "Open a window in my bedroom",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 6.6562,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "review-window",
+   "kind": "near_miss",
+   "prompt": "Show the phase tracker for the run",
+   "expect": "progress",
+   "chosen": "progress",
+   "relied_on": [
+    "Show where the run is",
+    "7-phase tracker"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 40
+   }
+  },
+  {
+   "target": "review-window",
+   "kind": "near_miss",
+   "prompt": "Package this session for a teammate",
+   "expect": "session",
+   "chosen": "session",
+   "relied_on": [
+    "package this session",
+    "hand off their session state to a teammate"
+   ],
+   "lexical": {
+    "target_score": 3.0727,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "security",
+   "kind": "positive",
+   "prompt": "Add password reset to our auth service and handle the tokens securely",
+   "expect": "security",
+   "chosen": "security",
+   "relied_on": [
+    "authentication, authorization, input handling, secrets, cryptography"
+   ],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "security",
+   "kind": "positive",
+   "prompt": "This handler builds a SQL query from user input; harden it",
+   "expect": "security",
+   "chosen": "security",
+   "relied_on": [
+    "authentication, authorization, input handling, secrets, cryptography",
+    "untrusted input"
+   ],
+   "lexical": {
+    "target_score": 12.1287,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "security",
+   "kind": "positive",
+   "prompt": "We store API secrets in the config; fix how credentials are handled",
+   "expect": "security",
+   "chosen": "security",
+   "relied_on": [
+    "authentication, authorization, input handling, secrets, cryptography"
+   ],
+   "lexical": {
+    "target_score": 9.6519,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "security",
+   "kind": "positive",
+   "prompt": "Add authorization checks to the admin service",
+   "expect": "security",
+   "chosen": "security",
+   "relied_on": [
+    "authentication, authorization, input handling, secrets, cryptography"
+   ],
+   "lexical": {
+    "target_score": 3.0727,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "security",
+   "kind": "positive",
+   "prompt": "Parse untrusted XML from a partner upload safely",
+   "expect": "security",
+   "chosen": "security",
+   "relied_on": [
+    "untrusted input"
+   ],
+   "lexical": {
+    "target_score": 8.667,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "security",
+   "kind": "near_miss",
+   "prompt": "Add a React Server Function that reads protected data",
+   "expect": "frontend-security",
+   "chosen": "frontend-security",
+   "relied_on": [
+    "Server Function, a route handler, a page that reads protected data"
+   ],
+   "lexical": {
+    "target_score": -1.5363,
+    "target_rank": 52
+   }
+  },
+  {
+   "target": "security",
+   "kind": "near_miss",
+   "prompt": "Rename internal helper functions in the math module",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": -2.3411,
+    "target_rank": 53
+   }
+  },
+  {
+   "target": "security",
+   "kind": "near_miss",
+   "prompt": "Change the button colour and contrast on the marketing page",
+   "expect": "frontend-a11y",
+   "chosen": "frontend-a11y",
+   "relied_on": [
+    "colour/contrast choice"
+   ],
+   "lexical": {
+    "target_score": 0.9209,
+    "target_rank": 18
+   }
+  },
+  {
+   "target": "security",
+   "kind": "near_miss",
+   "prompt": "Set up home security cameras",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.0727,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "security",
+   "kind": "near_miss",
+   "prompt": "Pin all GitHub Actions to shas for Scorecard",
+   "expect": "ci-cd",
+   "chosen": "ci-cd",
+   "relied_on": [
+    "GitHub Actions or other CI workflow"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 38
+   }
+  },
+  {
+   "target": "session",
+   "kind": "positive",
+   "prompt": "Package this session so I can continue on my laptop",
+   "expect": "session",
+   "chosen": "session",
+   "relied_on": [
+    "package this session",
+    "hand off their session state to a teammate"
+   ],
+   "lexical": {
+    "target_score": 11.6303,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "session",
+   "kind": "positive",
+   "prompt": "Hand off my session state to a teammate",
+   "expect": "session",
+   "chosen": "session",
+   "relied_on": [
+    "package this session",
+    "hand off their session state to a teammate"
+   ],
+   "lexical": {
+    "target_score": 15.6658,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "session",
+   "kind": "positive",
+   "prompt": "Pull the session bundle I pushed from my other machine",
+   "expect": "session",
+   "chosen": "session",
+   "relied_on": [
+    "package this session",
+    "hand off their session state to a teammate"
+   ],
+   "lexical": {
+    "target_score": 11.9221,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "session",
+   "kind": "positive",
+   "prompt": "Push this session under the tag auth-work",
+   "expect": "session",
+   "chosen": "session",
+   "relied_on": [
+    "package this session",
+    "hand off their session state to a teammate"
+   ],
+   "lexical": {
+    "target_score": 6.6379,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "session",
+   "kind": "positive",
+   "prompt": "Share this session with Priya so she can resume it",
+   "expect": "session",
+   "chosen": "session",
+   "relied_on": [
+    "package this session",
+    "hand off their session state to a teammate"
+   ],
+   "lexical": {
+    "target_score": 8.6303,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "session",
+   "kind": "near_miss",
+   "prompt": "Pick up where I left off on this machine",
+   "expect": "resume",
+   "chosen": "resume",
+   "relied_on": [
+    "Pick up where you left off"
+   ],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "session",
+   "kind": "near_miss",
+   "prompt": "Push my branch to origin",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": -1.7918,
+    "target_rank": 53
+   }
+  },
+  {
+   "target": "session",
+   "kind": "near_miss",
+   "prompt": "Share the brainstorm doc with the team",
+   "expect": "vault",
+   "chosen": "vault",
+   "relied_on": [
+    "Share design artifacts (brainstorm/spec) with the team"
+   ],
+   "lexical": {
+    "target_score": 2.4849,
+    "target_rank": 7
+   }
+  },
+  {
+   "target": "session",
+   "kind": "near_miss",
+   "prompt": "Flush the team write journal",
+   "expect": "sync",
+   "chosen": "sync",
+   "relied_on": [
+    "team write journal"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 45
+   }
+  },
+  {
+   "target": "session",
+   "kind": "near_miss",
+   "prompt": "Book a therapy session",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.0727,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "setup",
+   "kind": "positive",
+   "prompt": "Guided first-run setup for mokata on this machine",
+   "expect": "setup",
+   "chosen": "setup",
+   "relied_on": [
+    "Guided first-run setup"
+   ],
+   "lexical": {
+    "target_score": 12.7368,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "setup",
+   "kind": "positive",
+   "prompt": "Detect my tools and ask me what to wire",
+   "expect": "setup",
+   "chosen": "setup",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 11.4296,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "setup",
+   "kind": "positive",
+   "prompt": "Do the first-run setup for mokata, with my approval for each wiring",
+   "expect": "setup",
+   "chosen": "setup",
+   "relied_on": [
+    "Guided first-run setup"
+   ],
+   "lexical": {
+    "target_score": 13.5211,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "setup",
+   "kind": "positive",
+   "prompt": "First run: wire mokata into Claude Code",
+   "expect": "setup",
+   "chosen": "setup",
+   "relied_on": [
+    "Guided first-run setup"
+   ],
+   "lexical": {
+    "target_score": 6.5486,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "setup",
+   "kind": "positive",
+   "prompt": "Run mokata's guided setup",
+   "expect": "setup",
+   "chosen": "setup",
+   "relied_on": [
+    "Guided first-run setup"
+   ],
+   "lexical": {
+    "target_score": 6.5992,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "setup",
+   "kind": "near_miss",
+   "prompt": "mokata's MCP server stopped connecting",
+   "expect": "mcp-repair",
+   "chosen": "mcp-repair",
+   "relied_on": [
+    "mcp isn't working",
+    "/mcp doesn't list mokata"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 39
+   }
+  },
+  {
+   "target": "setup",
+   "kind": "near_miss",
+   "prompt": "Add one more integration to what's already wired",
+   "expect": "reconfigure",
+   "chosen": "reconfigure",
+   "relied_on": [
+    "add/remove an integration, switch a backend, change profile"
+   ],
+   "lexical": {
+    "target_score": 2.2842,
+    "target_rank": 9
+   }
+  },
+  {
+   "target": "setup",
+   "kind": "near_miss",
+   "prompt": "Set up a Python virtualenv for this project",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 42
+   }
+  },
+  {
+   "target": "setup",
+   "kind": "near_miss",
+   "prompt": "Upgrade mokata",
+   "expect": "update",
+   "chosen": "update",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 41
+   }
+  },
+  {
+   "target": "setup",
+   "kind": "near_miss",
+   "prompt": "Join the team stack as a new teammate",
+   "expect": "team",
+   "chosen": "team",
+   "relied_on": [
+    "team join",
+    "wires a new teammate"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 39
+   }
+  },
+  {
+   "target": "ship",
+   "kind": "positive",
+   "prompt": "Review passed; verify it's truly done and let me choose how to land it",
+   "expect": "ship",
+   "chosen": "ship",
+   "relied_on": [
+    "needs verifying and landing"
+   ],
+   "lexical": {
+    "target_score": 19.4188,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "ship",
+   "kind": "positive",
+   "prompt": "Wrap up this change and merge it",
+   "expect": "ship",
+   "chosen": "ship",
+   "relied_on": [
+    "finish, merge, release, or wrap up a change"
+   ],
+   "lexical": {
+    "target_score": 8.7407,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "ship",
+   "kind": "positive",
+   "prompt": "Finish the run — confirm everything is done before I decide how to land it",
+   "expect": "ship",
+   "chosen": "ship",
+   "relied_on": [
+    "needs verifying and landing",
+    "finish, merge, release, or wrap up a change"
+   ],
+   "lexical": {
+    "target_score": 10.3449,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "ship",
+   "kind": "positive",
+   "prompt": "We're done coding and it has been reviewed; verify it is truly done and land it",
+   "expect": "ship",
+   "chosen": "ship",
+   "relied_on": [
+    "needs verifying and landing"
+   ],
+   "lexical": {
+    "target_score": 13.3461,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "ship",
+   "kind": "positive",
+   "prompt": "Is this change ready to merge? Verify and then hand me the landing options",
+   "expect": "ship",
+   "chosen": "ship",
+   "relied_on": [
+    "needs verifying and landing",
+    "finish, merge, release, or wrap up a change"
+   ],
+   "lexical": {
+    "target_score": 14.0388,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "ship",
+   "kind": "near_miss",
+   "prompt": "Plan a canary rollout with abort thresholds for users",
+   "expect": "shipping",
+   "chosen": "shipping",
+   "relied_on": [
+    "rollout strategy (staged, canary, blue-green, feature-flagged)",
+    "rollback or abort thresholds"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 44
+   }
+  },
+  {
+   "target": "ship",
+   "kind": "near_miss",
+   "prompt": "Tests are still red, fix them",
+   "expect": "develop",
+   "chosen": "develop",
+   "relied_on": [
+    "failing test is on record"
+   ],
+   "lexical": {
+    "target_score": -2.3552,
+    "target_rank": 53
+   }
+  },
+  {
+   "target": "ship",
+   "kind": "near_miss",
+   "prompt": "Do the two-pass review of this diff",
+   "expect": "review",
+   "chosen": "review",
+   "relied_on": [
+    "check/review a diff or change"
+   ],
+   "lexical": {
+    "target_score": 2.1172,
+    "target_rank": 6
+   }
+  },
+  {
+   "target": "ship",
+   "kind": "near_miss",
+   "prompt": "Ship a parcel to Berlin",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 2.2842,
+    "target_rank": 4
+   }
+  },
+  {
+   "target": "ship",
+   "kind": "near_miss",
+   "prompt": "Pin our CI actions to commit shas",
+   "expect": "ci-cd",
+   "chosen": "ci-cd",
+   "relied_on": [
+    "CI/CD pipeline",
+    "GitHub Actions or other CI workflow"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 40
+   }
+  },
+  {
+   "target": "shipping",
+   "kind": "positive",
+   "prompt": "Plan a staged rollout of the new checkout with a canary",
+   "expect": "shipping",
+   "chosen": "shipping",
+   "relied_on": [
+    "rollout strategy (staged, canary, blue-green, feature-flagged)"
+   ],
+   "lexical": {
+    "target_score": 11.7397,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "shipping",
+   "kind": "positive",
+   "prompt": "Define rollback thresholds for the release — abort if errors double",
+   "expect": "shipping",
+   "chosen": "shipping",
+   "relied_on": [
+    "rollback or abort thresholds"
+   ],
+   "lexical": {
+    "target_score": 17.4404,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "shipping",
+   "kind": "positive",
+   "prompt": "Add a pre-launch checklist for the payments launch",
+   "expect": "shipping",
+   "chosen": "shipping",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 17.024,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "shipping",
+   "kind": "positive",
+   "prompt": "Should we use blue-green or a feature flag to launch this to users?",
+   "expect": "shipping",
+   "chosen": "shipping",
+   "relied_on": [
+    "rollout strategy (staged, canary, blue-green, feature-flagged)"
+   ],
+   "lexical": {
+    "target_score": 23.8809,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "shipping",
+   "kind": "positive",
+   "prompt": "Is this ready to go to users, and how do we back it out?",
+   "expect": "shipping",
+   "chosen": "shipping",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 17.8124,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "shipping",
+   "kind": "near_miss",
+   "prompt": "Merge my finished change after verifying it",
+   "expect": "ship",
+   "chosen": "ship",
+   "relied_on": [
+    "needs verifying and landing",
+    "finish, merge, release, or wrap up a change"
+   ],
+   "lexical": {
+    "target_score": 0.9209,
+    "target_rank": 19
+   }
+  },
+  {
+   "target": "shipping",
+   "kind": "near_miss",
+   "prompt": "Add a step to the CI pipeline that builds the docker image",
+   "expect": "ci-cd",
+   "chosen": "ci-cd",
+   "relied_on": [
+    "CI/CD pipeline",
+    "GitHub Actions or other CI workflow",
+    "quality-gate step"
+   ],
+   "lexical": {
+    "target_score": -0.5661,
+    "target_rank": 48
+   }
+  },
+  {
+   "target": "shipping",
+   "kind": "near_miss",
+   "prompt": "Implement the failing test for the cart",
+   "expect": "develop",
+   "chosen": "develop",
+   "relied_on": [
+    "failing test is on record"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 43
+   }
+  },
+  {
+   "target": "shipping",
+   "kind": "near_miss",
+   "prompt": "Compare shipping carriers for our e-commerce store",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 2.2842,
+    "target_rank": 6
+   }
+  },
+  {
+   "target": "shipping",
+   "kind": "near_miss",
+   "prompt": "Tag the release in git",
+   "expect": "git",
+   "chosen": "git",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 2.1172,
+    "target_rank": 7
+   }
+  },
+  {
+   "target": "skill-author",
+   "kind": "positive",
+   "prompt": "Author a new mokata skill test-first for our migration workflow",
+   "expect": "skill-author",
+   "chosen": "skill-author",
+   "relied_on": [
+    "Author a new mokata skill test-first"
+   ],
+   "lexical": {
+    "target_score": 17.6279,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "skill-author",
+   "kind": "positive",
+   "prompt": "Write a new mokata skill called db-migrate, RED-GREEN for docs",
+   "expect": "skill-author",
+   "chosen": "skill-author",
+   "relied_on": [
+    "Author a new mokata skill test-first"
+   ],
+   "lexical": {
+    "target_score": 18.9599,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "skill-author",
+   "kind": "positive",
+   "prompt": "Create a mokata skill with a required doc assertion",
+   "expect": "skill-author",
+   "chosen": "skill-author",
+   "relied_on": [
+    "Author a new mokata skill test-first"
+   ],
+   "lexical": {
+    "target_score": 4.5685,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "skill-author",
+   "kind": "positive",
+   "prompt": "I want to author a skill for mokata",
+   "expect": "skill-author",
+   "chosen": "skill-author",
+   "relied_on": [
+    "Author a new mokata skill test-first"
+   ],
+   "lexical": {
+    "target_score": 5.8678,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "skill-author",
+   "kind": "positive",
+   "prompt": "Add a new skill to mokata, test-first",
+   "expect": "skill-author",
+   "chosen": "skill-author",
+   "relied_on": [
+    "Author a new mokata skill test-first"
+   ],
+   "lexical": {
+    "target_score": 12.5444,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "skill-author",
+   "kind": "near_miss",
+   "prompt": "Teach mokata our team's naming conventions",
+   "expect": "onboard",
+   "chosen": "onboard",
+   "relied_on": [
+    "teach mokata the project's rules"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 46
+   }
+  },
+  {
+   "target": "skill-author",
+   "kind": "near_miss",
+   "prompt": "List all mokata skills on one screen",
+   "expect": "menu",
+   "chosen": "menu",
+   "relied_on": [
+    "every /mokata command and bundled skill on one screen"
+   ],
+   "lexical": {
+    "target_score": 2.2842,
+    "target_rank": 7
+   }
+  },
+  {
+   "target": "skill-author",
+   "kind": "near_miss",
+   "prompt": "Improve my public speaking skills",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 2.2842,
+    "target_rank": 5
+   }
+  },
+  {
+   "target": "skill-author",
+   "kind": "near_miss",
+   "prompt": "Install a community stack for Django",
+   "expect": "stacks",
+   "chosen": "stacks",
+   "relied_on": [
+    "Community stacks",
+    "per-framework stacks"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 46
+   }
+  },
+  {
+   "target": "skill-author",
+   "kind": "near_miss",
+   "prompt": "Write failing tests for the spec",
+   "expect": "test",
+   "chosen": "test",
+   "relied_on": [
+    "failing tests written"
+   ],
+   "lexical": {
+    "target_score": 3.4865,
+    "target_rank": 8
+   }
+  },
+  {
+   "target": "spec",
+   "kind": "positive",
+   "prompt": "The approach is approved; turn it into testable acceptance criteria",
+   "expect": "spec",
+   "chosen": "spec",
+   "relied_on": [
+    "acceptance criteria"
+   ],
+   "lexical": {
+    "target_score": 17.9149,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "spec",
+   "kind": "positive",
+   "prompt": "Write the spec for the CSV export change",
+   "expect": "spec",
+   "chosen": "spec",
+   "relied_on": [
+    "write or define the spec"
+   ],
+   "lexical": {
+    "target_score": 3.6453,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "spec",
+   "kind": "positive",
+   "prompt": "Define acceptance criteria for the refinements we picked",
+   "expect": "spec",
+   "chosen": "spec",
+   "relied_on": [
+    "acceptance criteria",
+    "write or define the spec"
+   ],
+   "lexical": {
+    "target_score": 13.203,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "spec",
+   "kind": "positive",
+   "prompt": "No persisted spec exists yet and we're about to plan tests; write one",
+   "expect": "spec",
+   "chosen": "spec",
+   "relied_on": [
+    "write or define the spec"
+   ],
+   "lexical": {
+    "target_score": 14.8361,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "spec",
+   "kind": "positive",
+   "prompt": "Map each acceptance criterion to a test for the login change",
+   "expect": "spec",
+   "chosen": "spec",
+   "relied_on": [
+    "acceptance criteria"
+   ],
+   "lexical": {
+    "target_score": 8.627,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "spec",
+   "kind": "near_miss",
+   "prompt": "Do a specification review of this vendor's PDF for typos",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 44
+   }
+  },
+  {
+   "target": "spec",
+   "kind": "near_miss",
+   "prompt": "We haven't picked an approach yet, explore options",
+   "expect": "brainstorm",
+   "chosen": "brainstorm",
+   "relied_on": [
+    "exploring an approach",
+    "weighing options or trade-offs"
+   ],
+   "lexical": {
+    "target_score": 1.3148,
+    "target_rank": 15
+   }
+  },
+  {
+   "target": "spec",
+   "kind": "near_miss",
+   "prompt": "Write the failing tests for the emitted spec",
+   "expect": "test",
+   "chosen": "test",
+   "relied_on": [
+    "failing tests written"
+   ],
+   "lexical": {
+    "target_score": 2.5702,
+    "target_rank": 8
+   }
+  },
+  {
+   "target": "spec",
+   "kind": "near_miss",
+   "prompt": "Split the approved spec into subtasks",
+   "expect": "decompose",
+   "chosen": "decompose",
+   "relied_on": [
+    "independent subtasks + a dependency plan"
+   ],
+   "lexical": {
+    "target_score": 3.3604,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "spec",
+   "kind": "near_miss",
+   "prompt": "Review the diff against the spec",
+   "expect": "review",
+   "chosen": "review",
+   "relied_on": [
+    "check/review a diff or change"
+   ],
+   "lexical": {
+    "target_score": 0.8755,
+    "target_rank": 23
+   }
+  },
+  {
+   "target": "stacks",
+   "kind": "positive",
+   "prompt": "Search the community stacks for a Django stack",
+   "expect": "stacks",
+   "chosen": "stacks",
+   "relied_on": [
+    "Community stacks",
+    "per-framework stacks"
+   ],
+   "lexical": {
+    "target_score": 8.1562,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "stacks",
+   "kind": "positive",
+   "prompt": "Install the react-web community stack",
+   "expect": "stacks",
+   "chosen": "stacks",
+   "relied_on": [
+    "Community stacks",
+    "per-framework stacks"
+   ],
+   "lexical": {
+    "target_score": 10.2734,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "stacks",
+   "kind": "positive",
+   "prompt": "Show me the curated catalog of per-framework stacks",
+   "expect": "stacks",
+   "chosen": "stacks",
+   "relied_on": [
+    "Community stacks",
+    "per-framework stacks"
+   ],
+   "lexical": {
+    "target_score": 16.8233,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "stacks",
+   "kind": "positive",
+   "prompt": "List the available mokata stacks",
+   "expect": "stacks",
+   "chosen": "stacks",
+   "relied_on": [
+    "Community stacks",
+    "per-framework stacks"
+   ],
+   "lexical": {
+    "target_score": 3.0727,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "stacks",
+   "kind": "positive",
+   "prompt": "Show the details of the nestjs-api stack before I install it",
+   "expect": "stacks",
+   "chosen": "stacks",
+   "relied_on": [
+    "Community stacks",
+    "per-framework stacks"
+   ],
+   "lexical": {
+    "target_score": 6.6899,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "stacks",
+   "kind": "near_miss",
+   "prompt": "Join my team's shared stack with one command",
+   "expect": "team",
+   "chosen": "team",
+   "relied_on": [
+    "team join"
+   ],
+   "lexical": {
+    "target_score": 4.9216,
+    "target_rank": 4
+   }
+  },
+  {
+   "target": "stacks",
+   "kind": "near_miss",
+   "prompt": "Explain how a call stack works",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.0727,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "stacks",
+   "kind": "near_miss",
+   "prompt": "Teach mokata our project conventions",
+   "expect": "onboard",
+   "chosen": "onboard",
+   "relied_on": [
+    "teach mokata the project's rules"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 44
+   }
+  },
+  {
+   "target": "stacks",
+   "kind": "near_miss",
+   "prompt": "Share the spec with the team vault",
+   "expect": "vault",
+   "chosen": "vault",
+   "relied_on": [
+    "Share design artifacts (brainstorm/spec) with the team"
+   ],
+   "lexical": {
+    "target_score": 2.7362,
+    "target_rank": 4
+   }
+  },
+  {
+   "target": "stacks",
+   "kind": "near_miss",
+   "prompt": "Add a new integration to mokata's wiring",
+   "expect": "reconfigure",
+   "chosen": "reconfigure",
+   "relied_on": [
+    "add/remove an integration, switch a backend, change profile"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 40
+   }
+  },
+  {
+   "target": "sync",
+   "kind": "positive",
+   "prompt": "Flush the team write journal to the shared DB",
+   "expect": "sync",
+   "chosen": "sync",
+   "relied_on": [
+    "team write journal"
+   ],
+   "lexical": {
+    "target_score": 23.5693,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "sync",
+   "kind": "positive",
+   "prompt": "Reconcile the compare-and-set conflicts from the last sync",
+   "expect": "sync",
+   "chosen": "sync",
+   "relied_on": [
+    "compare-and-set conflicts"
+   ],
+   "lexical": {
+    "target_score": 20.0967,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "sync",
+   "kind": "positive",
+   "prompt": "Sync my pending team writes to the shared database",
+   "expect": "sync",
+   "chosen": "sync",
+   "relied_on": [
+    "team write journal"
+   ],
+   "lexical": {
+    "target_score": 11.3914,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "sync",
+   "kind": "positive",
+   "prompt": "The journal has unflushed writes; push them to the shared DB",
+   "expect": "sync",
+   "chosen": "sync",
+   "relied_on": [
+    "team write journal"
+   ],
+   "lexical": {
+    "target_score": 13.0009,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "sync",
+   "kind": "positive",
+   "prompt": "Resolve the CAS conflicts through the gate",
+   "expect": "sync",
+   "chosen": "sync",
+   "relied_on": [
+    "compare-and-set conflicts"
+   ],
+   "lexical": {
+    "target_score": 4.3738,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "sync",
+   "kind": "near_miss",
+   "prompt": "Check the docs are in sync with the code",
+   "expect": "docsync",
+   "chosen": "docsync",
+   "relied_on": [
+    "docs still match the code",
+    "docs may have gone stale"
+   ],
+   "lexical": {
+    "target_score": 3.0727,
+    "target_rank": 4
+   }
+  },
+  {
+   "target": "sync",
+   "kind": "near_miss",
+   "prompt": "git pull and rebase my branch",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 47
+   }
+  },
+  {
+   "target": "sync",
+   "kind": "near_miss",
+   "prompt": "Join the team stack",
+   "expect": "team",
+   "chosen": "team",
+   "relied_on": [
+    "team join"
+   ],
+   "lexical": {
+    "target_score": 2.4849,
+    "target_rank": 4
+   }
+  },
+  {
+   "target": "sync",
+   "kind": "near_miss",
+   "prompt": "Push this session to Postgres for my teammate",
+   "expect": "session",
+   "chosen": "session",
+   "relied_on": [
+    "package this session",
+    "hand off their session state to a teammate"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 48
+   }
+  },
+  {
+   "target": "sync",
+   "kind": "near_miss",
+   "prompt": "Put mokata into team run mode",
+   "expect": "mode",
+   "chosen": "mode",
+   "relied_on": [
+    "run mode (local | team)",
+    "team-readiness preflight"
+   ],
+   "lexical": {
+    "target_score": 5.2211,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "team",
+   "kind": "positive",
+   "prompt": "team join our shared stack — I'm the new teammate",
+   "expect": "team",
+   "chosen": "team",
+   "relied_on": [
+    "team join",
+    "wires a new teammate"
+   ],
+   "lexical": {
+    "target_score": 21.6836,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "team",
+   "kind": "positive",
+   "prompt": "Wire me into the team: shared stack, memory and vault in one go",
+   "expect": "team",
+   "chosen": "team",
+   "relied_on": [
+    "team join",
+    "wires a new teammate"
+   ],
+   "lexical": {
+    "target_score": 20.0291,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "team",
+   "kind": "positive",
+   "prompt": "Connect to the team's shared memory DB using MOKATA_PG_DSN",
+   "expect": "team",
+   "chosen": "team",
+   "relied_on": [
+    "team join"
+   ],
+   "lexical": {
+    "target_score": 11.6597,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "team",
+   "kind": "positive",
+   "prompt": "Wire up the shared team memory and vault for me as a new teammate",
+   "expect": "team",
+   "chosen": "team",
+   "relied_on": [
+    "team join",
+    "wires a new teammate"
+   ],
+   "lexical": {
+    "target_score": 20.6651,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "team",
+   "kind": "positive",
+   "prompt": "Adopt the team's stack from the repo and connect",
+   "expect": "team",
+   "chosen": "team",
+   "relied_on": [
+    "team join"
+   ],
+   "lexical": {
+    "target_score": 11.703,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "team",
+   "kind": "near_miss",
+   "prompt": "Flush my pending writes to the shared DB",
+   "expect": "sync",
+   "chosen": "sync",
+   "relied_on": [
+    "team write journal"
+   ],
+   "lexical": {
+    "target_score": 2.4849,
+    "target_rank": 4
+   }
+  },
+  {
+   "target": "team",
+   "kind": "near_miss",
+   "prompt": "Switch to team run mode",
+   "expect": "mode",
+   "chosen": "mode",
+   "relied_on": [
+    "run mode (local | team)",
+    "team-readiness preflight"
+   ],
+   "lexical": {
+    "target_score": 2.4849,
+    "target_rank": 6
+   }
+  },
+  {
+   "target": "team",
+   "kind": "near_miss",
+   "prompt": "Plan a team offsite agenda",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 2.4849,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "team",
+   "kind": "near_miss",
+   "prompt": "Share a spec doc with the team vault",
+   "expect": "vault",
+   "chosen": "vault",
+   "relied_on": [
+    "Share design artifacts (brainstorm/spec) with the team"
+   ],
+   "lexical": {
+    "target_score": 7.706,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "team",
+   "kind": "near_miss",
+   "prompt": "Install a community stack for Rails",
+   "expect": "stacks",
+   "chosen": "stacks",
+   "relied_on": [
+    "Community stacks",
+    "per-framework stacks"
+   ],
+   "lexical": {
+    "target_score": 3.0727,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "test",
+   "kind": "positive",
+   "prompt": "The spec is emitted; write the failing tests for its acceptance criteria",
+   "expect": "test",
+   "chosen": "test",
+   "relied_on": [
+    "failing tests written"
+   ],
+   "lexical": {
+    "target_score": 21.4772,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "test",
+   "kind": "positive",
+   "prompt": "Write RED tests for the approved behaviour, no implementation",
+   "expect": "test",
+   "chosen": "test",
+   "relied_on": [
+    "failing tests written"
+   ],
+   "lexical": {
+    "target_score": 16.6126,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "test",
+   "kind": "positive",
+   "prompt": "Start TDD on the export change — tests first",
+   "expect": "test",
+   "chosen": "test",
+   "relied_on": [
+    "failing tests written",
+    "starting TDD"
+   ],
+   "lexical": {
+    "target_score": 13.5159,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "test",
+   "kind": "positive",
+   "prompt": "Write failing tests for AC-3 and AC-4",
+   "expect": "test",
+   "chosen": "test",
+   "relied_on": [
+    "failing tests written"
+   ],
+   "lexical": {
+    "target_score": 8.4606,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "test",
+   "kind": "positive",
+   "prompt": "Write tests for the approved behaviour before anyone implements it",
+   "expect": "test",
+   "chosen": "test",
+   "relied_on": [
+    "failing tests written"
+   ],
+   "lexical": {
+    "target_score": 12.7557,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "test",
+   "kind": "near_miss",
+   "prompt": "Implement the code to make the red tests green",
+   "expect": "develop",
+   "chosen": "develop",
+   "relied_on": [
+    "failing test is on record"
+   ],
+   "lexical": {
+    "target_score": 3.937,
+    "target_rank": 4
+   }
+  },
+  {
+   "target": "test",
+   "kind": "near_miss",
+   "prompt": "There's no spec yet, define the acceptance criteria",
+   "expect": "spec",
+   "chosen": "spec",
+   "relied_on": [
+    "acceptance criteria",
+    "write or define the spec"
+   ],
+   "lexical": {
+    "target_score": 7.9331,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "test",
+   "kind": "near_miss",
+   "prompt": "Run the existing test suite and tell me the result",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.7548,
+    "target_rank": 4
+   }
+  },
+  {
+   "target": "test",
+   "kind": "near_miss",
+   "prompt": "Write an end-to-end browser test for checkout",
+   "expect": "browser-testing",
+   "chosen": "browser-testing",
+   "relied_on": [
+    "end-to-end or browser test",
+    "running browser"
+   ],
+   "lexical": {
+    "target_score": 3.4865,
+    "target_rank": 5
+   }
+  },
+  {
+   "target": "test",
+   "kind": "near_miss",
+   "prompt": "Test my internet speed",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 1.6376,
+    "target_rank": 13
+   }
+  },
+  {
+   "target": "tour",
+   "kind": "positive",
+   "prompt": "Give me a 60-second read-only demo of mokata",
+   "expect": "tour",
+   "chosen": "tour",
+   "relied_on": [
+    "60-second read-only demo"
+   ],
+   "lexical": {
+    "target_score": 17.0995,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "tour",
+   "kind": "positive",
+   "prompt": "Show me a quick tour of what mokata can do",
+   "expect": "tour",
+   "chosen": "tour",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "tour",
+   "kind": "positive",
+   "prompt": "Demo mokata: a graph query, a memory recall and a gate catch",
+   "expect": "tour",
+   "chosen": "tour",
+   "relied_on": [
+    "60-second read-only demo"
+   ],
+   "lexical": {
+    "target_score": 28.9778,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "tour",
+   "kind": "positive",
+   "prompt": "Take me on the mokata tour",
+   "expect": "tour",
+   "chosen": "tour",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "tour",
+   "kind": "positive",
+   "prompt": "I'm new — give me a quick read-only demo of mokata",
+   "expect": "tour",
+   "chosen": "tour",
+   "relied_on": [
+    "60-second read-only demo"
+   ],
+   "lexical": {
+    "target_score": 6.9324,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "tour",
+   "kind": "near_miss",
+   "prompt": "Run the full pipeline end to end on this repo",
+   "expect": "playbook",
+   "chosen": "playbook",
+   "relied_on": [
+    "full pipeline end-to-end"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 48
+   }
+  },
+  {
+   "target": "tour",
+   "kind": "near_miss",
+   "prompt": "Show every mokata command on one screen",
+   "expect": "menu",
+   "chosen": "menu",
+   "relied_on": [
+    "every /mokata command and bundled skill on one screen"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 49
+   }
+  },
+  {
+   "target": "tour",
+   "kind": "near_miss",
+   "prompt": "Plan a tour of Rome for three days",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "tour",
+   "kind": "near_miss",
+   "prompt": "Guided first-run setup",
+   "expect": "setup",
+   "chosen": "setup",
+   "relied_on": [
+    "Guided first-run setup"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 48
+   }
+  },
+  {
+   "target": "tour",
+   "kind": "near_miss",
+   "prompt": "List the docs topics",
+   "expect": "docs",
+   "chosen": "docs",
+   "relied_on": [
+    "published documentation topics"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 50
+   }
+  },
+  {
+   "target": "update",
+   "kind": "positive",
+   "prompt": "Update mokata to the latest release",
+   "expect": "update",
+   "chosen": "update",
+   "relied_on": [
+    "Update mokata"
+   ],
+   "lexical": {
+    "target_score": 10.2734,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "update",
+   "kind": "positive",
+   "prompt": "Upgrade mokata with pip",
+   "expect": "update",
+   "chosen": "update",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "update",
+   "kind": "positive",
+   "prompt": "How do I update the mokata plugin?",
+   "expect": "update",
+   "chosen": "update",
+   "relied_on": [
+    "Update mokata"
+   ],
+   "lexical": {
+    "target_score": 3.0727,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "update",
+   "kind": "positive",
+   "prompt": "Is there a newer mokata? Upgrade if so",
+   "expect": "update",
+   "chosen": "update",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "update",
+   "kind": "positive",
+   "prompt": "Run the mokata upgrade",
+   "expect": "update",
+   "chosen": "update",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 4.7103,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "update",
+   "kind": "near_miss",
+   "prompt": "What version of mokata do I have?",
+   "expect": "version",
+   "chosen": "version",
+   "relied_on": [
+    "installed version"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 51
+   }
+  },
+  {
+   "target": "update",
+   "kind": "near_miss",
+   "prompt": "Upgrade React to version 19 in our app",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "update",
+   "kind": "near_miss",
+   "prompt": "mokata's MCP tools vanished",
+   "expect": "mcp-repair",
+   "chosen": "mcp-repair",
+   "relied_on": [
+    "mcp isn't working",
+    "tools are missing",
+    "/mcp doesn't list mokata"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 49
+   }
+  },
+  {
+   "target": "update",
+   "kind": "near_miss",
+   "prompt": "Switch mokata's profile to full",
+   "expect": "init",
+   "chosen": "init",
+   "relied_on": [
+    "Initialize mokata or switch profile"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 50
+   }
+  },
+  {
+   "target": "update",
+   "kind": "near_miss",
+   "prompt": "Add a new integration to mokata",
+   "expect": "reconfigure",
+   "chosen": "reconfigure",
+   "relied_on": [
+    "add/remove an integration, switch a backend, change profile"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 44
+   }
+  },
+  {
+   "target": "vault",
+   "kind": "positive",
+   "prompt": "Push this brainstorm to the team vault",
+   "expect": "vault",
+   "chosen": "vault",
+   "relied_on": [
+    "Share design artifacts (brainstorm/spec) with the team"
+   ],
+   "lexical": {
+    "target_score": 11.5409,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "vault",
+   "kind": "positive",
+   "prompt": "Search the vault for the auth spec",
+   "expect": "vault",
+   "chosen": "vault",
+   "relied_on": [
+    "Share design artifacts (brainstorm/spec) with the team"
+   ],
+   "lexical": {
+    "target_score": 7.1952,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "vault",
+   "kind": "positive",
+   "prompt": "Pull the payments spec from the vault",
+   "expect": "vault",
+   "chosen": "vault",
+   "relied_on": [
+    "Share design artifacts (brainstorm/spec) with the team"
+   ],
+   "lexical": {
+    "target_score": 6.6844,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "vault",
+   "kind": "positive",
+   "prompt": "Share our spec with the team through the vault",
+   "expect": "vault",
+   "chosen": "vault",
+   "relied_on": [
+    "Share design artifacts (brainstorm/spec) with the team"
+   ],
+   "lexical": {
+    "target_score": 10.0815,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "vault",
+   "kind": "positive",
+   "prompt": "List the design artifacts in the vault",
+   "expect": "vault",
+   "chosen": "vault",
+   "relied_on": [
+    "Share design artifacts (brainstorm/spec) with the team"
+   ],
+   "lexical": {
+    "target_score": 13.2922,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "vault",
+   "kind": "near_miss",
+   "prompt": "Package my whole session for a teammate",
+   "expect": "session",
+   "chosen": "session",
+   "relied_on": [
+    "package this session",
+    "hand off their session state to a teammate"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 51
+   }
+  },
+  {
+   "target": "vault",
+   "kind": "near_miss",
+   "prompt": "Store my AWS credentials in HashiCorp Vault",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 2.7362,
+    "target_rank": 4
+   }
+  },
+  {
+   "target": "vault",
+   "kind": "near_miss",
+   "prompt": "Join the team's shared stack",
+   "expect": "team",
+   "chosen": "team",
+   "relied_on": [
+    "team join"
+   ],
+   "lexical": {
+    "target_score": 4.9698,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "vault",
+   "kind": "near_miss",
+   "prompt": "Write the spec for this change",
+   "expect": "spec",
+   "chosen": "spec",
+   "relied_on": [
+    "write or define the spec"
+   ],
+   "lexical": {
+    "target_score": 0.8755,
+    "target_rank": 29
+   }
+  },
+  {
+   "target": "vault",
+   "kind": "near_miss",
+   "prompt": "Flush the team journal",
+   "expect": "sync",
+   "chosen": "sync",
+   "relied_on": [
+    "team write journal"
+   ],
+   "lexical": {
+    "target_score": 2.4849,
+    "target_rank": 4
+   }
+  },
+  {
+   "target": "version",
+   "kind": "positive",
+   "prompt": "What mokata version is installed?",
+   "expect": "version",
+   "chosen": "version",
+   "relied_on": [
+    "installed version"
+   ],
+   "lexical": {
+    "target_score": 4.8534,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "version",
+   "kind": "positive",
+   "prompt": "Show the installed mokata version",
+   "expect": "version",
+   "chosen": "version",
+   "relied_on": [
+    "installed version"
+   ],
+   "lexical": {
+    "target_score": 9.491,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "version",
+   "kind": "positive",
+   "prompt": "Which version of mokata am I running?",
+   "expect": "version",
+   "chosen": "version",
+   "relied_on": [
+    "installed version"
+   ],
+   "lexical": {
+    "target_score": 2.7362,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "version",
+   "kind": "positive",
+   "prompt": "mokata version please",
+   "expect": "version",
+   "chosen": "version",
+   "relied_on": [
+    "installed version"
+   ],
+   "lexical": {
+    "target_score": 2.7362,
+    "target_rank": 3
+   }
+  },
+  {
+   "target": "version",
+   "kind": "positive",
+   "prompt": "Show the installed version and how to update",
+   "expect": "version",
+   "chosen": "version",
+   "relied_on": [
+    "installed version"
+   ],
+   "lexical": {
+    "target_score": 14.0637,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "version",
+   "kind": "near_miss",
+   "prompt": "Upgrade mokata to the latest release with pip",
+   "expect": "update",
+   "chosen": "update",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 52
+   }
+  },
+  {
+   "target": "version",
+   "kind": "near_miss",
+   "prompt": "Bump our package version to 2.0 and tag it",
+   "expect": "git",
+   "chosen": "git",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 2.7362,
+    "target_rank": 5
+   }
+  },
+  {
+   "target": "version",
+   "kind": "near_miss",
+   "prompt": "What Python version does this project need?",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 2.7362,
+    "target_rank": 4
+   }
+  },
+  {
+   "target": "version",
+   "kind": "near_miss",
+   "prompt": "Show the governed rules",
+   "expect": "govern",
+   "chosen": "govern",
+   "relied_on": [
+    "see the governed state"
+   ],
+   "lexical": {
+    "target_score": 1.6376,
+    "target_rank": 14
+   }
+  },
+  {
+   "target": "version",
+   "kind": "near_miss",
+   "prompt": "Show every mokata command",
+   "expect": "menu",
+   "chosen": "menu",
+   "relied_on": [
+    "every /mokata command and bundled skill on one screen"
+   ],
+   "lexical": {
+    "target_score": 1.6376,
+    "target_rank": 14
+   }
+  },
+  {
+   "target": "watch",
+   "kind": "positive",
+   "prompt": "Open the live, clickable dashboard of the run",
+   "expect": "watch",
+   "chosen": "watch",
+   "relied_on": [
+    "live, clickable dashboard of the run"
+   ],
+   "lexical": {
+    "target_score": 20.1027,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "watch",
+   "kind": "positive",
+   "prompt": "Watch the run live with its parallel lanes",
+   "expect": "watch",
+   "chosen": "watch",
+   "relied_on": [
+    "live, clickable dashboard of the run"
+   ],
+   "lexical": {
+    "target_score": 14.7554,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "watch",
+   "kind": "positive",
+   "prompt": "Show me the live gate feed dashboard",
+   "expect": "watch",
+   "chosen": "watch",
+   "relied_on": [
+    "live, clickable dashboard of the run"
+   ],
+   "lexical": {
+    "target_score": 11.6827,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "watch",
+   "kind": "positive",
+   "prompt": "Open the run dashboard",
+   "expect": "watch",
+   "chosen": "watch",
+   "relied_on": [
+    "live, clickable dashboard of the run"
+   ],
+   "lexical": {
+    "target_score": 7.783,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "watch",
+   "kind": "positive",
+   "prompt": "I want to watch the pipeline live",
+   "expect": "watch",
+   "chosen": "watch",
+   "relied_on": [
+    "live, clickable dashboard of the run"
+   ],
+   "lexical": {
+    "target_score": 8.4369,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "watch",
+   "kind": "near_miss",
+   "prompt": "Show the 7-phase tracker as text",
+   "expect": "progress",
+   "chosen": "progress",
+   "relied_on": [
+    "Show where the run is",
+    "7-phase tracker"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 52
+   }
+  },
+  {
+   "target": "watch",
+   "kind": "near_miss",
+   "prompt": "Open the review window with the live diff",
+   "expect": "review-window",
+   "chosen": "review-window",
+   "relied_on": [
+    "Open the review window",
+    "live diff"
+   ],
+   "lexical": {
+    "target_score": 5.8089,
+    "target_rank": 2
+   }
+  },
+  {
+   "target": "watch",
+   "kind": "near_miss",
+   "prompt": "Recommend a smart watch",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.5835,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "watch",
+   "kind": "near_miss",
+   "prompt": "Resume the run",
+   "expect": "resume",
+   "chosen": "resume",
+   "relied_on": [],
+   "lexical": {
+    "target_score": 1.1268,
+    "target_rank": 18
+   }
+  },
+  {
+   "target": "watch",
+   "kind": "near_miss",
+   "prompt": "Show governance state",
+   "expect": "govern",
+   "chosen": "govern",
+   "relied_on": [
+    "see the governed state"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 53
+   }
+  }
+ ]
+}

@@ -46,6 +46,15 @@ def _repo(d, *, graph_present, python):
     return Surface.load(d, detector=Detector(overrides=overrides, cache=False))
 
 
+def _index_built():
+    """0.0.26 O13 (F2): "active" is said only when code-review-graph's index is BUILT — these
+    tests are about the active wording, so the index is built. The other states are graded in
+    test_o13_crg_auto_build."""
+    from unittest import mock
+    from mokata.knowledge import crg_build
+    return mock.patch.object(crg_build, "index_built", lambda _root: True)
+
+
 class TestGraphHintThreeWay(unittest.TestCase):
     def test_graph_hint_ast_floor(self):
         """The default CRG-less Python repo: names the AST floor, NEVER claims grep."""
@@ -62,13 +71,16 @@ class TestGraphHintThreeWay(unittest.TestCase):
             self.assertIn("--profile full", hint)
 
     def test_graph_hint_real_graph(self):
-        """A wired graph: the Stage 25 text is unchanged, pinned verbatim."""
-        with tempfile.TemporaryDirectory() as d:
+        """A wired graph: the Stage 25 text, plus (0.0.26 O2) which backend answers impact —
+        pinned verbatim."""
+        with tempfile.TemporaryDirectory() as d, _index_built():
             hint = graph_guidance(_repo(d, graph_present=True, python=True))
             self.assertEqual(
                 hint,
                 "code graph active (code-review-graph) — use `mokata query callers <sym>` / "
-                "`callees <sym>` / `blast_radius <sym>` for structural queries.",
+                "`callees <sym>` / `blast_radius <sym>` for structural queries. "
+                "blast radius: answered by 'code-review-graph' (transitive callers); a symbol it "
+                "does not index, or a failure, is answered by the 'ast' floor.",
             )
 
     def test_graph_hint_grep(self):
@@ -140,7 +152,7 @@ class TestGraphHintMirrorsGraphStatus(unittest.TestCase):
                     self.assertIn(f"floor '{name}'", hint)   # same vocabulary, both surfaces
 
     def test_active_graph_backend_word_matches(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory() as d, _index_built():
             surface = _repo(d, graph_present=True, python=True)
             hint = graph_guidance(surface)
             status = self._graph_status(surface)
@@ -190,6 +202,14 @@ class TestAllSurfacesInheritTheFix(unittest.TestCase):
                     if needle in fh.read():
                         hits.append(p)
         self.assertEqual(hits, [], f"stale copy of the old hint text in {hits}")
+
+
+def setUpModule():
+    # 0.0.26 O11 — this module's expectations are the CORE install's: no external code graph on
+    # the machine. Pinned, so a venv with code-review-graph (`mokata[full]`) means the same thing;
+    # what is true WITH it present is graded in test_o11_crg_present (and the sibling below, if any).
+    from _support import hide_external_graphs
+    hide_external_graphs()
 
 
 if __name__ == "__main__":

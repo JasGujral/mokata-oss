@@ -27,6 +27,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
+#: The floors a graph layer falls back to (`knowledge.layer._floor_backend` and the lexical tools).
+#: An answer whose `backend` is one of these did not come from a graph, whatever the layer is.
+_FLOOR_BACKENDS = ("ast", "ripgrep", "grep")
+
 # ---------------------------------------------------------------- file classification (buckets)
 # The impact surface is bucketed so two approaches compare on WHAT they touch, not just how much
 # (callers/tests/docs/configs — the AC's "callers/tests/docs"). Heuristic + deterministic.
@@ -311,6 +315,14 @@ def compute_impact(approach: str, targets: Sequence[str], *, layer: Any = None,
                     _reason(DEGRADE_GRAPH_UNAVAILABLE if pinned_tool
                             else DEGRADE_CHAIN_IS_LEXICAL)
                 continue
+            if chain_has_a_graph and getattr(qr, "backend", None) in _FLOOR_BACKENDS:
+                # 0.0.26 O11 — the DISPLAY caveat ("not a real adopted graph") is about who
+                # ANSWERED, and it was read off the layer alone. With code-review-graph detected
+                # but never built (the `mokata[full]` first run), the layer is a graph layer and
+                # EVERY answer is the AST floor's (`GraphNotIndexed` → floor) — so the caveat said
+                # "a real graph answered" when none did. The gate signal is untouched: an AST
+                # answer with evidence is still a sound decision input.
+                degraded = True
             if getattr(qr, "degraded", False):
                 degraded = True                       # the grep floor answered
                 graph_degraded = True                 # ...from the lexical floor (a decision input)

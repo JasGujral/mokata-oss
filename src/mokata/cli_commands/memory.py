@@ -112,6 +112,8 @@ def cmd_memory(args: argparse.Namespace) -> int:
         return _memory_reembed(surface, args)
     if action == "edit":
         return _memory_edit(store, args)
+    if action == "refresh":
+        return _memory_refresh(store, args)
     if action == "promote":
         return _memory_promote(store, args)
     if action == "review":
@@ -298,6 +300,39 @@ def _memory_edit(store, args) -> int:
     return 0 if res.changed or not res.aborted else 1
 
 
+def _memory_refresh(store, args) -> int:
+    """R5 — `mokata memory refresh [<subject> --verb V]`: list the learnings whose `retire_when`
+    fired, or resolve one with a refresh verb (keep/update/consolidate/replace/delete). Every verb
+    goes through the store's WriteGate (asks unless --yes); nothing is retired by silence."""
+    from ..memory.healing import REFRESH_VERBS, RETIRE_DUE
+    due = [p for p in store.detect_issues() if p.kind == RETIRE_DUE]
+    subject = args.file
+    verb = getattr(args, "verb", None)
+    if not subject or not verb:
+        if not due:
+            print("memory refresh: no learning's retire_when has fired.")
+            return 0
+        print(f"memory refresh — {len(due)} learning(s) whose retire_when fired (nothing changes "
+              f"until you choose a verb: {' / '.join(REFRESH_VERBS)}):")
+        for p in due:
+            print(f"  [{p.mtype}] {p.subject}: {p.predicate} — {p.rationale}")
+        print("  → `mokata memory refresh <subject> --verb <verb> [--value …] [--into ID]`")
+        return 0
+    match = next((p for p in due if p.subject == subject), None)
+    if match is None:
+        print(f"error: no fired retire_when for subject '{subject}'", file=sys.stderr)
+        return 1
+    from ..memory import MemoryError as _MemErr
+    try:
+        res = store.refresh(match, verb, value=args.value, into_id=getattr(args, "into", "") or "",
+                            assume_yes=args.yes)
+    except _MemErr as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(res.message)
+    return 0 if res.changed else 1
+
+
 def _memory_consolidate_drafting_request(proposals) -> int:
     """M-4/R5 PHASE 1 — print the SUMMARIZE proposals WITH the turns to draft from, as JSON.
 
@@ -479,14 +514,15 @@ def register(sub, common):
     )
     p_mem.add_argument("action", nargs="?",
                        choices=("export", "import", "migrate", "reembed", "edit", "consolidate",
-                                "promote", "review", "harvest"),
+                                "promote", "review", "harvest", "refresh"),
                        default=None,
                        help="export (back up memory to a file) / import (restore a backup, gated), "
                             "migrate the store, reembed the vector index (gated), edit an entry, "
                             "consolidate (propose-only), promote a rule's enforcement binding, "
                             "review pending memory proposals, or harvest: the session notes "
                             "mokata drafted when a session stopped (accept with --approve ID, "
-                            "drop with --reject ID)")
+                            "drop with --reject ID), or refresh: the learnings whose retire_when "
+                            "fired, resolved with --verb keep/update/consolidate/replace/delete")
     p_mem.add_argument("file", nargs="?", default=None,
                        help="backup file (export dest / import source), the subject to edit, or "
                             "the item id to promote")
@@ -512,6 +548,11 @@ def register(sub, common):
                        help="migrate source backend (default: the resolved store)")
     p_mem.add_argument("--drop-source", action="store_true",
                        help="after migrating, delete items from the source (separately gated)")
+    p_mem.add_argument("--verb", default=None,
+                       choices=("keep", "update", "consolidate", "replace", "delete"),
+                       help="with `refresh`: how to resolve a learning whose retire_when fired")
+    p_mem.add_argument("--into", default=None, metavar="ID",
+                       help="with `refresh --verb consolidate`: the entry to fold it into")
     p_mem.add_argument("--yes", action="store_true",
                        help="non-interactive (approve the gated import/migrate/edit)")
     # Stage 71a — review scoping over a shared backend (default: the current project only).

@@ -65,49 +65,64 @@ code; it does not touch `.claude/settings.json`, which still carries the wiring 
 version wrote. A hook added — or a tool matcher widened — since your last `mokata setup claude`
 is simply not there. Nothing errors. The gate just never fires.
 
-### The one instruction — the same one you set up with
+### Upgrade the package, then the same setup
 
 ```bash
-uv tool install --upgrade mokata   # or: pipx install --force mokata
-mokata setup claude                # refresh the wiring (previews, asks first); keeps config + memory
+uv tool upgrade mokata             # or: pipx upgrade mokata — both keep the [full] extra
+mokata setup claude --mode full    # refresh the wiring (previews, asks first); keeps config + memory
 # restart Claude Code, then:
 mokata doctor
 ```
 
-It is the same instruction as a first setup: `mokata setup claude` runs `mokata init` only on a
+⚠ Not `uv tool install --upgrade mokata`: naming mokata WITHOUT `[full]` rebuilds the tool env
+without the extra. The setup is the same one you set up with: `mokata setup claude` runs `mokata init` only on a
 repo with no `.mokata/`, so on an existing repo it refreshes the wiring and nothing else — new
 commands appear and stale mokata commands are removed. Never use `mokata init --force` to
 update; it resets the repo's config to defaults.
 
-### `mokata upgrade` (plain pip installs)
+### `mokata update` — one action, any install
 
-If mokata was installed with plain `pip`, `mokata upgrade` does both steps for you:
+```text
+$ mokata update
+mokata update
 
-1. it proposes `pip install -U mokata` and **asks** before running it;
-2. it then re-runs `mokata setup claude`, which **previews the change and asks again** before
-   writing `settings.json`;
-3. it runs `mokata doctor --wiring` and reports.
+  installed  0.0.25  (uv-tool; keeps mokata[full])
+  latest     0.0.26
 
-Both writes are human-gated: decline either and nothing is written. `mokata upgrade --yes`
-approves both non-interactively (the plan is still printed), and `--no-refresh` skips the
-re-wiring if you want to do it yourself.
+What changed 0.0.25 → 0.0.26:
+  0.0.26
+    ...the release notes...
 
-Restart Claude Code afterwards so it reloads `settings.json`.
+Will run:
+  uv tool upgrade mokata
 
-### Upgrading by hand
+Then, automatically (`mokata update --finish` with the new mokata):
+  mokata setup claude
 
-If you run `pip` yourself, run the other two steps yourself too:
-
-```bash
-pip install -U mokata
-mokata setup claude          # refresh the harness wiring (previews, asks first)
-mokata doctor --wiring       # confirm the gates resolve and the wiring is current
+Update now? [Y/n]
 ```
 
-From a source checkout, the first step is `git pull && pip install -e .`; the last two are the
-same. On the plugin route, update through Claude Code (`/plugin marketplace update mostack`,
-then `/plugin install mokata@mostack`) and verify with `mokata doctor --wiring` — `mokata setup
-claude` is not the plugin's remedy.
+- The **command** is the installer's own and keeps your extras: `uv tool upgrade mokata`,
+  `pipx upgrade mokata` (`--include-injected` when you injected packages), or
+  `python -m pip install --upgrade "mokata[full]"` with the extras your environment has. A plain
+  `pip install -U mokata` would never install a package a newer `[full]` adds.
+- After it, the **new** mokata refreshes the vendored commands/skills and re-wires only if the
+  wiring changed — you end up current with one yes.
+- **Windows:** mokata's files are locked while it runs, so the update starts the moment the
+  command exits; your next `mokata` command says how it went. Close Claude Code sessions using
+  mokata first (their MCP server holds mokata's files).
+- `mokata update --check` prints all of this and runs nothing. Offline, it says so and prints the
+  command.
+- A source checkout gets `git pull`; the plugin gets Claude Code's `/plugin` steps.
+
+### Commands and skills only: `mokata setup claude --skills-only`
+
+`mokata setup claude` copies mokata's slash commands and Agent Skills into `.claude/commands`
+and `.claude/skills` — committed with the repo, they give a teammate the methodology on clone
+with nothing installed. When those files differ from the installed mokata (you upgraded and
+did not re-run setup, or someone edited them), `mokata update` says so and offers
+`mokata setup claude --skills-only`: it rewrites only the commands and skills (and removes the
+ones mokata no longer ships). No init, no MCP, no hooks, no `settings.json`, no dependency.
 
 ### How you find out the wiring went stale
 

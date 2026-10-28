@@ -596,6 +596,12 @@ _SQL_EXEC = {"execute", "executemany", "executescript"}
 # collapse in a new costume.
 GATED = {
     ("config_cmd.py", "config_set._commit"): "WriteGate @config_cmd.py:161 (config_set)",
+    # L7b (0.0.26) — the opt-in committed spec `.mokata/specs/<run>.json`. Its ONE caller is
+    # `engine/emit.spec_commit`, which runs only inside the spec-emit / spec-amend WriteGate commit
+    # closures, so it is written by the same human approval that lands the spec.
+    ("committed_specs.py", "write_committed"): "WriteGate @engine/emit.py commit_spec / "
+                                               "mcp spec_emit / engine/amend.py finish_amend "
+                                               "(via spec_commit, settings.specs.commit on)",
     ("knowledge/graph_adopt.py", "adopt_graph._commit"): "WriteGate @knowledge/graph_adopt.py "
                                              "(adopt_graph pins the code graph into the manifest "
                                              "— GR.S2)",
@@ -636,6 +642,14 @@ GATED = {
         "residual named in `_writegraph.UNCLOSED_SHAPES` and counted by `qualname_collisions()`, "
         "and it is the ONLY such key in src/. All three apply an already-approved healing "
         "proposal to the item it names, under the one gate.",
+    ("memory/store.py", "MemoryStore._remember_as_update._commit"): "WriteGate @memory/store.py "
+        "`_gated_commit` — R5 (0.0.26) write-time overlap: a remember that overlaps an existing "
+        "entry on 4–5/5 dimensions lands ON that entry (one `update`) instead of adding a "
+        "near-duplicate. Same gate, scan and ledger as `remember`; the prompt says it is an update.",
+    ("memory/store.py", "MemoryStore.refresh._commit"): "WriteGate @memory/store.py `_gated_commit` "
+        "— R5 (0.0.26) refresh verbs for a fired `retire_when` (keep/update/consolidate/replace/"
+        "delete). The closure runs only inside the gate; a declined gate writes nothing (pinned by "
+        "test_r5_memory_grounding.test_R5_refresh_verbs_need_approval).",
     ("memory/store.py", "MemoryStore.apply_consolidation._commit"): "WriteGate @memory/store.py:511 "
         "— **bug 74 C1, the door this stage's parent closed.** MERGE/PRUNE/SUMMARIZE all land here "
         "(store.py:2105–2157: put, three updates, a delete, a final update). Before SI.6 this ran "
@@ -813,14 +827,40 @@ GATED = {
 UNGATED_BY_DESIGN = {
     ("harness_cert.py", "StdioMcpClient._pump"): "0.0.23 D12 — NOT a durable write: `self._q` is an in-process `queue.Queue` carrying the MCP server's stdout lines from the reader thread to the request loop of the certification client. `.put` is the queue's, the detector matches the method name. Nothing reaches disk.",
     ("harness_cert.py", "record_result"): "0.0.23 D12 — the OWNER's explicit `scripts/harness_cert.py record` action writing one observed certification result into the repo doc `docs/reference/harness-cert-matrix.json` (atomic tmp + replace). It is evidence the owner types and then COMMITS — git review is its gate — not governed memory, not a model-reachable path (no MCP tool, no hook calls it). It refuses an unevidenced pass and an unparseable matrix rather than overwriting it.",
+    ("session_index.py", "_write_file"): "0.0.26 P33 SESSION-INDEX — one small JSON row per Claude Code session under gitignored temp_local/sessions/ (the snapshot store's sibling): when it started/ended, its first prompt (secret-scanned), its cwd/branch/process. Ungated by design: it OBSERVES a session (written by mokata's own SessionStart/UserPromptSubmit/SessionEnd hooks), touches no committed or user file, is never read back as an instruction, and gating it would put a human approval on every session start. Losing it loses the IDE's history list, not code.",
     ("ide/snapshots.py", "_write_object"): "0.0.22 E2 — the review window's SNAPSHOT store under gitignored temp_local/snapshots/ (ADR doc 85 §1b): a content-addressed copy of a file mokata OBSERVED being written, for the diff at any point in time. Ungated by design: it records what the agent or the human already wrote (the write itself met its own gates), it touches no committed file, and routing an OBSERVATION of a write through the WriteGate would gate every write twice. Bounded (MAX_FILE_BYTES, MAX_ENTRIES); losing it loses history, not code.",
     ("ide/snapshots.py", "_append"): "0.0.22 E2 — the review window's SNAPSHOT store under gitignored temp_local/snapshots/ (ADR doc 85 §1b): a content-addressed copy of a file mokata OBSERVED being written, for the diff at any point in time. Ungated by design: it records what the agent or the human already wrote (the write itself met its own gates), it touches no committed file, and routing an OBSERVATION of a write through the WriteGate would gate every write twice. Bounded (MAX_FILE_BYTES, MAX_ENTRIES); losing it loses history, not code.",
     ("ide/snapshots.py", "_maybe_prune"): "0.0.22 E2 — the review window's SNAPSHOT store under gitignored temp_local/snapshots/ (ADR doc 85 §1b): a content-addressed copy of a file mokata OBSERVED being written, for the diff at any point in time. Ungated by design: it records what the agent or the human already wrote (the write itself met its own gates), it touches no committed file, and routing an OBSERVATION of a write through the WriteGate would gate every write twice. Bounded (MAX_FILE_BYTES, MAX_ENTRIES); losing it loses history, not code.",
     ("ide/snapshots.py", "capture_before_first_write"): "0.0.22 E2 — the review window's SNAPSHOT store under gitignored temp_local/snapshots/ (ADR doc 85 §1b): a content-addressed copy of a file mokata OBSERVED being written, for the diff at any point in time. Ungated by design: it records what the agent or the human already wrote (the write itself met its own gates), it touches no committed file, and routing an OBSERVATION of a write through the WriteGate would gate every write twice. Bounded (MAX_FILE_BYTES, MAX_ENTRIES); losing it loses history, not code.",
-    ("ide/search.py", "build_index"): "0.0.23 C2 — the IDE's local SEMANTIC INDEX (ruling R2) under gitignored temp_local/ide/semantic/: function/class chunk vectors from the optional model2vec extra, stamped with the embedder id, rebuilt from the source at will. A derived cache of code the user already wrote — no committed file, nothing approved, losing it costs one re-embed.",
+
+    ("update.py", "launch_detached"): "0.0.26 L2 — `mokata update`'s Windows hand-off: writes mokata's OWN runtime files under ~/.mokata/update/ (a copy of `_updater.py` and the job JSON naming the exact command the human just said yes to) and removes the previous result file. Never the repo or the harness config; the installer run it schedules is the one the `Update now? [Y/n]` answer (or the IDE click) consented to (Jas 2026-10-21 ruling).",
+    ("update.py", "take_result"): "0.0.26 L2 — deletes ~/.mokata/update-result.json after reporting it once. mokata's own one-shot notice file, written by the updater; nothing approved lives in it.",
+    ("_updater.py", "write_result"): "0.0.26 L2 — the detached updater's result notice (~/.mokata/update-result.json, atomic replace): what happened to the update the human consented to, for the next start to report. mokata's own runtime file; never the repo or the harness config.",
+    ("ide/search.py", "_write_index"): "0.0.23 C2 / 0.0.26 O13 — the IDE's local SEMANTIC INDEX (ruling R2) under gitignored temp_local/ide/semantic/: function/class chunk metadata (index.json) and their vectors (one float32 file it names), from the optional model2vec extra, stamped with the embedder id, rebuilt from the source at will and checkpointed so a big build resumes. A derived cache of code the user already wrote — no committed file, nothing approved, losing it costs one re-embed.",
+    ("knowledge/crg_build.py", "_lock_holder"): "0.0.26 O13 (CRG-AUTO-BUILD) — code-review-graph's index build RUN-STATE under gitignored temp_local/crg-build/ (the per-repo build lock, the last outcome + back-off, the background builder's log) and the tool's own derived index cache `.code-review-graph/` (which it gitignores itself). Approving setup is the consent for the build (ruling R-c); first use builds by ruling R-a. No committed file, nothing approved, losing it costs one rebuild. This site reaps a DEAD builder's lock.",
+    ("knowledge/crg_build.py", "_release"): "0.0.26 O13 (CRG-AUTO-BUILD) — code-review-graph's index build RUN-STATE under gitignored temp_local/crg-build/ (the per-repo build lock, the last outcome + back-off, the background builder's log) and the tool's own derived index cache `.code-review-graph/` (which it gitignores itself). Approving setup is the consent for the build (ruling R-c); first use builds by ruling R-a. No committed file, nothing approved, losing it costs one rebuild. This site removes the build lock.",
+    ("knowledge/crg_build.py", "_spawn_worker"): "0.0.26 O13 (CRG-AUTO-BUILD) — code-review-graph's index build RUN-STATE under gitignored temp_local/crg-build/ (the per-repo build lock, the last outcome + back-off, the background builder's log) and the tool's own derived index cache `.code-review-graph/` (which it gitignores itself). Approving setup is the consent for the build (ruling R-c); first use builds by ruling R-a. No committed file, nothing approved, losing it costs one rebuild. This site opens the background builder's log.",
+    ("knowledge/crg_build.py", "_write_json"): "0.0.26 O13 (CRG-AUTO-BUILD) — code-review-graph's index build RUN-STATE under gitignored temp_local/crg-build/ (the per-repo build lock, the last outcome + back-off, the background builder's log) and the tool's own derived index cache `.code-review-graph/` (which it gitignores itself). Approving setup is the consent for the build (ruling R-c); first use builds by ruling R-a. No committed file, nothing approved, losing it costs one rebuild. This site writes the lock / last-outcome JSON atomically.",
+    ("knowledge/crg_build.py", "_remove_db"): "0.0.26 O13 (CRG-AUTO-BUILD) — code-review-graph's index build RUN-STATE under gitignored temp_local/crg-build/ (the per-repo build lock, the last outcome + back-off, the background builder's log) and the tool's own derived index cache `.code-review-graph/` (which it gitignores itself). Approving setup is the consent for the build (ruling R-c); first use builds by ruling R-a. No committed file, nothing approved, losing it costs one rebuild. This site removes ONE graph.db and its WAL/SHM/journal side files: a PARTIAL index (via `discard_partial`, never a complete one by the tool's own record), or 0.0.26 P32's side-built rebuild copy under `.code-review-graph/next-build/` when that rebuild was cancelled or failed — so the index in use is never touched by a rebuild that did not finish.",
+    ("knowledge/crg_build.py", "_seed_beside"): "0.0.26 O13 (CRG-AUTO-BUILD) — code-review-graph's derived index cache `.code-review-graph/` (gitignored by the tool itself). 0.0.26 P37 (R39): the INCREMENTAL repair of an interrupted update copies graph.db (+ its WAL) into the side-build directory `.code-review-graph/next-build/`, runs `PRAGMA quick_check` on the COPY and puts back the `build_state = complete` the update began from IN THE COPY only (the index in use is never written). Called under the repo's build lock after a free-disk check; the copy is swapped in or removed (`_drop_next`). Losing it costs one repair.",
+    ("knowledge/crg_build.py", "_meta_value"): "0.0.26 P37 (R39) — NOT a write: a SELECT of one `metadata` value through a READ-ONLY sqlite URI (`connect_sqlite_readonly`, `mode=ro`). The detector matches `.execute`.",
+    ("knowledge/crg_build.py", "_end_update"): "0.0.26 O13 (CRG-AUTO-BUILD) — code-review-graph's index build RUN-STATE under gitignored temp_local/crg-build/. 0.0.26 P37 (R39): removes the update-attempt record `update.json` once the incremental update it recorded left the index COMPLETE (a failed or cancelled one is re-written, marked ended, through `_write_json`). Losing it costs only the 'updating…' disclosure; nothing committed or approved.",
+    ("knowledge/crg_build.py", "_last_updated"): "0.0.26 P37 (R39) — NOT a write: a SELECT of `metadata.last_updated` through a READ-ONLY sqlite URI (`connect_sqlite_readonly`, `mode=ro`), which cannot create or modify the file. The detector matches `.execute`.",
+    ("knowledge/crg_build.py", "_drop_next"): "0.0.26 O13 (CRG-AUTO-BUILD) — code-review-graph's index build RUN-STATE under gitignored temp_local/crg-build/ (the per-repo build lock, the last outcome + back-off, the background builder's log) and the tool's own derived index cache `.code-review-graph/` (which it gitignores itself). Approving setup is the consent for the build (ruling R-c); first use builds by ruling R-a. No committed file, nothing approved, losing it costs one rebuild. 0.0.26 P32 (R39): removes the side-build directory `.code-review-graph/next-build/` (its graph.db and the `.gitignore` the tool writes there) once a rebuild was swapped in, cancelled or failed, or its builder died — never the index in use.",
+    ("knowledge/crg_build.py", "swap_in"): "0.0.26 O13 (CRG-AUTO-BUILD) — code-review-graph's index build RUN-STATE under gitignored temp_local/crg-build/ (the per-repo build lock, the last outcome + back-off, the background builder's log) and the tool's own derived index cache `.code-review-graph/` (which it gitignores itself). Approving setup is the consent for the build (ruling R-c); first use builds by ruling R-a. No committed file, nothing approved, losing it costs one rebuild. 0.0.26 P32 (R39): a FULL rebuild of a built index is written beside it (`.code-review-graph/next-build/`, code-review-graph's own CRG_DATA_DIR) and this site replaces the index in use with it in ONE `os.replace` only once code-review-graph records it complete — then drops the old file's WAL/SHM and the empty side directory. The human's Rebuild click in the paired IDE (or `mokata graph build --full`) is the consent; a cancel or failure leaves the old index COMPLETE.",
+    ("knowledge/crg_build.py", "had_complete_build"): "0.0.26 P35 — NOT a write: a SELECT of `metadata.last_updated` on code-review-graph's graph.db through a READ-ONLY sqlite URI (`mode=ro`), which cannot create or modify the file. It decides that an index which EVER completed is never discarded (the kubernetes data-loss incident). The detector matches `.execute`.",
+    ("knowledge/crg_nodes.py", "_select"): "0.0.26 P35 (NAV-AT-SCALE) — NOT a write: the ONE read of code-review-graph's node table (symbols, outline, definitions; P37: also its CALLS edges, for the graph views' index-first rings and call path) — a SELECT (refused otherwise, in code) on a connection opened by `connect_sqlite_readonly` (`mode=ro` URI, no pragmas), which cannot create or modify the file. The detector matches `.execute`.",
+    ("knowledge/crg_build.py", "probe_db"): "0.0.26 O13 (P32 moved it from `probe_index` into `probe_db`, which also probes the side-built rebuild) — NOT a write: a SELECT on code-review-graph's metadata table through a READ-ONLY sqlite URI (`mode=ro`), which cannot create or modify the file. The detector matches `.execute`.",
     ("ide/health.py", "_rebuild_ast"): "0.0.25 — the health panel's FORCE RE-PARSE: deletes mokata's own AST edge cache under gitignored temp_local/knowledge_ast/ and re-parses the source into it. A derived cache of code the user already wrote, rebuilt on a human's click in the paired IDE (token + Origin guarded); no committed file, nothing approved, losing it costs one re-parse.",
     ("ide/health.py", "_rebuild_search"): "0.0.25 — the health panel's FORCE REBUILD of the IDE's local semantic index (the same derived cache `ide/search.py:build_index` writes, under gitignored temp_local/ide/semantic/): deleted and re-embedded on a human's click in the paired IDE. No committed file, nothing approved, losing it costs one re-embed.",
     ("ide/bus.py", "ensure_bridge"): '0.0.25 ID.S3 — the IDE LIVE-BRIDGE RECORD (stable port + hook token) under gitignored temp_local/ide/, mode 0600. Machine-local run-state the `--ide-bridge` http hooks point at; written inside apply_setup, whose batched `setup` ledger entry names settings.local.json. Content is two generated values, never repo content.',
+    ("ide/handoff.py", "_write"): "0.0.26 P37 (close-confirms-background) — the IDE's job HANDOFF records under gitignored temp_local/ide/jobs/ (or ~/.mokata/ide-repos/<hash>/ide/jobs/ on an un-set-up repo, P29): which kept job (an index build/update, the meaning index, mokata update) the closing IDE handed to a detached worker or cancelled, its progress and its outcome, and the worker's log. Run-state, not the repo: no committed file, nothing approved; bounded (KEEP_RECORDS, pruned). The worker runs only the work its record's KIND maps to (`handoff.WORK`). This site writes one record atomically (temp + os.replace).",
+    ("ide/handoff.py", "_prune"): "0.0.26 P37 (close-confirms-background) — the IDE's job HANDOFF records under gitignored temp_local/ide/jobs/ (or ~/.mokata/ide-repos/<hash>/ide/jobs/ on an un-set-up repo, P29): which kept job (an index build/update, the meaning index, mokata update) the closing IDE handed to a detached worker or cancelled, its progress and its outcome, and the worker's log. Run-state, not the repo: no committed file, nothing approved; bounded (KEEP_RECORDS, pruned). The worker runs only the work its record's KIND maps to (`handoff.WORK`). This site removes the records (and logs) past KEEP_RECORDS — never a live worker's.",
+    ("ide/handoff.py", "_spawn"): "0.0.26 P37 (close-confirms-background) — the IDE's job HANDOFF records under gitignored temp_local/ide/jobs/ (or ~/.mokata/ide-repos/<hash>/ide/jobs/ on an un-set-up repo, P29): which kept job (an index build/update, the meaning index, mokata update) the closing IDE handed to a detached worker or cancelled, its progress and its outcome, and the worker's log. Run-state, not the repo: no committed file, nothing approved; bounded (KEEP_RECORDS, pruned). The worker runs only the work its record's KIND maps to (`handoff.WORK`). This site opens the worker's own log beside its record (append).",
+    ("ide/workspace.py", "load"): '0.0.26 P2 (ID-TABS) — the IDE WORKSPACE (open tabs, scroll, explorer dirs, mode/panel, focused session) under gitignored temp_local/ide/, beside the server record. UI state, not the repo: it touches no committed file and approves nothing. Bounded (MAX_BYTES, every list capped). `load` only MOVES a corrupt file aside (never deletes or overwrites it — the user-owned-data rule).',
+    ("ide/workspace.py", "save"): '0.0.26 P2 (ID-TABS) — the IDE WORKSPACE (open tabs, scroll, explorer dirs, mode/panel, focused session) under gitignored temp_local/ide/, beside the server record. UI state, not the repo: it touches no committed file and approves nothing. Bounded (MAX_BYTES, every list capped). `load` only MOVES a corrupt file aside (never deletes or overwrites it — the user-owned-data rule).',
+    ("ide/firstrun.py", "_move_record"): '0.0.26 P39 (FIRST-RUN) — after the human ran `mokata init` from the Welcome screen\'s consent (a gated job), the IDE\'s own SERVER RECORD moves from the user profile into the now-governed repo\'s gitignored temp_local/ide/ (via `_write_record`) and the profile copy is removed, so `mokata ide` / `/mokata:review-window` find the open window where they now look. Only this process\'s own record (pid-checked); no repo file.',
+    ("ide/statedir.py", "note_repo"): '0.0.26 P29 (IDE-UNINITIALIZED-REPO) — a one-line `repo.txt` label in the USER profile (~/.mokata/ide-repos/<key>/) naming which repo an un-set-up repo\'s IDE scratch state belongs to. Written once, beside the server record; touches no repo file and approves nothing.',
     ("ide/server.py", "_write_record"): '0.0.22 E2 — the review-window SERVER RECORD (port, pid, token) under gitignored temp_local/ide/, mode 0600, removed on exit. Transient run-state: it says whether a window is open so `/mokata:review-window` re-focuses it instead of starting another.',
     ("ide/server.py", "_remove_record"): '0.0.22 E2 — the review-window SERVER RECORD (port, pid, token) under gitignored temp_local/ide/, mode 0600, removed on exit. Transient run-state: it says whether a window is open so `/mokata:review-window` re-focuses it instead of starting another.',
     ("notify.py", "_debounced"): "Lane F — the notification RATE LIMITER's stamp, under gitignored "
@@ -865,11 +905,8 @@ UNGATED_BY_DESIGN = {
         "Not a governed PROJECT write — nothing in the repo changes, and the whole point of the "
         "record is that the human is never asked again. The consent it guards is the gate; this "
         "is only its memory. (The ACCEPT path writes no project file at all — it runs pip.) "
-        "0.0.25 I-02: also called by `adoption_modes.offer_mode_extras` for the ONE mode-wide "
-        "decline (key `mode-dependencies`) — the same user-scoped 'no', for the whole dependency "
-        "set; only a HUMAN's no is recorded (an unreadable stdin is not one). Its consented "
-        "path's project writes (`memory.embedder`, the graph pin) go through `config_set` and "
-        "`adopt_graph`, both gated.",
+        "(0.0.26 L1: the mode-wide decline from `adoption_modes` is GONE with the mode's self-"
+        "install — setup no longer asks, so there is no 'no' to remember.)",
     ("govern/lifecycle.py", "_write_tombstone"): "KB.S1 — the USER-scoped removal TOMBSTONE in "
         "~/.mokata/removals.json (repo identity + when + actor, NO repo content). Same class as "
         "user_prefs above: a user-profile record, not a governed PROJECT write. It exists BECAUSE "
@@ -999,6 +1036,53 @@ UNGATED_BY_DESIGN = {
         "never item CONTENT, and it is derived — deleting it costs a session one repeated "
         "injection and nothing else. Append-only (a single O_APPEND write), no update path, no "
         "delete path, and it never raises.",
+    # 0.0.26 O12b — the SessionStart briefing's slow lines, cached and background-refreshed.
+    ("briefing_cache.py", "store"):
+        "0.0.26 O12b — the background-refreshed briefing answers (`lines.json`: the git status "
+        "line, due intentions, the dependency / wiring / skills / MCP checks, each with a "
+        "stat-signature key and when it was taken) under temp_local/briefing/, written atomically by "
+        "the detached refresher. Entirely derived; deleting it costs one 'being checked' briefing.",
+    ("briefing_cache.py", "derived"):
+        "0.0.26 O12b — the memory-derived briefing lines (rules, the resume hint, 'changed since "
+        "last session') cached against EXACTLY the files they read (`derived.json` under "
+        "temp_local/briefing/). Never served stale: a moved input re-derives them. Derived only.",
+    ("briefing_cache.py", "_acquire"):
+        "0.0.26 O12b — the briefing refresher's one-per-repo O_EXCL lock file under "
+        "temp_local/briefing/; a stale one is taken over. Run-state only.",
+    ("briefing_cache.py", "_release"):
+        "0.0.26 O12b — removes the briefing refresher's own lock file. Run-state only.",
+    # 0.0.26 O12 — the SessionStart briefing's structure line, cached off the session-start path.
+    ("knowledge/structure_cache.py", "store"):
+        "0.0.26 O12 — the briefing's one-line code-structure summary (`structure.json`: the line "
+        "and a stat-signature key) under temp_local/briefing/, written atomically by the detached "
+        "refresher or by a human-run `mokata bootstrap`. Module NAMES only, entirely derived from "
+        "the AST floor; deleting it costs one 'being summarised' briefing.",
+    ("knowledge/structure_cache.py", "_acquire"):
+        "0.0.26 O12 — the structure refresher's one-per-repo O_EXCL lock file under "
+        "temp_local/briefing/; a stale one is taken over. Run-state only.",
+    ("knowledge/structure_cache.py", "_release"):
+        "0.0.26 O12 — removes the structure refresher's own lock file. Run-state only.",
+    # 0.0.26 O12 (USER-PROMPT-SUBMIT-6S) — the per-prompt recall's graph tier, precomputed OFF the
+    # prompt path. All five write ONLY under temp_local/recall_graph/, hold token VERDICTS (an
+    # identifier and a bool), never memory content or source text, and are entirely derived: deleting
+    # the directory costs one turn's graph ranking and one background re-lookup.
+    ("memory/graph_anchors.py", "CachedGraphScorer.request_warm"):
+        "0.0.26 O12 — appends the prompt's identifier tokens that have no fresh verdict to the "
+        "lookup queue (`want`, one O_APPEND write) under temp_local/recall_graph/. Run-state on the "
+        "GR.S4 dirty-set pattern: P2 gates durable writes of facts; this is a work queue of "
+        "identifiers, bounded per prompt (MAX_WANT_PER_PROMPT) and drained by the warmer.",
+    ("memory/graph_anchors.py", "_acquire"):
+        "0.0.26 O12 — the warmer's one-per-repo O_EXCL lock file (its pid) under "
+        "temp_local/recall_graph/; a stale one (> LOCK_STALE_SECS) is taken over. Run-state only.",
+    ("memory/graph_anchors.py", "_release"):
+        "0.0.26 O12 — removes the warmer's own lock file on exit. Run-state only.",
+    ("memory/graph_anchors.py", "_take_wanted"):
+        "0.0.26 O12 — claims the lookup queue by rename and deletes the claimed copy after reading "
+        "it, so a token queued meanwhile lands in a fresh queue. Run-state only.",
+    ("memory/graph_anchors.py", "_write_cache"):
+        "0.0.26 O12 — the verdict cache (`anchors.json`: token -> bool, a freshness key of stat "
+        "signatures, failure timestamps) written atomically by the detached warmer. Derived from "
+        "the code graph alone, bounded (MAX_CACHED), and ignored the moment its key goes stale.",
     ("knowledge/anchor_fingerprints.py", "_write_record"):
         "H-6 S1 — the DURABLE anchor→fingerprint record under temp_local/ (H-6 plan of record, "
         "decision #5). It differs from the two GR.S4 entries above in ONE respect and it is worth "
@@ -1049,6 +1133,12 @@ UNGATED_BY_DESIGN = {
     ("dashboard.py", "write_governance_dashboard"): "derived HTML under temp_local/",
     ("plugin_cache.py", "record_plugin_root"): "machine-local cache under ~/.mokata (outside the "
                                                "repo)",
+    ("plugin_runtime.py", "_write"): "0.0.26 L8 — the plugin route's runtime records under "
+        "${CLAUDE_PLUGIN_DATA} (Claude Code's per-plugin data dir, outside the repo): the pinned "
+        "interpreter's path, the MCP server's pid/version, the last hook stamp. A cache of where "
+        "the pinned env is; losing it costs one slower hook.",
+    ("plugin_runtime.py", "record_runtime"): "0.0.26 L8 — removes ANOTHER version's runtime "
+        "record from that same data dir after an update (its shim is gone with it).",
     ("cli_commands/knowledge.py", "cmd_ci_check"): "ephemeral CI PR-comment body at an operator-"
                                                    "named --comment-file",
     ("vault.py", "vault_pull"): "copies an ALREADY-gated, hash-verified vault artifact out to an "
@@ -1350,6 +1440,11 @@ LEDGERED = {
         "merges). Every flow that reaches it (apply_setup / unsetup_harness / mcp_install) records a "
         "batched `setup`/`unsetup`/`mcp_install` entry naming the files on the repo ledger. Bespoke "
         "setup consent unchanged; merge-safety unchanged.",
+    ("worktree_setup.py", "_append_lines"): "0.0.26 P31 — appends `.worktreeinclude` patterns / "
+        "the `.claude/worktrees/` .gitignore line. Reached only from `apply_rows`, after the setup "
+        "plan SHOWED each row and the human confirmed (apply_setup's consent, or the plugin route's "
+        "own read_yes_no); each destination passes `_gate_config_destination` first; the batched "
+        "`setup` ledger entry names the files. Atomic, append-only, idempotent.",
     ("harness_setup.py", "_write_command_file"): "KB.S1 — materializes a command template; "
         "apply_setup records the batched `setup` entry naming the commands. Byte-identical write.",
     ("agent_skills.py", "write_skill_files"): "KB.S1 — writes SKILL.md; apply_setup records the "
@@ -1494,6 +1589,9 @@ GATED_CALLER_EXCEPTIONS = {
 # covers those is `DECLARED_CALLERS` above, checked by `gate_enclosure` instead of by the graph.
 # The 77 are counted and printed every run rather than left as an impression of completeness.
 CALLER_PINS = {
+    # 0.0.26 L7b — the committed spec has ONE caller, the spec committer, which only ever runs inside
+    # a spec-emit/amend WriteGate commit closure (derived by `_writegraph.derive_callers`).
+    ("committed_specs.py", "write_committed"): (("engine/emit.py", "spec_commit"),),
     # 0.0.23 D8 — derived from `_writegraph.derive_callers`. The entry's justification is WHAT it
     # writes (append-only gate evidence under temp_local/evidence/), not who calls it.
     ("govern/evidence.py", "record_evidence"): (
@@ -1504,12 +1602,76 @@ CALLER_PINS = {
     # `_writegraph.derive_callers`. Each entry's justification is about WHAT it writes (an
     # observation under temp_local/, or the server's own 0600 record), never about who calls it.
     # 0.0.23 C2 — the IDE's semantic index, derived the same way.
-    ("ide/search.py", "build_index"): (("ide/health.py", "_rebuild_search"), ("ide/search.py", "meaning")),
+    # 0.0.26 O13 — the semantic index writer and the CRG build run-state, derived the same way.
+    ("ide/search.py", "_write_index"): (("ide/search.py", "build_index.snapshot"),),
+    ("knowledge/crg_build.py", "_lock_holder"): (("knowledge/crg_build.py", "_acquire"),
+                                                ("knowledge/crg_build.py", "build_status")),
+    ("knowledge/crg_build.py", "_release"): (("knowledge/crg_build.py", "build_now"),
+                                            ("knowledge/crg_build.py", "ensure_building"),
+                                            ("knowledge/crg_build.py", "main")),
+    ("knowledge/crg_build.py", "_write_json"): (("knowledge/crg_build.py", "_begin_update"),
+                                               ("knowledge/crg_build.py", "_end_update"),
+                                               ("knowledge/crg_build.py", "_record"),
+                                               ("knowledge/crg_build.py", "_set_holder")),
+    ("knowledge/crg_build.py", "_drop_next"): (("knowledge/crg_build.py", "_lock_holder"),
+                                              ("knowledge/crg_build.py", "build_now"),
+                                              ("knowledge/crg_build.py", "swap_in")),
+    ("knowledge/crg_build.py", "_remove_db"): (("knowledge/crg_build.py", "_drop_next"),
+                                              ("knowledge/crg_build.py", "_seed_beside"),
+                                              ("knowledge/crg_build.py", "build_now"),
+                                              ("knowledge/crg_build.py", "discard_partial"),
+                                              ("knowledge/crg_build.py", "run_build"),
+                                              ("knowledge/crg_build.py", "swap_in")),
+    ("knowledge/crg_build.py", "had_complete_build"): (("knowledge/crg_build.py", "build_now"),
+                                                      ("knowledge/crg_build.py", "discard_partial")),
+    ("knowledge/crg_nodes.py", "_select"): (("knowledge/crg_nodes.py", "NodeReader._names_of"),
+                                           ("knowledge/crg_nodes.py", "NodeReader._qns_named"),
+                                           ("knowledge/crg_nodes.py", "NodeReader.built_root"),
+                                           ("knowledge/crg_nodes.py", "NodeReader.call_path"),
+                                           ("knowledge/crg_nodes.py", "NodeReader.callers_by_name"),
+                                           ("knowledge/crg_nodes.py", "NodeReader.defs"),
+                                           ("knowledge/crg_nodes.py", "NodeReader.languages"),
+                                           ("knowledge/crg_nodes.py", "NodeReader.outline"),
+                                           ("knowledge/crg_nodes.py", "NodeReader.symbols")),
+    ("knowledge/crg_build.py", "_end_update"): (("knowledge/crg_build.py", "build_now"),),
+    ("knowledge/crg_build.py", "_seed_beside"): (("knowledge/crg_build.py", "build_now"),),
+    ("knowledge/crg_build.py", "_meta_value"): (("knowledge/crg_build.py", "_begin_update"),),
+    ("knowledge/crg_build.py", "_last_updated"): (("knowledge/crg_build.py", "_begin_update"),
+                                                 ("knowledge/crg_build.py", "update_state")),
+    ("ide/handoff.py", "_prune"): (("ide/handoff.py", "stop"),),
+    ("ide/handoff.py", "_write"): (("ide/handoff.py", "run_worker"),
+                                  ("ide/handoff.py", "run_worker.progress"),
+                                  ("ide/handoff.py", "stop")),
+    ("knowledge/crg_build.py", "probe_db"): (("ide/handoff.py", "_crg_update"),
+                                            ("knowledge/crg_build.py", "_begin_update"),
+                                            ("knowledge/crg_build.py", "_end_update"),
+                                            ("knowledge/crg_build.py", "build_now"),
+                                            ("knowledge/crg_build.py", "probe_index"),
+                                            ("knowledge/crg_build.py", "run_build"),
+                                            ("knowledge/crg_build.py", "swap_in"),
+                                            ("knowledge/crg_build.py", "update_state")),
+    ("knowledge/crg_build.py", "swap_in"): (("knowledge/crg_build.py", "build_now"),),
     ("ide/health.py", "_rebuild_ast"): (("ide/health.py", "start"),),
     ("ide/health.py", "_rebuild_search"): (("ide/health.py", "start"),),
+    # 0.0.26 L2 — `mokata update`'s own runtime files (derived the same way). The IDE's Windows
+    # hand-off reaches `launch_detached` through an injectable `launch or launch_detached`, which
+    # the graph does not resolve — it is the same consented update, from the click.
+    ("_updater.py", "write_result"): (("_updater.py", "main"),),
+    ("update.py", "launch_detached"): (("cli_commands/core.py", "cmd_update"),),
+    ("update.py", "take_result"): (("cli.py", "_report_update_result"),
+                                   ("cli_commands/core.py", "cmd_update"),
+                                   ("ide/health.py", "_mokata_row")),
+    # 0.0.26 P2 — the IDE workspace file (derived the same way).
+    ("ide/workspace.py", "load"): (("ide/features/tabs.py", "routes"),),
     ("ide/server.py", "_remove_record"): (("ide/server.py", "serve"),),
-    ("ide/server.py", "_write_record"): (("ide/server.py", "serve"),),
+    ("ide/server.py", "_write_record"): (("ide/firstrun.py", "_move_record"),
+                                         ("ide/server.py", "serve"),),
+    # 0.0.26 P29 — the user-level state dir's `repo.txt` label (derived the same way).
+    ("ide/statedir.py", "note_repo"): (("ide/server.py", "_write_record"),),
+    ("ide/firstrun.py", "_move_record"): (("ide/firstrun.py", "_init_job"),),
     ("ide/bus.py", "ensure_bridge"): (("harness_setup.py", "apply_setup"),),
+    # 0.0.26 P33 — the session index row (derived the same way).
+    ("session_index.py", "_write_file"): (("session_index.py", "_update"),),
     ("ide/snapshots.py", "_append"): (("ide/snapshots.py", "capture"),),
     ("ide/snapshots.py", "_maybe_prune"): (("ide/snapshots.py", "_append"),),
     ("ide/snapshots.py", "_write_object"): (("ide/snapshots.py", "capture"),),
@@ -1545,6 +1707,9 @@ CALLER_PINS = {
     ),
     ("atomicfile.py", "atomic_write_text"): (
         ("branch_protection.py", "ProtectionCache.store"),
+        ("briefing_cache.py", "derived"),
+        ("briefing_cache.py", "store"),
+        ("committed_specs.py", "write_committed"),
         ("config_cmd.py", "config_set._commit"),
         ("flush_liveness.py", "store_state"),
         ("flush_liveness.py", "update_state"),
@@ -1553,6 +1718,9 @@ CALLER_PINS = {
         ("init.py", "InitPlan.write_files"),
         ("knowledge/anchor_fingerprints.py", "_write_record"),
         ("knowledge/graph_adopt.py", "adopt_graph._commit"),
+        ("knowledge/structure_cache.py", "store"),
+        ("memory/graph_anchors.py", "_write_cache"),
+        ("plugin_runtime.py", "_write"),
         ("session_transport.py", "_FileTransport.write_bundle"),
         ("share.py", "apply_manifest._commit"),
         ("state.py", "StateStore._atomic_write"),
@@ -1563,6 +1731,7 @@ CALLER_PINS = {
         ("vault.py", "_save_index"),
         ("vault.py", "commit_push"),
         ("visibility.py", "capture_session_snapshot"),
+        ("worktree_setup.py", "_append_lines"),
     ),
     ("dashboard.py", "write_dashboard"): (
         ("cli_commands/runviews.py", "cmd_watch"),
@@ -1573,7 +1742,6 @@ CALLER_PINS = {
         ("mcp/tools_read.py", "govern"),
     ),
     ("extras_install.py", "record_extra_decline"): (
-        ("adoption_modes.py", "offer_mode_extras"),
         ("extras_install.py", "offer_extra"),
     ),
     ("flush_liveness.py", "clear_state"): (
@@ -1601,12 +1769,58 @@ CALLER_PINS = {
         ("harness_setup.py", "_merge_mcp"),
         ("harness_setup.py", "_merge_statusline"),
         ("harness_setup.py", "_write_or_remove_json"),
+        ("worktree_setup.py", "apply_rows"),
+    ),
+    ("worktree_setup.py", "_append_lines"): (
+        ("worktree_setup.py", "apply_rows"),
     ),
     ("govern/cache.py", "_record_observation"): (
         ("govern/cache.py", "observe_prefix"),
     ),
     ("injection_ledger.py", "record_injected"): (
         ("hook_cli.py", "user_prompt_submit_main"),
+    ),
+    # 0.0.26 O12 — the recall-graph run-state, derived from `_writegraph.derive_callers`.
+    ("briefing_cache.py", "store"): (
+        ("briefing_cache.py", "refresh_main"),
+    ),
+    ("briefing_cache.py", "derived"): (
+        ("bootstrap.py", "_cached_changed_since"),
+        ("bootstrap.py", "_cached_resume_hint"),
+        ("bootstrap.py", "_cached_rule_lines"),
+    ),
+    ("briefing_cache.py", "_acquire"): (
+        ("briefing_cache.py", "refresh_main"),
+    ),
+    ("briefing_cache.py", "_release"): (
+        ("briefing_cache.py", "refresh_main"),
+    ),
+    ("knowledge/structure_cache.py", "store"): (
+        ("bootstrap.py", "_graph_structure_line"),
+        ("briefing_cache.py", "refresh_main"),
+        ("knowledge/structure_cache.py", "cached_line"),
+        ("knowledge/structure_cache.py", "warm_main"),
+    ),
+    ("knowledge/structure_cache.py", "_acquire"): (
+        ("knowledge/structure_cache.py", "warm_main"),
+    ),
+    ("knowledge/structure_cache.py", "_release"): (
+        ("knowledge/structure_cache.py", "warm_main"),
+    ),
+    ("memory/graph_anchors.py", "CachedGraphScorer.request_warm"): (
+        ("hook_cli.py", "user_prompt_submit_main"),
+    ),
+    ("memory/graph_anchors.py", "_acquire"): (
+        ("memory/graph_anchors.py", "warm_main"),
+    ),
+    ("memory/graph_anchors.py", "_release"): (
+        ("memory/graph_anchors.py", "warm_main"),
+    ),
+    ("memory/graph_anchors.py", "_take_wanted"): (
+        ("memory/graph_anchors.py", "warm_main"),
+    ),
+    ("memory/graph_anchors.py", "_write_cache"): (
+        ("memory/graph_anchors.py", "warm"),
     ),
     ("worktree_manage.py", "_write_seen"): (
         ("worktree_manage.py", "new_worktree_notice"),
@@ -1615,7 +1829,7 @@ CALLER_PINS = {
         ("knowledge/anchor_fingerprints.py", "record_anchors"),
     ),
     ("knowledge/ast_backend.py", "AstBackend._save_cache"): (
-        ("knowledge/ast_backend.py", "AstBackend._ensure_index"),
+        ("knowledge/ast_backend.py", "AstBackend._finish_index"),
     ),
     ("knowledge/freshness.py", "drain_dirty"): (
         ("knowledge/freshness.py", "FreshnessController._reconcile"),
@@ -1699,9 +1913,22 @@ CALLER_PINS = {
     ("plugin_cache.py", "record_plugin_root"): (
         ("hook_cli.py", "_record_plugin_root"),
     ),
+    ("plugin_runtime.py", "_write"): (
+        ("plugin_runtime.py", "record_hook_seen"),
+        ("plugin_runtime.py", "record_runtime"),
+    ),
+    ("plugin_runtime.py", "record_runtime"): (
+        ("mcp/server.py", "main"),
+    ),
     ("share.py", "export_manifest"): (
         ("mcp/tools_config.py", "export_stack"),
         ("mcp/tools_read.py", "export_preview"),
+    ),
+    # 0.0.26 R1 — the Stop evidence gate's per-session block counter is cleared through a LOCAL
+    # `StateStore` (rule e), the first caller of `delete` the graph can resolve. The entry's
+    # justification is WHAT it removes (run-state under temp_local/), not who calls it.
+    ("state.py", "StateStore.delete"): (
+        ("stop_gate.py", "_reset"),
     ),
     ("state.py", "StateStore._atomic_write"): (
         ("state.py", "StateStore.update"),
@@ -1763,6 +1990,7 @@ CALLER_PINS = {
         ("team.py", "_join_vault"),
     ),
     ("visibility.py", "capture_session_snapshot"): (
+        ("briefing_cache.py", "refresh_main"),
         ("hook_cli.py", "session_start_main"),
     ),
 }
@@ -2202,7 +2430,7 @@ class TestZeroBypass(unittest.TestCase):
                           "than leaving a stale one in the report.")
 
     def test_rule_e_yield_is_stated_not_left_as_a_silent_ratio(self):
-        """RULE (e) RESOLVES 76 CALLS AND ADDS 6 DERIVED SITES, and the ratio is one a reader of
+        """RULE (e) RESOLVES 113 CALLS AND ADDS 8 DERIVED SITES, and the ratio is one a reader of
         a derived report is entitled to have explained rather than left to wonder at.
 
         THE EXPLANATION, and it is checkable, not a hand-wave: the rule's job is to resolve calls
@@ -2215,6 +2443,96 @@ class TestZeroBypass(unittest.TestCase):
         Both baselines were re-derived through `scripts/mutate.sh` with a measurement label rather
         than by hand (doc 85 §7b: "I am only measuring, not mutation-testing" is not an exemption):
         rule (e) ON gives 118 derived sites, the M05-shape mutation OFF gives 116.
+
+        114 -> 113 AT 0.0.26 P37 (paging; merged after INT-2a — P37's own net is +6 −7 = −1): `ripple` became the
+        resumable `_Ripple` (a page resumes where the last stopped — no hard cap). Its ten receiver
+        calls on a local `_G` (payload ×5, confirm, edge ×2, drop_unconfirmed, node) moved into
+        methods that reach the graph through `self.g`, which rule (e) does not resolve; `ripple`
+        now makes three on its local `_Ripple` (run_page ×2, _finish). −10 +3 = −7, all in-memory
+        (no target writes): `productive` is unchanged.
+        112 -> 118 AT 0.0.26 P37 (merged after R1) (GRAPH-AT-SCALE), re-derived from `_write_closure()`'s
+        receiver-edge list filtered to `ide/visuals.py` and diffed by hand against base 090c376
+        (with multiplicity): +2 `_G.confirm` and +2 `_G.drop_unconfirmed` (ripple, focus: the
+        index-first rings are confirmed by the tool's answer), +2 `_G.payload` in `ripple` and
+        +1 in `focus` (the early-ring and confirming partials), and the path's `node`/`edge`/
+        `payload` (3) moved into `_chain_graph` (2: its `payload` is now called on a returned
+        graph, which rule (e) does not resolve). Every target is an in-memory `_G` method that
+        writes nothing: `productive` is unchanged — six resolutions, no site.
+        113 -> 114 AT 0.0.26 INT-2a (B-F4), re-derived from `_write_closure()`'s receiver-edge
+        list: `run_intent.run_claimants` calls `read` on its local `StateStore` (a read — the
+        claim records; it writes nothing), so `productive` is unchanged.
+        112 -> 113 AT 0.0.26 L7b, re-derived from `_write_closure()`'s receiver-edge list filtered to
+        `govern/doctor.py`: `unsealed_spec_findings` makes ONE call on its local `StateStore` (`read`
+        of each run's spec — a read, so `productive` is unchanged): one resolution, no site.
+        106 -> 112 AT 0.0.26 R1 (merged after O12/P33; +6 from R1's own base d253bad), re-derived from
+        `_write_closure()`'s receiver-edge list filtered to `stop_gate.py` / `test_runs.py`:
+        `stop_gate.missing_evidence` makes three calls on its local `StateStore` (`read`, `exists`,
+        `read` — reads) and `_reset` two (`exists`, `delete`); `test_runs.record_test_run` one
+        (`update`). `_reset -> StateStore.delete` and `record_test_run -> StateStore.update` reach
+        registered writers, so `productive` gains both (run-state under temp_local/): six
+        resolutions, two sites.
+        104 -> 106 AT 0.0.26 O12 (merged after P33; +2 from O12's own base) (USER-PROMPT-SUBMIT-6S), re-derived from `_write_closure()`'s
+        receiver-edge list: `bootstrap.build_injection` calls its local `CachedGraphScorer.note`
+        (builds a string, writes nothing) and `hook_cli.user_prompt_submit_main` its local
+        `CachedGraphScorer.request_warm` (the queue append registered above), which makes
+        `user_prompt_submit_main` a PRODUCTIVE resolution (it also reaches `record_injected`
+        directly, so the derived set gains no site). +2 resolutions, +1 productive caller.
+        103 -> 104 AT 0.0.26 P33 (SESSION-INDEX+SCREEN), re-derived from `_write_closure()`'s
+        receiver-edge list diffed against the P33 base d253bad (with multiplicity): the one new
+        edge is `ide/sessions.py:_attributions` calling its local `StateStore(...).read` (it reads
+        P31's per-session Bash attribution records for the session list). A read: `productive`
+        is unchanged — one resolution, no site.
+        100 -> 103 AT 0.0.26 P41 (merged after P32; +3 from P41's own base) (MCP-FOLLOWS-WORKTREE), re-derived from `_write_closure()`'s edge
+        list filtered to `knowledge/tree_overlay.py`: `Overlay._build` calls a local
+        `AstBackend._parse_file` (reads one worktree file), `_lexical_query` calls a local
+        `GrepBackend.query` and `_lexical_callers_of_many` a local `GrepBackend._callers_of_many`
+        (both read files). None of the three targets writes, so `productive` is unchanged: three
+        resolutions, no site.
+        102 -> 100 AT 0.0.26 P32 (IDE-JOBS), re-derived from `_write_closure()`'s receiver-edge list
+        (diffed against the P32 base 9f21a42, with multiplicity): the health panel's own `_Job`
+        is gone (its actions are jobs of the IDE's registry now), so `health._stream`'s two
+        `JOB.progress`, `health.health`'s two `JOB.snapshot` and `health.start`'s `JOB.start`
+        leave (-5); `visuals.ripple` (twice) and `visuals.focus` (once) now call their local
+        `_G.payload` for the PARTIAL answer they report while running (+3). `_G.payload` builds a
+        dict and writes nothing, so `productive` is unchanged: -2 resolutions, no site.
+
+        101 -> 102 AT 0.0.26 O13 (merged after O10, O3, L2, L8; counted from O13's own base as +1) (CRG-AUTO-BUILD): `adoption_modes.wire_mode` calls its local
+        `ModeWiringResult.row` once more (the new `lexical` row). `.row` is an in-memory lookup, so
+        `productive` is unchanged: +1 resolution, no site.
+
+        94 -> 98 AT 0.0.26 O10 (+4; merged after P0, L1, P1, P29), re-derived rather than bumped, and all four edges are nameable:
+        `run_intent.carry_claim` (`StateStore.read` of the predecessor's claim, `.write` of the
+        resumed session's) and `run_intent.mark_resumed` (`.exists`, `.update` of the session's own
+        claim record with its resume time). Exactly the `.write` and the `.update` are
+        write-reaching, so `productive` gains `carry_claim` and `mark_resumed` — the
+        `bind_registered` shape twice more: transient run-state under `temp_local/`, ungated.
+        79 -> 94 AT 0.0.26 P1 (ID-SYNTAX-HIGHLIGHT, +15; merged after P0 + L1), re-derived from `_write_closure()`'s edge
+        list filtered to `ide/highlight.py`: `cache_info` calls `_LRU.info` on the module's three
+        caches (3), and `window`, `_answer`, `_detect_cached`, `probe`, `diff` and `snippet` each
+        call `_LRU.get` and `_LRU.put` on a module-level cache (12). `_LRU` is an in-memory
+        OrderedDict with a lock and writes nothing, so `productive` is unchanged: fifteen
+        resolutions, no site.
+
+        76 -> 78 AT 0.0.26 P0 (ID-API-CONTRACT), re-derived from `_write_closure()`'s edge list:
+        `ide/server.build_app` binds a local `routes.Registry` and calls `.specs` (mounting the
+        routes), and its nested `add` calls `.register` (each core route). The registry holds route
+        specs in memory and writes nothing, so `productive` is unchanged: two resolutions, no site.
+        78 -> 79 AT 0.0.26 L1 (merged after P0), re-derived from `_write_closure()`'s edge list: `adoption_modes.
+        offer_mode_extras` (two `.row` calls) is replaced by `wire_mode`, which builds a local
+        `ModeWiringResult` and calls its `.row` THREE times (embeddings, code-graph, and the new
+        graph-ts row). `.row` is an in-memory lookup, so `productive` is unchanged: +1 resolution,
+        no site.
+
+        (L2 merged after O10 + P1 + O3: 98 -> 101, the +3 below counted from L2's own base.) 80 -> 82 AT 0.0.26 L2 rework (update runs on a yes), re-derived the same way: the IDE's
+        `health._stream` calls `JOB.progress(...)` twice (streaming the installer's output into the
+        running job). `_Job.progress` merges a dict under a lock and writes nothing, so
+        `productive` is unchanged: +2 resolutions, no site.
+
+        79 -> 80 AT 0.0.26 L2 (MOK-UPDATE), re-derived from `_write_closure()`'s edge list (diffed
+        against the L1 base: every other edge only moved line): `install_route._uv_tool_line` now
+        binds a local `main = _Req(...)` (the pin-dropping re-statement `plan_upgrade` prints) and
+        calls its `.render()`. `_Req.render` builds a string, so `productive` is unchanged: +1
+        resolution, no site.
 
         73 -> 76 AT 0.0.25 (the IDE health panel), re-derived from `_write_closure()`'s edge list:
         `ide/health.py:health` calls `JOB.snapshot()` twice and `ide/health.py:start` calls
@@ -2310,7 +2628,7 @@ class TestZeroBypass(unittest.TestCase):
         self.assertEqual(len(graph.receiver_edges), graph.receiver_calls,
                          "the rule-(e) COUNT and the rule-(e) EDGE LIST disagree — a count with no "
                          "list can only be re-asserted, never re-graded")
-        self.assertEqual(graph.receiver_calls, 76,
+        self.assertEqual(graph.receiver_calls, 113,
                          "rule (e)'s resolution count moved; re-derive its yield before trusting "
                          "any number in the audit report that depends on it")
         productive = sorted({caller for caller, _ln, target in graph.receiver_edges
@@ -2318,11 +2636,14 @@ class TestZeroBypass(unittest.TestCase):
         self.assertEqual(
             productive,
             [("govern/calibration.py", "observe"), ("harvest.py", "decide"),
-             ("harvest.py", "harvest"), ("mcp/tools_read.py", "session_save"),
-             ("run_intent.py", "bind_registered"), ("team_journal.py", "_floor_rows")],
-            "of rule (e)'s 73 resolutions, exactly these reach a durable write — every other one "
+             ("harvest.py", "harvest"), ("hook_cli.py", "user_prompt_submit_main"),
+             ("mcp/tools_read.py", "session_save"),
+             ("run_intent.py", "bind_registered"), ("run_intent.py", "carry_claim"),
+             ("run_intent.py", "mark_resumed"), ("stop_gate.py", "_reset"),
+             ("team_journal.py", "_floor_rows"), ("test_runs.py", "record_test_run")],
+            "of rule (e)'s 80 resolutions, exactly these reach a durable write — every other one "
             "binds a receiver whose class writes nothing (or, since CM.S5, IS the WriteGate), "
-            "which is why 73 resolutions buy 6 sites rather than 72. If this list moved, the "
+            "which is why 80 resolutions buy 8 sites rather than 79. If this list moved, the "
             "ratio in the report is stale.")
         for site in productive:
             self.assertIn(site, closure.derived,

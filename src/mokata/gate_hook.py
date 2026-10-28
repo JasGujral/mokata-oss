@@ -35,6 +35,10 @@ be able to write the failing test, and a gate that blocks the test blocks the fi
     approach present, spec absent      -> BLOCK   `spec-persisted`  (coding before the spec)
     spec present, red-set EMPTY        -> BLOCK   `no-code-without-failing-test`
     spec present, red-set NON-EMPTY    -> ALLOW   a failing test is on record
+                                                 (R2/0.0.26: unless the spec's plan no longer
+                                                 matches its approved hash, or the write is
+                                                 outside the spec scope / the ACTIVE task's
+                                                 scope — `spec-scope`, see `plan_tasks`)
 
 The direction of the TDD gate — read this before "fixing" it
 -------------------------------------------------------------
@@ -137,6 +141,24 @@ GATE_SCOPE = "spec-scope"
 # approved, no spec emitted — so a native implementation write before an approach exists is blocked.
 GATE_PHASE = "approach-approval"
 GATES: Tuple[str, ...] = (GATE_SPEC, GATE_TDD, GATE_SCOPE, GATE_PHASE)
+
+# R1 + R4 (0.0.26 Lane R) — the LOOP gates. Not run-state gates (those four judge a write against
+# the run's phase); these stop a LOOP the agent is in, each with the same P14 override:
+#   * `stop-evidence` (R1) — the Stop/SubagentStop evidence gate (`stop_gate`): a "done" with an
+#     acceptance criterion no test names, or a test still RED, is sent back to work.
+#   * `fix-breaker` (R4) — three failed fix attempts at one failure block the fourth implementation
+#     write (here, in `_decide_for_run`).
+#   * `review-loop` (R4) — five failed review rounds in a row refuse the sixth
+#     (`progress_events.record_review_verdict`).
+# Literals for the same import-surface reason as above; pinned to `loop_guard`/`stop_gate`.
+GATE_STOP_EVIDENCE = "stop-evidence"
+GATE_FIX_BREAKER = "fix-breaker"
+GATE_REVIEW_LOOP = "review-loop"
+LOOP_GATES: Tuple[str, ...] = (GATE_STOP_EVIDENCE, GATE_FIX_BREAKER, GATE_REVIEW_LOOP)
+#: The loop gates the gate-guard enforces on NATIVE writes (the others guard a stop and a record).
+NATIVE_WRITE_LOOP_GATES: Tuple[str, ...] = (GATE_FIX_BREAKER,)
+#: Every gate a human may override for one session (`mokata gate override`).
+OVERRIDABLE: Tuple[str, ...] = GATES + LOOP_GATES
 
 # RUN-REG (0.0.22 C1) — NOT one of the overridable `GATES`: it is the precondition that a session
 # which ASKED for a pipeline has a run to be checked against. There is no run to file an override
@@ -381,7 +403,7 @@ def read_override(root: str, run_id: str) -> frozenset:
     scopes = data.get("scopes")
     if not isinstance(scopes, list):
         return frozenset()
-    return frozenset(s for s in scopes if isinstance(s, str) and s in GATES)
+    return frozenset(s for s in scopes if isinstance(s, str) and s in OVERRIDABLE)
 
 
 # ======================================================================================
@@ -502,6 +524,11 @@ def _pending_emit_proposals(root: str, run_id: str) -> list:
         return []
 
 
+def _human_bound_bases() -> Tuple[str, ...]:
+    from .run_resolver import BASIS_EXPLICIT, BASIS_PINNED
+    return (BASIS_EXPLICIT, BASIS_PINNED)
+
+
 def check_write(root: str, path: str, run_id: Optional[str] = None,
                 content: str = "", session_id: Optional[str] = None) -> GateOutcome:
     """THE decision: may this native write to `path` proceed? See the module docstring's table.
@@ -525,9 +552,11 @@ def check_write(root: str, path: str, run_id: Optional[str] = None,
     # session that asked for a pipeline and whose registration came back is policed by exactly that
     # run, whatever else the repo holds (parallel runs, Jas 2026-10-09); one that asked and has NOT
     # registered waits. A session that never asked has no claim, and everything below is unchanged.
+    unbound_session = False
     if session_id and run_id is None:
-        from .run_intent import CLAIM_BOUND, CLAIM_OPEN, session_claim
+        from .run_intent import CLAIM_BOUND, CLAIM_NONE, CLAIM_OPEN, session_claim
         claim, claimed = session_claim(root, session_id)
+        unbound_session = claim == CLAIM_NONE
         if claim == CLAIM_OPEN:
             return GateOutcome(
                 False,
@@ -568,6 +597,32 @@ def check_write(root: str, path: str, run_id: Optional[str] = None,
                 "is never blocked, by design). Start a tracked run with /mokata:brainstorm to "
                 "turn enforcement on."),
         )
+
+    # INT-2a (B-F4) — a session that never asked for a pipeline is NOT policed by a run that ANOTHER
+    # session's own registration bound. Before this, the resolver's SINGLE/EVIDENCE rung handed an
+    # unbound window whichever run had state — i.e. a parallel session's brainstorm — and blocked
+    # its hand edits on that run's approach/spec state (Audit B: S03/S04/S06 blocked by S02's run).
+    # That contradicts `run_intent`'s contract ("does not police a session that never asked").
+    # Scope of the exemption, deliberately narrow:
+    #   * only a claim-NONE session with a known session id (hooks always have one);
+    #   * only when the resolved run is CLAIMED by some other session (`run_claimants`) — a run no
+    #     session claims (a CLI-registered run, a `mokata` terminal flow) still polices as before;
+    #   * never when the run was named explicitly or pinned with MOKATA_SESSION_ID — a human pin is
+    #     a binding, so it is honoured.
+    # The allow is DISCLOSED once per session, naming the other run and how to be tracked.
+    if unbound_session and run.basis not in _human_bound_bases():
+        from .run_intent import run_claimants
+        owners = run_claimants(root, run.run_id)
+        if owners and session_id not in owners:
+            return GateOutcome(
+                True, f"run {run.run_id} belongs to another session; this session is not bound "
+                      f"to a mokata run",
+                notice=(
+                    f"mokata: run-state gates are OFF for this window — it is not bound to a mokata "
+                    f"run, and run {run.run_id} belongs to another session, so its gates do not "
+                    f"police your edits here. Start /mokata:brainstorm in this window to have it "
+                    f"tracked (or pin a run with MOKATA_SESSION_ID)."),
+            )
 
     # SL.S3 (0.0.22 C2) — a BLOCK is stamped with the run whose state produced it, so the hook can
     # record it as an IN-LOOP catch for that run. Allows are left untouched (nothing was caught).
@@ -687,6 +742,15 @@ def _decide_for_run(root: str, path: str, run: "RunResolution", content: str) ->
             gate=GATE_SCOPE,
         )
 
+    # R4 — the 3-fix BREAKER. Three failed fix attempts at the same failure: the fourth blind fix is
+    # blocked until the failure is root-caused (/mokata:debug) or a human takes it. Ahead of the TDD
+    # gate because a RED test is exactly what a fix loop has — it must not license the fourth fix.
+    if GATE_FIX_BREAKER not in overrides:
+        from .loop_guard import breaker_message, tripped_failures
+        tripped = tripped_failures(root, run.run_id)
+        if tripped:
+            return GateOutcome(False, breaker_message(tripped), gate=GATE_FIX_BREAKER)
+
     # Gate 2 — no-code-without-failing-test. The spec is emitted; implementation now requires a
     # failing test ON RECORD for this run. RED is the licence, not the violation.
     red = _red_set(store, run.run_id)
@@ -727,6 +791,23 @@ def _decide_for_run(root: str, path: str, run: "RunResolution", content: str) ->
             gate=GATE_TDD,
         )
 
+    # R2 (0.0.26) — PLAN ATTESTATION. Implementation proceeds only against the plan a human
+    # approved: the persisted spec must still hash to the SHA-256 the committer sealed it with. A
+    # mismatch (the plan changed after approval) or an unsealed spec (one approved before tasks[] +
+    # the hash existed — user-owned `.mokata/` data, refused loudly per rule 1) BLOCKS, and is NOT
+    # overridable: the way on is re-approval, never a waiver. A spec file that cannot be READ at all
+    # stays the SI.1 fail-open floor above (`spec_data is None`) — unreadable is not "changed".
+    if spec_data is not None:
+        from .plan_tasks import attest
+        attestation = attest(spec_data)
+        if not attestation.ok:
+            return GateOutcome(
+                False,
+                f"{GATE_SCOPE}: {attestation.reason}. {os.path.basename(path)} is implementation "
+                f"and the plan it would implement is not the approved one.",
+                gate=GATE_SCOPE,
+            )
+
     # SI-DEV — the SCOPE. The spec is emitted, a failing test is on record, and nothing is being
     # amended: the only question left is whether this write is inside what the human APPROVED. It is
     # judged against the spec's declared scope and nothing else — and every undeclared case (no
@@ -746,6 +827,25 @@ def _decide_for_run(root: str, path: str, run: "RunResolution", content: str) ->
             f"or override: mokata gate override {GATE_SCOPE} --reason \"<why>\"",
             gate=GATE_SCOPE,
         )
+
+    # R2 (0.0.26) — TASK BY TASK. Inside the spec's scope, the write must also sit inside the
+    # ACTIVE task's scope (`plan_tasks.active_task`: the cursor's current task, else the first open
+    # task whose dependencies are done). Same gate, same P14 override as the spec scope above.
+    if spec_data is not None:
+        from .plan_tasks import TASKS_KEY, classify_task, read_cursor, tasks_from_state
+        task_verdict = classify_task(tasks_from_state(spec_data.get(TASKS_KEY)),
+                                     read_cursor(root, run.run_id), path, root=root)
+        if not task_verdict.allowed:
+            if GATE_SCOPE in overrides:
+                return GateOutcome(True, f"{GATE_SCOPE}: overridden for this session",
+                                   gate=GATE_SCOPE, overridden=True)
+            return GateOutcome(
+                False,
+                f"{GATE_SCOPE}: outside the active task — {task_verdict.reason}. Develop works "
+                f"task by task; widening a task is a plan change (`{AMEND_FINISH_CMD}`), or "
+                f"override: mokata gate override {GATE_SCOPE} --reason \"<why>\"",
+                gate=GATE_SCOPE,
+            )
 
     return GateOutcome(True, f"{GATE_TDD}: a failing test is on record for this run")
 
@@ -783,7 +883,8 @@ def notice_once(root: str, session_id: str, message: str) -> Optional[str]:
 
 
 __all__ = [
-    "BLOCK_EXIT", "GATES", "GATE_PHASE", "GATE_RUN_REG", "GATE_SCOPE", "GATE_SPEC", "GATE_TDD", "GateOutcome",
+    "BLOCK_EXIT", "GATES", "GATE_FIX_BREAKER", "GATE_PHASE", "GATE_REVIEW_LOOP",
+    "GATE_STOP_EVIDENCE", "LOOP_GATES", "NATIVE_WRITE_LOOP_GATES", "OVERRIDABLE", "GATE_RUN_REG", "GATE_SCOPE", "GATE_SPEC", "GATE_TDD", "GateOutcome",
     "RunResolution", "APPROACH_PREFIX", "SPEC_PREFIX", "CHECKPOINT_PREFIX", "OVERRIDE_PREFIX",
     "MAX_SCAN_BYTES",
     "bash_command", "check_write", "find_mokata_root", "is_implementation_path", "is_test_path",

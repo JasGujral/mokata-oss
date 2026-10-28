@@ -1,0 +1,6 @@
+{
+  "id": "01-fizzbuzz-off-by-one",
+  "title": "Fix an off-by-one in fizzbuzz",
+  "prompt": "`fizzbuzz(n)` in fizz.py should return the FizzBuzz sequence for 1..n inclusive, but the last number is missing. Fix it and add a test.",
+  "max_turns": 40
+}

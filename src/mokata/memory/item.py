@@ -189,6 +189,8 @@ DOC_KEYS = frozenset({
     "id", "subject", "value", "mtype", "status", "kind", "provenance", "expires_at",
     "supersedes", "depends_on", "scope_level", "scope_id", "pin", "priority", "enforcement",
     "applicability", "review", "about_code", "derives_from", "valid_from", "valid_to",
+    # R5 (0.0.26) — the expiry predicates (see `MemoryItem.retire_when`).
+    "retire_when",
     # M-1/R9 — the consent chain (see `MemoryItem.approved_by`).
     "approved_by", "approved_at", "approval_ledger_id",
     DOC_VERSION_KEY,
@@ -391,6 +393,14 @@ class MemoryItem:
     # edge row is a DERIVED PROJECTION rebuilt from it by the gated write that persists it.
     # Additive and empty by default, so every legacy item round-trips byte-identically.
     derives_from: List[str] = field(default_factory=list)
+    # R5 (0.0.26) — EXPIRY PREDICATES: the conditions under which this learning stops being worth
+    # carrying (`deleted:<path>`, `removed:<symbol>`, `after:<commit>`, `date:<YYYY-MM-DD>`; grammar
+    # and evaluator in memory/grounding.py). A fired predicate is SURFACED as a `retire_due`
+    # healing proposal and resolved by a human-gated refresh verb — nothing is ever auto-retired.
+    # Distinct from `expires_at` (a TTL on a clock) — this one is tied to the CODE it describes.
+    # Validated (grounded) at write time like every other citation. Empty for every item that
+    # names none.
+    retire_when: List[str] = field(default_factory=list)
     # DB.S5 — the BI-TEMPORAL VALIDITY WINDOW (doc 62 lifecycle; Graphiti's model). `valid_from` is
     # when this fact STARTED being true, `valid_to` when it STOPPED; an OPEN window (`valid_to`
     # empty) is the live state. This is a different axis from `provenance.created_at` (when we
@@ -482,6 +492,7 @@ class MemoryItem:
         review: Optional[Dict[str, Any]] = None,
         about_code: Optional[List[str]] = None,
         derives_from: Optional[List[str]] = None,
+        retire_when: Optional[List[str]] = None,
     ) -> "MemoryItem":
         created = created_at or now_iso()
         if expires_at is None and valid_for is not None:
@@ -511,6 +522,7 @@ class MemoryItem:
             about_code=[str(s) for s in (about_code or [])],
             # The SUMMARIZE lineage; empty for every item that was not distilled out of others.
             derives_from=[str(s) for s in (derives_from or [])],
+            retire_when=[str(s).strip() for s in (retire_when or []) if str(s).strip()],
         )
 
     @property
@@ -558,6 +570,7 @@ class MemoryItem:
             "review": dict(self.review),
             "about_code": list(self.about_code),
             "derives_from": list(self.derives_from),
+            "retire_when": list(self.retire_when),
             # DB.S5 — the bi-temporal window. Emitted always (like every other modelled field), and
             # empty strings for an item that has never had one, so a legacy item's window is
             # "unset" rather than a forged claim about when it started being true.
@@ -627,6 +640,7 @@ class MemoryItem:
             # round-trips its symbol list verbatim.
             about_code=[str(s) for s in (d.get("about_code", []) or [])],
             derives_from=[str(s) for s in (d.get("derives_from", []) or [])],
+            retire_when=[str(s) for s in (d.get("retire_when", []) or [])],
             # DB.S5 — a pre-S5 doc has no validity keys → "" / "" → `lifecycle.is_open` reads it as
             # OPEN and `lifecycle.open_window` reads its `created_at` as the window's start. The
             # whole pre-DB.S5 corpus is therefore valid on upgrade with no migration write; a v4

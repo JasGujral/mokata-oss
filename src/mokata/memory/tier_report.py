@@ -45,6 +45,12 @@ _HASHING_MODEL_NOT_LOADED = (
     "reachable")
 
 
+def _off_but_installed() -> str:
+    from ..adoption_modes import setup_command_for   # 0.0.26 L8: the route's own command
+    return ("model2vec IS installed but the semantic tier is not switched on in this repo — run "
+            f"`{setup_command_for('full')}` (or `--mode memory`), which wires and warms it")
+
+
 def _model2vec_installed() -> bool:
     from importlib.util import find_spec
     try:
@@ -80,6 +86,11 @@ class RetrievalStack:
     def render_lines(self, *, ascii_only: bool = False) -> List[str]:
         bullet = "-" if ascii_only else "•"
         sem_note = _SEMANTIC_NOTE.get(self.semantic_family, "")
+        if self.semantic_family == SEMANTIC_OFF and _model2vec_installed():
+            # 0.0.26 L1 (`DOCTOR-SEMANTIC-OFF-SAYS-NOT-WHY`): Jas's Windows run had model2vec
+            # installed and doctor said "no embedder configured" — true, and no help. The cause
+            # is that no setup run switched it on; the fix is that run.
+            sem_note = _off_but_installed()
         if self.semantic_family == "hashing" and _model2vec_installed():
             # 0.0.25 `DOCTOR-HASHING-NOTE-WRONG-FIX`: the package IS installed and only its model
             # could not load (first-use download). "install mokata[embeddings]" sends the user to

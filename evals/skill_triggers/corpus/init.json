@@ -1,0 +1,34 @@
+{
+ "skill": "init",
+ "triggers": [
+  "Initialize mokata or switch profile"
+ ],
+ "positive": [
+  "Initialize mokata in this repo with the standard profile",
+  "Switch mokata's profile from minimal to full",
+  "Set mokata up here — init, no pip",
+  "Initialize mokata with the minimal profile",
+  "Change the mokata profile to standard"
+ ],
+ "near_miss": [
+  {
+   "prompt": "mokata's MCP tools are missing after I restarted",
+   "expect": "mcp-repair"
+  },
+  {
+   "prompt": "Upgrade mokata to the newest release",
+   "expect": "update"
+  },
+  {
+   "prompt": "Write an __init__.py for this package"
+  },
+  {
+   "prompt": "Add a new integration to what mokata has wired",
+   "expect": "reconfigure"
+  },
+  {
+   "prompt": "Join my team's shared mokata stack",
+   "expect": "team"
+  }
+ ]
+}

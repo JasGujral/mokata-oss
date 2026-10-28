@@ -47,6 +47,8 @@ import unittest
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata import approval                                        # noqa: E402
 from mokata import gate_hook as G                                  # noqa: E402
@@ -215,7 +217,7 @@ def _payload(title=TITLE, mapped=True):
 def _spec_file(repo, payload=None):
     path = os.path.join(repo.path, "spec.json")
     with open(path, "w", encoding="utf-8") as fh:
-        json.dump(payload if payload is not None else _payload(), fh)
+        json.dump(planned(payload if payload is not None else _payload()), fh)
     return path
 
 

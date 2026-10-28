@@ -1,0 +1,6 @@
+{
+  "id": "03-parse-duration",
+  "title": "Parse a duration string",
+  "prompt": "Implement `parse_duration(s)` in duration.py returning seconds for strings like '1h30m', '45s', '2h', '1h2m3s'. Raise ValueError for empty or malformed input. Add tests.",
+  "max_turns": 40
+}

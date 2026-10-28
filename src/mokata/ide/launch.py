@@ -23,6 +23,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Optional
 
+from ..quiet_spawn import detached
 from .server import TOKEN_HEADER, read_record
 
 START_TIMEOUT = 8.0
@@ -93,7 +94,10 @@ def _open_or_focus(root: str, session: Optional[str], demo: bool, browser: bool,
     rule as demo vs real; a request without it never downgrades a window that has it."""
     rec = running(root)
     if rec and bool(rec.get("demo")) == demo and (not terminal or _has_terminal(rec)):
-        _call(int(rec["port"]), str(rec["token"]), "/api/focus", {"session": session})
+        # 0.0.26 P2 (ID-TABS): a relaunch with no session KEEPS the window's focus (its restored
+        # workspace); only a session that asked re-points it.
+        if session:
+            _call(int(rec["port"]), str(rec["token"]), "/api/focus", {"session": session})
         url = pair_url(rec, session)
         _open(url, browser)
         return Launched(url, False, demo)
@@ -102,6 +106,13 @@ def _open_or_focus(root: str, session: Optional[str], demo: bool, browser: bool,
         # ONE server per repo: the running one is the other mode (demo vs real) — stop it, so the
         # link printed below can only ever be the new server's, never the old one's.
         _stop(old_pid, root)
+    # 0.0.26 L8 — the server child runs THIS interpreter; if it lacks the web stack the child dies
+    # silently and the caller waited START_TIMEOUT for nothing. Say it now, as the ImportError every
+    # caller already turns into its install line (the plugin route's hook names its launcher).
+    import importlib.util
+    for mod in ("starlette", "uvicorn"):
+        if importlib.util.find_spec(mod) is None:
+            raise ImportError(f"mokata ide needs {mod} in {sys.executable}")
     cmd = [sys.executable, "-m", "mokata.ide.server", "--root", root]
     if session:
         cmd += ["--focus", session]
@@ -115,7 +126,7 @@ def _open_or_focus(root: str, session: Optional[str], demo: bool, browser: bool,
     src = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     env["PYTHONPATH"] = src + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                     stderr=subprocess.DEVNULL, env=env, **_detach_kwargs())
+                     stderr=subprocess.DEVNULL, env=env, **detached())
     deadline = time.time() + START_TIMEOUT
     while time.time() < deadline:
         rec = running(root)
@@ -141,23 +152,6 @@ def _pinged_pid(rec: dict) -> int:
         return int(pong.get("pid") or 0) if pong else 0
     except (TypeError, ValueError):
         return 0
-
-
-def _detach_kwargs() -> dict:
-    """The child outlives this command on every OS: a new session on POSIX; on Windows a new
-    process group with its own HIDDEN console (`start_new_session` is POSIX-only and silently
-    ignored there, so the child would die with the terminal that started it).
-
-    0.0.25 `IDE-WIN-CMD-FLASH`: NOT `DETACHED_PROCESS`. Windows ignores CREATE_NO_WINDOW beside
-    it, so the server had no console at all — and a console-less process makes every console
-    child (`git`, `rg`, a pyenv-win `.bat` shim through `cmd.exe`) open a new VISIBLE window. The
-    IDE polls, so cmd windows flashed continuously. A hidden console is inherited by those
-    children instead, and still does not belong to the launching terminal (`mokata/quiet_spawn.py`)."""
-    if os.name == "nt":
-        flags = (getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
-                 | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
-        return {"creationflags": flags}
-    return {"start_new_session": True}
 
 
 def _stop(pid: int, root: str, wait: float = 3.0) -> None:

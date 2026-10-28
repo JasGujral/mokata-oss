@@ -26,6 +26,8 @@ import unittest
 from unittest import mock
 
 import _support  # noqa: F401
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 from _support import mcp_commit
 
 from mokata import gate_hook as G                                  # noqa: E402
@@ -176,7 +178,7 @@ class TestTheIncident(unittest.TestCase):
                         reason="the user asked for batch update; it was deferred in v1",
                         item="D1")
 
-            proposed = TW.spec_amend(**args)
+            proposed = call_planned(TW.spec_amend, **args)
             self.assertEqual(proposed["status"], "proposed")
             self.assertFalse(proposed["committed"])
 
@@ -199,7 +201,7 @@ class TestTheIncident(unittest.TestCase):
             from mokata import approval
             approval.approve(repo.path, proposed["proposal_id"], actor="jas",
                              ledger=repo.ledger())
-            done = TW.spec_amend(**dict(args, proposal_id=proposed["proposal_id"]))
+            done = call_planned(TW.spec_amend, **dict(args, proposal_id=proposed["proposal_id"]))
             self.assertTrue(done["committed"], done)
             self.assertEqual(done["version"], 2)
 
@@ -279,7 +281,12 @@ class TestScopeHonesty(unittest.TestCase):
             _setup_run(repo)
             data = _emitted(repo)
             data["scope"] = "not a scope at all"
-            repo.raw.write(G.SPEC_PREFIX + RUN, data)
+            # sealed: a corrupt scope that was APPROVED (R2's plan hash covers it) — the question
+            # here is the scope reader, not an edit after approval.
+            # The task plan is VALID and still binds, so give its one task the whole repo: this
+            # test isolates the spec-level scope reader.
+            data["tasks"][0]["scope"] = ["*"]
+            repo.raw.write(G.SPEC_PREFIX + RUN, sealed(data))
             out = G.check_write(repo.path, "src/billing/charge.py", content="x=1")
             self.assertTrue(out.allowed, "unreadable scope must never block")
 
@@ -416,7 +423,7 @@ class TestTheAmendGates(unittest.TestCase):
     def test_the_model_cannot_mint_its_own_amend_approval(self):
         with _Repo() as repo:
             _setup_run(repo)
-            res = TW.spec_amend(**self._amend_args(repo, approve=True))
+            res = call_planned(TW.spec_amend, **self._amend_args(repo, approve=True))
             self.assertEqual(res["status"], "proposed")
             self.assertFalse(res["committed"])
             self.assertEqual(_emitted(repo)["version"], 1,
@@ -481,7 +488,7 @@ class TestTheAmendGates(unittest.TestCase):
     def test_an_amend_with_no_open_spec_is_refused(self):
         with _Repo() as repo:
             _approve_an_approach(repo)          # no spec emitted at all
-            res = TW.spec_amend(**self._amend_args(repo))
+            res = call_planned(TW.spec_amend, **self._amend_args(repo))
             self.assertFalse(res["committed"])
             self.assertIn("no spec", res["reason"].lower())
 
@@ -512,8 +519,10 @@ class TestNoBehaviourChange(unittest.TestCase):
             _approve_an_approach(repo)
             mcp_commit(TW.spec_emit, **_emit_args(repo.path, scope=None))
             data = _emitted(repo)
+            # R2/R3 (0.0.26) — the plan, its hash and the clarify record are always persisted.
             self.assertEqual(set(data) - {"version"},
-                             {"title", "criteria", "approach", "domains"},
+                             {"title", "criteria", "approach", "domains", "tasks",
+                              "clarifications", "assumptions", "plan_hash"},
                              "a scope-less emit must persist exactly what it always did")
 
 

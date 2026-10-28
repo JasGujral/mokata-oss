@@ -28,6 +28,7 @@ Stdlib-only. Copyright 2026 MoStack. Licensed under the Apache License, Version 
 from __future__ import annotations
 
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable, Deque, Optional
@@ -40,6 +41,9 @@ READ_TIMEOUT = "timeout"
 #: The stream reached EOF: the peer closed its end (it died, or it hung up). Distinct from
 #: `READ_TIMEOUT` — "it stopped" and "it stopped answering" send a reader to different remedies.
 READ_CLOSED = "closed"
+#: 0.0.26 P32 — the caller's job was cancelled while the read waited (the peer is then killed,
+#: as on a timeout: its answer would arrive desynchronised).
+READ_CANCELLED = "cancelled"
 #: The read itself raised (the stream was torn down mid-read, the descriptor went away).
 READ_ERROR = "error"
 
@@ -67,7 +71,8 @@ class BoundedReadResult:
         return self.outcome == READ_TIMEOUT
 
 
-def read_bounded(reader: Callable[[], str], timeout: float) -> BoundedReadResult:
+def read_bounded(reader: Callable[[], str], timeout: float,
+                 cancelled: Optional[Callable[[], bool]] = None) -> BoundedReadResult:
     """Run `reader()` on a daemon thread and give it `timeout` seconds to come back.
 
     On expiry the thread is LEFT PARKED — there is no way to interrupt a blocking read, and that
@@ -85,7 +90,16 @@ def read_bounded(reader: Callable[[], str], timeout: float) -> BoundedReadResult
 
     thread = threading.Thread(target=_pump, daemon=True)
     thread.start()
-    thread.join(timeout)
+    if cancelled is None:
+        thread.join(timeout)
+    else:
+        # 0.0.26 P32 — the wait is sliced so a cancelled job stops waiting within ~0.1 s; the
+        # caller then kills the peer exactly as on a timeout (the read is left parked).
+        end = time.monotonic() + timeout
+        while thread.is_alive() and time.monotonic() < end:
+            thread.join(min(0.1, max(0.0, end - time.monotonic())))
+            if thread.is_alive() and cancelled():
+                return BoundedReadResult(READ_CANCELLED)
     if thread.is_alive():
         return BoundedReadResult(READ_TIMEOUT)
     error = holder.get("error")
@@ -97,9 +111,10 @@ def read_bounded(reader: Callable[[], str], timeout: float) -> BoundedReadResult
     return BoundedReadResult(READ_ANSWERED, text=text)
 
 
-def read_line_bounded(stream: Any, timeout: float) -> BoundedReadResult:
+def read_line_bounded(stream: Any, timeout: float,
+                      cancelled: Optional[Callable[[], bool]] = None) -> BoundedReadResult:
     """`stream.readline()`, bounded. The one call site shape both stdio clients need."""
-    return read_bounded(stream.readline, timeout)
+    return read_bounded(stream.readline, timeout, cancelled)
 
 
 class BoundedStderrTail:

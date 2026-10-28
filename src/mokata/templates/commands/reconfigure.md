@@ -21,18 +21,19 @@ with approval**; it **never silently installs** a third-party tool.
 - Read the cached plugin root: `cat ~/.mokata/plugin-root` → `ROOT`. If missing/empty, search the
   Claude Code plugins directory for a `mokata` plugin containing `src/mokata/__init__.py`. (If a
   `mokata` CLI is on PATH, use it directly.)
-- Build the engine command with the **absolute interpreter**:
+- Define the engine as a shell FUNCTION on the **absolute interpreter** — arguments then reach
+  it as separate words, never re-parsed by `eval` (pass user or repo text single-quoted):
 
   ```bash
   PY="$(command -v python3 || command -v python)"
-  ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
+  mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
   ```
 
 ## 2. Show the current setup + re-detect (read-only)
 
 ```bash
-eval "$ENGINE status --path ."
-eval "$ENGINE detect --path ."     # re-detect — catches anything newly installed
+mokata status --path .
+mokata detect --path .     # re-detect — catches anything newly installed
 ```
 
 ## 3. Ask what to change
@@ -51,13 +52,13 @@ Show the current→proposed diff and ask for an explicit yes. Re-running with no
 
 ```bash
 # switch the profile:
-eval "$ENGINE reconfigure --profile full --yes --path ."
+mokata reconfigure --profile full --yes --path .
 # add a now-installed integration (only wired if detected; absent → recommended):
-eval "$ENGINE reconfigure --add postgres --yes --path ."
+mokata reconfigure --add postgres --yes --path .
 # cleanly remove one (reversible — no residue):
-eval "$ENGINE reconfigure --remove serena --yes --path ."
+mokata reconfigure --remove serena --yes --path .
 # switch a backend setting:
-eval "$ENGINE reconfigure --set tools.sqlite.config.path=mem/custom.db --yes --path ."
+mokata reconfigure --set tools.sqlite.config.path=mem/custom.db --yes --path .
 ```
 
 (The `reconfigure` MCP tool does the same from inside Claude Code, but it is PROPOSE-ONLY: it

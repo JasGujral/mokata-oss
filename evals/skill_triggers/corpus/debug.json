@@ -1,0 +1,35 @@
+{
+ "skill": "debug",
+ "triggers": [
+  "root-causing",
+  "something is broken and asks why"
+ ],
+ "positive": [
+  "The worker crashes every few hours and I have no idea why; help me root-cause it",
+  "Something is broken in the export — it silently produces empty files. Why?",
+  "We get an intermittent KeyError in production; trace it to its cause before changing anything",
+  "Unexpected behaviour: the counter resets on refresh. Find out why",
+  "This error started after the upgrade; reproduce it and root-cause it"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Add a new export format for XML",
+   "expect": "develop"
+  },
+  {
+   "prompt": "Make the search endpoint faster",
+   "expect": "optimize"
+  },
+  {
+   "prompt": "Explain how Python's garbage collector works in general"
+  },
+  {
+   "prompt": "Here is a reproducer and the bug report, write the regression test then fix",
+   "expect": "bug"
+  },
+  {
+   "prompt": "Show me the governed rules mokata is enforcing",
+   "expect": "govern"
+  }
+ ]
+}

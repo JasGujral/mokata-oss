@@ -1,0 +1,35 @@
+{
+ "skill": "team",
+ "triggers": [
+  "team join",
+  "wires a new teammate"
+ ],
+ "positive": [
+  "team join our shared stack — I'm the new teammate",
+  "Wire me into the team: shared stack, memory and vault in one go",
+  "Connect to the team's shared memory DB using MOKATA_PG_DSN",
+  "Wire up the shared team memory and vault for me as a new teammate",
+  "Adopt the team's stack from the repo and connect"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Flush my pending writes to the shared DB",
+   "expect": "sync"
+  },
+  {
+   "prompt": "Switch to team run mode",
+   "expect": "mode"
+  },
+  {
+   "prompt": "Plan a team offsite agenda"
+  },
+  {
+   "prompt": "Share a spec doc with the team vault",
+   "expect": "vault"
+  },
+  {
+   "prompt": "Install a community stack for Rails",
+   "expect": "stacks"
+  }
+ ]
+}

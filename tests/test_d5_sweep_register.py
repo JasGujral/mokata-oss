@@ -242,6 +242,9 @@ _register("memory/tiered.py", {
 # classes live in packages mokata refuses to import at module scope, so an `except` naming them
 # would either force the dependency or miss the one class that actually fires.
 _register("memory/embed.py", {
+    "cached_model_dir": (SUPPRESS_OK,
+        "0.0.26 cut — a per-file cache LOOKUP in an optional extra's error tree; any fault reads "
+        "\"not cached\" and the caller fetches (or says it is offline), never a wrong model."),
     "_load_model2vec": (DEGRADE_CLEAN,
         "The blessed extra's model load. BROAD by necessity — the raisables span huggingface_hub's "
         "error tree, `requests`' transport errors, `safetensors`, and plain OSError on a corrupt "
@@ -332,17 +335,26 @@ _register("extras_install.py", {
 })
 
 _register("adoption_modes.py", {
-    "offer_mode_extras": (DEGRADE_CLEAN,
-        "G1's two post-init OFFERS (embeddings for memory|full, code-graph for full), and the "
-        "SAME contract as `onboarding.run_wizard` below — deliberately, because they are the same "
-        "step reached by the other route. Both guard an optional, additive offer that runs AFTER "
-        "`init_repo` has already written and validated the manifest, so a failure here must not "
-        "undo an init that has succeeded. Neither is silent: each prints its own 'note: the "
-        "… offer was skipped (<Class>: <msg>); mokata's built-in <floor> is active' AND records "
-        "the same string on `ModeOffersResult.notes`, so the reason comes out on the terminal and "
-        "in the returned verdict. BROAD because the far side is a pip subprocess plus an "
-        "optional-package import probe (embeddings) and a subprocess-backed graph client "
-        "(code-graph) — neither's raisables are nameable at this module's scope."),
+    "_search_index_row": (DEGRADE_CLEAN,
+        "0.0.26 O13 — setup's meaning-index build. Anything it raises becomes a BLOCKED `meaning "
+        "search index (IDE)` row with the class and message as its cause, so the setup table says "
+        "why and the result is not complete; it never costs the user the rest of setup."),
+    "_index_row": (DEGRADE_CLEAN,
+        "0.0.26 O13 (R-b) — setup's code-review-graph index build. Anything it raises becomes a "
+        "BLOCKED `code-review-graph index` row with the class and message as its cause and "
+        "`mokata graph build` as its fix, so the setup table says why and the result is not "
+        "complete; it never costs the user the rest of setup."),
+    "wire_mode": (DEGRADE_CLEAN,
+        "0.0.26 L1 — the mode's detect-and-wire step (embedder + model warm-up for memory|full; "
+        "code-review-graph pin + TS parser for full), the SAME contract as `onboarding.run_wizard` "
+        "below. It runs AFTER `init_repo`/`setup_harness` has written and validated the manifest, "
+        "so a failure here must not undo a setup that has succeeded. Never silent: it prints "
+        "'note: the dependency step was skipped (<Class>: <msg>); mokata's built-in floors are "
+        "active' AND records the same string on `ModeWiringResult.notes`, which makes the result "
+        "incomplete. TWO broad catches: the outer one (optional-package import probes and a "
+        "subprocess-backed graph client, whose raisables are not nameable here) and the model "
+        "WARM-UP, whose raisables span huggingface_hub / requests / safetensors from an OPTIONAL "
+        "extra — that one becomes a BLOCKED row whose cause `model_fetch_cause` names."),
 })
 
 _register("onboarding.py", {
@@ -402,6 +414,11 @@ _register("events/store.py", {
         "here and the reason this is not a silent degrade: an unreadable toggle must never "
         "quietly switch an audit surface OFF."),
     "enabled_for_root": (SUPPRESS_OK, "the cached form of the same read, same reading."),
+})
+_register("govern/resume.py", {
+    "PipelineCheckpoint._save": (SUPPRESS_OK,
+        "0.0.26 O18 — reads the stored record only to KEEP its write-once `created_at`; unreadable "
+        "keeps what the object holds, and the save itself still raises as before."),
 })
 _register("govern/ledger.py", {
     "AuditLedger._project": (SUPPRESS_OK,
@@ -523,9 +540,17 @@ _register("hook_cli.py", {
     "subagent_start_main": (SUPPRESS_OK,
         "0.0.22 D4 — SubagentStart is context only and cannot block; a fault adds no contract text "
         "and costs the human nothing (always exit 0)."),
-    "subagent_stop_main": (SUPPRESS_OK,
-        "0.0.22 D4 (H-3) — a fault at SubagentStop lets the subagent finish: a crash here must "
-        "never hold a subagent open (the hook blocks only through its JSON decision)."),
+    "subagent_stop_main": (DEGRADE_CLEAN,
+        "0.0.26 R1 (was 0.0.22 D4 SUPPRESS_OK) — FAIL CLOSED, never a trap: a fault at SubagentStop "
+        "sends the subagent back ONCE with the crash named in the block reason; on Claude Code's "
+        "`stop_hook_active` re-entry it is let go with a systemMessage the human sees."),
+    "_model_tier_lane": (SUPPRESS_OK,
+        "0.0.26 R6 — fail OPEN on a fault: the tier lane is a methodology check on a spawn; a "
+        "crash in it must never break the user's Agent call. Its refusals are explicit returns."),
+    "stop_gate_main": (DEGRADE_CLEAN,
+        "0.0.26 R1 — FAIL CLOSED, never a trap: any fault in the Stop evidence gate blocks the stop "
+        "once with the crash named; on `stop_hook_active` re-entry the stop is let through with a "
+        "systemMessage saying it is UNVERIFIED and to run `mokata doctor`."),
 })
 _register("hook_cli.py", {
     "_read_stdin_bounded._reader": (SUPPRESS_OK,
@@ -559,6 +584,9 @@ _register("hook_cli.py", {
         "explicitly ABOVE, so reaching here is always something genuinely unexpected — and a gate "
         "persistently failing open enforces NOTHING while the badge says governance is on. "
         "`note_degraded('gate-guard', FAILURE_ENGINE)`: it still allows the write, it just says so."),
+    "_plugin_route_line": (SUPPRESS_OK,
+        "0.0.26 L8 — the plugin route's first-session hint + the hooks-firing stamp for doctor. "
+        "Both are observability; a fault omits the line and the briefing starts as before."),
     "_record_plugin_root": (SUPPRESS_OK,
         "A best-effort CACHE of a hint. Nothing degrades when it fails — `/mokata:init` re-derives "
         "the plugin root — so there is no fallback to announce, and a notice would be noise on a "
@@ -794,16 +822,22 @@ _register("session_registry.py", {
 })
 
 _register("mcp/server.py", {
-    "_serve.wrapper._run": (DEGRADE_CLEAN,
-        "MCP-R.D0 · R2. The systemic dispatch wrapper runs each tool BODY in a worker thread and "
-        "catches ANY uncaught exception so it can reclaim the outcome into mokata's own voice — a "
-        "structured `status:\"error\"` + `isError` + `reason` (the exception TYPE name) + an "
-        "actionable `hint`, returned as the tool result the model sees. Broad IS the contract: the "
-        "body is an arbitrary tool whose failure class is not nameable here, and the WHOLE point is "
-        "to convert every failure into the typed vocab instead of letting FastMCP's generic handler "
-        "(or a daemon-thread traceback onto stdio) speak for mokata. It is a (i) DEGRADE_CLEAN: the "
-        "signal comes out AS the verdict the caller receives — nothing is swallowed, the failure is "
-        "named. `str(exc)` is deliberately NOT surfaced (it can carry a DSN/path/arg)."),
+    "_work": (DEGRADE_CLEAN,
+        "MCP-R.D0 · R2 (moved by 0.0.26 O14 from `_serve.wrapper._run`). The dispatch runs each "
+        "tool BODY on the call's worker thread and catches ANY uncaught exception so it can reclaim "
+        "the outcome into mokata's own voice — a structured `status:\"error\"` + `isError` + "
+        "`reason` (the exception TYPE name) + an actionable `hint` (a `LockTimeout` becomes the "
+        "retryable `state-busy` answer). Broad IS the contract: the body is an arbitrary tool whose "
+        "failure class is not nameable here, and the point is to convert every failure into the "
+        "typed vocab instead of letting FastMCP's generic handler speak for mokata. A (i) "
+        "DEGRADE_CLEAN: the signal comes out AS the verdict the caller receives. `str(exc)` is "
+        "deliberately NOT surfaced (it can carry a DSN/path/arg)."),
+    "_join_or_start._run": (DEGRADE_CLEAN,
+        "0.0.26 O14. The backstop around `_work`: if even the SHAPING of a result raises (a "
+        "`with_remedy`/`_with_tree` defect), the call still completes with mokata's `error` verdict "
+        "and its `done` event is set in `finally` — a caller (or a re-call joined to this work) "
+        "must never wait on a call that silently died. The verdict IS the signal; nothing is "
+        "swallowed."),
     "_register_this_window": (DEGRADES_LOUD,
         "R-MCP. The MCP server self-registers its run in the MS.S2 live-session registry on the "
         "first tool call (and refreshes on every subsequent one) so the gate hook can soundly "
@@ -911,11 +945,22 @@ _register("mcp/tools_approve.py", {
         "approval over a cosmetic echo."),
 })
 
+_register("_updater.py", {
+    "main": (DEGRADES_LOUD,
+        "The detached updater's last line of defence: whatever crashed it is written to the result "
+        "file as 'the updater crashed: <type>: <message>' with the command to run by hand, and the "
+        "next `mokata` / IDE start prints it. It runs with no console, so this file IS its voice."),
+})
+
+_register("update.py", {
+    "fetch_releases": (DEGRADE_CLEAN,
+        "The signal is the returned ReleaseFeed(ok=False, error=<type: message>), which `mokata "
+        "update` prints as 'could not reach the release feed (offline, or blocked) — <error>' and "
+        "`version --check` as 'couldn't check for updates'. A blocked/failed opt-in egress is the "
+        "DOCUMENTED offline path (the one outbound call in mokata), said to the user's face."),
+})
+
 _register("version.py", {
-    "check_for_update": (DEGRADE_CLEAN,
-        "The signal is the returned verdict: 'couldn't check for updates (offline or unreachable) — "
-        "you're on mokata <v>.' A blocked/failed opt-in egress is the DOCUMENTED offline path (the "
-        "one outbound call in mokata), and it says so to the user's face."),
     "detect_install_method": (SUPPRESS_OK,
         "Guards `plugin_cache.read_plugin_root`, whose own docstring promises None rather than an "
         "exception ('or None if absent/unreadable/empty') — a promise it keeps by narrowing to "
@@ -989,6 +1034,12 @@ _register("memory/staleness.py", {
         "`note_degraded('stale-ref', SCHEMA)` names the loss and its fix."),
 })
 _register("memory/store.py", {
+    "MemoryStore.overlap_for": (DEGRADES_LOUD,
+        "R5 write-time overlap — ADVICE for the approval prompt (update-in-place vs flag). A broken "
+        "store read must not block a write the human is about to approve, so it degrades to 'no "
+        "overlap check' — LOUDLY, `note_degraded('memory-overlap', …)`, because a silent None reads "
+        "as 'nothing overlaps' and would quietly let a near-duplicate land. Broad because the read "
+        "spans SQLite, an optional psycopg driver and third-party adapters."),
     "MemoryStore._emit_memory_read": (SUPPRESS_OK,
         "R1.S1c — the MemoryOp row for a COUNTED read, the one event type with no ledger twin "
         "(reads are ungated by design, so nothing else records them). It runs after `_bump_read` "
@@ -1036,9 +1087,10 @@ _register("memory/store.py", {
         "the SessionStart 'Capabilities (resolved now)' block renders `code_graph -> UNAVAILABLE (no "
         "provider present)` / `(degraded; preferred … absent)`. Recall keeps its lexical+semantic "
         "tiers — the documented grep floor, which 'silently contributes nothing' by design."),
-    "MemoryStore.recall_relevant": (DEGRADE_CLEAN,
-        "The same graph tier, at query time (`make_graph_scorer`). Same signal (the capability "
-        "block), same floor: lexical+semantic always hold."),
+    "_LazyLiveGraphScorer.__call__": (DEGRADE_CLEAN,
+        "The same graph tier, at query time (`make_graph_scorer`), now resolved on the first item "
+        "it scores (0.0.26 O12). Same signal (the capability block), same floor: lexical+semantic "
+        "always hold."),
     "MemoryStore._can_read_item": (SUPPRESS_OK,
         "Guards `AccessPolicy.can_read` → `roles_for`, which is ITSELF fail-closed and never raises "
         "('deny on doubt' — it catches and returns an empty role set). Deny is the safe direction: "
@@ -1192,7 +1244,26 @@ _register("docsync.py", {
         "degraded, so a doc whose symbol check never ran cannot render as 'OK'."),
 })
 
+_register("memory/grounding.py", {
+    "_check_symbol": (DEGRADE_CLEAN,
+        "R5 write grounding asks an ADOPTED graph client (a third-party process) whether a symbol "
+        "resolves. A raise is not evidence the symbol is absent, so the citation is ACCEPTED and "
+        "the verdict's basis says 'NOT verified — the <graph> could not be asked (<ExcType>)' — the "
+        "basis is printed in the approval prompt and the MCP proposal payload. Broad because the "
+        "client's failure classes are not nameable at module scope."),
+    "evaluate_retire_when": (DEGRADE_CLEAN,
+        "R5 `removed:<symbol>` predicate on an adopted graph. A graph hiccup gives the predicate NO "
+        "opinion (it does not fire) — the documented contract is that a predicate never fires on "
+        "missing evidence, and the learning stays exactly as it was. Broad for the same "
+        "third-party-client reason as `_check_symbol`."),
+})
+
 _register("knowledge/graph_backend.py", {
+    "CodeReviewGraphBackend.index_unbuilt_note": (DEGRADE_CLEAN,
+        "0.0.26 O13 (R-a) — starting the ONE background build when a query hit an unbuilt index. A "
+        "failure to start is NOT swallowed: it becomes the answer's note ('the index build could "
+        "not be started: <msg>'), and the floor answers. Broad because it spans file locking, "
+        "process spawn and run-state IO, none of which may break the query."),
     "CodeReviewGraphBackend.query": (DEGRADE_CLEAN,
         "Converts ANY injected-client/subprocess failure into the typed `BackendError` and RAISES "
         "it. It swallows nothing: `KnowledgeLayer._run` catches that BackendError, falls to the grep "
@@ -1323,6 +1394,11 @@ _register("bounded_io.py", {
 })
 
 _register("knowledge/crg_client.py", {
+    "_McpStdioSession.call": (SUPPRESS_OK,
+        "0.0.26 O11 — the SAME guard as `_stderr_tail`, around the lazy secrets-scan import that "
+        "checks an MCP `isError` text before it is put in the `CrgUnavailable` message. It fails "
+        "CLOSED (the detail becomes `(withheld: ...)`) and the error is raised either way, so the "
+        "swallow can only cost a hint, never hide the failure or leak the text."),
     "_McpStdioSession._stderr_tail": (SUPPRESS_OK,
         "A1 — guards ONLY the lazy `from ..govern.secrets import scan` used to check the "
         "subprocess's own stderr before it is shown. It fails CLOSED: an unimportable scanner "
@@ -1334,6 +1410,59 @@ _register("knowledge/crg_client.py", {
         "It answers True/False; a broad failure IS unhealthy (False). Silence is correct HERE "
         "because the CALLER (the keep-functional machinery) is what announces the degrade LOUDLY "
         "and degrades to the AST floor — health() is only the cheap signal, never the enforcement."),
+})
+
+# 0.0.26 O13 (`CRG-AUTO-BUILD`) — code-review-graph's index: built by setup, on first use in the
+# background, or by `mokata graph build`; its state reported by status/doctor/IDE.
+_register("ide/search.py", {
+    "_start_background.run": (DEGRADES_LOUD,
+        "0.0.26 O13 — the background meaning-index build behind a query on a big repo. A failure "
+        "is recorded as the build's state (`failed` + class and message), which the NEXT meaning "
+        "query returns as its note and the IDE health panel shows as a BROKEN row with the "
+        "rebuild action. A thread's exception would otherwise vanish with the thread."),
+})
+
+_register("knowledge/crg_build.py", {
+    "_scan_tail": (SUPPRESS_OK,
+        "The SAME guard as `crg_client._McpStdioSession._stderr_tail`: the lazy secrets-scan import "
+        "that checks a failed build's last output lines before they go into the recorded error. "
+        "Fails CLOSED (the tail becomes `(output withheld: ...)`); the failure itself is recorded "
+        "and shown either way, so the swallow costs a hint, never the verdict or a leak."),
+    "build_now": (SUPPRESS_OK,
+        "0.0.26 P37 (R39) — cleanup-then-re-raise: an incremental update that ends by ANY exception "
+        "(a Ctrl+C, the job's Cancel — a ControlSignal, hence BaseException) marks its update-attempt "
+        "record ended, so the index it began from reads as a usable graph whose update did not "
+        "finish, then re-raises unchanged. Nothing is swallowed."),
+    "main": (DEGRADES_LOUD,
+        "The detached background builder's last line of defence: whatever escapes `run_build` is "
+        "RECORDED as a failed build (`last.json`, with the class and message) before the lock is "
+        "released — which `mokata status`/`doctor`/the IDE health row and the next query's note all "
+        "show, with the rebuild action. Without it a dying worker would leave no verdict and the "
+        "repo would read as 'building' until the stale-lock reaper noticed."),
+})
+
+_register("ide/nav.py", {
+    "_Symbols._build": (DEGRADES_LOUD,
+        "0.0.26 P35 — the ⌘P symbol build records ANY failure as the index's `error` (⌘P then says "
+        "`symbols_state: failed` with the reason and the rebuild action, instead of 'loading' for "
+        "ever — audit A #4) and RE-RAISES, so the job runner marks the job failed too. Nothing is "
+        "swallowed; `Cancelled` is let through untouched by the handler above it."),
+})
+
+_register("knowledge/ast_backend.py", {
+    "AstBackend._ensure_index": (SUPPRESS_OK,
+        "0.0.26 P35 — cleanup-then-re-raise: a build that was CANCELLED (or died) part-way keeps the "
+        "files it already parsed in memory (`_partial`) so the next build resumes instead of "
+        "re-parsing from zero (audit A #4), then re-raises unchanged. BaseException because the "
+        "job's Cancel is a ControlSignal, which is exactly the case to keep the work for."),
+})
+
+_register("knowledge/crg_client.py", {
+    "CodeReviewGraphClient.index_ready": (SUPPRESS_OK,
+        "A read-only PROBE of the index state (the injected probe, normally a read-only sqlite "
+        "open). An unknown state reads as NOT built — the safe direction: the floor answers with a "
+        "note naming the graph and the build is (re)considered. It cannot hide a failure of the "
+        "graph itself; it only decides whether the graph is asked."),
 })
 
 _register("dashboard.py", {
@@ -1378,6 +1507,50 @@ _register("govern/gate.py", {
         "0.0.22 D5 (HP.S4) — the user-harness-config allowance FAILS CLOSED: any fault reads as "
         "'not allowed', so containment holds and the write is refused with the rule-(c) message."),
 })
+_register("session_index.py", {
+    "_update": (SUPPRESS_OK,
+        "0.0.26 P33 — the session index is an OBSERVATION written from hooks that must exit 0; a "
+        "row that cannot be written is skipped (the session still runs) and the IDE lists the "
+        "session from its snapshots/claims/transcript instead."),
+    "claude_process": (DEGRADE_CLEAN,
+        "0.0.26 P33 — the Claude process cannot be told: the row records no process and its "
+        "liveness falls back to the heartbeat, whose basis the row SAYS ('cannot be checked')."),
+    "process_alive": (DEGRADE_CLEAN,
+        "0.0.26 P33 — an unreadable process table answers None ('cannot check'), never a guess; "
+        "the status then states its heartbeat basis."),
+    "label_of": (SUPPRESS_OK,
+        "0.0.26 P33 — a secret scan that cannot run stores NO label (WITHHELD) rather than an "
+        "unscanned prompt: fails closed."),
+    "_predecessor": (DEGRADE_CLEAN,
+        "0.0.26 P33 — an unreadable transcript names no predecessor: the resumed session is its "
+        "own row (still listed), exactly as before O10's join."),
+})
+_register("ide/sessions.py", {
+    "_lookup": (DEGRADE_CLEAN,
+        "0.0.26 P33 — no process table: rows fall back to the heartbeat basis, which they state."),
+    "_stages": (DEGRADE_CLEAN,
+        "0.0.26 P33 — a run with no readable lifecycle shows no stage on its row; the row itself "
+        "and its diff are unaffected."),
+})
+_register("ide/diffs.py", {
+    "_chain": (DEGRADE_CLEAN,
+        "0.0.26 P33 — an unreadable claim store makes the session a chain of one: its own diff, "
+        "without the resumed predecessor's."),
+    "mokata_written": (DEGRADE_CLEAN,
+        "0.0.26 P33 (G23) — a file whose mokata origin cannot be read is SHOWN in Live, never "
+        "hidden on a guess."),
+})
+_register("hook_cli.py", {
+    "_index_session_start": (SUPPRESS_OK,
+        "0.0.26 P33 — SessionStart's index row is observability: the briefing still goes out; "
+        "the session is still listed from its snapshots/claims/transcript."),
+    "_index_prompt": (SUPPRESS_OK,
+        "0.0.26 P33 — UserPromptSubmit must never eat the human's turn; an unlabelled row is "
+        "still a row."),
+    "_index_turn_or_end": (SUPPRESS_OK,
+        "0.0.26 P33 — Stop/SessionEnd are drained observability; a lost end marker leaves the "
+        "row's status to its process check / heartbeat, which states its basis."),
+})
 _register("ide/snapshots.py", {
     "capture": (SUPPRESS_OK,
         "0.0.22 E2 — a snapshot is an OBSERVATION of a write that already met its gates; one that "
@@ -1392,12 +1565,29 @@ _register("ide/launch.py", {
         "0.0.22 E2 — opening a browser is a convenience: the link is printed (CLI) or put in the "
         "turn's context (/mokata:review-window) either way, so a headless machine loses nothing."),
 })
+_register("ide/handoff.py", {
+    "run_worker": (DEGRADES_LOUD,
+        "0.0.26 P37 — the detached worker that finishes a job the closing IDE handed over: ANY "
+        "exception is "
+        "written to the job's record as `failed` with its class and message, which the next IDE "
+        "start shows in Activity and Health with the retry action. The record IS the report. (A "
+        "worker KILLED leaves `background` with a dead pid, which the next start reads as failed: "
+        "'the background worker stopped without a verdict'.)"),
+})
+_register("ide/jobs.py", {
+    "JobRegistry._run_work": (DEGRADES_LOUD,
+        "0.0.26 P32 (IDE-JOBS) — a job's work (a graph view, impact, query, search, an index "
+        "build, a health action) that raised: the job ends `failed` with the exception's class and "
+        "message — shown in the Activity drawer and the view that asked, and re-raised to a "
+        "request still inside its sync window so the route answers it as before (400/409/500). A "
+        "bug (not a MokataError) also prints its traceback to stderr. Never a job stuck at "
+        "`running`, never a silent success; a graph job's failure also feeds Health (R35)."),
+})
 _register("ide/server.py", {
-    "HeavyLane._work": (DEGRADES_LOUD,
-        "0.0.25 lane S — a heavy question (impact, a graph view, query) that raises on the heavy "
-        "lane is handed, exception and all, to the request waiting on it, which answers it exactly "
-        "as before (`_json`: 400 for a bad request, else a 500 JSON error the page shows). Nothing "
-        "is swallowed: the catch only moves the exception across the thread boundary."),
+    "build_app.health_route": (DEGRADES_LOUD,
+        "INT-2a — the always-200 health read. A bug in the checks is the same 500 + logged "
+        "traceback (`crashed`) as every core JSON read (`_json.handler` below); a MokataError is "
+        "the usual `refused` answer. Never a blank panel that reads as 'all healthy'."),
     "build_app._json.handler": (DEGRADES_LOUD,
         "0.0.22 E2 — a read that fails returns a JSON error the page SHOWS ('could not read: …'), "
         "never a blank view that reads as 'nothing changed' (§7g)."),
@@ -1417,6 +1607,17 @@ _register("ide/server.py", {
         "0.0.23 C2 — a meaning search that fails returns `available: false` with the error the "
         "Meaning pane shows — never word results, never an empty 'nothing found'."),
 })
+_register("ide/features/tabs.py", {
+    "_run_of": (DEGRADES_LOUD,
+        "0.0.26 P2 — the restore line's focused run: a sessions read that fails is put in "
+        "`live.notes` (the page shows it) and the run is not named — never a silent 'no run'."),
+    "_position": (DEGRADES_LOUD,
+        "0.0.26 P2 — the run's pipeline position: an unknown/unreadable run answers "
+        "`{current: null, note: <why>}` the page shows, never a made-up stage."),
+    "_pending": (DEGRADES_LOUD,
+        "0.0.26 P2 — approvals waiting on a person: an unreadable approval store is put in "
+        "`live.notes` instead of reading as 'nothing waiting'."),
+})
 _register("ide/search.py", {
     "_model_dir": (DEGRADES_LOUD,
         "0.0.23 C2 — the embeddings model cannot be found offline or fetched: re-raised as "
@@ -1427,16 +1628,27 @@ _register("ide/search.py", {
         "same way; nothing is cached, so the next request tries again."),
 })
 _register("ide/health.py", {
-    "_Job.start.run": (DEGRADES_LOUD,
-        "0.0.25 — a health-panel job (force rebuild of the code graph / AST index / search index, "
-        "or the confirmed update) that raised: the job ends `failed` with the exception's class and "
-        "message, which the panel shows. Never a job stuck at `running`, never a silent success."),
+    "_graph_rows": (SUPPRESS_OK,
+        "0.0.26 O13 — reading the code-review-graph index state for the health panel's graph row. "
+        "Unreadable → the row falls back to the pre-O13 graph row (backend + index age + any "
+        "degrade the IDE saw), which is still shown; a panel must never break on a status read."),
     "_doctor_rows": (DEGRADES_LOUD,
         "0.0.25 — `mokata doctor`'s checks could not run: the panel shows a `broken` row naming the "
         "exception and the command to run by hand. Never an empty list that reads as all-clear."),
     "_wiring_rows": (DEGRADES_LOUD,
         "0.0.25 — the cheap wiring-drift check could not run: a `broken` row with the reason and "
         "`mokata doctor --wiring`. Never silence that reads as current wiring."),
+})
+_register("ide/firstrun.py", {
+    "_graph": (SUPPRESS_OK,
+        "0.0.26 P39 — reading code-review-graph's index state for the Welcome screen's code-graph "
+        "row (the same probe Health's `_graph_rows` makes). Unreadable → the row is decided by "
+        "what IS known (installed? set up?) and still names the floor that answers and the fix; "
+        "a first-run screen must never break on a status read."),
+    "_active": (SUPPRESS_OK,
+        "0.0.26 P39 — the job registry's listing, read to say whether an init / meaning build is "
+        "already running. No answer reads as 'nothing running', so the Build button is offered "
+        "and the gate (`start` re-checks via `consent`) still refuses a duplicate it can see."),
 })
 _register("ide/plans.py", {
     "team_runs": (DEGRADES_LOUD,
@@ -1484,6 +1696,49 @@ _register("subagent_contract.py", {
         "the run cannot count this subagent, so an independent review may show as 'claimed'."),
     "_say_degraded": (SUPPRESS_OK,
         "0.0.22 D4 — the degrade notice itself is best-effort; the caller has already decided."),
+    "_record_usage": (DEGRADES_LOUD,
+        "0.0.26 R6 — a failed usage write emits a `subagent-contract` local-io notice naming the "
+        "consequence (the run's per-subagent model/token record is missing this subagent)."),
+})
+_register("stop_gate.py", {
+    "_ledger": (SUPPRESS_OK,
+        "0.0.26 R1 — ledgering a released stop is best-effort: the release has already been decided "
+        "and the human has already been TOLD (the `systemMessage` names what is unverified)."),
+    "block_or_release": (DEGRADE_CLEAN,
+        "0.0.26 R1 — two handlers. An unwritable block counter falls back to Claude Code's own "
+        "`stop_hook_active` one-shot (block once, then release LOUDLY with a systemMessage) — still "
+        "fail-closed, never a trap; the in-loop `gate_block` progress event is a best-effort "
+        "observability append beside a block the model already receives with its reason."),
+    "decide": (DEGRADE_CLEAN,
+        "0.0.26 R1 — FAIL CLOSED: an evidence check that raised (unreadable spec/TDD record, a scan "
+        "out of time) BLOCKS the stop, and the block's reason names the exception class and text."),
+})
+_register("test_runs.py", {
+    "read_test_record": (SUPPRESS_OK,
+        "0.0.26 R1 — the Stop hook's read of the recorded test evidence never raises: an "
+        "unreadable record reads as EMPTY, which the Stop gate then reports as 'no test run is "
+        "recorded' and BLOCKS on — the silence here is the fail-closed answer, not a hidden one."),
+})
+_register("loop_guard.py", {
+    "approach_signature": (SUPPRESS_OK,
+        "0.0.26 R4 — an unreadable approach fingerprints as 'none'. At trip time that pins the "
+        "breaker to 'no approach'; only a READABLE new approach then clears it, so the silence can "
+        "never lift a tripped breaker by accident."),
+    "ledger": (SUPPRESS_OK,
+        "0.0.26 R4 — ledgering a breaker ruling is best-effort: the ruling (the trip, the refused "
+        "review round) stands and was already said to the caller whether or not it is counted."),
+    "tripped_failures": (SUPPRESS_OK,
+        "0.0.26 R4 — the gate-guard's breaker read never raises: an unreadable record trips nothing, "
+        "so a broken file can never block a write the breaker did not count (the TDD/scope gates "
+        "still decide it). Mirrors `tdd_state.read_tdd_phase`'s fail-open read."),
+})
+_register("model_tiers.py", {
+    "record_spawn": (SUPPRESS_OK,
+        "0.0.26 R6 — the ledger row is a COPY of the run record written just above (which raises "
+        "on its own failure into the hook's fail-open floor); losing the copy hides nothing."),
+    "read_record": (SUPPRESS_OK,
+        "0.0.26 R6 — a display read (`mokata progress models`): an unreadable record shows as no "
+        "spawns recorded, which is what it is."),
 })
 _register("reanchor.py", {
     "next_write": (SUPPRESS_OK,
@@ -1513,6 +1768,11 @@ _register("hook_cli.py", {
 })
 
 _register("run_intent.py", {
+    "run_claimants": (SUPPRESS_OK,
+        "INT-2a (B-F4) — which sessions CLAIM a run. One unreadable claim record is skipped (one "
+        "unknown claimant). Fail direction is safe: a missing claimant can only SHRINK the set, "
+        "and an empty set keeps today's policing — a fault never widens the unbound-session "
+        "exemption."),
     "record_intent": (DEGRADES_LOUD,
         "0.0.22 C1 RUN-REG — a failed intent write means the gate will NOT wait for the run this "
         "session asked for: the pre-stage fail-open, which is safe for the edit but a real loss of "
@@ -1532,6 +1792,15 @@ _register("run_intent.py", {
         "decided, and a failing notice must not turn a degrade into a raise inside a hook."),
 })
 
+# 0.0.26 O10 IDE-RESUME-LOSES-RUN — SessionStart(resume|fork) keeps the conversation in its run.
+_register("session_resume.py", {
+    "on_session_start": (DEGRADES_LOUD,
+        "O10 — an unexpected fault while carrying a resumed session's claim leaves the session with "
+        "no claim: its writes are not attributed to the run and, with several runs in the repo, "
+        "the gate falls open. It emits the `run-registration` notice naming that and never raises "
+        "(SessionStart is the async/observability hook). Expected IO faults are narrowed inside."),
+})
+
 
 # 0.0.23 F1 SESSION-BIND-BY-ANCESTOR — the hooks record the Claude session per ancestor pid; the MCP
 # server walks its own ancestors to find it. EVERY failure here lands on "no ancestry answer", and
@@ -1539,6 +1808,43 @@ _register("run_intent.py", {
 # AMBIGUOUS-and-refuse outcome, the strictest there is. So silence is correct throughout: nothing a
 # real failure could hide can let a write through or pick a foreign run (the guards only ever turn
 # an answer into NO answer). A notice per tool call would be noise on the hottest MCP path.
+# 0.0.26 O12 USER-PROMPT-SUBMIT-6S — the per-prompt graph tier moved OFF the prompt path. The hook
+# reads cached verdicts; a detached warmer computes them. Every failure lands on "no verdict", which
+# the pack then SAYS ("code-graph ranking not applied / skipped") — the tier is never silently off.
+_register("briefing_cache.py", {
+    "lookup": (SUPPRESS_OK,
+        "0.0.26 O12b — reading the cached briefing answers. Any fault reads as MISSING, and a "
+        "missing answer is SAID in the briefing ('being checked in the background')."),
+    "start_refresh": (SUPPRESS_OK,
+        "0.0.26 O12b — starting the detached refresher after the briefing is emitted. On failure "
+        "it returns False and SessionStart does the deferred work (calibration, baseline) itself; "
+        "the cached answers stay as they are and keep saying how old they are."),
+    "refresh_main": (SUPPRESS_OK,
+        "0.0.26 O12b — the detached refresher's floor; no terminal. Its answers stay missing or "
+        "stale, which the next briefing SAYS."),
+})
+_register("knowledge/structure_cache.py", {
+    "cached_line": (SUPPRESS_OK,
+        "0.0.26 O12 — the SessionStart briefing's cached structure line. Any fault costs the "
+        "briefing that one advisory line (it was already fully guarded: `_graph_structure_line`); "
+        "the next session retries, and a missing summary is SAID ('being summarised')."),
+    "warm_main": (SUPPRESS_OK,
+        "0.0.26 O12 — the detached structure refresher's floor; it has no terminal. The cache stays "
+        "absent or stale, so the briefing keeps SAYING the summary is pending / refreshing."),
+})
+_register("memory/graph_anchors.py", {
+    "CachedGraphScorer.request_warm": (SUPPRESS_OK,
+        "Queueing a lookup / starting the warmer inside a hook that must exit 0. On failure the "
+        "token stays without a verdict, so the NEXT turn's pack says again that the graph ranking "
+        "was not applied and re-queues it — the gap is announced every turn it exists."),
+    "warm": (SUPPRESS_OK,
+        "One graph lookup in the background warmer. Any fault is recorded as a FAILED verdict with "
+        "its time; the hook then says 'the graph did not answer (`mokata doctor`)' on every turn "
+        "that needed it, and retries after RETRY_FAILED_SECS."),
+    "warm_main": (SUPPRESS_OK,
+        "The detached warmer's floor: it has no terminal and no caller to tell. Its tokens keep no "
+        "verdict, so the hook's pack keeps saying the graph ranking was not applied (the signal)."),
+})
 _register("session_ancestry.py", {
     "system_lookup": (SUPPRESS_OK,
         "Platform probe for the process lookup. Any fault -> None -> no chain -> today's "
@@ -1558,12 +1864,37 @@ _register("session_ancestry.py", {
     "session_for_process": (SUPPRESS_OK,
         "The MCP-side read. Any fault -> None -> the unchanged ladder (fail-closed)."),
 })
+_register("tree_scope.py", {
+    "scope_for": (SUPPRESS_OK,
+        "0.0.26 P41 — which tree a code question is about. Any fault in the ancestry / binding "
+        "read -> the main checkout of `path`, with no claim about a worktree (never another "
+        "session's worktree): the answer is exactly what it was before P41."),
+})
+_register("mcp/server.py", {
+    "_tree_scope_for": (SUPPRESS_OK,
+        "0.0.26 P41 — the per-call tree resolution in the dispatch wrapper. `scope_for` is itself "
+        "total; this guards the import so a broken scope never fails the user's tool call — no "
+        "scope is the main checkout's answer, as before P41."),
+})
 _register("run_resolver.py", {
     "_session_bound_run": (SUPPRESS_OK,
         "F1 — an unreadable claim falls to the general binding; an unreadable checkpoint reads as "
         "NOT bound. Both fall to the unchanged ladder — never a guessed run."),
     "process_session_run": (SUPPRESS_OK,
         "F1 — any fault in the ancestry lookup -> None -> `resolve_run` exactly as before."),
+    "_held_by_another_live_session": (SUPPRESS_OK,
+        "0.0.26 O16 — read-only liveness probe for the re-entry carve-out; any fault reads False, "
+        "which keeps the PRE-EXISTING carve-out (hand over to the one evidence run) — the old "
+        "behaviour, never a new guess."),
+    "_was_resumed": (SUPPRESS_OK,
+        "0.0.26 O16 — reads O10's resume record; unreadable reads False -> the pre-existing "
+        "carve-out, exactly as before this stage."),
+    "_run_created_at": (SUPPRESS_OK,
+        "0.0.26 O18 — a run's registration time from its checkpoint; unreadable is no age, and no "
+        "age keeps the pre-existing carve-out."),
+    "_registered_after_mine": (SUPPRESS_OK,
+        "0.0.26 O18 — read-only claim-time comparison for the re-entry carve-out; any fault reads "
+        "False -> the pre-existing carve-out, exactly as before this stage."),
 })
 _register("hook_cli.py", {
     "_record_session_ancestry": (SUPPRESS_OK,
@@ -1891,18 +2222,6 @@ _register("engine/amend.py", {
         "FAILS CLOSED (`plan.ok = False`, gate `blast-radius`) — a gate that fails open silently "
         "must not fail open at all. Stays broad because the graph backend is a pluggable optional "
         "dep; broad + fail-CLOSED is safe, broad + fail-open was the bug."),
-    "_bounded_lens._run": (SUPPRESS_OK,
-        "⛔ IT SUPPRESSES NOTHING — it TRANSPORTS. A thread's exception dies with the thread, so "
-        "`_run` captures whatever the lens raised into the holder and `_bounded_lens` RE-RAISES it "
-        "in the caller's stack; `begin_amend`'s fault arm then handles it exactly as it did when "
-        "the call was synchronous. Nothing passes unannounced, which is the question this sweep "
-        "asks. ⚠ It is `BaseException`, not `Exception`, and that is deliberate: a worker thread "
-        "that swallowed a `KeyboardInterrupt` or a `SystemExit` and then reported a TIMEOUT would "
-        "tell the user their graph is slow when in fact they pressed Ctrl-C — the re-raise puts it "
-        "back where the caller can see it. ⭐ AND IT MUST NOT BECOME A DEGRADE: a `note_degraded` "
-        "here would announce a fault the caller is about to announce properly, and the timeout arm "
-        "would then be indistinguishable from it (§7g) — which is the whole distinction OSS "
-        "#66/#69/#70/#73 turned on. (0.0.20, the amend-lens clock.)"),
 })
 _register("engine/emit.py", {
     "mark_emitted": (DEGRADES_LOUD,
@@ -1918,6 +2237,13 @@ _register("engine/emit.py", {
         "`session_flow.note_persist_failure` channel `mark_emitted` above uses, with its own key. "
         "BROAD ON PURPOSE, exactly as there: the ledger is a caller-supplied object whose failure "
         "modes are not knowable here."),
+    "note_plan_approved": (DEGRADES_LOUD,
+        "R2 (0.0.26) — the SHA-tied `plan_approved` ledger marker. The plan hash itself is sealed "
+        "into the committed spec (that is what every stage attests), so a lost marker loses only "
+        "the audit trail of WHICH hash was approved — but losing it silently would leave an "
+        "approval with no record. The spec is already committed and must not be failed by its own "
+        "bookkeeping, so it rides `session_flow.note_persist_failure` with its own key, exactly as "
+        "`note_supersede` above. BROAD ON PURPOSE: the ledger and store are caller-supplied."),
 })
 _register("engine/phases.py", {
     "_mark_gate_passed": (DEGRADE_CLEAN,
@@ -2523,13 +2849,6 @@ _register("knowledge/freshness.py", {
         "just not here)."),
 })
 
-_register("knowledge/about_code.py", {
-    "check_about_code_anchors": (SUPPRESS_OK,
-        "GR.S4 write-time validation is a PROPOSAL warning, never a block. It is FAIL-OPEN by design "
-        "(only an authoritative non-resolution flags), so any error → a clean check (no false alarm) "
-        "and the proposal proceeds untouched — validation must never break the write path."),
-})
-
 _register("knowledge/graph_backend.py", {
     "CodeReviewGraphBackend.refresh_index": (SUPPRESS_OK,
         "GR.S4/GR.S2(k) proactive re-index. Degrade-clean → False, which the freshness controller "
@@ -2543,6 +2862,21 @@ _register("knowledge/graph_backend.py", {
 })
 
 _register("knowledge/layer.py", {
+    "_graph_failure_summary": (SUPPRESS_OK,
+        "0.0.26 O15 — the secret check on the bounded cause the code-graph DEGRADED line now "
+        "carries (which binary, and why). Fail CLOSED: when the scanner cannot be imported or "
+        "raises, the cause is WITHHELD (the type name only) rather than shown unchecked — the "
+        "`_McpStdioSession._stderr_tail` rule. The degrade itself is still announced."),
+    "make_graph_scorer": (DEGRADE_CLEAN,
+        "0.0.26 O12 — the ONE freshness reconcile before the live graph tier's lookups (it ran per "
+        "token inside `_run`, whose rule this keeps: freshness never breaks a query). Unreadable "
+        "freshness -> the lookups run as `_run`'s own floor would; a failed lookup still raises the "
+        "`code-graph` degrade notice below."),
+    "graph_index_line": (SUPPRESS_OK,
+        "0.0.26 O13 (F2) — the status/doctor sentence for a graph whose index is building / unbuilt "
+        "/ failed. A status read that fails returns None, and the caller prints its ordinary line "
+        "for the backend that is wired; the index state is also read independently by the query "
+        "path (which notes it on every floor answer) and by `mokata graph build`."),
     "KnowledgeLayer.pinned_graph_tool": (SUPPRESS_OK,
         "0.0.21, REVIEW FINDING 3-1 — the committed manifest's pinned graph tool, i.e. ADOPTION as "
         "opposed to the AVAILABILITY `uses_graph` answers. Broad because it is a file read plus a "
@@ -2603,7 +2937,7 @@ _register("knowledge/anchor_fingerprints.py", {
     "_defining_paths": (SUPPRESS_OK,
         "The SYMBOL arm's graph read. A client/process failure yields `DECLINE_GRAPH_FAILED`, and "
         "the decline is REPORTED on the verdict rather than swallowed — `AnchorVerdict.reason` "
-        "carries it to whichever surface asked. This is `about_code.py:8-11`'s fail-OPEN rule, "
+        "carries it to whichever surface asked. This is `memory/grounding.py` (`_check_symbol`)'s fail-OPEN rule, "
         "which is a governing contract rather than a degrade: mokata never manufactures a "
         "'this code moved' claim from a graph that could not answer. A `note_degraded` here would "
         "fire on every adopted-graph hiccup for a feature whose correct behaviour in that case is "
@@ -2682,12 +3016,6 @@ _register("bootstrap.py", {
         "expectation import."),
 })
 
-_register("mcp/tools_memory.py", {
-    "remember": (SUPPRESS_OK,
-        "GR.S4 about_code validation is best-effort proposal metadata: any failure is swallowed so "
-        "the proposal proceeds unchanged (no warning attached). Validation never blocks a write "
-        "(P2 untouched) — silence here degrades to exactly the pre-GR.S4 proposal."),
-})
 
 
 # 0.0.23 lane D (D1/D4) — the develop-time per-turn evidence and the advisory spec anchors. Every one
@@ -2719,6 +3047,12 @@ _register("engine/emit.py", {
     "structural_backend_available": (DEGRADE_CLEAN,
         "0.0.23 D4 (S3) — whether to WARN on an anchorless AC. Unknown reads as False: the quiet "
         "direction for an advisory that can never block."),
+})
+_register("hook_cli.py", {
+    "_worktree_briefing": (SUPPRESS_OK,
+        "0.0.26 P31 — the SessionStart worktree line (bind / EnterWorktree instruction). The "
+        "briefing must start without it; the GATE still refuses a main-checkout edit under "
+        "`always`, and says how to enter the worktree, so nothing is silently unenforced."),
 })
 _register("hook_cli.py", {
     "_develop_evidence": (SUPPRESS_OK,

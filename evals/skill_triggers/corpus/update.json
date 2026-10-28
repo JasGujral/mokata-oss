@@ -1,0 +1,34 @@
+{
+ "skill": "update",
+ "triggers": [
+  "Update mokata"
+ ],
+ "positive": [
+  "Update mokata to the latest release",
+  "Upgrade mokata with pip",
+  "How do I update the mokata plugin?",
+  "Is there a newer mokata? Upgrade if so",
+  "Run the mokata upgrade"
+ ],
+ "near_miss": [
+  {
+   "prompt": "What version of mokata do I have?",
+   "expect": "version"
+  },
+  {
+   "prompt": "Upgrade React to version 19 in our app"
+  },
+  {
+   "prompt": "mokata's MCP tools vanished",
+   "expect": "mcp-repair"
+  },
+  {
+   "prompt": "Switch mokata's profile to full",
+   "expect": "init"
+  },
+  {
+   "prompt": "Add a new integration to mokata",
+   "expect": "reconfigure"
+  }
+ ]
+}

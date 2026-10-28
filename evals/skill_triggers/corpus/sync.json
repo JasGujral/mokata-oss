@@ -1,0 +1,35 @@
+{
+ "skill": "sync",
+ "triggers": [
+  "team write journal",
+  "compare-and-set conflicts"
+ ],
+ "positive": [
+  "Flush the team write journal to the shared DB",
+  "Reconcile the compare-and-set conflicts from the last sync",
+  "Sync my pending team writes to the shared database",
+  "The journal has unflushed writes; push them to the shared DB",
+  "Resolve the CAS conflicts through the gate"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Check the docs are in sync with the code",
+   "expect": "docsync"
+  },
+  {
+   "prompt": "git pull and rebase my branch"
+  },
+  {
+   "prompt": "Join the team stack",
+   "expect": "team"
+  },
+  {
+   "prompt": "Push this session to Postgres for my teammate",
+   "expect": "session"
+  },
+  {
+   "prompt": "Put mokata into team run mode",
+   "expect": "mode"
+  }
+ ]
+}

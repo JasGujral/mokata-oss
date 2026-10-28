@@ -29,6 +29,8 @@ from contextlib import redirect_stdout
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 from _support import mcp_commit
 
 from mokata import session                                          # noqa: E402
@@ -117,7 +119,7 @@ def _cli_emit(repo, *, yes=True):
                "tests": [{"name": n, "ac_ids": list(a)} for n, a in TESTS]}
     fp = os.path.join(repo.path, "spec.json")
     with open(fp, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh)
+        json.dump(planned(payload), fh)
     args = types.SimpleNamespace(path=repo.path, file=fp, yes=yes)
     buf = io.StringIO()
     with redirect_stdout(buf):

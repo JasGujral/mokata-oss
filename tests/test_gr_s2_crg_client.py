@@ -174,13 +174,9 @@ class TestRealClientGroundedMapping(unittest.TestCase):
                     {"name": "handle", "qualified_name": "svc.api.handle",
                      "kind": "Function", "file_path": "svc/api.py",
                      "line_start": 40, "line_end": 45, "is_test": False}],
-                    "edges": [{"source_qualified": "svc.api.handle",
-                               "target_qualified": params["target"], "kind": "CALLS",
+                    "edges": [{"source": "svc.api.handle",
+                               "target": params["target"], "kind": "CALLS",
                                "file_path": "svc/api.py"}]}
-            if tool == "traverse_graph_tool":
-                return {"status": "ok", "results": [
-                    {"name": "run", "qualified_name": "svc.caller.run", "kind": "Function",
-                     "file_path": "svc/caller.py", "line_start": 9, "line_end": 12}]}
             if tool == "semantic_search_nodes_tool":
                 return {"status": "ok", "results": [
                     {"name": "handle", "qualified_name": "svc.api.handle", "kind": "Function",
@@ -220,12 +216,16 @@ class TestRealClientGroundedMapping(unittest.TestCase):
         c.query("imports", "svc.db", root=".")
         self.assertEqual(self.tool_calls[-1][1]["pattern"], "imports_of")
 
-    def test_blast_radius_uses_traverse(self):
+    def test_blast_radius_walks_callers_of(self):
+        """0.0.26 O2 — blast radius is a DIRECTED walk over `callers_of`, never the undirected
+        `traverse_graph_tool` (see test_o2_crg_blast_radius for the full contract)."""
         c = self._client()
-        rows = c.query("blast_radius", "svc.api.handle", root=".", depth=2)
-        self.assertEqual(self.tool_calls[-1][0], "traverse_graph_tool")
-        self.assertEqual(self.tool_calls[-1][1]["depth"], 2)
-        self.assertEqual(rows[0]["symbol"], "svc.caller.run")
+        rows = c.query("blast_radius", "svc.caller.run", root=".", depth=2)
+        tools = {t for t, _p in self.tool_calls}
+        self.assertEqual(tools, {"query_graph_tool"})
+        self.assertEqual(self.tool_calls[0][1]["pattern"], "callers_of")
+        self.assertEqual(self.tool_calls[0][1]["target"], "svc.caller.run")
+        self.assertEqual(rows[0]["symbol"], "svc.api.handle")
 
     def test_semantic_maps_to_semantic_search(self):
         c = self._client()

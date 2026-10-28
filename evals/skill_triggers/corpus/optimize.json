@@ -1,0 +1,35 @@
+{
+ "skill": "optimize",
+ "triggers": [
+  "faster or lighter",
+  "measured",
+  "proven before it is kept"
+ ],
+ "positive": [
+  "Make the CSV parser faster and prove it with a before/after benchmark",
+  "Profiling shows the hot path in render_table; make it lighter and keep it only if it's measured faster",
+  "Can you cut memory use in the importer? We can measure it with the benchmark script",
+  "Optimize this loop and prove the win before keeping it",
+  "Make the build step faster; here's a timing harness to measure before and after"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Make it faster even if the output format changes"
+  },
+  {
+   "prompt": "The worker crashes randomly, why?",
+   "expect": "debug"
+  },
+  {
+   "prompt": "Add an index to the orders table — spec says p95 under 50ms",
+   "expect": "performance"
+  },
+  {
+   "prompt": "The React page re-renders too much, budget is in the AC",
+   "expect": "frontend-perf"
+  },
+  {
+   "prompt": "Optimize my resume for job applications"
+  }
+ ]
+}

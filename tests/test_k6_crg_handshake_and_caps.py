@@ -74,8 +74,6 @@ for raw in sys.stdin:
                 for i in range(min(n, cap))]
         payload = {"status": "ok", "result_count": n, "results_omitted": max(0, n - cap),
                    "results": rows, "edges": []}
-    elif tool == "traverse_graph_tool":
-        payload = {"start_node": args.get("query"), "traversal": [], "truncated": True}
     else:
         payload = {}
     send({"jsonrpc": "2.0", "id": msg.get("id"),
@@ -90,7 +88,9 @@ class _Case(unittest.TestCase):
         with open(os.path.join(self.tmp, "serve"), "w", encoding="utf-8") as fh:
             fh.write(_SERVER)
         os.chdir(self.tmp)
-        self.client = CodeReviewGraphClient(name=sys.executable, root=self.tmp, timeout=10.0)
+        # 0.0.26 O13: the fake server stands for a BUILT index (this module grades the wire).
+        self.client = CodeReviewGraphClient(name=sys.executable, root=self.tmp, timeout=10.0,
+                                            index_probe=lambda _root: True)
         self.addCleanup(self.client.close)
 
     def tearDown(self):
@@ -144,11 +144,14 @@ class TestCapsAreDisclosed(_Case):
         self.assertTrue(rows.truncated)
         self.assertIsNone(rows.total, "a union's true size is unknown — no total is claimed")
 
-    def test_a_budget_cut_traversal_is_partial(self):
-        rows = self.client.query("blast_radius", "hub", root=self.tmp, depth=2)
+    def test_a_capped_blast_radius_is_partial(self):
+        """0.0.26 O2 — the blast radius walks `callers_of` over the real wire; a hub whose first hop
+        the tool caps is a PARTIAL answer and says which bound bit."""
+        rows = self.client.query("blast_radius", "hub", root=self.tmp, depth=1)
         self.assertTrue(rows.truncated)
-        sent = [c["args"] for c in self.calls() if c["tool"] == "traverse_graph_tool"]
-        self.assertNotIn("max_results", sent[-1], "the real tool takes no max_results")
+        self.assertEqual(len(rows), CRG_MAX_RESULTS)
+        self.assertIn("capped a callers_of answer", rows.cut_why)
+        self.assertEqual({c["tool"] for c in self.calls()}, {"query_graph_tool"})
 
 
 if __name__ == "__main__":

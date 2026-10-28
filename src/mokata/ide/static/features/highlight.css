@@ -1,0 +1,52 @@
+/* mokata ide — syntax token colours (0.0.26 P1). The server sends token CLASSES, never colours:
+   each .tk-<cls> reads a --tk-<cls> theme token, defined here for dark (default), light, and
+   high-contrast (prefers-contrast: more; forced-colors hands everything to the OS palette).
+   Keywords take the brand green (--accent dark / --add light) — no third green. */
+:root {
+  --tk-kw: var(--accent); --tk-con: #ff9e64; --tk-ty: #7dcfff; --tk-str: #e6c07b;
+  --tk-doc: #9fb0a6; --tk-esc: #ff9e64; --tk-num: #ff9e64; --tk-com: #7f8c85; --tk-pre: #c792ea;
+  --tk-fn: var(--blue); --tk-cls: #f0c674; --tk-dec: #c792ea; --tk-bi: #7dcfff;
+  --tk-tag: var(--accent); --tk-attr: #f0c674; --tk-var: var(--text); --tk-op: var(--text2);
+  --tk-pun: var(--muted); --tk-hd: var(--accent); --tk-err: #ff6b6b;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --tk-kw: var(--add); --tk-con: #a3480d; --tk-ty: #0b6e99; --tk-str: #8a5300;
+    --tk-doc: #5f6b64; --tk-esc: #a3480d; --tk-num: #a3480d; --tk-com: #66726b; --tk-pre: #7a3e9d;
+    --tk-fn: var(--blue); --tk-cls: #8b4513; --tk-dec: #7a3e9d; --tk-bi: #0b6e99;
+    --tk-tag: var(--add); --tk-attr: #8b4513; --tk-var: var(--text); --tk-op: var(--text2);
+    --tk-pun: var(--muted); --tk-hd: var(--add); --tk-err: #b91c1c;
+  }
+}
+@media (prefers-contrast: more) {
+  :root {
+    --tk-kw: #5dffa4; --tk-con: #ffb27a; --tk-ty: #a6e3ff; --tk-str: #ffd98a; --tk-doc: #d0dcd5;
+    --tk-esc: #ffb27a; --tk-num: #ffb27a; --tk-com: #c3cfc8; --tk-pre: #e0b3ff; --tk-fn: #b3ccff;
+    --tk-cls: #ffe08a; --tk-dec: #e0b3ff; --tk-bi: #a6e3ff; --tk-tag: #5dffa4; --tk-attr: #ffe08a;
+    --tk-var: #ffffff; --tk-op: #ffffff; --tk-pun: #e6ece8; --tk-hd: #5dffa4; --tk-err: #ff8a8a;
+  }
+}
+@media (prefers-contrast: more) and (prefers-color-scheme: light) {
+  :root {
+    --tk-kw: #0a4d24; --tk-con: #7a2e00; --tk-ty: #00476b; --tk-str: #5c3700; --tk-doc: #2b332f;
+    --tk-esc: #7a2e00; --tk-num: #7a2e00; --tk-com: #3a443f; --tk-pre: #4f1f6b; --tk-fn: #102f80;
+    --tk-cls: #5a2a00; --tk-dec: #4f1f6b; --tk-bi: #00476b; --tk-tag: #0a4d24; --tk-attr: #5a2a00;
+    --tk-var: #000000; --tk-op: #000000; --tk-pun: #1a1f1c; --tk-hd: #0a4d24; --tk-err: #8a0000;
+  }
+}
+.tk-kw { color: var(--tk-kw); } .tk-con { color: var(--tk-con); } .tk-ty { color: var(--tk-ty); }
+.tk-str { color: var(--tk-str); } .tk-doc { color: var(--tk-doc); font-style: italic; }
+.tk-esc { color: var(--tk-esc); } .tk-num { color: var(--tk-num); }
+.tk-com { color: var(--tk-com); font-style: italic; } .tk-pre { color: var(--tk-pre); }
+.tk-fn { color: var(--tk-fn); } .tk-cls { color: var(--tk-cls); } .tk-dec { color: var(--tk-dec); }
+.tk-bi { color: var(--tk-bi); } .tk-tag { color: var(--tk-tag); } .tk-attr { color: var(--tk-attr); }
+.tk-var { color: var(--tk-var); } .tk-op { color: var(--tk-op); } .tk-pun { color: var(--tk-pun); }
+.tk-hd { color: var(--tk-hd); font-weight: 600; } .tk-ins { color: var(--add); }
+.tk-del { color: var(--del); } .tk-err { color: var(--tk-err); text-decoration: underline wavy; }
+.tk-em { font-style: italic; } .tk-strong { font-weight: 600; }
+/* High contrast never leans on colour alone: keywords and names of things are also bold. */
+@media (prefers-contrast: more) { .tk-kw, .tk-fn, .tk-cls { font-weight: 600; } }
+@media (forced-colors: active) { [class^="tk-"] { color: CanvasText; } .tk-kw { font-weight: 700; } }
+.hl-lang { color: var(--muted); white-space: nowrap; margin-left: 8px; }
+pre.md-code { font: 12px/1.55 var(--mono); background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 6px; padding: 8px 10px; overflow: auto; white-space: pre; color: var(--text2); }

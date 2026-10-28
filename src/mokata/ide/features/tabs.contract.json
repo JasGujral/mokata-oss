@@ -1,0 +1,50 @@
+{
+  "routes": [
+    {
+      "path": "/api/workspace", "method": "GET", "kind": "json",
+      "params": {},
+      "responses": {
+        "200": {"media": "json", "schema": {
+          "type": "object",
+          "required": ["schema", "tabs", "active", "closed", "expanded", "collapsed", "mode",
+                       "panel", "focus", "run", "saved_at", "sample", "refused", "live"],
+          "properties": {
+            "schema": {"type": "integer"},
+            "tabs": {"type": "array", "items": {"$ref": "#/schemas/WorkspaceTab"}},
+            "closed": {"type": "array", "items": {"$ref": "#/schemas/WorkspaceTab"}},
+            "expanded": {"type": "array", "items": {"type": "string"}},
+            "collapsed": {"type": "array", "items": {"type": "string"}},
+            "sample": {"type": "boolean"},
+            "saved_at": {"type": "number"},
+            "live": {"type": "object", "required": ["focus", "run", "pending", "notes"],
+                     "properties": {"notes": {"type": "array", "items": {"type": "string"}},
+                       "pending": {"type": "array", "items": {"type": "object",
+                       "required": ["proposal_id", "tool", "run", "command", "expires_in"]}}}}}}}
+      },
+      "probes": [{"status": 200}, {"status": 200, "demo": true}]
+    },
+    {
+      "path": "/api/workspace", "method": "POST", "kind": "action",
+      "params": {"body": {"tabs": "[{kind: file|diff|commit, path, source?, sha?, line, scroll, pinned}]",
+                          "active": "the active tab's key", "closed": "recently closed tabs (reopen)",
+                          "expanded": "explorer dirs opened", "collapsed": "explorer dirs closed",
+                          "mode": "mode id", "panel": "panel id", "run": "the focused run"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object",
+          "required": ["saved", "tabs", "dropped", "sample"],
+          "properties": {"saved": {"enum": [true]}, "tabs": {"type": "integer"},
+                         "dropped": {"type": "integer"}, "sample": {"type": "boolean"}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"body": {"tabs": [{"kind": "file", "path": "README.md", "line": 1, "scroll": 0}]},
+                  "status": 200},
+                 {"body": {"tabs": "not a list"}, "status": 400}]
+    }
+  ],
+  "schemas": {
+    "WorkspaceTab": {"type": "object", "required": ["kind", "key", "line", "scroll", "pinned"],
+            "properties": {"kind": {"enum": ["file", "diff", "commit"]}, "key": {"type": "string"},
+                           "path": {"type": "string"}, "line": {"type": "integer"},
+                           "scroll": {"type": "integer"}, "pinned": {"type": "boolean"}}}
+  }
+}

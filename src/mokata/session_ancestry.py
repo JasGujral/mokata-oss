@@ -49,7 +49,6 @@ Stdlib-only. Copyright 2026 MoStack. Licensed under the Apache License, Version 
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import time
 from collections import namedtuple
@@ -82,8 +81,32 @@ _START_SLACK_SECS = 1.0
 #: `ps` must never hold a hook up.
 _PS_TIMEOUT_SECS = 1.0
 
-#: One process as the walk sees it: parent pid, an opaque start token, and the start as epoch secs.
-ProcInfo = namedtuple("ProcInfo", "ppid token started")
+#: One process as the walk sees it: parent pid, an opaque start token, the start as epoch secs, and
+#: (O18) its executable's short name when the platform gives it cheaply (None otherwise).
+ProcInfo = namedtuple("ProcInfo", "ppid token started name", defaults=(None,))
+
+#: O18 — the processes a hook's OWN launch can put between it and the Claude process: shells, the
+#: interpreter, and wrappers that exec a script. The first ancestor of a hook NOT in this set is
+#: the writer's Claude — identified positively, by name, never by age. Lower-case, no `.exe`.
+LAUNCHER_NAMES = frozenset({
+    "sh", "bash", "zsh", "dash", "ksh", "fish", "tcsh", "csh", "cmd", "powershell", "pwsh",
+    "python", "python3", "py", "pythonw", "uv", "uvx", "env", "mokata-hook", "mokata",
+    "timeout", "gtimeout", "nice", "nohup", "stdbuf", "caffeinate",
+})
+
+
+def _short_name(name) -> Optional[str]:
+    """`/usr/bin/Python3.12` -> `python3.12` -> folded to `python3`; `bash.exe` -> `bash`.
+    None when there is no usable name."""
+    if not isinstance(name, str) or not name.strip():
+        return None
+    import ntpath                            # splits on both `/` and `\\`: a ps path or an exe name
+    base = ntpath.basename(name.strip()).lower().lstrip("-")
+    if base.endswith(".exe"):
+        base = base[:-4]
+    if base.startswith("python"):
+        base = "python3" if base[6:7] == "3" else ("pythonw" if base[6:7] == "w" else "python")
+    return base or None
 
 #: A process lookup: pid -> ProcInfo, or None when no such (live) process. Injectable for tests.
 ProcLookup = Callable[[int], Optional[ProcInfo]]
@@ -114,7 +137,8 @@ def _linux_lookup() -> Optional[ProcLookup]:
             rest = raw[raw.rindex(")") + 2:].split()
             if rest[0] in ("Z", "X"):             # a zombie is not a live process
                 return None
-            return ProcInfo(int(rest[1]), rest[19], btime + int(rest[19]) / hz)
+            return ProcInfo(int(rest[1]), rest[19], btime + int(rest[19]) / hz,
+                            raw[raw.find("(") + 1:raw.rindex(")")])
         except (OSError, ValueError, IndexError):
             return None
     return lookup
@@ -122,21 +146,23 @@ def _linux_lookup() -> Optional[ProcLookup]:
 
 def _ps_lookup() -> Optional[ProcLookup]:
     """macOS / BSD — ONE `ps` snapshot of every process (pid, ppid, lstart)."""
+    import subprocess          # macOS/BSD only — Linux reads /proc (no `subprocess` on the prompt path)
     env = dict(os.environ, LC_ALL="C", LANG="C")
     try:
-        out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,lstart="], capture_output=True,
+        out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,lstart=,comm="], capture_output=True,
                              text=True, timeout=_PS_TIMEOUT_SECS, env=env, check=False).stdout
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
     table: Dict[int, ProcInfo] = {}
     for line in out.splitlines():
-        parts = line.split(None, 2)
-        if len(parts) != 3:
+        parts = line.split(None, 7)            # pid ppid Dow Mon DD HH:MM:SS YYYY comm
+        if len(parts) < 7:
             continue
         try:
-            stamp = " ".join(parts[2].split())
+            stamp = " ".join(parts[2:7])
             started = time.mktime(time.strptime(stamp, "%a %b %d %H:%M:%S %Y"))
-            table[int(parts[0])] = ProcInfo(int(parts[1]), stamp, started)
+            table[int(parts[0])] = ProcInfo(int(parts[1]), stamp, started,
+                                            parts[7] if len(parts) > 7 else None)
         except (ValueError, OverflowError):
             continue
     return table.get if table else None
@@ -171,12 +197,14 @@ def _windows_lookup() -> Optional[ProcLookup]:
         if not snap or snap == wintypes.HANDLE(-1).value:
             return None
         parents: Dict[int, int] = {}
+        names: Dict[int, str] = {}
         try:
             entry = PROCESSENTRY32W()
             entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
             ok = k32.Process32FirstW(snap, ctypes.byref(entry))
             while ok and len(parents) < 100000:
                 parents[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
+                names[int(entry.th32ProcessID)] = entry.szExeFile
                 ok = k32.Process32NextW(snap, ctypes.byref(entry))
         finally:
             k32.CloseHandle(snap)
@@ -205,7 +233,8 @@ def _windows_lookup() -> Optional[ProcLookup]:
             if ft is None:
                 return None
             # FILETIME: 100ns ticks since 1601-01-01.
-            return ProcInfo(parents[int(pid)], str(ft), ft / 1e7 - 11644473600.0)
+            return ProcInfo(parents[int(pid)], str(ft), ft / 1e7 - 11644473600.0,
+                            names.get(int(pid)))
         except (OSError, ValueError, TypeError, AttributeError):
             return None
     return lookup
@@ -290,6 +319,9 @@ def record_session(root: str, session_id: Optional[str], *, lookup: Optional[Pro
         chain = ancestors(lookup, self_pid)
         if not chain:
             return False
+        claude = _writers_claude(chain)
+        if claude is not None:                      # O18: write up to the writer's Claude only
+            chain = chain[:[p for p, _ in chain].index(claude) + 1]
         ts = time.time() if now is None else float(now)
         store = _store(root)
         try:
@@ -312,6 +344,13 @@ def record_session(root: str, session_id: Optional[str], *, lookup: Optional[Pro
         for p, info in chain:
             fresh[str(p)] = {"session_id": session_id.strip(), "ts": ts, "token": info.token,
                              "below": [list(b) for b in branch]}
+            if p == claude:
+                # O18: guard 3 trusts THIS entry only — and nothing ABOVE it was kept in `chain`.
+                # Above the writer's Claude sit processes that are not this session's: a pane
+                # shell, an IDE host — or ANOTHER Claude, when this one is a print-mode Claude its Bash
+                # tool started, whose own entry this write would otherwise overwrite with the
+                # nested session's id (independent review, 2026-10-27).
+                fresh[str(p)]["claude"] = True
             branch.append([p, info.token])
 
         def merge(current):
@@ -338,6 +377,30 @@ def record_session(root: str, session_id: Optional[str], *, lookup: Optional[Pro
         return True
     except Exception:  # noqa: BLE001 — observability-class write; the reader then finds nothing
         return False
+
+
+def _only_launchers(between) -> bool:
+    """O18 (reader side) — True when every process strictly between the reader and its match is a
+    NAMED launcher, within `HOOK_LAUNCH_DEPTH`: the match is then the reader's OWN Claude. Any
+    other name on the way (a nested print-mode Claude started from that Claude's Bash tool) or no name
+    at all means the match is above some other process, and guard 3 applies strictly."""
+    if len(between) >= HOOK_LAUNCH_DEPTH:
+        return False
+    return all(_short_name(getattr(i, "name", None)) in LAUNCHER_NAMES for i in between)
+
+
+def _writers_claude(chain) -> Optional[int]:
+    """O18 — the pid of the Claude process that ran this hook: the first ancestor whose name is NOT
+    a launcher, reached through ancestors that ALL are, within `HOOK_LAUNCH_DEPTH`. Positive
+    identification by name: any unnamed process on the way (a lookup without names, a fake) means
+    no answer, and with no answer guard 3 stays as strict as before O18."""
+    for depth, (pid, info) in enumerate(chain):
+        name = _short_name(getattr(info, "name", None))
+        if name is None or depth >= HOOK_LAUNCH_DEPTH:
+            return None
+        if name not in LAUNCHER_NAMES:
+            return pid
+    return None
 
 
 def session_for_process(root: str, *, lookup: Optional[ProcLookup] = None,
@@ -384,9 +447,16 @@ def session_for_process(root: str, *, lookup: Optional[ProcLookup] = None,
                     return None
                 if (bpid, btok) not in mine and bpid != self_pid and _alive_as(lookup, bpid, btok):
                     return None
-            # guard 3 — the write must postdate every process on OUR branch below the match.
+            # guard 3 — the write must postdate every process on OUR branch below the match, UNLESS
+            # the match is the writer's own Claude process (O18). A matching start token proves it
+            # is the same process; its session is the one our MCP serves however late the MCP
+            # (re)started — after a dropped connection, a `/mcp` reconnect, or a few seconds after
+            # SessionStart. The writer flagged that entry `claude` by NAME (`_writers_claude`), never
+            # by age. Above a Claude — a pane shell or IDE host a previous, now-dead Claude's hook
+            # reached — no entry is flagged and the guard still applies.
             ts = float(entry.get("ts") or 0)
-            if any(ts + _START_SLACK_SECS < b.started for b in own_branch):
+            if not (entry.get("claude") is True and _only_launchers(own_branch[1:])) and any(
+                    ts + _START_SLACK_SECS < b.started for b in own_branch):
                 return None
             return sid
         return None

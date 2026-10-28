@@ -17,6 +17,8 @@ from contextlib import redirect_stderr
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata import bash_lane as BL
 from mokata import gate_hook as G
@@ -64,7 +66,7 @@ def _in_tdd(d, rid):
     """A run whose implementation writes are allowed: approach approved, spec emitted, a red test."""
     store = StateStore(state_dir(d))
     store.write(APPROACH_PREFIX + rid, {"run_id": rid, "approach": "a"})
-    store.write(G.SPEC_PREFIX + rid, {"run_id": rid})
+    store.write(G.SPEC_PREFIX + rid, sealed({"run_id": rid}))
     tdd_state.record(store, rid, red=["tests/test_app.py::test_x"])
 
 

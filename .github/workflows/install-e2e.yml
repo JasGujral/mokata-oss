@@ -1,30 +1,30 @@
 name: install-e2e
 
-# 0.0.25 I-03 — `INSTALL-CLEAN-MACHINE-E2E` (doc 112 Lane I, exit criteria 1 + 4).
+# 0.0.26 L1 — `FULL-INSTALLS-EVERYTHING-IN-ONE-GO` (doc 113 §2, first stage of Lane L; absorbs
+# `WIN-FULL-SEMANTIC-OFF-AFTER-WITH-DEPS`). Supersedes 0.0.25 I-03's `--with-deps` legs.
 #
-# The bar Lane I promises: a stranger runs ONE documented instruction and gets every capability of
-# the mode they chose — on macOS, Linux and Windows, from uv, pipx or pip — or is told exactly what
-# is missing and the one command that fixes it. Unit tests cannot see this: they inject the
-# installer. This job runs the REAL installers on fresh runners and asks `mokata doctor` whether
-# the capabilities are actually live.
+# The bar: a stranger runs ONE install line and ONE setup, and gets every full-mode capability —
+# on macOS, Linux and Windows, from uv tool, pipx or pip. Unit tests cannot see this: they inject
+# the installer. This job runs the REAL installers on fresh runners and asks `mokata doctor`
+# whether the capabilities are actually live.
 #
-#   1. `--yes` WITHOUT `--with-deps` installs nothing (DB.S4: no unasked network install) and says
-#      so on every missing row.
-#   2. `--with-deps` installs the mode's dependencies through the installer that owns the env.
-#      Windows + uv tool: the env holds the running `mokata.exe`, so setup DEFERS the rebuild and
-#      prints the command (`INSTALL-SELF-WINDOWS-LOCK`); this job runs exactly that printed line,
-#      as a user would, then re-runs setup.
-#   3. `mokata doctor`: the code graph is code-review-graph (not a floor) and semantic recall is
-#      model2vec (not token-hash) — the model is fetched from huggingface.co, which runners reach.
-#   4. The installer's own upgrade keeps the extras (uv tool upgrade / pipx reinstall).
+#   1. ONE install line: `uv tool install ".[full]"` / `pipx install ".[full]"` /
+#      `pip install ".[full]"` — the installer fetches everything (embeddings, graph-ts,
+#      code-review-graph, ide).
+#   2. ONE `mokata setup claude --mode full --yes`: it only detects and wires — it must never
+#      start an installer (no "installing …" line), and every row must be active (no ✗, never
+#      "PARTIALLY wired"). The model is fetched from huggingface.co, which runners reach.
+#   3. `mokata doctor`: the code graph is code-review-graph (not a floor), semantic recall is
+#      model2vec (not token-hash), and the repo's TypeScript is parsed (no `graph-ts-absent`).
+#   4. The installer's own upgrade keeps the extra (uv tool upgrade / pipx reinstall).
 #
 # NOT A PR GATE ON EVERY CHANGE: each leg downloads ~360 MB. It runs when the install path
 # changes, weekly, and by hand.
 #
 # ⚠ The installs below are LOCAL (`.` — this checkout) or hash-pinned (`requirements/uv.txt`), per
-# the pinned-dependencies property (`tests/_supply_chain_sweep.py`). What `--with-deps` itself
-# fetches (model2vec, code-review-graph) is the product's own install path under test — the same
-# residual `real-crg.yml` and `embeddings-leg.yml` carry.
+# the pinned-dependencies property (`tests/_supply_chain_sweep.py`). What `[full]` itself fetches
+# (model2vec, code-review-graph, tree-sitter-typescript) is the product's own install path under
+# test — the same residual `real-crg.yml` and `embeddings-leg.yml` carry.
 
 on:
   workflow_dispatch:
@@ -38,6 +38,8 @@ on:
       - "src/mokata/cli_commands/setup.py"
       - "src/mokata/harness_setup.py"
       - "src/mokata/knowledge/graph_adopt.py"
+      - "src/mokata/memory/embed.py"
+      - "src/mokata/govern/doctor.py"
       - "src/mokata/detect.py"
       - "pyproject.toml"
       - "requirements/uv.txt"
@@ -52,18 +54,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
-    # Measured: a cold `--with-deps` install is ~1–3 min on a runner; the full-suite-free job
+    # Measured (0.0.25): a cold full-deps install is ~1–3 min on a runner; the full-suite-free job
     # should finish well inside 15. 25 leaves room for a slow index without hiding a hang.
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: ubuntu-latest, route: uv-tool }
-          - { os: macos-latest, route: uv-tool }
-          - { os: windows-latest, route: uv-tool }
-          - { os: ubuntu-latest, route: pipx }
-          - { os: ubuntu-latest, route: pip }
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        route: [uv-tool, pipx, pip]
     defaults:
       run:
         shell: bash
@@ -95,59 +93,44 @@ jobs:
         if: matrix.route == 'uv-tool'
         run: pip install --require-hashes -r requirements/uv.txt
 
-      - name: Install mokata from this checkout — the route under test
+      - name: "1 · ONE install line — the route under test, with [full]"
         run: |
           set -euo pipefail
           case "$ROUTE" in
-            uv-tool) uv tool install . ;;
-            pipx)    pipx install . ;;
+            uv-tool) uv tool install ".[full]" ;;
+            pipx)    pipx install ".[full]" ;;
             pip)
               python -m venv "$VENV"
               if [ -x "$VENV/Scripts/python.exe" ]; then bin="$VENV/Scripts"; else bin="$VENV/bin"; fi
-              "$bin/python" -m pip install .
+              "$bin/python" -m pip install ".[full]"
               echo "$bin" >> "$GITHUB_PATH" ;;
           esac
 
-      - name: A fresh repo
+      - name: A fresh repo (Python + TypeScript, so graph-ts is exercised)
         working-directory: ${{ env.REPO }}
         run: |
           set -euo pipefail
           git init -q .
           printf 'def charge(total):\n    return total\n\ndef checkout(total):\n    return charge(total)\n' > shop.py
+          printf 'export function charge(t: number) { return t }\nexport function checkout(t: number) { return charge(t) }\n' > shop.ts
           command -v mokata
           mokata --version
 
-      - name: "1 · --yes WITHOUT --with-deps installs nothing, and says so"
+      - name: "2 · ONE setup — detects and wires, never installs, everything active"
         working-directory: ${{ env.REPO }}
         run: |
           set -euo pipefail
           out="$(mokata setup claude --mode full --yes 2>&1)"; echo "$out"
-          echo "$out" | grep -q "not installed (non-interactive)" \
-            || { echo "::error::the missing rows did not say they were skipped"; exit 1; }
-          if echo "$out" | grep -q "installing mokata\[embeddings\]"; then
-            echo "::error::--yes alone started an installer (DB.S4 forbids an unasked install)"; exit 1
+          if echo "$out" | grep -qE "^installing |via (uv-tool|pipx|pip|uv-pip) …"; then
+            echo "::error::setup started an installer — it must only detect and wire"; exit 1
           fi
-          echo "$out" | grep -q "PARTIALLY wired" \
-            || { echo "::error::the quickstart claimed 'everything wired' over missing deps"; exit 1; }
+          if echo "$out" | grep -qE "✗ |PARTIALLY wired|one line installs everything"; then
+            echo "::error::full mode is not complete after ONE install line + ONE setup"; exit 1
+          fi
+          echo "$out" | grep -q "semantic memory model .*active" \
+            || { echo "::error::the semantic model row is not active"; exit 1; }
 
-      - name: "2 · --with-deps installs the mode's dependencies (Windows+uv: run the printed line)"
-        working-directory: ${{ env.REPO }}
-        run: |
-          set -euo pipefail
-          out="$(mokata setup claude --mode full --yes --with-deps 2>&1)"; echo "$out"
-          if echo "$out" | grep -q "run after setup"; then
-            fix="$(echo "$out" | grep -m1 '^      fix: ' | sed 's/^      fix: //')"
-            [ -n "$fix" ] || { echo "::error::a deferred row printed no fix line"; exit 1; }
-            echo "deferred (INSTALL-SELF-WINDOWS-LOCK) — running the printed line as a user would:"
-            echo "  $fix"
-            eval "$fix"
-            out="$(mokata setup claude --mode full --yes --with-deps 2>&1)"; echo "$out"
-          fi
-          if echo "$out" | grep -qE "✗ |PARTIALLY wired"; then
-            echo "::error::full mode is not complete after --with-deps (see the table above)"; exit 1
-          fi
-
-      - name: "3 · doctor: code-review-graph is the graph, model2vec is the semantic tier"
+      - name: "3 · doctor: code-review-graph, model2vec, TypeScript parsed"
         working-directory: ${{ env.REPO }}
         run: |
           set -euo pipefail
@@ -156,8 +139,11 @@ jobs:
             || { echo "::error::doctor does not report code-review-graph as the live graph"; exit 1; }
           echo "$out" | grep -qE "semantic: model2vec" \
             || { echo "::error::doctor does not report model2vec as the semantic tier"; exit 1; }
+          if echo "$out" | grep -q "graph-ts-absent"; then
+            echo "::error::doctor says the TypeScript parser is absent after [full]"; exit 1
+          fi
 
-      - name: "4 · the installer's own upgrade keeps the extras"
+      - name: "4 · the installer's own upgrade keeps the extra"
         if: matrix.route != 'pip'
         working-directory: ${{ env.REPO }}
         run: |
@@ -171,4 +157,7 @@ jobs:
             || { echo "::error::the upgrade dropped code-review-graph"; echo "$out"; exit 1; }
           echo "$out" | grep -qE "semantic: model2vec" \
             || { echo "::error::the upgrade dropped the embeddings extra"; echo "$out"; exit 1; }
-          echo "ok — the extras survived the $ROUTE upgrade"
+          if echo "$out" | grep -q "graph-ts-absent"; then
+            echo "::error::the upgrade dropped the TypeScript parser"; echo "$out"; exit 1
+          fi
+          echo "ok — the [full] extra survived the $ROUTE upgrade"

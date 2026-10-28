@@ -1,0 +1,6 @@
+{
+  "id": "04-lru-cache",
+  "title": "Implement an LRU cache",
+  "prompt": "Implement class `LRUCache(capacity)` in lru.py with `get(key)` (returns -1 when missing) and `put(key, value)`, evicting the least recently used entry when over capacity. Add tests.",
+  "max_turns": 40
+}

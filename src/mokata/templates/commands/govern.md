@@ -28,8 +28,8 @@ the gated `mokata memory edit` manage path for each item — it never writes fro
 
 ```bash
 PY="$(command -v python3 || command -v python)"
-ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
-eval "$ENGINE govern --path ."                 # write the governance dashboard (add --open)
+mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
+mokata govern --path .                 # write the governance dashboard (add --open)
 ```
 
 It is **read-only** and degrades clean (no/empty memory → an empty view). To act on a

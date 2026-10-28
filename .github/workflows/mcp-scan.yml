@@ -1,0 +1,54 @@
+name: mcp-scan (opt-in)
+
+# 0.0.26 L6 (SA.S1) — a THIRD-PARTY scan of mokata's MCP server with `mcp-scan`
+# (https://invariantlabs.ai/blog/introducing-mcp-scan). OPT-IN AND MANUAL ONLY, never on push/PR:
+#   * it needs the network: it starts the plugin's MCP server exactly as the plugin does
+#     (`uvx --from "mokata[full]==<version>" mokata-mcp`, i.e. from PyPI), and mcp-scan sends the
+#     server's tool names + descriptions to its vendor's API to be judged;
+#   * it is never part of the product — mokata itself makes no network calls by default and has no
+#     scanner dependency; the per-PR, offline half of SA.S1 is `scripts/security_lint.py` (ci.yml
+#     job `security-lint`).
+# The mcp-scan version is a REQUIRED input (an exact pin, never a floating "latest"), so every run names what it ran.
+# The config file it scans is built from `.claude-plugin/plugin.json` — the plugin's own server entry.
+# ⚠ UNVERIFIED HERE (no network in the build bed): the `scan <config-file>` form; confirm it on
+# the first manual run — an unknown form exits non-zero, which this job reports as red.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mcp_scan_version:
+        description: "Exact mcp-scan version to run (e.g. the latest release on PyPI)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  mcp-scan:
+    name: mcp-scan · the plugin's MCP server
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # The server starts from PyPI and mcp-scan round-trips its vendor API: a few minutes at most.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install uv (hash-pinned)
+        run: pip install --require-hashes -r requirements/uv.txt
+      - name: Build the scan config from the plugin's own server entry
+        run: |
+          python - <<'PY'
+          import json, pathlib
+          plugin = json.loads(pathlib.Path(".claude-plugin/plugin.json").read_text(encoding="utf-8"))
+          cfg = {"mcpServers": plugin["mcpServers"]}
+          pathlib.Path("mcp-scan-config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+          print(json.dumps(cfg, indent=2))
+          PY
+      - name: mcp-scan (exact version)
+        env:
+          MCP_SCAN_VERSION: ${{ inputs.mcp_scan_version }}
+        run: uvx --from "mcp-scan==${MCP_SCAN_VERSION}" mcp-scan scan mcp-scan-config.json

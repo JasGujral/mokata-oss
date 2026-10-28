@@ -8,8 +8,8 @@
 #   * a GUI-launched macOS Claude Code runs hooks with a minimal PATH that omits
 #     Homebrew (/opt/homebrew/bin), pyenv shims, or /usr/local/bin.
 #
-# This launcher resolves *a* Python 3 — mokata's hooks carry no third-party deps
-# (they add ../src to sys.path), so any Python 3 works — and execs it with the
+# This launcher resolves a Python 3.12+ (mokata's floor) — mokata's hooks carry no third-party
+# deps (they add ../src to sys.path) — and execs it with the
 # target script plus any forwarded args. If no interpreter is found it prints one
 # clear line to stderr and exits 0, so a missing Python never blocks the session.
 #
@@ -26,10 +26,17 @@ if [ -z "$target" ]; then
 fi
 shift
 
-# Does the given command run as Python 3?  ("$@" lets us pass `py -3` as one cmd.)
+# Does the given command run a Python at mokata's floor, 3.12+ (PY-FLOOR-3.12, = pyproject's
+# requires-python)?  ("$@" lets us pass `py -3` as one cmd.) An older Python 3 is remembered so
+# the last line says why nothing ran.
+old_py=""
 _is_py3() {
-    "$@" -c 'import sys; raise SystemExit(0 if sys.version_info[0] == 3 else 1)' \
-        >/dev/null 2>&1
+    v=$("$@" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null) || return 1
+    case $v in
+        3.1[2-9]|3.[2-9][0-9]) return 0 ;;
+        3.*) [ -n "$old_py" ] || old_py="$v ($*)"; return 1 ;;
+        *) return 1 ;;
+    esac
 }
 
 # 1. Explicit override wins (an exotic install the user pinned themselves).
@@ -64,5 +71,9 @@ done
 IFS=$oldifs
 
 # 4. Nothing found — degrade clean. A missing interpreter never blocks a session.
-echo "mokata: no Python 3 found; skipping hook (set MOKATA_PYTHON to point at one)." >&2
+if [ -n "$old_py" ]; then
+    echo "mokata: found Python $old_py, but mokata needs Python 3.12+; skipping hook (install Python 3.12+ or set MOKATA_PYTHON to point at one)." >&2
+else
+    echo "mokata: no Python 3.12+ found; skipping hook (set MOKATA_PYTHON to point at one)." >&2
+fi
 exit 0

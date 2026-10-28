@@ -21,11 +21,12 @@ next Claude Code launch.
 - If that file is missing/empty, search the Claude Code plugins directory for a `mokata` plugin
   containing `src/mokata/__init__.py` and set `ROOT` to it. (If a `mokata` CLI is on PATH, use
   it directly.)
-- Build the engine command with the **absolute interpreter**:
+- Define the engine as a shell FUNCTION on the **absolute interpreter** — arguments then reach
+  it as separate words, never re-parsed by `eval` (pass user or repo text single-quoted):
 
   ```bash
   PY="$(command -v python3 || command -v python)"
-  ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
+  mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
   ```
 
 ## 2. Diagnose (read-only)
@@ -33,7 +34,7 @@ next Claude Code launch.
 Run the real `initialize` handshake against whatever is currently registered:
 
 ```bash
-eval "$ENGINE mcp status"
+mokata mcp status
 ```
 
 - **`mokata-mcp: CONNECTED ✓`** → nothing is broken. Tell the user the server is already
@@ -42,7 +43,7 @@ eval "$ENGINE mcp status"
 - **Any `NOT CONNECTED ✗ (…)` / `NOT REGISTERED ✗`** → note the specific cause the command
   printed (e.g. `not_registered`, `command_not_found`, `sdk_absent`, `timeout`) and go to step 3.
   - If the cause is **`sdk_absent`**, the repair is NOT a re-registration — the MCP SDK needs
-    Python ≥ 3.10. Relay the command's own one-line fix (`pip install -U mokata` on ≥ 3.10) and
+    Python ≥ 3.12. Relay the command's own one-line fix (`pip install -U mokata` on ≥ 3.12) and
     stop; do not pretend `install` will fix it.
 
 ## 3. Repair (a durable write — be transparent)
@@ -53,9 +54,9 @@ eval "$ENGINE mcp status"
 user you're about to repair the registration, then run it:
 
 ```bash
-eval "$ENGINE mcp install"
+mokata mcp install
 # user-scope registration instead of this project only:
-# eval "$ENGINE mcp install --scope user"
+# mokata mcp install --scope user
 ```
 
 ## 4. Re-verify
@@ -63,7 +64,7 @@ eval "$ENGINE mcp install"
 Confirm the repair actually took, using the same handshake:
 
 ```bash
-eval "$ENGINE mcp status"
+mokata mcp status
 ```
 
 ## 5. Report exactly what happened — and the one step left

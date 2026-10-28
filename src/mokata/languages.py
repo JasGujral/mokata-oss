@@ -82,6 +82,12 @@ class Language:
     _test_def: str = ""
     _test_attr: str = ""
     keywords: frozenset = _COMMON_KEYWORDS
+    #: 0.0.26 P35 (G30) — whether a call is normally spelled QUALIFIED (`pkg.X(`, `Type.m(`,
+    #: `mod::f(`, `ns.f(`). True for Go / Java / Rust / JS-TS: every cross-package Go call is
+    #: `utilruntime.HandleError(...)`, and a floor that excluded `pkg.X(` found 3 of kubernetes'
+    #: 501 `HandleError` call sites. False for Python, where `obj.method(` names a DIFFERENT
+    #: function far more often than a module function, so the floor keeps excluding it.
+    qualified_calls: bool = False
 
     # --- per-language predicates (all pure, all lexical) ---------------------------------
     def defines(self, line: str, target: str) -> bool:
@@ -243,6 +249,7 @@ PYTHON = Language(
 )
 
 JAVASCRIPT = Language(
+    qualified_calls=True,
     name="javascript",
     extensions=(".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"),
     block_style="brace",
@@ -265,6 +272,7 @@ JAVASCRIPT = Language(
 )
 
 GO = Language(
+    qualified_calls=True,
     name="go",
     extensions=(".go",),
     block_style="brace",
@@ -280,6 +288,7 @@ GO = Language(
 )
 
 RUST = Language(
+    qualified_calls=True,
     name="rust",
     extensions=(".rs",),
     block_style="brace",
@@ -299,6 +308,7 @@ RUST = Language(
 )
 
 JAVA = Language(
+    qualified_calls=True,
     name="java",
     extensions=(".java",),
     block_style="brace",

@@ -91,12 +91,16 @@ jobs:
     # so nothing published. Its slowest completed leg: 1240.6s (`test (3.12, present)`) -> 1861s
     # -> **32**. Re-derive again whenever the suite grows; a ceiling the suite can reach is a red
     # that says nothing about the code.
-    timeout-minutes: 32
+    #
+    # 32 -> 45 (0.0.26 cut). The PR gate's `tag-ceiling` job (ci.yml) re-assembled this job from
+    # the ubuntu shards of CI #172 (run 40631802534, PR #87): 1799 s against 32 min = 1.07x, under
+    # the 1.2x alarm — the same cliff that cancelled v0.0.23. 1.5 x 1799 s = 2698.5 s -> **45**.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         # PY312-ONLY (0.0.24, owner ruling 2026-10-17): the tag-time gate runs the same single
-        # Python as the PR gate. `requires-python = ">=3.10"` is kept and is untested — disclosed.
+        # Python as the PR gate — mokata's floor since 0.0.26 L12 (`requires-python = ">=3.12"`).
         python: ["3.12"]
         jsonschema: ["absent", "present"]
     steps:

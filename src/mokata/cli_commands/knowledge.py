@@ -86,9 +86,16 @@ def cmd_onboard(args: argparse.Namespace) -> int:
 
 def cmd_query(args: argparse.Namespace) -> int:
     from ..knowledge.layer import run_query
+    from ..knowledge.query import BUDGET_DEFAULT, BUDGET_FULL
+    full = bool(getattr(args, "full", False))
+    if full and args.kind != "blast_radius":
+        # 0.0.26 O7 — only the blast radius has a budget; refuse rather than silently ignore.
+        print(f"--full applies to blast_radius only, not '{args.kind}'", file=sys.stderr)
+        return 2
     surface = _load_surface(args.path)
     layer = KnowledgeLayer.from_surface(surface)
-    result = run_query(layer, args.kind, args.target, depth=args.depth)
+    result = run_query(layer, args.kind, args.target, depth=args.depth,
+                       budget=BUDGET_FULL if full else BUDGET_DEFAULT)
     if getattr(args, "json", False):
         # 0.0.23 C1 — the machine form. The IDE's `/api/query` answers these exact bytes, through
         # the one serialiser both share, so the review window and the CLI cannot disagree.
@@ -119,6 +126,11 @@ def cmd_query(args: argparse.Namespace) -> int:
         print(f"  {where}{sym}  {ref.snippet}")
     if result.note:
         print(f"  ({result.note})")
+    if result.kind == "blast_radius" and result.truncated and not full:
+        # 0.0.26 O7 — a cut radius offers the on-request full walk instead of leaving it there.
+        from ..knowledge.ast_backend import BLAST_RADIUS_FULL_TIME_BUDGET_S as ceiling
+        print(f"  → the default bound cut this radius; `mokata query blast_radius {result.target}"
+              f" --depth {args.depth} --full` walks it with the full budget (hard ceiling {ceiling:g} s)")
     # GRAPH-FIRST-IMPACT (d) — a lexical blast radius names itself degraded, with ITS remedy.
     from ..knowledge.layer import impact_degrade
     deg = impact_degrade(layer, result)
@@ -272,6 +284,11 @@ def register(sub, common):
     p_query.add_argument(
         "--depth", type=int, default=2,
         help="hops for blast_radius (default: 2; ignored by other kinds)",
+    )
+    p_query.add_argument(
+        "--full", action="store_true",
+        help="blast_radius only: a radius the default bound cut (20k references / 2 s) is walked "
+             "again with the full budget (hard ceiling 60 s; Ctrl-C cancels)",
     )
     p_query.add_argument(
         "--json", action="store_true",

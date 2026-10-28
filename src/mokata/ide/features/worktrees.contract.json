@@ -1,0 +1,574 @@
+{
+ "schemas": {
+  "WorktreeRow": {
+   "type": "object",
+   "required": [
+    "path",
+    "name",
+    "branch",
+    "head",
+    "base",
+    "behind",
+    "ahead",
+    "dirty",
+    "merged",
+    "fresh",
+    "locked",
+    "missing",
+    "session",
+    "sessions",
+    "run",
+    "last_activity",
+    "claude_managed",
+    "resume"
+   ],
+   "properties": {
+    "path": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    },
+    "branch": {
+     "type": "string"
+    },
+    "head": {
+     "type": "string"
+    },
+    "base": {
+     "type": "string"
+    },
+    "merged": {
+     "type": "boolean"
+    },
+    "fresh": {
+     "type": "boolean"
+    },
+    "locked": {
+     "type": "boolean"
+    },
+    "missing": {
+     "type": "boolean"
+    },
+    "session": {
+     "type": "string"
+    },
+    "sessions": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "claude_managed": {
+     "type": "boolean"
+    },
+    "resume": {
+     "type": "string"
+    }
+   }
+  }
+ },
+ "routes": [
+  {
+   "path": "/api/worktrees",
+   "method": "GET",
+   "kind": "json",
+   "params": {},
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "ok",
+       "main",
+       "worktrees",
+       "sample"
+      ],
+      "properties": {
+       "ok": {
+        "type": "boolean"
+       },
+       "main": {
+        "type": "string"
+       },
+       "into": {
+        "type": "string"
+       },
+       "into_head": {
+        "type": "string"
+       },
+       "note": {
+        "type": "string"
+       },
+       "worktrees": {
+        "type": "array",
+        "items": {
+         "$ref": "#/schemas/WorktreeRow"
+        }
+       },
+       "sample": {
+        "type": "boolean"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "status": 200
+    },
+    {
+     "status": 200,
+     "demo": true
+    }
+   ]
+  },
+  {
+   "path": "/api/worktree/diff",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "session": "a Claude Code session id"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "title",
+       "note",
+       "added",
+       "removed",
+       "files",
+       "mode",
+       "session",
+       "worktree",
+       "branch",
+       "base",
+       "shared",
+       "sample"
+      ],
+      "properties": {
+       "title": {
+        "type": "string"
+       },
+       "note": {
+        "type": "string"
+       },
+       "files": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "required": [
+          "path",
+          "status",
+          "hunks"
+         ]
+        }
+       },
+       "mode": {
+        "enum": [
+         "worktree",
+         "fallback"
+        ]
+       },
+       "session": {
+        "type": "string"
+       },
+       "shared": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        }
+       },
+       "sample": {
+        "type": "boolean"
+       }
+      }
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "session": "S-1"
+     },
+     "status": 200
+    },
+    {
+     "query": {
+      "session": "S-1"
+     },
+     "status": 200,
+     "demo": true
+    },
+    {
+     "status": 400
+    }
+   ]
+  },
+  {
+   "path": "/api/worktree/size",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "path": "a linked worktree's path (as /api/worktrees lists it)"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "ok",
+       "sample"
+      ],
+      "properties": {
+       "ok": {
+        "type": "boolean"
+       },
+       "bytes": {
+        "type": "integer"
+       },
+       "files": {
+        "type": "integer"
+       },
+       "complete": {
+        "type": "boolean"
+       },
+       "note": {
+        "type": "string"
+       },
+       "sample": {
+        "type": "boolean"
+       }
+      }
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "path": "/no/such/worktree"
+     },
+     "status": 200
+    },
+    {
+     "status": 400
+    }
+   ]
+  },
+  {
+   "path": "/api/worktree/merge",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "path": "the worktree",
+     "proposal_id": "the approved proposal (second call)"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "stage",
+       "sample"
+      ],
+      "properties": {
+       "stage": {
+        "enum": [
+         "sample",
+         "blocked",
+         "proposed",
+         "refused",
+         "done"
+        ]
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "reason": {
+        "type": "string"
+       },
+       "proposal_id": {
+        "type": "string"
+       },
+       "command": {
+        "type": "string"
+       },
+       "plan": {
+        "type": "object"
+       },
+       "result": {
+        "type": "object"
+       }
+      }
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {
+      "path": "/no/such/worktree"
+     },
+     "status": 200
+    },
+    {
+     "body": {},
+     "status": 400
+    },
+    {
+     "body": {
+      "path": "/x"
+     },
+     "status": 200,
+     "demo": true
+    }
+   ]
+  },
+  {
+   "path": "/api/worktree/sync",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "path": "the worktree",
+     "proposal_id": "the approved proposal (second call)"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "stage",
+       "sample"
+      ],
+      "properties": {
+       "stage": {
+        "enum": [
+         "sample",
+         "blocked",
+         "proposed",
+         "refused",
+         "done"
+        ]
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "reason": {
+        "type": "string"
+       },
+       "proposal_id": {
+        "type": "string"
+       },
+       "command": {
+        "type": "string"
+       },
+       "plan": {
+        "type": "object"
+       },
+       "result": {
+        "type": "object"
+       }
+      }
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {
+      "path": "/no/such/worktree"
+     },
+     "status": 200
+    },
+    {
+     "body": {},
+     "status": 400
+    },
+    {
+     "body": {
+      "path": "/x"
+     },
+     "status": 200,
+     "demo": true
+    }
+   ]
+  },
+  {
+   "path": "/api/worktree/delete",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "path": "the worktree",
+     "discard": "true = delete even with unmerged work (shown to the approver)",
+     "proposal_id": "the approved proposal (second call)"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "stage",
+       "sample"
+      ],
+      "properties": {
+       "stage": {
+        "enum": [
+         "sample",
+         "blocked",
+         "proposed",
+         "refused",
+         "done"
+        ]
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "reason": {
+        "type": "string"
+       },
+       "proposal_id": {
+        "type": "string"
+       },
+       "command": {
+        "type": "string"
+       },
+       "plan": {
+        "type": "object"
+       },
+       "result": {
+        "type": "object"
+       }
+      }
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {
+      "path": "/no/such/worktree"
+     },
+     "status": 200
+    },
+    {
+     "body": {},
+     "status": 400
+    },
+    {
+     "body": {
+      "path": "/x"
+     },
+     "status": 200,
+     "demo": true
+    }
+   ]
+  },
+  {
+   "path": "/api/worktree/clean",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "proposal_id": "the approved proposal (second call)"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "stage",
+       "sample"
+      ],
+      "properties": {
+       "stage": {
+        "enum": [
+         "sample",
+         "blocked",
+         "proposed",
+         "refused",
+         "done"
+        ]
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "reason": {
+        "type": "string"
+       },
+       "proposal_id": {
+        "type": "string"
+       },
+       "command": {
+        "type": "string"
+       },
+       "plan": {
+        "type": "object"
+       },
+       "result": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {},
+     "status": 200
+    },
+    {
+     "body": {},
+     "status": 200,
+     "demo": true
+    }
+   ]
+  }
+ ]
+}

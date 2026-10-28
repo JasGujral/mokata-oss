@@ -6,6 +6,12 @@ Supply-chain details: <https://mokata.ai/reference/supply-chain/>
 mokata follows a **coordinated (responsible) disclosure** policy: report privately, we
 investigate and fix, and we disclose together once a fix is available.
 
+## Security posture
+
+What mokata runs and where, what it writes, its network behaviour (none by default), why it never
+needs an API key, its approvals an agent cannot give itself, its threat model and what CI checks on
+every PR: **<https://mokata.ai/security/>** (source: [`docs/security.md`](docs/security.md)).
+
 ## Supported versions
 
 mokata is pre-1.0; security fixes land on the **latest released `0.0.x`** line. Update to the

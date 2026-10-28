@@ -5,12 +5,12 @@ Claude Code has no plugin install hook and a plugin's `dependencies` are other p
 who installs mokata from the marketplace and initializes `full` has none of full's optional
 dependencies. What must be true for that user:
 
-  * their first session's briefing says what full mode still lacks and names the ONE command that
-    gets them to the same end state as `mokata setup claude --mode full`;
-  * that command is real (the CLI parser accepts it) and, on a machine with no `mokata` CLI, is
-    prefixed with the documented install;
+  * their first session's briefing says what full mode still lacks and names the commands that
+    get them to the same end state as `mokata setup claude --mode full` — the ONE install line
+    for `mokata[full]` first when a package is missing (0.0.26 L1: setup never installs);
+  * that setup command is real (the CLI parser accepts it);
   * nothing is installed and no process is spawned by the hook (P2 / DB.S4: consent stays human);
-  * a complete repo, a seatbelt/standard repo, and a human who already said no hear nothing.
+  * a complete repo and a seatbelt/standard repo hear nothing.
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
@@ -34,8 +34,10 @@ from mokata.init import init_repo
 
 ROOT = Path(__file__).resolve().parents[1]
 
-_ALL_PRESENT = {"embeddings": lambda: True, "code-graph": lambda: True}
-_NONE_PRESENT = {"embeddings": lambda: False, "code-graph": lambda: False}
+_ALL_PRESENT = {"embeddings": lambda: True, "code-graph": lambda: True, "graph-ts": lambda: True,
+                "lexical": lambda: True}   # every full-mode row, ripgrep included (CI has none)
+_NONE_PRESENT = {"embeddings": lambda: False, "code-graph": lambda: False,
+                 "graph-ts": lambda: False}
 
 
 def _repo(test, profile):
@@ -86,21 +88,31 @@ class PluginOnlyFullRepoIsToldTheOneCommand(unittest.TestCase):
         self.d = _repo(self, "full")
 
     def test_the_first_briefing_names_what_is_missing_and_the_one_command(self):
+        """0.0.26 L8: on the plugin route the PACKAGES live in the plugin's pinned `mokata[full]`
+        env, so the briefing names the missing WIRING and the one uvx command that does it."""
         ctx = _briefing(self.d, presence=_NONE_PRESENT, mokata_on_path=False)
         self.assertIn("full mode is not complete", ctx)
-        self.assertIn("semantic memory model", ctx)
-        self.assertIn("code-review-graph", ctx)
-        self.assertIn("`uv tool install mokata && mokata setup claude --mode full`", ctx)
-
-    def test_with_the_cli_installed_the_command_is_just_setup(self):
-        ctx = _briefing(self.d, presence=_NONE_PRESENT, mokata_on_path=True)
-        self.assertIn("`mokata setup claude --mode full`", ctx)
+        self.assertIn("semantic tier switched on", ctx)
+        self.assertNotIn("TypeScript parser", ctx, "a package of the pinned env, not this Python's")
+        self.assertIn(f"`{AM.plugin_setup_command('full')}`", ctx)
         self.assertNotIn("uv tool install", ctx)
+
+    def test_the_plugin_command_is_the_same_whatever_this_python_has(self):
+        for presence in (_ALL_PRESENT, _NONE_PRESENT):
+            ctx = _briefing(self.d, presence=presence, mokata_on_path=True)
+            self.assertIn(f"`{AM.plugin_setup_command('full')}`", ctx)
+            self.assertNotIn("`mokata setup claude --mode full`", ctx)
+
+    def test_the_cli_route_names_this_installers_line(self):
+        line = AM.first_session_check(self.d, presence=_NONE_PRESENT, mokata_on_path=True,
+                                      install_line_fn=lambda e: f"pipx install --force m[{e}]").line
+        self.assertIn("`pipx install --force m[full]`, then `mokata setup claude --mode full`",
+                      line)
 
     def test_the_line_keeps_consent_with_the_human(self):
         line = AM.first_session_check(self.d, presence=_NONE_PRESENT,
                                       mokata_on_path=True).line
-        self.assertIn("asks once before installing", line)
+        self.assertIn("the human runs in their terminal", line)
         self.assertIn("Do not run it for them", line)
 
     def test_the_line_fits_inside_the_one_briefing_budget(self):
@@ -118,16 +130,33 @@ class PluginOnlyFullRepoIsToldTheOneCommand(unittest.TestCase):
             line = AM.first_session_check(self.d, presence=_NONE_PRESENT).line
         self.assertIsNotNone(line)
 
-    def test_the_plugin_route_is_told_the_command_moves_it_to_the_cli_route(self):
-        """The plugin's MCP server runs as `uvx --from mokata==<v> mokata-mcp` — no extras — so
-        the plugin route cannot carry the semantic model; saying so is the honest end state."""
+    def test_the_plugin_route_stays_on_the_plugin_route(self):
+        """0.0.26 L8 (MP.S1): the plugin's MCP server runs `uvx --from "mokata[full]==<v>"`, so the
+        plugin route carries every full-mode package itself — the finishing command runs that SAME
+        pinned env with `--plugin` (wire the mode, write no harness wiring) instead of moving the
+        repo to a separately installed CLI."""
         with open(ROOT / ".claude-plugin" / "plugin.json", encoding="utf-8") as fh:
-            mcp = json.load(fh)["mcpServers"]["mokata"]
+            data = json.load(fh)
+        mcp = data["mcpServers"]["mokata"]
         self.assertEqual("uvx", mcp["command"])
-        self.assertFalse(any("[" in a or a == "--with" for a in mcp["args"]), mcp["args"])
+        self.assertIn(f"mokata[full]=={data['version']}", mcp["args"])
+        cmd = AM.plugin_setup_command("full", platform="linux")
+        self.assertIn(f"mokata[full]=={data['version']}", cmd)
         ctx = _briefing(self.d, presence=_NONE_PRESENT, mokata_on_path=True)
-        self.assertIn("moves this repo to the CLI route", ctx)
-        self.assertIn(f"claude plugin disable {AM.PLUGIN_ID} --scope local", ctx)
+        self.assertNotIn("moves this repo to the CLI route", ctx)
+        self.assertNotIn("plugin disable", ctx)
+        self.assertIn("the plugin keeps its hooks and MCP server", ctx)
+
+    def test_the_plugin_command_parses_and_quotes_for_windows(self):
+        from mokata.cli import build_parser
+        import shlex
+        argv = shlex.split(AM.plugin_setup_command("full", platform="linux"))
+        self.assertEqual(argv[:4], ["uvx", "--python", ">=3.12", "--from"])
+        ns = build_parser().parse_args(argv[5:][1:])
+        self.assertEqual(("claude", "full", True), (ns.harness, ns.mode, ns.plugin))
+        win = AM.plugin_setup_command("full", platform="win32")
+        self.assertIn('"mokata[full]==', win)
+        self.assertNotIn("'", win)
 
     def test_the_cli_route_line_does_not_talk_about_the_plugin(self):
         line = AM.first_session_check(self.d, presence=_NONE_PRESENT, mokata_on_path=True,
@@ -142,8 +171,9 @@ class PluginOnlyFullRepoIsToldTheOneCommand(unittest.TestCase):
     def test_the_named_command_is_a_real_cli_invocation(self):
         from mokata.cli import build_parser
         for on_path in (True, False):
-            cmd = AM.setup_command_for("full", mokata_on_path=on_path)
-            argv = cmd.split("&&")[-1].split()
+            cmd = AM.finish_commands_for("full", packages_missing=True,
+                                         mokata_on_path=on_path)[-1]
+            argv = cmd.split()
             self.assertEqual("mokata", argv[0])
             ns = build_parser().parse_args(argv[1:])
             self.assertEqual(("claude", "full"), (ns.harness, ns.mode))
@@ -168,17 +198,6 @@ class NothingIsSaidWhenNothingIsOwed(unittest.TestCase):
         self.assertNotIn("mode is not complete", ctx)
         self.assertNotIn("setup claude --mode", ctx)
 
-    def test_a_human_who_declined_is_not_nagged(self):
-        from mokata.extras_install import record_extra_decline
-        d = _repo(self, "full")
-        record_extra_decline(d, AM.MODE_DEPS_KEY)
-        check = AM.first_session_check(d, presence=_NONE_PRESENT, mokata_on_path=True)
-        self.assertTrue(check.missing, "the gap is still MEASURED")
-        self.assertTrue(check.silenced)
-        self.assertIsNone(check.line)
-        ctx = _briefing(d, presence=_NONE_PRESENT, mokata_on_path=True)
-        self.assertNotIn("mode is not complete", ctx)
-
 
 class TheModeIsDerivedNotRecorded(unittest.TestCase):
     def test_full_profile_is_full_mode(self):
@@ -188,9 +207,10 @@ class TheModeIsDerivedNotRecorded(unittest.TestCase):
         data = {"profile": "standard", "settings": {"memory": {"embedder": "auto"}}}
         self.assertEqual("memory", AM.mode_for_manifest(data))
         check = AM.first_session_check("/nonexistent", data=data, presence=_NONE_PRESENT,
-                                       mokata_on_path=True, user_home=tempfile.gettempdir())
+                                       mokata_on_path=True,
+                                       install_line_fn=lambda e: f"LINE[{e}]")
         self.assertEqual(("semantic memory model",), check.missing)
-        self.assertIn("`mokata setup claude --mode memory`", check.line)
+        self.assertIn("`LINE[embeddings]`, then `mokata setup claude --mode memory`", check.line)
 
     def test_plain_standard_hashing_and_minimal_imply_no_mode_dependencies(self):
         for data in ({"profile": "standard"},

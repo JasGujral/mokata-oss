@@ -12,7 +12,7 @@ Business rules — what must be true for the user:
     names `claude` or `shell`, never an argv. It is bounded (a cap, a kill on close that takes the
     whole process group, an idle reaper for a page that went away) and its stream is never written
     anywhere. It is offered only to a window a human started at a TTY, never on SAMPLE data, and on
-    Windows it says so as its own state instead of a blank.
+    Windows without the optional `pywinpty` it says so as its own state instead of a blank.
   * SESSION JOIN (doc 109 §4): the joinable sessions are the ones `mokata windows`' registry and the
     snapshot timeline already know — live ones first. Joining focuses the window, tells every page to
     follow, and makes the session the default target of context the human sends. An unknown id
@@ -171,7 +171,7 @@ class _App(unittest.TestCase):
 
 # ================================================================================ the terminal
 
-@unittest.skipUnless(POSIX, "the pty terminal is POSIX-only; Windows reports its own state (below)")
+@unittest.skipUnless(POSIX, "the stdlib pty backend; Windows (pywinpty) is tested in test_o5_windows_terminal.py")
 class TheEmbeddedTerminalIsARealPtyThePageDrives(_App):
 
     def test_the_program_runs_in_a_real_pty_with_a_controlling_terminal_and_echoes_input(self):
@@ -379,12 +379,14 @@ class TheTerminalIsOfferedOnlyWhereItShouldBe(unittest.TestCase):
         st = self._state(demo=True, terminal=True)
         self.assertFalse(st.terminals.caps()["available"])
 
-    def test_windows_says_not_available_as_its_own_state(self):
-        with mock.patch.object(TM.os, "name", "nt"):
+    def test_windows_without_pywinpty_says_not_available_as_its_own_state(self):
+        # 0.0.26 O5: Windows has a ConPTY backend (pywinpty); without that optional package the
+        # terminal says so — the Windows backend itself is tested in test_o5_windows_terminal.py.
+        with mock.patch.object(TM.os, "name", "nt"), mock.patch.dict(sys.modules, {"winpty": None}):
             ok, why = TM.available()
         self.assertFalse(ok)
-        self.assertEqual(TM.NOT_ON_PLATFORM, why)
-        self.assertIn("not available on Windows yet", why)
+        self.assertEqual(TM.NO_WINPTY, why)
+        self.assertIn("pywinpty", why)
         host = TM.TerminalHost("/", enabled=(ok, why))
         self.assertEqual(why, host.caps()["reason"])
         with self.assertRaises(TM.TerminalRefused) as cm:
@@ -439,7 +441,7 @@ class TheTerminalIsOfferedOnlyWhereItShouldBe(unittest.TestCase):
                 mock.patch.object(launch, "_has_terminal", return_value=False), \
                 mock.patch.object(launch, "_call", lambda *a, **k: calls.append(a[2]) or {}), \
                 mock.patch.object(launch, "_open", lambda *a: None):
-            got = launch._open_or_focus("/r", None, False, False, None, False)
+            got = launch._open_or_focus("/r", "S1", False, False, None, False)
         self.assertFalse(got.started)                      # a hook-opened refocus never restarts
         self.assertIn("/api/focus", calls)
 
@@ -457,7 +459,7 @@ class TheTerminalScreenModel(unittest.TestCase):
                    "const location = {href: 'http://127.0.0.1:9/', origin: 'http://127.0.0.1:9'};\n")
         helpers = ("const S = window.MK.TermScreen;\n"
                    "const txt = (s) => s.g.map(l => l.map(c => c.ch).join('').replace(/ +$/, ''));\n")
-        p = subprocess.run([node, "-e", prelude + src + helpers + js], capture_output=True,
+        p = subprocess.run(_support.node_argv(prelude + src + helpers + js), capture_output=True,
                            text=True, timeout=60, stdin=subprocess.DEVNULL, encoding="utf-8")
         self.assertEqual(0, p.returncode, p.stderr)
         return json.loads(p.stdout)

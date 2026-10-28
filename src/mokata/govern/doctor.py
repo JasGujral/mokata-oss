@@ -648,6 +648,28 @@ def ts_parser_verdict(root: str, available=None, walker=None) -> tuple:
     return (TS_PARSED if installed else TS_UNPARSED), count
 
 
+def crg_resolution_findings(resolve=None) -> List[DoctorFinding]:
+    """0.0.26 O15 `CRG-RESOLUTION-HERMETIC` — which code-review-graph mokata runs, said when it
+    matters: an in-env copy REFUSED (version outside the grounded range / no metadata), or a copy
+    on PATH from ANOTHER environment that mokata deliberately does not use. Silent when neither
+    (a core install with no code-review-graph anywhere is not a finding)."""
+    if resolve is None:
+        from ..crg_resolve import resolve_crg as resolve
+    res = resolve()
+    if res.disabled:
+        return []                       # switched off on purpose; `graph status` names the floor
+    if res.refused:
+        return [DoctorFinding("warning", "code-review-graph-refused", res.describe())]
+    if res.outside:
+        if res.ok:
+            return [DoctorFinding(
+                "info", "code-review-graph-outside-env",
+                f"mokata runs {res.describe()}; the code-review-graph on PATH ({res.outside}) "
+                f"belongs to another environment and is NOT used.")]
+        return [DoctorFinding("warning", "code-review-graph-outside-env", res.describe())]
+    return []
+
+
 def ts_parser_findings(surface: Any, available=None) -> List[DoctorFinding]:
     """`JS-TS-GRAPH-FLOOR` clause 3 — say it here, not at emit."""
     root = getattr(surface, "root", ".")
@@ -666,9 +688,52 @@ def ts_parser_findings(surface: Any, available=None) -> List[DoctorFinding]:
         "answering from the lexical floor for all of them, so `implementers`, `callers` and "
         "blast radius are incomplete HERE even when they look fine. Nothing is wrong with your "
         "setup — the parser ships as an opt-in extra so a base install adds no dependency for "
-        "the majority who never open a .ts file. Fix: run `pip install 'mokata[graph-ts]'`, then "
+        "the majority who never open a .ts file (`mokata[full]` includes it). Fix: run `%s`, then "
         "`mokata index`. No configuration and no flag: with it present the files are simply in "
-        "the graph." % (count,))]
+        "the graph." % (count, _graph_ts_install_line()))]
+
+
+def _graph_ts_install_line() -> str:
+    """0.0.26 L1 (`FULL-MODE-OMITS-GRAPH-TS`): the fix line for THIS installer, quoted for THIS
+    platform's shells — `pip install 'mokata[graph-ts]'` is wrong in a uv tool env and fails as
+    printed in cmd.exe."""
+    return fix_line("ts", "not-installed")
+
+
+# 0.0.26 P39 (G24/R36) — ONE fix line per capability and state. The IDE's search card, its Health
+# row and its Welcome row printed different commands for the same missing thing (`pip install
+# 'mokata[embeddings]'` vs `mokata setup claude --mode memory`, Audit B) because two code paths
+# each spelled their own. Every surface now asks HERE, and doctor's own findings do too.
+#: The capabilities a first run reports on, and the states that have a fix.
+FIX_CAPABILITIES = ("lexical", "meaning", "graph", "ts", "setup")
+FIX_STATES = ("not-installed", "model-not-local", "unbuilt", "failed", "not-wired", "not-set-up")
+_EXTRA_OF = {"lexical": "ide", "meaning": "embeddings", "graph": "full", "ts": "graph-ts"}
+
+
+def fix_line(capability: str, state: str) -> str:
+    """The ONE command that moves `capability` out of `state` — or "" when there is nothing for
+    the user to run (it is ready, or building). Display only: it never installs or spawns.
+
+      not-installed    the extra, by THIS installer, quoted for THIS shell (`install_route`)
+      model-not-local  `mokata setup claude --mode memory` — setup fetches the model, a terminal
+                       act the user chooses (the IDE never goes online by itself)
+      unbuilt/failed   the build command (`mokata graph build`; the meaning index: setup --mode
+                       full, which builds it with progress and resumes a partial one)
+      not-wired        the setup mode that wires it (the tool is installed, the chain lacks it)
+      not-set-up       `mokata setup claude` (sessions, gates, runs)"""
+    from ..adoption_modes import setup_command_for
+    if state == "not-installed" and capability in _EXTRA_OF:
+        from ..install_route import plan_extra_install
+        return plan_extra_install(_EXTRA_OF[capability]).display
+    if state == "model-not-local":
+        return setup_command_for("memory")
+    if state in ("unbuilt", "failed"):
+        return "mokata graph build" if capability == "graph" else setup_command_for("full")
+    if state == "not-wired":
+        return setup_command_for("full")
+    if state == "not-set-up":
+        return "mokata setup claude"          # == ide.statedir.SETUP_COMMAND (P29; tested)
+    return ""
 
 
 _PYTHON_PROJECT_FILES = ("pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile")
@@ -753,8 +818,8 @@ def wiring_check_lines(root: str = ".", home: Any = None, *,
                        ascii_only: bool = False) -> tuple:
     """`mokata doctor --wiring` — the WIRING-ONLY check, as `(ok, lines)`.
 
-    Deliberately free of a `Surface`: this is what `mokata upgrade` runs immediately after a pip
-    upgrade, and what a user runs when the wiring is the thing that is broken. Requiring an
+    Deliberately free of a `Surface`: this is what a user runs right after an upgrade (the
+    plugin route's `mokata update` follow-up), and what a user runs when the wiring is the thing that is broken. Requiring an
     initialized `.mokata/` there would make the diagnostic unavailable in exactly the situations
     it exists for. Composes the two existing checks — nothing here re-derives a verdict.
 
@@ -766,8 +831,8 @@ def wiring_check_lines(root: str = ".", home: Any = None, *,
         from the part that is out of date" is not an answer to the question.
       * NARROWER: `plugin-mcp-unresolvable` is reported and does NOT decide it. That warning is
         about the MCP *server* on the plugin route — a different axis, informational everywhere
-        else in doctor — and letting it fail this check would have `mokata upgrade` announce a
-        problem immediately after a re-wire that worked perfectly."""
+        else in doctor — and letting it fail this check would announce a problem immediately after
+        a re-wire that worked perfectly."""
     shim = SimpleNamespace(root=str(root))
     findings = (hook_resolution_findings(shim, home) + wiring_drift_findings(shim, home))
     glyph_ok = "[ok]" if ascii_only else "✓"
@@ -889,6 +954,153 @@ def http_gate_findings(surface: Any, *, listening: Any = None,
     return out
 
 
+def ide_bridge_version_findings(surface: Any, *, version: Any = None) -> List[DoctorFinding]:
+    """CC-COMPAT — `--ide-bridge` wired a hook shape (http on POSIX, exec-form `args` on Windows)
+    that this Claude Code predates: name the surface and what is lost. Silent when nothing is wired,
+    Claude Code is absent, or it is new enough. `version` is the test seam."""
+    from pathlib import Path
+    from ..claude_code_version import MANIFEST, fmt, installed_version, parse
+    from ..harness_setup import LOCAL_SETTINGS, ide_bridge_surfaces
+    used = ide_bridge_surfaces(Path(surface.root) / ".claude" / LOCAL_SETTINGS)
+    if not used:
+        return []
+    v = version if version is not None else installed_version()
+    if v is None:
+        return []
+    rows = {s["id"]: s for s in MANIFEST["surfaces"]}
+    out = []
+    for sid in used:
+        need = parse(rows[sid]["since"])
+        if need and tuple(v) < need:
+            out.append(DoctorFinding(
+                "warning", "ide-bridge-claude-code-too-old",
+                f"Claude Code {fmt(tuple(v))} predates {sid} ({fmt(need)}), which "
+                f"`mokata setup claude --ide-bridge` wired: {rows[sid]['loss']}. Update Claude "
+                "Code (`claude update`)."))
+    return out
+
+
+def billing_env_findings(environ: Any = None) -> List[DoctorFinding]:
+    """NO-API-KEY-GUARD (runtime) — a billing credential in the environment outranks the user's
+    Claude login in Claude Code. mokata needs none; say so, naming the variable (never its value)."""
+    from ..billing_env import billing_overrides, notice
+    names = billing_overrides(environ)
+    return [DoctorFinding("warning", "claude-billing-env", notice(names))] if names else []
+
+
+def session_worktree_findings(surface: Any) -> List[DoctorFinding]:
+    """P31 — the session worktree policy, always stated (it decides where every session may edit):
+    `always` (default) / `off` / `always` degraded to off (no git). A bad value is a warning."""
+    from ..session_worktrees import CONFIG_KEY, effective_policy
+    pol = effective_policy(surface.root)
+    out: List[DoctorFinding] = []
+    if pol.problem:
+        out.append(DoctorFinding("warning", "session-worktree-setting", pol.problem))
+    if pol.always:
+        detail = (f"{CONFIG_KEY} = always — every Claude Code session works in its own git worktree "
+                  f"(.claude/worktrees/<name>/, branched from HEAD); edits in the main checkout are "
+                  f"refused until the session enters one. Merge back from the IDE's Worktrees panel.")
+    elif pol.reason:
+        detail = f"{CONFIG_KEY} = {pol.configured}, but OFF here: {pol.reason}"
+    else:
+        detail = (f"{CONFIG_KEY} = off — sessions share the main checkout; Bash changes are "
+                  f"attributed by call window (shared when two sessions overlap)")
+    out.append(DoctorFinding("info", "session-worktrees", detail))
+    return out
+
+
+def background_job_findings(surface: Any) -> List[DoctorFinding]:
+    """0.0.26 P37 — each job the IDE handed over (or cancelled) when it last closed, newest first:
+    still running, done, failed or cancelled, and when. A failure is a WARNING with the worker's
+    own message; the rest are information. Nothing is listed when nothing was handed over."""
+    import time as _time
+    try:
+        from ..ide.handoff import snapshots
+        jobs = snapshots(surface.root)
+    except (OSError, ValueError, ImportError) as exc:
+        return [DoctorFinding("warning", "background-jobs",
+                              f"could not read the IDE's background-job records ({exc})")]
+    out = []
+    for j in jobs:
+        when = j.get("finished")
+        at = _time.strftime("%Y-%m-%d %H:%M", _time.localtime(float(when))) if when else ""
+        label = j.get("label") or j.get("kind")
+        if j["state"] == "running":
+            out.append(DoctorFinding("info", "background-job",
+                                     f"{label}: still running after the IDE closed — {j['note']}"))
+        elif j["state"] == "failed":
+            out.append(DoctorFinding("warning", "background-job-failed",
+                                     f"{label}: failed after the IDE closed{' at ' + at if at else ''}"
+                                     f" — {j.get('error') or 'no reason recorded'}"))
+        else:
+            word = "finished" if j["state"] == "done" else j["state"]
+            msg = j.get("note") or ""
+            out.append(DoctorFinding("info", "background-job",
+                                     f"{label}: {word} after the IDE closed"
+                                     f"{' at ' + at if at else ''}{' — ' + msg if msg else ''}"))
+    return out
+
+
+#: The most run specs `unsealed_spec_findings` reads (one small JSON read each).
+UNSEALED_SCAN_CAP = 200
+
+
+def unsealed_spec_findings(surface: Any) -> List[DoctorFinding]:
+    """R2/L7b (0.0.26) — runs whose spec mokata now REFUSES to build against. A spec approved by
+    0.0.25 has no `tasks[]` and no plan hash, so its run's next implementation write is blocked
+    ("re-emit it with tasks[]"); a spec edited after approval is blocked as a changed plan. Name each
+    run and the EXACT command that re-approves it: `spec emit` before any test is RED, `spec amend`
+    once one is (a re-emit is refused then). Read-only, bounded, never raises."""
+    import os as _os
+    from ..plan_tasks import ATTEST_MISMATCH, attest
+    from ..state import StateStore
+    from ..tdd_state import load as load_tdd, state_dir
+    try:
+        sdir = state_dir(surface.root)
+        names = sorted(n for n in _os.listdir(sdir)
+                       if n.startswith("emitted_spec__") and n.endswith(".json"))
+    except (OSError, AttributeError):
+        return []
+    store = StateStore(sdir)
+    out: List[DoctorFinding] = []
+    for name in names[:UNSEALED_SCAN_CAP]:
+        key = name[:-len(".json")]
+        run = key[len("emitted_spec__"):]
+        try:
+            data = store.read(key)
+        except OSError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        att = attest(data)
+        if att.ok:
+            continue
+        try:
+            red, _green = load_tdd(store, run)
+        except (OSError, TypeError, ValueError):
+            red = set()
+        if att.code != ATTEST_MISMATCH:
+            out.append(DoctorFinding(
+                "warning", "spec-needs-reapproval",
+                f"run {run}: its spec was approved before 0.0.26 (no tasks[], no plan hash), so "
+                f"implementation writes for it are BLOCKED. Re-approve it with one command — it "
+                f"proposes a one-task plan over the spec's criteria and scope, you approve it: "
+                f"mokata spec migrate {run}"))
+            continue
+        pin = f"MOKATA_SESSION_ID={run}"
+        cmd = (f"{pin} mokata spec amend --file spec.json --reason \"re-approve the plan\""
+               if red else f"{pin} mokata spec emit --file spec.json")
+        out.append(DoctorFinding(
+            "warning", "spec-needs-reapproval",
+            f"run {run}: its plan CHANGED after approval, so implementation writes for it are "
+            f"BLOCKED. Re-approve the plan you mean (`mokata spec show` prints it): {cmd}"))
+    if len(names) > UNSEALED_SCAN_CAP:
+        out.append(DoctorFinding("info", "spec-needs-reapproval",
+                                 f"only the first {UNSEALED_SCAN_CAP} of {len(names)} run specs "
+                                 f"were checked"))
+    return out
+
+
 def diagnose(surface: Any) -> DoctorReport:
     findings: List[DoctorFinding] = []
     m = surface.manifest
@@ -976,6 +1188,15 @@ def diagnose(surface: Any) -> DoctorReport:
     # This is the only place that difference is visible.
     findings.extend(hook_resolution_findings(surface))
 
+    # 0.0.26 P31 — where sessions may edit: the session worktree policy, always stated.
+    findings.extend(session_worktree_findings(surface))
+
+    # 0.0.26 P37 — work a closing IDE handed to a background worker (or cancelled): how it ended.
+    findings.extend(background_job_findings(surface))
+    # 0.0.26 R2/L7b — runs whose spec predates the task plan (or changed after approval): blocked
+    # until re-approved, with the exact command.
+    findings.extend(unsealed_spec_findings(surface))
+
     # 0.0.23 B2 — which Python the project's own tests run in (Python projects only).
     findings.extend(project_python_findings(surface))
 
@@ -994,6 +1215,10 @@ def diagnose(surface: Any) -> DoctorReport:
     # something a user has to know to run. Warning-level and PROPOSING, never writing — the chain
     # is a file the user owns (P2), so doctor names the command and the human gate does the rest.
     findings.extend(graph_floor_findings(surface))
+
+    # 6b-iii-c2) 0.0.26 O15 — which code-review-graph mokata runs (its own env only), and any copy
+    # on PATH from another environment it refuses to adopt silently.
+    findings.extend(crg_resolution_findings())
 
     # 6b-iii-d) JS-TS-GRAPH-FLOOR clause 3 (doc 105 §9/G14) — a repo whose TypeScript the graph
     # cannot read hears about it HERE, at the first structural question, rather than at emit six
@@ -1015,6 +1240,10 @@ def diagnose(surface: Any) -> DoctorReport:
     # and say it LOUDLY when the IDE server they need is down (Claude Code is refusing every gated
     # tool call) or Claude Code is too old to honour `onFailure: "block"`.
     findings.extend(http_gate_findings(surface))
+    # 6b-cc) CC-COMPAT (0.0.26 L3) — the `--ide-bridge` hook shapes against the installed Claude Code.
+    findings.extend(ide_bridge_version_findings(surface))
+    # 6b-key) NO-API-KEY-GUARD (0.0.26 L4) — a key/token in the env would move Claude Code off the login.
+    findings.extend(billing_env_findings())
 
     # 6c) TM.S1 — run mode. Flag a hand-edited invalid `settings.mode` (read_mode stays safe/
     # local, but doctor must SEE it); the local default is never an error.

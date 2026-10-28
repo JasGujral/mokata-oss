@@ -101,7 +101,9 @@ _VERDICT_OF = {
 #: and then quietly narrows what "production" means.
 ENTRY_RULES = (
     "console-script — a `[project.scripts]` value in pyproject.toml (`mokata.cli:main`), resolved "
-    "through re-exports so `mokata.mcp_server:main` lands on the module that defines it",
+    "through re-exports so `mokata.mcp_server:main` lands on the module that defines it, and "
+    "through a stdlib FRONT DOOR outside the package (`mokata-hook = mokata_emit:main`) to the "
+    "package function that front imports inside the named function (`mokata.hook_cli.main`)",
     "cli-subcommand — the callable in `parser.set_defaults(func=<name>)`, resolved through the "
     "declaring module's imports; this is what `cli.main`'s `args.func(args)` dispatch invokes, and "
     "that dispatch is dynamic, so the handlers are the entry points and `main` alone is not",
@@ -343,10 +345,50 @@ def read_console_scripts(pyproject: str, *, package: str = "mokata") -> List[Sit
             m = _SCRIPT_LINE.match(line)
             if m:
                 dotted, fn = m.group(1), m.group(2)
-                for cand in _writegraph._module_candidates(dotted, package):
-                    out.append((cand, fn))
-                    break
+                cands = _writegraph._module_candidates(dotted, package)
+                if cands:
+                    out.append((cands[0], fn))
+                else:
+                    out.extend(_front_door_delegates(pyproject, dotted, fn, package))
     return out
+
+
+def _front_door_delegates(pyproject: str, dotted: str, fn: str, package: str) -> List[Site]:
+    """A console script whose module lives OUTSIDE the package (0.0.26 O3: `mokata-hook =
+    mokata_emit:main`, the stdlib-only hook front door) enters production through whatever package
+    function that front imports INSIDE `fn` — `from mokata.hook_cli import main as engine_main`.
+    Followed, not dropped: dropping it would silently remove `hook_cli.main` from the closure."""
+    src = os.path.join(os.path.dirname(os.path.abspath(pyproject)), "src")
+    base = os.path.join(src, *dotted.split("."))
+    path = next((p for p in (base + ".py", os.path.join(base, "__init__.py")) if os.path.isfile(p)),
+                None)
+    if path is None:
+        return []
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    out: List[Site] = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == fn:
+            # `import mokata.hook_cli as engine` … `engine.main(argv)` (0.0.26 O12b) enters the
+            # package exactly as `from mokata.hook_cli import main` did, spelled as a module alias
+            # plus an attribute CALL. Both spellings are followed; only the called attribute is an
+            # entry (a bare module import enters nothing by itself).
+            aliases: Dict[str, str] = {}
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.ImportFrom) and not sub.level and sub.module:
+                    for cand in _writegraph._module_candidates(sub.module, package)[:1]:
+                        out.extend((cand, alias.name) for alias in sub.names)
+                elif isinstance(sub, ast.Import):
+                    for alias in sub.names:
+                        aliases[alias.asname or alias.name] = alias.name
+            for sub in ast.walk(node):
+                if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
+                        and isinstance(sub.func.value, ast.Name)
+                        and sub.func.value.id in aliases):
+                    for cand in _writegraph._module_candidates(aliases[sub.func.value.id],
+                                                               package)[:1]:
+                        out.append((cand, sub.func.attr))
+    return sorted(set(out))
 
 
 def _is_tool_registrar(node: ast.expr) -> bool:

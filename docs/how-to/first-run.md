@@ -77,7 +77,7 @@ mokata helps instead of just erroring:
 $ mokata statuss
 mokata: 'statuss' is not a mokata command.
 Did you mean 'status'?  (try `mokata status --help`)
-Next: run `mokata init` (or `/mokata:setup` inside Claude Code) to set up this repo …
+Next: run `mokata init` (or `/setup` inside Claude Code) to set up this repo …
 ```
 
 It suggests the closest real command (a `difflib` match over the command set) and the single most

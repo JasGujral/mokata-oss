@@ -8,8 +8,9 @@ may a made-up one). The demo writes nothing and reads nothing from disk.
 
 from __future__ import annotations
 
+import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from . import diffs as D
 
@@ -17,20 +18,60 @@ from . import diffs as D
 class RealSource:
     sample = False
 
-    def __init__(self, root: str) -> None:
+    def __init__(self, root: str, focus_of: Optional[Callable[[], Optional[str]]] = None) -> None:
         self.root = root
+        # P41 — the focused session (the server owns focus). When it works in a linked worktree
+        # (P31 binding), the code views read THAT tree: Code view, outline, ⌘P, search, the
+        # structural query, impact and the graph views. Shared state stays the main checkout's.
+        self.focus_of = focus_of or (lambda: None)
+
+    def code_tree(self) -> Dict[str, Any]:
+        """Which tree the code views read now: `{root, tree, worktree, label, session, note}`."""
+        from ..repo_identity import canonical_repo_root, worktree_label, worktree_toplevel
+        sid = self.focus_of()
+        out: Dict[str, Any] = {"sample": False, "root": self.root, "tree": self.root,
+                               "worktree": False, "label": "main", "session": sid, "note": ""}
+        if not sid:
+            return out
+        from .. import session_worktrees as SW
+        b = SW.binding(self.root, sid)
+        path = str(b.get("path") or "") if b else ""
+        if not path:
+            return out
+        top = worktree_toplevel(path) if os.path.isdir(path) else None
+        if top is None or os.path.realpath(canonical_repo_root(top)) != \
+                os.path.realpath(canonical_repo_root(self.root)):
+            out["note"] = (f"session {sid[:8]}'s worktree {path} no longer exists — the code views "
+                           "read the main checkout")
+            return out
+        out.update(tree=top, worktree=True, label=worktree_label(top))
+        return out
+
+    def _code_root(self) -> str:
+        return self.code_tree()["tree"]
 
     def state(self, focus: Optional[str]) -> Dict[str, Any]:
+        # P33 — the session LIST is not in the state any more (one source: `/api/sessions/list`,
+        # paginated); the state names the focused session's row, for the "Viewing" context.
         from . import sessions as SS
-        rows = [r.facts() for r in SS.sessions(self.root)]
-        return {"sample": False, "repo": self.root, "focus": focus, "sessions": rows,
+        row = SS.get(self.root, focus) if focus else None
+        return {"sample": False, "repo": self.root, "focus": focus,
+                "focus_row": row.facts() if row else None,
                 "git": D.is_git(self.root), "branches": D.branches(self.root)}
 
-    def live(self) -> Dict[str, Any]:
-        return {"sample": False, **D.live(self.root).facts()}
+    def live(self, mokata_files: bool = False) -> Dict[str, Any]:
+        return {"sample": False, **D.live(self.root, mokata_files).facts()}
 
     def session(self, sid: str) -> Dict[str, Any]:
         return {"sample": False, **D.session_diff(self.root, sid).facts()}
+
+    def write(self, snap: str) -> Dict[str, Any]:
+        return {"sample": False, **D.write_diff(self.root, snap).facts()}
+
+    def session_list(self, offset: int, limit: int, q: str, filt: str,
+                     needs: List[str]) -> Dict[str, Any]:
+        from . import sessions as SS
+        return SS.page(self.root, offset, limit, q, filt, needs=needs)
 
     def timeline(self, sid: Optional[str]) -> Dict[str, Any]:
         from . import snapshots as S
@@ -47,39 +88,67 @@ class RealSource:
         return {"sample": False, **D.pr(self.root, url).facts()}
 
     # --- 0.0.23 C1 navigation: every answer from the graph layer (see `nav`) ----------------
-    def tree(self) -> Dict[str, Any]:
+    def tree(self, dir: str = "", filter: str = "", offset: int = 0) -> Dict[str, Any]:
         from . import nav
-        return nav.tree(self.root)
+        return nav.tree(self._code_root(), dir, filter, offset)
 
-    def file(self, path: str) -> Dict[str, Any]:
+    def file(self, path: str, with_outline: bool = False) -> Dict[str, Any]:
         from . import nav
-        return nav.read_file(self.root, path)
+        root = self._code_root()
+        out = nav.read_file(root, path)
+        sid = self.focus_of()
+        if sid and isinstance(out.get("text"), str):
+            # R28 — ONE "Viewing" context: with a session focused, the Code gutter marks what THAT
+            # session changed in this file (against what it found), and says so.
+            regions = D.session_regions(self.root, sid, out["path"], out["text"])
+            out["changes"] = [dict(r, end=min(r["end"], max(out.get("lines") or 1, 1)))
+                              for r in regions or []]
+            out["changes_against"] = f"session {sid[:8]}"
+            out["viewing"] = {"kind": "session", "session": sid,
+                              "changed_here": regions is not None}
+        else:
+            out["viewing"] = {"kind": "live", "session": None, "changed_here": None}
+        if with_outline:
+            # P35 (G16): the file and its outline in ONE request — opening or reloading a file
+            # (a live edit) asks once, not twice.
+            out["outline"] = {"sample": False, **nav.outline(out["path"], out.get("text"), root)}
+        return out
 
     def outline(self, path: str) -> Dict[str, Any]:
         from . import nav
-        rel = nav.contained_rel(self.root, path)
-        return {"sample": False, **nav.outline(rel, D._read_text(self.root, rel))}
+        root = self._code_root()
+        rel = nav.contained_rel(root, path)
+        return {"sample": False, **nav.outline(rel, D._read_text(root, rel), root)}
 
     def quick(self, q: str, changed: List[str]) -> Dict[str, Any]:
         from . import nav
-        return nav.quick_open(self.root, q, changed)
+        return nav.quick_open(self._code_root(), q, changed)
 
     def query(self, kind: str, target: str, depth: int) -> str:
         from . import nav
-        return nav.query_payload(nav.run(self.root, kind, target, depth)) + "\n"
+        return nav.query_payload(nav.run(self._code_root(), kind, target, depth)) + "\n"
 
-    def impact(self, path: str, lines: str, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
+    def impact(self, path: str, lines: str, symbols: Optional[List[str]] = None,
+               budget: str = "default") -> Dict[str, Any]:
         from . import nav
-        return nav.impact(self.root, path, lines, symbols)
+        return nav.impact(self._code_root(), path, lines, symbols, budget=budget)
 
     # --- 0.0.23 C2 search ---------------------------------------------------------------
-    def search(self, q: str, mode: str, case: bool, only: Optional[List[str]]) -> Dict[str, Any]:
+    def search(self, q: str, mode: str, case: bool, only: Optional[List[str]],
+               offset: int = 0) -> Dict[str, Any]:
         from . import search
-        return search.text(self.root, q, mode, case, only)
+        return search.text(self._code_root(), q, mode, case, only, offset)
 
     def meaning(self, q: str, only: Optional[List[str]]) -> Dict[str, Any]:
         from . import search
-        return search.meaning(self.root, q, only)
+        out = search.meaning(self.root, q, only)
+        if self.code_tree()["worktree"] and isinstance(out, dict):
+            # P41 — the meaning index is built once, on the main checkout; it is not re-embedded
+            # per worktree, and says so rather than passing main-checkout chunks off as the tree's.
+            said = ("meaning search reads the main checkout's index — your worktree's changed "
+                    "files are not in it; use word search for them")
+            out = dict(out, note=f"{out['note']} | {said}" if out.get("note") else said)
+        return out
 
     def semantic_status(self) -> Dict[str, Any]:
         from . import search
@@ -90,28 +159,47 @@ class RealSource:
         return {"sample": False, **search.fetch_model()}
 
     # --- 0.0.23 C3 graph views ----------------------------------------------------------
-    def graph(self, view: str, symbol: str, to: str, depth: int) -> Dict[str, Any]:
+    def graph(self, view: str, symbol: str, to: str, depth: int,
+              page: int = 1) -> Dict[str, Any]:
         from . import visuals as V
+        root = self._code_root()
         if view == "focus":
-            return V.focus(self.root, symbol)
+            return V.focus(root, symbol, page=page)
         if view == "path":
-            return V.path(self.root, symbol, to, depth)
+            return V.path(root, symbol, to, depth)
         if view == "untested":
-            return V.untested(self.root, symbol, depth)
-        return V.ripple(self.root, symbol, depth)
+            return V.untested(root, symbol, depth, page=page)
+        return V.ripple(root, symbol, depth, page=page)
 
     # --- 0.0.23 C5 the plan, the spec and the lifecycle of a run (see `plans`) --------------
-    def runs(self, source: str) -> Dict[str, Any]:
+    # 0.0.26 P29 — on a repo mokata has not set up there are no runs to have a plan, a spec or a
+    # lifecycle: each answers the not-initialized STATE (200) with the one command, not an error.
+    def _unset(self, what: str) -> Optional[Dict[str, Any]]:
+        from .statedir import initialized, not_initialized
+        return None if initialized(self.root) else not_initialized(what)
+
+    # 0.0.26 O10 — `focus`: the focused session's own run is the default (a resumed session opens
+    # the run it continues, not the newest one).
+    def runs(self, source: str, focus: Optional[str] = None) -> Dict[str, Any]:
         from . import plans
-        return plans.team_runs(self.root) if plans.check_source(source) == "team" \
-            else plans.local_runs(self.root)
+        src = plans.check_source(source)
+        unset = self._unset("its runs, plans and specs")
+        if unset is not None:
+            return {**unset, "source": src}
+        return plans.team_runs(self.root) if src == "team" else plans.local_runs(self.root, focus)
 
     def plan(self, run: str, source: str, version: int) -> Dict[str, Any]:
         from . import plans
+        unset = self._unset("a run's plan and spec")
+        if unset is not None:
+            return unset
         return plans.plan(self.root, run, source, version)
 
     def lifecycle(self, run: str) -> Dict[str, Any]:
         from . import plans
+        unset = self._unset("a run's lifecycle")
+        if unset is not None:
+            return unset
         return plans.lifecycle(self.root, run)
 
     def saved_plans(self) -> Dict[str, Any]:
@@ -162,18 +250,45 @@ class DemoSource:
         self._sessions = [
             {"id": "sample-session-a", "short": "sample-A", "run": "run-parser-fix",
              "files": ["src/parser.py", "tests/test_parser.py"], "writes": 3, "claim": "bound",
-             "first": now - 3600, "last": now - 300, "last_iso": "SAMPLE"},
+             "first": now - 3600, "last": now - 300, "last_iso": "SAMPLE",
+             "prompt": "SAMPLE · fix the parser crash on empty input", "started": now - 3600,
+             "ended": 0.0, "duration": 3300.0, "status": "live", "status_basis": "SAMPLE",
+             "branch": "worktree-sample-a", "worktree": "", "segments": 1,
+             "sources": ["startup"], "known_by": ["SAMPLE"], "kind": "changed",
+             "too_large": [], "chain": ["sample-session-a"], "end_reason": "",
+             "resumed_from": "", "resumes": []},
             {"id": "sample-session-b", "short": "sample-B", "run": "run-retry-fetch",
              "files": ["src/net.py"], "writes": 2, "claim": "bound",
-             "first": now - 2400, "last": now - 600, "last_iso": "SAMPLE"},
+             "first": now - 2400, "last": now - 600, "last_iso": "SAMPLE",
+             "prompt": "SAMPLE · retry fetch on timeout", "started": now - 2400,
+             "ended": now - 600, "duration": 1800.0, "status": "ended",
+             "status_basis": "SAMPLE", "branch": "worktree-sample-b", "worktree": "",
+             "segments": 1, "sources": ["startup"], "known_by": ["SAMPLE"], "kind": "changed",
+             "too_large": [], "chain": ["sample-session-b"], "end_reason": "SAMPLE",
+             "resumed_from": "", "resumes": []},
         ]
 
     def state(self, focus: Optional[str]) -> Dict[str, Any]:
+        f = focus or self._sessions[0]["id"]
         return {"sample": True, "repo": "SAMPLE repository (nothing here is real)",
-                "focus": focus or self._sessions[0]["id"], "sessions": self._sessions,
+                "focus": f, "focus_row": next((s for s in self._sessions if s["id"] == f), None),
                 "git": True, "branches": ["main", "sample/parser-fix", "sample/retry"]}
 
-    def live(self) -> Dict[str, Any]:
+    def session_list(self, offset: int, limit: int, q: str, filt: str,
+                     needs: List[str]) -> Dict[str, Any]:
+        words = [w for w in (q or "").lower().split() if w]
+        rows = [dict(s, stage="develop", waiting=False) for s in self._sessions
+                if all(w in (s["prompt"] + " " + s["id"]).lower() for w in words)
+                and (filt != "live" or s["status"] == "live")]
+        return {"sample": True, "rows": rows[offset:offset + limit], "total": len(rows),
+                "all": len(self._sessions), "offset": offset, "limit": limit, "q": q,
+                "filter": filt, "live": 1, "live_window_secs": 900}
+
+    def write(self, snap: str) -> Dict[str, Any]:
+        return _fake(f"src/parser.py: write ({snap})",
+                     [D.text_diff("src/parser.py", _A_OLD, _A_NEW)])
+
+    def live(self, mokata_files: bool = False) -> Dict[str, Any]:
         return _fake("Live changes", [D.text_diff("src/parser.py", _A_OLD, _A_NEW),
                                       D.text_diff("src/net.py", _B_OLD, _B_NEW),
                                       D.text_diff("tests/test_parser.py", "", _T_NEW)])
@@ -210,18 +325,38 @@ class DemoSource:
     _NO_GRAPH = ("the SAMPLE has no code graph — structural answers need a real repository "
                  "(`mokata ide` without --demo)")
 
-    def tree(self) -> Dict[str, Any]:
-        files = sorted(self._FILES)
-        return {"sample": True, "count": len(files), "files": files, "truncated": False,
-                "pruned": "SAMPLE"}
+    def tree(self, dir: str = "", filter: str = "", offset: int = 0) -> Dict[str, Any]:
+        from . import nav
+        idx = nav._DirIndex(sorted(self._FILES))
+        flt = (filter or "").strip().lower()
+        if flt:
+            rows = [p for p in idx.files if flt in p.lower()]
+            return {"sample": True, "count": len(idx.files), "pruned": "SAMPLE", "mode": "filter",
+                    "filter": filter, "total": len(rows), "offset": 0, "next": None,
+                    "entries": [{"kind": "file", "path": p, "name": p.rsplit("/", 1)[-1]}
+                                for p in rows]}
+        d = (dir or "").strip("/")
+        if d not in idx.subdirs:
+            d = ""
+        rows = [{"kind": "dir", "path": sd, "name": sd.rsplit("/", 1)[-1],
+                 "files": idx.under.get(sd, 0)} for sd in sorted(idx.subdirs[d])]
+        rows += [{"kind": "file", "path": p, "name": p.rsplit("/", 1)[-1]}
+                 for p in sorted(idx.direct[d])]
+        return {"sample": True, "count": len(idx.files), "pruned": "SAMPLE", "mode": "dir",
+                "dir": d, "total": len(rows), "offset": 0, "next": None, "entries": rows,
+                "files_under": idx.under.get(d, 0)}
 
-    def file(self, path: str) -> Dict[str, Any]:
+    def file(self, path: str, with_outline: bool = False) -> Dict[str, Any]:
         text = self._FILES.get(path)
         if text is None:
-            return {"sample": True, "path": path, "text": None, "note": "not in the SAMPLE"}
-        n = text.count("\n")
-        return {"sample": True, "path": path, "text": text, "lines": n,
-                "changes": [{"start": 1, "end": n, "kind": "mod"}], "changes_against": "SAMPLE"}
+            out = {"sample": True, "path": path, "text": None, "note": "not in the SAMPLE"}
+        else:
+            n = text.count("\n")
+            out = {"sample": True, "path": path, "text": text, "lines": n,
+                   "changes": [{"start": 1, "end": n, "kind": "mod"}], "changes_against": "SAMPLE"}
+        if with_outline:
+            out["outline"] = self.outline(path)
+        return out
 
     def outline(self, path: str) -> Dict[str, Any]:
         from . import nav
@@ -240,11 +375,13 @@ class DemoSource:
         return json.dumps({"sample": True, "kind": kind, "target": target, "references": [],
                            "basis": "", "note": self._NO_GRAPH}) + "\n"
 
-    def impact(self, path: str, lines: str, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
+    def impact(self, path: str, lines: str, symbols: Optional[List[str]] = None,
+               budget: str = "default") -> Dict[str, Any]:
         return {"sample": True, "pending": [], "path": path, "symbols": [], "status": "unknown",
                 "is_test": path.startswith("tests/"), "note": self._NO_GRAPH}
 
-    def search(self, q: str, mode: str, case: bool, only: Optional[List[str]]) -> Dict[str, Any]:
+    def search(self, q: str, mode: str, case: bool, only: Optional[List[str]],
+               offset: int = 0) -> Dict[str, Any]:
         from . import search
         pat = search._compile(q, mode, case) if q.strip() else None
         files = []
@@ -255,9 +392,10 @@ class DemoSource:
                     for n, ln in enumerate(text.splitlines(), 1) if pat and pat.search(ln)]
             if hits:
                 files.append({"path": path, "matches": hits})
-        return {"sample": True, "q": q, "mode": mode, "files": files,
-                "total": sum(len(f["matches"]) for f in files), "truncated": False,
-                "engine": "python-floor", "engine_note": "SAMPLE"}
+        n = sum(len(f["matches"]) for f in files)
+        return {"sample": True, "q": q, "mode": mode, "files": files, "offset": 0, "count": n,
+                "total": n, "more": False, "next_offset": None, "large_files": [],
+                "partial": False, "engine": "python-floor", "engine_note": "SAMPLE"}
 
     def meaning(self, q: str, only: Optional[List[str]]) -> Dict[str, Any]:
         return {"sample": True, "q": q, "kind": "meaning", "results": [], "available": False,
@@ -270,7 +408,8 @@ class DemoSource:
     def semantic_fetch(self) -> Dict[str, Any]:
         return self.semantic_status()
 
-    def graph(self, view: str, symbol: str, to: str, depth: int) -> Dict[str, Any]:
+    def graph(self, view: str, symbol: str, to: str, depth: int,
+              page: int = 1) -> Dict[str, Any]:
         return {"sample": True, "view": view, "nodes": [], "edges": [], "note": self._NO_GRAPH}
 
     # --- the plan / spec / lifecycle of the two SAMPLE runs (invented, labelled) ---------------
@@ -282,7 +421,7 @@ class DemoSource:
             raise BadRequest(f"no run {rid} in the SAMPLE")
         return rid
 
-    def runs(self, source: str) -> Dict[str, Any]:
+    def runs(self, source: str, focus: Optional[str] = None) -> Dict[str, Any]:
         from . import plans
         if plans.check_source(source) == "team":
             from .server import BadRequest

@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Dict, List, Optional, Tuple
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 from .. import languages
+from .cancel import checkpoint, report
 from ..repo_paths import RepoName, name_of
 from ..repo_walk import prune_source_dirs
 from .query import (BASIS_LEXICAL, GREP_FLOOR_IMPACT_NOTE, GREP_FLOOR_NAV_NOTE,
@@ -31,16 +33,43 @@ LEXICAL_NOTE = "lexical fallback (no structural graph; results are approximate)"
 SOURCE_EXTENSIONS = languages.SOURCE_EXTENSIONS
 
 
-_CALL_RE_CACHE: Dict[str, "re.Pattern"] = {}
+_CALL_RE_CACHE: Dict[Tuple[str, str], "re.Pattern"] = {}
 
 
-def _calls(line: str, sym: str) -> bool:
-    pat = _CALL_RE_CACHE.get(sym)
+#: What may precede a called name. Unqualified only (`x(`, never `a.x(`) — or, for a language
+#: whose calls are spelled qualified (`Language.qualified_calls`, P35 G30), also `pkg.x(` /
+#: `mod::x(` (still never `fooX(`).
+_BARE, _QUALIFIED = r"(?<![\w.])", r"(?<!\w)"
+
+
+def _before(lang: Optional["languages.Language"]) -> str:
+    return _QUALIFIED if lang is not None and lang.qualified_calls else _BARE
+
+
+def _calls(line: str, sym: str, lang: Optional["languages.Language"] = None) -> bool:
+    key = (sym, _before(lang))
+    pat = _CALL_RE_CACHE.get(key)
     if pat is None:
         if len(_CALL_RE_CACHE) > 4096:
             _CALL_RE_CACHE.clear()
-        pat = _CALL_RE_CACHE[sym] = re.compile(r"(?<![\w.])" + re.escape(sym) + r"\s*\(")
+        pat = _CALL_RE_CACHE[key] = re.compile(key[1] + re.escape(sym) + r"\s*\(")
     return bool(pat.search(line))
+
+
+class _Counts:
+    """0.0.26 P32 — a running callers/refs walk says how far it got ("≥120 so far", n/N files) to
+    the job it runs in, at most every `every` seconds. A no-op outside a job."""
+
+    def __init__(self, what: str, files: Any, every: float = 0.3) -> None:
+        self.what, self.every = what, every
+        self.total = len(files) if isinstance(files, list) else None
+        self.at = time.monotonic()
+
+    def __call__(self, n: int, found: int) -> None:
+        now = time.monotonic()
+        if now - self.at >= self.every:
+            self.at = now
+            report(done=n, total=self.total, unit="files", note=f"{self.what}: ≥{found} so far")
 
 
 class GrepBackend(GraphBackend):
@@ -115,6 +144,7 @@ class GrepBackend(GraphBackend):
         return self._walk_files()
 
     def _read(self, path: str) -> List[str]:
+        checkpoint()                    # P32: a cancelled job stops here, per file
         cache = getattr(self, "_corpus_cache", None)
         if cache is None:
             return self._read_file(path)
@@ -129,6 +159,7 @@ class GrepBackend(GraphBackend):
             # checkouts — a vendored dependency or a worktree is somebody else's source, and
             # answering `defs`/`callers` from it duplicates every symbol it holds.
             prune_source_dirs(dirpath, dirnames)
+            checkpoint()                # P32: per directory of the walk
             for fn in filenames:
                 if fn.endswith(self.extensions):
                     yield os.path.join(dirpath, fn)
@@ -170,10 +201,14 @@ class GrepBackend(GraphBackend):
     def _callers(self, target: str) -> List[Reference]:
         if not target or any(c.isspace() for c in target):
             return []                    # not a symbol: no call site can spell it (see above)
-        call = re.compile(r"(?<![\w.])" + re.escape(target) + r"\s*\(")
+        calls = {b: re.compile(b + re.escape(target) + r"\s*\(") for b in (_BARE, _QUALIFIED)}
         out: List[Reference] = []
-        for path in self._files():
+        files = self._files()
+        tick = _Counts(f"callers of {target}", files)
+        for n, path in enumerate(files):
+            tick(n, len(out))
             lang = self._lang(path)
+            call = calls[_before(lang)]
             lines = self._read(path)
             for i, line in enumerate(lines):
                 if lang.defines(line, target):
@@ -193,7 +228,7 @@ class GrepBackend(GraphBackend):
         if not targets:
             return out
         alts = "|".join(re.escape(t) for t in sorted(set(targets), key=len, reverse=True))
-        call = re.compile(r"(?<![\w.])(" + alts + r")\s*\(")
+        call = re.compile(_QUALIFIED + r"(" + alts + r")\s*\(")   # a prefilter; judged below
         for path in self._files():
             lang = self._lang(path)
             lines = self._read(path)
@@ -204,7 +239,7 @@ class GrepBackend(GraphBackend):
                 # `hit` only PREFILTERS lines: each target is then judged by its own pattern, so
                 # overlapping names (`foo` / `foobar`) answer exactly as `_callers` would
                 for sym in targets:
-                    if _calls(line, sym):
+                    if _calls(line, sym, lang):
                         if lang.defines(line, sym):
                             continue
                         out[sym].append(Reference(self._rel(path), i + 1, line.strip(),
@@ -212,10 +247,11 @@ class GrepBackend(GraphBackend):
         return out
 
     def _callees(self, target: str) -> List[Reference]:
-        call = re.compile(r"(?<![\w.])(\w+)\s*\(")
+        calls = {b: re.compile(b + r"(\w+)\s*\(") for b in (_BARE, _QUALIFIED)}
         out: List[Reference] = []
         for path in self._files():
             lang = self._lang(path)
+            call = calls[_before(lang)]
             lines = self._read(path)
             for i, line in enumerate(lines):
                 if lang.func_name(line) != target:
@@ -246,7 +282,10 @@ class GrepBackend(GraphBackend):
         # `crate::mod_a`) so a leading `.`/`:` must NOT exclude the match — only word chars do.
         word = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(target) + r"(?![A-Za-z0-9_])")
         out: List[Reference] = []
-        for path in self._files():
+        files = self._files()
+        tick = _Counts(f"references to {target}", files)
+        for n, path in enumerate(files):
+            tick(n, len(out))
             lang = self._lang(path)
             lines = self._read(path)
             for i, line in enumerate(lines):
@@ -274,7 +313,10 @@ class GrepBackend(GraphBackend):
         exactly the floor's contract — approximate, marked degraded, and honest about it."""
         word = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(target) + r"(?![A-Za-z0-9_])")
         out: List[Reference] = []
-        for path in self._files():
+        files = self._files()
+        tick = _Counts(f"references to {target}", files)
+        for n, path in enumerate(files):
+            tick(n, len(out))
             lang = self._lang(path)
             lines = self._read(path)
             for i, line in enumerate(lines):

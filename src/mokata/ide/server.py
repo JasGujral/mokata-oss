@@ -10,7 +10,7 @@ GUARDS, every one tested (doc 109 §6 — designed from px0's failures):
   * CONTAINED. Every path it reads goes through `snapshots.rel_path` (realpath inside the repo).
   * READ-ONLY. No route writes the repo (the semantic index lives under `.mokata/`). The network
     calls are the ones the user asks for: a PR fetch, and (0.0.23 C2) the one-time embeddings-model
-    fetch behind the Meaning tab's button — meaning search otherwise loads its model offline.
+    fetch behind the Meaning column's fetch button — meaning search otherwise loads its model offline.
 
 LIFETIME. Started from a terminal it lives as long as its command (`--foreground`). Started from a
 Claude session (`/mokata:review-window`) it is a child that exits after `IDLE_SECS` with no page attached —
@@ -22,33 +22,42 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import hmac
 import json
 import os
 import queue
+import re
 import secrets
 import socket
 import sys
 import threading
 import time
+import traceback
 from typing import Any, Callable, Dict, List, Optional
 
 from ..errors import MokataError
+from ..knowledge.query import BUDGET_DEFAULT, BUDGET_FULL
 from .bus import HOOK_HEADER
 from .gate_door import GATE_PATH as _GATE_PATH
-from ..tdd_state import state_dir
 
 IDLE_SECS = 30 * 60
 POLL_SECS = 1.0            # SSE keep-alive tick: focus / idle bookkeeping (events arrive pushed)
 COOKIE = "mokata_ide"
 TOKEN_HEADER = "x-mokata-token"
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-STATIC_FILES = ("index.html", "app.js", "combo.js", "nav.js", "search.js", "graph.js", "plan.js",
-                "terminal.js", "bridge.js", "sessions.js", "health.js", "boot.js", "app.css",
+STATIC_FILES = ("index.html", "registry.js", "app.js", "combo.js", "nav.js", "search.js", "graph.js",
+                "plan.js", "terminal.js", "bridge.js", "sessions.js", "health.js", "boot.js", "app.css",
                 "mokata-wordmark-dark.svg", "mokata-wordmark-light.svg", "mokata-icon.svg")
 # 0.0.23 C3 — the vendored graph libraries (MIT; pins + sha256 in static/vendor/VERSIONS.json).
 VENDOR_FILES = ("cytoscape.min.js", "layout-base.js", "cose-base.js", "cytoscape-fcose.js",
                 "cytoscape-dagre.min.js")
+# 0.0.26 P0 — a FEATURE's frontend: any `static/features/<name>.js|.css` is served and loaded by the
+# page (`index` writes its <script>/<link> tags at the markers below) — no edit to index.html.
+FEATURES_DIR = os.path.join(STATIC_DIR, "features")
+SCRIPTS_MARK = "<!-- mokata:feature-scripts -->"
+STYLES_MARK = "<!-- mokata:feature-styles -->"
+_FEATURE_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\.(js|css)$")
 _TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
           ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml"}
 
@@ -61,164 +70,51 @@ class BadRequest(MokataError, ValueError):
     answered 400 (D5); nothing is attempted."""
 
 
-# ------------------------------------------------------------------------------ the heavy lane
+def refused(root: str, exc: MokataError) -> Any:
+    """0.0.26 P29 — a failure mokata DEFINED (D5: a `MokataError` carries its own remedy in its
+    message) is an answer about the repo's state, not a server fault: 409 with the error's class
+    and text. A repo mokata has not set up says so as a state, with the one command."""
+    from starlette.responses import JSONResponse
+    from ..config import ConfigError
+    from .statedir import NOT_INITIALIZED, SETUP_COMMAND, initialized
+    body: Dict[str, Any] = {"error": type(exc).__name__, "note": str(exc)[:300]}
+    if isinstance(exc, ConfigError) and not initialized(root):
+        body.update(state=NOT_INITIALIZED, command=SETUP_COMMAND)
+    return JSONResponse(body, status_code=409)
+
+
+def crashed(where: str, exc: BaseException) -> Any:
+    """Anything ELSE is a bug: still a 500, and its traceback goes to stderr (never swallowed) so
+    the terminal running `mokata ide` shows where it broke. (stderr, not `logging`: the tree has
+    no logging setup — test_a39 holds that.)"""
+    from starlette.responses import JSONResponse
+    try:
+        sys.stderr.write(f"mokata ide: {where} failed — this is a bug, please report it:\n"
+                         + "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+    except (OSError, ValueError):                              # pragma: no cover — no stderr
+        pass
+    return JSONResponse({"error": type(exc).__name__, "note": str(exc)[:300]}, status_code=500)
+
+
+# ------------------------------------------------------------------------------ jobs
 #
-# 0.0.25 (lane S — the 1M-line scale run). Every data route used to run on asyncio's ONE default
-# thread pool with no deadline and no cancellation. The Review page asks `/api/impact` for each
-# changed file; on a hub function one impact never finished, the abandoned calls filled the pool,
-# and then /api/caps, /api/tree and /api/state hung too — and SIGTERM could not stop the server
-# (its non-daemon pool threads were joined on the way out). Now the graph's heavy questions
-# (impact, the graph views, `query`) run HERE:
-#
-#   * a SMALL bounded pool of DAEMON threads of its own — light routes never queue behind them,
-#     and a stuck one can never hold the process open;
-#   * a DEADLINE per request (queue time included): past it the request answers an honest
-#     "timed out — <what to do>" (503 + `timed_out: true`), never a 500 and never silence;
-#   * a request whose browser went away stops waiting at once;
-#   * identical questions in flight are COALESCED (a page refresh re-asking joins the running
-#     answer instead of queueing a second copy);
-#   * when nobody is waiting any more the job's cancel flag is set and the work stops at its next
-#     graph question (`nav.check_abandoned`); a job nobody waits for is never started.
-HEAVY_WORKERS = 2
-HEAVY_DEADLINE_SECS = 20.0
-MEANING_DEADLINE_SECS = 120.0
+# 0.0.26 P32 `IDE-JOBS` (Jas 2026-10-21/22, overruling U10's 20 s cap). The heavy questions —
+# graph views, impact, `query`, word and meaning search, the tree walk, health — used to run on a
+# lane with a DEADLINE: past 20 s the page got a 503 while the work kept burning CPU for nobody
+# (audit A #1, #3). Each is now a JOB (`ide/jobs.py`): the route waits a short sync window for it
+# and answers the result, or `202 {job, state, partial}`; the page follows the job's `job` events
+# on the event stream (progress, partial answers) and re-asks when it is done — the kept answer
+# comes back at once. Cancel really stops the work (checkpoints in the walks, subprocess kill);
+# a query job nobody watches any more is cancelled; index builds keep running. No deadline.
+CLIENT_HEADER = "x-mokata-client"   # the page's id: its SSE stream is what keeps its jobs wanted
 SHUTDOWN_GRACE_SECS = 2.0       # how long a SIGTERM/SIGINT waits for open requests before closing
 SWITCH_INTERVAL_SECS = 0.001   # the GIL hand-off interval while serving (see `serve`)
-_WAIT_TICK = 0.25               # how often a waiting request checks its client is still there
-
-
-class _Job:
-    __slots__ = ("key", "fn", "cancel", "done", "result", "exc", "waiters", "_wake")
-
-    def __init__(self, key: Any, fn: Callable[[], Any]):
-        self.key, self.fn = key, fn
-        self.cancel, self.done = threading.Event(), threading.Event()
-        self.result: Any = None
-        self.exc: Optional[BaseException] = None
-        self.waiters = 0
-        self._wake: List[Callable[[], None]] = []
-
-
-class HeavyLane:
-    """A small bounded pool of daemon threads for slow questions (see the section note)."""
-
-    def __init__(self, workers: int = HEAVY_WORKERS, name: str = "mokata-heavy"):
-        self._q: "queue.Queue[Optional[_Job]]" = queue.Queue()
-        self._lock = threading.Lock()
-        self._inflight: Dict[Any, _Job] = {}
-        self._closed = False
-        self.started = 0                     # jobs that actually ran (tests read it)
-        self._name, self._workers = name, max(1, workers)
-        self._threads: List[threading.Thread] = []
-
-    def submit(self, key: Any, fn: Callable[[], Any]) -> _Job:
-        with self._lock:
-            if not self._threads and not self._closed:      # started on first use
-                self._threads = [threading.Thread(target=self._work, daemon=True,
-                                                  name=f"{self._name}-{i}")
-                                 for i in range(self._workers)]
-                for t in self._threads:
-                    t.start()
-            job = self._inflight.get(key)
-            if job is None or job.cancel.is_set():
-                job = self._inflight[key] = _Job(key, fn)
-                if self._closed:
-                    job.cancel.set()
-                self._q.put_nowait(job)
-            job.waiters += 1
-            return job
-
-    def leave(self, job: _Job) -> None:
-        """One waiter stopped waiting. The last one out cancels the job."""
-        with self._lock:
-            job.waiters -= 1
-            if job.waiters <= 0 and not job.done.is_set():
-                job.cancel.set()
-                if self._inflight.get(job.key) is job:
-                    del self._inflight[job.key]
-
-    def on_done(self, job: _Job, wake: Callable[[], None]) -> None:
-        with self._lock:
-            if not job.done.is_set():
-                job._wake.append(wake)
-                return
-        wake()
-
-    def busy(self) -> int:
-        with self._lock:
-            return len(self._inflight)
-
-    def _work(self) -> None:
-        from . import nav
-        while True:
-            job = self._q.get()
-            if job is None:
-                return
-            if job.cancel.is_set():
-                job.exc = nav.Abandoned("nobody was waiting any more — not started")
-            else:
-                self.started += 1
-                with nav.cancellable(job.cancel):
-                    try:
-                        job.result = job.fn()
-                    except Exception as exc:  # noqa: BLE001 — handed to the waiting request
-                        job.exc = exc
-            with self._lock:
-                if self._inflight.get(job.key) is job:
-                    del self._inflight[job.key]
-                job.done.set()
-                wakes, job._wake = job._wake, []
-            for w in wakes:
-                w()
-
-    def close(self) -> None:
-        """Cancel everything queued or running and let the (daemon) workers go."""
-        with self._lock:
-            self._closed = True
-            for job in self._inflight.values():
-                job.cancel.set()
-            self._inflight.clear()
-        for _ in self._threads:
-            self._q.put_nowait(None)
-
-
-class TimedOut(MokataError):
-    """A heavy question did not finish inside its deadline (answered 503 with what to do)."""
-
-
-class ClientGone(MokataError):
-    """The browser that asked went away; nobody reads the answer."""
-
-
-async def run_heavy(lane: HeavyLane, request: Any, key: Any, fn: Callable[[], Any],
-                    deadline: float) -> Any:
-    """Run `fn` on `lane` for this request: its answer, or TimedOut / ClientGone. Waiting is
-    bounded by `deadline` and stops early when the client disconnects."""
-    loop = asyncio.get_running_loop()
-    job = lane.submit(key, fn)
-    woke = loop.create_future()
-
-    def wake() -> None:
-        loop.call_soon_threadsafe(lambda: woke.done() or woke.set_result(None))
-    lane.on_done(job, wake)
-    end = time.monotonic() + deadline
-    try:
-        while not job.done.is_set():
-            left = end - time.monotonic()
-            if left <= 0:
-                raise TimedOut(f"did not finish within {deadline:g} s")
-            await asyncio.wait({woke}, timeout=min(_WAIT_TICK, left))
-            if not job.done.is_set() and request is not None and await request.is_disconnected():
-                raise ClientGone("the client went away")
-    finally:
-        lane.leave(job)
-    if job.exc is not None:
-        raise job.exc
-    return job.result
+MAX_SYNC_MS = 2000              # the longest sync window a page may ask for (`?sync_ms=`)
 
 
 def record_path(root: str) -> str:
-    return os.path.join(os.path.dirname(state_dir(root)), "ide", "server.json")
+    from .statedir import ide_dir
+    return os.path.join(ide_dir(root), "server.json")
 
 
 def read_record(root: str) -> Optional[Dict[str, Any]]:
@@ -231,8 +127,10 @@ def read_record(root: str) -> Optional[Dict[str, Any]]:
 
 
 def _write_record(root: str, data: Dict[str, Any]) -> None:
+    from .statedir import note_repo
     path = record_path(root)
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    note_repo(root)                  # P29 — a user-level state dir names the repo it belongs to
     tmp = path + f".tmp-{os.getpid()}"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -264,14 +162,14 @@ TERMINAL_NOT_SAMPLE = "no terminal on SAMPLE data (`mokata ide --demo`)"
 
 class AppState:
     def __init__(self, root: str, token: str, port: int, focus: Optional[str], demo: bool,
-                 terminal: bool = False):
+                 terminal: bool = False, approve_here: bool = False):
         from .source import DemoSource, RealSource
         self.root = root
         self.token = token
         self.port = port
         self.focus = focus
         self.demo = demo
-        self.source = DemoSource() if demo else RealSource(root)
+        self.source = DemoSource() if demo else RealSource(root, focus_of=lambda: self.focus)
         if demo and not focus:
             # The SAMPLE opens on its first session, and the server — not the page — owns focus,
             # so the live channel and the state read can never disagree about it.
@@ -293,14 +191,37 @@ class AppState:
                 (False, TERMINAL_NEEDS_TTY) if not terminal else available())
         self.terminals = TerminalHost(root, enabled=gate)
         self.joined: Optional[str] = None
-        # 0.0.25 lane S — the graph's heavy questions, and meaning search, each on a lane of
-        # their own: never on the pool the light routes (caps/state/tree/file/…) answer from.
-        self.heavy = HeavyLane(HEAVY_WORKERS, "mokata-heavy")
-        self.meaning = HeavyLane(1, "mokata-meaning")
+        # 0.0.26 P38 — Approve/Reject in the window needs a code printed to THIS process's own
+        # terminal (`ide/approve_codes.py`): offered only to `mokata ide --foreground` at a human
+        # TTY, re-checked here (fail closed). The codes live in memory only.
+        from .approve_codes import NO_TTY, SAMPLE, CodeBook, human_terminal
+        self.approve_tty = ((False, SAMPLE) if demo else human_terminal() if approve_here
+                            else (False, NO_TTY))
+        self.codes = CodeBook()
+        # 0.0.26 P32 — every long question is a job of this registry (lanes of its own, never the
+        # pool the light routes answer from); background index builds started deep in a module
+        # (⌘P symbols, the meaning index) become its jobs too (`jobs.install`).
+        from . import jobs as J
+        self.jobs = J.JobRegistry()
+        J.install(self.jobs)
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
 
-    def close(self) -> None:
-        self.heavy.close()
-        self.meaning.close()
+    def attach_loop(self) -> None:
+        """Bind job events to the event bus, from the server's loop (first request / stream)."""
+        if self.loop is not None:
+            return
+        loop = self.loop = asyncio.get_running_loop()
+        bus = self.bus
+
+        def publish(evt: Dict[str, Any]) -> None:
+            loop.call_soon_threadsafe(lambda: asyncio.ensure_future(bus.publish(evt)))
+        self.jobs.attach(publish)
+
+    def close(self, wait: float = 0.0) -> None:
+        from . import jobs as J
+        self.jobs.close(wait)
+        if J.installed() is self.jobs:
+            J.install(None)
 
     def hosts(self):
         return {f"127.0.0.1:{self.port}", f"localhost:{self.port}"}
@@ -323,8 +244,45 @@ def _fingerprint(root: str) -> str:
     return "|".join(parts)
 
 
-def build_app(state: AppState):
-    """The Starlette app. Imported lazily so the core never needs the `[ide]` deps."""
+def _approvals_fp(root: str) -> str:
+    """P38 — the proposal records' names, sizes and mtimes: changes when one is proposed, decided or
+    used. Bounded by approval.MAX_PROPOSALS (plus whatever else sits in the state dir: names only)."""
+    from ..approval import PROPOSAL_PREFIX
+    from ..tdd_state import state_dir
+    try:
+        with os.scandir(state_dir(root)) as it:
+            parts = sorted(f"{e.name}:{e.stat().st_size}:{e.stat().st_mtime_ns}" for e in it
+                           if e.name.startswith(PROPOSAL_PREFIX))
+    except OSError:
+        return "-"
+    return "|".join(parts)
+
+
+def feature_assets() -> Dict[str, List[str]]:
+    """The feature scripts and styles under `static/features/` (sorted: a stable load order). Read
+    once per app build — never at idle."""
+    try:
+        names = sorted(n for n in os.listdir(FEATURES_DIR) if _FEATURE_NAME.match(n))
+    except FileNotFoundError:
+        names = []
+    return {"scripts": [n for n in names if n.endswith(".js")],
+            "styles": [n for n in names if n.endswith(".css")]}
+
+
+def render_index(html: str, assets: Dict[str, List[str]]) -> str:
+    """index.html with the feature tags written at its two markers (after the core views, before
+    boot.js — so a feature registers before boot wires and refreshes)."""
+    if SCRIPTS_MARK not in html or STYLES_MARK not in html:
+        raise MokataError("index.html lost a feature marker — feature modules would not load")
+    tags = "\n".join(f'<script src="/static/features/{n}"></script>' for n in assets["scripts"])
+    links = "\n".join(f'<link rel="stylesheet" href="/static/features/{n}">'
+                      for n in assets["styles"])
+    return html.replace(SCRIPTS_MARK, tags).replace(STYLES_MARK, links)
+
+
+def build_app(state: AppState, features: Optional[List[Any]] = None):
+    """The Starlette app. Imported lazily so the core never needs the `[ide]` deps. `features`
+    defaults to every module under `ide/features/` (a test passes its own)."""
     from starlette.applications import Starlette
     from starlette.requests import Request
     from starlette.responses import (HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse,
@@ -376,8 +334,19 @@ def build_app(state: AppState):
         resp.set_cookie(COOKIE, state.token, httponly=True, samesite="strict", path="/")
         return resp
 
+    assets = feature_assets()
+
     async def index(request: Request):
-        return _static("index.html")
+        with open(os.path.join(STATIC_DIR, "index.html"), encoding="utf-8", newline="") as fh:
+            html = fh.read()
+        return _served(render_index(html, assets).encode("utf-8"), "index.html")
+
+    async def feature_static(request: Request):
+        name = request.path_params["name"]
+        if name not in assets["scripts"] and name not in assets["styles"]:
+            return PlainTextResponse("not found", status_code=404)
+        with open(os.path.join(FEATURES_DIR, name), "rb") as fh:
+            return _served(fh.read(), name)
 
     async def static(request: Request):
         name = request.path_params["name"]
@@ -393,7 +362,9 @@ def build_app(state: AppState):
 
     def _static(name: str) -> Response:
         with open(os.path.join(STATIC_DIR, *name.split("/")), "rb") as fh:
-            body = fh.read()
+            return _served(fh.read(), name)
+
+    def _served(body: bytes, name: str) -> Response:
         return Response(body, media_type=_TYPES.get(os.path.splitext(name)[1], "text/plain"),
                         headers={"Cache-Control": "no-store",
                                  "Content-Security-Policy": "default-src 'self'; "
@@ -401,48 +372,105 @@ def build_app(state: AppState):
                                  "frame-ancestors 'none'",
                                  "X-Frame-Options": "DENY"})
 
-    def _json(fn, heavy: Optional[Callable[[Request, float], str]] = None):
-        """A JSON read route. LIGHT by default (asyncio's pool); `heavy` routes run on the
-        server's heavy lane with HEAVY_DEADLINE_SECS — `heavy(request, deadline)` is the honest
-        "timed out — what to do" line the page shows when the deadline passes."""
+    def _json(fn, job: Optional[str] = None,
+              job_label: Optional[Callable[[Request], str]] = None):
+        """A JSON read route. LIGHT by default (asyncio's pool). A `job` route's handler VALIDATES
+        the request (a bad one is a 400 at once) and returns the work, which runs as a job of that
+        kind (see the section note): the result, or 202 with the job's handle."""
         async def handler(request: Request):
             from .nav import PathRefused
             try:
-                if heavy is None:
+                if job is None:
                     return JSONResponse(await asyncio.to_thread(fn, request))
-                deadline = HEAVY_DEADLINE_SECS
-                return JSONResponse(await run_heavy(state.heavy, request, _key(request),
-                                                    lambda: fn(request), deadline))
+                work = fn(request)
+                done, out = await run_job(request, job, _args(request), work,
+                                          job_label(request) if job_label else job)
+                return JSONResponse(out) if done else out
             except (PathRefused, BadRequest) as exc:
                 return JSONResponse({"error": type(exc).__name__, "note": str(exc)},
                                     status_code=400)
-            except TimedOut:
-                return _timed_out(heavy(request, deadline), deadline)
-            except ClientGone:
-                return Response(status_code=499)
-            except Exception as exc:  # noqa: BLE001 — a failed read is an answer, not a 500 page
-                return JSONResponse({"error": type(exc).__name__, "note": str(exc)[:300]},
-                                    status_code=500)
+            except MokataError as exc:
+                return refused(state.root, exc)
+            except Exception as exc:  # noqa: BLE001 — a bug: 500, traceback logged (`crashed`)
+                return crashed(request.url.path, exc)
         return handler
 
-    def _key(request: Request) -> Any:
-        """Identical questions coalesce: the route and its sorted parameters."""
-        return (request.url.path, tuple(sorted(request.query_params.multi_items())))
+    def _args(request: Request) -> Dict[str, Any]:
+        """A job's question: the route's parameters (identical questions are one job)."""
+        return {k: v for k, v in sorted(request.query_params.multi_items())
+                if k not in ("sync_ms", "job")}
 
-    def _timed_out(note: str, deadline: float) -> Response:
-        return JSONResponse({"error": "TimedOut", "timed_out": True, "deadline_s": deadline,
-                             "note": note}, status_code=503)
+    async def run_job(request: Request, kind: str, args: Dict[str, Any],
+                      work: Callable[[], Any], label: str, scope: str = "",
+                      sync_ms: Any = None, job_id: Any = None, as_handle: bool = False) -> Any:
+        """(True, result) when the job is done inside the sync window, else (False, a 202
+        Response with the job's handle and any partial answer). A failed job re-raises its error
+        here, so the route answers it as it always did (400 / 409 / 500). `sync_ms` (the query
+        parameter, or a POST body's field) sets the window; 0 = answer the handle at once. `job`
+        (likewise) names the job a page waited for: its finished answer comes back at once."""
+        from . import jobs as J
+        state.attach_loop()
+        client = request.headers.get(CLIENT_HEADER) or None
+        question = {"route": request.url.path, **args}
+        want = request.query_params.get("job") if job_id is None else job_id
+        kept = state.jobs.answer(want, kind, question) if isinstance(want, str) and want else None
+        if kept is not None:                 # the page that waited for it fetches its answer
+            return True, kept.result
+        j = state.jobs.start(kind, question, work, label=label,
+                             scope=scope or os.path.basename(state.root), client=client)
+        raw = request.query_params.get("sync_ms", "") if sync_ms is None else sync_ms
+        try:
+            wait = max(0, min(MAX_SYNC_MS, int(raw))) / 1000
+        except (TypeError, ValueError):
+            wait = J.SYNC_WINDOW_S
+        if wait == 0:
+            return False, (handle(j) if as_handle else JSONResponse(handle(j), status_code=202))
+        if not j.finished.is_set() and wait > 0:
+            loop = asyncio.get_running_loop()
+            woke = loop.create_future()
+            def _wake() -> None:
+                try:
+                    loop.call_soon_threadsafe(lambda: woke.done() or woke.set_result(None))
+                except RuntimeError:
+                    pass        # INT-2a: the waiter's loop already closed (it answered and left)
+            state.jobs.on_finish(j, _wake)
+            await asyncio.wait({woke}, timeout=wait)
+        if j.state == J.DONE:
+            return True, j.result
+        if j.state == J.FAILED and j.exc is not None:
+            raise j.exc
+        return False, (handle(j) if as_handle else JSONResponse(handle(j), status_code=202))
 
-    def _impact_late(request: Request, deadline: float) -> str:
-        return (f"impact for {q(request, 'path')} did not finish within {deadline:g} s — a widely "
-                f"called symbol makes its blast radius huge. Open the changed symbol in Focus "
-                f"(one hop each way) or ask `mokata query callers <name>`; this page will not ask "
-                f"again until the file changes")
+    def handle(j: Any) -> Dict[str, Any]:
+        """What a page needs to follow a job it asked for."""
+        snap = j.snapshot()
+        return {"job": j.id, "kind": j.kind, "label": j.label, "state": j.state,
+                "done": snap["done"], "total": snap["total"], "unit": snap["unit"],
+                "note": snap["note"], "error": snap["error"], "elapsed": snap["elapsed"],
+                "partial_ref": snap["partial_ref"], "partial": j.partial}
 
-    def _graph_late(request: Request, deadline: float) -> str:
-        return (f"the {q(request, 'view') or 'ripple'} view of {q(request, 'symbol')} did not "
-                f"finish within {deadline:g} s — open it in Focus (one hop each way), or lower "
-                f"the depth")
+    def impact(request: Request) -> Dict[str, Any]:
+        """0.0.26 O7 — `budget=full` (one named symbol) re-walks a blast radius the default bound
+        cut, under its own hard ceiling; anything else about `budget` is refused up front."""
+        budget = q(request, "budget") or BUDGET_DEFAULT
+        names = [n for n in (q(request, "symbols") or "").split(",")[:40] if n.strip()] or None
+        if budget not in (BUDGET_DEFAULT, BUDGET_FULL):
+            raise BadRequest(f"budget must be '{BUDGET_DEFAULT}' or '{BUDGET_FULL}'")
+        if budget == BUDGET_FULL and (not names or len(names) != 1):
+            raise BadRequest("the full blast-radius budget is asked for one named symbol at a time")
+        path, lines = q(request, "path"), q(request, "lines")
+        return lambda: state.source.impact(path, lines, names, budget)
+
+    def _impact_label(request: Request) -> str:
+        if q(request, "budget") == BUDGET_FULL:
+            return f"full blast radius · {q(request, 'symbols')[:80]}"
+        return f"impact · {q(request, 'path')[:120]}"
+
+    def _graph_label(request: Request) -> str:
+        to = f" → {q(request, 'to')[:60]}" if q(request, "view") == "path" else ""
+        pg = q(request, "page")
+        more = f" · page {pg[:6]}" if pg and pg != "1" else ""
+        return f"graph {q(request, 'view') or 'ripple'} · {q(request, 'symbol')[:80]}{to}{more}"
 
     q = lambda r, k: r.query_params.get(k, "")  # noqa: E731
 
@@ -545,9 +573,10 @@ def build_app(state: AppState):
             return JSONResponse(await asyncio.to_thread(state.source.quick, q_[:200],
                                                         [c for c in changed[:5000]
                                                          if isinstance(c, str)]))
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"error": type(exc).__name__, "note": str(exc)[:300]},
-                                status_code=500)
+        except MokataError as exc:
+            return refused(state.root, exc)
+        except Exception as exc:  # noqa: BLE001 — a bug: 500, traceback logged
+            return crashed(request.url.path, exc)
 
     async def query(request: Request):
         """The structural answer as the EXACT bytes `mokata query --json` prints (C1)."""
@@ -561,18 +590,17 @@ def build_app(state: AppState):
             depth = max(1, min(6, int(q(request, "depth") or 2)))
         except ValueError:
             depth = 2
-        deadline = HEAVY_DEADLINE_SECS
+        tgt = target[:300]
         try:
-            body = await run_heavy(state.heavy, request, _key(request),
-                                   lambda: state.source.query(kind, target[:300], depth), deadline)
-        except TimedOut:
-            return _timed_out(f"{kind}({target[:80]}) did not finish within {deadline:g} s — "
-                              f"lower the depth, or ask `callers` (one hop) instead", deadline)
-        except ClientGone:
-            return Response(status_code=499)
-        except Exception as exc:  # noqa: BLE001 — e.g. the repo is not a mokata repo
-            return JSONResponse({"error": type(exc).__name__, "note": str(exc)[:300]},
-                                status_code=409)
+            done, body = await run_job(request, "graph.query", _args(request),
+                                       lambda: state.source.query(kind, tgt, depth),
+                                       f"{kind} · {tgt[:80]}")
+        except MokataError as exc:   # e.g. a broken manifest — the repo's state, said as such
+            return refused(state.root, exc)
+        except Exception as exc:  # noqa: BLE001 — a bug: 500 + logged (was a 409)
+            return crashed(request.url.path, exc)
+        if not done:
+            return body
         return Response(body.encode("utf-8"), media_type="application/json")
 
     async def _body(request: Request) -> Dict[str, Any]:
@@ -587,23 +615,42 @@ def build_app(state: AppState):
         return [p for p in only[:5000] if isinstance(p, str)] if isinstance(only, list) else None
 
     # 0.0.25 — the health panel: highlight missing / degraded / out of sync; force a re-sync of
-    # what is derived; update mokata on a confirmed click. Nothing installs a dependency.
+    # what is derived; update mokata on the human's click (`update.py`'s plan and executor).
     def _health_layer():
         from . import nav
         return None if state.demo else nav._layer(state.root)
 
-    def _health_late(_request: Request, deadline: float) -> str:
-        return (f"the health checks did not finish within {deadline:g} s — run `mokata doctor` "
-                f"in a terminal for the same verdicts")
-
-    def health_rows(request: Request) -> Dict[str, Any]:
+    def health_rows(request: Request) -> Callable[[], Dict[str, Any]]:
         from . import health
-        return health.health(state.root, _health_layer(), demo=state.demo,
-                             full=q(request, "full") == "1")
+        full = q(request, "full") == "1"
+        return lambda: health.health(state.root, _health_layer(), demo=state.demo, full=full,
+                                     jobs=state.jobs)
 
-    def health_job(_request: Request) -> Dict[str, Any]:
+    async def health_route(request: Request):
+        """INT-2a — `/api/health` ALWAYS answers 200 with what is known now. The checks run as the
+        `health.check` job (same kind, same join-the-running-one rule as before); when they finish
+        inside the sync window the answer is the full rows, and when they do not (a loaded box, a
+        cold graph, `sync_ms=0`) the answer is the CHECKING shape — every row group `checking…`,
+        the counts honest about being unknown — with the job's handle in `pending`. The page
+        follows `pending` and re-asks with `job=<id>` for the finished rows. Never a bare 202 job
+        handle: a health probe that sometimes answers a different shape is the flake P33/P35/P38/
+        P39 kept hitting, and a health view must never be blank because the box is busy."""
         from . import health
-        return health.JOB.snapshot()
+        try:
+            work = health_rows(request)
+            full = q(request, "full") == "1"
+            done, out = await run_job(request, "health.check", _args(request), work,
+                                      "health checks" + (" (full)" if full else ""),
+                                      as_handle=True)
+            if done:
+                return JSONResponse(out)
+            body = health.checking(state.root, demo=state.demo, full=full, jobs=state.jobs)
+            body["pending"] = out
+            return JSONResponse(body)
+        except MokataError as exc:
+            return refused(state.root, exc)
+        except Exception as exc:  # noqa: BLE001 — a bug: 500, traceback logged (`crashed`)
+            return crashed(request.url.path, exc)
 
     async def health_action(request: Request):
         from . import health
@@ -614,10 +661,16 @@ def build_app(state: AppState):
         action = b.get("action") if isinstance(b.get("action"), str) else ""
         confirm = b.get("confirm") if isinstance(b.get("confirm"), str) else ""
         try:
+            if action not in health.ACTIONS:    # refuse before building anything
+                raise BadRequest(f"action must be one of {', '.join(health.ACTIONS)}")
             layer = await asyncio.to_thread(_health_layer)
-            return JSONResponse(health.start(state.root, layer, action, confirm[:2000]))
+            state.attach_loop()
+            return JSONResponse(health.start(state.root, layer, action, confirm[:2000],
+                                             state.jobs))
         except BadRequest as exc:
             return JSONResponse({"error": "BadRequest", "note": str(exc)}, status_code=400)
+        except MokataError as exc:
+            return refused(state.root, exc)
 
     async def health_check_update(_request: Request):
         """The ONE outbound call, on the human's click (opt-in, ledger-accounted)."""
@@ -627,40 +680,53 @@ def build_app(state: AppState):
         return JSONResponse(await asyncio.to_thread(health.check_update, state.root))
 
     async def search_text(request: Request):
-        from .search import BadPattern
+        from .search import BadPattern, _compile
         b = await _body(request)
-        q_ = b.get("q") if isinstance(b.get("q"), str) else ""
+        q_ = (b.get("q") if isinstance(b.get("q"), str) else "")[:500]
         mode = "regex" if b.get("mode") == "regex" else "word"
+        case, only = bool(b.get("case")), _only(b)
+        offset = b.get("offset", 0)
         try:
-            return JSONResponse(await asyncio.to_thread(state.source.search, q_[:500], mode,
-                                                        bool(b.get("case")), _only(b)))
+            if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+                raise BadRequest("offset must be a whole number ≥ 0 (a page's next_offset)")
+            if q_.strip():
+                _compile(q_, mode, case)             # a bad pattern is a 400 now, not a job
+            done, out = await run_job(request, "search.text",
+                                      {"q": q_, "mode": mode, "case": case, "only": only,
+                                       "offset": offset},
+                                      lambda: state.source.search(q_, mode, case, only, offset),
+                                      f"search · {q_[:80]}", sync_ms=b.get("sync_ms"),
+                                      job_id=b.get("job"))
+            return JSONResponse(out) if done else out
         except BadPattern as exc:
             return JSONResponse({"error": "BadPattern", "note": str(exc)}, status_code=400)
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"error": type(exc).__name__, "note": str(exc)[:300]},
-                                status_code=500)
+        except BadRequest as exc:
+            return JSONResponse({"error": "BadRequest", "note": str(exc)}, status_code=400)
+        except MokataError as exc:
+            return refused(state.root, exc)
+        except Exception as exc:  # noqa: BLE001 — a bug: 500, traceback logged
+            return crashed(request.url.path, exc)
 
     async def search_meaning(request: Request):
         b = await _body(request)
-        q_ = b.get("q") if isinstance(b.get("q"), str) else ""
+        q_ = (b.get("q") if isinstance(b.get("q"), str) else "")[:500]
         only = _only(b)
-        key = ("meaning", q_[:500], tuple(only) if only is not None else None)
-        deadline = MEANING_DEADLINE_SECS
         try:
-            return JSONResponse(await run_heavy(state.meaning, request, key,
-                                                lambda: state.source.meaning(q_[:500], only),
-                                                deadline))
-        except TimedOut:
-            return JSONResponse({"error": "TimedOut", "timed_out": True, "available": False,
-                                 "note": f"meaning search did not finish within {deadline:g} s "
-                                         f"(the first search embeds the whole repo) — try again "
-                                         f"in a moment, or limit it to the changed files"},
-                                status_code=503)
-        except ClientGone:
-            return Response(status_code=499)
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"error": type(exc).__name__, "note": str(exc)[:300],
-                                 "available": False}, status_code=500)
+            done, out = await run_job(request, "search.meaning", {"q": q_, "only": only},
+                                      lambda: state.source.meaning(q_, only),
+                                      f"meaning · {q_[:80]}", sync_ms=b.get("sync_ms"),
+                                      job_id=b.get("job"))
+            return JSONResponse(out) if done else out
+        except Exception as exc:  # noqa: BLE001 — R18: never a 500; the failure is SAID
+            # 0.0.26 P36 (R18) — meaning search never answers a 500. The job that failed is in
+            # Activity as FAILED with this error; the page gets a `failed` state naming it (and
+            # word results beside it are untouched). The traceback is logged like any crash.
+            crashed(request.url.path, exc)        # its traceback to stderr; its 500 discarded
+            return JSONResponse({"sample": False, "q": q_, "kind": "meaning", "results": [],
+                                 "available": False, "state": "failed",
+                                 "error": type(exc).__name__,
+                                 "note": f"meaning search failed — {type(exc).__name__}: "
+                                         f"{str(exc)[:300]}"})
 
     async def semantic_fetch(request: Request):
         return JSONResponse(await asyncio.to_thread(state.source.semantic_fetch))
@@ -676,12 +742,17 @@ def build_app(state: AppState):
             depth = int(q(request, "depth") or 2)
         except ValueError:
             depth = 2
-        return state.source.graph(view, symbol, to, depth)
+        raw = q(request, "page") or "1"
+        if not raw.isdigit() or not 1 <= int(raw) <= 100000:
+            raise BadRequest("page must be a page number (1, 2, …)")
+        page = int(raw)
+        return lambda: state.source.graph(view, symbol, to, depth, page)
 
     # 0.0.23 C5 — the plan + spec of a run, and its lifecycle. Every run id is validated (shape,
     # then existence) inside `plans` before anything is read; a bad one is a BadRequest (400).
     def runs(request: Request) -> Dict[str, Any]:
-        return state.source.runs(q(request, "source") or "local")
+        # O10 — the Plan view opens on the run the FOCUSED session is in (kept across a resume).
+        return state.source.runs(q(request, "source") or "local", state.focus)
 
     def plan(request: Request) -> Dict[str, Any]:
         raw = q(request, "version") or "0"
@@ -893,14 +964,28 @@ def build_app(state: AppState):
         except ValueError:
             resume = None
 
+        # P32: the page's id — while this stream is open, the jobs it asked for stay wanted.
+        client = (request.query_params.get("client") or "")[:64] or None
+
         async def gen():
             state.clients += 1
+            state.attach_loop()
+            if client:
+                state.jobs.client_back(client)
             _ensure_watcher(state)
             last = resume if resume is not None and 0 <= resume <= state.bus.seq else state.bus.seq
             try:
                 fp = await asyncio.to_thread(_fingerprint, state.root)
                 yield {"event": "changed", "data": fp}
                 yield {"event": "focus", "data": json.dumps({"focus": state.focus})}
+                if resume is None:
+                    # A FIRST connect starts at the current seq; the jobs already known (started
+                    # before this stream, e.g. by the page's own first requests) are sent as they
+                    # stand now — else a fast job's `done` is never heard (0.0.26 O9).
+                    for e in state.bus.job_events():
+                        if e["id"] <= last:
+                            yield {"event": "job", "id": str(e["id"]),
+                                   "data": json.dumps(e.get("job") or {})}
                 while True:
                     if await request.is_disconnected():
                         break
@@ -916,78 +1001,110 @@ def build_app(state: AppState):
                         elif e["kind"] == "focus":
                             yield {"event": "focus", "id": str(e["id"]),
                                    "data": json.dumps({"focus": e.get("focus")})}
+                        elif e["kind"] == "job":
+                            yield {"event": "job", "id": str(e["id"]),
+                                   "data": json.dumps(e.get("job") or {})}
                         else:
                             yield {"event": "bus", "id": str(e["id"]), "data": json.dumps(e)}
                     state.last_seen = time.time()
             finally:
                 state.clients -= 1
+                if client:
+                    state.jobs.client_gone(client)
         return EventSourceResponse(gen())
 
-    routes = [
-        Route("/pair", guard(pair, auth=False)),
-        Route("/", guard(index)),
-        Route("/static/{name}", guard(static)),
-        Route("/api/ping", guard(ping)),
-        Route("/api/state", guard(_json(lambda r: state.source.state(state.focus)))),
-        Route("/api/live", guard(_json(lambda r: state.source.live()))),
-        Route("/api/session", guard(_json(lambda r: state.source.session(q(r, "id"))))),
-        Route("/api/timeline", guard(_json(lambda r: state.source.timeline(q(r, "session") or None)))),
-        Route("/api/between", guard(_json(lambda r: state.source.between(q(r, "a"), q(r, "b"))))),
-        Route("/api/compare", guard(_json(lambda r: state.source.compare(q(r, "base"),
-                                                                         q(r, "head"))))),
-        Route("/api/pr", guard(pr), methods=["POST"]),
-        # 0.0.23 C1 — navigation. Every path-taking route contains its path (nav.contained_rel).
-        Route("/api/tree", guard(_json(lambda r: state.source.tree()))),
-        Route("/api/file", guard(_json(lambda r: state.source.file(q(r, "path"))))),
-        Route("/api/outline", guard(_json(lambda r: state.source.outline(q(r, "path"))))),
-        Route("/api/impact", guard(_json(lambda r: state.source.impact(
-            q(r, "path"), q(r, "lines"),
-            [n for n in (q(r, "symbols") or "").split(",")[:40] if n.strip()] or None),
-            heavy=_impact_late))),
-        Route("/api/quickopen", guard(quick), methods=["POST"]),
-        Route("/api/query", guard(query)),
-        Route("/api/caps", guard(_json(caps))),
-        Route("/api/health", guard(_json(health_rows, heavy=_health_late))),
-        Route("/api/health/job", guard(_json(health_job))),
-        Route("/api/health/action", guard(health_action), methods=["POST"]),
-        Route("/api/health/check-update", guard(health_check_update), methods=["POST"]),
-        # 0.0.23 C2 — search: word / regex (rg or the floor, named) and meaning (R2).
-        Route("/api/search", guard(search_text), methods=["POST"]),
-        Route("/api/meaning", guard(search_meaning), methods=["POST"]),
-        Route("/api/semantic", guard(_json(lambda r: state.source.semantic_status()))),
-        Route("/api/semantic/fetch", guard(semantic_fetch), methods=["POST"]),
-        # 0.0.23 C3 — the graph views, as data drawn by the vendored Cytoscape.js.
-        Route("/api/graph", guard(_json(graph, heavy=_graph_late))),
-        Route("/static/vendor/{name}", guard(vendor)),
-        Route("/api/runs", guard(_json(runs))),
-        Route("/api/plan", guard(_json(plan))),
-        Route("/api/lifecycle", guard(_json(lifecycle))),
-        Route("/api/saved-plans", guard(_json(saved_plans))),
-        Route("/api/saved-plan", guard(_json(saved_plan))),
-        Route("/api/focus", guard(focus), methods=["POST"]),
-        Route("/api/events", guard(events)),
-        Route("/api/bus", guard(bus_post, hook=True), methods=["POST"]),
-        Route(_GATE_PATH, guard(gate_post, hook=True), methods=["POST"]),
-        # ID.S3 (Lane ID2) — OSC-8 target, embedded terminal, session join, context injection.
-        Route("/open", guard(open_ref)),
-        Route("/api/term/caps", guard(term_caps)),
-        Route("/api/term/open", guard(term_open), methods=["POST"]),
-        Route("/api/term/input", guard(term_input), methods=["POST"]),
-        Route("/api/term/resize", guard(term_resize), methods=["POST"]),
-        Route("/api/term/close", guard(term_close), methods=["POST"]),
-        Route("/api/term/out", guard(term_out)),
-        Route("/api/join", guard(_json(join_list))),
-        Route("/api/join", guard(join), methods=["POST"]),
-        Route("/api/context", guard(_json(context_list))),
-        Route("/api/context", guard(context_send), methods=["POST"]),
-        Route("/api/context/clear", guard(context_clear), methods=["POST"]),
-        # 0.0.25 ID3 — session browser / needs-you, time-lapse, treemap, and `ide_open`'s door.
-        Route("/api/sessions", guard(sessions_browser)),
-        Route("/api/timelapse", guard(_json(timelapse))),
-        Route("/api/treemap", guard(_json(treemap))),
-        Route("/api/open", guard(open_in_page), methods=["POST"]),
-    ]
-    return Starlette(routes=routes)
+    # 0.0.26 P0 (ID-API-CONTRACT) — the routes are a REGISTRY (`ide/routes.py`): the core ones
+    # are registered here, a feature module under `ide/features/` registers its own (one new file,
+    # no edit to this list), and every one is mounted behind the same `guard(...)` below. The
+    # contract (`api_contract.json` + `features/*.contract.json`) lists exactly these.
+    from .routes import FeatureContext, Registry, feature_modules
+    reg = Registry()
+
+    def add(path, handler, kind, **kw):
+        reg.register(path, handler, kind=kind, feature="core", **kw)
+
+    add("/pair", pair, "page", auth=False)
+    add("/", index, "page")
+    add("/static/{name}", static, "static")
+    add("/static/vendor/{name}", vendor, "static")
+    add("/static/features/{name}", feature_static, "static")
+    add("/api/ping", ping, "read")
+    add("/api/state", lambda r: state.source.state(state.focus), "json")
+    add("/api/live", lambda r: state.source.live(q(r, "mokata") == "1"), "json")
+    add("/api/session", lambda r: state.source.session(q(r, "id")), "json")
+    add("/api/timeline", lambda r: state.source.timeline(q(r, "session") or None), "json")
+    add("/api/between", lambda r: state.source.between(q(r, "a"), q(r, "b")), "json")
+    add("/api/compare", lambda r: state.source.compare(q(r, "base"), q(r, "head")), "json")
+    add("/api/pr", pr, "action")
+    # 0.0.23 C1 — navigation. Every path-taking route contains its path (nav.contained_rel).
+    def tree(r):
+        # 0.0.26 P35 (G13/R19) — lazy: ONE directory's children, or a filter over every path,
+        # paged (`offset` / the answer's `next`). Validated here (a bad offset is a 400 at once).
+        try:
+            offset = max(0, int(q(r, "offset") or 0))
+        except ValueError:
+            raise BadRequest("offset must be a whole number") from None
+        d, flt = q(r, "dir") or "", q(r, "filter") or ""
+        return lambda: state.source.tree(d, flt, offset)
+    add("/api/tree", tree, "json", job="tree.walk",
+        job_label=lambda r: "file tree" + (f" filter {q(r, 'filter')}" if q(r, "filter") else ""))
+    add("/api/file", lambda r: state.source.file(q(r, "path"), q(r, "outline") == "1"), "json")
+    add("/api/outline", lambda r: state.source.outline(q(r, "path")), "json")
+    add("/api/impact", impact, "json", job="impact", job_label=_impact_label)
+    add("/api/quickopen", quick, "action")
+    add("/api/query", query, "read")
+    add("/api/caps", caps, "json")
+    add("/api/health", health_route, "read")
+    add("/api/health/action", health_action, "action")
+    add("/api/health/check-update", health_check_update, "action")
+    # 0.0.23 C2 — search: word / regex (rg or the floor, named) and meaning (R2).
+    add("/api/search", search_text, "action")
+    add("/api/meaning", search_meaning, "action")
+    add("/api/semantic", lambda r: state.source.semantic_status(), "json")
+    add("/api/semantic/fetch", semantic_fetch, "action")
+    # 0.0.23 C3 — the graph views, as data drawn by the vendored Cytoscape.js.
+    add("/api/graph", graph, "json", job="graph.view", job_label=_graph_label)
+    add("/api/runs", runs, "json")
+    add("/api/plan", plan, "json")
+    add("/api/lifecycle", lifecycle, "json")
+    add("/api/saved-plans", saved_plans, "json")
+    add("/api/saved-plan", saved_plan, "json")
+    add("/api/focus", focus, "action")
+    add("/api/events", events, "stream")
+    add("/api/bus", bus_post, "hook")
+    add(_GATE_PATH, gate_post, "hook")
+    # ID.S3 (Lane ID2) — OSC-8 target, embedded terminal, session join, context injection.
+    add("/open", open_ref, "page")
+    add("/api/term/caps", term_caps, "read")
+    add("/api/term/open", term_open, "action")
+    add("/api/term/input", term_input, "action")
+    add("/api/term/resize", term_resize, "action")
+    add("/api/term/close", term_close, "action")
+    add("/api/term/out", term_out, "stream")
+    add("/api/join", join_list, "json")
+    add("/api/join", join, "action")
+    add("/api/context", context_list, "json")
+    add("/api/context", context_send, "action")
+    add("/api/context/clear", context_clear, "action")
+    # 0.0.25 ID3 — session browser / needs-you, time-lapse, treemap, and `ide_open`'s door.
+    add("/api/sessions", sessions_browser, "read")
+    add("/api/timelapse", timelapse, "json")
+    add("/api/treemap", treemap, "json")
+    add("/api/open", open_in_page, "action")
+
+    ctx = FeatureContext(state=state, q=q, body=_body, bad_request=BadRequest,
+                         assets=dict(assets), registry=reg)
+    for mod in features if features is not None else feature_modules():
+        mod.routes(reg, ctx)
+
+    routes = [Route(s.path, guard(_json(s.handler, job=s.job, job_label=s.job_label)
+                                  if s.kind == "json"
+                                  else s.handler, auth=s.auth, hook=s.hook),
+                    methods=list(s.methods))
+              for s in reg.specs()]
+    app = Starlette(routes=routes)
+    app.state.registry = reg
+    return app
 
 
 def _ensure_watcher(state: AppState) -> None:
@@ -1004,6 +1121,7 @@ async def _watch(state: AppState) -> None:
     if tails:
         await asyncio.to_thread(tails.prime)
     fp = await asyncio.to_thread(_fingerprint, state.root)
+    afp = None if state.demo else await asyncio.to_thread(_approvals_fp, state.root)
     while True:
         await asyncio.sleep(TAIL_SECS)
         if state.clients <= 0:
@@ -1021,9 +1139,26 @@ async def _watch(state: AppState) -> None:
         if now != fp:
             fp, moved = now, True
             await state.bus.publish({"kind": "changed", "fp": now})
+        if not state.demo:
+            # P38 — a proposal appeared, was approved / rejected (in a terminal or here) or used:
+            # the approval cards update live. A stat of <= MAX_PROPOSALS small files per tick.
+            now_afp = await asyncio.to_thread(_approvals_fp, state.root)
+            if now_afp != afp:
+                afp = now_afp
+                await state.bus.publish({"kind": "approval", "fp": afp})
         if moved:
             from .nav import note_change
             note_change(state.root)          # lane S: ⌘P's file/symbol lists follow real change
+
+
+async def _exit_watch(server: Any) -> None:
+    """0.0.26 L2 — the health panel's Windows update asks this server to exit so the detached
+    updater can replace mokata's locked files (`ide.health.EXIT`)."""
+    from .health import EXIT
+    while not server.should_exit:
+        await asyncio.sleep(1.0)
+        if EXIT.is_set():
+            server.should_exit = True
 
 
 async def _idle_watch(state: AppState, server: Any, idle_secs: float) -> None:
@@ -1033,10 +1168,73 @@ async def _idle_watch(state: AppState, server: Any, idle_secs: float) -> None:
             server.should_exit = True
 
 
+def _stopping_server_class():
+    import uvicorn
+
+    class StoppingServer(uvicorn.Server):
+        """uvicorn's server, with two changes for P37 (closing with jobs running asks first):
+        it remembers WHICH signal stopped it, and it does NOT re-raise that signal once it has
+        shut down (uvicorn re-raises it, and a re-raised SIGTERM kills the process on the spot —
+        every running index build and update died with no word, before `serve`'s cleanup)."""
+        stop_signal: Optional[int] = None
+
+        def handle_exit(self, sig: int, frame: Any) -> None:
+            if self.stop_signal is None:
+                self.stop_signal = sig
+            super().handle_exit(sig, frame)
+
+        @contextlib.contextmanager
+        def capture_signals(self):
+            import signal as _signal
+            from uvicorn.server import HANDLED_SIGNALS
+            if threading.current_thread() is not threading.main_thread():
+                yield
+                return
+            original = {sig: _signal.signal(sig, self.handle_exit) for sig in HANDLED_SIGNALS}
+            try:
+                yield
+            finally:
+                for sig, handler in original.items():
+                    _signal.signal(sig, handler)
+    return StoppingServer
+
+
+def _StoppingServer(config: Any) -> Any:
+    return _stopping_server_class()(config)
+
+
+def _on_stop(state: "AppState", sig: Optional[int], *, interactive: Optional[bool] = None,
+             read: Any = None) -> str:
+    """0.0.26 P37 (Jas: "while closing, it should confirm to run in background") — the server has
+    stopped; jobs that outlive their page are still running. Ctrl+C at a terminal ASKS
+    (background / cancel safely / wait); any other stop (SIGTERM, no TTY, the idle exit, an
+    update's restart) hands them to background workers. Never a silent kill."""
+    import signal as _signal
+    from . import handoff
+    jobs = state.jobs.running_kept() if state.jobs is not None else []
+    if not jobs:
+        return ""
+    if interactive is None:
+        try:
+            interactive = sig == _signal.SIGINT and sys.stdin.isatty() and sys.stdout.isatty()
+        except (OSError, ValueError):
+            interactive = False
+    choice = handoff.ask(jobs, root=state.root, **({"read": read} if read else {})) \
+        if interactive \
+        else handoff.BACKGROUND
+    if not interactive:
+        print(f"mokata ide: stopping with {len(jobs)} job(s) running — they continue in the "
+              "background (shown in Activity and Health at the next start)", flush=True)
+    handoff.stop(state.jobs, state.root, choice)
+    return choice
+
+
 def serve(root: str, port: int = 0, focus: Optional[str] = None, demo: bool = False,
           idle_secs: Optional[float] = IDLE_SECS, token: Optional[str] = None,
-          terminal: bool = False) -> int:
-    """Run the server in THIS process until stopped (or idle). Writes / removes the record."""
+          terminal: bool = False, approve_here: bool = False) -> int:
+    """Run the server in THIS process until stopped (or idle). Writes / removes the record.
+    `approve_here` (P38): only `mokata ide --foreground` passes it — the code for an in-window
+    approval is printed to this process's terminal, so a detached child can never offer it."""
     try:
         import uvicorn
         build_app  # noqa: B018
@@ -1049,25 +1247,26 @@ def serve(root: str, port: int = 0, focus: Optional[str] = None, demo: bool = Fa
         from .bus import preferred_port
         port = preferred_port(root)           # ID.S3: the stable port the http hooks post to
     port = port or free_port()
-    # lane S: heavy graph work is pure-Python CPU on the heavy lane's threads; at the default 5 ms
+    # lane S: heavy graph work is pure-Python CPU on the job lanes' threads; at the default 5 ms
     # GIL switch interval every syscall a light route makes (a walk, a git read) waits up to 5 ms
     # to get the interpreter back — measured on the scale repo, /api/tree took 11 s behind one
-    # running blast radius. 1 ms keeps light routes responsive; the heavy lane barely notices.
+    # running blast radius. 1 ms keeps light routes responsive; the job lanes barely notice.
     sys.setswitchinterval(SWITCH_INTERVAL_SECS)
-    state = AppState(root, token or secrets.token_urlsafe(24), port, focus, demo, terminal)
+    state = AppState(root, token or secrets.token_urlsafe(24), port, focus, demo, terminal,
+                     approve_here)
     app = build_app(state)
     # lane S: a SIGTERM/SIGINT closes within SHUTDOWN_GRACE_SECS even with heavy work in flight —
-    # open requests are cut after the grace, the heavy lanes' jobs are cancelled, and their
+    # open requests are cut after the grace, the job lanes' jobs are cancelled, and their
     # threads are daemons, so nothing still computing can hold the process open.
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning",
                             access_log=False, lifespan="off",
                             timeout_graceful_shutdown=SHUTDOWN_GRACE_SECS)
-    server = uvicorn.Server(config)
+    server = _StoppingServer(config)
     _write_record(root, {"port": port, "pid": os.getpid(), "token": state.token, "root": root,
                          "demo": demo, "started": time.time()})
 
     async def main():
-        tasks = [asyncio.create_task(server.serve())]
+        tasks = [asyncio.create_task(server.serve()), asyncio.create_task(_exit_watch(server))]
         if idle_secs:
             tasks.append(asyncio.create_task(_idle_watch(state, server, idle_secs)))
         await tasks[0]
@@ -1076,8 +1275,9 @@ def serve(root: str, port: int = 0, focus: Optional[str] = None, demo: bool = Fa
 
     try:
         asyncio.run(main())
+        _on_stop(state, server.stop_signal)
     finally:
-        state.close()
+        state.close(SHUTDOWN_GRACE_SECS)   # P32: a running build kills its subprocess on the way out
         from . import nav
         nav.close_layers()          # 0.0.25 IDE-SERVER-LIGHT: no serve process outlives us
         state.terminals.close_all()  # ID.S3: no terminal outlives its window

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from ..errors import DegradedCapability
 
 # The structural questions the API answers. Stable across backends.
@@ -23,6 +23,15 @@ from ..errors import DegradedCapability
 # `query` tool derives its enum from this tuple, so it accepts them for free); no new tool.
 QUERY_KINDS = ("callers", "callees", "implementers", "imports", "blast_radius",
                "defs", "refs")
+
+# 0.0.26 O7 (BLAST-FULL-ON-REQUEST) — how much a blast radius may spend. `default` is the bounded
+# walk every automatic caller gets (the 0.0.25 K cap; ruling U10 keeps it). `full` is asked for by
+# a HUMAN on a result the default cut (`mokata query blast_radius X --full`, the IDE's "calculate
+# the full blast radius" action): a much longer, still hard-bounded and cancellable walk. Only the
+# blast radius has a budget; every other kind refuses `full` rather than silently ignoring it.
+BUDGET_DEFAULT = "default"
+BUDGET_FULL = "full"
+BUDGETS = (BUDGET_DEFAULT, BUDGET_FULL)
 
 # CRG-NAV — the NAVIGATION subset: "where does this symbol live / who touches it". `blast_radius`
 # is deliberately NOT here: that is the IMPACT question (GRAPH-FIRST-IMPACT owns it), and the
@@ -96,6 +105,36 @@ class BackendError(DegradedCapability):
     catches this to degrade to the grep floor rather than hard-fail (A3)."""
 
 
+class GraphNotIndexed(BackendError):
+    """0.0.26 O2 (`CRG-BLAST-EMPTY`) — the adopted graph is HEALTHY and holds no node for the
+    target (code-review-graph's `status: "not_found"` / `"ambiguous"`). Neither "the tool failed"
+    nor "zero dependents": the graph simply cannot speak for this symbol. The layer answers it from
+    the floor with a note naming both backends — no recovery re-probe, no degrade alarm against a
+    tool that is working."""
+
+
+class GraphIndexUnbuilt(GraphNotIndexed):
+    """0.0.26 O13 (`CRG-AUTO-BUILD`) — the graph is installed but its index for THIS repo was never
+    built (or is being built, or its build failed). Not "this symbol is absent": NO symbol is there.
+    The layer answers from the floor, and the backend has already started (or declined, with the
+    reason) the one background build; the message is the note the reader sees."""
+
+
+def floor_symbol(graph_symbol: Optional[str]) -> Optional[str]:
+    """0.0.26 O13 (F3) — a graph's symbol id in the FLOOR's identity scheme.
+
+    The AST floor names a symbol by its bare name (`refund`, a method `meth`), and the IDE builds
+    its node ids from that (`sym:refund`). code-review-graph names it `path::name` /
+    `path::Class.meth`. Left as-is, the same function had two node ids depending on which backend
+    happened to answer, so a symbol picked while the floor answered vanished once the graph took
+    over. The graph's own id is kept in `metadata.qualified_name`; this is only the display/identity
+    form, applied once at the adapter boundary."""
+    if not graph_symbol:
+        return graph_symbol
+    name = graph_symbol.rsplit("::", 1)[-1]
+    return name.rsplit(".", 1)[-1] or graph_symbol
+
+
 @dataclass
 class Reference:
     """One structural hit: a location and the symbol it relates to.
@@ -155,6 +194,12 @@ class QueryResult:
     # that concludes an absence from it ("no test reaches this") must read `truncated` first.
     truncated: bool = False
     total: Optional[int] = None
+    # 0.0.26 P35 (G28/R37) — the target NAME matched more than one definition (kubernetes:
+    # `HandleError` has 18 graph nodes). The answer is the union over all of them, and says so:
+    # `definitions` is how many there were, `candidates` names them (repo-relative qualified name,
+    # path, line) so a reader can ask again for exactly one. None / [] when the name was unique.
+    definitions: Optional[int] = None
+    candidates: List[Dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         # The one incoherent combination: a basis claiming "the answer is zero" while carrying
@@ -208,6 +253,8 @@ class QueryResult:
             "truncated": self.truncated,
             "total": self.total,
             "references": [r.to_dict() for r in self.references],
+            **({"definitions": self.definitions, "candidates": list(self.candidates)}
+               if self.definitions else {}),
         }
 
 
@@ -240,6 +287,17 @@ class GraphBackend(ABC):
     @abstractmethod
     def query(self, kind: str, target: str, depth: int = 1) -> QueryResult:
         ...
+
+    def blast_radius_full(self, target: str, depth: int = 1,
+                          checkpoint: Optional[Callable[[], None]] = None) -> QueryResult:
+        """0.0.26 O7 — the blast radius with the FULL budget, asked for on request only.
+
+        A backend whose blast radius has no budget (the grep floor walks to the end; an adopted
+        graph caps on its own side and says so) answers it exactly as `query` does. The AST floor,
+        which cuts its default walk, overrides this with its long hard-bounded walk. `checkpoint`
+        is called between steps of a long walk and RAISES to cancel it (the IDE passes its
+        abandoned-request check)."""
+        return self.query("blast_radius", target, depth=depth)
 
     def supports_kind(self, kind: str) -> bool:
         """CRG-NAV (b/d): whether THIS backend has an op for `kind`.

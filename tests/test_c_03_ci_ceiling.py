@@ -6,8 +6,8 @@ What must be true (for the owner cutting a release, and so for every user waitin
   * a suite that has grown to within 20% of a job ceiling REDS with the 1.5x value to set —
     while it is a one-line edit, not after the tag's test job is cancelled (v0.0.23 was lost so);
   * a ceiling that still clears says so; "could not measure" is never reported as "clears";
-  * the PR gate's ubuntu legs measure release.yml's `test` ceiling, because they run a superset
-    of that job on the same image — the tag gate's ceiling is re-derived on every PR;
+  * the PR gate re-derives release.yml's `test` ceiling on every PR — since 0.0.26 O6 (sharding)
+    from the ubuntu shards re-assembled into the unsharded leg (`tag-ceiling` job);
   * the reader takes the JOB-level ceiling, never a step's and never a comment's.
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
@@ -145,21 +145,32 @@ class TheGatesMeasureThemselves(unittest.TestCase):
         install = next(i for i, n in enumerate(names) if "pip install -e ." in n)
         checks = [i for i, n in enumerate(names) if "scripts/ci_ceiling.py" in n]
         self.assertLess(clock, install)
-        self.assertEqual(len(names) - len(checks), min(checks), "the checks must be the last steps")
+        # 0.0.26 O6: only the upload of the shard's clock may follow the check — nothing the
+        # ceiling must cover runs after it.
+        after = [n for n in names[max(checks) + 1:]]
+        self.assertTrue(all("actions/upload-artifact@" in n for n in after), after)
+        self.assertEqual(len(names) - len(checks) - len(after), min(checks),
+                         "the checks must be the last measured steps")
 
-    def test_the_pr_gate_re_derives_the_tag_gates_ceiling_on_linux(self):
-        tag = self._runs("--workflow .github/workflows/release.yml --job test")
-        self.assertEqual(1, len(tag))
-        self.assertEqual("runner.os == 'Linux'", tag[0].get("if"))
+    def test_the_pr_gate_re_derives_the_tag_gates_ceiling_from_the_ubuntu_shards(self):
+        """Sharded (0.0.26 O6), no leg runs the whole suite, so the tag gate's ceiling is checked
+        by a job that re-assembles the unsharded ubuntu leg — never by one shard."""
+        self.assertEqual([], self._runs("--workflow .github/workflows/release.yml"),
+                         "a single shard cannot measure the unsharded tag gate")
+        tag = self.ci["jobs"]["tag-ceiling"]
+        runs = [str(s.get("run", "")) for s in tag["steps"]]
+        self.assertEqual(1, len([r for r in runs if "--workflow .github/workflows/release.yml "
+                                 "--job test" in r and "--from-shards" in r]))
+        self.assertEqual(tag["runs-on"], "ubuntu-latest")
         release = safe_load(_read(os.path.join(WORKFLOWS, "release.yml")), "grade the tag gate")
         self.assertEqual("ubuntu-latest", release["jobs"]["test"]["runs-on"],
-                         "the superset argument needs the SAME runner image")
+                         "the re-assembly argument needs the SAME runner image")
 
     def test_every_leg_checks_its_own_ceiling(self):
         own = self._runs("--workflow .github/workflows/ci.yml --job test")
         self.assertEqual(1, len(own))
         self.assertNotIn("if", own[0])
-
+        self.assertIn("--record ci-clock/job.json", own[0]["run"])
 
 if __name__ == "__main__":
     unittest.main()

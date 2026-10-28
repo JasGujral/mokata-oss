@@ -39,6 +39,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
+from ..repo_identity import temp_local_dir as _shared_temp_local  # P31: one shared state
 import hashlib
 import json
 import os
@@ -163,7 +164,7 @@ def merged_stats(current: Any, folded: Dict[str, ModelCalibration]) -> Dict[str,
 # ------------------------------------------------------------------ the cursor (a bookmark only)
 
 def cursor_dir(root: str) -> str:
-    return os.path.join(root, MOKATA_DIR, TEMP_LOCAL_DIRNAME, CALIBRATION_DIRNAME)
+    return os.path.join(_shared_temp_local(root), CALIBRATION_DIRNAME)
 
 
 def cursor_path(root: str, transcript_path: str) -> str:

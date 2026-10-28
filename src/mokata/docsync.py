@@ -342,6 +342,10 @@ _PAGE_COMMAND_ROUTE: Dict[str, str] = {
     "docs/how-to/use-the-plugin.md": ROUTE_BOTH,
     "docs/how-to/install-plugin.md": ROUTE_BOTH,
     "docs/how-to/use-mokata-in-cowork.md": ROUTE_BOTH,
+    # The two landing pages present BOTH install routes side by side (pip/uv and the plugin), so
+    # each names the form its own route renders — SD.S1 (0.0.26) found them red under the default.
+    "README.md": ROUTE_BOTH,
+    "docs/index.md": ROUTE_BOTH,
 }
 
 _FRONTMATTER_ROUTE = re.compile(r"^mokata_command_route:\s*([a-z]+)\s*$")
@@ -736,7 +740,12 @@ def reconcile_doc(path: Any, *, facts: Optional[CodeFacts] = None,
 # --------------------------------------------------------------- targeting (ii): sweep + drift
 # The doc tree docsync sweeps by default — the PUBLIC product docs (README + docs/), never the
 # internal build/launch/marketing trees (they are not part of the docs↔code contract).
-_INTERNAL_DOC_DIRS = ("docs/build", "docs/launch", "docs/marketing")
+#: Dev-only doc trees docsync never audits. ⚠ `docs/talks` belongs here and was missing (O16):
+#: a talk deck is a RECORD — it quotes the command spellings and counts of the release it was
+#: written for — so auditing it reds on history, which is what Jas's dev tree did (`mokata
+#: upgrade`, `/mokata:*` forms from before the rename). The mirror never receives any of these
+#: (`scripts/sync-public.sh`), so on a user's checkout this list changes nothing.
+_INTERNAL_DOC_DIRS = ("docs/build", "docs/launch", "docs/marketing", "docs/talks")
 
 
 def find_docs(root: Any = ".", *, include_internal: bool = False) -> List[str]:
@@ -821,6 +830,137 @@ def render_sweep(results: Dict[str, List[Finding]],
     for path in sorted(results):
         lines.append(render_findings(path, results[path]))
     return "\n".join(lines)
+
+
+# --------------------------------------------------------------- SD.S1 — spec ↔ code drift
+# The doc sweep keeps the DOCS true to the code; the saved spec is the other document a change can
+# leave behind. An emitted spec says, per acceptance criterion, WHERE the behaviour lives (its
+# SPEC-ANCHOR `anchors[]`) and — once tests carry AC ids — WHICH test proves it. Either claim can
+# rot silently after the run that made it: a rename moves the symbol, a refactor deletes the test.
+# `spec_drift` re-asks both of the live tree, read-only, so `mokata docsync` (and CI) fails on it.
+SPEC_DOC = "saved spec"
+SPEC_CHECKED = "checked"
+SPEC_SKIPPED = "skipped"
+SPEC_MALFORMED = "malformed"
+
+
+@dataclass
+class SpecDrift:
+    """The spec leg's verdict. ``status`` is never silent: ``skipped`` carries WHY (no saved spec,
+    repo not initialised), so an absent spec can never read as a spec that was checked and clean."""
+
+    status: str
+    note: str
+    title: str = ""
+    findings: List[Finding] = field(default_factory=list)
+    # L7b — what `.mokata/specs/` held: the committed-spec note (`committed_specs.NO_COMMITTED_NOTE`
+    # when there is none, so CI never reads silence as a clean drift check).
+    committed: str = ""
+    committed_present: bool = False
+
+
+def audit_spec(spec: Any, root: str) -> List[Finding]:
+    """Blocking findings where the saved ``spec`` and the live tree under ``root`` disagree:
+
+      * ``spec-anchor`` — an AC's code anchor no longer resolves (its file is gone, or its symbol is
+        not in the file): the spec points at code that is not there;
+      * ``spec-ac-test`` — the repo tags tests with AC ids, yet an AC has no test carrying its id:
+        the proof the spec was shipped with is gone.
+
+    Neither is auto-reconcilable (``suggestion`` None): which side is right is a human call — amend
+    the spec (`mokata spec amend`) or restore the code/test."""
+    from .engine.acmapper import scan_tests
+    from .engine.spec_anchor import resolve as resolve_anchor
+
+    out: List[Finding] = []
+    for ac in spec.criteria:
+        for a in ac.anchors:
+            why = resolve_anchor(a, root)
+            if why:
+                out.append(Finding(
+                    "spec-anchor", BLOCKING, 0, ac.id, (ac.text or "").strip(),
+                    f"{ac.id} anchor `{a.label()}` does not resolve ({why}) — the spec and the "
+                    f"code drifted; amend the spec or restore the code"))
+    ids = list(spec.ac_ids)
+    if ids:
+        covered = {aid for t in scan_tests(root, ids) for aid in t.ac_ids}
+        if covered:      # the repo uses AC-tagged tests; a repo that doesn't is not judged on them
+            for ac in spec.criteria:
+                if ac.id not in covered:
+                    out.append(Finding(
+                        "spec-ac-test", BLOCKING, 0, ac.id, (ac.text or "").strip(),
+                        f"{ac.id} has no test carrying its id — the spec's proof is gone; "
+                        f"restore the test or amend the spec"))
+    return out
+
+
+def spec_drift(root: Any = ".") -> SpecDrift:
+    """SD.S1 — check every SAVED spec (this session's emitted spec + the shared cross-run corpus
+    `spec-check` reads) against the live tree, read-only. Degrade-loud: an uninitialised repo or no
+    saved spec is ``skipped`` with the reason; a spec that is present but unreadable is Blocking (a
+    spec nobody can read is not a spec that holds)."""
+    from .config import ConfigError, Surface
+    from .engine.spec_awareness import load_spec_corpus
+
+    root = str(root)
+    if not Surface.is_initialized(root):
+        return SpecDrift(SPEC_SKIPPED, "repo not initialised with mokata — no saved spec to check")
+    try:
+        store = Surface.load(root).state
+    except (ConfigError, OSError) as exc:
+        return SpecDrift(SPEC_MALFORMED, f"mokata state could not be loaded ({exc})", findings=[
+            Finding("spec-unreadable", BLOCKING, 0, "(state)", "",
+                    "the mokata surface would not load, so the saved specs were NOT checked")])
+    from .committed_specs import load_committed
+    committed = load_committed(root)
+    loaded = load_spec_corpus(store)
+    specs, seen = [], set()
+    # L7b — the COMMITTED specs first (in CI they are the only ones there), then this checkout's
+    # run state; a same-titled duplicate is checked once.
+    for spec in list(committed.specs) + list(loaded):
+        if spec.title not in seen and spec.criteria:
+            seen.add(spec.title)
+            specs.append(spec)
+    unreadable = [Finding("spec-unreadable", BLOCKING, 0, "(state)", "",
+                          f"{loaded.skipped} saved spec(s) are present but unreadable, so they "
+                          "were NOT checked")] if loaded.skipped else []
+    unreadable += [Finding("spec-unreadable", BLOCKING, 0, ".mokata/specs/" + name, "",
+                           f"committed spec {name} is present but unreadable, so it was NOT "
+                           "checked") for name in committed.skipped]
+    tag = dict(committed=committed.note, committed_present=committed.present)
+    if not specs:
+        if unreadable:
+            return SpecDrift(SPEC_MALFORMED, "a saved spec is present but unreadable",
+                             findings=unreadable, **tag)
+        if not committed.present:
+            return SpecDrift(SPEC_SKIPPED, committed.note, **tag)
+        return SpecDrift(SPEC_SKIPPED, "no saved spec with acceptance criteria — nothing to check",
+                         **tag)
+    findings = list(unreadable)
+    for spec in specs:
+        for f in audit_spec(spec, root):
+            if len(specs) > 1:
+                f = Finding(f.checker, f.severity, f.line, f"{spec.title} · {f.section}",
+                            f.excerpt, f.message, f.suggestion)
+            findings.append(f)
+    acs = sum(len(sp.criteria) for sp in specs)
+    return SpecDrift(SPEC_CHECKED, f"{len(specs)} spec(s), {acs} acceptance criterion(a) checked",
+                     title=", ".join(sp.title for sp in specs), findings=findings, **tag)
+
+
+def render_spec_drift(sd: SpecDrift) -> str:
+    # L7b — a checkout with no committed specs says so on its own line whenever specs WERE checked
+    # (from local run state), because CI — which has no run state — would have checked nothing.
+    tail = ("\n  note: " + sd.committed) if (sd.committed and not sd.committed_present
+                                             and sd.status != SPEC_SKIPPED) else ""
+    if sd.status == SPEC_SKIPPED:
+        return f"docsync spec: skipped — {sd.note}."
+    if not sd.findings:
+        return (f"docsync spec: OK — \"{sd.title}\": {sd.note}; anchors and AC tests match the "
+                f"code.{tail}")
+    head = (f"docsync spec: {len(sd.findings)} drift finding(s)"
+            + (f" in \"{sd.title}\"" if sd.title else "") + f" ({sd.note})")
+    return "\n".join([head] + ["  " + f.render() for f in sd.findings]) + tail
 
 
 # --------------------------------------------------------------- auto-fire on drift (the ⛭ banner)

@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from ..plan_tasks import (ASSUMPTIONS_KEY, CLARIFICATIONS_KEY, TASKS_KEY, Assumption,
+                          Clarification, Task, clarify_from_state, tasks_from_state)
 from ..spec_scope import SCOPE_KEY, SpecScope, scope_from_dict
 
 
@@ -171,6 +173,13 @@ class Spec:
     # SI-DEV) reads as None and is NOT policed. Additive, like `domains` above: a JSON field only,
     # serialized ONLY when set, so a scope-less spec's persisted bytes are unchanged.
     scope: Optional["SpecScope"] = None
+    # R2 (0.0.26) — the TASK PLAN: ordered tasks, each with its ACs and its own write scope, approved
+    # with the ACs and sealed by the plan hash (`plan_tasks`). Always serialized: the new shape.
+    tasks: List["Task"] = field(default_factory=list)
+    # R3 (0.0.26) — the capped clarify record (<= `plan_tasks.CLARIFY_CAP` questions, each with its
+    # recommended answer) and the stated assumptions the spec proceeds on.
+    clarifications: List["Clarification"] = field(default_factory=list)
+    assumptions: List["Assumption"] = field(default_factory=list)
 
     @property
     def ac_ids(self) -> List[str]:
@@ -185,6 +194,9 @@ class Spec:
         }
         if self.scope is not None:
             out[SCOPE_KEY] = self.scope.to_dict()
+        out[TASKS_KEY] = [t.to_dict() for t in self.tasks]
+        out[CLARIFICATIONS_KEY] = [q.to_dict() for q in self.clarifications]
+        out[ASSUMPTIONS_KEY] = [a.to_dict() for a in self.assumptions]
         return out
 
     @classmethod
@@ -196,4 +208,9 @@ class Spec:
             source=d.get("source", ""),
             domains=list(d.get("domains", [])),
             scope=scope_from_dict(d.get(SCOPE_KEY)),
+            tasks=list(tasks_from_state(d.get(TASKS_KEY))),
+            clarifications=list(clarify_from_state(d.get(CLARIFICATIONS_KEY),
+                                                   d.get(ASSUMPTIONS_KEY))[0]),
+            assumptions=list(clarify_from_state(d.get(CLARIFICATIONS_KEY),
+                                                d.get(ASSUMPTIONS_KEY))[1]),
         )

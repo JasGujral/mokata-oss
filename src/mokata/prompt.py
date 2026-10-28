@@ -56,7 +56,7 @@ class ConsentDecision:
         return self.basis == ASKED
 
 
-def read_yes_no(prompt: str, question: str = "") -> ConsentDecision:
+def read_yes_no(prompt: str, question: str = "", *, default_yes: bool = False) -> ConsentDecision:
     """Show `prompt` (plus an optional tailored `question`), read a y/N answer, and approve only on
     an explicit yes. Non-interactive / EOF / unreadable stdin / anything else → declined
     (never auto-approve), with the `basis` saying WHICH of those it was.
@@ -67,12 +67,17 @@ def read_yes_no(prompt: str, question: str = "") -> ConsentDecision:
     is not a TTY, take the safe default (No) and log why WITHOUT calling `input()` — non-interactive
     automation approves via the explicit `assume_yes`/`--yes` path, not by piping an answer. The
     Stage-1a `(EOFError, OSError) → No` catch is kept as defense-in-depth (a lying isatty, a
-    captured/redirected stream). Either way we never hang and never fail open to Yes."""
+    captured/redirected stream). Either way we never hang and never fail open to Yes.
+
+    `default_yes` (0.0.26, `mokata update` — Jas's ruling that the one update question defaults to
+    yes) makes ENTER an answered yes, `[Y/n]`. It moves only what an EMPTY line typed AT A TERMINAL
+    means: no TTY and unreadable stdin stay a No, so it can never fail open."""
     if not _stdin_is_tty():
         print("mokata: stdin is not a TTY — defaulting to No without prompting "
               "(approve non-interactively with --yes / assume_yes).", file=sys.stderr)
         return ConsentDecision(False, NO_TTY)
-    full = prompt + (f"\n{question} [y/N] " if question else "")
+    full = prompt + (f"\n{question} {'[Y/n]' if default_yes else '[y/N]'} " if question else "")
+    yes = ("", "y", "yes") if default_yes else ("y", "yes")
     # Lane F — mokata's own attention channel, raised HERE and not at the twenty-four call sites
     # that reach this reader, for the same reason `awaiting_block` builds the loud head once: a
     # signal each caller emits its own way is a signal that drifts. It sits AFTER the TTY guard on
@@ -81,7 +86,7 @@ def read_yes_no(prompt: str, question: str = "") -> ConsentDecision:
     # exactly as reliable as it was before this line existed.
     announce_prompt()
     try:
-        return ConsentDecision(input(full).strip().lower() in ("y", "yes"), ASKED)
+        return ConsentDecision(input(full).strip().lower() in yes, ASKED)
     except (EOFError, OSError) as exc:
         # Don't swallow it silently: a durable action was declined because stdin was unreadable.
         print(f"mokata: unreadable stdin ({exc.__class__.__name__}) — defaulting to No",
@@ -89,7 +94,8 @@ def read_yes_no(prompt: str, question: str = "") -> ConsentDecision:
         return ConsentDecision(False, UNREADABLE_STDIN)
 
 
-def confirmed(assume_yes: bool, prompt: str, question: str = "") -> ConsentDecision:
+def confirmed(assume_yes: bool, prompt: str, question: str = "", *,
+              default_yes: bool = False) -> ConsentDecision:
     """The y/N gate WITH its `--yes` shortcut, as ONE decision object.
 
     ⛔ IT EXISTS TO KILL `if not (args.yes or read_yes_no(...))`, which four commands wrote and
@@ -103,7 +109,7 @@ def confirmed(assume_yes: bool, prompt: str, question: str = "") -> ConsentDecis
     """
     if assume_yes:
         return ConsentDecision(True, ASKED)
-    return read_yes_no(prompt, question)
+    return read_yes_no(prompt, question, default_yes=default_yes)
 
 
 def decline_notice(decision: ConsentDecision, *, flag: str = "--yes") -> str:

@@ -20,6 +20,8 @@ from contextlib import redirect_stdout
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata import hook_cli
 from mokata import run_intent as RI
@@ -362,10 +364,10 @@ class AmendEndToEndPicksTheBoundRun(_Base):
             "approved_at": "2026-10-15T00:00:00Z",
             "prior_art": {"ran": True, "approach": "A1", "findings": [], "verdict": "none"},
             "domains": []})
-        out = TS.spec_emit(path=d, title=rid, criteria=self.C1, tests=self.T1, approach="A1")
+        out = call_planned(TS.spec_emit, path=d, title=rid, criteria=self.C1, tests=self.T1, approach="A1")
         A.approve(d, out["proposal_id"], actor="human",
                   ledger=AuditLedger.from_mokata_dir(os.path.join(d, ".mokata")))
-        done = TS.spec_emit(path=d, title=rid, criteria=self.C1, tests=self.T1, approach="A1",
+        done = call_planned(TS.spec_emit, path=d, title=rid, criteria=self.C1, tests=self.T1, approach="A1",
                             proposal_id=out["proposal_id"])
         self.assertEqual("committed", done.get("status"), done)
 
@@ -386,7 +388,7 @@ class AmendEndToEndPicksTheBoundRun(_Base):
         m.hook(d, 1210, "S_B", ts=400.0)
         with mock.patch.object(SA, "system_lookup", return_value=m.lookup):
             self.assertEqual("runB", _approval_run(d))
-            out = TS.spec_amend(path=d, title="runB", criteria=self.C2, tests=self.T2,
+            out = call_planned(TS.spec_amend, path=d, title="runB", criteria=self.C2, tests=self.T2,
                                 approach="A1", reason="widen")
         self.assertNotEqual("spec-persisted", out.get("gate"), out)
         self.assertEqual("proposed", out.get("status"), out)

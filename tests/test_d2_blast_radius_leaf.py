@@ -306,6 +306,24 @@ class TestComputeImpactVerdict(unittest.TestCase):
             self.assertFalse(imp.graph_degraded)
 
 
+class TestComputeImpactVerdictWithCrgPresent(TestComputeImpactVerdict):
+    """0.0.26 O11 sibling — doc 99's verdict table with code-review-graph installed and never
+    built. The graph holds no node, so every row is the AST floor's (named as such), and the
+    verdicts must not move. Before the fix an absent symbol read as a healthy zero here."""
+
+    def setUp(self):
+        from _support import crg_present_unbuilt
+        self.calls = crg_present_unbuilt(self)
+
+    def test_unknown_symbol_still_degrades(self):
+        with tempfile.TemporaryDirectory() as root:
+            layer = self._layer(root)
+            imp = compute_impact("a", ["totally_unknown"], layer=layer)
+            self.assertTrue(imp.graph_degraded,
+                            "an unbuilt graph's empty answer vouched for an absent symbol")
+        self.assertTrue(self.calls, "code-review-graph was never asked")
+
+
 # ================================================================ 4. the guard is narrowed only
 class TestAbsenceStillRefuses(unittest.TestCase):
     """Every route to a genuinely ABSENT structural answer still sets `graph_degraded`. The stage
@@ -485,6 +503,14 @@ class TestTestsThemselves(unittest.TestCase):
         # A mutant collapsing two constants to one string would otherwise satisfy every
         # equality assertion above.
         self.assertEqual(len({BASIS_STRUCTURAL, BASIS_VERIFIED_EMPTY, BASIS_LEXICAL}), 3)
+
+
+def setUpModule():
+    # 0.0.26 O11 — this module's expectations are the CORE install's: no external code graph on
+    # the machine. Pinned, so a venv with code-review-graph (`mokata[full]`) means the same thing;
+    # what is true WITH it present is graded in test_o11_crg_present (and the sibling below, if any).
+    from _support import hide_external_graphs
+    hide_external_graphs()
 
 
 if __name__ == "__main__":

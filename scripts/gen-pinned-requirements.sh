@@ -18,7 +18,7 @@
 # SOURCE OF TRUTH
 #   uv.lock governs mokata's own dependency graph; requirements/jsonschema.in is
 #   pinned to the EXACT jsonschema version uv.lock resolves (4.26.0 for the
-#   python >= 3.10 floor). The CI/build/docs tooling is not part of mokata's
+#   python >= 3.12 floor). The CI/build/docs tooling is not part of mokata's
 #   dependency graph, so it lives in the `.in` files here and is compiled with
 #   the same `uv` toolchain. Bump a version by editing the `.in`, then re-run
 #   this script and commit the regenerated `.txt`.
@@ -45,8 +45,9 @@ command -v "$UV" >/dev/null 2>&1 || {
 # writes into each .txt is portable (no machine-specific absolute path).
 cd "$REPO_ROOT"
 
-# --universal + --python-version 3.10 → one file valid across the whole CI matrix
-# (python 3.10–3.13, Linux + Windows). --generate-hashes emits sha256 for every
+# --universal + --python-version 3.12 → one file valid across the whole CI matrix and every
+# supported Python (3.12+, mokata's floor since 0.0.26 L12 PY-FLOOR-3.12; Linux, macOS,
+# Windows). --generate-hashes emits sha256 for every
 # candidate wheel + sdist so `pip --require-hashes` can verify whichever it picks.
 compile_one() {
   local name="$1"
@@ -54,7 +55,7 @@ compile_one() {
   "$UV" pip compile \
     --quiet \
     --universal \
-    --python-version 3.10 \
+    --python-version 3.12 \
     --generate-hashes \
     --no-annotate \
     --emit-index-url \
@@ -62,7 +63,7 @@ compile_one() {
     -o "requirements/${name}.txt"
 }
 
-for f in ci jsonschema release-build docs; do
+for f in ci jsonschema release-build docs e2e uv; do
   compile_one "$f"
 done
 

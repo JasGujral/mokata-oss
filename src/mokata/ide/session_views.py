@@ -68,7 +68,7 @@ REASON_TEXT = {
     TURN_ENDED: "the agent ended its turn — it is your move",
 }
 
-LIVE, ENDED, PAST = "live", "ended", "past"
+LIVE, ENDED, PAST = "live", "ended", "inactive"     # P33: the index's statuses (sessions.py)
 READS_NOTE = ("reads are not recorded — mokata snapshots WRITES; a `before` is the file as the "
               "session found it, captured at its first write")
 
@@ -132,17 +132,23 @@ def browser(root: str, *, now: Optional[float] = None,
     from . import sessions as SS
     from ..events.schema import GATE_DECISION, SECRET_SCAN_HIT, TOKEN_SPEND
     now = time.time() if now is None else now
-    rows = {r.id: r.facts() for r in SS.sessions(root)}
+    # P33 — ONE session source: the durable index ∪ snapshots ∪ claims ∪ worktrees (`sessions`);
+    # status comes from it (SessionEnd marker / the Claude process / heartbeat), not the bus ring.
+    rows = {r.id: r.facts() for r in SS.sessions(root, now)}
     signals = _bus_signals(bus_events)
-    for sid, sig in signals.items():                 # a session the bus saw before its first write
-        rows.setdefault(sid, {"id": sid, "short": sid[:8], "run": "", "files": [], "writes": 0,
-                              "first": sig["at"], "last": sig["at"], "claim": "", "last_iso": ""})
+    # O10 — a resumed session is JOINED to the one it continues: same run, and each names the other.
+    for row in rows.values():
+        row.setdefault("resumed_by", [])
+    for row in rows.values():
+        frm = row.get("resumed_from")
+        if frm and frm in rows:
+            rows[frm]["resumed_by"].append(row["id"])
     events = _events(root, (GATE_DECISION, SECRET_SCAN_HIT, TOKEN_SPEND))
     pending = _pending(root, now)
     live = _live_runs(root, (r["run"] for r in rows.values()))
 
     def mine(ev: Any, row: Dict[str, Any]) -> bool:
-        return (bool(row["run"]) and ev.run_id == row["run"]) or ev.session_id == row["id"]
+        return (bool(row["run"]) and ev.run_id == row["run"]) or ev.session_id in row["chain"]
 
     claimed_proposals = set()
     out: List[Dict[str, Any]] = []
@@ -154,22 +160,19 @@ def browser(root: str, *, now: Optional[float] = None,
         spend = [e for e in evs if e.type == TOKEN_SPEND]
         sig = signals.get(row["id"])
         last = max(float(row.get("last") or 0.0), sig["at"] if sig else 0.0)
-        if sig and sig["ended"]:
-            status, basis = ENDED, "session_end hook"
-        elif row["run"] and row["run"] in live:
+        status, basis = row["status"], row["status_basis"]
+        if status != ENDED and sig and sig["ended"]:
+            status, basis = ENDED, "session_end hook (bus)"
+        elif status != LIVE and status != ENDED and row["run"] and row["run"] in live:
             status, basis = LIVE, "live MCP process registered for its run"
-        elif sig and sig["at"] and now - sig["at"] <= LIVE_SECS:
-            status, basis = LIVE, f"bus event ({sig['last']}) within {LIVE_SECS // 60} min"
-        elif last and now - last <= LIVE_SECS:
-            status, basis = LIVE, f"a write within {LIVE_SECS // 60} min"
-        else:
-            status, basis = PAST, "no-signal"
         reasons: List[Dict[str, Any]] = []
         for p in pending:
             if row["run"] and p.run_id == row["run"]:
                 claimed_proposals.add(p.proposal_id)
                 reasons.append(_awaiting_item(p, now))
-        if blocked and status != ENDED:
+        # G15 — only a LIVE session can be waiting on a gate or a turn: an ended (or silent)
+        # session's old block ages out of needs-you instead of heading the queue for days.
+        if blocked and status == LIVE:
             b = blocked[-1]
             at = _epoch(b.ts)
             later_write = float(row.get("last") or 0.0) > at + 1.0
@@ -186,7 +189,7 @@ def browser(root: str, *, now: Optional[float] = None,
                                       "subject": str(b.data.get("subject", ""))[:300],
                                       "ledger_seq": b.ledger_seq,
                                       "basis": "typed event store (gate_decision)"}))
-        if sig and sig["last"] == "turn_end" and status != ENDED:
+        if sig and sig["last"] == "turn_end" and status == LIVE:
             reasons.append(_item(TURN_ENDED, sig["at"], now, {"basis": "Stop hook (bus)"}))
         reasons.sort(key=lambda r: (-r["risk"], r["since"]))
         out.append({**row, "status": status, "status_basis": basis, "last": last,
@@ -288,7 +291,12 @@ def timelapse(root: str, session: str) -> Dict[str, Any]:
     from .nav import PathRefused
     if not isinstance(session, str) or not session or len(session) > 200:
         raise PathRefused("a session id is required")
-    snaps = S.timeline(root, session=session)
+    # O10 — a resumed session replays JOINED to the sessions it continues (same run), so the work
+    # on both sides of the break reads as one story, with a `resume` step at each break.
+    from ..run_intent import resume_facts
+    joined = SS.chain(root, session)
+    snaps = sorted((x for sid in joined for x in S.timeline(root, session=sid)),
+                   key=lambda x: x.t)
     row = SS.get(root, session)
     run = row.run if row else ""
     deltas = _Deltas(root, snaps)
@@ -296,17 +304,21 @@ def timelapse(root: str, session: str) -> Dict[str, Any]:
     for s in snaps:
         d = deltas.by_id.get(s.id) if s.kind == S.AFTER else None
         steps.append({"t": s.t, "kind": "write" if s.kind == S.AFTER else "before", "path": s.path,
-                      "snap": s.id, "state": s.state,
+                      "snap": s.id, "state": s.state, "session": s.session,
                       "added": d[0] if d else None, "removed": d[1] if d else None,
                       "measured": d is not None or s.kind != S.AFTER})
+    for sid in joined:
+        frm, times = resume_facts(root, sid)
+        for t in times:
+            steps.append({"t": t, "kind": "resume", "session": sid, "from": frm or sid})
     gates = [e for e in _events(root, (GATE_DECISION,))
-             if (run and e.run_id == run) or e.session_id == session]
+             if (run and e.run_id == run) or e.session_id in joined]
     for e in gates:
         decision = str(e.data.get("decision", ""))
         steps.append({"t": _epoch(e.ts), "kind": "gate", "gate": str(e.data.get("gate", "")),
                       "decision": decision, "blocked": decision.lower() in BLOCKING,
                       "subject": str(e.data.get("subject", ""))[:300], "ledger_seq": e.ledger_seq})
-    steps.sort(key=lambda x: (x["t"], 0 if x["kind"] == "before" else 1))
+    steps.sort(key=lambda x: (x["t"], 0 if x["kind"] in ("resume", "before") else 1))
     truncated = len(steps) > MAX_FRAMES
     steps = steps[-MAX_FRAMES:]
     files: List[str] = []
@@ -314,7 +326,9 @@ def timelapse(root: str, session: str) -> Dict[str, Any]:
         st["i"] = i
         if st.get("path") and st["path"] not in files:
             files.append(st["path"])
-    return {"sample": False, "session": session, "run": run, "steps": steps, "files": files,
+    return {"sample": False, "session": session, "run": run, "joined": joined,
+            "resumes": sum(1 for st in steps if st["kind"] == "resume"),
+            "steps": steps, "files": files,
             "count": len(steps), "truncated": truncated, "reads": READS_NOTE,
             "unmeasured": sum(1 for s in steps if s["kind"] == "write" and not s["measured"])}
 

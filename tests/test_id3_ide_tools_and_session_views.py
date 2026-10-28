@@ -106,11 +106,13 @@ class EverySessionIsListedWithWhatItDid(_Repo):
         self.assertEqual(["src/a.py"], new["files"])
         self.assertEqual(1, new["writes"])
         self.assertEqual("live", new["status"])
-        self.assertIn("write within", new["status_basis"])
+        # P33: the status comes from the session index (SessionEnd / the Claude process /
+        # activity); with no process to check, recent activity is live and SAYS that is its basis.
+        self.assertIn("activity", new["status_basis"])
         later = SV.browser(self.d, now=now + SV.LIVE_SECS + 60)
-        self.assertEqual("past", self.row(later, "S-new")["status"])
-        self.assertEqual("no-signal", self.row(later, "S-new")["status_basis"],
-                         "a status with no live signal must say so, not guess")
+        self.assertEqual("inactive", self.row(later, "S-new")["status"])
+        self.assertIn("no SessionEnd and no activity", self.row(later, "S-new")["status_basis"],
+                      "a status with no live signal must say so, not guess")
 
     def test_gates_spend_and_ledger_links_are_per_run_and_spend_is_never_blended(self):
         _edit(self.d, "src/a.py", "a = 2\n", "S1", "R1")
@@ -130,11 +132,14 @@ class EverySessionIsListedWithWhatItDid(_Repo):
     def test_a_session_the_bus_saw_before_its_first_write_is_listed_and_an_ended_one_says_so(self):
         _edit(self.d, "src/a.py", "a = 2\n", "S1", "R1")
         now = time.time()
-        bus = [{"kind": "session_start", "session": "S-fresh", "ts": now},
-               {"kind": "session_end", "session": "S1", "ts": now}]
+        # P33: a session is listed from its SessionStart (the durable index), not from the bus
+        # ring — the ring is gone after a restart.
+        from mokata import session_index as SI
+        SI.on_start(self.d, "S-fresh", "startup", self.d, t=now, proc=None)
+        bus = [{"kind": "session_end", "session": "S1", "ts": now}]
         data = SV.browser(self.d, now=now, bus_events=bus)
         self.assertEqual("live", self.row(data, "S-fresh")["status"])
-        self.assertEqual(("ended", "session_end hook"),
+        self.assertEqual(("ended", "session_end hook (bus)"),
                          (self.row(data, "S1")["status"], self.row(data, "S1")["status_basis"]))
         self.assertTrue(data["bus"])
 
@@ -192,7 +197,10 @@ class WaitingOnAHumanIsImpossibleToMiss(_Repo):
         _gate(self.d, "R-secret", "write_gate", "blocked")
         # the approval is NEWER than the secret block, but a secret block is the riskier wait
         approval.propose(self.d, tool="remember", args={"y": 2}, run_id="R-wait", now=now + 5)
-        bus = [{"kind": "turn_end", "session": "S-idle", "ts": now - 3600}]
+        # P33 (G15): only a LIVE session is waiting on you — S-idle's turn ended 2 min ago.
+        from mokata import session_index as SI
+        SI.on_start(self.d, "S-idle", "startup", self.d, t=now - 600, proc=None)
+        bus = [{"kind": "turn_end", "session": "S-idle", "ts": now - 120}]
         data = SV.browser(self.d, now=now + 10, bus_events=bus)
         self.assertEqual(["secret-blocked", "awaiting-approval", "turn-ended"],
                          [q["reason"] for q in data["needs_you"]])
@@ -582,8 +590,8 @@ class ThePageHasTheSessionsMode(unittest.TestCase):
     def test_the_sessions_view_needs_you_marker_and_script_are_served(self):
         from mokata.ide.server import STATIC_FILES
         html = (STATIC / "index.html").read_text(encoding="utf-8")
-        for needle in ('data-mode="sessions"', 'id="view-sessions"', 'id="needs-you"',
-                       'id="tl-range"', 'id="tm"', 'id="sb-list"', 'id="ny-list"',
+        for needle in ('data-screen="sessions"', 'id="view-sessions"', 'id="needs-you"',
+                       'id="tl-range"', 'id="tm"', 'id="s1-rows"', 'id="ny-list"',
                        '/static/sessions.js'):
             self.assertIn(needle, html)
         self.assertIn("sessions.js", STATIC_FILES)
@@ -593,7 +601,7 @@ class ThePageHasTheSessionsMode(unittest.TestCase):
     def test_the_page_follows_open_events_and_draws_without_markup(self):
         app = (STATIC / "app.js").read_text(encoding="utf-8")
         self.assertIn('e.kind === "open"', app)
-        self.assertIn('"sessions"]', app)
+        self.assertIn('{ id: "sessions"', app)                      # P34: a screen
         js = (STATIC / "sessions.js").read_text(encoding="utf-8")
         self.assertNotIn("innerHTML", js)
         self.assertNotIn("insertAdjacentHTML", js)

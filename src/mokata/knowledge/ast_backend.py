@@ -35,15 +35,18 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
+from ..repo_identity import tree_temp_local_dir as _tree_temp_local  # P31: one shared state
 import ast
 import json
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from collections.abc import Mapping
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from ..repo_paths import name_of
 from ..repo_walk import prune_source_dirs
+from .cancel import checkpoint, report
 from .grep_backend import GrepBackend
 from .query import (BASIS_STRUCTURAL, BASIS_VERIFIED_EMPTY, QUERY_KINDS,
                     GraphBackend, QueryResult, Reference, mark_truncated)
@@ -88,6 +91,16 @@ SYMBOL_EDGE_KINDS = ("callers", "callees", "implementers", "blast_radius")
 # a classed `truncated —` note says which bound bit and how far the walk got (`mark_truncated`).
 BLAST_RADIUS_MAX_REFS = 20000
 BLAST_RADIUS_TIME_BUDGET_S = 2.0
+
+# 0.0.26 O7 (BLAST-FULL-ON-REQUEST) — the FULL budget, spent only when a human asks for it on a
+# result the default bounds cut (`mokata query blast_radius X --full`, the IDE's action on a capped
+# impact). STILL BOUNDED: a hard wall-clock ceiling and a reference ceiling far past anything a
+# depth-3 walk reaches on the 1.2M-line scale repo, and cancellable between steps. A full walk the
+# ceiling still cuts is marked truncated exactly like a default one — never a silent partial.
+BLAST_RADIUS_FULL_MAX_REFS = 1_000_000
+BLAST_RADIUS_FULL_TIME_BUDGET_S = 60.0
+#: The leading words of a full-budget cut's reason, so a reader can tell the two cuts apart.
+FULL_BUDGET_CUT = "even with the full budget"
 
 # 0.0.25 K — the sentence an EMPTY answer carries when the AST floor indexes every Python file and
 # holds NO definition of the target: an external / undefined name (a builtin like `str`, a library
@@ -283,13 +296,18 @@ class AstBackend(GraphBackend):
         self.grep = grep if grep is not None else GrepBackend(root=root)
         if cache_dir is None:
             from .. import MOKATA_DIR, TEMP_LOCAL_DIRNAME
-            cache_dir = os.path.join(root, MOKATA_DIR, TEMP_LOCAL_DIRNAME, CACHE_DIRNAME)
+            cache_dir = os.path.join(_tree_temp_local(root), CACHE_DIRNAME)
         self.cache_dir = cache_dir
         self._edges: Optional[Dict[str, FileEdges]] = None    # rel -> edges, built lazily
+        self._generation = 0          # bumped on every index build (`index_generation`)
         # 0.0.25 K — (mtime, size) per indexed file, and the index an `invalidate()` dropped: the
         # NEXT build re-uses unchanged files from memory instead of re-reading the 30 MB JSON cache.
         self._stat: Dict[str, Tuple[float, int]] = {}
         self._prior: Optional[Tuple[Dict[str, FileEdges], Dict[str, Tuple[float, int]]]] = None
+        # 0.0.26 P35 (audit A #4) — what a build that was CANCELLED (or died) part-way had already
+        # parsed: rel -> ((mtime, size), FileEdges or None). The next build reuses it, so a
+        # restarted index build never starts from zero.
+        self._partial: Dict[str, Tuple[Tuple[float, int], Optional[FileEdges]]] = {}
         # 0.0.25 K — reverse indexes over the edges, each built ONCE per index build, on the first
         # query that needs it (`_rev`). Every query used to scan all edges (453k on the scale repo,
         # 25-100 ms each, multiplied by ripple / path / blast radius); each lookup is now a dict
@@ -300,6 +318,42 @@ class AstBackend(GraphBackend):
 
     # --- public API ----------------------------------------------------------
     def query(self, kind: str, target: str, depth: int = 1) -> QueryResult:
+        return self._answer(kind, target, depth)
+
+    def blast_radius_full(self, target: str, depth: int = 1,
+                          checkpoint: Optional[Callable[[], None]] = None) -> QueryResult:
+        """0.0.26 O7 — the blast radius walked with the FULL budget (see
+        `BLAST_RADIUS_FULL_TIME_BUDGET_S`); same answer shape and honesty rules as `query`."""
+        return self._answer("blast_radius", target, depth, full=True, checkpoint=checkpoint)
+
+    def definitions(self) -> List[Tuple[str, str, int, str]]:
+        """0.0.26 O8 (AST-PUBLIC-DEFS-ACCESSOR) — every definition the index holds, as
+        `(name, rel_path, line, kind)` rows ordered by path then file order. Loads the index the
+        usual way ((mtime, size) disk cache, re-parsing only what moved). The IDE's ⌘P symbol list
+        reads this instead of reaching into the private edge dict."""
+        self._ensure_index()
+        edges = self._edges or {}
+        return [(name, rel, int(line), kind) for rel, fe in sorted(edges.items())
+                for name, line, kind in fe.defs]
+
+    @classmethod
+    def of_edges(cls, root: str, edges: Dict[str, "FileEdges"]) -> "AstBackend":
+        """0.0.26 P41 — a backend whose index is exactly `edges` (already parsed): nothing is
+        walked, loaded or cached. The worktree overlay's index over a worktree's changed files."""
+        b = cls(root=root, cache_dir=os.path.join(root, CACHE_DIRNAME))
+        b._edges, b._generation = dict(edges), 1
+        return b
+
+    @property
+    def index_generation(self) -> Optional[int]:
+        """0.0.26 O8 — which build of the index is loaded: a number that changes with every
+        rebuild, or None while no index is loaded (never built, or dropped by `invalidate`).
+        A reader holding rows from `definitions()` is current while this still equals the value it
+        read alongside them."""
+        return self._generation if self._edges is not None else None
+
+    def _answer(self, kind: str, target: str, depth: int, full: bool = False,
+                checkpoint: Optional[Callable[[], None]] = None) -> QueryResult:
         if kind not in QUERY_KINDS:
             raise ValueError(f"unknown query kind '{kind}'; one of {QUERY_KINDS}")
         if kind == "refs":
@@ -322,7 +376,13 @@ class AstBackend(GraphBackend):
         elif kind == "defs":
             refs = self._defs(target)
         else:
-            refs, cut = self._blast_radius_bounded(target, depth)
+            if full:
+                refs, cut = self._blast_radius_bounded(
+                    target, depth, max_refs=BLAST_RADIUS_FULL_MAX_REFS,
+                    budget_s=BLAST_RADIUS_FULL_TIME_BUDGET_S, checkpoint=checkpoint)
+                cut = f"{FULL_BUDGET_CUT}: {cut}" if cut else ""
+            else:
+                refs, cut = self._blast_radius_bounded(target, depth)
             if cut:
                 res = QueryResult(kind=kind, target=target, references=refs, backend=self.name,
                                   basis=BASIS_STRUCTURAL, note=AST_NOTE)
@@ -428,8 +488,27 @@ class AstBackend(GraphBackend):
         # files on the scale repo forced a 30 MB cache rewrite per build).
         stat: Dict[str, Tuple[float, int]] = {}
         unparsed: set = set()
+        partial, self._partial = self._partial, {}
+        try:
+            changed = self._walk_index(prior, disk, partial, edges, stat, unparsed)
+        except BaseException:
+            # Cancelled, or a crash part-way: keep what was read for the next build (P35).
+            kept = dict(partial)
+            kept.update({rel: (key, edges.get(rel)) for rel, key in stat.items()})
+            self._partial = kept
+            raise
+        # A file that LEFT the repo is a change too (its entry must not survive in the cache).
+        held_before = prior[1] if prior is not None else disk
+        if not changed and len(held_before) != len(stat):
+            changed = True
+        self._finish_index(edges, stat, changed)
+
+    def _walk_index(self, prior, disk, partial, edges, stat, unparsed) -> bool:
         changed = False
-        for ab in self._source_files():
+        for n_seen, ab in enumerate(self._source_files(), 1):
+            checkpoint()                          # P32: a cancelled job stops here, per file
+            if n_seen % 500 == 0:
+                report(done=n_seen, unit="files", note="reading the AST index")
             rel = name_of(ab, self.root)
             try:
                 st = os.stat(ab)
@@ -460,16 +539,20 @@ class AstBackend(GraphBackend):
                         pass                      # a malformed cache entry → re-parse this file
             changed = True
             stat[rel] = key
-            fe = self._parse_file(ab)
+            got = partial.get(rel)
+            if got is not None and got[0] == key:
+                fe = got[1]                       # read by a build that was cancelled part-way
+            else:
+                fe = self._parse_file(ab)
             if fe is None:
                 unparsed.add(rel)                 # unparseable: a coverage gap, not a crash
                 continue
             edges[rel] = fe
-        # A file that LEFT the repo is a change too (its entry must not survive in the cache).
-        held_before = prior[1] if prior is not None else disk
-        if not changed and len(held_before) != len(stat):
-            changed = True
+        return changed
+
+    def _finish_index(self, edges, stat, changed: bool) -> None:
         self._edges, self._stat = edges, stat
+        self._generation += 1
         self._build_reverse()
         # 0.0.25 K — write ONLY WHEN SOMETHING CHANGED, and once. A cold reconcile used to rebuild
         # twice (cold walk → invalidate → rebuild) and rewrite the full ~30 MB cache both times,
@@ -546,6 +629,7 @@ class AstBackend(GraphBackend):
             # a vendored dependency into THIS repo's edge graph makes every blast-radius answer
             # name a file the user does not maintain, twice.
             prune_source_dirs(dirpath, dirnames)
+            checkpoint()                          # P32: per directory of the walk
             for fn in filenames:
                 if fn.endswith(".py"):
                     yield os.path.join(dirpath, fn)
@@ -564,17 +648,20 @@ class AstBackend(GraphBackend):
             try:
                 with open(abspath, encoding="utf-8", errors="replace") as fh:
                     return ts_edges.parse_source(fh.read(), abspath)
-            except OSError:
+            except (OSError, RecursionError):
                 return None
         try:
             with open(abspath, encoding="utf-8", errors="replace") as fh:
                 source = fh.read()
             tree = parse_source(source)           # module-level seam (re-parse spy)
-        except (OSError, SyntaxError, ValueError):
+            return extract_edges(tree)
+        except (OSError, SyntaxError, ValueError, RecursionError):
+            # P35: a pathologically nested file is UNPARSED (a coverage gap), never a dead build
             return None
-        return extract_edges(tree)
 
     def _load_cache(self) -> Dict[str, Any]:
+        if not self.cache_dir:
+            return {}                             # P39: memory only (a repo mokata does not govern)
         try:
             with open(os.path.join(self.cache_dir, CACHE_FILENAME), encoding="utf-8") as fh:
                 data = json.load(fh)
@@ -584,6 +671,8 @@ class AstBackend(GraphBackend):
         return entries if isinstance(entries, dict) else {}
 
     def _save_cache(self, entries: Dict[str, Any]) -> None:
+        if not self.cache_dir:
+            return                                # P39: memory only — nothing written
         try:
             os.makedirs(self.cache_dir, exist_ok=True)
             payload = {"schema_version": CACHE_SCHEMA_VERSION, "entries": entries}
@@ -647,14 +736,17 @@ class AstBackend(GraphBackend):
 
     def _blast_radius_bounded(self, target: str, depth: int,
                               max_refs: Optional[int] = None,
-                              budget_s: Optional[float] = None) -> Tuple[List[Reference], str]:
+                              budget_s: Optional[float] = None,
+                              checkpoint: Optional[Callable[[], None]] = None,
+                              ) -> Tuple[List[Reference], str]:
         """Transitive callers up to `depth` hops — the impact surface of `target` (the same
         BFS the grep floor runs, but over AST-resolved caller edges).
 
         0.0.25 K — BOUNDED. Returns `(refs, why)`: `why` is "" for a complete answer, else the
         sentence naming the bound that stopped the walk (`BLAST_RADIUS_MAX_REFS` references, or
         `BLAST_RADIUS_TIME_BUDGET_S` seconds) and how far it got. Within the bounds the answer is
-        the unbounded BFS's prefix, in the same order."""
+        the unbounded BFS's prefix, in the same order. 0.0.26 O7: `checkpoint` (if given) is
+        called before each frontier symbol and cancels the walk by raising."""
         cap = BLAST_RADIUS_MAX_REFS if max_refs is None else max_refs
         budget = BLAST_RADIUS_TIME_BUDGET_S if budget_s is None else budget_s
         deadline = time.monotonic() + budget
@@ -665,6 +757,8 @@ class AstBackend(GraphBackend):
         for hop in range(1, max(1, depth) + 1):
             nxt: List[str] = []
             for sym in frontier:
+                if checkpoint is not None:
+                    checkpoint()              # O7: raises to cancel a long on-request walk
                 if time.monotonic() > deadline:
                     return out, (f"blast radius stopped at the {budget:g}s time budget during hop "
                                  f"{hop} of {max(1, depth)} with {len(out)} reference(s); deeper "
@@ -686,3 +780,77 @@ class AstBackend(GraphBackend):
             if not frontier:
                 break
         return out, ""
+
+
+# ============================================================================ P41: a worktree's floor
+class _MergedEdges(Mapping):
+    """0.0.26 P41 — the main index with a worktree's changed files' entries replaced (a read-only
+    view: nothing is copied)."""
+
+    def __init__(self, base: Mapping, changed: Mapping, extra: Mapping) -> None:
+        self._base, self._changed, self._extra = base, changed, extra
+        self._len: Optional[int] = None
+
+    def __getitem__(self, rel: str) -> FileEdges:
+        if rel in self._changed:
+            return self._extra[rel]
+        return self._base[rel]
+
+    def __contains__(self, rel: object) -> bool:
+        if rel in self._changed:
+            return rel in self._extra
+        return rel in self._base
+
+    def __iter__(self) -> Iterator[str]:
+        for rel in self._base:
+            if rel not in self._changed:
+                yield rel
+        yield from self._extra
+
+    def __len__(self) -> int:
+        if self._len is None:
+            self._len = sum(1 for r in self._base if r not in self._changed) + len(self._extra)
+        return self._len
+
+
+class OverlayAstBackend(AstBackend):
+    """0.0.26 P41 (MCP-FOLLOWS-WORKTREE) — the AST floor of a linked WORKTREE: the main checkout's
+    index with the worktree's changed files replaced by a parse of the worktree's copies (deleted
+    files dropped). Every lookup goes through `_hits`, so every kind, the bounded blast radius and the
+    verified-zero rules run unchanged on the merged index — the answer a fresh index of the worktree
+    would give, without re-parsing the files it shares with the main checkout. `overlay.current()`
+    is the worktree's changed set (`tree_overlay.Snapshot`: `version`, `changed`, `edges`, `small`).
+    Read-only: the main index owns the parse cache; this never writes one."""
+
+    def __init__(self, main: AstBackend, tree: str, overlay: Any) -> None:
+        super().__init__(root=tree, grep=GrepBackend(root=tree, name=main.grep.name),
+                         name=main.name, cache_dir=main.cache_dir)
+        self.main, self.overlay = main, overlay
+        self._key: Optional[Tuple[int, int]] = None
+        self._snap: Any = None
+
+    def _ensure_index(self) -> None:
+        self.main._ensure_index()
+        snap = self.overlay.current()
+        key = (self.main._generation, snap.version)
+        if self._edges is not None and self._key == key:
+            return
+        self._snap, self._key = snap, key
+        self._edges = _MergedEdges(self.main._edges or {}, snap.changed, snap.edges)
+        self._generation += 1
+        self._build_reverse()
+
+    def invalidate(self) -> None:
+        self.main.invalidate()
+        self._edges, self._key = None, None
+
+    def _hits(self, which: str, key: str):
+        snap = self._snap
+        changed = snap.changed if snap is not None else {}
+        out = [(rel, e) for rel, e in self.main._hits(which, key) if rel not in changed]
+        if snap is not None and snap.small is not None:
+            out.extend(snap.small._hits(which, key))
+        return out
+
+    def _save_cache(self, entries: Dict[str, Any]) -> None:
+        return None                     # read-only by construction: the main index owns the cache

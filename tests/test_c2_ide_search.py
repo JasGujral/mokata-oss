@@ -157,20 +157,38 @@ class MeaningUnavailableIsSaid(unittest.TestCase):
             self.assertIs(False, res["available"])
             self.assertEqual("not-installed", res["state"])
             self.assertIn("semantic unavailable", res["note"])
-            self.assertEqual("pip install 'mokata[embeddings]'", res["install"])
+            # 0.0.26 L1: the line is THIS installer's, never a hard-coded `pip install '…'`.
+            from mokata.install_route import plan_extra_install
+            self.assertEqual(plan_extra_install("embeddings").display, res["install"])
+            self.assertIn("model2vec", res["install"])
             self.assertEqual([], res["results"], "a word hit exists — and is NOT returned as meaning")
             self.assertFalse(os.path.exists(SR.index_dir(d)), "nothing is indexed or written")
 
     def _fake_extra(self, calls, have_model):
-        """A stand-in for model2vec + huggingface_hub: records every fetch call's offline flag."""
+        """A stand-in for model2vec + huggingface_hub: records every cache question's offline flag
+        (`True` = a no-network cache lookup, `False` = a real fetch)."""
         import types
+        models = tempfile.mkdtemp()
 
         def snapshot_download(repo, local_files_only=False, etag_timeout=None):
             calls.append(local_files_only)
             if local_files_only and not have_model["on_disk"]:
                 raise OSError("not in the local cache")
+            where = os.path.join(models, repo.replace("/", "--"))
+            os.makedirs(where, exist_ok=True)
+            from mokata.memory.embed import MODEL_FILES
+            for name in MODEL_FILES:
+                open(os.path.join(where, name), "w", encoding="utf-8").close()
             have_model["on_disk"] = True
-            return "/models/" + repo
+            return where
+
+        from mokata.memory.embed import MODEL_FILES
+
+        def try_to_load_from_cache(repo, filename, **_kw):
+            if filename == MODEL_FILES[0]:            # one offline question per lookup
+                calls.append(True)
+            path = os.path.join(models, repo.replace("/", "--"), filename)
+            return path if have_model["on_disk"] else None
 
         class FakeModel:
             def encode(self, texts):
@@ -179,10 +197,11 @@ class MeaningUnavailableIsSaid(unittest.TestCase):
         class StaticModel:
             @staticmethod
             def from_pretrained(path):
-                assert path.startswith("/models/"), "only ever loaded from a LOCAL directory"
+                assert path.startswith(models), "only ever loaded from a LOCAL directory"
                 return FakeModel()
         hub = types.ModuleType("huggingface_hub")
         hub.snapshot_download = snapshot_download
+        hub.try_to_load_from_cache = try_to_load_from_cache
         m2v = types.ModuleType("model2vec")
         m2v.StaticModel = StaticModel
         return {"huggingface_hub": hub, "model2vec": m2v}
@@ -202,7 +221,7 @@ class MeaningUnavailableIsSaid(unittest.TestCase):
                                  (res["state"], res["can_fetch"], res["results"]))
                 self.assertEqual([True], calls, "the status probe never touches the network")
                 fetched = SR.fetch_model()
-                self.assertEqual([True, False, ], calls[:2], "the fetch IS online")
+                self.assertEqual(False, calls[-1], "the fetch IS online (after a cache look)")
                 self.assertIs(True, fetched["available"])
                 self.assertEqual("model2vec:minishlab/potion-base-8M", fetched["embedder"],
                                  "the same stamp memory's embedder carries")
@@ -340,11 +359,13 @@ class TheEndpoints(unittest.TestCase):
 
 class ThePage(unittest.TestCase):
 
-    def test_three_tabs_and_an_unavailable_state_that_names_the_fix(self):
+    def test_one_box_with_toggles_and_an_unavailable_state_that_names_the_fix(self):
         with open(os.path.join(STATIC, "index.html"), encoding="utf-8") as fh:
             html = fh.read()
-        for needle in ('data-skind="word"', 'data-skind="regex"', 'data-skind="meaning"',
-                       'id="sr-meaning-state"', 'id="s-changed"', 'src="/static/search.js"'):
+        # 0.0.26 P36 — one box: regex / case / meaning are toggles; the scope is a select
+        for needle in ('data-stoggle="regex"', 'data-stoggle="case"', 'data-stoggle="meaning"',
+                       'id="sr-meaning-state"', 'id="s-scope"', 'data-sscope="changed"',
+                       'data-sscope="session"', 'src="/static/search.js"'):
             self.assertIn(needle, html)
         with open(os.path.join(STATIC, "search.js"), encoding="utf-8") as fh:
             js = fh.read()

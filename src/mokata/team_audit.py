@@ -35,9 +35,14 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Tuple
 
 from . import team_docs
-from .govern.gate import WriteGate, WriteRequest
 from .govern.ledger import AuditLedger
-from .govern.secrets import Finding
+
+# `govern.gate` (and the secret scanner behind it) is imported where a publish is gated, not here:
+# `actor()` sits on the per-prompt hook's path (the memory store's identity), which never gates
+# (0.0.26 O12). `Finding` is an annotation only.
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from .govern.secrets import Finding
 
 # The env vars the shared audit log reads its DSN from (never inline in the committed manifest,
 # exactly like the shared-memory + session backends). The audit-specific override var wins; then
@@ -424,6 +429,7 @@ def share_audit(root: str, surface: Any, *, assume_yes: bool = False, policy: An
 
     from .govern.trust import (CLI_SURFACE, policy_approved, policy_surface, policy_tool,
                                policy_trust)
+    from .govern.gate import WriteGate, WriteRequest
     gate = WriteGate(ledger=local, trust=policy_trust(policy))
     outcome = gate.submit(
         WriteRequest(kind="send", target=f"team-audit:{dsn_env}/{ns}", content=payload,

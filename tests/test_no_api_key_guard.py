@@ -36,13 +36,74 @@ class TestTheProductNeedsNoApiKey(unittest.TestCase):
         # An unparsable file is an UN-swept file — never a clean one.
         self.assertEqual(self.broken, [])
 
-    def test_allow_list_is_empty_for_the_product(self):
-        # The allow-list is an owner decision. Empty is the claim; a non-empty list must be argued.
-        self.assertEqual(S.ALLOW, {})
+    def test_allow_list_is_only_the_presence_warning(self):
+        # The allow-list is an owner decision. 0.0.26 L4: exactly the runtime billing WARNING's two
+        # variable names, in exactly one file — nothing else in the product may name a key.
+        self.assertEqual(set(S.ALLOW), {("R2", "src/mokata/billing_env.py", "ANTHROPIC_API_KEY"),
+                                        ("R2", "src/mokata/billing_env.py", "ANTHROPIC_AUTH_TOKEN")})
+
+    def test_the_allowed_file_never_hands_the_value_out(self):
+        # The allowance is for a presence check. Every read of the environment in billing_env.py is
+        # `env.get(name)` wrapped in bool(...) — a returned, formatted or logged value would not be.
+        import ast
+        with open(os.path.join(PKG, "billing_env.py"), encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        parents = {c: p for p in ast.walk(tree) for c in ast.iter_child_nodes(p)}
+        gets = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute) and n.func.attr == "get"]
+        self.assertEqual(1, len(gets))
+        node = gets[0]
+        while not (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "bool"):
+            node = parents[node]          # KeyError if the read escapes bool(...) — the red
+
+    def test_the_planted_import_in_a_copy_of_the_real_tree_reds(self):
+        # Firing control over the REAL package: copy src/mokata, plant `import anthropic` into one
+        # real module, sweep the copy. The live tree's verdict must flip from clean to exactly that.
+        import shutil
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = os.path.join(tmp, "src", "mokata")
+            shutil.copytree(PKG, pkg, ignore=shutil.ignore_patterns("__pycache__"))
+            target = os.path.join(pkg, "claude_code_version.py")
+            with open(target, encoding="utf-8") as fh:
+                text = fh.read()
+            with open(target, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(text.replace("import json\n", "import json\nimport anthropic\n", 1))
+            bad = S.violations(S.sweep(pkg)[0])
+            self.assertEqual([("R1", "src/mokata/claude_code_version.py", "import anthropic")],
+                             [(f.rule, f.path, f.detail) for f in bad])
 
     def test_no_allow_list_entry_is_stale(self):
         live = {f.key() for f in self.findings}
         self.assertEqual([k for k in S.ALLOW if k not in live], [])
+
+
+class TestTheEvalHarnessIsTheOnlyKeyReader(unittest.TestCase):
+    """bench/ (outside the wheel) is documented as the one place a key may be read: the G2 judge's
+    dedicated `MOKATA_G2_JUDGE_API_KEY` (LoCoMo reuses that client). Verified, not trusted: any
+    other key name, endpoint or SDK import in bench/'s Python reds here."""
+
+    def test_bench_reads_only_the_judge_key_and_scrubs_the_rest(self):
+        findings, counts, broken = S.sweep(os.path.join(ROOT, "bench"))
+        self.assertEqual([], broken)
+        self.assertGreater(counts["python"], 10)
+        py = sorted({(f.rule, os.path.basename(f.path), f.detail) for f in findings
+                     if f.path.endswith(".py") and f.rule in ("R1", "R2", "R5")})
+        self.assertEqual([
+            ("R2", "agent.py", "ANTHROPIC_API_KEY"), ("R2", "agent.py", "ANTHROPIC_AUTH_TOKEN"),
+            ("R2", "agent.py", "MOKATA_G2_JUDGE_API_KEY"), ("R2", "agent.py", "OPENAI_API_KEY"),
+            ("R2", "judge.py", "MOKATA_G2_JUDGE_API_KEY"), ("R5", "judge.py", "api.anthropic.com"),
+        ], py)
+        # the four names in agent.py are its SCRUB list (removed from the child's env), not reads
+        import sys
+        sys.path.insert(0, ROOT)
+        try:
+            from bench.g2 import agent, judge
+        finally:
+            sys.path.remove(ROOT)
+        self.assertTrue({"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY",
+                         "MOKATA_G2_JUDGE_API_KEY"} <= set(agent.SCRUBBED_ENV))
+        self.assertEqual("MOKATA_G2_JUDGE_API_KEY", judge.JUDGE_KEY_ENV)
 
 
 class TestEveryRuleFires(unittest.TestCase):
@@ -81,7 +142,9 @@ class TestEveryRuleFires(unittest.TestCase):
     def test_r4_headless_spawn(self):
         for src in ("A = ['claude', '-p', 'hi']", "A = ('claude', '--print', 'x')",
                     "A = ['/usr/bin/claude.exe', '--output-format', 'json', '-p', 'x']",
-                    "C = 'claude -p \"do it\"'"):
+                    "C = 'claude -p \"do it\"'",
+                    # 0.0.26 L4: --bare never reads the login (OAuth/keychain): a key-only spawn
+                    "A = ['claude', '--bare']", "C = 'claude --bare --settings s.json'"):
             self.assertIn("R4", self._rules(src), src)
 
     def test_r4_does_not_fire_on_other_tools_print_flags(self):

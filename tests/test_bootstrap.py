@@ -137,7 +137,7 @@ class TestRulesDegradeIsLoud(unittest.TestCase):
         from mokata import bootstrap, degrade
         import mokata.memory as memory
 
-        def boom(_surface):
+        def boom(_surface, **_kw):
             raise exc
         real = memory.MemoryStore.from_surface
         memory.MemoryStore.from_surface = staticmethod(boom)

@@ -81,7 +81,7 @@ def build_state_fingerprint(surface: Any) -> Dict[str, Any]:
     try:
         from .memory import MemoryStore
         from .memory.item import ALWAYS_ON_KINDS
-        store = MemoryStore.from_surface(surface)
+        store = MemoryStore.from_surface(surface, knowledge=False, load_model=False)  # O12b: a read
         if store.enabled_types:
             for it in store.peek_active():        # non-counting read (no _bump_read)
                 memory[it.subject] = it.value

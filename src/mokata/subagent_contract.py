@@ -350,8 +350,38 @@ def finish_contract(root: str, payload: Dict[str, Any]) -> StopVerdict:
                                  + HANDBACK_FORMAT)
     if report is None:
         ledger_unhonored(root, contract, "handback-missing", why=why)
+    # R1 (0.0.26) — a `done` handback must be backed: implementation changed ⇒ a test was run and
+    # passed. Sent back ONCE with the reason; on re-entry let go and ledgered — never a loop.
+    from .stop_gate import GATE_STOP_EVIDENCE, remedy, subagent_untested
+    untested = subagent_untested(report)
+    if untested and contract.get("run_id"):
+        from .gate_hook import read_override
+        if GATE_STOP_EVIDENCE in read_override(root, contract["run_id"]):
+            untested = ""
+    if untested and not payload.get("stop_hook_active"):
+        return StopVerdict(True, f"mokata {GATE_STOP_EVIDENCE}: {untested}. {remedy()}")
+    if untested:
+        ledger_unhonored(root, contract, "done-untested", why=untested)
     _record_finished(root, contract, report, why)
+    _record_usage(root, contract, payload)
     return StopVerdict(False, report=report)
+
+
+def _record_usage(root: str, contract: Dict[str, Any], payload: Dict[str, Any]) -> None:
+    """R6 (0.0.26) — what this subagent actually ran on (models, tokens), from its own transcript:
+    the per-run cost record. Absent when Claude Code gave no transcript — never a guessed zero."""
+    rid = contract.get("run_id")
+    if not rid:
+        return
+    from .model_tiers import record_usage, usage_from_transcript
+    usage = usage_from_transcript(payload.get("agent_transcript_path"))
+    if usage is None:
+        return
+    try:
+        record_usage(root, rid, str(contract.get("agent_id") or ""),
+                     str(contract.get("agent_type") or ""), usage)
+    except Exception as exc:  # noqa: BLE001
+        _say_degraded("a subagent's model/token usage was NOT recorded for its run", exc)
 
 
 def _record_finished(root: str, contract: Dict[str, Any], report: Optional[HandbackReport],

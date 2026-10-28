@@ -8,6 +8,7 @@ Keep volatile, per-run content OUT of the prefix so the cache keeps hitting.
 
 from __future__ import annotations
 
+from ..repo_identity import temp_local_dir as _shared_temp_local  # P31: one shared state
 import hashlib
 import json
 import os
@@ -117,7 +118,7 @@ class PrefixObservation:
 
 def prefix_watch_dir(root: str) -> str:
     from .. import MOKATA_DIR, TEMP_LOCAL_DIRNAME
-    return os.path.join(root, MOKATA_DIR, TEMP_LOCAL_DIRNAME, PREFIX_WATCH_DIRNAME)
+    return os.path.join(_shared_temp_local(root), PREFIX_WATCH_DIRNAME)
 
 
 def _session_key(session_id: Optional[str]) -> str:

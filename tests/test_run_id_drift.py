@@ -560,7 +560,9 @@ class TestRootRecovery(unittest.TestCase):
         # root recovering NO repo instead of `/`. Verified in both path dialects ('/' on POSIX,
         # '\\' on Windows), so it costs the round trip nothing to carry.
         for root in (os.path.normpath("/tmp/x"), os.path.normpath("/a/b/c"),
-                     os.path.normpath(os.sep), os.path.abspath(".")):
+                     os.path.normpath(os.sep), os.path.realpath(tempfile.gettempdir())):
+            # (not `abspath(".")`: since 0.0.26 P31 a LINKED WORKTREE's state is its main checkout's,
+            # so the cwd round-trips only when the suite is not itself run from a worktree)
             self.assertEqual(root_of_state_dir(state_dir(root)), root)
 
     def test_a_non_state_dir_recovers_nothing_rather_than_guessing(self):

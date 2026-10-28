@@ -1,0 +1,35 @@
+{
+ "skill": "review",
+ "triggers": [
+  "check/review a diff or change",
+  "tests are GREEN"
+ ],
+ "positive": [
+  "Tests are green — review the change against the spec, then for quality",
+  "Review my diff before I merge it",
+  "Check this change: does it meet the spec?",
+  "Implementation is finished, run the closing review",
+  "Do a two-pass review of the PR"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Deeply review the existing legacy code and propose refactors",
+   "expect": "refine"
+  },
+  {
+   "prompt": "Open the review window with the live diff for this session",
+   "expect": "review-window"
+  },
+  {
+   "prompt": "Write a product review of my new headphones"
+  },
+  {
+   "prompt": "Help me explore a new feature idea",
+   "expect": "brainstorm"
+  },
+  {
+   "prompt": "Implementation is half done; keep coding the approved plan",
+   "expect": "develop"
+  }
+ ]
+}

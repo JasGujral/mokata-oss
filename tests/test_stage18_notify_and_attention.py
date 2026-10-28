@@ -288,6 +288,7 @@ class TestTriggerCorpus(unittest.TestCase):
                 "session_worktree:create_worktree",    # free text: what is this session about
                 "onboarding:_default_ask",             # a choice, not a y/N
                 "cli_commands._common:_cli_ask",       # the execution-mode ask
+                "ide.handoff:ask",                     # P37: stopping the IDE with jobs running
             },
         )
 

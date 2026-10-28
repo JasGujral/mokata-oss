@@ -149,11 +149,13 @@ def _json_get(root: str, rel: str, *path: Any) -> Optional[str]:
     return node if isinstance(node, str) else None
 
 
-_MCP_PIN_RE = re.compile(r"^mokata==(\d+\.\d+\.\d+\S*)$")
+_MCP_PIN_RE = re.compile(r"^mokata\[full\]==(\d+\.\d+\.\d+\S*)$")
 
 
 def _mcp_pin(root: str) -> Optional[str]:
-    """The `mokata==X` pin in the plugin's `uvx --from` MCP launch, or None (a named mismatch)."""
+    """The `mokata[full]==X` pin in the plugin's `uvx --from` MCP launch, or None (a named mismatch).
+    0.0.26 L8: the plugin's environment carries the `full` extra (IDE included); a bare `mokata==X`
+    no longer counts — pre-1.0, the old shape is a mismatch, not a fallback."""
     text = _read_text(root, PLUGIN_MANIFEST_PATH)
     try:
         args = json.loads(text)["mcpServers"]["mokata"]["args"] if text else None

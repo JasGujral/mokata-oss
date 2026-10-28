@@ -163,7 +163,9 @@ class FakeServerCase(unittest.TestCase):
         return s
 
     def client(self, timeout=BOUND):
-        c = CodeReviewGraphClient(name=sys.executable, root=self._tmp, timeout=timeout)
+        # 0.0.26 O13: the fake server stands for a BUILT index — this module grades the transport.
+        c = CodeReviewGraphClient(name=sys.executable, root=self._tmp, timeout=timeout,
+                                  index_probe=lambda _root: True)
         self.addCleanup(lambda: getattr(c, "_session", None) and c._session.close())
         return c
 
@@ -581,9 +583,15 @@ class TestTheUntouchedPathsAreUntouched(unittest.TestCase):
             return R()
 
         subprocess.run = spy
+        # 0.0.26 O15 — the client runs only a RESOLVED binary (mokata's env / MOKATA_CRG); this
+        # test is about the bound, so it names one rather than depending on the venv.
+        from unittest import mock
+        from mokata import detect
         try:
-            client = CodeReviewGraphClient(name="code-review-graph", timeout=17.0)
-            self.assertEqual(client.version(), "2.3.6")
+            with mock.patch.object(detect, "find_command",
+                                   lambda n: "/opt/crg/bin/code-review-graph"):
+                client = CodeReviewGraphClient(name="code-review-graph", timeout=17.0)
+                self.assertEqual(client.version(), "2.3.6")
         finally:
             subprocess.run = real
         self.assertEqual(seen.get("timeout"), 17.0)

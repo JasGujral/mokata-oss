@@ -406,6 +406,8 @@ class SetupWiresObserveOnlyHttpHooks(unittest.TestCase):
         p = self.root / ".claude" / "settings.local.json"
         return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
+    @unittest.skipIf(os.name == "nt", "Windows wires the command form (0.0.26 O4) — "
+                                      "tests/test_o4_bridge_live_check.py")
     def test_the_flag_writes_documented_http_hooks_to_the_machine_local_file(self):
         self._setup(ide_bridge=True)
         rec = B.read_bridge(str(self.root.resolve()))
@@ -556,8 +558,9 @@ class HookBudget(unittest.TestCase):
         self.results["observe_http_closed"] = _p95(xs)
         if os.name == "nt":
             # Windows retries a refused localhost connect before giving up: ~1 s per hook, measured
-            # on windows-latest (0.0.25 cut, p95 1011 ms). Disclosed as a known limitation of the
-            # opt-in `--ide-bridge`; the hook still FAILS OPEN — it never blocks Claude Code.
+            # on windows-latest (0.0.25 cut, p95 1011 ms). That is why, since 0.0.26 O4, `--ide-bridge`
+            # does NOT wire the http hook on Windows: it wires `bridge_client`, which never connects
+            # to a closed IDE (tests/test_o4_bridge_live_check.py). This pins the raw OS cost only.
             self.assertLessEqual(_p95(xs), WINDOWS_REFUSED_CONNECT_CEILING_MS, xs)
             return
         self.assertLessEqual(_p95(xs), self._budget("observe_http_closed"), xs)

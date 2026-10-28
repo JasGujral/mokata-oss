@@ -1,0 +1,6 @@
+{
+  "id": "02-slugify",
+  "title": "Implement slugify",
+  "prompt": "Implement `slugify(text)` in text_utils.py: lowercase, ASCII letters/digits kept, every run of other characters becomes a single '-', no leading/trailing '-'. Add tests.",
+  "max_turns": 40
+}

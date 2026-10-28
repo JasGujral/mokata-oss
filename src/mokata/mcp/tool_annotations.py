@@ -62,7 +62,7 @@ OPEN_WORLD_TOOLS = frozenset({
     "query",           # tools_read.query        -> run_query -> KnowledgeLayer._run (crg_client)
     "decompose",       # tools_read.decompose    -> _decompose(layer=) graph independence-verify
     "ci_check",        # tools_read.ci_check     -> ci_check.run_ci_check -> KnowledgeLayer graph
-    "remember",        # tools_memory.remember   -> check_about_code_anchors(layer) on propose path
+    "remember",        # tools_memory.remember   -> grounding_report(layer) symbol resolve on propose
     "spec_amend",      # tools_spec.spec_amend   -> KnowledgeLayer graph regression (:242)
     "spec_check",      # tools_spec.spec_check   -> KnowledgeLayer graph touch-set (:346)
     # --- team Postgres — memory read / DSN health probe / PG transport / shared log -----------
@@ -148,9 +148,11 @@ OUTCOMES — three, and they are NOT interchangeable:
       the harness permission prompt. This is a person saying NO; it is NOT a stuck server and NOT
       something to retry. Say so plainly, and confirm from the terminal with `mokata approve
       --list` (out-of-band — it needs no MCP call and works when this boundary does not).
-  (c) a result with status "error" / "timed_out" / "degraded" — a genuine fault, in mokata's own
-      voice, naming the stuck resource and its fix. Every mokata tool returns one of these rather
-      than hanging, so silence is never mokata's answer — silence means (b).
+  (c) a result with status "error" / "degraded" — a genuine fault, in mokata's own voice, naming
+      the stuck resource and its fix. Every mokata tool returns one of these rather than hanging,
+      so silence is never mokata's answer — silence means (b).
+  (d) status "running" — the work is still going (never cut). Re-call with EXACTLY the same
+      arguments to join it and get its result; it never runs twice. Do not redo it via the CLI.
 
 NEVER report a wait as a failure, and never report a decline as a hang. If you cannot tell which
 you got, run `mokata approve --list` and say what it shows."""

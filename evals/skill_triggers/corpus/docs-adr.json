@@ -1,0 +1,34 @@
+{
+ "skill": "docs-adr",
+ "triggers": [
+  "architecturally significant decision",
+  "ADR / decision record / changelog"
+ ],
+ "positive": [
+  "Record an ADR for choosing Postgres over Mongo",
+  "We decided to split the monolith at the billing boundary; write the decision record",
+  "Add a changelog entry and a decision record for the new caching strategy",
+  "This is an architecturally significant decision, persist why we chose event sourcing",
+  "Future readers will ask why we picked gRPC; write that ADR now"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Check if the docs still match the code after the rename",
+   "expect": "docsync"
+  },
+  {
+   "prompt": "Fix the off-by-one in the pagination helper"
+  },
+  {
+   "prompt": "List the published documentation topics and their URLs",
+   "expect": "docs"
+  },
+  {
+   "prompt": "Write a README section explaining how to install the tool"
+  },
+  {
+   "prompt": "Plan the rollout and rollback thresholds for the release",
+   "expect": "shipping"
+  }
+ ]
+}

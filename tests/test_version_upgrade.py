@@ -1,9 +1,8 @@
 """Stage 45b — version & upgrade UX.
 
 `mokata version` is OFFLINE by default (local-first, zero egress). The update check is
-OPT-IN, netguard-accounted, and degrade-clean offline. `mokata upgrade` proposes a
-human-gated `pip install -U` (pip install) or prints the plugin-update steps (plugin
-install) — it never auto-runs. Both jsonschema states; no real network in tests.
+OPT-IN, netguard-accounted, and degrade-clean offline. How to upgrade is `mokata update`
+(print-only, 0.0.26 L2 — tests/test_l2_mok_update.py). No real network in tests.
 """
 
 import io
@@ -26,9 +25,6 @@ from mokata.version import (
     VersionInfo,
     check_for_update,
     detect_install_method,
-    run_upgrade,
-    upgrade_plan,
-    upgrade_steps,
     version_info,
 )
 
@@ -99,13 +95,13 @@ class TestInstallDetection(unittest.TestCase):
 # --- update check: opt-in, accounted, degrade-clean -----------------------------
 class TestUpdateCheck(unittest.TestCase):
     def test_reports_a_newer_release(self):
-        chk = check_for_update("0.0.3", fetcher=lambda _url: "v0.0.9")
+        chk = check_for_update("0.0.3", fetcher=lambda _url: '[{"tag_name": "v0.0.9"}]')
         self.assertTrue(chk.ok)
         self.assertEqual(chk.latest, "0.0.9")
         self.assertFalse(chk.up_to_date)
 
     def test_reports_up_to_date(self):
-        chk = check_for_update("0.0.9", fetcher=lambda _url: "0.0.9")
+        chk = check_for_update("0.0.9", fetcher=lambda _url: '[{"tag_name": "0.0.9"}]')
         self.assertTrue(chk.ok)
         self.assertTrue(chk.up_to_date)
 
@@ -125,46 +121,8 @@ class TestUpdateCheck(unittest.TestCase):
     def test_check_is_accounted_in_the_ledger(self):
         with tempfile.TemporaryDirectory() as d:
             led = AuditLedger(os.path.join(d, "l.jsonl"))
-            check_for_update("0.0.3", fetcher=lambda _url: "v0.0.3", ledger=led)
+            check_for_update("0.0.3", fetcher=lambda _url: '[{"tag_name": "v0.0.3"}]', ledger=led)
             self.assertTrue(any(e["kind"] == "update_check" for e in led.entries()))
-
-
-# --- upgrade: human-gated, never auto-runs --------------------------------------
-class TestUpgrade(unittest.TestCase):
-    def test_pip_upgrade_runs_the_right_command_via_runner(self):
-        spy = []
-        res = run_upgrade(upgrade_plan("pip"), runner=lambda c: spy.append(c) or 0)
-        self.assertTrue(res.ok)
-        self.assertEqual(spy[0][-4:], ["pip", "install", "--upgrade", "mokata"])
-
-    def test_upgrade_steps_per_method(self):
-        self.assertIn("pip install --upgrade mokata", " ".join(upgrade_steps("pip")))
-        self.assertIn("marketplace update", " ".join(upgrade_steps("plugin")))
-
-    def test_cmd_upgrade_pip_proposes_without_running(self):
-        with tempfile.TemporaryDirectory() as d:
-            rc, out = run_cli(["upgrade", "--method", "pip", "--path", d], stdin="")
-        self.assertEqual(rc, 0)
-        self.assertIn("pip install --upgrade mokata", out)
-        self.assertIn("not run", out.lower())          # declined at the human gate
-
-    def test_a_failed_upgrade_says_so_and_skips_the_wiring_tail(self):
-        from mokata.version import UpgradeRun
-        with tempfile.TemporaryDirectory() as d, \
-                mock.patch("mokata.version.run_upgrade",
-                           return_value=UpgradeRun(["x"], 2, "ERROR: no network")), \
-                mock.patch("mokata.version._default_tail_runner",
-                           side_effect=AssertionError("tail ran after a failed upgrade")):
-            rc, out = run_cli(["upgrade", "--method", "pip", "--path", d, "--yes"])
-        self.assertEqual(rc, 1)
-        self.assertIn("upgrade FAILED", out)
-        self.assertIn("no network", out)
-
-    def test_cmd_upgrade_plugin_prints_steps(self):
-        with tempfile.TemporaryDirectory() as d:
-            rc, out = run_cli(["upgrade", "--method", "plugin", "--path", d])
-        self.assertEqual(rc, 0)
-        self.assertIn("/plugin marketplace update mostack", out)
 
 
 # --- /mokata:version slash command (generated from skills.py) -------------------

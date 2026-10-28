@@ -478,7 +478,7 @@ def note_supersede(ledger: Any, run_id: str, verdict: ReemitVerdict, title: str)
 
 
 def spec_commit(store: Any, spec: Spec, *, version: int = 0,
-                archive_key: str = "", run_id: str = "") -> int:
+                archive_key: str = "", run_id: str = "", tests: Any = None) -> int:
     """THE durable spec write. Returns the corpus size after it.
 
     Two keys, one commit: this run's `emitted_spec` (session-scoped — the key the SI.1 hook reads)
@@ -502,6 +502,7 @@ def spec_commit(store: Any, spec: Spec, *, version: int = 0,
     `version=0` is that "say nothing" sentinel. It replaced a `1` default that did not merely fail
     to bump — it REWOUND, writing "v1" over a v3 spec and poisoning the next amendment's archive
     key."""
+    require_plan(spec)                  # R2 — the floor: no plan, no commit (every surface)
     if not version and not archive_key:
         plan = reemit_verdict(store, run_id)
         version, archive_key = plan.version, plan.archive
@@ -529,12 +530,72 @@ def spec_commit(store: Any, spec: Spec, *, version: int = 0,
     from ..domains import derive_spec_domains
     derive_spec_domains(spec, approved, root=_repo_root(store))
 
+    # R2 (0.0.26) — SEAL the plan: the SHA-256 of exactly the bytes being written, inside the
+    # human-gated commit, so the hash IS the approval every later stage attests.
+    from ..plan_tasks import seal
     data = dict(spec.to_dict())
     data["version"] = version
+    data = seal(data)
     store.write(SPEC_STATE_KEY, data)
     corpus = _corpus_after(store.read(SPEC_CORPUS_KEY), spec)
     store.write(SPEC_CORPUS_KEY, corpus)
+    # L7b (0.0.26, D1) — OPT-IN committed spec. With `settings.specs.commit: true` the approved spec
+    # (the exact sealed dict above) is also written to the TRACKED `.mokata/specs/<run>.json`, here
+    # inside the same human-gated commit, so emit, MCP emit and amend all keep it current. Off (the
+    # default) writes nothing outside temp_local/.
+    root = _repo_root(store)
+    if root:
+        from ..committed_specs import commit_enabled, write_committed
+        if commit_enabled(root):
+            write_committed(root, _reemit_run(store, run_id), data)
+    if tests is not None and run_id:
+        # R1 (0.0.26) — the AC→test map the completeness gate checked becomes the run's PLANNED map
+        # once the spec has LANDED (never on a refused emit), so the Stop evidence gate reads it
+        # from the record instead of walking the repo.
+        from ..test_runs import seed_ac_map
+        seed_ac_map(_repo_root(store), run_id, tests)
     return len(corpus)
+
+
+def spec_for_emit(payload: Dict[str, Any]) -> "tuple[Spec, List[TestRef]]":
+    """`spec_from_payload` + `require_plan`: what every EMIT surface (CLI emit/amend, MCP
+    spec_emit/spec_amend) parses with, so a spec without a task plan is refused before any gate
+    runs or any human is asked. Raises ValueError."""
+    spec, tests = spec_from_payload(payload)
+    require_plan(spec)
+    return spec, tests
+
+
+# R2 — the gate identity of a plan-less emit refusal, and its one sentence.
+PLAN_GATE = "task-plan"
+PLAN_REQUIRED = ("a spec needs a task plan: tasks: [{id, title, ac_ids: [...], scope: [globs]}] — "
+                 "every acceptance criterion in >= 1 task; develop works task by task inside "
+                 "each task's scope")
+
+
+def require_plan(spec: Spec) -> None:
+    """R2 — a spec without a task plan is not the 0.0.26 shape and is never committed. Checked by
+    every emit surface up front (`spec_for_emit`), before the human gate (`commit_spec`), and in
+    the committer itself (`spec_commit`) as the floor. Raises ValueError."""
+    if not spec.tasks:
+        raise ValueError(PLAN_REQUIRED)
+
+
+def note_plan_approved(ledger: Any, run_id: str, store: Any) -> None:
+    """R2 — the SHA-tied ledger marker: which plan hash the human approved for this run. Read from
+    the spec as written (the committer sealed it). Degrade-clean: the spec is already committed."""
+    if ledger is None:
+        return
+    try:
+        data = store.read(SPEC_STATE_KEY)
+        from ..plan_tasks import PLAN_HASH_KEY
+        ledger.record("plan_approved", run=run_id,
+                      plan_hash=(data or {}).get(PLAN_HASH_KEY, ""),
+                      version=(data or {}).get("version", 1),
+                      tasks=len((data or {}).get("tasks") or []))
+    except Exception as exc:         # noqa: BLE001 — bookkeeping never undoes a committed spec
+        from ..session_flow import note_persist_failure
+        note_persist_failure("ledger:plan_approved", error=exc)
 
 
 def commit_spec(store: Any, spec: Spec, *, gate: WriteGate,
@@ -543,7 +604,7 @@ def commit_spec(store: Any, spec: Spec, *, gate: WriteGate,
                 policy: Any = None,
                 human_approved: bool = False,
                 surface: str = CLI_SURFACE,
-                run_id: str = "") -> "tuple[bool, str, int]":
+                run_id: str = "", tests: Any = None) -> "tuple[bool, str, int]":
     """Run `spec_commit` through the human WriteGate. `(committed, reason, corpus_size)`.
 
     The caller owns the gate (so the engine pipeline keeps its own, and the MCP path can hand in
@@ -553,11 +614,12 @@ def commit_spec(store: Any, spec: Spec, *, gate: WriteGate,
     `run_id` is the run the supersede is keyed to (SPEC-REEMIT-CLOBBER). A caller that has one
     passes it; `phases.py:_emit` has none and falls back to its own session, which is the identity
     the store it hands in is already scoped to (see `_reemit_run`)."""
+    require_plan(spec)
     box: Dict[str, int] = {}
     out = gate.submit(
         WriteRequest(EMIT_KIND, EMIT_TARGET, content=preview_content(store, spec),
                      tool=EMIT_TOOL, surface=surface),
-        commit=lambda: box.update(size=spec_commit(store, spec, run_id=run_id)),
+        commit=lambda: box.update(size=spec_commit(store, spec, run_id=run_id, tests=tests)),
         assume_yes=assume_yes, confirm=confirm, human_approved=human_approved)
     return bool(out.committed), out.reason, box.get("size", 0)
 
@@ -628,6 +690,9 @@ def emit_spec(surface: Any, spec: Spec, tests: List[TestRef], *,
     `cli_commands/spec.py:_run_scoped_store`). Defaulting to `surface.state` keeps every in-session
     caller unchanged."""
     store = surface.state if store is None else store
+    # R2 (0.0.26) — no task plan, no emit: refused before any gate runs or any human is asked.
+    if not spec.tasks:
+        return EmitOutcome(False, PLAN_REQUIRED, gate=PLAN_GATE, ac_count=len(spec.criteria))
     # SPEC-ANCHOR — derive the anchors BEFORE the gate, so its S3 advisories judge the anchors that
     # will actually land (the committer derives again; derivation is idempotent).
     from .spec_anchor import derive_anchors
@@ -677,11 +742,12 @@ def emit_spec(surface: Any, spec: Spec, tests: List[TestRef], *,
 
     committed, reason, size = commit_spec(
         store, spec, gate=WriteGate(ledger=ledger),
-        assume_yes=assume_yes, confirm=confirm, run_id=run_id)
+        assume_yes=assume_yes, confirm=confirm, run_id=run_id, tests=tests)
     if committed and run_id:
         mark_emitted(store, run_id, ledger=ledger)      # the two gates this emit just earned (P17)
     if committed:
         note_supersede(ledger, run_id, verdict, spec.title)
+        note_plan_approved(ledger, run_id, store)
     return EmitOutcome(committed, reason, gate="" if committed else "write-gate",
                        ac_count=len(spec.criteria), corpus_size=size,
                        version=verdict.version, superseded=verdict.archive if verdict.replaces
@@ -700,7 +766,11 @@ def spec_from_payload(payload: Dict[str, Any]) -> "tuple[Spec, List[TestRef]]":
          "criteria": [{"id": str, "text": str, "anchors": [CodeAnchor]?,
                        "kind": "behaviour" | "ui"?, "states": {default, loading, empty, error,
                        disabled: str}?}],
-         "tests":    [{"name": str, "ac_ids": [str]}]}
+         "tests":    [{"name": str, "ac_ids": [str]}],
+         "tasks":    [{"id", "title", "ac_ids": [str], "scope": [glob], "files"?: [str],
+                       "depends_on"?: [id], "consumes"?, "produces"?, "parallel"?: bool}],
+         "clarifications"?: [{"id", "question", "recommended", "answer"?, "category"?}]  (<= 5),
+         "assumptions"?:    [{"id", "text", "for"?: clarification id}]}
 
     Raises `ValueError` with an actionable message on a shape the gates could not judge — an
     unparseable spec must fail LOUDLY at the surface, never reach a gate as an empty one (an
@@ -744,6 +814,21 @@ def spec_from_payload(payload: Dict[str, Any]) -> "tuple[Spec, List[TestRef]]":
         tests.append(TestRef(name=str(t["name"]), ac_ids=[str(a) for a in ac_ids]))
 
     domains = payload.get("domains") or []
+    scope = scope_from_dict(payload.get(SCOPE_KEY))
+    # R2 — the task plan (strict) and R3 — the capped clarify record (the cap holds HERE).
+    # "every task has >= 1 test" FOLLOWS: each task names >= 1 AC (checked here) and the completeness
+    # gate refuses any AC no test maps — so the plan rule needs no second check to drift from it.
+    from ..plan_tasks import (ASSUMPTIONS_KEY, CLARIFICATIONS_KEY, TASKS_KEY,
+                              clarify_from_payload, tasks_from_payload)
+    # The PARSE validates a plan's shape strictly when one is sent; REQUIRING one is the emit's
+    # policy (`spec_for_emit` / `require_plan`), so a caller that only parses (a preview, a lint)
+    # is not made to invent a plan it is not committing.
+    raw_tasks = payload.get(TASKS_KEY)
+    tasks = (tasks_from_payload(raw_tasks, [c.id for c in criteria],
+                                authorized=scope.authorized if scope is not None else ())
+             if raw_tasks is not None else ())
+    clarifications, assumptions = clarify_from_payload(payload.get(CLARIFICATIONS_KEY),
+                                                       payload.get(ASSUMPTIONS_KEY))
     spec = Spec(
         title=title,
         criteria=criteria,
@@ -751,14 +836,18 @@ def spec_from_payload(payload: Dict[str, Any]) -> "tuple[Spec, List[TestRef]]":
         domains=[str(d) for d in domains] if isinstance(domains, list) else [],
         # SI-DEV — the optional, additive scope section. Absent => the spec declares no scope and
         # the hook will not police it (the honest boundary; every pre-SI-DEV spec is in this case).
-        scope=scope_from_dict(payload.get(SCOPE_KEY)),
+        scope=scope,
+        tasks=list(tasks),
+        clarifications=list(clarifications),
+        assumptions=list(assumptions),
     )
     return spec, tests
 
 
 __all__ = [
     "EMIT_KIND", "EMIT_TARGET", "EMIT_TOOL", "MAX_CORPUS", "REEMIT_GATE",
-    "EmitOutcome", "ReemitVerdict", "commit_spec", "derive_scope", "emit_spec", "note_supersede",
+    "EmitOutcome", "ReemitVerdict", "commit_spec", "note_plan_approved", "require_plan",
+    "derive_scope", "spec_for_emit", "PLAN_GATE", "PLAN_REQUIRED", "emit_spec", "note_supersede",
     "preview_content", "reemit_verdict", "replacement_preview", "spec_commit",
     "spec_from_payload", "spec_version", "structural_backend_available", "run_quality_gate",
 ]

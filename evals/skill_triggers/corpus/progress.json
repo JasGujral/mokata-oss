@@ -1,0 +1,35 @@
+{
+ "skill": "progress",
+ "triggers": [
+  "Show where the run is",
+  "7-phase tracker"
+ ],
+ "positive": [
+  "Where is the run right now — which phase and which lanes?",
+  "Show the 7-phase tracker and the user-stage arc",
+  "Show progress for the current run including parallel lanes",
+  "Which phase are we in? Show the tracker",
+  "Show me the run's progress"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Open the live clickable dashboard of the run",
+   "expect": "watch"
+  },
+  {
+   "prompt": "Pick up where I left off",
+   "expect": "resume"
+  },
+  {
+   "prompt": "Show me the governed rules",
+   "expect": "govern"
+  },
+  {
+   "prompt": "Track my weight-loss progress"
+  },
+  {
+   "prompt": "Switch the run to parallel subagents",
+   "expect": "exec"
+  }
+ ]
+}

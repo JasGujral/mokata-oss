@@ -21,14 +21,14 @@ to a command. Writing the rendered command is a durable write, so it is **human-
 
    ```bash
    PY="$(command -v python3 || command -v python)"
-   ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
+   mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
    ```
 
 3. **Check it RED→GREEN first** (writes nothing while RED):
 
    ```bash
-   eval "$ENGINE skill author <name> --summary \"mokata · <one-liner>\" \
-     --require <doc>:<must-contain> --content-file <draft.md> --path ."
+   mokata skill author '<name>' --summary 'mokata · <one-liner>' \
+     --require '<doc>':'<must-contain>' --content-file '<draft.md>' --path .
    ```
 
    If it reports RED (a requirement unmet), revise the draft until every requirement passes.
@@ -36,8 +36,8 @@ to a command. Writing the rendered command is a durable write, so it is **human-
 4. **Approve the write** — only after the draft is GREEN and the user confirms, add `--yes`:
 
    ```bash
-   eval "$ENGINE skill author <name> --summary \"mokata · <one-liner>\" \
-     --require <doc>:<must-contain> --content-file <draft.md> --yes --path ."
+   mokata skill author '<name>' --summary 'mokata · <one-liner>' \
+     --require '<doc>':'<must-contain>' --content-file '<draft.md>' --yes --path .
    ```
 
    The write goes through the universal gate (a secret in the content is hard-blocked even

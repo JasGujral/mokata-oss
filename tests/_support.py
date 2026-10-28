@@ -38,6 +38,173 @@ import _provisioning  # noqa: E402
 _provisioning.refuse_unless_provisioned()
 
 
+# --- 0.0.26 O15 `CRG-RESOLUTION-HERMETIC`: THE SUITE NEVER BORROWS THE DEVELOPER'S TOOLS ---------
+# Measured on Jas's Mac at checkpoint 2: a core venv (`.[dev,ide]`, no code-review-graph) ran the
+# unit suite at a real terminal while a `uv tool` mokata[full] had put a code-review-graph on PATH.
+# Tests that meant "no external graph" got the uv tool's copy, printed `code-graph: DEGRADED`, a
+# test FAILED, and the run sat silent. The product fix is `mokata.crg_resolve` (mokata's own env
+# only); this is the suite's half, installed by the one import every module makes:
+#
+#   1. code-review-graph is OFF unless a test asks for it: `MOKATA_CRG=off` (inherited by every
+#      subprocess a test starts), so a core venv and a full venv mean the SAME thing — the "5+
+#      tests that wrongly assume CRG absent" in a full venv were this. A test that wants a graph
+#      NAMES it: `MOKATA_CRG=<fake>`, `_crg_present` (stubbed at the wire), or `real_crg(tc)` (the
+#      env's real one). `MOKATA_TEST_REAL_CRG=1` keeps the env's real one for a whole run (the
+#      real-crg CI leg). And PATH is SCRUBBED of any `code-review-graph` that is not this
+#      interpreter's own — the dir is replaced by a mirror of its other executables (dropped where
+#      symlinks are refused, e.g. unprivileged Windows), so `git`, `rg`, `node` beside it resolve.
+#   2. Every in-process spawn of a code-review-graph is CHECKED: it must be this environment's, a
+#      fake under the temp dir, or the one the test named in `MOKATA_CRG`. Anything else raises
+#      `HermeticViolation` — at the spawn, in the test that did it (`test_o15_*` sweeps the tree).
+#   3. A WATCHDOG: any single test running past `MOKATA_TEST_WATCHDOG_S` (default 900 s) has every
+#      thread's stack dumped to the real stderr (repeating), so a hang is never silent again.
+import faulthandler as _faulthandler
+import subprocess as _subprocess
+import sysconfig as _sysconfig
+import tempfile as _tempfile
+
+HERMETIC_COMMANDS = ("code-review-graph",)
+
+
+def _own_scripts_dirs():
+    dirs = []
+    for d in (_sysconfig.get_path("scripts"), os.path.dirname(sys.executable),
+              os.path.join(sys.prefix, "Scripts" if os.name == "nt" else "bin")):
+        if d and os.path.normcase(os.path.realpath(d)) not in dirs:
+            dirs.append(os.path.normcase(os.path.realpath(d)))
+    return dirs
+
+
+def _mirror_without(d, names):
+    """A temp dir of symlinks to every entry of `d` except `names`; None when symlinks fail."""
+    mirror = _tempfile.mkdtemp(prefix="mokata-hermetic-path-")
+    import atexit
+    atexit.register(shutil.rmtree, mirror, True)
+    try:
+        for entry in os.listdir(d):
+            stem = os.path.splitext(entry)[0] if os.name == "nt" else entry
+            if stem in names:
+                continue
+            os.symlink(os.path.join(d, entry), os.path.join(mirror, entry))
+    except OSError:
+        shutil.rmtree(mirror, ignore_errors=True)
+        return None
+    return mirror
+
+
+def hermetic_path(path, own_dirs=None, names=HERMETIC_COMMANDS):
+    """`path` with every dir that holds one of `names` OUTSIDE `own_dirs` replaced by a mirror
+    without it (or dropped). Returns (new_path, [scrubbed dirs])."""
+    own = own_dirs if own_dirs is not None else _own_scripts_dirs()
+    out, scrubbed = [], []
+    for d in (path or "").split(os.pathsep):
+        if not d:
+            continue
+        hit = any(shutil.which(n, path=d) for n in names)
+        if hit and os.path.normcase(os.path.realpath(d)) not in own:
+            scrubbed.append(d)
+            mirror = _mirror_without(d, names)
+            if mirror:
+                out.append(mirror)
+            continue
+        out.append(d)
+    return os.pathsep.join(out), scrubbed
+
+
+#: What the scrub removed at import (empty on a clean machine) — `test_o15_*` reads it.
+os.environ["PATH"], HERMETIC_SCRUBBED = hermetic_path(os.environ.get("PATH", ""))
+if os.environ.get("MOKATA_TEST_REAL_CRG") == "1":
+    os.environ.pop("MOKATA_CRG", None)
+else:
+    os.environ["MOKATA_CRG"] = "off"
+
+
+def real_crg(testcase):
+    """Opt THIS test into the environment's real code-review-graph resolution (MOKATA_CRG unset
+    for its duration)."""
+    from unittest import mock
+    p = mock.patch.dict(os.environ)
+    p.start()
+    testcase.addCleanup(p.stop)
+    os.environ.pop("MOKATA_CRG", None)
+
+
+class HermeticViolation(AssertionError):
+    """A test spawned a tool from outside its own environment without naming it."""
+
+
+def _allowed_crg(exe):
+    real = os.path.normcase(os.path.realpath(exe))
+    if os.path.dirname(real) in _own_scripts_dirs():
+        return True
+
+    def _under(path, base):
+        try:
+            return os.path.commonpath([path, base]) == base
+        except ValueError:                           # different drives (Windows)
+            return False
+    tmp = _tempfile.gettempdir()
+    if _under(real, os.path.normcase(os.path.realpath(tmp))) or _under(
+            os.path.normcase(os.path.abspath(exe)), os.path.normcase(os.path.abspath(tmp))):
+        return True                                  # a fake the test built
+    named = os.environ.get("MOKATA_CRG")
+    return bool(named) and named.lower() not in ("off", "none", "0") and os.path.normcase(os.path.realpath(named)) == real
+
+
+_REAL_POPEN_INIT = _subprocess.Popen.__init__
+
+
+def _guarded_popen_init(self, args, *a, **kw):
+    argv0 = args if isinstance(args, (str, bytes, os.PathLike)) else (args[0] if args else "")
+    argv0 = os.fsdecode(argv0) if isinstance(argv0, (bytes, os.PathLike)) else argv0
+    if not kw.get("shell") and isinstance(argv0, str):
+        stem = os.path.basename(argv0)
+        if os.name == "nt":
+            stem = os.path.splitext(stem)[0]
+        if stem in HERMETIC_COMMANDS:
+            env = kw.get("env")
+            exe = argv0 if os.path.dirname(argv0) else shutil.which(
+                argv0, path=(env or os.environ).get("PATH"))
+            if exe and not _allowed_crg(exe):
+                raise HermeticViolation(
+                    f"a test spawned {exe} — a {stem} from OUTSIDE this test environment that the "
+                    f"test did not name. Name it (MOKATA_CRG / a temp-dir fake / `_crg_present`) "
+                    f"or hide it (`hide_external_graphs`).")
+    return _REAL_POPEN_INIT(self, args, *a, **kw)
+
+
+_subprocess.Popen.__init__ = _guarded_popen_init
+
+WATCHDOG_S = float(os.environ.get("MOKATA_TEST_WATCHDOG_S", "900") or 0)
+
+
+def _install_watchdog():
+    import unittest
+    if getattr(unittest.TestCase.run, "_mokata_watchdog", False) or WATCHDOG_S <= 0:
+        return
+    real_run = unittest.TestCase.run
+
+    def run(self, result=None):
+        stream = sys.__stderr__
+        armed = stream is not None
+        if armed:
+            try:
+                stream.write("")  # a closed stream cannot carry the dump
+                _faulthandler.dump_traceback_later(WATCHDOG_S, repeat=True, file=stream)
+            except (ValueError, OSError, AttributeError):
+                armed = False
+        try:
+            return real_run(self, result)
+        finally:
+            if armed:
+                _faulthandler.cancel_dump_traceback_later()
+    run._mokata_watchdog = True
+    unittest.TestCase.run = run
+
+
+_install_watchdog()
+
+
 # --- WINDOWS PORTABILITY: THE TWO THINGS A POSIX-ONLY AUTHOR GETS WRONG -------------------
 # Both of these were found the expensive way — 19 of the 20 tests that reded on all three Windows
 # legs of the 0.0.18 cut were one or the other of them, and NOT nineteen separate defects. They
@@ -85,6 +252,18 @@ NO_BASH = ("no bash on PATH — this check drives a shell script and cannot be R
            "un-run check, not a passing one (doc 85 §7g).")
 
 
+def node_argv(js):
+    """`[node, <file>]` running `js` — the page-logic tests' replacement for `node -e <js>`.
+    Windows' CreateProcess caps a command line at 32,767 characters, and a feature module inlined
+    into `-e` passes it (0.0.26 cut: WinError 206 on the windows legs). A file has no such cap."""
+    fd, path = _tempfile.mkstemp(suffix=".js", prefix="mk-node-")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(js)
+    import atexit
+    atexit.register(lambda: os.path.exists(path) and os.remove(path))
+    return [shutil.which("node"), path]
+
+
 def bash_argv(*args):
     """argv for running bash, resolved through PATH rather than left to CreateProcess.
 
@@ -130,6 +309,12 @@ def mcp_commit(tool, **kwargs):
     from mokata import approval
     from mokata.govern.ledger import AuditLedger
 
+    # R2 (0.0.26) — every spec carries its task plan. A spec_emit / spec_amend fixture that is
+    # about something else gets the smallest honest one (`_plan.planned`); one that sends its own
+    # `tasks` is untouched.
+    if getattr(tool, "__name__", "") in ("spec_emit", "spec_amend"):
+        from _plan import planned
+        kwargs = planned(kwargs)
     proposed = tool(**kwargs)
     if not isinstance(proposed, dict):
         return proposed
@@ -748,3 +933,119 @@ def install_release_scripts(repo_root, dest_scripts_dir, names=SYNC_COMPANIONS):
             _shutil.copy2(src, os.path.join(dest_scripts_dir, name))
             copied.append(name)
     return tuple(copied)
+
+
+# --- 0.0.26 O11: THE GRAPH BACKEND A TEST MEANS, PINNED ----------------------------------------
+# `mokata[full]` installs code-review-graph, and GR.S2(g) USES a detected one read-only on a repo
+# that never adopted it (`knowledge.graph_adopt.detected_graph_overlay`). `detect.find_command`
+# also looks in the running interpreter's scripts dir (0.0.25 I-02), so a venv that has CRG finds
+# it even when that venv is not on PATH. A test that drives the real router through
+# `Surface.load` therefore meant one thing in a core venv and another in a full one — 30+ tests
+# went red in the full venv on a correct tree. A test that depends on which graph answers says so
+# with ONE of these, and then means the same thing everywhere:
+#
+#   * `hide_external_graphs(tc)`  — the machine has no external graph (the core install);
+#   * `crg_present_unbuilt(tc)`   — code-review-graph is installed and this repo never built its
+#     index (the common `mokata[full]` first run). Every `query_graph_tool` call answers the reply
+#     RECORDED from 2.3.9 in that state; returns the list of calls so a test can prove CRG was asked.
+EXTERNAL_GRAPH_COMMANDS = ("code-review-graph", "serena")
+
+# RECORDED from code-review-graph 2.3.9: `query_graph_tool(callers_of, …)` in a git repo it never
+# built (`target` is filled in per call, as the tool does).
+CRG_EMPTY_GRAPH_REPLY = {
+    "status": "not_found",
+    "confidence": "graph is empty: nothing is indexed, so this 0 says nothing about the code; "
+                  "run `code-review-graph build`"}
+
+
+def hide_external_graphs(testcase=None):
+    """Pin "no external graph on this machine". With no `testcase`, for the whole module (call it
+    from `setUpModule`; the patch is undone by `unittest.addModuleCleanup`)."""
+    import unittest
+    from unittest import mock
+    from mokata import detect
+    real = detect.find_command
+
+    def find_command(name):
+        return None if name in EXTERNAL_GRAPH_COMMANDS else real(name)
+    p = mock.patch.object(detect, "find_command", find_command)
+    p.start()
+    (testcase.addCleanup if testcase is not None else unittest.addModuleCleanup)(p.stop)
+
+
+# RECORDED from 2.3.9: the MCP `tools/call` result when `repo_root` is not a project (no .git,
+# .svn or .code-review-graph) — every temp dir a test builds without `git init`.
+CRG_NOT_A_PROJECT_RESULT = {
+    "content": [{"type": "text", "text": "Error calling tool 'query_graph_tool': repo_root does "
+                 "not look like a project root (no .git, .svn, or .code-review-graph directory "
+                 "found)"}],
+    "isError": True}
+
+
+def _crg_present(testcase, *, index_built, reply):
+    """Force code-review-graph PRESENT through the real detector and stub it at the MCP wire
+    (`_McpStdioSession._rpc`), so the client's own reply parsing runs. The index probe and the
+    background builder are stubbed too: no test ever spawns a real build. Returns the list of
+    calls: `(tool, params)` per MCP call, `("index-probe", root)` per probe, `("build", root)` per
+    background build started."""
+    import json
+    from unittest import mock
+    from mokata import detect
+    from mokata.knowledge import crg_build, crg_client
+    from mokata.knowledge.crg_client import CodeReviewGraphClient
+    real = detect.find_command
+    calls = []
+
+    def find_command(name):
+        if name == "code-review-graph":
+            return os.path.join(os.sep, "opt", "crg", "bin", name)
+        return None if name in EXTERNAL_GRAPH_COMMANDS else real(name)
+
+    def rpc(_self, method, params):
+        if method != "tools/call":
+            return {}
+        calls.append((params.get("name"), dict(params.get("arguments") or {})))
+        return json.loads(json.dumps(reply(params.get("arguments") or {})))
+
+    def run_cli(_self, args):
+        if list(args) == ["--version"]:
+            return 0, "code-review-graph 2.3.9", ""
+        return 1, "", "not available in this test"
+
+    def probe(root):
+        calls.append(("index-probe", root))
+        return index_built() if callable(index_built) else index_built
+
+    def spawn(root):
+        calls.append(("build", root))
+        return os.getpid()            # a live pid: the "build" stays running for the test
+    for p in (mock.patch.object(detect, "find_command", find_command),
+              mock.patch.object(crg_client._McpStdioSession, "_ensure", lambda _self: None),
+              mock.patch.object(crg_client._McpStdioSession, "_rpc", rpc),
+              mock.patch.object(CodeReviewGraphClient, "_default_run_cli", run_cli),
+              mock.patch.object(crg_build, "index_built", probe),
+              mock.patch.object(crg_build, "_spawn_worker", spawn)):
+        p.start()
+        testcase.addCleanup(p.stop)
+    return calls
+
+
+def crg_present_unbuilt(testcase):
+    """code-review-graph is on this machine and the repo never built its index (the `mokata[full]`
+    first run). 0.0.26 O13: the index probe says unbuilt, so the tool is NOT asked (no `serve`); a
+    first query starts ONE background build (stubbed: recorded as `("build", root)`) and the floor
+    answers. Should the tool be asked anyway, it answers the recorded empty-graph reply."""
+    import json
+
+    def reply(args):
+        r = dict(CRG_EMPTY_GRAPH_REPLY)
+        r["summary"] = f"No node found matching '{args.get('target')}'."
+        return {"content": [{"type": "text", "text": json.dumps(r)}]}
+    return _crg_present(testcase, index_built=False, reply=reply)
+
+
+def crg_present_failing(testcase):
+    """code-review-graph is on this machine, its index is built, and the tool FAILS when asked —
+    the recorded 2.3.9 MCP error (`isError: true`). The layer must degrade loudly, never read it
+    as a zero."""
+    return _crg_present(testcase, index_built=True, reply=lambda _a: CRG_NOT_A_PROJECT_RESULT)

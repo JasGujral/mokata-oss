@@ -67,6 +67,12 @@ KIND_REGISTER: Dict[str, Tuple[Optional[str], str]] = {
                       "have blocked, or that it would have passed — decided, never blocking"),
     "harvest_decision": (APPROVAL_DECISION,
                          "a person accepted or rejected a drafted session note (stage D6)"),
+    "stop_evidence": (GATE_DECISION,
+                      "R1 — a 'done' stop the run's record did not back, released UNVERIFIED "
+                      "after the block streak (the stop-evidence gate's audit row)"),
+    "loop_breaker": (GATE_DECISION,
+                     "R4 — a breaker ruling: the 3-fix breaker tripped, or the review loop "
+                     "refused a round past its cap"),
     "subagent_contract_unhonored": (GATE_DECISION,
                                     "a subagent's contract refused or missed: a read-only write, a "
                                     "spawn past the depth limit, or no HandbackReport (stage D4)"),
@@ -86,6 +92,8 @@ KIND_REGISTER: Dict[str, Tuple[Optional[str], str]] = {
     "scope_promotion": (APPROVAL_DECISION, "a human moving an item between scopes"),
     "decompose_confirm": (APPROVAL_DECISION, "a human confirming a decomposition"),
     "finish": (APPROVAL_DECISION, "the end-of-run choice a human makes"),
+    "plan_approved": (APPROVAL_DECISION, "R2 — the SHA-256 of the task plan a human approved with "
+                      "the spec (emit or amend); every later stage attests it"),
     # ⚠ An OVERRIDE is filed here and not under GateDecision, deliberately. The gate's own
     # verdict is already its own event; an override is a PERSON deciding to proceed past one,
     # which is the fact an auditor is looking for and the one a gate-shaped event would bury.
@@ -145,6 +153,8 @@ KIND_REGISTER: Dict[str, Tuple[Optional[str], str]] = {
     "spec_amend": (UNMAPPED, "a spec document edit. It passes a gate, and THAT gate's own entry "
                              "is the governance event; this row is the artifact change"),
     "spec_reemit": (UNMAPPED, "the same, for a re-emitted spec version"),
+    "model_tier": (UNMAPPED, "R6 — a FACT about a spawn (which model tier a role's subagent ran "
+                             "on). A refused tier is a gate block on stderr, not this row"),
     "spec_quality": (UNMAPPED, "SQ.S1 — one cycle of the spec-quality fix loop (findings → "
                                "revise). Bookkeeping of an AUTHOR's revision loop before any "
                                "human is asked; the human's decision is the emit's own gate entry"),

@@ -32,9 +32,9 @@ A **read-only** glance at the active run — never mutates anything. The MAX-det
 
 ```bash
 PY="$(command -v python3 || command -v python)"
-ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
-eval "$ENGINE progress --path ."            # phase tracker
-eval "$ENGINE progress --lanes --path ."     # + parallel lanes  (add --run <id> to target one)
+mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
+mokata progress --path .            # phase tracker
+mokata progress --lanes --path .     # + parallel lanes  (add --run <id> to target one)
 ```
 
 Both degrade clean: with no active run they return a friendly empty view — surface it, never

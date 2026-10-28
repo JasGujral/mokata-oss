@@ -1,0 +1,6 @@
+{
+  "id": "06-top-k-words",
+  "title": "Top-k word frequency",
+  "prompt": "Implement `top_k(text, k)` in words.py: the k most frequent lowercase words (letters only) as (word, count) pairs, ties broken alphabetically. Add tests.",
+  "max_turns": 40
+}

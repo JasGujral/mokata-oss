@@ -1,14 +1,16 @@
 # Install mokata (plugin / pipx / uv / brew / pip)
 
 mokata is a pure-Python CLI whose **core has no required runtime dependencies**, so it installs
-anywhere Python ≥ 3.10 runs. A plain `pip install mokata` also pulls the one default dependency —
+anywhere Python ≥ 3.12 runs. A plain `pip install mokata` also pulls the one default dependency —
 the **MCP SDK** — so the in-harness **`mokata-mcp` server works out of the box**, no extra needed.
 The SDK is still *lazily* imported, so the CLI runs fine even in a stripped env where it's absent.
 Pick the path that fits how you work. This page covers the **CLI**.
 
-> **The primary way — set up or update, the same instruction:** in your repo run
-> `uv tool install --upgrade mokata` (or `pipx install --force mokata`), then `mokata setup claude`,
-> restart Claude Code and run `mokata doctor`. `setup claude` runs `mokata init` for you on a new
+> **The primary way — one install line, one setup:** in your repo run
+> `uv tool install "mokata[full]"` (or `pipx install "mokata[full]"`), then
+> `mokata setup claude --mode full`, restart Claude Code and run `mokata doctor`. The installer
+> fetches everything full mode uses; setup only detects and wires it, and never installs. Update
+> later with `uv tool upgrade mokata` / `pipx upgrade mokata` — both keep the extra. `setup claude` runs `mokata init` for you on a new
 > repo and only refreshes the wiring on an existing one.
 >
 > **Alternative inside Claude Code: the plugin** — you may not need the CLI at all; it installs
@@ -22,8 +24,8 @@ Pick the path that fits how you work. This page covers the **CLI**.
 
 | Method | Command | Status | Best for |
 |---|---|---|---|
-| uv tool (recommended) | `uv tool install --upgrade mokata` | **Live** (on PyPI) | Install **or** update an isolated `mokata` on your PATH — then `mokata setup claude` |
-| pipx (recommended) | `pipx install --force mokata` | **Live** (on PyPI) | The same isolated install or update, for pipx users |
+| uv tool (recommended) | `uv tool install "mokata[full]"` | **Live** (on PyPI) | An isolated `mokata` + everything full mode uses — then `mokata setup claude --mode full`; update with `uv tool upgrade mokata` |
+| pipx (recommended) | `pipx install "mokata[full]"` | **Live** (on PyPI) | The same, for pipx users; update with `pipx upgrade mokata` |
 | pip | `pip install mokata` | **Live** (on PyPI) | Last resort — inside a project venv this mixes mokata's deps into yours; prefer pipx / uv tool |
 | uv (pip) | `uv pip install mokata` | **Live** (on PyPI) | Same caveat as pip — it installs into the active environment |
 | uvx (zero-install run) | `uvx mokata --version` | **Live** (on PyPI) | Running mokata once without installing |
@@ -47,8 +49,9 @@ pipx install mokata
 mokata --version
 ```
 
-Upgrade with `pipx upgrade mokata`; uninstall with `pipx uninstall mokata`. mokata's own
-`mokata upgrade` proposes a **human-gated** `pip install -U mokata` (it never upgrades on its own).
+Upgrade with `pipx upgrade mokata`; uninstall with `pipx uninstall mokata`. `mokata update`
+does the same in one step for any install — it shows the release notes and the command, and asks
+first.
 
 ## uv tool
 
@@ -79,6 +82,8 @@ a `[mcp]` extra (it's a no-op alias kept only for backwards compatibility).
 Optional extras (each is degrade-clean when absent — never required):
 
 ```bash
+pip install "mokata[full]"      # everything `--mode full` wires: embeddings + graph-ts +
+                                #   code-review-graph + the IDE companion's web stack
 pip install "mokata[postgres]"  # optional shared-memory / session Postgres backend
 pip install "mokata[schema]"    # richer manifest validation messages (jsonschema)
 ```
@@ -119,6 +124,17 @@ brew install mokata
 Homebrew builds Python formulae from source with `--no-deps`, so the formula vendors mokata's
 whole dependency tree — including the MCP SDK — into its own virtualenv. `mokata-mcp` therefore
 works from a brew install exactly as it does from pip.
+
+## "mokata needs Python 3.12 or newer"
+
+mokata requires **Python 3.12+**. On an older Python, pip refuses the install
+(`requires-python >=3.12`), and a checkout run without installing (the Claude Code plugin's hooks,
+`mokata-launch`, a clone on `PYTHONPATH`) says so in one line, naming the Python it found — for
+example *"found Python 3.10 (python3), but mokata needs Python 3.12+"*. Fix it either way:
+
+- install uv — `uv tool install mokata` and the plugin route fetch a Python 3.12 themselves; or
+- install Python 3.12+ (python.org, `brew install python@3.12`, `uv python install 3.12`, or your
+  distro's package) and install mokata with it.
 
 ## Then what?
 

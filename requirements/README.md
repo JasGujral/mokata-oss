@@ -15,6 +15,7 @@ pip install --require-hashes -r requirements/<file>.txt
 | `jsonschema.txt` | `ci.yml` / `release.yml` present leg · `release.sh` preflight | the optional `[schema]` extra, pinned to the exact version mokata resolves in `uv.lock` |
 | `release-build.txt` | `release.yml` (build) | `build` (PyPA sdist/wheel) + `cyclonedx-bom` (SBOM) |
 | `docs.txt` | `docs.yml` (build) | `mkdocs` + `mkdocs-material` for the docs site |
+| `e2e.txt` | `ci.yml` (ide-e2e) | `playwright` (the browser end-to-end for `mokata ide`, `tests/e2e_ide/`; its version pins the Chromium build `python -m playwright install chromium` fetches) + mokata's runtime `mcp` and `[ide]` deps — the job runs the checkout's `src/` and installs no mokata package |
 | `uv.txt` | `install-e2e.yml` (uv-tool legs) | the `uv` installer — the documented primary install route (`uv tool install mokata`) is what that job tests |
 
 ## What is NOT pinned here (deliberately)
@@ -37,9 +38,9 @@ Edit the loose pins in the `*.in` files, then recompile — never hand-edit a `*
 scripts/gen-pinned-requirements.sh      # requires `uv` (pipx install uv)
 ```
 
-This runs `uv pip compile --universal --python-version 3.10 --generate-hashes` for each `.in`, so
-one file is valid across the whole CI matrix (Python 3.10–3.13, Linux + Windows). `jsonschema.in`
-is pinned to the exact `jsonschema` version `uv.lock` resolves for mokata's `>=3.10` floor, keeping
+This runs `uv pip compile --universal --python-version 3.12 --generate-hashes` for each `.in`, so
+one file is valid across the whole CI matrix and every supported Python (3.12+, Linux, macOS, Windows). `jsonschema.in`
+is pinned to the exact `jsonschema` version `uv.lock` resolves for mokata's `>=3.12` floor, keeping
 the CI install consistent with what mokata itself locks; its transitive deps are freshly resolved
 and hash-pinned. The other tools are not part of mokata's dependency graph, so they are declared in
 the `.in` files and compiled with the same `uv` toolchain.

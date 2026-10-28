@@ -1,53 +1,66 @@
-"""The minimum Claude Code version mokata needs (0.0.22 E1), and the doctor check that says so.
+"""The minimum Claude Code version mokata needs (0.0.22 E1; CC-COMPAT 0.0.26), and the doctor check.
 
-Every enforcement mokata runs inside Claude Code rides a hook event, and those events arrived over
-time. The floor below is the OLDEST version on which every one of them exists — derived from the
-table, never typed beside it:
-
-    event / field mokata depends on                   since    used by
-    Stop, SessionEnd                                   1.0.38   D6 session harvest
-    SubagentStop                                       1.0.41   D4 HandbackReport
-    PreCompact                                         1.0.48   D1 anchor, D6 harvest
-    SessionStart                                       1.0.62   the briefing, D1 re-anchor
-    agent_id / agent_transcript_path on SubagentStop   2.0.42   D4
-    SubagentStart                                      2.0.43   D4 contract
-    PreToolUse/PostToolUse fire INSIDE subagents       2.1.0    D4 read-only enforcement, D5
-
-Sources (checked 2026-10-11): the hook-event history at github.com/shanraisshan/claude-code-hooks;
-claudeissues 11726 (agent_id on SubagentStop, 2.0.42). Anthropic's own CHANGELOG.md now keeps only
-2.1.286 onwards, so it cannot answer for the older events.
-
-⚠ `last_assistant_message` (Stop / SubagentStop) is NOT in the floor: no source dates it. mokata
-treats it as optional — without it the HandbackReport is recorded as the harness's gap (never a
-send-back loop) and the session note omits the last word.
+Every Claude Code surface mokata depends on — hook events and payload fields, settings keys, the
+plugin manifest, skill frontmatter, the `claude` CLI flags it invokes or tells you to run — is listed
+with the oldest version that provides it in `claude_code_compat.json` (the machine-readable manifest,
+with a source per row). The floor is DERIVED from it: the newest `since` among the `core` surfaces.
+`opt-in` surfaces (http hooks for `--ide-bridge`, `onFailure` for `--http-gates`) are checked only
+when wired. README/docs state the floor and a test fails if they disagree with the manifest; a weekly
+workflow (`cc-compat.yml`) runs the manifest's CLI checks and `claude plugin validate --strict`
+against the latest Claude Code.
 
 Below the floor nothing breaks loudly — the hook that would have fired simply does not — so the
-doctor says WHICH features are off, by name, instead of letting them read as working.
+doctor says WHICH surfaces are missing, by name, instead of letting them read as working.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import shutil
 import subprocess
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 Version = Tuple[int, int, int]
 
-#: (feature, since, what mokata loses below it). The floor is derived from this table.
-FEATURES: Tuple[Tuple[str, Version, str], ...] = (
-    ("Stop / SessionEnd hooks", (1, 0, 38), "session notes are never drafted"),
-    ("SubagentStop hook", (1, 0, 41), "subagent handbacks are never read"),
-    ("PreCompact hook", (1, 0, 48), "the pre-compaction anchor is never written"),
-    ("SessionStart hook", (1, 0, 62), "no briefing and no post-compaction re-anchor"),
-    ("agent_id on SubagentStop", (2, 0, 42), "a subagent's contract cannot be matched at stop"),
-    ("SubagentStart hook", (2, 0, 43), "subagents get no contract"),
-    ("tool hooks inside subagents", (2, 1, 0),
-     "a read-only subagent's writes, and its Bash, are not policed"),
-)
-MIN_VERSION: Version = max(v for _f, v, _l in FEATURES)
+MANIFEST_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "claude_code_compat.json")
+SCOPES = ("core", "opt-in")
+
+
+def _load_manifest(path: str = MANIFEST_PATH) -> Dict[str, Any]:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    for s in data["surfaces"]:
+        if s["scope"] not in SCOPES:
+            raise ValueError(f"{s['id']}: scope must be one of {SCOPES}")
+        if s["scope"] == "opt-in" and not s.get("opt_in"):
+            raise ValueError(f"{s['id']}: an opt-in surface names its flag")
+        if s["since"] is not None and parse(s["since"]) is None:
+            raise ValueError(f"{s['id']}: since {s['since']!r} is not x.y.z")
+    return data
+
+
+#: The whole manifest (surfaces, sources, the date it was checked).
+MANIFEST: Dict[str, Any] = {}
+#: (surface id, since, what mokata loses below it) for every DATED core surface — the floor's input.
+FEATURES: Tuple[Tuple[str, Version, str], ...] = ()
+MIN_VERSION: Version = (0, 0, 0)
+
+
+def since(surface_id: str) -> Optional[Version]:
+    """The version a surface arrived in (None when undated). KeyError for an unknown id."""
+    for s in MANIFEST["surfaces"]:
+        if s["id"] == surface_id:
+            return parse(s["since"]) if s["since"] else None
+    raise KeyError(surface_id)
+
+
+def opt_in_surfaces(flag: str) -> List[Dict[str, Any]]:
+    return [s for s in MANIFEST["surfaces"] if s.get("opt_in") == flag]
+
 
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 _TIMEOUT_SECS = 3.0
@@ -60,6 +73,12 @@ def parse(text: Optional[str]) -> Optional[Version]:
 
 def fmt(v: Version) -> str:
     return ".".join(str(x) for x in v)
+
+
+MANIFEST = _load_manifest()
+FEATURES = tuple((s["id"], parse(s["since"]), s["loss"]) for s in MANIFEST["surfaces"]
+                 if s["scope"] == "core" and s["since"])
+MIN_VERSION = max(v for _f, v, _l in FEATURES)
 
 
 @lru_cache(maxsize=1)
@@ -104,5 +123,5 @@ def missing_features(version: Version) -> List[str]:
     return [f for f, since, _l in FEATURES if version < since]
 
 
-__all__ = ["FEATURES", "MIN_VERSION", "parse", "fmt", "installed_version", "VersionCheck",
-           "check", "missing_features"]
+__all__ = ["MANIFEST", "MANIFEST_PATH", "FEATURES", "MIN_VERSION", "parse", "fmt", "since",
+           "opt_in_surfaces", "installed_version", "VersionCheck", "check", "missing_features"]

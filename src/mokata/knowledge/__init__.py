@@ -53,8 +53,8 @@ if TYPE_CHECKING:  # the eager list, for static readers only — see the module 
         file_fingerprint,
         surface_staleness,
     )
+    from .graph_tools import GRAPH_TOOLS
     from .layer import (
-        GRAPH_TOOLS,
         KnowledgeLayer,
         StoryAnalysis,
         build_story_analysis,
@@ -98,7 +98,7 @@ _EXPORTS: Dict[str, Tuple[str, str]] = {
     "KnowledgeIndex": ("index", "KnowledgeIndex"),
     "file_fingerprint": ("index", "file_fingerprint"),
     "surface_staleness": ("index", "surface_staleness"),
-    "GRAPH_TOOLS": ("layer", "GRAPH_TOOLS"),
+    "GRAPH_TOOLS": ("graph_tools", "GRAPH_TOOLS"),
     "KnowledgeLayer": ("layer", "KnowledgeLayer"),
     "StoryAnalysis": ("layer", "StoryAnalysis"),
     "build_story_analysis": ("layer", "build_story_analysis"),

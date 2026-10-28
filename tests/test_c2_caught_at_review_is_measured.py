@@ -73,11 +73,15 @@ class SlS3AGateBlockIsAnInLoopCatchForItsRun(unittest.TestCase):
             self.assertEqual(IMPL, events[0]["data"]["path"])
 
     def test_a_block_in_a_window_that_holds_no_claim_is_not_that_runs_catch(self):
-        """0.0.22 verification D-1: still policed by the repo's only run, never credited to it."""
+        """0.0.22 verification D-1, amended by INT-2a (B-F4): a window with no claim is no longer
+        policed by a run ANOTHER session's registration holds (S1 holds r1 here) — so it is neither
+        blocked by it nor credited to it. The bound session S1 is still blocked and credited."""
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d, "r1")
-            self.assertEqual(G.BLOCK_EXIT, _block(d, sid="S-other"))
+            self.assertEqual(0, _block(d, sid="S-other"))
             self.assertEqual(0, PE.review_yield(surface, "r1").in_loop)
+            self.assertEqual(G.BLOCK_EXIT, _block(d, sid="S1"))
+            self.assertEqual(1, PE.review_yield(surface, "r1").in_loop)
 
     def test_the_outcome_carries_its_run_only_on_a_block(self):
         with tempfile.TemporaryDirectory() as d:

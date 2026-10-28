@@ -1,0 +1,63 @@
+{
+  "routes": [
+    {
+      "path": "/api/sessions/list", "method": "GET", "kind": "json",
+      "params": {"query": {"offset": "first row (0)", "limit": "rows per page (1..200, 50)",
+                           "q": "text: prompt, file, branch, run, id, date",
+                           "filter": "all | live | needs | worktree | changed | nochange"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object",
+          "required": ["sample", "rows", "total", "all", "offset", "limit", "q", "filter", "live",
+                       "live_window_secs"],
+          "properties": {"sample": {"type": "boolean"}, "total": {"type": "number"},
+                         "all": {"type": "number"}, "offset": {"type": "number"},
+                         "limit": {"type": "number"}, "live": {"type": "number"},
+                         "rows": {"type": "array", "items": {"$ref": "#/schemas/SessionRow"}}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"status": 200}, {"query": {"q": "parser", "filter": "live"}, "status": 200},
+                 {"query": {"filter": "nonsense"}, "status": 400},
+                 {"query": {"limit": "-1"}, "status": 400}]
+    },
+    {
+      "path": "/api/sessions/stats", "method": "GET", "kind": "json",
+      "params": {"query": {"ids": "comma-separated session ids (≤100)"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object", "required": ["sample", "stats"],
+          "properties": {"sample": {"type": "boolean"}, "stats": {"type": "object"}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"ids": "S-1"}, "status": 200}, {"status": 400}]
+    },
+    {
+      "path": "/api/session/write", "method": "GET", "kind": "json",
+      "params": {"query": {"snap": "a snapshot id (one write)"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object",
+          "required": ["added", "files", "note", "removed", "sample", "title"],
+          "properties": {"added": {"type": "number"}, "files": {"type": "array"},
+                         "note": {"type": "string"}, "removed": {"type": "number"},
+                         "sample": {"type": "boolean"}, "title": {"type": "string"}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"snap": "x"}, "status": 200}, {"status": 400}]
+    }
+  ],
+  "schemas": {
+    "SessionRow": {"type": "object",
+      "required": ["id", "short", "prompt", "started", "ended", "duration", "status",
+                   "status_basis", "branch", "worktree", "run", "stage", "files", "writes",
+                   "kind", "chain", "too_large", "known_by", "waiting", "last"],
+      "properties": {"id": {"type": "string"}, "short": {"type": "string"},
+                     "prompt": {"type": "string"}, "started": {"type": "number"},
+                     "duration": {"type": "number"},
+                     "status": {"enum": ["live", "ended", "inactive"]},
+                     "status_basis": {"type": "string"}, "branch": {"type": "string"},
+                     "run": {"type": "string"}, "stage": {"type": "string"},
+                     "files": {"type": "array", "items": {"type": "string"}},
+                     "writes": {"type": "number"},
+                     "kind": {"enum": ["changed", "brainstorm only", "read-only session"]},
+                     "chain": {"type": "array", "items": {"type": "string"}},
+                     "waiting": {"type": "boolean"}}}
+  }
+}

@@ -75,7 +75,7 @@ EXEMPT = {"unsetup", "harness", "route", "detect", "validate", "bootstrap",
 NEW_READ_TOOLS = ("rules", "skills", "suggest", "lat_check", "index_status",
                   "baseline", "sessions", "config_get", "export_preview")
 NEW_WRITE_TOOLS = ("config_set", "export_stack")
-NEW_SLASH = ("enter", "exec", "chain", "playbook", "resume", "upgrade", "skill-author")
+NEW_SLASH = ("enter", "exec", "chain", "playbook", "resume", "update", "skill-author")
 
 # Assembled from fragments so no literal credential string lives in this file (mokata's own
 # secret-guard hook would otherwise block writing/committing it — exactly the thing under test).

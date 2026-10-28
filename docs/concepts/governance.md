@@ -131,7 +131,7 @@ It is where the method stops being advice: a write that breaks the run's own met
 | `approach-approval` | a run is registered (brainstorm in progress) but **no approach is approved yet** — the idea→code jump |
 | `spec-persisted` | an approach is approved for this run but **no spec is emitted** |
 | `no-code-without-failing-test` | the spec is emitted but **no failing test is on record** |
-| `spec-scope` | the write is **outside the spec's authorized surface**, spells a **deferred** marker, or a **spec amend is in progress** |
+| `spec-scope` | the write is **outside the spec's authorized surface** or the **active task's scope**, spells a **deferred** marker, a **spec amend is in progress**, or the **plan no longer matches its approved hash** |
 
 A block is one line on stderr, then exit 2. Every reason names the file, says what to do, and
 offers the override:
@@ -149,7 +149,7 @@ mokata gate override no-code-without-failing-test --reason "<why>"
   arrest.
 - **Test files are always writable.** You must be able to write the failing test — RED is the
   *permission* to implement, not the prohibition.
-- **A pipeline you started waits for its run.** Typing `/mokata:brainstorm` (or Claude invoking the
+- **A pipeline you started waits for its run.** Typing `/brainstorm` (or Claude invoking the
   brainstorm skill) tells mokata this session wants a tracked run. Until brainstorm registers it,
   implementation writes in **that session** are blocked with the remedy (let brainstorm do its
   step 1, or `/clear` to drop the pipeline). Other sessions are not affected, and the wait
@@ -157,11 +157,99 @@ mokata gate override no-code-without-failing-test --reason "<why>"
 - **Parallel runs are policed separately.** Each session that started a pipeline is tied to the
   run its own registration returned, so two windows running two pipelines in one repo each get
   their own run's verdict.
+- **Another session's run never polices you.** A session that did *not* start a pipeline is not
+  gated by a run that another session's registration owns, even when it is the only run in the
+  repo. mokata says so once ("run-state gates are OFF for this window — run X belongs to another
+  session") and tells you how to be tracked (start `/brainstorm` in this window). A run no
+  session owns (started from the terminal) still polices every window, and a `MOKATA_SESSION_ID`
+  pin is always honoured.
 - **Ambiguity fails OPEN.** For a session that did *not* start a pipeline here, if two runs have
   state in one repo and neither is pinned, mokata will not guess which window your edit belongs
   to, so **every run-state gate turns off** for that window — and says so, once. Pin one with
   `MOKATA_SESSION_ID` to get enforcement back.
 - **Shell writes, and their limit:** the gate-guard also reads `Bash`: every file a shell command writes that mokata can see (redirections, `sed -i`, `tee`, `cp`/`mv`, inline `python -c` writes, bare file names included) meets the same run-state gates as a `Write` to that file. During a run, a command whose writes mokata cannot read (`$VAR` or `$(…)` destinations, `eval`, `xargs`/`find -exec` running a writer, a heredoc into a shell, inline `node -e`-style code that writes) is refused with the reason; reads are never refused. What it does not police is a program it runs (`python -m unittest`, `make`): no command line says what those write.
+
+**The approved plan binds every later stage (0.0.26).** The spec carries a task plan (`tasks[]`)
+and the SHA-256 hash of the plan the human approved. Develop works task by task inside the active
+task's scope (`mokata spec task`). If the plan on record changes after approval, implementation
+writes, stage entry (`progress mark`) and ship all refuse until the plan is re-approved. That
+refusal is the one `spec-scope` block the override below does **not** lift: the way on is a new
+approval, not a waiver. See `mokata spec emit` and `mokata spec task` in the CLI reference.
+
+## Loop gates: a "done" must be backed, three fixes then stop, five reviews then you
+
+The run-state gates judge a *write*. Three more gates stop a **loop** the agent can get stuck in.
+They fire only inside a run your session is attached to, and each takes the same P14 override.
+
+| Gate | What it stops | Enforced by |
+|---|---|---|
+| `stop-evidence` | A session (or subagent) ending its turn **claiming the work is done** ("all tests pass", "implementation complete") when the run's **recorded** evidence does not back it. It checks four things. Is a test still **RED**? Does an acceptance criterion of the emitted spec have **no test recorded GREEN** for it? Did the last recorded test run **fail**, or is it **older than the run's last write**? Is the run **in review with no review verdict recorded**? A subagent's `status: done` handback that changed implementation must name the test it ran, and that test must have passed. | the `Stop` hook (`mokata-hook stop-gate`) and the `SubagentStop` hook |
+| `fix-breaker` | A **fourth blind fix**. Each fix attempt is recorded (`mokata progress fix-attempt --failure "<test id or error line>" --failed`). The third failed attempt at the **same** failure trips the breaker, and the trip is written to the audit ledger (`loop_breaker`). Three failures say the *approach* is wrong, so implementation writes for the run stay blocked until a **new approach is approved** through the approach-approval gate (`/brainstorm`), or a human overrides. | the `gate-guard` hook |
+| `review-loop` | A **sixth review round**. Only Blocking findings keep the loop going; Minor ones are deferred. At round 4 the reviewer moves up one model tier. After five failed rounds in a row, recording another verdict is refused with an escalation (ledgered), and the human takes it from there. A passed round resets the count. | `mokata progress record-review` / the `review_record` tool |
+
+**Recorded state only.** The `stop-evidence` gate never reads your code or walks your repository,
+so its cost is the same on a ten-file project and a multi-million-line one. It reads what the run
+recorded:
+
+- the AC→test map, which the spec emit seeds from the tests the completeness gate mapped;
+- the TDD record (RED/GREEN);
+- the last test run;
+- the time of the run's last write;
+- the progress log.
+
+The agent records each test run as it makes it:
+
+```bash
+mokata progress test-run --passed --command "pytest -q" --test test_login --ac AC-1=test_login
+```
+
+A failed run records the named tests RED, and a passed run records them GREEN.
+
+**Fail-closed, never a trap.** The gate blocks when the record does not back the claim, and it
+also blocks when the record cannot be read or the hook crashes. A blocked stop goes back to the
+model with the missing evidence named, for example `no test is recorded for acceptance criteria
+AC-2`. Two exits keep a human from ever being stuck:
+
+- `mokata gate override stop-evidence --reason "<why>"`: you accept the stop unverified, on the
+  ledger.
+- After **three** consecutive blocks in one session, the next stop is let through. You see a
+  message naming what is unverified, the release is written to the audit ledger (`stop_evidence`),
+  and nothing marks the run done. Ship's own gates still apply. A crashing hook blocks once and lets
+  the next stop through the same way.
+
+A stop that **does not claim completion** (a question, a blocker report) is never blocked, and
+neither is a stop right after the breaker trips or the review loop hits its cap, because stopping to
+escalate is exactly what those two ask for.
+
+## Model tier per role
+
+Every role mokata spawns a subagent for names its model tier. A tier is one of Claude Code's own
+model aliases (`haiku` < `sonnet` < `opus`), resolved inside your login. There is no API key and no
+model id.
+
+| role | default | floor |
+|---|---|---|
+| `explorer` | haiku | — |
+| `implementer` | sonnet | — |
+| `debugger` | opus | — |
+| `reviewer` | sonnet | sonnet |
+| `final-reviewer` | opus | opus |
+
+**How the skills use it.** A skill spawns a role's subagent with the Agent tool's `model` set and
+`[mokata:<role>]` in the description. Review rounds 1–3 run as `reviewer`. Round 4 onward, and the
+closing review, run as `final-reviewer`.
+
+**What the gate-guard hook does with it:**
+
+- It **blocks** a role-tagged spawn that names no tier, or one below its role's floor (gate
+  `model-tier`).
+- It records the tier for the run, and writes an audit-ledger row (`model_tier`).
+- When the subagent stops, mokata reads its own transcript for the model that actually answered and
+  its token usage. That is the run's cost record, as measured by Claude Code.
+
+`mokata progress models` shows the tiers and the run's record. Change a tier with
+`mokata config set settings.models.<role> <tier>`. The change is human-gated like every config
+write, and a tier below a role's floor is refused.
 
 **The override (P14).** These are *methodology* gates, not security ones, so they are
 overridable — under exactly one discipline:

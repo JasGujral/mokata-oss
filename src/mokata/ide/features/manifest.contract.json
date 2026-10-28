@@ -1,0 +1,21 @@
+{
+  "routes": [
+    {
+      "path": "/api/manifest", "method": "GET", "kind": "json",
+      "params": {},
+      "responses": {
+        "200": {"media": "json", "schema": {
+          "type": "object", "required": ["contract", "routes", "scripts", "styles"],
+          "properties": {
+            "contract": {"type": "integer"},
+            "routes": {"type": "array", "items": {"type": "object",
+              "required": ["path", "method", "kind", "feature"],
+              "properties": {"path": {"type": "string"}, "method": {"enum": ["GET", "POST"]},
+                             "kind": {"type": "string"}, "feature": {"type": "string"}}}},
+            "scripts": {"type": "array", "items": {"type": "string"}},
+            "styles": {"type": "array", "items": {"type": "string"}}}}}
+      },
+      "probes": [{"status": 200}]
+    }
+  ]
+}

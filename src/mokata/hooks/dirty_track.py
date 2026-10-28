@@ -23,7 +23,12 @@ import sys
 # (the parent of the `mokata` package) is two directories up from here.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from mokata.hook_cli import dirty_track_main as main  # noqa: E402  (re-exported as `main`)
+from mokata_emit import main as _front  # noqa: E402  (the stdlib-only emitter, ruling U13)
+
+
+def main(argv=None):
+    """`dirty-track` through the same front door `mokata-hook` runs: spooled, drained off the clock."""
+    return _front(["dirty-track", *(sys.argv[1:] if argv is None else argv)])
 
 
 if __name__ == "__main__":

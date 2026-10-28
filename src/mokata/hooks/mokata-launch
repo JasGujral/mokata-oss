@@ -1,0 +1,72 @@
+#!/bin/sh
+# mokata plugin CLI launcher (0.0.26 L8, MP.S1) — run the `mokata` CLI the plugin pins.
+#
+# A plugin-only user has no `mokata` on PATH: the two `/plugin` commands are their whole install.
+# Slash commands that need the CLI (`/mokata:doctor`, `/mokata:review-window`'s fallback) run it
+# through THIS file, which runs exactly the plugin's version, in this order:
+#
+#   1. the PINNED runtime — the interpreter of the plugin's `uvx --from "mokata[full]==<version>"`
+#      environment, recorded by the plugin's MCP server (`plugin_runtime.record_runtime`);
+#   2. `uvx --from "mokata[full]==<version>" mokata …` — the same environment, through uv (the
+#      first call fetches it once; later calls reuse uv's cache);
+#   3. a Python 3 running THIS checkout's module (`python3 -m mokata`, `src/` on PYTHONPATH) —
+#      mokata's core with no extras: `doctor --plugin` still reports, `ide` names what it lacks;
+#   4. nothing → ONE line naming how to get uv, and exit 1.
+#
+# `<version>` is read from this checkout's `src/mokata/__init__.py` (a guarded version field equal
+# to plugin.json's), so the CLI, the MCP server and the hooks are always the same mokata.
+#
+# Windows: run from Claude Code's Bash tool (Git Bash). `mokata ide` starts its server through
+# `quiet_spawn` (no console window); every path below is quoted, so a home dir with spaces works.
+#
+# Usage:  sh "<plugin root>/src/mokata/hooks/mokata-launch" <mokata subcommand> [args...]
+#
+# Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
+
+set -u
+
+# `/` or `\` (Git Bash on Windows hands $0 over with backslashes) — the LATER separator wins.
+_dn_s=${0%/*}; _dn_b=${0%\\*}
+if [ "$_dn_s" = "$0" ] && [ "$_dn_b" = "$0" ]; then
+    _here=.
+elif [ "$_dn_s" = "$0" ]; then
+    _here=$_dn_b
+elif [ "$_dn_b" = "$0" ] || [ ${#_dn_s} -ge ${#_dn_b} ]; then
+    _here=$_dn_s
+else
+    _here=$_dn_b
+fi
+[ -n "$_here" ] || _here=/
+_src_dir=$(CDPATH= cd -- "$_here/../.." 2>/dev/null && pwd) || _src_dir=""
+
+. "$_here/mokata-plugin-env.sh"
+_mk_read_version
+
+# Every fix line mokata prints names the plugin's pinned command, not a `mokata` CLI the user
+# does not have (`plugin_runtime.on_plugin_route`).
+MOKATA_VIA_PLUGIN=1
+export MOKATA_VIA_PLUGIN
+
+# 1 — the pinned runtime.
+if _mk_pinned_python; then
+    exec "$_mk_py" -m mokata "$@"
+fi
+
+# 2 — uvx, pinned to this checkout's version.
+if [ -n "$_mk_version" ] && _mk_find_uvx; then
+    exec "$_mk_uvx" --python ">=3.12" --from "mokata[full]==$_mk_version" python -m mokata "$@"
+fi
+
+# 3 — a Python at mokata's floor (3.12+) running this checkout's own module (core only).
+for _cand in "${MOKATA_PYTHON:-}" python3 python; do
+    [ -n "$_cand" ] || continue
+    if command -v "$_cand" >/dev/null 2>&1 && _mk_py_ok "$_cand"; then
+        PYTHONPATH="$_src_dir${PYTHONPATH:+:$PYTHONPATH}"
+        export PYTHONPATH
+        exec "$_cand" -m mokata "$@"
+    fi
+done
+
+_mk_old_note
+echo "mokata: cannot run the plugin's mokata ${_mk_version:-?} — neither uv nor a Python 3.12+ was found${_mk_note}. Fix: install uv — macOS/Linux: curl -LsSf https://astral.sh/uv/install.sh | sh · Windows: powershell -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\" — then restart Claude Code." >&2
+exit 1

@@ -1,0 +1,6 @@
+{
+  "id": "09-semver-compare",
+  "title": "Compare semantic versions",
+  "prompt": "Implement `compare(a, b)` in semver.py returning -1, 0 or 1 for MAJOR.MINOR.PATCH versions with an optional pre-release (`1.0.0-rc.1` < `1.0.0`; pre-release identifiers compare numerically when numeric). Add tests.",
+  "max_turns": 40
+}

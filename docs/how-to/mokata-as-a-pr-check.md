@@ -14,6 +14,20 @@ CLI and plugin use — no separate logic):
 |---|---|---|
 | **completeness gate** | does the repo's **saved spec** still map every acceptance criterion to a test? | a saved spec has an AC with **no test** (a real completeness gap) |
 | **spec-awareness** | does this change **touch** a previously saved spec or decision? | the changed files/symbols overlap a saved spec/decision (a regression a reviewer must confirm) |
+| **spec-drift** | do the **committed specs** (`.mokata/specs/`) still match the code — every AC's code anchor resolves, and every AC still has its test? | a committed spec points at code or a test that is gone, or a committed spec file is unreadable |
+
+**Committed specs are opt-in.** By default a spec lives only in `.mokata/temp_local/` (git-ignored),
+so a CI checkout has none and the spec-drift leg prints *"no committed specs — spec drift not
+checked"*. That is a visible skip, never a silent pass, and the check still exits 0. To have CI check
+specs, turn on `settings.specs.commit` (human-gated, like every config change):
+
+```bash
+mokata config set settings.specs.commit true
+```
+
+From then on, approving a spec (emit or amend) also writes the approved spec to
+`.mokata/specs/<run>.json`, inside the same human-gated commit. The approval preview names the file.
+Commit it with the change it describes. The completeness and spec-awareness legs read these files too.
 
 Each block names the **single unblock action** (e.g. *write a test for the unmapped AC*, or
 *confirm/amend the affected spec*).
@@ -58,7 +72,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --quiet mokata
       - id: check
-        uses: JasGujral/mokata-oss/.github/actions/mokata-check@v0.0.25
+        uses: JasGujral/mokata-oss/.github/actions/mokata-check@v0.0.26
         with:
           base: ${{ github.event.pull_request.base.sha }}
           fail-on-block: "true"          # set "false" for report-only (never fails the job)

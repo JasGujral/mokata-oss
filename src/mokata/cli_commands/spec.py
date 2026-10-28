@@ -24,7 +24,9 @@ def _read_payload(args: argparse.Namespace) -> dict:
     """The spec, as JSON, from `--file` or stdin (`-`). One shape, shared with the MCP tool:
 
         {"title": …, "approach": …?, "domains": [...]?,
-         "criteria": [{"id": …, "text": …}], "tests": [{"name": …, "ac_ids": [...]}]}"""
+         "criteria": [{"id": …, "text": …}], "tests": [{"name": …, "ac_ids": [...]}],
+         "tasks": [{"id", "title", "ac_ids", "scope"}], "clarifications"?: [...] (<= 5),
+         "assumptions"?: [...]}"""
     if args.file == "-":
         raw = sys.stdin.read()
     else:
@@ -206,13 +208,13 @@ def _consent_criteria(spec: "object", payload: "object") -> list:
 def cmd_spec_emit(args: argparse.Namespace) -> int:
     """Emit the spec through the real gates — completeness, then the human write gate."""
     from .. import approval
-    from ..engine.emit import EMIT_TOOL, emit_spec, spec_from_payload
+    from ..engine.emit import EMIT_TOOL, emit_spec, spec_for_emit
     from ..prompt import read_yes_no
 
     surface = _load_surface(args.path)
     try:
         payload = _read_payload(args)
-        spec, tests = spec_from_payload(payload)
+        spec, tests = spec_for_emit(payload)
     except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -299,6 +301,14 @@ def cmd_spec_emit(args: argparse.Namespace) -> int:
     # The human sees the whole spec — every AC and the test that covers it — before the question.
     # Off a TTY `read_yes_no` fails CLOSED (P2): a non-interactive shell cannot emit by accident;
     # a genuinely non-interactive HUMAN flow passes `--yes`.
+    # L7b — with `settings.specs.commit` on, approving ALSO writes the tracked
+    # `.mokata/specs/<run>.json`; say so before the question, so it is approved knowingly.
+    from ..committed_specs import committed_path_for
+    from ..engine.emit import _reemit_run
+    committed = committed_path_for(surface.root, _reemit_run(store, run_id or ""))
+    if committed:
+        print(f"approving also commits the spec to {committed} (settings.specs.commit — tracked "
+              f"in git).")
     out = emit_spec(surface, spec, tests, ledger=ledger, store=store, run_id=run_id or "",
                     assume_yes=args.yes, confirm=None if args.yes else _confirm)
 
@@ -367,6 +377,8 @@ def cmd_spec_emit(args: argparse.Namespace) -> int:
               f"it is kept at {out.superseded} and named on the audit ledger.")
     print(f"  saved as this run's spec{where}, and recorded in the shared spec corpus "
           f"({out.corpus_size} spec(s)).")
+    if committed:
+        print(f"  committed copy: {committed} — commit it with your change so CI checks it.")
     print("  implementation is unblocked once a failing test is on record (/mokata:test).")
     return 0
 
@@ -440,14 +452,190 @@ def cmd_spec_show(args: argparse.Namespace) -> int:
     from ..engine.spec_anchor import ac_anchor_lines
     for line in ac_anchor_lines(spec):
         print(f"  → {line}")
+    # R2 + R3 — the approved plan (hash + tasks) and the capped clarify record, from the CURRENT
+    # spec's persisted dict (a superseded version shows its ACs only).
+    if not want:
+        from ..engine.spec_gate import SPEC_STATE_KEY
+        data = store.read(SPEC_STATE_KEY)
+        if isinstance(data, dict):
+            for line in _plan_lines(data):
+                print(line)
     return 0
+
+
+# R2 (0.0.26) — the exit code when a stage refuses because the plan on record is not the approved
+# one (hash mismatch, or a spec approved before tasks[] + the hash existed). 3, not 1: nothing
+# failed to run — the remedy is re-approval, and a script must be able to tell the two apart.
+PLAN_REFUSED_EXIT = 3
+
+
+def _plan_lines(data: dict) -> list:
+    """`spec show`'s plan block: the plan hash, each task (with the cursor's marks), the capped
+    clarify record and the stated assumptions."""
+    from ..plan_tasks import (ASSUMPTIONS_KEY, CLARIFICATIONS_KEY, CLARIFY_CAP, PLAN_HASH_KEY,
+                              TASKS_KEY, clarify_from_state, tasks_from_state)
+    lines = []
+    if data.get(PLAN_HASH_KEY):
+        lines.append(f"plan: {data[PLAN_HASH_KEY]}")
+    for t in tasks_from_state(data.get(TASKS_KEY)):
+        deps = f" after {', '.join(t.depends_on)}" if t.depends_on else ""
+        lines.append(f"  task {t.id}: {t.title} [{', '.join(t.ac_ids)}] scope "
+                     f"{', '.join(t.scope)}{deps}")
+    qs, asm = clarify_from_state(data.get(CLARIFICATIONS_KEY), data.get(ASSUMPTIONS_KEY))
+    if qs:
+        lines.append(f"clarifications ({len(qs)}/{CLARIFY_CAP}):")
+        for q in qs:
+            lines.append(f"  {q.id}: {q.question} -> {q.answer or '(unanswered)'} "
+                         f"(recommended: {q.recommended})")
+    for a in asm:
+        lines.append(f"  assumption {a.id}: {a.text}" + (f" (for {a.for_question})"
+                                                          if a.for_question else ""))
+    return lines
+
+
+def cmd_spec_task(args: argparse.Namespace) -> int:
+    """R2 — develop works TASK BY TASK: `status` shows the plan and the active task; `start <id>`
+    makes a task active (its dependencies must be done); `done <id>` closes it. The cursor is
+    run-state (UNGATED, the tier of the TDD record); every move ATTESTS the plan hash first and
+    refuses (exit 3) on a plan that is not the approved one."""
+    from ..engine.spec_gate import SPEC_STATE_KEY
+    from ..plan_tasks import (PLAN_HASH_KEY, TASKS_KEY, active_task, attest, move_cursor,
+                              read_cursor, tasks_from_state)
+
+    surface = _load_surface(args.path)
+    store, run_id, err = _run_scoped_store(surface, getattr(args, "run", None) or None)
+    if err:
+        print(f"error: {err}", file=sys.stderr)
+        return 1
+    if run_id is None:
+        print(NO_TRACKED_RUN_RECOVERY)
+        return 1
+    data = store.read(SPEC_STATE_KEY)
+    if not isinstance(data, dict):
+        print(NO_SPEC_RECOVERY)
+        return 1
+    attestation = attest(data)
+    if not attestation.ok:
+        print(f"mokata spec task: REFUSED — {attestation.reason}.", file=sys.stderr)
+        return PLAN_REFUSED_EXIT
+    tasks = tasks_from_state(data.get(TASKS_KEY))
+    action = args.task_action
+    if action in ("start", "done"):
+        if not args.task_id:
+            print(f"error: name the task: mokata spec task {action} <id>", file=sys.stderr)
+            return 1
+        try:
+            move_cursor(surface.root, run_id, tasks, args.task_id, done=(action == "done"),
+                        plan=data[PLAN_HASH_KEY])
+        except ValueError as exc:
+            print(f"mokata spec task: {exc}", file=sys.stderr)
+            return 1
+    cursor = read_cursor(surface.root, run_id)
+    active = active_task(tasks, cursor)
+    print(f"plan {data[PLAN_HASH_KEY][:19]}… (attested) — run {run_id[:8]}")
+    for t in tasks:
+        mark = "x" if t.id in cursor.done else (">" if active and t.id == active.id else " ")
+        print(f"  [{mark}] {t.id}: {t.title} — scope {', '.join(t.scope)}")
+    print(f"active task: {active.id} — implementation writes are held to its scope"
+          if active else "every task is done — writes stay inside the plan's surface")
+    return 0
+
+
+#: L7b — the consent identity of a plan migration (the `mokata approve` proposal's tool name).
+MIGRATE_TOOL = "spec_migrate"
+
+
+def migration_plan(data: dict) -> list:
+    """The one-task plan `spec migrate` proposes for a spec approved before tasks[] existed: ONE
+    task covering every acceptance criterion, scoped to the spec's own `scope.authorized` (or the
+    whole repo when it drew none — the same surface the spec already allowed)."""
+    from ..plan_tasks import Task
+    from ..spec_scope import SCOPE_KEY, scope_from_dict
+    ac_ids = tuple(str(c["id"]) for c in (data.get("criteria") or [])
+                   if isinstance(c, dict) and c.get("id"))
+    scope = scope_from_dict(data.get(SCOPE_KEY))
+    authorized = tuple(scope.authorized) if scope is not None else ()
+    return [Task(id="T1", title=str(data.get("title") or "the approved spec"), ac_ids=ac_ids,
+                 scope=authorized or ("*",))]
+
+
+def cmd_spec_migrate(args: argparse.Namespace) -> int:
+    """L7b/R2 — re-approve a spec approved BEFORE 0.0.26's task plan, without hand-building JSON.
+
+    Proposes a one-task plan (`migration_plan`), shows it, and commits it through the ONE spec
+    committer (`engine/emit.commit_spec`, WriteGate + ledger), which seals the plan hash — the run's
+    writes are then allowed again. The approval is the usual one: a human answering at a TTY, a
+    human's own `--yes`, or (off a TTY) a proposal approved with `mokata approve <id>` and this
+    command re-run. Refuses loudly when the run already has a task plan (that is `spec amend`)."""
+    from .. import approval
+    from ..engine.emit import commit_spec, note_plan_approved
+    from ..engine.spec import Spec
+    from ..engine.spec_gate import SPEC_STATE_KEY
+    from ..govern import WriteGate
+    from ..plan_tasks import TASKS_KEY
+    from ..prompt import read_yes_no
+    from ..session_state import scoped_store
+    from ..state import StateStore
+    from ..tdd_state import state_dir
+
+    surface = _load_surface(args.path)
+    run_id = (args.run_id or "").strip()
+    store = scoped_store(StateStore(state_dir(surface.root)), run_id)
+    data = store.read(SPEC_STATE_KEY)
+    if not isinstance(data, dict):
+        print(f"error: run {run_id} has no readable spec — nothing to migrate "
+              f"(`mokata sessions` lists runs).", file=sys.stderr)
+        return 1
+    if isinstance(data.get(TASKS_KEY), list) and data[TASKS_KEY]:
+        print(f"error: run {run_id}'s spec already has a task plan — `spec migrate` only adds one "
+              f"to a spec approved before 0.0.26. To change the plan, use `mokata spec amend`.",
+              file=sys.stderr)
+        return 1
+    tasks = migration_plan(data)
+    spec = Spec.from_dict(data)
+    spec.tasks = tasks
+    t = tasks[0]
+    preview = (f"migrate run {run_id}: '{spec.title}' gets a task plan (0.0.26) — the criteria and "
+               f"scope are unchanged.\n  task {t.id}: {t.title} [{', '.join(t.ac_ids)}] scope "
+               f"{', '.join(t.scope)}\n  approving seals the plan hash; this run's implementation "
+               f"writes are then allowed again.")
+    print(preview)
+    margs = {"path": surface.root, "run": run_id, "tasks": [x.to_dict() for x in tasks]}
+    pid = approval.proposal_id_for(run_id, approval.content_hash(MIGRATE_TOOL, margs))
+    asked: list = []
+
+    def _confirm(text: str) -> bool:
+        granted = approval.redeem(surface.root, pid, tool=MIGRATE_TOOL, args=margs, run_id=run_id)
+        if granted.granted:
+            return True
+        decision = read_yes_no(text, f"Add this task plan to run {run_id}?")
+        asked.append(decision)
+        return bool(decision)
+
+    ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+    committed, reason, _size = commit_spec(store, spec, gate=WriteGate(ledger=ledger),
+                                           assume_yes=args.yes,
+                                           confirm=None if args.yes else _confirm, run_id=run_id)
+    if committed:
+        note_plan_approved(ledger, run_id, store)
+        print(f"migrated: run {run_id} now carries task plan T1 and its plan hash.")
+        return 0
+    if asked and not asked[-1].answered_by_human:
+        p = approval.propose(surface.root, tool=MIGRATE_TOOL, args=margs, run_id=run_id,
+                             target="state/emitted_spec.json",
+                             summary=f"add a task plan to run {run_id}", preview=preview)
+        print(f"waiting for you: approve it with `mokata approve {p.proposal_id}`, then re-run "
+              f"`mokata spec migrate {run_id}`. Nothing was written.")
+        return EMIT_AWAITING_EXIT
+    print(f"migration declined — nothing was written ({reason}).")
+    return 1
 
 
 def cmd_spec_amend(args: argparse.Namespace) -> int:
     """SI-DEV — the FORCED PHASE REGRESSION. Not a text edit to the spec: the run leaves `develop`,
     the new scope re-earns every gate, and the spec lands as vN+1 with vN superseded."""
     from ..engine.amend import abort_amend, begin_amend, finish_amend
-    from ..engine.emit import spec_from_payload
+    from ..engine.emit import spec_for_emit
     from ..prompt import read_yes_no
 
     surface = _load_surface(args.path)
@@ -476,7 +664,7 @@ def cmd_spec_amend(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        spec, tests = spec_from_payload(_read_payload(args))
+        spec, tests = spec_for_emit(_read_payload(args))
     except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -486,6 +674,9 @@ def cmd_spec_amend(args: argparse.Namespace) -> int:
 
     # THE REGRESSION happens here — before a single gate is judged. From this moment development
     # writes are blocked, and they stay blocked if the amendment turns out to be incomplete.
+    # O14b — gate 2 has no clock, so long work is SAID before it starts rather than looking hung.
+    print("mokata · spec amend — running the gates (a scope-WIDENING amendment computes its blast "
+          "radius first; on a large repo without a code graph that can take minutes)…", flush=True)
     plan = begin_amend(surface, spec, tests, run_id=run_id, store=store, reason=args.reason,
                        item=args.item, ledger=ledger, layer=layer)
     if not plan.ok:
@@ -503,6 +694,8 @@ def cmd_spec_amend(args: argparse.Namespace) -> int:
         if plan.impact is not None:
             from ..brainstorm_impact import render_impacts
             print("    " + render_impacts([plan.impact]).replace("\n", "\n    "))
+            if plan.lens_basis:
+                print(f"    basis: {plan.lens_basis}")
         else:
             print("    (impact could not be computed — saying so rather than assuming it is small)")
     if plan.red_owed:
@@ -583,5 +776,25 @@ def register(sub, common):
                         help="list every version of this run's spec with its archive key")
     p_show.set_defaults(func=cmd_spec_show)
 
+    p_mig = ssub.add_parser(
+        "migrate", parents=[common],
+        help="give a spec approved before 0.0.26 its task plan (one task over all its criteria), "
+             "human-gated; seals the plan hash so the run's writes are allowed again")
+    p_mig.add_argument("run_id", help="the run whose spec to migrate (`mokata doctor` names it)")
+    p_mig.add_argument("--yes", action="store_true",
+                       help="approve non-interactively (a HUMAN's own flow)")
+    p_mig.set_defaults(func=cmd_spec_migrate)
 
-__all__ = ["cmd_spec_amend", "cmd_spec_emit", "cmd_spec_show", "register"]
+    p_task = ssub.add_parser(
+        "task", parents=[common],
+        help="the approved plan's tasks: status, start <id>, done <id> — develop works task by "
+             "task and writes outside the active task's scope are blocked")
+    p_task.add_argument("task_action", choices=("status", "start", "done"))
+    p_task.add_argument("task_id", nargs="?", default="",
+                        help="the task id (start / done)")
+    p_task.add_argument("--run", default="", help="the run (default: the run being gated)")
+    p_task.set_defaults(func=cmd_spec_task)
+
+
+__all__ = ["MIGRATE_TOOL", "PLAN_REFUSED_EXIT", "cmd_spec_amend", "cmd_spec_emit",
+           "cmd_spec_migrate", "cmd_spec_show", "cmd_spec_task", "migration_plan", "register"]

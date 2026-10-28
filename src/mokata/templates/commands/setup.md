@@ -21,11 +21,12 @@ installs** a third-party tool. Writing config / harness wiring is a durable writ
 - If that file is missing/empty, search the Claude Code plugins directory for a `mokata` plugin
   containing `src/mokata/__init__.py` and set `ROOT` to it. (If a `mokata` CLI is on PATH, use
   it directly.)
-- Build the engine command with the **absolute interpreter**:
+- Define the engine as a shell FUNCTION on the **absolute interpreter** — arguments then reach
+  it as separate words, never re-parsed by `eval` (pass user or repo text single-quoted):
 
   ```bash
   PY="$(command -v python3 || command -v python)"
-  ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
+  mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
   ```
 
 ## 2. Detect the environment (read-only)
@@ -34,8 +35,8 @@ Show the user what's actually installed — graph backends, memory backends, Pos
 vector — so the choices are grounded:
 
 ```bash
-eval "$ENGINE detect --path ."
-eval "$ENGINE init --profile standard --preview --path ."   # detected tools + what each profile wires
+mokata detect --path .
+mokata init --profile standard --preview --path .   # detected tools + what each profile wires
 ```
 
 ## 3. Ask the profile + what to wire
@@ -59,11 +60,11 @@ it. If they decline, stop — and don't ask again.
 
 ```bash
 # scaffold config for the chosen profile:
-eval "$ENGINE init --profile <profile> --yes --path ."
+mokata init --profile '<profile>' --yes --path .
 # wire a detected integration into the manifest (example — Postgres memory via an env-var DSN):
-# eval "$ENGINE config set capabilities.memory_store.fallback '[\"postgres\",\"sqlite\"]' --yes --path ."
+# mokata config set capabilities.memory_store.fallback '["postgres","sqlite"]' --yes --path .
 # wire mokata into Claude Code (commands + MCP + hooks + badge):
-# eval "$ENGINE setup claude --yes --path ."
+# mokata setup claude --yes --path .
 ```
 
 The CLI's own interactive wizard (`mokata init` in a terminal, or `mokata init --wizard`) does
@@ -72,7 +73,7 @@ above.
 
 ## 6. The 30-second recap + next step
 
-After applying, run `eval "$ENGINE status --path ."` and tell the user, in one short block: what
+After applying, run `mokata status --path .` and tell the user, in one short block: what
 was detected, what got wired, the graph/memory that's now standing, the 5 starter guardrails (the
 constitution), and the **one next step** — `/mokata:brainstorm` to start their first governed
 change (or `/mokata:tour` for a 60-second demo). Remind them to restart Claude Code so the

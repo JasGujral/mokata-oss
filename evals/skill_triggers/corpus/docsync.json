@@ -1,0 +1,35 @@
+{
+ "skill": "docsync",
+ "triggers": [
+  "docs still match the code",
+  "docs may have gone stale",
+  "drift"
+ ],
+ "positive": [
+  "Do the docs still match the code after we renamed the CLI command?",
+  "We bumped the command count; check whether the docs have gone stale",
+  "Audit docs/install.md against the code and reconcile any drift",
+  "Before the release, verify the docs against what actually ships",
+  "Sweep the doc tree for drift against the symbols this change touched"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Write a brand-new tutorial from scratch about plugins"
+  },
+  {
+   "prompt": "Change the code so it matches what the README says"
+  },
+  {
+   "prompt": "Record an ADR for the database decision",
+   "expect": "docs-adr"
+  },
+  {
+   "prompt": "Open the published docs URL for hooks",
+   "expect": "docs"
+  },
+  {
+   "prompt": "Sync my team's write journal to the shared DB",
+   "expect": "sync"
+  }
+ ]
+}

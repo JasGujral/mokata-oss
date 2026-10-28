@@ -1,0 +1,58 @@
+{
+  "routes": [
+    {
+      "path": "/api/jobs", "method": "GET", "kind": "json",
+      "params": {},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object",
+          "required": ["active", "recent", "failing", "background"],
+          "properties": {"active": {"type": "array", "items": {"$ref": "#/schemas/JobSnapshot"}},
+                         "recent": {"type": "array", "items": {"$ref": "#/schemas/JobSnapshot"}},
+                         "failing": {"type": "object"},
+                         "background": {"type": "array", "items": {"type": "object",
+                           "required": ["id", "kind", "label", "state", "background"]}}}}}
+      },
+      "probes": [{"status": 200}]
+    },
+    {
+      "path": "/api/jobs", "method": "POST", "kind": "action",
+      "params": {"body": {"kind": "graph.view | graph.query | impact | search.text | search.meaning | tree.walk | index.crg | index.ast | index.meaning | index.symbols | mokata.update",
+                          "args": "the question: e.g. {view, symbol, to, depth} for graph.view; {confirm} for mokata.update"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object", "required": ["id", "job"],
+          "properties": {"id": {"type": "string"}, "job": {"$ref": "#/schemas/JobSnapshot"}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"body": {"kind": "tree.walk", "args": {"probe": 1}}, "status": 200},
+                 {"body": {"kind": "nope", "args": {}}, "status": 400},
+                 {"body": {"kind": "index.crg", "args": {}}, "status": 400, "demo": true}]
+    },
+    {
+      "path": "/api/jobs/{id}", "method": "GET", "kind": "read",
+      "params": {"path": {"id": "a job id from POST /api/jobs, a 202 handle or a job event"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object", "required": ["job", "partial", "result"],
+          "properties": {"job": {"$ref": "#/schemas/JobSnapshot"}}}},
+        "404": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"path": {"id": "tree-walk-3c6f8ca7-1"}, "status": 200},
+                 {"path": {"id": "tree-walk-nope"}, "status": 404}]
+    },
+    {
+      "path": "/api/jobs/{id}/cancel", "method": "POST", "kind": "action",
+      "params": {"path": {"id": "the job"}},
+      "responses": {
+        "404": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"path": {"id": "nope"}, "status": 404}]
+    },
+    {
+      "path": "/api/jobs/{id}/leave", "method": "POST", "kind": "action",
+      "params": {"path": {"id": "the job"}, "body": {"client": "the page's id (this page no longer wants it)"}},
+      "responses": {
+        "404": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"path": {"id": "nope"}, "body": {"client": "c"}, "status": 404}]
+    }
+  ]
+}

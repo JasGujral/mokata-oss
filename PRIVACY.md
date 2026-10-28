@@ -17,6 +17,16 @@ mokata stores its working state **locally**, inside your project, under the `.mo
 directory (configuration, memory, audit ledger, and run state). This data never leaves your
 machine unless **you** explicitly configure an external backend.
 
+mokata's observability hooks (the ones that only record — file writes, turn ends, session ends,
+compactions) hand each Claude Code hook event to a short-lived local spool in your home directory,
+`~/.mokata/hook-spool/` (`MOKATA_HOOK_SPOOL` moves it). The directory is owner-only and each event file
+is readable by you alone (on Windows, both inherit your user profile's permissions). An event holds the
+hook's input from Claude Code, and for a file write it also holds a copy of that file as it was right
+after the write (up to 1 MiB; a larger file is recorded by size alone, and an event over 8 MiB skips
+the spool and is recorded immediately instead). An event stays in the spool only until a background
+mokata process has recorded it into the project's `.mokata/` state, normally well under a second.
+Then it is deleted.
+
 ## Optional external services (you control these)
 
 mokata can optionally be wired to external storage you choose and configure yourself — for

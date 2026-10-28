@@ -52,6 +52,6 @@ body:
     id: env
     attributes:
       label: OS / Python version
-      placeholder: "macOS 14 / Python 3.11"
+      placeholder: "macOS 14 / Python 3.12"
     validations:
       required: true

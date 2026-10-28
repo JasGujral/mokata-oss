@@ -26,6 +26,7 @@ from unittest import mock
 import _support  # noqa: F401  (puts src/ on the path)
 
 from mokata.ide import diffs as D
+from mokata.quiet_spawn import detached
 from mokata.ide import launch as L
 from mokata.ide import nav
 from mokata.ide import snapshots as S
@@ -131,11 +132,11 @@ class TheLaunchIsLockedOnEveryOS(unittest.TestCase):
 
     def test_the_child_is_detached_on_windows_too(self):
         with mock.patch.object(L.os, "name", "nt"):
-            kw = L._detach_kwargs()
+            kw = detached()
         self.assertIn("creationflags", kw)
         self.assertNotIn("start_new_session", kw)
         with mock.patch.object(L.os, "name", "posix"):
-            self.assertEqual({"start_new_session": True}, L._detach_kwargs())
+            self.assertEqual({"start_new_session": True}, detached())
 
 
 class TheReviewWindowMinors(unittest.TestCase):
@@ -220,14 +221,16 @@ class CrossPlatformSpelling(unittest.TestCase):
 
 class TheViewIsRestored(unittest.TestCase):
 
-    def test_mode_panel_and_file_are_saved_and_restored_with_safe_storage(self):
+    def test_mode_panel_and_file_are_restored_from_the_servers_workspace(self):
+        """0.0.26 P2 (ID-TABS) replaced C4's per-browser localStorage restore with the server's
+        per-repo workspace (tests/test_p2_ide_tabs_restore.py holds the round trip)."""
         with open(os.path.join(IDE, "static", "app.js"), encoding="utf-8") as fh:
             js = fh.read()
-        for fn in ("saveView", "loadView"):
-            body = re.search(rf"function {fn}\(\) \{{(.*?)\n\}}", js, re.S).group(1)
-            self.assertIn("try", body)
-            self.assertIn("catch", body)
-        self.assertIn("MK.restoreView", js)
+        self.assertNotIn("mokata-ide:view", js)
+        with open(os.path.join(IDE, "static", "features", "tabs.js"), encoding="utf-8") as fh:
+            tabs = fh.read()
+        self.assertIn("MK.restoreView = async function", tabs)
+        self.assertIn('"/api/workspace"', tabs)
         with open(os.path.join(IDE, "static", "boot.js"), encoding="utf-8") as fh:
             self.assertIn("MK.restoreView()", fh.read())
 

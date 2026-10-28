@@ -1,0 +1,6 @@
+{
+  "id": "07-merge-intervals",
+  "title": "Merge overlapping intervals",
+  "prompt": "Implement `merge(intervals)` in intervals.py: merge overlapping or touching [start, end] pairs and return them sorted. Add tests.",
+  "max_turns": 40
+}

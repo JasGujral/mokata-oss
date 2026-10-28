@@ -76,6 +76,8 @@ import unittest
 from contextlib import contextmanager
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata import gate_hook as G                                    # noqa: E402
 from mokata import tdd_state as T                                    # noqa: E402
@@ -553,7 +555,7 @@ class TheVerdictsAreIdentical(unittest.TestCase):
             _raw_store(d).write(G.APPROACH_PREFIX + RUN, {"approach": "the chosen one"})
             self.assertEqual(self._matrix(d)["impl"], (False, G.GATE_SPEC))
             _raw_store(d).write(G.SPEC_PREFIX + RUN,
-                                {"criteria": [{"id": "AC1", "text": "it works"}]})
+                                sealed({"criteria": [{"id": "AC1", "text": "it works"}]}))
             self.assertEqual(self._matrix(d)["impl"], (False, G.GATE_TDD))
             _raw_store(d).write(T.state_key(RUN), T.to_state(RUN, red=["test_login"], green=[]))
             self.assertEqual(self._matrix(d)["impl"], (True, None))

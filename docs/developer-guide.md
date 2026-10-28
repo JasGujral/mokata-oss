@@ -1,7 +1,7 @@
 # Developer guide
 
 mokata is a pure-Python package under `src/mokata/`, with one capability model. Supported
-Python: **3.10–3.13**.
+Python: **3.12+** (the floor; CI runs 3.12).
 
 **Dependencies.** The one required runtime dependency is the **MCP SDK** (`mcp>=1.2,<2`) — it
 ships by default so the bundled `mokata-mcp` server works straight out of `pip install mokata`.
@@ -142,9 +142,8 @@ python -m unittest discover -s tests -t tests
 ```
 
 CI runs **both jsonschema states on `ubuntu-latest` and `windows-latest`**, on **Python 3.12**,
-plus a `mokata playbook` smoke run — **and the declared floor on three further legs** (`ubuntu` ×
-present, `ubuntu` × absent, `windows` × present). The matrix is deliberately light; the classifiers
-cover 3.10–3.13. See [platform support](reference/platform-support.md#ci-coverage).
+plus a `mokata playbook` smoke run. The gate Python, 3.12, IS the declared floor, so every PR
+tests it; the classifiers cover 3.12–3.13. See [platform support](reference/platform-support.md#ci-coverage).
 Tests are written RED-before-GREEN.
 
 ### On the declared floor

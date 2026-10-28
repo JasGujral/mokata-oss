@@ -1,0 +1,35 @@
+{
+ "skill": "playbook",
+ "triggers": [
+  "full pipeline end-to-end",
+  "smoke-test the whole brainstorm-to-ship story"
+ ],
+ "positive": [
+  "Run mokata's full pipeline end-to-end on this repo as an integration check",
+  "Smoke-test the whole brainstorm-to-ship story here",
+  "Validate that my fresh install performs a complete run",
+  "Run the full v1 story end to end",
+  "Do an end-to-end integration check of the whole mokata pipeline"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Write the spec for this feature",
+   "expect": "spec"
+  },
+  {
+   "prompt": "Plan a chain of brainstorm then spec",
+   "expect": "chain"
+  },
+  {
+   "prompt": "Give me a 60-second read-only demo",
+   "expect": "tour"
+  },
+  {
+   "prompt": "Write a football playbook for a 7-a-side team"
+  },
+  {
+   "prompt": "Enter the pipeline at the review phase",
+   "expect": "enter"
+  }
+ ]
+}

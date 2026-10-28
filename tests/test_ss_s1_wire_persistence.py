@@ -32,6 +32,8 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 from _support import approve_with_lenses
 
 from mokata import session as S
@@ -313,7 +315,7 @@ class TestDoubleWireRunPipeline(_Base):
             spec = Spec("slugify", [AcceptanceCriterion("AC-1", "lowercase"),
                                     AcceptanceCriterion("AC-2", "strip punct")])
             tests = [TestRef("t1", ["AC-1"]), TestRef("t2", ["AC-2"])]
-            run = run_pipeline(handoff(), spec, tests, store=store)
+            run = run_pipeline(handoff(), with_tasks(spec), tests, store=store)
             # output unchanged — the full run still emits
             self.assertTrue(run.ok)
             self.assertIsNotNone(run.emitted)

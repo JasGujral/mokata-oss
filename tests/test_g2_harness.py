@@ -332,14 +332,13 @@ class TestNotShippedInTheWheel(unittest.TestCase):
     def test_pyproject_finds_packages_only_under_src_and_excludes_bench(self):
         with open(os.path.join(ROOT, "pyproject.toml"), encoding="utf-8") as fh:
             text = fh.read()
-        if sys.version_info >= (3, 11):
-            import tomllib
-            find = tomllib.loads(text)["tool"]["setuptools"]["packages"]["find"]
-            self.assertEqual(find["where"], ["src"])
-            self.assertIn("bench", find["exclude"])
-            self.assertIn("bench.*", find["exclude"])
-            pkg_data = tomllib.loads(text)["tool"]["setuptools"].get("package-data", {})
-            self.assertNotIn("bench", pkg_data)
+        import tomllib
+        find = tomllib.loads(text)["tool"]["setuptools"]["packages"]["find"]
+        self.assertEqual(find["where"], ["src"])
+        self.assertIn("bench", find["exclude"])
+        self.assertIn("bench.*", find["exclude"])
+        pkg_data = tomllib.loads(text)["tool"]["setuptools"].get("package-data", {})
+        self.assertNotIn("bench", pkg_data)
         self.assertFalse(os.path.exists(os.path.join(ROOT, "MANIFEST.in"))
                          and "bench" in open(os.path.join(ROOT, "MANIFEST.in"), encoding="utf-8").read())
 

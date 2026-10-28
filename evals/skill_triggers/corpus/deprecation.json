@@ -1,0 +1,33 @@
+{
+ "skill": "deprecation",
+ "triggers": [
+  "removes or retires a symbol, endpoint, flag, or module",
+  "migrates callers off an old shape"
+ ],
+ "positive": [
+  "Remove the deprecated --legacy flag and everything that reads it",
+  "Retire the old v1 payments module and migrate its callers to v2",
+  "Delete the compatibility shim for the old config format",
+  "We're taking the XML export away; walk the blast radius before removing it",
+  "Migrate every caller off the old fetchUser signature, then delete it"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Add a new optional parameter to fetchUser; nothing is removed"
+  },
+  {
+   "prompt": "Rename variables inside a function without touching any callers"
+  },
+  {
+   "prompt": "Write a changelog entry and an ADR for choosing Postgres",
+   "expect": "docs-adr"
+  },
+  {
+   "prompt": "Add a new feature flag for the beta checkout"
+  },
+  {
+   "prompt": "Upgrade mokata to the latest version",
+   "expect": "update"
+  }
+ ]
+}

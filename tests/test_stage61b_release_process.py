@@ -57,7 +57,7 @@ def _make_repo(tmp, *, pyproject="0.0.4", plugin="0.0.4", mp_meta="0.0.4",
         with open(os.path.join(tmp, ".claude-plugin", "plugin.json"), "w", encoding="utf-8") as fh:
             json.dump({"name": "mokata", "version": plugin,
                        "mcpServers": {"mokata": {"command": "uvx", "args": [
-                           "--from", f"mokata=={pyproject}", "mokata-mcp"]}}}, fh)
+                           "--from", f"mokata[full]=={pyproject}", "mokata-mcp"]}}}, fh)
     if "marketplace" not in omit:
         with open(os.path.join(tmp, ".claude-plugin", "marketplace.json"), "w", encoding="utf-8") as fh:
             json.dump({"name": "mostack", "metadata": {"version": mp_meta},

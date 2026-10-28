@@ -69,7 +69,7 @@ Almost always one of these:
 - **You upgraded mokata without re-wiring.** `pip install -U mokata` replaces the package; it
   does not touch `.claude/settings.json`. If the old wiring pointed at a path that moved — a
   rebuilt virtualenv, a `pipx` reinstall, a new Python minor version — the command it names is
-  now gone. Modern `mokata upgrade` finishes this for you (see
+  now gone. `mokata update` re-wires for you after it upgrades (see
   [the upgrade runbook](which-setup-command.md#upgrading-mokata)); a hand-run `pip install -U`
   does not.
 - **You hand-edited `settings.json`,** or copied a hook line from an older doc or blog post that

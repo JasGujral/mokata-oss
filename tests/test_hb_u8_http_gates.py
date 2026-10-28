@@ -263,14 +263,18 @@ class SetupWiresTheHttpGatesOnlyWhenAsked(unittest.TestCase):
         self._setup(http_gates=True, ide_bridge=True)
         data = self._local()
         self.assertEqual(2, len(data["hooks"]["PreToolUse"]), "re-setup duplicated the gate")
-        self.assertIn("/api/bus", json.dumps(data))
+        # the bridge's own hooks stay wired: `http` to /api/bus on POSIX; on Windows (O4) the
+        # stdlib `bridge_client` command form, which carries no URL (it reads server.json)
+        self.assertIn("mokata.ide.bridge_client" if sys.platform == "win32" else "/api/bus",
+                      json.dumps(data))
         text = HS.render_setup_plan(HS.plan_setup("claude", root=str(self.root),
                                                   home=str(self.home), ide_bridge=True))
         self.assertIn("Will REMOVE the fail-closed http gate hooks", text)
         self._setup(ide_bridge=True)
         data = self._local()
         self.assertNotIn("/api/gate", json.dumps(data))
-        self.assertIn("/api/bus", json.dumps(data), "the bridge is not the gate's to remove")
+        self.assertIn("mokata.ide.bridge_client" if sys.platform == "win32" else "/api/bus",
+                      json.dumps(data), "the bridge is not the gate's to remove")
         self.assertIn({"hooks": [mine]}, data["hooks"]["PreToolUse"])
         self._setup(http_gates=True)
         HS.apply_unsetup(HS.plan_unsetup("claude", root=str(self.root), home=str(self.home)))

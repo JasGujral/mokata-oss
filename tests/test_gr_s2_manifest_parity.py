@@ -179,5 +179,13 @@ class GrS2Regression(unittest.TestCase):
                       f"manifest chain {chain} does not name the real answerer {answerer!r}")
 
 
+def setUpModule():
+    # 0.0.26 O11 — this module's expectations are the CORE install's: no external code graph on
+    # the machine. Pinned, so a venv with code-review-graph (`mokata[full]`) means the same thing;
+    # what is true WITH it present is graded in test_o11_crg_present (and the sibling below, if any).
+    from _support import hide_external_graphs
+    hide_external_graphs()
+
+
 if __name__ == "__main__":
     unittest.main()

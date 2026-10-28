@@ -89,7 +89,7 @@ governed fan-out **without leaving Claude Code**; nothing is written or gated.
 | `/mokata:playbook` | Run the full v1 story end-to-end (integration check) |
 | `/mokata:resume` | Preview where a run resumes — the phase + the gate that still applies |
 | `/mokata:skill-author` | Author a new skill test-first (RED-GREEN-for-docs); the write is human-gated |
-| `/mokata:upgrade` | Update mokata — human-gated pip upgrade or the plugin-update steps |
+| `/mokata:update` | Update mokata — the plan and release notes, one confirm, the command that keeps your extras, then skills + wiring |
 
 Everything else is reachable too: read-only inspection (`rules`, `skills`, `suggest`,
 `lat_check`, `index_status`, `baseline`, `sessions`, `config_get`, `export_preview`) as MCP
@@ -139,6 +139,17 @@ All three hooks are declared in `hooks/hooks.json`:
   emitted), **`no-code-without-failing-test`** (the spec is emitted but no failing test is on
   record), and **`spec-scope`** (the write is outside the spec's authorized surface, spells a
   **deferred** marker you agreed *not* to build, or a spec amend is in progress).
+
+- **Stop evidence gate** (`stop_gate.py`, **Stop, sync, a JSON `decision: block`**). When a
+  session in a run ends its turn **claiming the work is done** but the run's recorded evidence
+  does not back it, the stop is sent back with the missing evidence named. Examples: a test still
+  RED, an acceptance criterion with no test recorded passing, a last test run that failed or is
+  older than the last write, or a run in review with no verdict. It reads recorded state only and
+  never walks the repo. It fails closed. After three blocks in a row the stop is
+  let through with a message you see, and the release is written to the audit ledger. The
+  `SubagentStop` hook applies the same rule to a subagent's `status: done` handback. Override
+  with `mokata gate override stop-evidence`. See
+  [loop gates](../concepts/governance.md#loop-gates-a-done-must-be-backed-three-fixes-then-stop-five-reviews-then-you).
 
 The two PreToolUse blocks are **different in kind**, and mokata treats them differently:
 

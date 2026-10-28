@@ -1,0 +1,35 @@
+{
+ "skill": "exec",
+ "triggers": [
+  "execution mode for a run",
+  "parallel subagents"
+ ],
+ "positive": [
+  "Switch this run's execution mode to parallel subagents",
+  "Show me the execution mode for the current run",
+  "Should this run be sequential or use parallel subagents? Let me choose",
+  "Run the next phase with parallel subagents and isolation",
+  "Set the execution mode back to sequential"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Show me the parallel lanes and the 7-phase tracker",
+   "expect": "progress"
+  },
+  {
+   "prompt": "Switch the run mode from local to team",
+   "expect": "mode"
+  },
+  {
+   "prompt": "Execute this shell script for me"
+  },
+  {
+   "prompt": "Split the spec into subtasks with a dependency plan",
+   "expect": "decompose"
+  },
+  {
+   "prompt": "Open the live dashboard of the run",
+   "expect": "watch"
+  }
+ ]
+}

@@ -1,0 +1,14 @@
+# Browser end-to-end for `mokata ide` (ci.yml `ide-e2e`, 0.0.26 O9). Test tooling, not a mokata dep.
+# The job installs NO mokata package: the e2e runs this checkout's src/ (PYTHONPATH), so its
+# runtime set is pinned here instead — the `mcp` floor/ceiling from pyproject.toml and EVERY `[ide]`
+# requirement (keep this list equal to pyproject's `ide` extra; tests/test_o9_ide_e2e_in_ci.py reds
+# when they part) — and the whole job installs hash-pinned (no editable-install site).
+# The playwright version pins the Chromium build `python -m playwright install chromium` fetches.
+playwright==1.56.0
+mcp>=1.2,<2
+starlette>=0.27
+uvicorn>=0.23.1
+sse-starlette>=1.6.1
+pygments>=2.15
+pywinpty>=2.0; sys_platform == "win32"
+ripgrep==14.1.0; platform_machine == "x86_64" or platform_machine == "AMD64" or platform_machine == "aarch64" or platform_machine == "arm64"

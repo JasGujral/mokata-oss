@@ -18,6 +18,8 @@ import unittest
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata.config import Surface
 from mokata.engine.completeness import (UI_MATRIX_FIX, WARN_NO_UI_CRITERION,
@@ -69,7 +71,7 @@ class _Repo(unittest.TestCase):
 
     def emit(self, payload):
         spec, tests = spec_from_payload(payload)
-        return emit_spec(Surface.load(self.root), spec, tests, store=self.store, run_id=RID,
+        return emit_planned(Surface.load(self.root), spec, tests, store=self.store, run_id=RID,
                          assume_yes=True)
 
     def on_disk(self):
@@ -123,7 +125,7 @@ class CompletenessRefusesAUiCriterionWithoutAMatrix(_Repo):
 
     def test_the_mcp_surface_refuses_it_before_any_proposal(self):
         from mokata.mcp import tools_spec as T
-        res = T.spec_emit(path=self.root, title="t", criteria=[_ui()],
+        res = call_planned(T.spec_emit, path=self.root, title="t", criteria=[_ui()],
                           tests=[{"name": "test_a", "ac_ids": ["AC-1"]}])
         self.assertEqual("blocked", res["status"])
         self.assertEqual("completeness", res["gate"])

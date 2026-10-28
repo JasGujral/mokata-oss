@@ -1,0 +1,22 @@
+{
+  "routes": [
+    {
+      "path": "/api/code-tree", "method": "GET", "kind": "json",
+      "params": {},
+      "responses": {
+        "200": {"media": "json", "schema": {
+          "type": "object",
+          "required": ["sample", "root", "tree", "worktree", "label", "session", "note"],
+          "properties": {
+            "sample": {"type": "boolean"},
+            "root": {"type": "string"},
+            "tree": {"type": "string"},
+            "worktree": {"type": "boolean"},
+            "label": {"type": "string"},
+            "session": {"type": ["string", "null"]},
+            "note": {"type": "string"}}}}
+      },
+      "probes": [{"status": 200}, {"status": 200, "demo": true}]
+    }
+  ]
+}

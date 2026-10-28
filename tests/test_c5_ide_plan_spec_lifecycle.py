@@ -25,6 +25,8 @@ import unittest
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata.init import init_repo
 
@@ -83,12 +85,12 @@ def _plant(root, *, spec_versions=2, events=True, amend_open=False):
     st = _store(root, RUN)
     PipelineCheckpoint(st, RUN).ensure_registered()
     st.write("approved_approach", APPROACH)
-    spec_commit(st, Spec("parse handles empty input",
+    commit_planned(st, Spec("parse handles empty input",
                          [AcceptanceCriterion("AC1", "parse('') returns []")]),
                 version=1, run_id=RUN)
     if spec_versions >= 2:
         from mokata.spec_scope import archive_key
-        spec_commit(st, Spec("parse handles empty input",
+        commit_planned(st, Spec("parse handles empty input",
                              [AcceptanceCriterion("AC1", "parse('') returns []"),
                               AcceptanceCriterion("AC2", "fields are **stripped**")]),
                     version=2, archive_key=archive_key(RUN, 1), run_id=RUN)
@@ -412,8 +414,9 @@ class Page(unittest.TestCase):
         for js in ("app.js", "nav.js", "search.js", "graph.js", "plan.js", "combo.js", "boot.js"):
             self.assertNotIn('createElement("select")', self._read(js), js)
             self.assertNotIn('el("select"', self._read(js), js)
-        for cid in ("base", "head", "g-depth", "insp-pick", "session-pick", "plan-run",
-                    "plan-version"):
+        # P33: "session-pick" (the left panel's second session list) is gone — the Sessions
+        # screen's filter box is the one way to find a session.
+        for cid in ("base", "head", "g-depth", "insp-pick", "plan-run", "plan-version"):
             m = re.search(rf'<div[^>]*\bid="{cid}"[^>]*>', html)
             self.assertIsNotNone(m, cid)
             self.assertIn('class="combo"', m.group(0), cid)
@@ -449,12 +452,14 @@ class Page(unittest.TestCase):
         for fixed in (".top", ".lc-strip"):
             self.assertIn("flex: none", rule(fixed), fixed)
 
-    def test_lifecycle_strip_sits_under_the_top_bar(self):
+    def test_lifecycle_strip_sits_in_the_sessions_screen_header(self):
+        # P34 (PRD §5.2 S6): the strip moved from under the top bar into the S1 header.
         html = self._read("index.html")
-        self.assertLess(html.index('class="top"'), html.index('id="lifecycle"'))
-        self.assertLess(html.index('id="lifecycle"'), html.index('class="shell"'))
+        s1 = html[html.index('id="view-sessions"'):]
+        self.assertLess(s1.index('id="lifecycle"'), s1.index('id="sessions-scroll"'))
+        self.assertNotIn('id="lifecycle"', html[:html.index('class="shell"')])
         self.assertIn('id="lc-detail"', html)
-        self.assertIn('data-mode="plan"', html)
+        self.assertIn('data-screen="plan"', html)
         self.assertIn('id="view-plan"', html)
 
     def test_plan_renderer_builds_text_nodes_only(self):
@@ -487,7 +492,8 @@ const texts = []; const walk = (n) => { if (n.tag === "#text") texts.push(n.text
 walk(f);
 console.log(JSON.stringify({ made: [...new Set(made)].sort(), texts }));
 """
-        out = subprocess.run([node, "-e", prog], capture_output=True, text=True, timeout=30)
+        out = subprocess.run(_support.node_argv(prog), capture_output=True, text=True,
+                             timeout=120, stdin=subprocess.DEVNULL, encoding="utf-8")
         self.assertEqual(0, out.returncode, out.stderr)
         res = json.loads(out.stdout)
         self.assertTrue(set(res["made"]) <= {"p", "ul", "li", "b", "code", "h4"}, res["made"])

@@ -1,0 +1,23 @@
+{
+  "routes": [
+    {
+      "path": "/api/palette/commands", "method": "GET", "kind": "json",
+      "params": {},
+      "responses": {
+        "200": {"media": "json", "schema": {
+          "type": "object", "required": ["commands", "count", "source", "how", "joined"],
+          "properties": {
+            "commands": {"type": "array", "items": {"type": "object",
+              "required": ["name", "slash", "description", "gated", "kind"],
+              "properties": {"name": {"type": "string"}, "slash": {"type": "string"},
+                             "description": {"type": "string"}, "gated": {"type": "boolean"},
+                             "kind": {"enum": ["command", "skill"]}}}},
+            "count": {"type": "integer"},
+            "source": {"type": "string"},
+            "how": {"type": "string"},
+            "joined": {"type": ["string", "null"]}}}}
+      },
+      "probes": [{"status": 200}]
+    }
+  ]
+}

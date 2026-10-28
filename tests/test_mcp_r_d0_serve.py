@@ -6,7 +6,7 @@ silence (P16 legibility, P14 no-unbounded-hang, P22 EDGE). This suite is the fau
 deliverable — each numbered requirement of §D0 has at least one named test:
 
   R5  never-block front door     : test_mcp_r_d0_prehook_nonblocking
-  R1  never-hang / timed_out     : test_mcp_r_d0_timeout_returns_status
+  R1  never-hang / running (O14) : test_mcp_r_d0_timeout_returns_status
   R2  exception -> isError       : test_mcp_r_d0_exception_becomes_iserror
   R3  never-None                 : test_mcp_r_d0_none_coerced
   R6  status vocab (SSOT)        : test_mcp_r_d0_status_vocab
@@ -19,7 +19,7 @@ R4 (progress/heartbeat) lands as a documented degrade-clean NO-OP this stage: th
 `Context.report_progress` is a coroutine that must be injected as a tool parameter and awaited on
 the event loop, which a synchronous, SDK-free tool body running in a worker thread cannot reach
 without altering the tool schema (forbidden this stage) — so liveness is delivered by the bounded
-budget + `running`/`timed_out` statuses instead. That decision is asserted in
+budget + the `running` status (O14) instead. That decision is asserted in
 test_mcp_r_d0_r4_progress_is_documented_noop.
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
@@ -74,10 +74,10 @@ class TestStatusVocab(_Base):
         # (a) the vocab is exactly the documented set, importable by tools + tests (no magic strings)
         self.assertEqual(
             set(ST.STATUS_VOCAB),
-            {"proposed", "refused", "blocked", "running", "timed_out", "degraded",
+            {"proposed", "refused", "blocked", "running", "degraded",
              "committed", "error"})
         # (b) every status the wrapper itself can PRODUCE is a member of the vocab
-        for produced in (MS._timed_out("op", 1.0),
+        for produced in (MS._still_running("op", 1.0, 1.0, "abc"),
                          MS._as_error("op", RuntimeError("x")),
                          MS._coerce("op", None)):
             self.assertIn(produced["status"], ST.STATUS_VOCAB)
@@ -98,7 +98,7 @@ class TestStatusVocab(_Base):
 
 
 # ======================================================================================
-# R1 — never-hang: a stalled body yields a structured timed_out within budget
+# R1 — never-hang: a stalled body yields a structured `running` within budget (O14)
 # ======================================================================================
 
 class TestNeverHang(_Base):
@@ -113,11 +113,11 @@ class TestNeverHang(_Base):
             res = MS._serve(slow, name="slowtool")(path=".")
             elapsed = time.monotonic() - started
 
-        self.assertEqual(res["status"], "timed_out")
-        self.assertIs(res["isError"], True)
+        self.assertEqual(res["status"], "running")          # O14 — disclosed, never cut
+        self.assertIs(res["isError"], False)
         self.assertEqual(res["operation"], "slowtool")
         self.assertIn("slowtool", res["reason"])            # names the OPERATION
-        self.assertIn("mokata", res["hint"].lower())        # names the CLI fallback
+        self.assertIn("same arguments", res["hint"])        # names how to collect the result
         self.assertLess(elapsed, 3.0, "the wrapper hung past its budget instead of timing out")
 
 
@@ -277,7 +277,7 @@ class TestSecretSafety(_Base):
         dsn = "postgres" + "://u:" + secret_pw + "@db.internal:5432/app"
         secret_path = "/etc/mokata/" + secret_pw
 
-        # timed_out: the stalled body carried the DSN as an arg; the render must not echo it
+        # running: the stalled body carried the DSN as an arg; the render must not echo it
         with mock.patch.object(MS, "MCP_SURFACE_TIMEOUT_SECONDS", 0.2):
             res_t = MS._serve(lambda path=".", dsn="": time.sleep(3),
                               name="op")(path=secret_path, dsn=dsn)

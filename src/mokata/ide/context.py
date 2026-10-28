@@ -28,6 +28,8 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 from __future__ import annotations
 
 import hashlib
+import os
+import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -46,9 +48,33 @@ class ContextRefused(MokataError, ValueError):
     """The item cannot be sent (bad kind/lines, unreadable or sensitive file) — nothing stored."""
 
 
+class _MemoryStore:
+    """0.0.26 P39 — the context queue of a repo that has not run setup: in this process only.
+    No hook reads it there (setup wires the hooks), and nothing is written for a folder the user
+    merely opened. The same three calls as `StateStore`."""
+
+    _data: Dict[str, Dict[str, Any]] = {}
+    _lock = threading.Lock()
+
+    def __init__(self, key: str) -> None:
+        self._key = key
+
+    def read(self, key: str) -> Any:
+        with self._lock:
+            return self._data.get(self._key, {}).get(key)
+
+    def update(self, key: str, fn: Any, default: Any = None) -> Any:
+        with self._lock:
+            box = self._data.setdefault(self._key, {})
+            box[key] = fn(box.get(key, default))
+            return box[key]
+
+
 def _store(root: str):
     from ..state import StateStore
-    from ..tdd_state import state_dir
+    from .statedir import governed, state_dir
+    if not governed(root):
+        return _MemoryStore(os.path.normcase(os.path.realpath(os.path.abspath(root))))
     return StateStore(state_dir(root))
 
 

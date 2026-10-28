@@ -1,0 +1,34 @@
+{
+ "skill": "enter",
+ "triggers": [
+  "Enter the pipeline at a phase"
+ ],
+ "positive": [
+  "Enter the pipeline at the test phase; I already have a spec",
+  "Start mokata at the review phase without forcing the earlier phases",
+  "Jump into the pipeline at develop — only that phase's gates should apply",
+  "Enter at the spec phase and run to the test phase",
+  "I want to enter the pipeline mid-way, at the ship phase"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Pick up the run where I left off yesterday",
+   "expect": "resume"
+  },
+  {
+   "prompt": "Show where the run currently is",
+   "expect": "progress"
+  },
+  {
+   "prompt": "Press enter to continue in the terminal"
+  },
+  {
+   "prompt": "Run the whole story end to end as an integration check",
+   "expect": "playbook"
+  },
+  {
+   "prompt": "Plan a chain of skills in order",
+   "expect": "chain"
+  }
+ ]
+}

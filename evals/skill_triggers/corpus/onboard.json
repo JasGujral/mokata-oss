@@ -1,0 +1,34 @@
+{
+ "skill": "onboard",
+ "triggers": [
+  "teach mokata the project's rules",
+  "capturing institutional knowledge"
+ ],
+ "positive": [
+  "Teach mokata our project's rules: all money is stored in integer cents",
+  "Capture our guardrails and coding conventions into mokata's memory",
+  "Here's our domain glossary doc — ingest it so the skills reference it",
+  "I want to teach mokata the project's conventions for naming migrations",
+  "Onboard mokata with our institutional knowledge about the pricing formulas"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Show me what rules mokata is enforcing right now",
+   "expect": "govern"
+  },
+  {
+   "prompt": "Onboard our new hire to the HR system"
+  },
+  {
+   "prompt": "Join the team's shared memory and vault",
+   "expect": "team"
+  },
+  {
+   "prompt": "Remember for this task only that I prefer tabs"
+  },
+  {
+   "prompt": "Guided first-run setup: detect my tools and wire them",
+   "expect": "setup"
+  }
+ ]
+}

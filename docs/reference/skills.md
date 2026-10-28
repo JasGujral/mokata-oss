@@ -18,7 +18,7 @@ are visible in this root.
 | `brainstorm` | `approach-approval` | human | Socratic pre-spec exploration (for *new* problems); HARD-GATE: no spec until one approach is explicitly approved |
 | `refine` | `refinement-approval` | human | deep, user-steerable review of *existing* code → prioritized refinements; HARD-GATE: no spec until a scoped set is approved, then hands off to `spec` |
 | `onboard` | `typed-capture-human-gated` | human | guided capture of the project's rules/guardrails/conventions/context/docs into TYPED, human-gated memory the skills reference |
-| `spec` | `completeness` | human | turn the problem into testable acceptance criteria, each mapped to a test |
+| `spec` | `completeness` | human | turn the problem into testable acceptance criteria, each mapped to a test, plus the task plan (`tasks[]`) and at most 5 clarifying questions (`clarifications[]`), approved together and sealed by a plan hash |
 | `test` | `red-before-green` | check | write failing tests first (RED); no implementation here |
 | `develop` | `no-code-without-failing-test` | check | implement the minimum to turn a failing test green |
 | `review` | `spec-then-quality` | human | two-pass review — against the spec, then quality |
@@ -75,7 +75,7 @@ so they hold even when no mokata skill is driving.
 | `approach-approval` | the run is registered but still in brainstorm — no approach approved, no spec emitted |
 | `spec-persisted` | an approach is approved for this run but no spec is emitted |
 | `no-code-without-failing-test` | the spec is emitted but no failing test is on record |
-| `spec-scope` | the write is outside the spec's authorized surface, spells a **deferred** item's marker, or a `spec amend` is in progress |
+| `spec-scope` | the write is outside the spec's authorized surface or the active task's scope, spells a **deferred** item's marker, a `spec amend` is in progress, or the plan no longer matches its approved hash |
 
 Test files are always writable, the gates fire only inside an active run, and an ambiguous run
 (two windows, none pinned) fails **open**. They are methodology gates, so they are overridable —
@@ -83,6 +83,16 @@ Test files are always writable, the gates fire only inside an active run, and an
 ledgered, with deliberately no MCP tool and no slash command. The `secret-guard` hook is a
 *security* block and has no override. Full explainer:
 [the gate-guard](../how-it-works/skills-and-gates.md#the-gate-guard-the-gates-enforced-on-native-edits).
+
+## The loop gates (R1 + R4)
+
+Three gates stop a loop rather than a write: `stop-evidence` (the `Stop`/`SubagentStop` hooks send back a "done" stop the run's
+recorded evidence does not back, fail-closed), `fix-breaker` (three failed fix attempts at one
+failure block implementation writes until a new approach is approved) and `review-loop` (five
+failed review rounds in a row and the sixth escalates to you). `develop`, `debug` and `review`
+tell the agent when each applies. All three take the same session-scoped, ledgered
+`mokata gate override`. Full explainer:
+[governance: loop gates](../concepts/governance.md#loop-gates-a-done-must-be-backed-three-fixes-then-stop-five-reviews-then-you).
 
 ## Invocation
 

@@ -29,9 +29,15 @@ class MacosIsTheCutMachineAndHasNoLeg(unittest.TestCase):
         self.job = _job()
 
     def test_macos_is_the_cut_machine_and_has_a_leg(self):
+        """Sharded since 0.0.26 O6: the macOS leg is one include PER SHARD, and together they must
+        cover every shard the matrix lists — a missing shard is a slice of the suite macOS skips."""
         include = self.job["strategy"]["matrix"].get("include") or []
-        self.assertIn(MACOS, [{k: str(v) for k, v in e.items()} for e in include],
-                      "no macos-latest leg on the PR gate — the cut machine is ungraded again")
+        mac = [{k: str(v) for k, v in e.items()} for e in include
+               if {k: str(e.get(k)) for k in MACOS} == MACOS]
+        self.assertTrue(mac, "no macos-latest leg on the PR gate — the cut machine is ungraded again")
+        self.assertEqual(sorted(str(s) for s in self.job["strategy"]["matrix"]["shard"]),
+                         sorted(e.get("shard") for e in mac),
+                         "the macOS leg does not run every shard of the unit suite")
 
     def test_the_leg_blocks(self):
         for e in self.job["strategy"]["matrix"].get("include") or []:
@@ -55,8 +61,11 @@ class MacosIsTheCutMachineAndHasNoLeg(unittest.TestCase):
         self.assertNotIn("Windows", self.job["steps"][0]["if"])
 
     def test_the_leg_runs_the_whole_unit_suite_unconditionally(self):
+        # Sharded since 0.0.26 O6: each shard leg runs its slice, all shards together the suite.
         steps = [s for s in self.job["steps"]
-                 if s.get("run", "").strip() == "python -m unittest discover -s tests -t tests"]
+                 if s.get("run", "").strip().startswith(
+                     "python scripts/shard_tests.py run --shard ${{ matrix.shard }} ")
+                 and "-s tests -t tests" in s.get("run", "")]
         self.assertEqual(1, len(steps), "the unit-suite step moved — re-derive this pin")
         self.assertNotIn("if", steps[0], "the unit suite became conditional: some leg skips it")
 

@@ -8,7 +8,7 @@ console is a VISIBLE cmd window that opens and closes with the child: the IDE po
 2026-10-19; mechanism read from the spawns a polling IDE makes — `git` ×10 per refresh round).
 
 Two halves, either of which alone stops the flash:
-  * `launch._detach_kwargs` gives the SERVER a hidden console (CREATE_NO_WINDOW, no longer
+  * `detached()` (the IDE server start, the hook drainer) gives the CHILD a hidden console (CREATE_NO_WINDOW, no longer
     DETACHED_PROCESS — Windows ignores CREATE_NO_WINDOW beside DETACHED_PROCESS, and a process
     with no console at all forces every console child to make a new, visible one);
   * every captured-output spawn in the IDE's reach passes `hidden()` — so a server started any
@@ -24,7 +24,10 @@ from __future__ import annotations
 
 import os
 import subprocess
-from typing import Dict
+
+TYPE_CHECKING = False        # `typing` costs a hook ~3 ms and is only for readers here
+if TYPE_CHECKING:
+    from typing import Dict
 
 
 def _windows() -> bool:
@@ -38,4 +41,22 @@ def hidden() -> Dict[str, int]:
     return {}
 
 
-__all__ = ["hidden"]
+def detached() -> "Dict[str, object]":
+    """`subprocess` kwargs for a background child that must OUTLIVE its parent and show no window:
+    a new session on POSIX; on Windows a new process group with its own HIDDEN console.
+
+    0.0.25 `IDE-WIN-CMD-FLASH` (B-01): NOT `DETACHED_PROCESS`. Windows ignores CREATE_NO_WINDOW beside
+    it, so the child had no console at all — and a console-less process makes every console child it
+    starts (`git`, `rg`, a pyenv-win `.bat` shim through `cmd.exe`) open a new VISIBLE window. A hidden
+    console is inherited by those children instead, and CREATE_NEW_PROCESS_GROUP keeps the child out
+    of the launching console's Ctrl-C/close group, so it is not taken down with its parent
+    (`start_new_session` is POSIX-only and silently ignored on Windows). Used by the IDE server start
+    (`ide/launch.py`), the hook drainer (`mokata_emit`, 0.0.26 O3) and the code-graph index
+    builder (0.0.26 O13)."""
+    if _windows():
+        return {"creationflags": (getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+                                  | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))}
+    return {"start_new_session": True}
+
+
+__all__ = ["detached", "hidden"]

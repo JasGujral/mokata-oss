@@ -1,0 +1,34 @@
+{
+ "skill": "chain",
+ "triggers": [
+  "chain of skills to run in order"
+ ],
+ "positive": [
+  "Plan a chain of skills to run in order: spec then test then develop",
+  "Set up a manual chain — brainstorm, then spec, each step keeping its own gate",
+  "I want to run these mokata skills in order as a chain",
+  "Chain these skills in order: refine, then spec, then test",
+  "Order a sequence of skills to run manually with gates between them"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Run the full pipeline end to end as an integration check",
+   "expect": "playbook"
+  },
+  {
+   "prompt": "Split the approved spec into parallel subtasks",
+   "expect": "decompose"
+  },
+  {
+   "prompt": "Enter the pipeline straight at the test phase",
+   "expect": "enter"
+  },
+  {
+   "prompt": "Explain how a blockchain stores transactions"
+  },
+  {
+   "prompt": "Show me where the current run is in the pipeline",
+   "expect": "progress"
+  }
+ ]
+}

@@ -123,10 +123,14 @@ def _update(root: str, run_id: str, mutate) -> None:
     _store(root).update(WORKING_SET_PREFIX + run_id, _m, default={})
 
 
-def record_touched(root: str, run_id: str, rel_path: str) -> None:
+def record_touched(root: str, run_id: str, rel_path: str, *, at: Optional[float] = None) -> None:
     """Append a repo-relative path this run wrote (deduplicated, capped, the drop counted). A path
     outside the repo, or one carrying a control character, is not a working-set file and is not
-    recorded (0.0.22 verification D-5a: `../../etc/hosts` and raw newlines reached the briefing)."""
+    recorded (0.0.22 verification D-5a: `../../etc/hosts` and raw newlines reached the briefing).
+
+    R1 (0.0.26) — `last_write_at` is WHEN the run last wrote (`at`: the hook-time capture of the
+    tool call, else now). The Stop evidence gate compares it with the last recorded suite run: a
+    suite older than the last write proves nothing about the code being called done."""
     if not run_id or not rel_path:
         return
     from .repo_paths import split_path
@@ -141,6 +145,9 @@ def record_touched(root: str, run_id: str, rel_path: str) -> None:
         over = max(0, len(files) - TOUCHED_CAP)
         cur["touched_files"] = files[over:]
         cur["touched_dropped"] = int(cur.get("touched_dropped", 0) or 0) + over
+        when = time.time() if at is None else at
+        prev = cur.get("last_write_at")
+        cur["last_write_at"] = max(when, prev) if isinstance(prev, (int, float)) else when
     _update(root, run_id, _m)
 
 

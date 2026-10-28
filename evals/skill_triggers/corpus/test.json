@@ -1,0 +1,34 @@
+{
+ "skill": "test",
+ "triggers": [
+  "failing tests written",
+  "starting TDD"
+ ],
+ "positive": [
+  "The spec is emitted; write the failing tests for its acceptance criteria",
+  "Write RED tests for the approved behaviour, no implementation",
+  "Start TDD on the export change — tests first",
+  "Write failing tests for AC-3 and AC-4",
+  "Write tests for the approved behaviour before anyone implements it"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Implement the code to make the red tests green",
+   "expect": "develop"
+  },
+  {
+   "prompt": "There's no spec yet, define the acceptance criteria",
+   "expect": "spec"
+  },
+  {
+   "prompt": "Run the existing test suite and tell me the result"
+  },
+  {
+   "prompt": "Write an end-to-end browser test for checkout",
+   "expect": "browser-testing"
+  },
+  {
+   "prompt": "Test my internet speed"
+  }
+ ]
+}

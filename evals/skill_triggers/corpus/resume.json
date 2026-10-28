@@ -1,0 +1,34 @@
+{
+ "skill": "resume",
+ "triggers": [
+  "Pick up where you left off"
+ ],
+ "positive": [
+  "Pick up where I left off on yesterday's run",
+  "Resume the last mokata run",
+  "Where would my run resume if I continued now?",
+  "Preview where run 42 resumes",
+  "Continue the run I stopped on Friday from where I left off"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Pull the session bundle my teammate pushed",
+   "expect": "session"
+  },
+  {
+   "prompt": "Show the 7-phase tracker",
+   "expect": "progress"
+  },
+  {
+   "prompt": "Write my resume for a backend role"
+  },
+  {
+   "prompt": "Enter the pipeline at the test phase",
+   "expect": "enter"
+  },
+  {
+   "prompt": "Open the live dashboard",
+   "expect": "watch"
+  }
+ ]
+}

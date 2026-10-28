@@ -1,0 +1,34 @@
+{
+ "skill": "setup",
+ "triggers": [
+  "Guided first-run setup"
+ ],
+ "positive": [
+  "Guided first-run setup for mokata on this machine",
+  "Detect my tools and ask me what to wire",
+  "Do the first-run setup for mokata, with my approval for each wiring",
+  "First run: wire mokata into Claude Code",
+  "Run mokata's guided setup"
+ ],
+ "near_miss": [
+  {
+   "prompt": "mokata's MCP server stopped connecting",
+   "expect": "mcp-repair"
+  },
+  {
+   "prompt": "Add one more integration to what's already wired",
+   "expect": "reconfigure"
+  },
+  {
+   "prompt": "Set up a Python virtualenv for this project"
+  },
+  {
+   "prompt": "Upgrade mokata",
+   "expect": "update"
+  },
+  {
+   "prompt": "Join the team stack as a new teammate",
+   "expect": "team"
+  }
+ ]
+}

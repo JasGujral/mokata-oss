@@ -6,6 +6,7 @@
 <title>mokata ide</title>
 <link rel="icon" href="/static/mokata-icon.svg">
 <link rel="stylesheet" href="/static/app.css">
+<!-- mokata:feature-styles -->
 <!-- Cytoscape injects a one-rule <style> unless this id exists; the rule lives in app.css, so a
      strict CSP (no inline styles) holds. -->
 <meta name="cytoscape-stylesheet" id="__________cytoscape_stylesheet" content="app.css">
@@ -16,29 +17,63 @@
   <img class="mark mark-dark" src="/static/mokata-wordmark-dark.svg" alt="mokata">
   <img class="mark mark-light" src="/static/mokata-wordmark-light.svg" alt="mokata">
   <span id="repo" class="repo"></span>
-  <button type="button" id="session-chip" class="session-chip" aria-haspopup="true" title="sessions and diff source">
-    <span class="dot"></span><span id="focus-chip">all sessions</span>
+  <!-- 0.0.26 P34 (IA-ONE-NAV) — the top bar is FIVE things: repo · Viewing ▾ · ⌘K · Activity · Health.
+       The mode bar is gone (the rail is the screen); Follow / Join / Terminal / live / needs-you are in
+       the Activity drawer. -->
+  <button type="button" id="session-chip" class="session-chip" aria-haspopup="dialog" aria-expanded="false" aria-controls="viewing-pop" title="what Review, the Code gutter and Search's session scope show — click to change">
+    <span class="dot"></span><span id="focus-chip">Viewing: uncommitted changes</span>
     <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
   </button>
-  <nav class="modes" aria-label="mode">
-    <button type="button" class="mode" data-mode="review">Review</button>
-    <button type="button" class="mode" data-mode="navigate">Navigate</button>
-    <button type="button" class="mode" data-mode="graph">Graph</button>
-    <button type="button" class="mode" data-mode="plan">Plan</button>
-    <button type="button" class="mode" data-mode="sessions">Sessions</button>
-  </nav>
   <span class="spacer"></span>
-  <button type="button" id="qo-open" class="qo-box" title="Go to file or symbol (Ctrl/⌘+P)">
+  <button type="button" id="qo-open" class="qo-box" title="Palette (Ctrl/⌘+K): go to file (⌘P), symbol, line, command — ? lists every key">
     <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9.5 9.5l3 3" stroke="currentColor" stroke-width="1.5"/></svg>
-    <span class="qo-ph">Go to file or symbol…</span><kbd>⌘P</kbd>
+    <span class="qo-ph">Go to, search or run a command…</span><kbd>⌘K</kbd>
   </button>
   <button type="button" id="health-chip" class="health-chip" title="What is missing, degraded or out of sync — and updates">health <b id="health-n">…</b></button>
-  <button type="button" id="needs-you" class="needs-you" hidden title="sessions waiting on you (!)">needs you <b id="needs-you-n">0</b></button>
-  <button type="button" id="follow" class="follow" aria-pressed="false" title="Follow: open each file a session edits as it edits it">Follow</button>
-  <button type="button" id="join-btn" class="follow" aria-pressed="false" aria-haspopup="true" title="Join a live session: focus and follow it; context you send goes to it">Join</button>
-  <button type="button" id="term-toggle" class="follow" aria-pressed="false" title="Terminal: run claude (unmodified, your own login) or your shell here">Terminal</button>
-  <span id="live-dot" class="live" title="updates live as sessions write">● live</span>
 </header>
+
+<!-- ============ Viewing ▾ — the ONE diff source (R28): Review, the Code gutter, Search's session scope ============ -->
+<div id="viewing-pop" class="viewing-pop" role="dialog" aria-label="Viewing" hidden>
+  <div class="lp-head"><h2>Viewing</h2><span class="spacer"></span><button type="button" id="viewing-close" class="link small">close</button></div>
+  <ul class="list views">
+    <li><button type="button" data-view="live" class="view">Uncommitted changes <span class="sub">working tree vs HEAD</span></button></li>
+    <li><button type="button" data-view="session" class="view" id="view-session">This session's changes <span class="sub" id="view-session-sub">no session selected</span></button></li>
+    <li><button type="button" id="viewing-pick" class="view">Pick a session… <span class="sub">every session, on the Sessions screen</span></button></li>
+  </ul>
+  <p class="small dim pad-x" id="viewing-between" hidden></p>
+  <div class="lp-head"><h2>Compare branches</h2></div>
+  <div class="row">
+    <div class="combo" id="base" data-label="base branch" data-placeholder="base…"></div><span>…</span>
+    <div class="combo" id="head" data-label="head branch" data-placeholder="head…"></div>
+    <button type="button" id="compare-go" class="btn">Compare</button>
+  </div>
+  <p class="empty" id="compare-empty" hidden>
+    <b>No branches to compare.</b><br>This folder is not a git repository, or it has one branch.
+  </p>
+  <div class="lp-head"><h2>Pull request</h2></div>
+  <div class="row">
+    <input id="pr-url" placeholder="https://github.com/owner/repo/pull/123" aria-label="PR URL">
+    <button type="button" id="pr-go" class="btn">Open</button>
+  </div>
+  <p class="empty small">Paste a GitHub PR URL. It is fetched with <b>your</b> git login —
+    mokata stores no token.</p>
+</div>
+
+<!-- ============ the live half of Activity (activity.js moves it into the drawer) ============ -->
+<div id="act-live" class="act-live" hidden>
+  <div class="act-live-row">
+    <span id="live-dot" class="live" title="updates live as sessions write">● live</span>
+    <button type="button" id="needs-you" class="needs-you" hidden title="the most urgent session waiting on you (!)">waiting on you <b id="needs-you-n">0</b></button>
+  </div>
+  <div class="act-live-row">
+    <button type="button" id="follow" class="follow" aria-pressed="false" title="Follow: open each file a session edits as it edits it">Follow</button>
+    <button type="button" id="join-btn" class="follow" aria-pressed="false" aria-haspopup="true" title="Join a live session: focus and follow it; context you send goes to it">Join</button>
+    <button type="button" id="term-toggle" class="follow" aria-pressed="false" title="Terminal: run claude (unmodified, your own login) or your shell here">Terminal</button>
+  </div>
+  <p id="term-why" class="small dim" hidden></p>
+  <!-- P38: durable writes waiting on you — the approval cards (features/approvals.js) -->
+  <div id="approvals-drawer" class="ap-list" data-rows></div>
+</div>
 
 <!-- ============ ID.S3: join a session (registry + snapshots) ============ -->
 <div id="join-pop" class="join-pop" role="dialog" aria-label="Join a session" hidden>
@@ -48,40 +83,42 @@
 </div>
 <div id="bridge-toast" class="bridge-toast small" role="status" hidden></div>
 
-<!-- ============ the focused run's lifecycle (C5) — compact; the detail is in Sessions ============ -->
-<div id="lifecycle" class="lc-strip" aria-label="run lifecycle" hidden>
-  <button type="button" id="lc-run" class="lc-run mono" title="open the run's plan and spec"></button>
-  <ol id="lc-stages" class="lc-stages"></ol>
-  <span id="lc-meta" class="lc-meta mono small"></span>
-  <button type="button" id="lc-more" class="link small" title="the full lifecycle (Sessions panel)">details</button>
+<!-- ============ ? — every key (§5.5) ============ -->
+<div id="keys-help" class="qo-overlay" hidden>
+  <div class="qo-dialog keys-dialog" role="dialog" aria-label="Keyboard">
+    <div class="qo-input-row"><span class="qo-label">Keys</span><span class="dim small">no key here is one your browser keeps for itself</span><span class="spacer"></span><button type="button" class="btn ghost" id="keys-close">Close</button></div>
+    <div class="qo-results"><table class="keys-table" id="keys-table"></table></div>
+  </div>
 </div>
 
 <div class="shell">
-  <nav class="rail" aria-label="activity">
-    <button type="button" class="rail-btn" data-panel="changes" aria-label="Changes" title="Changes">
+  <!-- The rail IS the screen: one button per screen, its highlight is always the screen you see.
+       `g` + the letter goes there from the keyboard. A feature adds a screen through the registry. -->
+  <nav class="rail" aria-label="screens">
+    <button type="button" class="rail-btn" data-screen="sessions" aria-label="Sessions" title="Sessions (g s)">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="2.5" y="3.5" width="13" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6 15.5h6" stroke="currentColor" stroke-width="1.5"/></svg>
+    </button>
+    <button type="button" class="rail-btn" data-screen="review" aria-label="Review" title="Review (g r)">
       <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M4 3v12M4 6h6a3 3 0 013 3v6" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="13" cy="15" r="1.6" fill="currentColor"/></svg>
       <span id="rail-count" class="rail-badge" hidden></span>
     </button>
-    <button type="button" class="rail-btn" data-panel="files" aria-label="Files" title="Files">
+    <button type="button" class="rail-btn" data-screen="navigate" aria-label="Code" title="Code (g c)">
       <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M3 4h5l1.5 2H15v8H3z" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
     </button>
-    <button type="button" class="rail-btn" data-panel="search" aria-label="Search" title="Search">
+    <button type="button" class="rail-btn" data-screen="search" aria-label="Search" title="Search (⌘⇧F)">
       <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12 12l4 4" stroke="currentColor" stroke-width="1.5"/></svg>
     </button>
-    <button type="button" class="rail-btn" data-panel="sessions" aria-label="Sessions" title="Sessions and diff source">
-      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="2.5" y="3.5" width="13" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6 15.5h6" stroke="currentColor" stroke-width="1.5"/></svg>
-    </button>
-    <button type="button" class="rail-btn" data-panel="graph" aria-label="Graph" title="Graph">
+    <button type="button" class="rail-btn" data-screen="graph" aria-label="Impact" title="Impact (g i)">
       <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="2" fill="currentColor"/><circle cx="9" cy="9" r="6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-dasharray="2 2"/></svg>
     </button>
-    <button type="button" class="rail-btn" data-panel="plan" aria-label="Plan and spec" title="Plan and spec">
+    <button type="button" class="rail-btn" data-screen="plan" aria-label="Plan and spec" title="Plan and spec (g p)">
       <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="3.5" y="2.5" width="11" height="13" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6 6.5h6M6 9.5h6M6 12.5h3.5" stroke="currentColor" stroke-width="1.4"/></svg>
     </button>
   </nav>
 
   <aside class="left" id="left">
-    <!-- ============ the changed-files navigator ============ -->
-    <section class="lp" id="panel-changes" aria-label="Changed files">
+    <!-- ============ Review's side: the changed-files navigator ============ -->
+    <section class="lp" id="panel-review" aria-label="Changed files">
       <div class="lp-head">
         <h2>Changes</h2>
         <span id="nav-count" class="mono dim2"></span>
@@ -94,88 +131,27 @@
         <button type="button" class="pill" data-filter="untested">Untested</button>
         <button type="button" class="pill" data-filter="tests">Tests</button>
       </div>
-      <div class="src-line">Source: <b id="src-label">working tree vs HEAD</b> · <button type="button" class="link" id="src-change">change</button></div>
-      <ul id="nav-list" class="nav-list"></ul>
+      <ul id="nav-list" class="nav-list" data-rows></ul>
       <p class="empty" id="nav-empty" hidden></p>
-      <div class="keys">
-        <span><kbd>]</kbd> / <kbd>[</kbd> next / prev file</span>
-        <span><kbd>j</kbd> / <kbd>k</kbd> next / prev hunk</span>
-        <span><kbd>u</kbd> next unseen</span>
-        <span><kbd>e</kbd> open in Navigate</span>
-      </div>
+      <p class="small dim pad-x keys-hint"><kbd>?</kbd> every key · <kbd>]</kbd> <kbd>[</kbd> file · <kbd>j</kbd> <kbd>k</kbd> hunk</p>
     </section>
 
-    <!-- ============ explorer + outline (Navigate) ============ -->
-    <section class="lp" id="panel-files" aria-label="Explorer" hidden>
+    <!-- ============ Code's side: explorer + outline ============ -->
+    <section class="lp" id="panel-navigate" aria-label="Explorer" hidden>
       <div class="lp-head">
         <h2>Files</h2><span id="tree-count" class="mono dim"></span><span class="spacer"></span>
         <label class="check"><input type="checkbox" id="only-changed"> only changed</label>
       </div>
       <input id="tree-filter" class="filter-input" placeholder="filter files" aria-label="filter files">
-      <ul id="tree" class="tree"></ul>
+      <ul id="tree" class="tree" data-rows></ul>
       <p class="small dim" id="tree-note"></p>
       <div class="lp-head"><h2>Outline</h2><span id="outline-basis"></span></div>
-      <ul id="outline" class="outline"></ul>
+      <ul id="outline" class="outline" data-rows></ul>
       <p class="empty" id="outline-empty" hidden></p>
     </section>
 
-    <!-- ============ search (C2 fills it) ============ -->
-    <section class="lp" id="panel-search" aria-label="Search" hidden>
-      <div class="lp-head"><h2>Search</h2></div>
-      <p class="small dim">Word, regex and meaning search open in the main view.</p>
-    </section>
-
-    <!-- ============ sessions + every diff source ============ -->
-    <section class="lp" id="panel-sessions" aria-label="Sessions" hidden>
-      <div class="lp-head"><h2>Sessions</h2></div>
-      <div class="row combo-row"><div class="combo" id="session-pick" data-label="focus a session" data-placeholder="find a session…"></div></div>
-      <ul id="sessions" class="list"></ul>
-      <p class="empty" id="sessions-empty" hidden>
-        <b>No session has written anything yet.</b><br>
-        A session appears here the moment Claude Code writes a file in this repo — mokata keeps a
-        snapshot of every write. Run <code>/mokata:review-window</code> inside a session to focus the window on it.
-      </p>
-      <div class="lp-head"><h2>Lifecycle</h2><span id="lc-detail-run" class="mono dim small"></span></div>
-      <ol id="lc-detail" class="lc-detail"></ol>
-      <p class="empty" id="lc-detail-empty" hidden>No run to show — a run appears once a brainstorm registers it (<code>/mokata:brainstorm</code>).</p>
-      <div class="lp-head"><h2>Diff source</h2></div>
-      <ul class="list views">
-        <li><button type="button" data-view="live" class="view">Live — working tree vs HEAD</button></li>
-        <li><button type="button" data-view="session" class="view" id="view-session">What this session wrote</button></li>
-      </ul>
-      <div class="lp-head"><h2>Timeline</h2><span class="hint">pick one to see that write · pick two to compare them</span></div>
-      <ul id="timeline" class="list timeline"></ul>
-      <p class="empty" id="timeline-empty" hidden>
-        <b>No snapshots for this view yet.</b><br>
-        Every write a session makes is recorded here with the content before and after it, so you
-        can diff any two moments. Focus a session above, or wait for its first write.
-      </p>
-      <div class="lp-head"><h2>Compare branches</h2></div>
-      <div class="row">
-        <div class="combo" id="base" data-label="base branch" data-placeholder="base…"></div><span>…</span>
-        <div class="combo" id="head" data-label="head branch" data-placeholder="head…"></div>
-        <button type="button" id="compare-go" class="btn">Compare</button>
-      </div>
-      <p class="empty" id="compare-empty" hidden>
-        <b>No branches to compare.</b><br>This folder is not a git repository, or it has one branch.
-      </p>
-      <div class="lp-head"><h2>Pull request</h2></div>
-      <div class="row">
-        <input id="pr-url" placeholder="https://github.com/owner/repo/pull/123" aria-label="PR URL">
-        <button type="button" id="pr-go" class="btn">Open</button>
-      </div>
-      <p class="empty small">Paste a GitHub PR URL. It is fetched with <b>your</b> git login —
-        mokata stores no token.</p>
-    </section>
-
-    <section class="lp" id="panel-graph" aria-label="Graph" hidden>
-      <div class="lp-head"><h2>Graph</h2></div>
-      <p class="small dim">The graph views open in the main area; press <b>?</b> there for how it works.</p>
-    </section>
-
-    <!-- ============ plan + spec: which run, from where, which version (C5) ============ -->
+    <!-- ============ Plan's side: which run, from where, which version (C5) ============ -->
     <section class="lp" id="panel-plan" aria-label="Plan and spec" hidden>
-      <div class="lp-head"><h2>Plan &amp; spec</h2></div>
       <div class="filters" role="tablist" aria-label="source" id="plan-sources">
         <button type="button" class="pill" data-psource="local" role="tab">Local</button>
         <button type="button" class="pill" data-psource="team" role="tab" id="plan-team-btn" hidden>Team</button>
@@ -212,8 +188,10 @@
         <button type="button" id="mark-seen" class="btn">Mark seen · next</button>
       </div>
       <div class="scroll" id="review-scroll">
+        <div id="approvals-review" class="ap-list ap-review" data-rows hidden></div>
         <div class="main-head"><h1 id="diff-title">Loading…</h1><span id="diff-stats" class="stats"></span></div>
         <p id="diff-note" class="note" hidden></p>
+        <p id="diff-mokata" class="small dim pad-x" hidden><span id="diff-mokata-n"></span> <button type="button" class="link" id="diff-mokata-btn">show them</button></p>
         <div id="diff-empty" class="empty big" hidden>
           <b>Nothing changed.</b><br>
           <span id="diff-empty-why">The working tree matches HEAD. Changes appear here live as soon as
@@ -230,6 +208,7 @@
         <button type="button" id="nav-fwd" class="icon-btn" aria-label="forward" title="forward (Alt+→)">→</button>
         <span id="crumbs" class="crumbs mono"></span>
         <span class="spacer"></span>
+        <span id="code-viewing" class="pill-static" title="the gutter marks what the Viewing context changed in this file"></span>
         <span class="pill-static">read-only</span>
         <button type="button" id="send-ctx" class="pill-link" title="send the selected lines (or the whole file) to the session's next turn">Send to session</button>
         <button type="button" id="as-diff" class="pill-link" hidden>view as diff</button>
@@ -250,27 +229,32 @@
     <!-- ============ Search (C2) ============ -->
     <section id="view-search" class="view-pane" hidden>
       <div class="bar">
-        <div class="tabs-inline" role="tablist" aria-label="search kind">
-          <button type="button" class="pill" data-skind="word" role="tab">Word</button>
-          <button type="button" class="pill" data-skind="regex" role="tab">Regex</button>
-          <button type="button" class="pill" data-skind="meaning" role="tab">Meaning</button>
-        </div>
         <label for="sq" class="sr-only">Search</label>
-        <input id="sq" class="search-input" autocomplete="off" spellcheck="false" placeholder="search the repository">
-        <label class="check"><input type="checkbox" id="s-case"> Aa</label>
-        <label class="check"><input type="checkbox" id="s-changed"> changed files only</label>
+        <!-- 0.0.26 P36 — ONE box; how it searches is a set of toggles, not separate tabs -->
+        <input id="sq" class="search-input" autocomplete="off" spellcheck="false" placeholder="search the repository — words, a regex, or what the code does">
+        <div class="s-toggles" role="group" aria-label="how to search">
+          <button type="button" class="pill s-tog" data-stoggle="regex" aria-pressed="false" title="Regular expression (Alt+R)">.*</button>
+          <button type="button" class="pill s-tog" data-stoggle="case" aria-pressed="false" title="Match case (Alt+C)">Aa</button>
+          <button type="button" class="pill s-tog" data-stoggle="meaning" aria-pressed="false" title="Also rank by meaning — local model, nothing leaves your machine (Alt+M)">Meaning</button>
+        </div>
+        <div class="s-toggles" id="s-scope" role="radiogroup" aria-label="search in">
+          <span class="small dim">in</span>
+          <button type="button" class="pill s-sc" data-sscope="all" role="radio" aria-checked="true">all files</button>
+          <button type="button" class="pill s-sc" data-sscope="changed" role="radio" aria-checked="false">changed</button>
+          <button type="button" class="pill s-sc" data-sscope="session" role="radio" aria-checked="false" disabled title="needs a selected session (session context)">this session's files</button>
+        </div>
       </div>
       <div id="s-engine" class="engine-line small dim"></div>
       <div class="scroll search-cols" id="search-cols">
         <section id="sr-meaning" class="sr-col" aria-label="results by meaning">
           <h2 class="sr-h">By meaning</h2>
           <div id="sr-meaning-state" class="sem-state" hidden></div>
-          <ul id="sr-meaning-list" class="sem-list"></ul>
+          <ul id="sr-meaning-list" data-rows class="sem-list"></ul>
         </section>
         <section id="sr-word" class="sr-col" aria-label="word results">
           <h2 class="sr-h" id="sr-word-h">Word search</h2>
           <p id="sr-word-note" class="small dim"></p>
-          <div id="sr-word-list"></div>
+          <div id="sr-word-list" data-rows></div>
         </section>
       </div>
     </section>
@@ -279,16 +263,15 @@
     <section id="view-graph" class="view-pane" hidden>
       <div class="bar">
         <div class="tabs-inline" role="tablist" aria-label="graph view">
-          <button type="button" class="pill" data-gview="ripple" role="tab" title="What is affected if this symbol changes — callers, ring by ring, and the tests that reach them">Ripple</button>
-          <button type="button" class="pill" data-gview="focus" role="tab" title="One step each way: its callers (left) and what it calls (right)">Focus</button>
-          <button type="button" class="pill" data-gview="path" role="tab" title="The shortest chain of calls from one symbol to another">Path to…</button>
-          <button type="button" class="pill" data-gview="untested" role="tab" title="Caller chains into this symbol that no test runs">Untested paths</button>
+          <button type="button" class="pill" data-gview="ripple" role="tab" title="What is affected if this symbol changes — callers, ring by ring, and the tests that reach them">What breaks</button>
+          <button type="button" class="pill" data-gview="focus" role="tab" title="One step each way: its callers (left) and what it calls (right)">Who calls</button>
+          <button type="button" class="pill" data-gview="path" role="tab" title="The shortest chain of calls from one symbol to another">Path</button>
         </div>
+        <label class="check" id="g-untested-wrap" title="Only the caller chains into this symbol that no test runs"><input type="checkbox" id="g-untested" data-gview-toggle="untested"> untested only</label>
         <label for="g-symbol" class="sr-only">symbol — a function, class or method name</label>
         <span class="g-pick"><input id="g-symbol" class="g-input" placeholder="function or class, e.g. slugify" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-controls="g-sug" title="A symbol is a named piece of your code — a function, class or method. Start typing to pick one."></span>
         <span id="g-to-wrap" hidden>→ <label for="g-to" class="sr-only">to symbol</label><span class="g-pick"><input id="g-to" class="g-input" placeholder="to function or class" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-controls="g-sug"></span></span>
         <div class="check">depth <div class="combo" id="g-depth" data-label="depth" data-options="1,2,3,4,5" data-value="2"></div></div>
-        <label class="check"><input type="checkbox" id="g-organic"> organic layout</label>
         <button type="button" id="g-go" class="btn">Show</button>
         <button type="button" id="g-help" class="btn ghost" title="How the graph works" aria-label="How the graph works">?</button>
       </div>
@@ -315,7 +298,7 @@
           </div>
         </div>
         <aside class="graph-side" aria-label="graph details">
-          <details id="g-guide" class="g-guide small" open>
+          <details id="g-guide" class="g-guide small">
             <summary>How the graph works</summary>
             <p>A map of <b>who calls what</b> in this repo, built from your code — not from the agent's
               memory. Each dot is a function or class; each arrow is a call or an import, and clicking it
@@ -351,7 +334,7 @@
           <h2 id="g-title" class="g-title"></h2>
           <p id="g-summary" class="small"></p>
           <h3 id="g-chains-h" hidden>Paths no test runs</h3>
-          <ul id="g-chains" class="g-chains"></ul>
+          <ul id="g-chains" data-rows class="g-chains"></ul>
           <div id="g-sel" class="g-sel" hidden></div>
           <p class="small dim">Click a node or edge for its source; double-click a node to centre on it. No edge is drawn that the graph cannot justify — each names its call or import site.</p>
           <p id="g-note" class="small dim"></p>
@@ -383,35 +366,77 @@
         <span class="spacer"></span>
         <span class="pill-static">read-only</span>
       </div>
+      <!-- the focused run's lifecycle (C5) — the S1 header (P34: it no longer sits under the top bar) -->
+      <div id="lifecycle" class="lc-strip" aria-label="run lifecycle" hidden>
+        <button type="button" id="lc-run" class="lc-run mono" title="open the run's plan and spec"></button>
+        <ol id="lc-stages" class="lc-stages"></ol>
+        <span id="lc-meta" class="lc-meta mono small"></span>
+      </div>
       <div class="scroll sv-scroll" id="sessions-scroll">
+        <!-- P33 S1: one list (every session, paginated) · click → its changed files → diffs -->
+        <div class="s1" id="s1">
+          <section class="s1-list" aria-label="all sessions">
+            <div class="s1-filter">
+              <label for="s1-q" class="sr-only">filter sessions</label>
+              <input id="s1-q" class="filter-input" placeholder="filter: prompt, file, branch, run, date…" autocomplete="off">
+              <div class="filters" role="tablist" aria-label="session filter" id="s1-filters">
+                <button type="button" class="pill active" data-s1filter="all" role="tab">All</button>
+                <button type="button" class="pill" data-s1filter="live" role="tab">Live</button>
+                <button type="button" class="pill" data-s1filter="needs" role="tab">Waiting on you</button>
+                <button type="button" class="pill" data-s1filter="worktree" role="tab">Has worktree</button>
+                <button type="button" class="pill" data-s1filter="nochange" role="tab">No changes</button>
+              </div>
+              <p class="small dim" id="s1-count"></p>
+            </div>
+            <ul id="s1-rows" class="list s1-rows" data-rows></ul>
+            <p class="empty" id="s1-empty" hidden></p>
+            <button type="button" id="s1-more" class="btn ghost" hidden>Show more</button>
+          </section>
+          <section class="s1-detail" aria-label="this session's changes" id="s1-detail">
+            <p class="empty" id="s1-pick">Pick a session to see the files it changed and their diffs.</p>
+            <div id="s1-box" hidden>
+              <h2 id="s1-title" class="s1-title"></h2>
+              <p id="s1-meta" class="small dim mono"></p>
+              <div class="row s1-actions">
+                <div class="filters" role="tablist" aria-label="diff">
+                  <button type="button" class="pill active" data-s1diff="cumulative" role="tab" title="everything the session changed, all segments">Cumulative</button>
+                  <button type="button" class="pill" data-s1diff="write" role="tab" title="each write: the previous capture → this capture">Per write</button>
+                </div>
+                <button type="button" id="s1-review" class="btn ghost" title="open these changes in Review">Open in Review</button>
+                <button type="button" id="s1-resume" class="btn ghost" title="copy the command that resumes this session">Copy resume command</button>
+              </div>
+              <!-- Replay: a scrubber in the session header (was the bottom timeline + the time-lapse block) -->
+              <div class="row s1-replay" id="tl-box">
+                <button type="button" id="tl-play" class="btn ghost small">Play</button>
+                <label for="tl-range" class="sr-only">replay step</label>
+                <input type="range" id="tl-range" class="tl-range" min="0" max="0" value="0">
+                <button type="button" id="tl-show" class="link small">show this write</button>
+              </div>
+              <p id="tl-label" class="mono small"></p>
+              <p id="tl-empty" class="small dim" hidden>Nothing to replay.</p>
+              <details class="s1-more"><summary class="small dim">Replay detail · lifecycle</summary>
+                <ul id="tl-files" class="tl-files"></ul>
+                <p id="tl-note" class="small dim"></p>
+                <div class="lp-head"><h2>Lifecycle</h2><span id="lc-detail-run" class="mono dim small"></span></div>
+                <ol id="lc-detail" class="lc-detail"></ol>
+                <p class="empty" id="lc-detail-empty" hidden>No run to show — a run appears once a brainstorm registers it (<code>/mokata:brainstorm</code>).</p>
+              </details>
+              <p id="s1-note" class="small dim" hidden></p>
+              <ul id="session-files" class="s1-files" data-rows></ul>
+              <p class="small dim" id="s1-writes-hint" hidden>click a write to see it · shift-click a second one to compare the two moments</p>
+              <ul id="s1-writes" class="list s1-writes" data-rows hidden></ul>
+              <div id="s1-write-diff" hidden></div>
+            </div>
+          </section>
+        </div>
         <section class="sv-sec" aria-label="needs you">
           <h2>Needs you</h2>
-          <ul id="ny-list" class="list ny-list"></ul>
+          <ul id="ny-list" class="list ny-list" data-rows></ul>
           <p class="empty" id="ny-empty">Nothing is waiting on you.</p>
           <p class="small dim" id="ny-formula"></p>
         </section>
-        <section class="sv-sec" aria-label="session browser">
-          <h2>All sessions</h2>
-          <ul id="sb-list" class="list sb-list"></ul>
-          <p class="empty" id="sb-empty" hidden>No session has written in this repository yet.</p>
-        </section>
-        <section class="sv-sec" aria-label="time-lapse">
-          <h2>Time-lapse</h2>
-          <p class="empty" id="tl-empty">Focus a session to replay it.</p>
-          <div id="tl-box" hidden>
-            <div class="row">
-              <button type="button" id="tl-play" class="btn">Play</button>
-              <label for="tl-range" class="sr-only">step</label>
-              <input type="range" id="tl-range" class="tl-range" min="0" max="0" value="0">
-              <button type="button" id="tl-show" class="btn ghost">Show this write</button>
-            </div>
-            <p id="tl-label" class="mono small"></p>
-            <ul id="tl-files" class="tl-files"></ul>
-            <p id="tl-note" class="small dim"></p>
-          </div>
-        </section>
-        <section class="sv-sec" aria-label="change treemap">
-          <h2>Change treemap</h2>
+        <details class="sv-sec sv-map" id="s1-map" aria-label="change treemap">
+          <summary><h2>Map</h2> <span class="small dim">the repo sized by lines, coloured by what changed</span></summary>
           <div class="tabs-inline" role="tablist" aria-label="treemap size">
             <button type="button" class="pill active" data-tmsize="loc" role="tab">Sized by LOC</button>
             <button type="button" class="pill" data-tmsize="change" role="tab">Sized by change</button>
@@ -419,7 +444,7 @@
           <svg id="tm" class="tm" role="img" aria-label="change treemap" preserveAspectRatio="none"></svg>
           <p class="small dim legend-line"><span class="tm-key tm-h0"></span> unchanged <span class="tm-key tm-h1"></span><span class="tm-key tm-h2"></span><span class="tm-key tm-h3"></span><span class="tm-key tm-h4"></span> lines changed (log scale) · click a file to open it</p>
           <p id="tm-note" class="small dim"></p>
-        </section>
+        </details>
       </div>
     </section>
   </main>
@@ -433,9 +458,9 @@
         <div id="insp-chips" class="chips"></div>
         <div class="combo" id="insp-pick" data-label="changed symbol" data-placeholder="find a changed symbol…" hidden></div>
       </div>
-      <div class="insp-block"><h3>Called by</h3><ul id="insp-callers" class="refs"></ul></div>
-      <div class="insp-block"><h3>Covered by</h3><p id="insp-notests" class="warn" hidden></p><ul id="insp-tests" class="refs"></ul></div>
-      <div class="insp-block"><h3>Reaches (blast radius)</h3><ul id="insp-blast" class="refs"></ul></div>
+      <div class="insp-block"><h3>Called by</h3><ul id="insp-callers" data-rows class="refs"></ul></div>
+      <div class="insp-block"><h3>Covered by</h3><p id="insp-notests" class="warn" hidden></p><ul id="insp-tests" data-rows class="refs"></ul></div>
+      <div class="insp-block"><h3>Reaches (blast radius)</h3><ul id="insp-blast" data-rows class="refs"></ul></div>
       <button type="button" id="insp-ripple" class="btn wide">Open ripple view</button>
       <p class="small dim">Every edge carries its basis — <b class="b-struct">structural</b> from the graph, <b class="b-lex">lexical</b> when the graph could not answer.</p>
     </div>
@@ -444,17 +469,12 @@
       <div class="mono big-sym" id="ref-sym"></div>
       <div class="tabs" role="tablist" id="ref-tabs"></div>
       <p class="small dim" id="ref-meta"></p>
-      <ul id="ref-list" class="ref-cards"></ul>
+      <ul id="ref-list" data-rows class="ref-cards"></ul>
       <p class="small dim" id="ref-same"></p>
     </div>
   </aside>
 </div>
 
-<div class="timeline-strip">
-  <span class="cap">Timeline</span>
-  <div class="ticks" id="ticks"></div>
-  <span id="ticks-label" class="mono dim small"></span>
-</div>
 <!-- ============ ID.S3: the embedded terminal (a pty on the server; nothing is stored) ============ -->
 <section id="term-drawer" class="term-drawer" aria-label="Terminal" hidden>
   <div class="term-bar">
@@ -493,34 +513,36 @@
         <p class="small" id="hp-version"></p>
         <div class="row"><button type="button" class="btn" id="hp-check">Check for update</button>
           <span class="small dim" id="hp-check-note">asks the release page once — the only time this window goes online</span></div>
-        <div id="hp-upd" hidden>
-          <p class="small">Runs, with the installer that owns this install:</p>
+        <div id="hp-upd">
+          <p class="small">Updates with the installer that owns this install (keeps <span id="hp-keeps"></span>), then refreshes the vendored commands/skills and wiring:</p>
           <pre class="mono cmd" id="hp-cmd"></pre>
           <p class="small dim" id="hp-cmd-why"></p>
-          <button type="button" class="btn" id="hp-run">Update now</button>
+          <div class="row"><button type="button" class="btn" id="hp-run" hidden>Update now</button>
+            <button type="button" class="btn ghost small" id="hp-copy">Copy</button></div>
+          <div id="hp-delta" class="small" hidden></div>
+          <div id="hp-then" class="small" hidden></div>
         </div>
       </div>
     </div>
   </div>
 </div>
 <div id="qo" class="qo-overlay" hidden>
-  <div class="qo-dialog" role="dialog" aria-label="Go to">
+  <div class="qo-dialog" role="dialog" aria-label="Command palette">
     <div class="qo-input-row">
-      <label for="qo-input" class="qo-label">Go to</label>
-      <input id="qo-input" autocomplete="off" spellcheck="false" placeholder="file name, @symbol, #text">
-      <span class="dim small">files · <b>@</b> symbols · <b>#</b> text</span>
+      <label for="qo-input" class="qo-label" id="qo-label">Go to</label>
+      <input id="qo-input" autocomplete="off" spellcheck="false" placeholder="file name — or @ # : > /">
+      <span class="dim small" id="qo-prefixes"></span>
     </div>
     <div id="qo-results" class="qo-results"></div>
     <div class="qo-foot small dim">
-      <span><kbd>↵</kbd> open (diff if changed, else file)</span>
-      <span><kbd>⌥↵</kbd> open the file, not the diff</span>
-      <span><kbd>⌘P</kbd> again: changed files only</span>
+      <span id="qo-hint"></span>
       <span class="spacer"></span>
       <span id="qo-matcher"></span>
     </div>
   </div>
 </div>
 
+<script src="/static/registry.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/combo.js"></script>
 <script src="/static/nav.js"></script>
@@ -531,6 +553,7 @@
 <script src="/static/terminal.js"></script>
 <script src="/static/bridge.js"></script>
 <script src="/static/health.js"></script>
+<!-- mokata:feature-scripts -->
 <script src="/static/boot.js"></script>
 </body>
 </html>

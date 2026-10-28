@@ -13,6 +13,8 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata import pipeline, skill_contracts, skills
 from mokata.engine import run_completeness_gate
@@ -226,7 +228,7 @@ class TestD3NothingStopsBlocking(_LedgerCase):
         from mokata.brainstorm import Approach, Grounding, Handoff
         handoff = Handoff(topic="t", approach=Approach("a", "b"), answered_questions=[],
                           grounding=Grounding(False, None, False, None), approver="jas", approved_at="now")
-        run = run_pipeline(handoff, _spec(), [], ledger=self.ledger)
+        run = run_pipeline(handoff, with_tasks(_spec()), [], ledger=self.ledger)
         self.assertFalse(run.ok)
         rec = {r.name: r for r in run.phases}
         self.assertFalse(rec["completeness_gate"].gate_passed)

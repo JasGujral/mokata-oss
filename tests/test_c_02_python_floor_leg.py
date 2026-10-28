@@ -1,4 +1,5 @@
-"""0.0.25 Lane C — the declared Python floor is exercised again: a WEEKLY leg, not a PR gate (U2).
+"""0.0.25 Lane C — the declared Python floor is exercised: a WEEKLY leg, not a PR gate (U2). Since
+0.0.26 L12 the floor is 3.12 (PY-FLOOR-3.12), the gate Python too; this leg still reads it from pyproject.
 
 What must be true for a user installing mokata on the oldest Python it claims to support:
 
@@ -45,8 +46,8 @@ class TheFloorIsTestedWeekly(unittest.TestCase):
         self.runs = "\n".join(str(s.get("run", "")) for s in self.steps)
 
     def test_the_floor_is_still_the_one_declared(self):
-        self.assertEqual("3.10", _declared_floor(),
-                         "the floor moved — re-read U2 (raise the floor vs keep a floor leg)")
+        self.assertEqual("3.12", _declared_floor(),
+                         "the floor moved — re-read U2 / L12 (PY-FLOOR-3.12) before editing")
 
     def test_the_leg_runs_on_exactly_the_declared_floor(self):
         pythons = [str(s["with"]["python-version"]) for s in self.steps

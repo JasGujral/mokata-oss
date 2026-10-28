@@ -88,8 +88,8 @@ mutant "A03 ★ node_modules counts, so a Python repo with one dependency is a T
                 if is_source(name):' "$T"
 
 mutant "A04 the remedy stops naming the command that fixes it" "$D" \
-  '        "the majority who never open a .ts file. Fix: run `pip install '"'"'mokata[graph-ts]'"'"'`, then "' \
-  '        "the majority who never open a .ts file. "' "$T"
+  '        "the graph." % (count, _graph_ts_install_line()))]' \
+  '        "the graph." % (count, ""))]' "$T"
 
 # ==== S. the three states (§7g) =================================================================
 

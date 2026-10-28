@@ -40,7 +40,8 @@ from .consolidation import (
     propose_consolidations,
     render_consolidation,
 )
-from .healing import (CONTRADICTION, CROSS_WRITER, INTENTION_DUE, HealingProposal,
+from .healing import (CONTRADICTION, CROSS_WRITER, INTENTION_DUE, REFRESH_VERBS, RETIRE_DUE,
+                      HealingProposal,
                       detect_issues, render_proposal)
 from .item import ACTIVE, ARCHIVED, DECISION, DEFAULT_TOP_K, MEMORY_TYPES, STALE as STATUS_STALE
 from .item import SUPERSEDED, MemoryItem, approval_ledger_id_of, downgrade_refusal, now_iso
@@ -142,6 +143,10 @@ class WriteResult:
     # a plain abort (the human declined) — reporting a client refusal as "you declined" would be
     # the quiet lie CM.S2/D5 exist to kill. Nothing was written; the doc is untouched.
     refused: bool = False
+    # R5 — the write-time overlap with an existing entry ("4/5 (kind, subject, …)"), "" for none,
+    # and whether the write therefore UPDATED that entry in place instead of adding a new one.
+    overlap: str = ""
+    updated_existing: bool = False
 
 
 @dataclass
@@ -238,6 +243,7 @@ class MemoryStore:
         # pre-TM.S6. When set (team mode), reads return the union of items across the scope path.
         self.scope_context = scope_context
         self.embedder = embedder        # Stage 35e — None => semantic tier off (local-first)
+        self.semantic_skipped = False   # 0.0.26 O12 — a model embedder deliberately not loaded
         self.knowledge_layer = knowledge_layer   # Stage 35f — live graph-proximity tier
         self._stats_store = stats_store
         self._stats_key = stats_key
@@ -264,7 +270,11 @@ class MemoryStore:
 
     @classmethod
     def from_surface(cls, surface: Any,
-                     project: Any = _PROJECT_CURRENT) -> "MemoryStore":
+                     project: Any = _PROJECT_CURRENT, *,
+                     knowledge: bool = True, load_model: bool = True) -> "MemoryStore":
+        # 0.0.26 O12 — `knowledge=False` builds the store with NO knowledge layer: the per-prompt
+        # hook, which supplies its own off-path graph tier (`memory.graph_anchors`) and must not pay
+        # for the layer's construction (router, freshness session, run resolution) on every prompt.
         # Stage 71a — SCOPE the shared backend to the current project by default. `project` can be
         # overridden for review: a specific id (str), or `ALL_PROJECTS` (None) to span all.
         from ..project import project_id
@@ -281,16 +291,23 @@ class MemoryStore:
         from .embed import make_embedder
         # Stage 35e: semantic tier is OPT-IN — `settings.memory.embedder` (e.g. "hashing");
         # absent => None => semantic off (lexical floor only). Local-first, no network.
-        embedder = make_embedder((surface.manifest.setting("memory", {}) or {})
-                                 .get("embedder"))
+        embedder_name = (surface.manifest.setting("memory", {}) or {}).get("embedder")
+        # 0.0.26 O12 — `load_model=False` (the per-prompt hook) never loads an embedding MODEL: the
+        # semantic tier is OFF for that recall and `semantic_skipped` lets the caller SAY so. The
+        # cheap embedders (hashing) still run; so does `auto` where the extra is absent (= hashing).
+        from .embed import would_load_model
+        semantic_skipped = not load_model and would_load_model(embedder_name)
+        embedder = None if semantic_skipped else make_embedder(embedder_name)
         # Stage 35f: auto-wire the live graph-proximity tier from the in-repo knowledge layer
         # (degrade-clean — on the grep floor it contributes nothing). Defensive: a layer
         # build problem must never break memory.
-        try:
-            from ..knowledge import KnowledgeLayer
-            knowledge_layer = KnowledgeLayer.from_surface(surface)
-        except Exception:
-            knowledge_layer = None
+        knowledge_layer = None
+        if knowledge:
+            try:
+                from ..knowledge import KnowledgeLayer
+                knowledge_layer = KnowledgeLayer.from_surface(surface)
+            except Exception:
+                knowledge_layer = None
         # TM.S10 — the REAL run identity (doc 52 M-1 / doc 63 §5): stamp the actual author on every
         # durable write, not the "user" placeholder. Reuses team_audit.actor() (the run identity —
         # full session identity is 0.0.13). The access POLICY only enforces in TEAM mode (doc 62 §6);
@@ -300,13 +317,15 @@ class MemoryStore:
         # PRE-SIMP (0.0.15) — resolve the TEAM-writer strategy HERE, where the surface is built, so
         # the store never imports the collab layer (team_journal/team_audit/teamdb) at its own edge.
         from .team_writer import TeamWriter
-        return cls(backend, enabled_types=enabled_memory_types(surface.manifest),
+        store = cls(backend, enabled_types=enabled_memory_types(surface.manifest),
                    stats_store=surface.state,
                    ledger=AuditLedger.from_mokata_dir(surface.mokata_dir),
                    embedder=embedder, knowledge_layer=knowledge_layer, surface=surface,
                    scope_context=_scope_context_for(surface, scope),
                    identity=identity, access=access, read_routing=routing,
                    team_writer=TeamWriter())
+        store.semantic_skipped = semantic_skipped
+        return store
 
     # --- scope (TM.S6, doc 62 §2) -------------------------------------------
     def scoped_active(self, mtype: Optional[str] = None) -> List[MemoryItem]:
@@ -544,7 +563,7 @@ class MemoryStore:
             commit=commit, confirm=confirm, assume_yes=assume_yes, prompt=prompt,
             human_approved=policy_approved(policy))
 
-    def render_write(self, item: MemoryItem) -> str:
+    def render_write(self, item: MemoryItem, grounding: Any = None, overlap: Any = None) -> str:
         """The gate surface for a remember.
 
         R9 — when this write SUPERSEDES existing items, the human is not being asked to store a
@@ -562,6 +581,21 @@ class MemoryStore:
         for prior in self._superseded_items(item):
             displaced += (f"\n  this REPLACES an existing memory: {prior.subject} = "
                           f"{prior.value!r}" + provenance_block(prior))
+        # R5 — what the write is grounded on, and what it overlaps. Both are EVIDENCE for the
+        # decision, so they sit above the "nothing is stored" line, not after it.
+        if grounding is not None:
+            for line in grounding.lines():
+                displaced += "\n" + line
+        if item.retire_when:
+            displaced += f"\n  retire_when: {', '.join(item.retire_when)}"
+        if overlap is not None:
+            if overlap.updates:
+                displaced += (f"\n  this UPDATES the existing memory {overlap.existing.subject} = "
+                              f"{overlap.existing.value!r} in place (overlap "
+                              f"{overlap.describe()}) instead of adding a near-duplicate")
+            else:
+                displaced += (f"\n  overlaps the existing memory {overlap.existing.subject} "
+                              f"({overlap.describe()}) — consider consolidating them")
         return base + displaced + "\nNothing is stored unless you approve."
 
     def _superseded_items(self, item: MemoryItem) -> List[MemoryItem]:
@@ -827,6 +861,51 @@ class MemoryStore:
         PRE-SIMP (0.0.15) — delegates to the injected team-writer seam (byte-identical flush)."""
         self._resolve_team_writer().flush(self._surface, self._ledger)
 
+    # --- R5 (0.0.26) — write grounding + write-time overlap -----------------------
+    def _grounding_root(self) -> str:
+        """The repo every citation is resolved against: the surface's root. Empty for a directly
+        constructed store (no surface, no repo) — the grounding report then SAYS it checked
+        nothing, rather than passing a citation it never looked at."""
+        return getattr(self._surface, "root", "") if self._surface is not None else ""
+
+    def grounding_report(self, item: MemoryItem) -> Any:
+        """R5 — ground every citation `item` carries (paths, line anchors, commits, symbols, links,
+        `retire_when` predicates). Read-only; O(citations); never walks the repo."""
+        from .grounding import check_grounding
+        return check_grounding(item, self._grounding_root(), self.knowledge_layer)
+
+    def _grounding_refusal(self, *items: Optional[MemoryItem]) -> Optional[str]:
+        """R5 — the refusal naming every unresolved citation across `items`, else None. Called on
+        the paths that land NEW CONTENT (remember · propose · a healing edit · a refresh that
+        rewrites a value · a consolidation that lands a value) — never on a status-only write, so
+        retiring a learning whose cited file is gone is never itself refused for citing it."""
+        for item in items:
+            if item is None:
+                continue
+            msg = self.grounding_report(item).refusal()
+            if msg is not None:
+                return msg
+        return None
+
+    def overlap_for(self, item: MemoryItem) -> Any:
+        """R5 — the strongest overlap between `item` and an ACTIVE entry this identity can see, or
+        None. Skipped for episodic turns and intentions (records, not learnings) and for a write
+        that already names what it supersedes (the writer has made the call)."""
+        from .item import EPISODIC, INTENTION
+        if item.mtype == EPISODIC or item.kind == INTENTION or item.supersedes:
+            return None
+        from .overlap import best_overlap
+        try:
+            return best_overlap(item, self.peek_visible_active(item.mtype))
+        except Exception as exc:  # noqa: BLE001
+            # D5 — LOUD degrade: the overlap read is advice for the gate, and a broken read must not
+            # block a write the human is about to approve — but it must not look like "no overlap".
+            note_degraded("memory-overlap", failure_class_of(exc) or FAILURE_LOCAL_IO,
+                          fallback="the write is proposed without the overlap check",
+                          fix="run `mokata doctor` to check the memory store",
+                          detail=f"{type(exc).__name__}: {exc}")
+            return None
+
     def remember(self, item: MemoryItem,
                  confirm: Optional[Callable[[str], bool]] = None,
                  assume_yes: bool = False, policy: Any = None) -> WriteResult:
@@ -847,6 +926,31 @@ class MemoryStore:
         refusal = self._downgrade_refusal(item)
         if refusal is not None:
             return WriteResult(None, committed=False, aborted=True, refused=True, message=refusal)
+
+        # R5 — `<private>` spans are cut BEFORE anything else sees the text (the scan, the prompt,
+        # the store). An unbalanced tag refuses: guessing where a private span ends stores it.
+        from .private import UnbalancedPrivateTag, strip_private
+        try:
+            if isinstance(item.subject, str):
+                item.subject, _ = strip_private(item.subject)
+            if isinstance(item.value, str):     # a structured (dict) value carries no tag
+                item.value, _ = strip_private(item.value)
+        except UnbalancedPrivateTag as exc:
+            return WriteResult(None, committed=False, aborted=True, refused=True, message=str(exc))
+
+        # R5 — GROUNDING: every citation must resolve, or nothing is written and the refusal names
+        # the citation. Before the gate, like D6: an ungrounded write costs no approval prompt.
+        grounding = self.grounding_report(item)
+        refusal = grounding.refusal()
+        if refusal is not None:
+            return WriteResult(None, committed=False, aborted=True, refused=True, message=refusal)
+
+        # R5 — OVERLAP: a 4–5/5 match UPDATES the existing entry in place (the human is shown that
+        # this is an update); 2–3/5 lands new and the prompt flags it for consolidation.
+        ov = self.overlap_for(item)
+        if ov is not None and ov.updates:
+            return self._remember_as_update(item, ov, grounding, confirm=confirm,
+                                            assume_yes=assume_yes, policy=policy)
 
         team = self._team_mode()
 
@@ -877,12 +981,57 @@ class MemoryStore:
         # secret-scan (hard block) + human gate + audit ledger — with the rich render_write
         # surface preserved. No second gate path.
         outcome = self._gated_commit(item.subject, f"{item.subject}\n{item.value}",
-                                     _commit, self.render_write(item),
+                                     _commit, self.render_write(item, grounding, ov),
                                      confirm=confirm, assume_yes=assume_yes, policy=policy)
         if outcome.committed:
             if team:
                 self._best_effort_flush()   # flush when healthy; offline → journaled, not lost
-            return WriteResult(item, committed=True, aborted=False, message="ok")
+            return WriteResult(item, committed=True, aborted=False, message="ok",
+                               overlap=ov.describe() if ov is not None else "")
+        if outcome.findings:
+            return WriteResult(None, committed=False, aborted=True, blocked=True,
+                               message="blocked: secret detected — not stored")
+        return WriteResult(None, committed=False, aborted=True,
+                           message="declined at the human gate")
+
+    def _remember_as_update(self, item: MemoryItem, ov: Any, grounding: Any, *,
+                            confirm: Optional[Callable[[str], bool]] = None,
+                            assume_yes: bool = False, policy: Any = None) -> WriteResult:
+        """R5 — land `item`'s content ON the existing entry it overlaps (same id, same row), rather
+        than adding a near-duplicate. The existing entry keeps its id, author and creation stamp;
+        it takes the incoming subject, value, kind, citations and expiry predicates. Same gate,
+        same scan, same ledger as any remember — the prompt says it is an update and shows both."""
+        target = ov.existing
+        denied = self._access_denied_edit(target)
+        if denied is not None:
+            return WriteResult(None, committed=False, aborted=True, message=denied)
+        refusal = self._downgrade_refusal(target)
+        if refusal is not None:
+            return WriteResult(None, committed=False, aborted=True, refused=True, message=refusal)
+        team = self._team_mode()
+
+        def _commit() -> None:
+            target.subject = item.subject
+            target.value = item.value
+            target.kind = item.kind or target.kind
+            target.about_code = list(item.about_code)
+            target.retire_when = list(item.retire_when)
+            if self.embedder is not None:
+                target.provenance["_embedding"] = list(
+                    self.embedder(f"{target.subject} {target.value}"))
+            self._durable_write(target, op=_OP_UPDATE, base_revision=self._base_revision(target),
+                                backend_call=lambda: self.backend.update(target), team=team)
+            self._bump_write()
+
+        outcome = self._gated_commit(item.subject, f"{item.subject}\n{item.value}", _commit,
+                                     self.render_write(item, grounding, ov),
+                                     confirm=confirm, assume_yes=assume_yes, policy=policy)
+        if outcome.committed:
+            if team:
+                self._best_effort_flush()
+            return WriteResult(target, committed=True, aborted=False,
+                               message=f"updated existing {target.id} (overlap {ov.describe()})",
+                               overlap=ov.describe(), updated_existing=True)
         if outcome.findings:
             return WriteResult(None, committed=False, aborted=True, blocked=True,
                                message="blocked: secret detected — not stored")
@@ -1130,7 +1279,7 @@ class MemoryStore:
             return ReviewResult(False, aborted=True, message=denied)
         # D6 — the proposal doc itself is written (as a not-live DRAFT). `base` is only READ here
         # (for the diff); publishing is what rewrites it, and `_transition` guards it there.
-        refusal = self._downgrade_refusal(item)
+        refusal = self._downgrade_refusal(item) or self._grounding_refusal(item)
         if refusal is not None:
             return ReviewResult(False, aborted=True, message=refusal)
         base = self.get(base_id) if base_id else None
@@ -1452,11 +1601,9 @@ class MemoryStore:
         subsystem), so every existing caller keeps its notices."""
         from .tiered import tiered_recall
         if graph_scorer is None and self.knowledge_layer is not None:
-            try:
-                from ..knowledge import make_graph_scorer
-                graph_scorer = make_graph_scorer(self.knowledge_layer, query)
-            except Exception:
-                graph_scorer = None
+            # 0.0.26 O12 — LAZY: the live graph lookups (a server start, a freshness reconcile) run
+            # on the first item the tier actually scores, never for a recall with no candidates.
+            graph_scorer = _LazyLiveGraphScorer(self.knowledge_layer, query)
         hits = tiered_recall(self, query, embedder=self.embedder,
                              graph_scorer=graph_scorer, top_k=top_k, semantic=semantic,
                              expander=self._edge_expander(), kinds=kinds, count_read=stamp,
@@ -1593,7 +1740,19 @@ class MemoryStore:
                   if i.mtype in self.enabled_types]
         return detect_issues(active, now=now, conflicts=self._cross_writer_conflicts(),
                              anchor_staleness=self._moved_code_anchors(active),
-                             intentions_due=self._due_intentions(active, now))
+                             intentions_due=self._due_intentions(active, now),
+                             retire_due=self._retire_due(active, now))
+
+    def _retire_due(self, active: List[MemoryItem], now: Optional[str]) -> List[Any]:
+        """R5 — the fired `retire_when` predicates, evaluated HERE (the store owns the root and the
+        graph) and handed to `healing.py` as plain records. Costs nothing when no active item
+        carries a predicate; otherwise one stat / git call / graph ask per predicate."""
+        mine = [i for i in active if i.retire_when]
+        if not mine:
+            return []
+        from .grounding import evaluate_retire_when
+        return evaluate_retire_when(mine, root=self._grounding_root(),
+                                    layer=self.knowledge_layer, now=now)
 
     def _due_intentions(self, active: List[MemoryItem], now: Optional[str]) -> List[Any]:
         """PM.S1 — the healing sweep's intention arm. Session signals (git branch + changed paths)
@@ -1809,6 +1968,9 @@ class MemoryStore:
         if decision == "discard":
             raise MemoryError("'discard' resolves a cross-writer conflict only "
                               f"(this proposal is '{p.kind}')")
+        if p.kind == RETIRE_DUE and decision in ("approve", "edit"):
+            raise MemoryError("a retire_due proposal is resolved with a refresh verb "
+                              f"({' / '.join(REFRESH_VERBS)}) — `MemoryStore.refresh`")
         if decision in ("reject", "defer"):
             self._record_healing(p, decision, changed=False)
             return HealingResult(changed=False, message=f"{decision}: no change")
@@ -1830,6 +1992,10 @@ class MemoryStore:
         if decision == "edit":
             if edited is None:
                 raise MemoryError("edit requires an edited item")
+            grounded = self._grounding_refusal(edited)          # R5 — new content is grounded
+            if grounded is not None:
+                self._record_healing(p, decision, changed=False)
+                return HealingResult(changed=False, aborted=True, refused=True, message=grounded)
             content = f"{edited.subject}\n{edited.value}"     # the new value is scanned
             result_item, result_msg = edited, "edited"
 
@@ -1891,6 +2057,121 @@ class MemoryStore:
                                  message="blocked: secret detected — not applied")
         return HealingResult(changed=False, aborted=True,
                              message="declined at the human gate")
+
+    # --- R5 (0.0.26) — the refresh verbs for a fired `retire_when` ------------------
+    def refresh(self, p: HealingProposal, verb: str, *, value: Optional[str] = None,
+                subject: Optional[str] = None, about_code: Optional[List[str]] = None,
+                retire_when: Optional[List[str]] = None, into_id: str = "",
+                confirm: Optional[Callable[[str], bool]] = None,
+                assume_yes: bool = False, policy: Any = None) -> HealingResult:
+        """Resolve a RETIRE_DUE proposal with ONE refresh verb. Every verb is a durable write and
+        goes through the same WriteGate as every memory write (scan → human gate → ledger →
+        commit); nothing here is applied without that approval.
+
+          keep        — the learning is still true: drop the fired predicate (the rest stay)
+          update      — rewrite it IN PLACE (same id) with `value` (+ optional subject/about_code/
+                        retire_when); the new content is grounded first
+          consolidate — fold it into the active entry `into_id`, which takes `value` as the merged
+                        text and records the folded entry in `supersedes`; grounded first
+          replace     — a NEW learning (`value`) supersedes it; grounded first
+          delete      — remove the row (the audit ledger + git history are the archive)
+        """
+        from .healing import REFRESH_VERBS
+        if verb not in REFRESH_VERBS:
+            raise MemoryError(f"unknown refresh verb '{verb}' (one of {', '.join(REFRESH_VERBS)})")
+        if p.kind != RETIRE_DUE:
+            raise MemoryError(f"refresh resolves a retire_due proposal (this one is '{p.kind}')")
+        old = p.old
+        if verb in ("update", "consolidate", "replace") and not (value or "").strip():
+            raise MemoryError(f"'{verb}' needs the new value")
+        target: Optional[MemoryItem] = None
+        if verb == "consolidate":
+            target = self.get(into_id) if into_id else None
+            if target is None or target.status != ACTIVE or target.id == old.id:
+                raise MemoryError(f"'consolidate' needs `into_id` naming another ACTIVE entry "
+                                  f"(got {into_id!r})")
+        denied = self._access_denied_edit(old) or (self._access_denied_edit(target)
+                                                   if target is not None else None)
+        if denied is not None:
+            return HealingResult(changed=False, aborted=True, message=denied)
+        refusal = self._downgrade_refusal(old, target)
+        if refusal is not None:
+            return HealingResult(changed=False, aborted=True, refused=True, message=refusal)
+
+        remaining = [r for r in old.retire_when if r != p.predicate]
+        landed: Optional[MemoryItem] = None
+        if verb == "update":
+            landed = MemoryItem.from_dict(old.to_dict())
+            landed.subject = subject or old.subject
+            landed.value = str(value)
+            if about_code is not None:
+                landed.about_code = [str(a) for a in about_code]
+            landed.retire_when = list(retire_when) if retire_when is not None else remaining
+        elif verb == "consolidate":
+            landed = MemoryItem.from_dict(target.to_dict())
+            landed.value = str(value)
+        elif verb == "replace":
+            landed = MemoryItem.create(subject or old.subject, str(value), mtype=old.mtype,
+                                       kind=old.kind, scope_level=old.scope_level,
+                                       scope_id=old.scope_id,
+                                       about_code=about_code if about_code is not None
+                                       else old.about_code,
+                                       retire_when=retire_when if retire_when is not None
+                                       else remaining,
+                                       supersedes=[old.id])
+        if landed is not None:
+            grounded = self._grounding_refusal(landed)
+            if grounded is not None:
+                self._record_healing(p, verb, changed=False)
+                return HealingResult(changed=False, aborted=True, refused=True, message=grounded)
+
+        team = self._team_mode()
+        content = f"{landed.subject}\n{landed.value}" if landed is not None else old.subject
+
+        def _commit() -> None:
+            updates: List[MemoryItem] = []
+            if verb == "keep":
+                old.retire_when = remaining
+                updates = [old]
+            elif verb == "update":
+                old.subject, old.value = landed.subject, landed.value
+                old.about_code, old.retire_when = landed.about_code, landed.retire_when
+                updates = [old]
+            elif verb == "consolidate":
+                target.value = landed.value
+                if old.id not in target.supersedes:
+                    target.supersedes.append(old.id)
+                old.status = SUPERSEDED
+                updates = [old, target]
+            elif verb == "replace":
+                old.status = SUPERSEDED
+                updates = [old]
+            for it in updates:
+                self._durable_write(it, op=_OP_UPDATE, base_revision=self._base_revision(it),
+                                    backend_call=lambda it=it: self.backend.update(it), team=team)
+            if verb == "replace":
+                self._stamp_author(landed)
+                self._durable_write(landed, op=_OP_PUT, base_revision=None,
+                                    backend_call=lambda: self.backend.put(landed), team=team)
+            elif verb == "delete":
+                self._durable_write(old, op=_OP_DELETE, base_revision=self._base_revision(old),
+                                    backend_call=lambda: self.backend.delete(old.id), team=team)
+            self._bump_write()
+
+        prompt = (self.render_proposal(p) + f"\n\nYou chose: {verb.upper()}"
+                  + (f" → {landed.subject} = {landed.value!r}" if landed is not None else ""))
+        outcome = self._gated_commit(p.subject, content, _commit, prompt, confirm=confirm,
+                                     assume_yes=assume_yes, policy=policy)
+        self._record_healing(p, verb, changed=outcome.committed)
+        if outcome.committed:
+            if team:
+                self._best_effort_flush()
+            result = {"keep": old, "update": old, "consolidate": target, "replace": landed}
+            return HealingResult(changed=True, item=result.get(verb), message=verb)
+        if outcome.findings:
+            return HealingResult(changed=False, aborted=True, blocked=True,
+                                 message="blocked: secret detected — not applied")
+        return HealingResult(changed=False, aborted=True, message="declined at the human gate")
 
     def _resolve_cross_writer(self, p: HealingProposal, decision: str, *,
                               confirm: Optional[Callable[[str], bool]] = None,
@@ -2175,6 +2456,11 @@ class MemoryStore:
 
         team = self._team_mode()
         keep = edited or p.new              # MERGE/SUMMARIZE: the value this consolidation LANDS
+        if p.kind in (MERGE, SUMMARIZE):
+            grounded = self._grounding_refusal(keep)    # R5 — the landed value is grounded
+            if grounded is not None:
+                _log(False, "refused")
+                return HealingResult(changed=False, aborted=True, refused=True, message=grounded)
 
         # What the gate must scan: the untrusted NEW content this consolidation would write. MERGE
         # and SUMMARIZE land a value (an edited/summarized item is exactly where a secret could be
@@ -2265,3 +2551,26 @@ class MemoryStore:
 
     def close(self) -> None:
         self.backend.close()
+
+
+class _LazyLiveGraphScorer:
+    """The live graph tier, resolved on its FIRST call (0.0.26 O12): `make_graph_scorer`'s graph
+    lookups run only when the recall has an item to score. Same ranking as an eager scorer — an
+    unresolved or failed graph scores every item 0.0, which `tiered_recall` reads exactly as an
+    absent tier."""
+
+    def __init__(self, layer: Any, query: str) -> None:
+        self._layer = layer
+        self._query = query
+        self._resolved = False
+        self._scorer: Any = None
+
+    def __call__(self, query: str, item: Any) -> float:
+        if not self._resolved:
+            self._resolved = True
+            try:
+                from ..knowledge import make_graph_scorer
+                self._scorer = make_graph_scorer(self._layer, self._query)
+            except Exception:
+                self._scorer = None
+        return self._scorer(query, item) if self._scorer is not None else 0.0

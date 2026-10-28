@@ -1,0 +1,35 @@
+{
+ "skill": "review-window",
+ "triggers": [
+  "Open the review window",
+  "live diff"
+ ],
+ "positive": [
+  "Open the review window for this session",
+  "Show me the live diff for this session in the review window",
+  "Open the review window at an earlier point in time",
+  "I want to see this session's PRs and live diff",
+  "Pop open the review window"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Review my diff against the spec",
+   "expect": "review"
+  },
+  {
+   "prompt": "Open the live run dashboard",
+   "expect": "watch"
+  },
+  {
+   "prompt": "Open a window in my bedroom"
+  },
+  {
+   "prompt": "Show the phase tracker for the run",
+   "expect": "progress"
+  },
+  {
+   "prompt": "Package this session for a teammate",
+   "expect": "session"
+  }
+ ]
+}

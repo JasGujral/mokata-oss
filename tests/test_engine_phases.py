@@ -7,6 +7,8 @@ import tempfile
 import unittest
 
 from _support import sample_manifest_data, approve_with_lenses  # noqa: F401  (path fix side-effect)
+from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
+                   planned, sealed, with_tasks)
 
 from mokata.brainstorm import PIPELINE_PHASES, Approach, BrainstormSession
 from mokata.engine import (
@@ -43,7 +45,7 @@ PARTIAL_TESTS = [TestRef("t1", ["AC-1"])]
 class TestSevenPhaseFlow(unittest.TestCase):
     def test_story_flows_through_all_seven_phases(self):
         with tempfile.TemporaryDirectory() as d:
-            run = run_pipeline(handoff(), spec2(), FULL_TESTS,
+            run = run_pipeline(handoff(), with_tasks(spec2()), FULL_TESTS,
                                store=StateStore(os.path.join(d, "state")))
             self.assertEqual(run.sequence, list(PIPELINE_PHASES))
             self.assertTrue(all(r.ok for r in run.phases))
@@ -52,7 +54,7 @@ class TestSevenPhaseFlow(unittest.TestCase):
 
     def test_each_phase_consumes_the_prior_output(self):
         with tempfile.TemporaryDirectory() as d:
-            run = run_pipeline(handoff(), spec2(), FULL_TESTS,
+            run = run_pipeline(handoff(), with_tasks(spec2()), FULL_TESTS,
                                store=StateStore(os.path.join(d, "state")))
             ctx = run.context
             # analysis fed strawman; strawman covers the spec's ACs
@@ -64,7 +66,7 @@ class TestSevenPhaseFlow(unittest.TestCase):
 
     def test_completeness_blocks_emit_when_an_ac_is_unmapped(self):
         with tempfile.TemporaryDirectory() as d:
-            run = run_pipeline(handoff(), spec2(), PARTIAL_TESTS,
+            run = run_pipeline(handoff(), with_tasks(spec2()), PARTIAL_TESTS,
                                store=StateStore(os.path.join(d, "state")))
             # all 7 phases still ran...
             self.assertEqual(len(run.phases), 7)
@@ -77,7 +79,7 @@ class TestSevenPhaseFlow(unittest.TestCase):
 
     def test_emit_is_human_gated(self):
         with tempfile.TemporaryDirectory() as d:
-            run = run_pipeline(handoff(), spec2(), FULL_TESTS,
+            run = run_pipeline(handoff(), with_tasks(spec2()), FULL_TESTS,
                                store=StateStore(os.path.join(d, "state")),
                                approve=False)              # human declines the emit
             emit = next(r for r in run.phases if r.name == "emit")
@@ -87,7 +89,7 @@ class TestSevenPhaseFlow(unittest.TestCase):
     def test_phases_are_logged_to_the_ledger(self):
         with tempfile.TemporaryDirectory() as d:
             led = AuditLedger(os.path.join(d, "l.jsonl"))
-            run_pipeline(handoff(), spec2(), FULL_TESTS,
+            run_pipeline(handoff(), with_tasks(spec2()), FULL_TESTS,
                          store=StateStore(os.path.join(d, "state")), ledger=led)
             phases = [e["phase"] for e in led.entries() if e["kind"] == "phase"]
             self.assertEqual(phases, list(PIPELINE_PHASES))

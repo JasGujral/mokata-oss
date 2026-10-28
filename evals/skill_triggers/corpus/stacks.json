@@ -1,0 +1,35 @@
+{
+ "skill": "stacks",
+ "triggers": [
+  "Community stacks",
+  "per-framework stacks"
+ ],
+ "positive": [
+  "Search the community stacks for a Django stack",
+  "Install the react-web community stack",
+  "Show me the curated catalog of per-framework stacks",
+  "List the available mokata stacks",
+  "Show the details of the nestjs-api stack before I install it"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Join my team's shared stack with one command",
+   "expect": "team"
+  },
+  {
+   "prompt": "Explain how a call stack works"
+  },
+  {
+   "prompt": "Teach mokata our project conventions",
+   "expect": "onboard"
+  },
+  {
+   "prompt": "Share the spec with the team vault",
+   "expect": "vault"
+  },
+  {
+   "prompt": "Add a new integration to mokata's wiring",
+   "expect": "reconfigure"
+  }
+ ]
+}

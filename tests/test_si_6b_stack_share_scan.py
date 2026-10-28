@@ -426,7 +426,9 @@ class TestTheRegisterRecordsTheClosure(unittest.TestCase):
                          ("govern/lifecycle.py", "_remove"),
                          ("harness_setup.py", "_write_command_file"),
                          ("harness_setup.py", "_write_json"),
-                         ("init.py", "InitPlan.write_files")]
+                         ("init.py", "InitPlan.write_files"),
+                         # 0.0.26 P31 — setup's session-worktree rows (.worktreeinclude/.gitignore)
+                         ("worktree_setup.py", "_append_lines")]
         for site in setup_cluster:
             self.assertIn(site, LEDGERED,
                           f"{site} is one of KB.S1's 6 setup one-shots — recorded, not bypassing")

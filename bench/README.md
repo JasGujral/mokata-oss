@@ -8,6 +8,7 @@
 |---|---|
 | `bench.g2` | **G2 proof engine** — bare Claude Code vs mokata-on, conditions × tasks × ≥5 repeats |
 | `bench.locomo` | **BM (LOCOMO)** — governed-memory retrieval on LOCOMO, 8 pins, pin 8 is a stop condition |
+| `bench.ab` | **R7 A/B** — Claude Code with mokata vs without, scored by hidden test suites (no judge) |
 
 ## G2 — how a real run works
 
@@ -57,3 +58,39 @@ publishable run; a task's `repo` may be `{"url": …, "ref": <pinned sha>}` inst
 
 The product runs on the user's Claude login. If a measurement ever needs a key, the key is read
 here, opt-in, under a dedicated variable name — never in `src/mokata`.
+
+## A/B (R7) — the only source a performance claim may cite
+
+`bench.ab` runs every task in `bench/ab/tasks/` in two arms: `bare` and `mokata`. These are G2's
+conditions, with the same isolation flags and contamination check. Each task is run `--repeats N`
+times per arm. Every task directory holds:
+
+- `repo/`: the starting code;
+- `hidden/`: the acceptance suite, copied in only after the agent stops;
+- `reference/`: a known-good solution.
+
+**Scoring** is the hidden suite's recorded outcome (`python -m unittest`): passed / total, and
+solved when every test passes. No model judges anything. A run writes:
+
+- `raw.jsonl`: one row per run;
+- `summary.json`: medians per task and arm, plus overall;
+- `RESULTS.md`;
+- `run.json`: the Claude Code version, mokata version, corpus sha256, n and date.
+
+```bash
+python -m bench.ab plan --repeats 5            # the matrix, runs nothing
+python -m bench.ab check-corpus                # every task: hidden FAILS on repo/, PASSES on reference/
+python -m bench.ab run --out /tmp/ab-dry       # DRY: no model call (what CI tests)
+python -m bench.ab run --agent live --yes --repeats 5 --out bench/ab/results/<date>
+python -m bench.ab summarize --raw bench/ab/results/<date>/raw.jsonl   # replay from raw data
+```
+
+**About live runs:**
+
+- A live run uses your own `claude` login, headless, with every API-key variable scrubbed. It is
+  refused under `CI`.
+- `RESULTS.md` says **publishable: yes** only for a live run with at least 5 repeats and no
+  contaminated rows.
+- Product copy (README, docs, the landing page) may state a performance number **only** in a
+  paragraph that cites a committed `bench/ab/results/` result. `tests/test_r7_no_unbacked_perf_claims.py`
+  enforces this.

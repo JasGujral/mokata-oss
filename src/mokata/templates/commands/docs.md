@@ -20,18 +20,21 @@ the page and it ships **no doc content** in the package.
 - Read the cached plugin root: `cat ~/.mokata/plugin-root` → `ROOT`. If missing/empty, search the
   Claude Code plugins directory for a `mokata` plugin containing `src/mokata/__init__.py`. (If a
   `mokata` CLI is on PATH, use it directly.)
-- Build the engine command with the **absolute interpreter**:
+- Define the engine as a shell FUNCTION on the **absolute interpreter** — arguments then reach
+  it as separate words, never re-parsed by `eval`:
 
   ```bash
   PY="$(command -v python3 || command -v python)"
-  ENGINE="PYTHONPATH=\"$ROOT/src\" \"$PY\" -m mokata"
+  mokata() { PYTHONPATH="$ROOT/src" "$PY" -m mokata "$@"; }   # skip when a `mokata` CLI is on PATH
   ```
 
 ## 2. Print the pointer (read-only)
 
 ```bash
-# no topic → the topic list with URLs; a topic → that page's URL
-eval "$ENGINE docs ${ARGUMENTS}"
+# no topic → the topic list with URLs
+mokata docs
+# a topic → that page's URL. The topic is the user's text: pass it as ONE single-quoted word.
+mokata docs '<topic>'
 ```
 
 Show the output **verbatim**. With no `$ARGUMENTS` it renders a header box + a `(topic, title,

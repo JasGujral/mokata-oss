@@ -41,6 +41,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
 
@@ -257,8 +258,28 @@ CONVERTED = [
 # "relpath:qualname", with the reason it is NOT a committed-config write. A site that is neither
 # converted nor registered here fails `test_r_man_no_bare_manifest_writes`.
 OUT_OF_SCOPE = {
-    ("ide/search.py", "build_index"):
-        "Already atomic (temp + os.replace). 0.0.23 C2 — the IDE's local semantic index under temp_local/ide/semantic/, a derived artifact, not the manifest.",
+    ("mcp/server.py", "_run_stdio"):
+        "Not a file write. 0.0.26 O14 — `os.fdopen` over a DUPLICATE of the process's own stdout "
+        "descriptor, so the MCP JSON-RPC transport writes a private fd while fd 1 points at stderr.",
+    ("_updater.py", "write_result"):
+        "Already atomic (temp + os.replace). 0.0.26 L2 — the detached updater's result record under ~/.mokata/update/, not the manifest.",
+    ("update.py", "launch_detached"):
+        "Already atomic (temp + os.replace). 0.0.26 L2 — the updater's job file under ~/.mokata/update/ (and a copy of the stdlib updater script), not the manifest.",
+    ("ide/handoff.py", "_write"):
+        "Already atomic (temp + os.replace). 0.0.26 P37 — a job handoff record under temp_local/ide/jobs/ (or the user-dir twin on an un-set-up repo), not the manifest.",
+    ("ide/workspace.py", "save"):
+        "Already atomic (temp + os.replace). 0.0.26 P2 — the IDE's restore state (tabs, scroll, focus) under temp_local/ide/ (or ~/.mokata/ide-repos/<hash>/ on an un-set-up repo, P29), not the manifest.",
+
+    ("ide/search.py", "_write_index"):
+        "Already atomic (temp + os.replace; the vectors file under a fresh name first). 0.0.23 C2 / 0.0.26 O13 — the IDE's local semantic index under temp_local/ide/semantic/, a derived artifact, not the manifest.",
+    ("knowledge/crg_build.py", "_acquire"):
+        "0.0.26 O13 — code-review-graph build RUN-STATE under gitignored temp_local/crg-build/ (lock, last outcome, builder log), not the manifest. The lock is created O_EXCL (one build per repo).",
+    ("knowledge/crg_build.py", "_spawn_worker"):
+        "0.0.26 O13 — code-review-graph build RUN-STATE under gitignored temp_local/crg-build/ (lock, last outcome, builder log), not the manifest. The background builder's log file.",
+    ("knowledge/crg_build.py", "_write_json"):
+        "Already atomic (temp + os.replace). 0.0.26 O13 — code-review-graph build RUN-STATE under gitignored temp_local/crg-build/ (lock, last outcome, builder log), not the manifest.",
+    ("session_index.py", "_write_file"):
+        "Already atomic (temp + os.replace). 0.0.26 P33 — one session's index row under temp_local/sessions/, not the manifest.",
     ("ide/snapshots.py", "_write_object"):
         "Already atomic (temp + os.replace). 0.0.22 E2 — a snapshot object under temp_local/snapshots/, not the manifest.",
     ("ide/snapshots.py", "_maybe_prune"):
@@ -269,6 +290,9 @@ OUT_OF_SCOPE = {
         "Already atomic (temp + os.replace), mode 0600. 0.0.25 ID.S3 — the IDE live-bridge record (port + hook token) under temp_local/ide/, not the manifest.",
     ("ide/server.py", "_write_record"):
         "Already atomic (temp + os.replace), mode 0600. 0.0.22 E2 — the review-window server record, not the manifest.",
+    ("ide/statedir.py", "note_repo"):
+        "0.0.26 P29 — a one-line `repo.txt` label in the USER's ~/.mokata/ide-repos/<key>/ naming the "
+        "repo an un-set-up repo's IDE state belongs to. Never the manifest; never in the repo.",
     ("team_events.py", "save_mark"):
         "Already atomic (temp + os.replace). The event publisher's own high-water mark under "
         "gitignored temp_local/events/ (0.0.22 C1) — not the manifest; a lost write costs one "
@@ -429,9 +453,25 @@ class TestAtomicfileContract(unittest.TestCase):
         """A cross-filesystem temp would make `os.replace` a copy, not an atomic rename — which
         would silently un-fix everything above."""
         src = inspect.getsource(atomic_write_text)
-        self.assertIn("dir=parent", src)
         self.assertIn("os.fsync", src)
         self.assertIn("os.replace", src)
+        # 0.0.26 O3: the temp is no longer `tempfile.mkstemp(dir=parent)` (a 50 ms hook cannot
+        # afford `tempfile`'s imports) — so this is now asserted on BEHAVIOUR: where it was opened.
+        from mokata import atomicfile
+        opened = []
+        real = atomicfile._exclusive_temp
+
+        def spy(parent, prefix, suffix):
+            fd, tmp = real(parent, prefix, suffix)
+            opened.append(tmp)
+            return fd, tmp
+
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(atomicfile, "_exclusive_temp", side_effect=spy):
+            target = os.path.join(d, "sub", "t.json")
+            atomic_write_text(target, "x\n")
+            self.assertEqual(1, len(opened))
+            self.assertEqual(os.path.dirname(target), os.path.dirname(opened[0]))
 
     def test_replace_is_atomic_on_this_platform(self):
         """`os.replace` is the portable atomic-overwrite primitive: `rename(2)` on POSIX,
