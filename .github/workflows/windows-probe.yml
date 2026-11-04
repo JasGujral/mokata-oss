@@ -105,7 +105,13 @@ jobs:
         env:
           MOKATA_REQUIRE_MCP_SDK: '1'
         working-directory: tests
-        run: python -c "import faulthandler,sys,unittest; faulthandler.dump_traceback_later(240, exit=True); unittest.main(module=None, argv=['x','-v']+sys.argv[1:])" ${PROBE_MODULES}
+        run: |
+          python -c "import faulthandler,sys,unittest; faulthandler.dump_traceback_later(400, exit=True); unittest.main(module=None, argv=['x','-v']+sys.argv[1:])" ${PROBE_MODULES} > ../probe.log 2>&1 &
+          pid=$!
+          for i in $(seq 1 450); do kill -0 $pid 2>/dev/null || break; sleep 1; done
+          cat ../probe.log
+          tasklist | head -60
+          taskkill //F //IM python.exe || true
       - name: Skip inventory — WHICH tests do not run on Windows, and why
         # ⭐ ALWAYS, even when the probe above went red: the inventory is the answer to a
         # different question and withholding it because something else failed is how "204 skips"
