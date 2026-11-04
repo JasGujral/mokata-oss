@@ -61,7 +61,7 @@ class Attack(unittest.TestCase):
     def test_a1_real_npm_npx_pnpm_yarn(self):
         from mokata.ide import review_context as RC
         root = self.root("npm test")
-        say("which npm", shutil.which("npm"), "node", shutil.which("node"))
+        say("which npm", shutil.which("npm"), "node", shutil.which("node"), "pnpm", shutil.which("pnpm"), "yarn", shutil.which("yarn"))
         for n in ("npm", "npx", "pnpm", "yarn", "corepack", "mvn", "gradle"):
             head, why = RC.resolve_runner(root, n, os.environ.get("PATH"))
             say("resolve", n, "->", head, "|", why)
@@ -172,8 +172,9 @@ class Attack(unittest.TestCase):
             got = RC.run_tests(root, [spelled, "x"], ["t1"])
             hit = os.path.exists(mark)
             say("explicit", repr(spelled), "runnable", tc["runnable"], "run state",
-                got["tests"][0]["state"], "BATCH RAN" if hit else "no batch",
-                "|", (got["tests"][0].get("note") or "")[:160])
+                got["tests"][0]["state"], "rc", got["tests"][0].get("rc"),
+                "BATCH RAN" if hit else "no batch",
+                "|", (got["tests"][0].get("note") or "")[:160], "| tail", repr(bytes(got.get("output", b"") if isinstance(got.get("output"), (bytes, bytearray)) else str(got.get("output", "")).encode())[-300:]))
 
     def test_a6_bare_variants(self):
         from mokata.ide import review_context as RC
@@ -202,7 +203,7 @@ class Attack(unittest.TestCase):
         mark = os.path.join(prefix, "M.txt")
         self.fake_npm(prefix, mark)
         _w(prefix, "mvn.cmd", "@echo off\r\necho MVN %%* >> \"%s\"\r\nexit /b 0\r\n" % mark)
-        path = os.pathsep.join([prefix, os.path.dirname(node),
+        path = os.pathsep.join([prefix, os.path.dirname(node), os.path.dirname(shutil.which("git")),
                                 os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "System32")])
         oldp = os.environ["PATH"]
         os.environ["PATH"] = path
