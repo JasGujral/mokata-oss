@@ -58,7 +58,7 @@ env:
   # Currently (0.0.27 WIN-LOCK-WAIT): the fair state lock on `msvcrt` — `test_win_lock_wait` (its
   # Windows-only test is control-gated: it SKIPS, saying why, off Windows), the O14 stress test
   # whose Windows-only 45 s allowance the probe run re-derives, and the lock/StateStore module.
-  PROBE_MODULES: "test_p24_ide_lsp_readonly"
+  PROBE_MODULES: "test_p24_ide_lsp_readonly test_p4_copy_context_usages test_a35_the_tty_sweep_instrument_works test_p7_ide_review_context"
 
 jobs:
   probe:
