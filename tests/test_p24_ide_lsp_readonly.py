@@ -1155,10 +1155,8 @@ class StoppingNeverHangsAndKillsTheTree(_Repo):
         with open(self.pidfile, encoding="utf-8") as fh:
             pid = int(fh.read())
         if os.name == "nt":
-            exe = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "tasklist.exe")
-            out = subprocess.run([exe, "/FI", f"PID eq {pid}", "/NH"], stdin=subprocess.DEVNULL,
-                                 capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
-            return str(pid) in out, pid
+            from _win_proc import tasklist_says_alive           # fail-closed: no answer = alive
+            return tasklist_says_alive(pid)[0], pid
         try:
             with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
                 return fh.read().rsplit(")", 1)[1].split()[0] != "Z", pid
@@ -1317,6 +1315,7 @@ class StoppingNeverHangsAndKillsTheTree(_Repo):
         # and the Server makes that job at spawn on Windows
         made = []
         with mock.patch("mokata.ide.lsp.subprocess.Popen") as popen, \
+                mock.patch("mokata.ide.lsp._resume_process"), \
                 mock.patch("mokata.ide.lsp.WinJob", side_effect=lambda p: made.append(p) or job):
             popen.return_value.stdin = io.BytesIO()
             popen.return_value.stdout = io.BytesIO()
@@ -1446,6 +1445,192 @@ class NothingOutsideTheWorkspaceIsRead(_Repo):
         from mokata.ide.features.lsp import TRUST_KEY
         self.assertIn(":", TRUST_KEY)
         self.assertFalse(TRUST_KEY.startswith("p-"))
+
+
+class TheTreeIsInItsJobBeforeItRuns(unittest.TestCase):
+    """CI-FIX 0.0.27 round 3, H1. A server or test runner on Windows is very often a LAUNCHER (a
+    venv's `Scripts\\python.exe`, `pytest.exe`, `pylsp.exe`) that starts its real child within
+    milliseconds. Assigning the Job Object after `Popen` returned lost that race: 1 grandchild in
+    40 was in no job of ours, survived `terminate`, and (the launcher's own job allowing silent
+    breakaway) belonged to no job at all. The rule: the process is created SUSPENDED, put in the
+    job, and only then resumed — so nothing it starts can start first."""
+
+    def _spawn(self, popen_side=None, job_ok=True, resume_err=None):
+        calls = []
+        proc = mock.Mock(pid=5, _handle=77)
+        job = mock.Mock(ok=job_ok)
+
+        def popen(argv, **kw):
+            calls.append(("popen", kw.get("creationflags")))
+            return proc
+
+        def winjob(p):
+            calls.append(("job", p))
+            return job
+
+        def resume(p):
+            calls.append(("resume", p))
+            if resume_err:
+                raise resume_err
+
+        with mock.patch("mokata.ide.lsp.subprocess.Popen", side_effect=popen), \
+                mock.patch("mokata.ide.lsp.WinJob", side_effect=winjob), \
+                mock.patch("mokata.ide.lsp._resume_process", side_effect=resume):
+            try:
+                got = L.spawn_jobbed(["x"], nt=True, creationflags=0x200 | 0x08000000)
+            except OSError as exc:
+                got = exc
+        return calls, proc, job, got
+
+    def test_the_process_is_created_suspended_assigned_to_the_job_and_only_then_resumed(self):
+        calls, proc, job, got = self._spawn()
+        self.assertEqual(["popen", "job", "resume"], [c[0] for c in calls], calls)
+        self.assertTrue(calls[0][1] & 0x4, "not created CREATE_SUSPENDED")
+        self.assertEqual(0x200 | 0x08000000, calls[0][1] & ~0x4, "the caller's flags were lost")
+        self.assertEqual((proc, job), got)
+
+    def test_a_job_that_could_not_be_made_still_lets_the_process_run_and_says_so(self):
+        calls, proc, job, got = self._spawn(job_ok=False)
+        self.assertEqual(["popen", "job", "resume"], [c[0] for c in calls])
+        self.assertFalse(got[1].ok, "the caller must see that no job holds the tree")
+
+    def test_a_process_that_cannot_be_resumed_is_killed_not_left_suspended(self):
+        calls, proc, job, got = self._spawn(resume_err=OSError("refused"))
+        self.assertIsInstance(got, OSError)
+        proc.kill.assert_called()
+        job.terminate.assert_called()
+
+    def test_on_posix_it_is_a_plain_popen_with_no_job(self):
+        with mock.patch("mokata.ide.lsp.subprocess.Popen") as popen:
+            proc, job = L.spawn_jobbed(["x"], nt=False, start_new_session=True)
+        self.assertIsNone(job)
+        self.assertEqual({"start_new_session": True}, popen.call_args.kwargs)
+
+    @unittest.skipUnless(os.name == "nt", "Job Objects exist on Windows only")
+    def test_on_windows_nothing_a_launcher_starts_first_escapes_the_job(self):
+        """The real thing, through a REAL launcher: a venv's `Scripts\\python.exe` (which starts
+        the real interpreter as its child) running a script that starts a grandchild at once.
+        Forty runs; every launcher, real interpreter and grandchild is dead after `terminate`.
+        Spawning with the job assigned after Popen leaks about one in forty here."""
+        import subprocess
+        from _win_proc import tasklist_says_alive
+        venv = tempfile.mkdtemp(prefix="mk-launch-venv-")
+        self.addCleanup(lambda: __import__("shutil").rmtree(venv, True))
+        subprocess.run([sys.executable, "-m", "venv", venv], check=True, stdin=subprocess.DEVNULL)
+        launcher = os.path.join(venv, "Scripts", "python.exe")
+        script = os.path.join(venv, "spawn_grandchild.py")
+        with open(script, "w", encoding="utf-8") as fh:
+            fh.write("import subprocess, sys, time\n"
+                     "gc = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'])\n"
+                     "import os\n"
+                     "with open(sys.argv[1] + '.tmp', 'w') as o:\n"
+                     "    o.write('%d %d' % (os.getpid(), gc.pid))\n"
+                     "os.replace(sys.argv[1] + '.tmp', sys.argv[1])\n"
+                     "time.sleep(300)\n")
+        runs = 40
+        pids = []
+        for i in range(runs):
+            pidfile = os.path.join(venv, f"pids{i}")
+            proc, job = L.spawn_jobbed([launcher, script, pidfile], stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                       **L.detached())
+            self.assertTrue(job.ok, "no Job Object holds the tree")
+            self.assertTrue(wait_for(lambda: os.path.exists(pidfile), timeout=120), f"run {i}: no pids")
+            with open(pidfile, encoding="utf-8") as fh:
+                pids += [(i, proc.pid, *map(int, fh.read().split()))]
+            job.terminate()
+            proc.wait(timeout=60)
+        for i, launcher_pid, real, grandchild in pids:
+            for pid in (launcher_pid, real, grandchild):
+                self.assertTrue(wait_for(lambda pid=pid: not tasklist_says_alive(pid)[0], timeout=60),
+                                f"run {i}: pid {pid} outlived the job's terminate "
+                                f"(launcher {launcher_pid}, interpreter {real}, grandchild {grandchild})"
+                                f": {tasklist_says_alive(pid)[1]}")
+
+
+class FileUrisAsRealServersSpellThem(unittest.TestCase):
+    """CI-FIX 0.0.27 round 3, M1. typescript-language-server, pyright and pylsp (vscode-uri) name a
+    Windows location `file:///c%3A/Users/x/a.ts` — lower-case drive, escaped colon. CPython 3.12's
+    `url2pathname` looks for the drive before it unquotes and returned `\\c:\\Users\\x\\a.ts`, a
+    path inside no repo: every definition and reference came back "outside the repository", with
+    no snippet. The fake server (`_fake_lsp_server.vscode_uri`) now speaks that dialect too, so
+    the whole path is graded, not the product against its own spelling."""
+
+    def test_every_windows_spelling_of_a_drive_is_the_same_local_path(self):
+        for uri in ("file:///c%3A/Users/x/a.ts", "file:///C%3A/Users/x/a.ts", "file:///c%3a/Users/x/a.ts",
+                    "file:///C:/Users/x/a.ts", "file:///c:/Users/x/a.ts", "file://localhost/c:/Users/x/a.ts"):
+            self.assertEqual("C:\\Users\\x\\a.ts", L.from_uri(uri, nt=True), uri)
+
+    def test_other_percent_escapes_are_decoded_once_on_both_platforms(self):
+        self.assertEqual("C:\\My Repo\\100%\\a.py", L.from_uri("file:///c%3A/My%20Repo/100%25/a.py", nt=True))
+        self.assertEqual("/tmp/My Repo/a b.py", L.from_uri("file:///tmp/My%20Repo/a%20b.py", nt=False))
+
+    def test_a_unc_share_a_host_or_a_driveless_path_is_not_local_on_windows(self):
+        for uri in ("file://evilhost/share/x.py", "file:////evilhost/share/x.py",
+                    "file:///share/x.py", "file:///c%3A%00/x", "http://x/c:/a"):
+            self.assertIsNone(L.from_uri(uri, nt=True), uri)
+
+    def test_a_location_in_the_vscode_spelling_is_inside_the_repo_with_its_snippet(self):
+        """Through `location`, with the fake's own spelling of the repo's file."""
+        from _fake_lsp_server import vscode_uri
+        root = tempfile.mkdtemp(prefix="mk-uri-")
+        self.addCleanup(lambda: __import__("shutil").rmtree(root, True))
+        os.makedirs(os.path.join(root, "src"))
+        with open(os.path.join(root, "src", "a.py"), "w", encoding="utf-8") as fh:
+            fh.write("def parse(t):\n    return t\n")
+        root = os.path.realpath(root)
+        uri = vscode_uri(L.to_uri(os.path.join(root, "src", "a.py")))
+        if os.name == "nt":
+            self.assertRegex(uri, r"^file:///[a-z]%3A/", "the fake must emit the real servers' spelling")
+        got = L.location(root, {"uri": uri, "range": {"start": {"line": 0, "character": 4},
+                                                      "end": {"line": 0, "character": 9}}}, L._Lines())
+        self.assertEqual(("src/a.py", False, "def parse(t):"),
+                         (got["path"], got["outside"], got["snippet"]), uri)
+
+    def test_the_fake_servers_answers_are_spelled_the_way_real_servers_spell_them(self):
+        from _fake_lsp_server import vscode_uri
+        self.assertEqual("file:///c%3A/Users/x/a%20b.ts", vscode_uri("file:///C:/Users/x/a%20b.ts"))
+        self.assertEqual("file:///tmp/a%20b.py", vscode_uri("file:///tmp/a%20b.py"))
+
+
+class OnlyARunnableProgramIsEverFound(unittest.TestCase):
+    """CI-FIX 0.0.27 round 3 (was L5): the default PATHEXT lists `.VBS;.JS;.WSF;.MSC`; CreateProcess
+    cannot start those and a script host must not be the answer, nor shadow a later real `.exe`."""
+
+    def test_a_script_extension_is_never_a_server_and_does_not_shadow_a_real_exe(self):
+        d1, d2 = tempfile.mkdtemp(prefix="mk-pe1-"), tempfile.mkdtemp(prefix="mk-pe2-")
+        for d in (d1, d2):
+            self.addCleanup(lambda d=d: __import__("shutil").rmtree(d, True))
+        for n in ("srv.VBS", "srv.JS", "srv.cmd", "srv.BAT", "srv.msc", "other.vbs"):
+            open(os.path.join(d1, n), "w").close()
+        open(os.path.join(d2, "srv.EXE"), "w").close()
+        ext = ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+        self.assertEqual(os.path.join(d2, "srv.EXE"), L.which_in("srv", [d1, d2], nt=True, pathext=ext))
+        self.assertIsNone(L.which_in("other", [d1, d2], nt=True, pathext=ext))
+        self.assertIsNone(L.which_in("other.vbs", [d1, d2], nt=True, pathext=ext), "the name itself")
+        self.assertIsNone(L.which_in("srv.js", [d1], nt=True, pathext=ext))
+
+
+class TheTasklistCheckIsFailClosed(unittest.TestCase):
+    """CI-FIX 0.0.27 round 3 (was L8): a tasklist that printed nothing or failed says nothing about
+    the process; only a successful answer that names no row for the pid is "dead"."""
+
+    def _run(self, rc, out):
+        import subprocess
+        return lambda *a, **k: subprocess.CompletedProcess(a, rc, out, "")
+
+    def test_silence_and_failure_are_not_death(self):
+        from _win_proc import tasklist_says_alive
+        self.assertTrue(tasklist_says_alive(4242, run=self._run(0, ""))[0])
+        self.assertTrue(tasklist_says_alive(4242, run=self._run(1, "ERROR: x"))[0])
+        self.assertTrue(tasklist_says_alive(4242, run=lambda *a, **k: (_ for _ in ()).throw(OSError("no")))[0])
+
+    def test_a_row_for_the_pid_is_alive_and_a_notice_without_it_is_dead(self):
+        from _win_proc import tasklist_says_alive
+        self.assertTrue(tasklist_says_alive(4242, run=self._run(0, '"python.exe","4242","Console","1","9,000 K"'))[0])
+        self.assertFalse(tasklist_says_alive(4242, run=self._run(0, "INFO: No tasks are running which match the specified criteria."))[0])
+        self.assertFalse(tasklist_says_alive(4242, run=self._run(0, '"python.exe","42420","Console","1","9,000 K"'))[0],
+                         "42420 is not 4242")
 
 
 if __name__ == "__main__":

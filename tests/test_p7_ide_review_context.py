@@ -16,6 +16,7 @@ Each test states the user-visible rule it protects. The rules:
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -79,13 +80,9 @@ def _gone(pid, within=10.0):
     """True once `pid` is dead (a zombie awaiting its reaper counts as dead)."""
     t0 = time.time()
     if os.name == "nt":
-        import subprocess
-        exe = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "tasklist.exe")
+        from _win_proc import tasklist_says_alive           # fail-closed: no answer = alive
         while time.time() - t0 < within:
-            out = subprocess.run([exe, "/FI", f"PID eq {pid}", "/NH"], stdin=subprocess.DEVNULL,
-                                 capture_output=True, text=True, encoding="utf-8",
-                                 errors="replace").stdout
-            if f" {pid} " not in f" {out} ":
+            if not tasklist_says_alive(pid)[0]:
                 return True
             time.sleep(0.1)
         return False
@@ -733,6 +730,38 @@ class TheRendererIsVendoredAndInert(unittest.TestCase):
                 self.assertEqual(200, v.status_code, name)
                 self.assertIn("javascript", v.headers["content-type"])
             self.assertEqual(404, c.get("/static/vendor/LICENSE.mermaid.txt").status_code)
+
+
+class TheRepoDoesNotChooseTheRunner(unittest.TestCase):
+    """CI-FIX 0.0.27 round 3 (was L6). `mokata ide`'s cwd is the repo, and a bare runner name
+    (`pytest`) must be the user's — the project env's, or one on an ABSOLUTE PATH entry — never a
+    file the repo put in its own root, whether the search is `shutil.which` (cwd first on Windows)
+    or the OS's own (a relative PATH entry such as `.`)."""
+
+    @unittest.skipIf(os.name == "nt", "the planted file is a POSIX script; Windows is the finder's rule")
+    def test_a_runner_planted_in_the_repo_and_reachable_only_through_cwd_is_not_run(self):
+        from mokata.ide import review_context as RC
+        d = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-plant-"))
+        self.addCleanup(lambda: shutil.rmtree(d, True))
+        mark = os.path.join(d, "RAN")
+        _write(d, "mk-p7-planted", f"#!/bin/sh\necho x > '{mark}'\n")
+        os.chmod(os.path.join(d, "mk-p7-planted"), 0o755)
+        here = os.getcwd()
+        os.chdir(d)
+        self.addCleanup(os.chdir, here)
+        for path in (".", "", "relative/dir", d + os.sep + "..", ):
+            got = RC.run_tests(d, ["mk-p7-planted"], ["t1"], environ={"PATH": path})
+            self.assertEqual("error", got["tests"][0]["state"], path)
+            self.assertIn("not an executable on the project's PATH", got["tests"][0]["note"], path)
+            self.assertFalse(os.path.exists(mark), f"the repo chose the runner (PATH={path!r})")
+
+    def test_an_explicit_path_in_the_manifest_is_used_as_written(self):
+        from mokata.ide import review_context as RC
+        d = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-explicit-"))
+        self.addCleanup(lambda: shutil.rmtree(d, True))
+        got = RC.run_tests(d, [sys.executable, "-c", "import sys; sys.exit(0)", "--"], ["t1"],
+                           environ={"PATH": ""})
+        self.assertEqual("green", got["tests"][0]["state"], got)
 
 
 if __name__ == "__main__":

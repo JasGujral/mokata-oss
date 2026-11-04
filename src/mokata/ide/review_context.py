@@ -33,14 +33,15 @@ import os
 import re
 import queue
 import shlex
-import shutil
 import subprocess
 import threading
 import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..knowledge.cancel import cancelled, checkpoint, kill_on_cancel, report
+from ..exe_path import path_dirs, which_in
 from ..quiet_spawn import detached, hidden
+from .lsp import spawn_jobbed
 from .server import BadRequest
 
 #: ACs per page and tests per AC when the page does not say (paging, not a cap: `page` walks all).
@@ -359,7 +360,7 @@ _DRAIN_IDLE_S = 1.0
 
 def _kill_tree(proc: Any, leftovers_only: bool = False, job: Any = None) -> None:
     """End the runner's whole tree. POSIX: SIGKILL to its process group (its pid, as it leads a
-    new session). Windows: the runner's Job Object (`lsp.WinJob`, made at spawn) — it holds the
+    new session). Windows: the runner's Job Object (`lsp.spawn_jobbed`: the runner is created suspended, put in the job, then resumed) — it holds the
     tree whether or not the runner still lives, so what a test left behind after the runner
     exited is ended too (`taskkill /T` needs a LIVE root to walk from, so it reaches nothing then:
     the leftover held the project directory open and could not be deleted). Only when no job could
@@ -415,10 +416,19 @@ def run_tests(root: str, argv: List[str], ids: List[str],
     env_line = project_env.describe(penv) + (f" (manifest unreadable, `settings.python` not "
                                              f"applied: {problem})" if problem else "")
     run_env = project_env.activated(base_env, penv)
-    # The runner as the PROJECT's env finds it (its bin/ first on PATH): `pytest` is the venv's,
-    # and on Windows `npm` resolves to npm.CMD, which CreateProcess cannot find by itself.
+    # The runner as the PROJECT's env finds it (its bin/ first on PATH): `pytest` is the venv's.
+    # The product's own finder (`exe_path`): absolute PATH entries only, never the cwd — which is
+    # the repo — and on Windows only a real `.exe`/`.com`, never a `.cmd` shim (cmd.exe).
     path_var = next((v for k, v in run_env.items() if k.upper() == "PATH"), None)  # Win: "Path"
-    exe = argv[0] if os.path.isabs(argv[0]) else shutil.which(argv[0], path=path_var)
+    # An explicit path (`/abs/pytest`, `./gradlew`: the manifest's own words) is used as written;
+    # a BARE name is found only by the finder — and when it finds nothing the run does not start
+    # (handing the bare name to Popen would let the OS search `.` or a relative PATH entry,
+    # which is the repo).
+    bare = os.path.basename(argv[0]) == argv[0] and not os.path.isabs(argv[0])
+    exe = which_in(argv[0], path_dirs({"PATH": path_var or ""})) if bare else argv[0]
+    not_found = (f"`{argv[0]}` is not an executable on the project's PATH"
+                 + (" (a .cmd/.bat shim is never run)" if os.name == "nt" else "")
+                 ) if bare and not exe else None
     argv = [exe or argv[0], *argv[1:]]
     out = {"tail": bytearray(), "bytes": 0}
     results: List[Dict[str, Any]] = []
@@ -442,20 +452,21 @@ def run_tests(root: str, argv: List[str], ids: List[str],
             take(f"$ {' '.join(argv)} {tid}\n".encode("utf-8"))
             emit(f"running {tid}")
             try:
-                proc = subprocess.Popen([*argv, tid], cwd=root, env=run_env,  # nosec B603 argv
-                                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                        stderr=subprocess.STDOUT, **detached())
+                # Windows: suspended, into the tree's Job Object, then resumed — a launcher's
+                # first child (venv python.exe, pytest.exe) is in the job from its first instruction.
+                if not_found:
+                    raise OSError(not_found)
+                proc, job = spawn_jobbed([*argv, tid], cwd=root, env=run_env,  # nosec B603 argv
+                                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                         stderr=subprocess.STDOUT, **detached())
             except OSError as exc:
                 results.append({"id": tid, "state": "error", "rc": None,
-                                "seconds": 0.0, "note": f"could not start: {exc}"[:300]})
+                                "seconds": 0.0,
+                                "note": (f"could not start: {exc}")[:300]})
                 if on_test:
                     on_test(tid, "error", time.time())
                 emit(f"{tid}: could not start")
                 continue
-            job = None
-            if os.name == "nt":
-                from .lsp import WinJob
-                job = WinJob(proc)          # the tree's handle, taken before the runner starts work
             try:
                 rc = _drive(proc, take, lambda: emit(f"running {tid}"), job)
             finally:

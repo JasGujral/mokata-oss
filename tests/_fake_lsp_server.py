@@ -113,7 +113,22 @@ def word_at(text, line, ch):
     return ""
 
 
+def vscode_uri(uri):
+    """The URI the way vscode-uri based servers (typescript-language-server, pyright, pylsp)
+    spell a location: the path percent-encoded, a Windows drive as a LOWER-case letter with an
+    escaped colon (`file:///c%3A/Users/x`). The client's own spelling (`file:///C:/Users/x`) is
+    NOT what real servers send back, and a client that only reads its own spelling passes here
+    and fails on a real machine."""
+    from urllib.parse import quote, unquote, urlsplit
+    path = unquote(urlsplit(uri).path)
+    m = re.match(r"^/([A-Za-z]):(/.*)?$", path)
+    if m:
+        return "file:///%s%%3A%s" % (m.group(1).lower(), quote(m.group(2) or "/", safe="/"))
+    return "file://" + quote(path, safe="/")
+
+
 def occurrences(uri, text, word):
+    uri = vscode_uri(uri)
     out = []
     for i, ln in enumerate(text.split("\n")):
         for m in re.finditer(r"\b%s\b" % re.escape(word), ln):
@@ -123,6 +138,7 @@ def occurrences(uri, text, word):
 
 
 def definition(uri, text, word):
+    uri = vscode_uri(uri)
     for i, ln in enumerate(text.split("\n")):
         m = re.search(r"^\s*(?:def|class)\s+(%s)\b|^\s*(%s)\s*=" % (re.escape(word), re.escape(word)), ln)
         if m:

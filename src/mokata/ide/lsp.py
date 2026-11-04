@@ -39,14 +39,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import ntpath
 import os
+import posixpath
+import re
 import subprocess
 import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
-from urllib.parse import urlsplit
-from urllib.request import url2pathname
+from urllib.parse import unquote, urlsplit
 
 from .. import __version__
 from ..errors import MokataError
@@ -319,13 +321,30 @@ def to_uri(path: str) -> str:
     return Path(os.path.abspath(path)).as_uri()
 
 
-def from_uri(uri: str) -> Optional[str]:
+def from_uri(uri: str, nt: Optional[bool] = None) -> Optional[str]:
     """A `file:` URI's local path. A URI with a HOST (`file://evilhost/share/x`, a UNC path on
-    Windows that would open SMB to that host) is not local: None."""
+    Windows that would open SMB to that host) is not local: None.
+
+    The path is percent-DECODED first, then read as a path. Real Windows servers (vscode-uri:
+    typescript-language-server, pyright) spell a drive as `file:///c%3A/Users/x` — lower-case
+    letter, escaped colon — and CPython 3.12's `url2pathname` looks for the drive BEFORE it
+    unquotes, so it returned `\\c:\\Users\\x`, a path inside no repo. `nt` injects the platform
+    for the tests. On Windows: `/c:/x`, `/C:/x` and `/c%3A/x` all give `C:\\x`; a path with no drive
+    letter, or one that starts `//` (a UNC share spelled as a path), is not a local file: None."""
+    is_nt = (os.name == "nt") if nt is None else nt
     parts = urlsplit(uri)
     if parts.scheme != "file" or (parts.netloc and parts.netloc != "localhost"):
         return None
-    return os.path.normpath(url2pathname(parts.path))
+    path = unquote(parts.path)
+    if "\0" in path:
+        return None
+    if not is_nt:
+        return posixpath.normpath(path)
+    path = path.replace("\\", "/")
+    m = re.match(r"^/?([A-Za-z]):(/.*)?$", path)
+    if not m:
+        return None
+    return ntpath.normpath(m.group(1).upper() + ":" + (m.group(2) or "/"))
 
 
 def utf16_col(line: str, col1: int) -> int:
@@ -433,6 +452,56 @@ class WinJob:
             pass
 
 
+_CREATE_SUSPENDED = 0x00000004
+
+
+def _resume_process(proc: Any) -> None:
+    """Let a process created CREATE_SUSPENDED run: `NtResumeProcess` on its handle (Popen drops
+    the primary thread's handle, so there is no thread to `ResumeThread`). ctypes only. Raises
+    OSError when Windows refuses."""
+    import ctypes
+    from ctypes import wintypes
+    ntdll = ctypes.WinDLL("ntdll")
+    ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
+    ntdll.NtResumeProcess.restype = ctypes.c_long
+    status = ntdll.NtResumeProcess(int(proc._handle))
+    if status != 0:
+        raise OSError(f"NtResumeProcess failed: NTSTATUS {status & 0xFFFFFFFF:#x}")
+
+
+def spawn_jobbed(argv: Sequence[str], nt: Optional[bool] = None,
+                 **popen_kw: Any) -> "tuple[subprocess.Popen, Optional[WinJob]]":
+    """Start `argv` so that it, and everything it ever starts, is in OUR Job Object from its very
+    first instruction. POSIX: a plain Popen (the caller's `start_new_session` makes the group);
+    the job is None. Windows: the process is created CREATE_SUSPENDED, assigned to a new
+    KILL_ON_JOB_CLOSE job (no breakaway of any kind is allowed), and only then resumed. Assigning
+    AFTER a running start lost a race (1 in 40 on a real runner): a launcher — a venv's
+    `Scripts\\python.exe`, `pytest.exe`, `pylsp.exe` — starts its real child within milliseconds,
+    and a child that started first is in no job of ours, so `terminate` never reached it.
+    If the job could not be made (`job.ok` False) the process is still resumed and the caller's
+    fallback (`taskkill /F /T` from the live leader, before it exits) is all there is: that
+    fallback cannot reach what a leader left behind AFTER it died. Raises OSError (the process
+    killed first) if it cannot be resumed."""
+    is_nt = (os.name == "nt") if nt is None else nt
+    kw = dict(popen_kw)
+    if not is_nt:
+        return subprocess.Popen(list(argv), **kw), None
+    kw["creationflags"] = int(kw.get("creationflags") or 0)
+    proc = subprocess.Popen(list(argv), **kw)
+    job = WinJob(proc)
+    try:
+        _resume_process(proc)
+    except BaseException:
+        job.terminate()
+        try:
+            proc.kill()
+            proc.wait(timeout=STOP_GRACE_S)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        raise
+    return proc, job
+
+
 def _kill_tree(proc: Any, pgid: Optional[int] = None, job: Optional[WinJob] = None) -> None:
     """Kill `proc` and everything it started — ALSO after `proc` itself is already dead
     (re-verification R1: a crashed leader's children survived). POSIX: `killpg(pgid)` with the
@@ -508,14 +577,12 @@ class Server:
         # Its OWN process group / session (verification M1): stopping kills the whole tree
         # (tsserver under typescript-language-server, proc-macro-srv under rust-analyzer, `go`
         # under gopls), not only the direct child. No shell is involved anywhere (M3).
-        self.proc = subprocess.Popen(self.argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE, cwd=self.root, close_fds=True,
-                                     **detached())   # own session / group, hidden console
+        # Windows: created suspended, put in the tree's Job Object, THEN resumed (`spawn_jobbed`) —
+        # a launcher's first child is in the job too.
+        self.proc, self.job = spawn_jobbed(
+            self.argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cwd=self.root, close_fds=True, **detached())   # own session / group, hidden console
         self.pgid = self.proc.pid if os.name != "nt" else None     # its session's id, kept
-        if os.name == "nt":
-            # R1: the tree's handle on Windows — taken before `initialize`, i.e. before a server
-            # has been asked anything that would make it start a child of its own.
-            self.job = WinJob(self.proc)
         self._stop_readers = threading.Event()
         threading.Thread(target=self._read_loop, daemon=True,
                          name=f"mokata-lsp-{self.language}").start()
@@ -1258,6 +1325,6 @@ def diagnostics_of(root: str, srv: Server, abspath: str, lines: _Lines) -> List[
 __all__ = ["ALLOWED", "ALLOWED_REQUESTS", "ALLOWED_NOTIFICATIONS", "WRITE_METHODS", "READ_ONLY",
            "IDLE_S", "MAX_CRASHES", "CRASH_WINDOW_S", "MethodRefused", "ServerGone",
            "ServerError", "Server", "Host", "languages", "language_of", "language_id",
-           "find_binary", "find_server", "path_dirs", "which_in", "will_run", "to_uri", "from_uri",
+           "find_binary", "find_server", "spawn_jobbed", "path_dirs", "which_in", "will_run", "to_uri", "from_uri",
            "utf16_col", "char_col", "location", "hover_text", "symbols_flat", "diagnostics_of",
            "source_text"]

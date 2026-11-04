@@ -161,12 +161,9 @@ def run_sweep(modules, extra_tree=None, stall_floor_s=STALL_FLOOR_S, stall_facto
         # Output goes to FILES, not pipes: a poll loop that does not drain a pipe deadlocks the
         # child on a full buffer, and that deadlock would read as the hang this guard hunts.
         with open(out_path, "wb") as out_fh, open(err_path, "wb") as err_fh:
-            proc = subprocess.Popen(argv, cwd=_TESTS, env=env, stdin=subprocess.DEVNULL,
-                                    stdout=out_fh, stderr=err_fh, **kw)
-            job = None
-            if os.name == "nt":
-                from mokata.ide.lsp import WinJob
-                job = WinJob(proc)
+            from mokata.ide.lsp import spawn_jobbed       # Windows: in the job before it runs
+            proc, job = spawn_jobbed(argv, cwd=_TESTS, env=env, stdin=subprocess.DEVNULL,
+                                     stdout=out_fh, stderr=err_fh, **kw)
             last_n, last_t, slowest = 0, time.monotonic(), 0.0
             stalled = None
             try:

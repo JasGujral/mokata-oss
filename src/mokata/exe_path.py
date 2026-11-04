@@ -47,11 +47,15 @@ def _under(path: str, base: str) -> bool:
         return False
 
 
+#: The only Windows suffixes a program can be started from without a shell.
+_RUNNABLE = (".exe", ".com")
+
+
 def which_in(name: str, dirs: Sequence[str], nt: Optional[bool] = None,
              pathext: Optional[str] = None, refuse_under: Optional[str] = None) -> Optional[str]:
     """`name` as an executable file in exactly these directories, in order — never the cwd, never
     a shell shim. On Windows the PATHEXT suffixes are tried (and the name itself when it already
-    has an extension); a `.cmd`/`.bat` hit is SKIPPED (it would need cmd.exe); the current
+    has an extension); only `.exe`/`.com` count — a `.cmd`/`.bat` (cmd.exe), `.vbs`/`.js` (a script host) are never an answer; the current
     directory is skipped even when listed. `refuse_under`
     skips any hit whose REALPATH lies inside that directory (re-verification R2: a PATH entry such
     as `<repo>/tools`, or a symlink into the repo, must not let the repo answer for a name the
@@ -60,7 +64,11 @@ def which_in(name: str, dirs: Sequence[str], nt: Optional[bool] = None,
     if is_nt:
         exts = [e for e in (pathext if pathext is not None
                             else os.environ.get("PATHEXT") or ".COM;.EXE;.BAT;.CMD").split(";") if e]
-        names = ([name] if os.path.splitext(name)[1] else []) + [name + e for e in exts]
+        # Only what CreateProcess can run by itself: a PATHEXT of `.VBS;.JS;.WSF;.MSC` (the
+        # default) must never make a script the answer, nor shadow a later real `.exe`.
+        exts = [e for e in exts if e.lower() in _RUNNABLE]
+        names = ([name] if os.path.splitext(name)[1].lower() in _RUNNABLE else []) \
+            + [name + e for e in exts]
     else:
         names = [name]
     here = os.path.normcase(os.path.realpath(os.getcwd()))

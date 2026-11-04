@@ -83,7 +83,8 @@ def _client(root, demo=False):
     state = AppState(root, "tok", 9999, None, demo)
     c = TestClient(build_app(state), base_url="http://127.0.0.1:9999")
     c.get("/pair?t=tok")
-    return c
+    from _ide_follow import Following
+    return Following(c)
 
 
 def _cli_json(d, *argv):
@@ -501,6 +502,39 @@ def setUpModule():
     # what is true WITH it present is graded in test_o11_crg_present (and the sibling below, if any).
     from _support import hide_external_graphs
     hide_external_graphs()
+
+
+class AJobbedReadFollowsItsHandleLikeAPage(unittest.TestCase):
+    """CI-FIX 0.0.27 round 3 (was L2): a slow box answers the sync window with a 202 job handle;
+    the tests of the jobbed routes ask through `Following`, which follows it as a page does."""
+
+    def test_a_202_is_followed_to_the_final_answer_and_an_explicit_window_is_respected(self):
+        from _ide_follow import Following
+
+        class R:
+            def __init__(self, code, body):
+                self.status_code, self._b = code, body
+
+            def json(self):
+                return self._b
+
+        class Slow:
+            def __init__(self):
+                self.urls = []
+
+            def get(self, url, **kw):
+                self.urls.append(url)
+                n = len(self.urls)
+                return R(202, {"job": "J1"}) if n < 3 else R(200, {"answer": 1})
+
+        slow = Slow()
+        got = Following(slow).get("/api/query", params={"kind": "callers", "target": "x"})
+        self.assertEqual((200, {"answer": 1}), (got.status_code, got.json()))
+        self.assertIn("sync_ms=2000", slow.urls[0])
+        self.assertIn("job=J1", slow.urls[-1])
+        pinned = Slow()
+        first = Following(pinned).get("/api/query?kind=callers&target=x&sync_ms=0")
+        self.assertEqual((202, 1), (first.status_code, len(pinned.urls)), "sync_ms=0 means 0")
 
 
 if __name__ == "__main__":

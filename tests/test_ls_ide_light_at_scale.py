@@ -512,6 +512,8 @@ class TheGraphViewsSayWhatTheyLeftOut(unittest.TestCase):
         c = TestClient(build_app(AppState(self.root, "tok", 9999, None, False)),
                        base_url="http://127.0.0.1:9999")
         c.get("/pair?t=tok")
+        from _ide_follow import Following
+        c = Following(c)
         lines = f"1-{body.count(chr(10))}"
         got = c.get(f"/api/impact?path=src/app/many.py&lines={lines}&symbols=g0,g9").json()
         self.assertEqual({"g0", "g9"}, {s["name"] for s in got["symbols"]})
@@ -609,6 +611,8 @@ class TheStatusBarNamesTheGraphThatAnswers(unittest.TestCase):
         c = TestClient(build_app(AppState(d, "tok", 9999, None, False)),
                        base_url="http://127.0.0.1:9999")
         c.get("/pair?t=tok")
+        from _ide_follow import Following
+        c = Following(c)
         with mock.patch("sys.stderr"):
             g = c.get("/api/graph?view=focus&symbol=total").json()
         self.assertIn("degraded, answering from ast", g["graph_note"])
