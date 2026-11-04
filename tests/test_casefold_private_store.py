@@ -677,17 +677,62 @@ class ACaseSensitiveDiskKeepsTheTypedSpelling(unittest.TestCase):
         self.assertEqual((".MOKATA/x", True), S.record_name(self.d, ".MOKATA/x"))
         self.assertEqual((".mokata/x", True), S.record_name(self.d, ".mokata/x"))
 
+    def _forget_volumes(self):
+        p = mock.patch.dict(S._FOLDS_CASE, clear=True)
+        p.start()
+        self.addCleanup(p.stop)
+
     @unittest.skipIf(os.name == "nt", "Windows answers the disk's own case: the typed one is gone")
     def test_the_decision_is_the_disks_not_the_names(self):
         """Any filesystem: the disk is made to answer 'different directory', and the record keeps
         the typed spelling; made to answer 'same directory', it is the store's own name."""
         write(self.d, ".mokata/x", "y")
         real = os.path.samefile
+        self._forget_volumes()
         with mock.patch.object(os.path, "samefile", side_effect=lambda a, b: False):
             self.assertEqual((".MOKATA/x", True), S.record_name(self.d, ".MOKATA/x"))
+        self._forget_volumes()
         with mock.patch.object(os.path, "samefile", side_effect=real):
             want = ".mokata/x" if aliases_on_disk(self.d, ".MOKATA/x", ".mokata/x") else ".MOKATA/x"
             self.assertEqual((want, True), S.record_name(self.d, ".MOKATA/x"))
+
+    def test_the_decision_is_the_volumes_not_whether_this_folder_exists_yet(self):
+        """N-L1: where the volume folds case, `vendor/.GIT/hooks/x` is the store under ANY spelling,
+        so it is filed under one name before its folder exists and after the write creates it; where
+        it does not, the typed spelling both times. A decision that waited for the folder split the
+        timeline in two on the default macOS and Windows disks."""
+        for folds in (True, False):
+            self._forget_volumes()
+            with mock.patch.object(S, "_probe_folds_case", return_value=folds):
+                for typed in ("vendor/.GIT/hooks/x", "sub/.Mokata/y"):
+                    with self.subTest(folds=folds, typed=typed):
+                        before = S.record_name(self.d, typed)
+                        want = typed.replace(typed.split("/")[1], typed.split("/")[1].lower()) \
+                            if folds else typed
+                        self.assertEqual((want, True), before)
+
+    def test_a_write_that_creates_the_folder_is_filed_under_the_same_name_on_this_disk(self):
+        """N-L1 on the real disk (case-insensitive on a default Mac or Windows, sensitive on Linux):
+        whichever it is, before the write and after it are one name."""
+        self._forget_volumes()
+        for typed in ("vendor/.GIT/hooks/x", "sub/.Mokata/y"):
+            with self.subTest(typed=typed):
+                before = S.record_name(self.d, typed)
+                write(self.d, typed, "z")
+                self.assertEqual(before, S.record_name(self.d, typed))
+
+    def test_the_volume_is_probed_once_not_once_per_write(self):
+        self._forget_volumes()
+        with mock.patch.object(S, "_probe_folds_case", return_value=True) as probe:
+            for typed in (".MOKATA/a", ".MOKATA/b", "x/.GIT/c"):
+                S.record_name(self.d, typed)
+        self.assertEqual(1, probe.call_count)
+
+    def test_a_root_with_no_letter_to_flip_is_probed_with_a_file_that_is_removed(self):
+        digits = os.path.join(self.d, "123")
+        os.makedirs(digits)
+        self.assertIn(S._probe_folds_case(digits), (True, False))
+        self.assertEqual([], [e for e in os.listdir(digits)], "the probe file was left behind")
 
 
 if __name__ == "__main__":

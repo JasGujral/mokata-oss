@@ -28,7 +28,7 @@ import codecs
 import json
 import os
 import re
-import tempfile
+import secrets
 import threading
 import time
 from dataclasses import dataclass, field
@@ -376,25 +376,28 @@ class SpillWriter:
     one per line, in key order; every `INDEX_EVERY`-th row's (key, offset) is indexed."""
 
     def __init__(self, directory: str, kind: str) -> None:
+        from ..winacl import create_private_file, make_private_dir
         try:
-            fresh = not os.path.isdir(directory)
-            os.makedirs(directory, mode=0o700, exist_ok=True)
-            fd, self.path = tempfile.mkstemp(prefix=f"{SPILL_PREFIX}{os.getpid()}-{kind}-",
-                                             suffix=".spill", dir=directory)
+            if not os.path.isdir(directory):       # born owner-only, and its children inherit that
+                os.makedirs(os.path.dirname(directory) or ".", exist_ok=True)
+                try:
+                    make_private_dir(directory)
+                except FileExistsError:
+                    pass                           # a concurrent spill made it first
+            while True:
+                self.path = os.path.join(directory, "%s%d-%s-%s.spill" % (
+                    SPILL_PREFIX, os.getpid(), kind, secrets.token_hex(6)))
+                try:
+                    fd = create_private_file(self.path)    # owner-only from its first instant
+                    break
+                except FileExistsError:
+                    continue
         except OSError as exc:
-            raise SpillFull(f"no spill file could be made in {directory}: {exc}") from None
+            raise SpillFull(f"no owner-only spill file could be made in {directory}: {exc}") from None
         self.fh = os.fdopen(fd, "wb")
         self.rows = 0
         self.bytes = 0
         self.index: List[Tuple[Any, int]] = []
-        try:
-            from ..winacl import owner_only          # Windows ignores 0o600: set the DACL itself
-            if fresh:                  # once, when WE made the folder: re-applying a directory ACL
-                owner_only(directory)  # walks every child (O(spills)), and its entry is inherited
-            owner_only(self.path)
-        except OSError as exc:
-            self.discard()
-            raise SpillFull(f"the spill file could not be made owner-only: {exc}") from None
 
     def row(self, key: Any, row: List[Any]) -> None:
         if self.rows % INDEX_EVERY == 0:

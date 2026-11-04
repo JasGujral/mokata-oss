@@ -1,16 +1,23 @@
-"""Owner-only on Windows — the one helper behind every "owner-only" claim (0.0.27 CI-FIX Lows C).
+"""Owner-only on Windows — files and folders BORN owner-only (0.0.27 CI-FIX Lows C).
 
 POSIX gets owner-only from the mode bits (`0o600` file, `0o700` directory). Windows ignores both: a
 file made there inherits the ACL of its folder, and outside the user's profile (a repo on `D:\\`)
 that folder grants `BUILTIN\\Users` read. So a file whose docstring says "owner-only" was readable
-by every local account. `owner_only(path)` makes it true: it replaces the path's DACL with a
-PROTECTED one (no inheritance from the parent) holding exactly one entry, full control for the
-current user. A directory's entry is inherited by what is made in it afterwards.
+by every local account.
 
-No-op on every other OS. Stdlib `ctypes` only (advapi32 / kernel32), no new dependency. A volume
-with no ACLs (FAT, exFAT) answers ERROR_NOT_SUPPORTED: there is nothing to protect there, so that
-one answer is not an error; every other failure raises `OSError` — owner-only is a promise, and a
-promise that could not be kept is not quietly dropped.
+Setting the ACL AFTER the file exists is not enough: Windows checks access when a handle is OPENED,
+so an account that opens the new file in the window before the ACL lands keeps a handle that reads
+the secret later (measured: 105 of 3000 writes). So the file is CREATED with its descriptor:
+`create_private_file(path)` is `CreateFileW(CREATE_NEW, <protected DACL: this user only>)`, and
+`make_private_dir(path)` is `CreateDirectoryW` with the same. The descriptor is protected (no
+inheritance from the parent) and holds exactly one entry, full control for the current user; a
+directory's entry is inherited by what is made in it afterwards. On every other OS the same two
+calls make a `0o600` file (exclusively) and a `0o700` directory.
+
+Stdlib `ctypes` only (advapi32 / kernel32), no new dependency. A volume with no ACLs (FAT, exFAT)
+answers ERROR_NOT_SUPPORTED: there is nothing to protect there, so the file is made plainly; every
+other failure raises `OSError` — owner-only is a promise, and a promise that could not be kept is
+not quietly dropped.
 
 Not used by the hook spool: a hook may import the standard library alone and pays no `ctypes`
 (`test_o3_hook_emitter`). The spool must live under the user profile (`~/.mokata/hook-spool`), whose
@@ -26,9 +33,11 @@ import sys
 from typing import Optional
 
 _ERROR_NOT_SUPPORTED = 50
-_SE_FILE_OBJECT = 1
-_DACL_SECURITY_INFORMATION = 0x4
-_PROTECTED_DACL_SECURITY_INFORMATION = 0x80000000
+_GENERIC_READ = 0x80000000
+_GENERIC_WRITE = 0x40000000
+_SHARE_ALL = 0x7                       # read | write | delete: the same sharing `os.open` gives
+_CREATE_NEW = 1                        # fails if the name exists (the O_EXCL of CreateFileW)
+_FILE_ATTRIBUTE_NORMAL = 0x80
 _TOKEN_QUERY = 0x8
 _TOKEN_USER = 1
 _SDDL_REVISION_1 = 1
@@ -57,11 +66,12 @@ def _win():
     adv.ConvertSidToStringSidW.argtypes = [vp, ctypes.POINTER(ctypes.c_wchar_p)]
     adv.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
         ctypes.c_wchar_p, wintypes.DWORD, ctypes.POINTER(vp), vp]
-    adv.GetSecurityDescriptorDacl.argtypes = [vp, ctypes.POINTER(wintypes.BOOL), ctypes.POINTER(vp),
-                                              ctypes.POINTER(wintypes.BOOL)]
-    adv.SetNamedSecurityInfoW.argtypes = [ctypes.c_wchar_p, ctypes.c_int, wintypes.DWORD, vp, vp,
-                                          vp, vp]
-    adv.SetNamedSecurityInfoW.restype = wintypes.DWORD
+    ker.CreateFileW.argtypes = [ctypes.c_wchar_p, wintypes.DWORD, wintypes.DWORD, vp,
+                                wintypes.DWORD, wintypes.DWORD, vp]
+    ker.CreateFileW.restype = vp
+    ker.CreateDirectoryW.argtypes = [ctypes.c_wchar_p, vp]
+    ker.CreateDirectoryW.restype = wintypes.BOOL
+    ker.CloseHandle.argtypes = [vp]
     return ctypes, wintypes, adv, ker
 
 
@@ -93,28 +103,68 @@ def current_user_sid() -> str:
     return _SID
 
 
-def owner_only(path: str) -> None:
-    """Make `path` (a file or a directory) readable and writable by the current user ONLY."""
-    if sys.platform != "win32":
-        return
+def _plain_flags() -> int:
+    return (os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+            | getattr(os, "O_NOINHERIT", 0))
+
+
+def _born_with_descriptor(directory: bool, create):
+    """Run `create(ctypes, kernel32, SECURITY_ATTRIBUTES*)` with this user's owner-only descriptor."""
     ctypes, wintypes, adv, ker = _win()
+
+    class SecurityAttributes(ctypes.Structure):
+        _fields_ = [("nLength", wintypes.DWORD), ("lpSecurityDescriptor", ctypes.c_void_p),
+                    ("bInheritHandle", wintypes.BOOL)]
+
     sd = ctypes.c_void_p()
-    text = sddl_for(current_user_sid(), os.path.isdir(path))
     if not adv.ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            text, _SDDL_REVISION_1, ctypes.byref(sd), None):
+            sddl_for(current_user_sid(), directory), _SDDL_REVISION_1, ctypes.byref(sd), None):
         raise ctypes.WinError(ctypes.get_last_error())
     try:
-        present, defaulted, dacl = wintypes.BOOL(), wintypes.BOOL(), ctypes.c_void_p()
-        if not adv.GetSecurityDescriptorDacl(sd, ctypes.byref(present), ctypes.byref(dacl),
-                                             ctypes.byref(defaulted)):
-            raise ctypes.WinError(ctypes.get_last_error())
-        rc = adv.SetNamedSecurityInfoW(
-            os.fspath(path), _SE_FILE_OBJECT,
-            _DACL_SECURITY_INFORMATION | _PROTECTED_DACL_SECURITY_INFORMATION,
-            None, None, dacl, None)
+        sa = SecurityAttributes(ctypes.sizeof(SecurityAttributes), sd.value, False)  # not inherited
+        return create(ctypes, ker, ctypes.byref(sa))
     finally:
         ker.LocalFree(sd)
-    if rc == _ERROR_NOT_SUPPORTED:
-        return                                  # a volume with no ACLs: nothing to protect
-    if rc != 0:
-        raise OSError(rc, "could not make %s owner-only (Windows error %d)" % (path, rc), path)
+
+
+def create_private_file(path: str) -> int:
+    """Create `path` NEW (it must not exist: `FileExistsError`), readable and writable by the current
+    user ONLY from its first instant, and return an open read-write binary fd that children do not
+    inherit. Nobody else can ever hold a handle to it, because nobody else could open it."""
+    if sys.platform != "win32":
+        return os.open(path, _plain_flags(), 0o600)
+
+    def create(ctypes, ker, sa):
+        h = ker.CreateFileW(os.fspath(path), _GENERIC_READ | _GENERIC_WRITE, _SHARE_ALL, sa,
+                            _CREATE_NEW, _FILE_ATTRIBUTE_NORMAL, None)
+        if h is None or h == ctypes.c_void_p(-1).value:
+            err = ctypes.get_last_error()
+            if err == _ERROR_NOT_SUPPORTED:
+                return None                       # a volume with no ACLs: nothing to protect
+            raise ctypes.WinError(err)
+        import msvcrt
+        try:
+            return msvcrt.open_osfhandle(h, 0)
+        except BaseException:
+            ker.CloseHandle(h)
+            raise
+    fd = _born_with_descriptor(False, create)
+    return os.open(path, _plain_flags(), 0o600) if fd is None else fd
+
+
+def make_private_dir(path: str) -> None:
+    """Create the directory `path` NEW (`FileExistsError` if it exists), usable by the current user
+    ONLY from its first instant, and inherited that way by everything made in it afterwards."""
+    if sys.platform != "win32":
+        os.mkdir(path, 0o700)
+        return
+
+    def create(ctypes, ker, sa):
+        if ker.CreateDirectoryW(os.fspath(path), sa):
+            return True
+        err = ctypes.get_last_error()
+        if err == _ERROR_NOT_SUPPORTED:
+            return False
+        raise ctypes.WinError(err)
+    if not _born_with_descriptor(True, create):
+        os.mkdir(path, 0o700)

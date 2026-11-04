@@ -1784,6 +1784,8 @@ CALLER_PINS = {
         ("flush_liveness.py", "update_state"),
         ("govern/calibration.py", "save_cursor"),
         ("govern/secret_ignore.py", "_gated_write._commit"),
+        ("ide/bus.py", "ensure_bridge"),
+        ("ide/server.py", "_write_record"),
         ("ide/trust.py", "_write"),
         ("init.py", "InitPlan.write_files"),
         ("knowledge/anchor_fingerprints.py", "_write_record"),

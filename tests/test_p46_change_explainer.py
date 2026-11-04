@@ -840,10 +840,9 @@ class TheTerminalHandOffIsOneSafeArgument(unittest.TestCase):
         real_reap = host.reap
 
         def counted_reap(*a, **k):
-            try:
-                return real_reap(*a, **k)
-            finally:
-                swept.set()
+            out = real_reap(*a, **k)         # a sweep that RAISES must not count: it is a red, and
+            swept.set()                      # setting the event first lets the main thread win the
+            return out                       # race against the excepthook that records the death
         host.reap = counted_reap             # the reaper loop calls self.reap: see its sweeps
 
         def fake(tid, program, argv, root, cols, rows):

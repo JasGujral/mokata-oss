@@ -11,8 +11,9 @@ in `re`/`enum`/`functools`) and NOTHING from `mokata`:
 
   * `dirty-track`, `stop`, `session-end`, `pre-compact` are SPOOLED: the payload, argv, cwd, the
     `CLAUDE_*`/`MOKATA_*` environment and — for `dirty-track` — the written file's bytes AS THEY ARE
-    AT HOOK TIME are written to one owner-only file in the per-user spool, and a detached DRAINER is
-    started to do the work. The hook exits 0. Doc 109's "append to the event log and exit 0".
+    AT HOOK TIME are written to one file in the per-user spool (under the user profile, so readable by
+    this user, the administrators and SYSTEM only; a spool outside the profile is refused on Windows
+    and the hook runs inline), and a detached DRAINER is started to do the work. The hook exits 0. Doc 109's "append to the event log and exit 0".
   * `run-bind` stays SYNCHRONOUS: it writes the session→run binding the phase gate reads on the very
     next tool call, so deferring it would be a correctness change, not a latency trade. Its common
     case (a `session_save` that registered nothing) is answered here on the standard library; a real
@@ -480,12 +481,41 @@ def spool_dir() -> str:
 
 
 def under_profile(path: str, home: str) -> bool:
-    """True when `path` is `home` or inside it (symlinks, 8.3 names and case resolved first)."""
+    """True when `path` is `home` or inside it (symlinks, 8.3 names and case resolved first). A
+    `home` or `path` that is not absolute is NEVER inside: `~` left unexpanded (no `%USERPROFILE%`)
+    would resolve against the working directory, i.e. the repo, and be called the profile."""
+    if not (os.path.isabs(path) and os.path.isabs(home)):
+        return False
     try:
         p, h = os.path.normcase(os.path.realpath(path)), os.path.normcase(os.path.realpath(home))
         return os.path.commonpath([p, h]) == h
     except ValueError:                  # another drive: commonpath refuses to compare
         return False
+
+
+def _windows() -> bool:
+    return os.name == "nt"
+
+
+def spool_refusal(spool: str, home: str, windows: bool = None) -> str:
+    """Why `spool` may not be used on this OS, in plain words with the remedy; "" when it may.
+
+    Windows ignores file modes, and a hook may not pay for `ctypes`, so the spool relies on the ACL
+    of the user profile it sits under. One outside the profile (or with no profile to compare with)
+    would inherit the grants of whatever folder it is in, so there it is refused and the hook runs
+    inline: correct, and slower (the whole engine imports on the harness's clock). `mokata doctor`
+    prints this so the slowdown has a name."""
+    if not (_windows() if windows is None else windows):
+        return ""
+    if not os.path.isabs(home):
+        return ("your user profile folder could not be found (USERPROFILE is not set), so the hook "
+                "spool cannot be shown to be private and hooks run inline (slower). Set USERPROFILE "
+                "so the spool can live under it.")
+    if under_profile(spool, home):
+        return ""
+    return ("MOKATA_HOOK_SPOOL (%s) is outside your user profile (%s), where the folder's ACL may "
+            "admit other accounts, so hooks run inline (slower) instead of spooling. Unset "
+            "MOKATA_HOOK_SPOOL, or point it at a folder inside your profile." % (spool, home))
 
 
 def pending(spool: str) -> list:
@@ -564,9 +594,9 @@ def spool_entry(spool: str, argv: list, raw: bytes, observed: dict = None) -> st
     Format: `MKS2 \0 cwd \0 argc \0 argv… \0 envc \0 K=V… \0 obsc \0 (path \0 state \0 size
     \0 t \0 len \0)…` then the observed files' bytes back to back, then the raw hook payload."""
     ns = time.time_ns()
-    if os.name == "nt" and not under_profile(spool, os.path.expanduser("~")):
-        raise OSError("MOKATA_HOOK_SPOOL is outside the user profile: its ACL is not this user's "
-                      "alone, so the hook runs inline instead of spooling %s" % spool)
+    why = spool_refusal(spool, os.path.expanduser("~"))
+    if why:
+        raise OSError(why)
     os.makedirs(spool, mode=0o700, exist_ok=True)
     if os.name != "nt" and os.stat(spool).st_mode & 0o077:
         os.chmod(spool, 0o700)               # owner-only, even if something else created it
@@ -992,4 +1022,4 @@ def main(argv: "list | None" = None) -> int:
 __all__ = ["DEFERRED", "PRIVATE_DIRS", "QUIET_OUTSIDE_MOKATA", "SYNC_OBSERVE", "aliases_private",
            "drain", "emit", "fold_component", "hardlinked_private", "is_private_name", "loads",
            "main", "pending", "private_path", "registered_run", "split_any", "spool_dir",
-           "spool_entry", "store_dirs", "surely_not_mokata", "under_profile"]
+           "spool_entry", "spool_refusal", "store_dirs", "surely_not_mokata", "under_profile"]

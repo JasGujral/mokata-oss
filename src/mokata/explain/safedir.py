@@ -126,14 +126,12 @@ class SafeDir:
                  | getattr(os, "O_BINARY", 0))
         if self.fd is not None:
             fd = os.open(tmp, flags, 0o600, dir_fd=self.fd)
-        else:
-            fd = os.open(os.path.join(self.path, tmp), flags, 0o600)
+        else:                                    # no dir_fd (Windows): born owner-only, not fixed after
+            from ..winacl import create_private_file
+            fd = create_private_file(os.path.join(self.path, tmp))
         done = False
         try:
             with os.fdopen(fd, "wb") as fh:
-                if os.name == "nt":              # Windows ignores 0o600: set the DACL itself
-                    from ..winacl import owner_only
-                    owner_only(os.path.join(self.path, tmp))
                 fh.write(data)
                 fh.flush()
                 os.fsync(fh.fileno())
@@ -172,11 +170,8 @@ def _step(parent: SafeDir, part: str, create: bool) -> Optional[SafeDir]:
             if parent.fd is not None:
                 os.mkdir(part, 0o700, dir_fd=parent.fd)
             else:
-                made = os.path.join(parent.path, part)
-                os.mkdir(made, 0o700)
-                if os.name == "nt":              # Windows ignores 0o700: set the DACL itself
-                    from ..winacl import owner_only
-                    owner_only(made)
+                from ..winacl import make_private_dir    # Windows ignores 0o700: born owner-only
+                make_private_dir(os.path.join(parent.path, part))
         except FileExistsError:
             pass
     st = parent._lstat(part)

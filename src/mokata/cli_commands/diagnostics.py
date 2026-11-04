@@ -77,6 +77,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     trust_line = ide_trust.status_line(args.path)
     if trust_line:
         print(trust_line)
+    # The hook spool: on Windows a spool outside the profile (or with no profile found) is refused
+    # for privacy, and every deferred hook then runs inline. Say so, with the remedy.
+    import os
+    from mokata_emit import spool_dir, spool_refusal
+    why = spool_refusal(spool_dir(), os.path.expanduser("~"))
+    if why:
+        print("hooks: " + why)
     # B-VER — the version-parity finding (parity + scope/plugin shadow), the SAME shared reporter
     # `mokata mcp status` uses. Informational: doctor's ok/exit stays derived from `report.ok`,
     # never from parity. This is the MCP-server version axis — a DIFFERENT axis than DB.S1's shared

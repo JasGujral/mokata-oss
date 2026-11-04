@@ -125,16 +125,19 @@ def _canonical_store_name(rel: str, real_root: str) -> str:
     `.MOKATA/x` on macOS (it keeps the typed case): one file, two records. The rest of the path is
     left as the OS named it.
 
-    Only where the two spellings are the SAME directory on disk (`samefile`): on a case-sensitive
-    filesystem `.MOKATA` is a different directory from `.mokata`, a write into it is not a write to
-    mokata's store, and it is recorded as typed."""
+    Only on a volume whose names fold case (`volume_folds_case`): on a case-sensitive filesystem
+    `.MOKATA` is a different directory from `.mokata`, a write into it is not a write to mokata's
+    store, and it is recorded as typed. The decision is the VOLUME's, made once, never whether this
+    one folder exists yet: a write that CREATES `vendor/.GIT/hooks/` must be filed under the same
+    name before and after, or its timeline splits in two."""
     from .. import repo_paths as RP
     try:
         parts = RP.split_path(rel)
+        folds = volume_folds_case(real_root)
         out = []
         for part in parts:
             key = RP.fold_component(part)
-            if key in (".git", ".mokata") and part != key and _same_dir(real_root, out, part, key):
+            if key in (".git", ".mokata") and part != key and folds:
                 part = key
             out.append(part)
         return "/".join(out)
@@ -142,11 +145,43 @@ def _canonical_store_name(rel: str, real_root: str) -> str:
         return rel
 
 
-def _same_dir(real_root: str, done: List[str], typed: str, canonical: str) -> bool:
+#: st_dev of a volume -> does it open names regardless of case? Probed once per volume (a root's
+#: own name against its case-flipped spelling), then remembered: it is asked on every recorded write.
+_FOLDS_CASE: Dict[int, bool] = {}
+
+
+def volume_folds_case(real_root: str) -> bool:
+    """Does the volume holding `real_root` open `Name` and `nAME` as the same file? Asked of the disk
+    through the root's own name (it exists, so nothing is created); a root whose name has no letter
+    case to flip is probed with a short-lived file beside it. Undecidable means it does NOT fold
+    (the typed spelling is kept, which is also what a case-sensitive disk is owed)."""
     try:
-        return os.path.samefile(os.path.join(real_root, *done, typed),
-                                os.path.join(real_root, *done, canonical))
-    except (OSError, ValueError):
+        dev = os.stat(real_root).st_dev
+    except OSError:
+        return False
+    if dev not in _FOLDS_CASE:
+        _FOLDS_CASE[dev] = _probe_folds_case(real_root)
+    return _FOLDS_CASE[dev]
+
+
+def _probe_folds_case(real_root: str) -> bool:
+    parent, name = os.path.split(real_root.rstrip("/\\"))
+    flipped = name.swapcase()
+    if parent and name and flipped != name:
+        try:
+            return os.path.samefile(real_root, os.path.join(parent, flipped))
+        except (OSError, ValueError):
+            return False
+    import secrets
+    probe = os.path.join(real_root, ".mokata-case-probe-" + secrets.token_hex(4))
+    try:
+        with open(probe, "x", encoding="utf-8"):
+            pass
+        try:
+            return os.path.exists(os.path.join(real_root, os.path.basename(probe).swapcase()))
+        finally:
+            os.remove(probe)
+    except OSError:
         return False
 
 

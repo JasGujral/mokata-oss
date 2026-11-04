@@ -463,8 +463,8 @@ class TestAtomicfileContract(unittest.TestCase):
         opened = []
         real = atomicfile._exclusive_temp
 
-        def spy(parent, prefix, suffix):
-            fd, tmp = real(parent, prefix, suffix)
+        def spy(parent, prefix, suffix, *rest):
+            fd, tmp = real(parent, prefix, suffix, *rest)
             opened.append(tmp)
             return fd, tmp
 

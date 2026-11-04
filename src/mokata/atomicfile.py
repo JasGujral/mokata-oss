@@ -71,17 +71,23 @@ def _replace(tmp: str, path: str, *, retries: Optional[int] = None,
 _TEMP_SEQ = [0]
 
 
-def _exclusive_temp(parent: str, prefix: str, suffix: str) -> "tuple":
+def _exclusive_temp(parent: str, prefix: str, suffix: str, private: bool = False) -> "tuple":
     """`tempfile.mkstemp`'s contract — a NEW file, created exclusively (O_EXCL), owner-only (0600),
     binary, not inherited by children — without importing `tempfile` (which drags in `random`,
     `shutil`, `hashlib`…: ~8 ms of the synchronous `run-bind` hook's 50, 0.0.26 O3). The name is
-    pid + clock + a per-process counter; a collision just tries the next one."""
+    pid + clock + a per-process counter; a collision just tries the next one. `private` creates it
+    through `winacl.create_private_file`: owner-only from the instant it exists (on Windows that is a
+    descriptor handed to `CreateFileW`; the ACL is never set afterwards, because a handle another
+    account opened in between would keep reading)."""
     flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0) \
         | getattr(os, "O_NOINHERIT", 0)
     for _ in range(10000):
         _TEMP_SEQ[0] += 1
         tmp = os.path.join(parent, f"{prefix}{os.getpid()}-{time.time_ns()}-{_TEMP_SEQ[0]}{suffix}")
         try:
+            if private:
+                from .winacl import create_private_file
+                return create_private_file(tmp), tmp
             return os.open(tmp, flags, 0o600), tmp
         except FileExistsError:
             continue
@@ -105,19 +111,17 @@ def atomic_write_text(path: str, text: str, *, tmp_prefix: str = ".tmp-",
     every diff (L7b's `.mokata/specs/`).
 
     `private=True` is for a file whose CONTENT is a secret (a session bundle, a trust record, a
-    token): the temp file gets an owner-only ACL on Windows (`winacl.owner_only`) BEFORE the first
-    byte is written, and `os.replace` carries it to the target. The default leaves the inherited ACL
-    alone: a committed or user-owned file (`.gitignore`, a spec, the constitution, a manifest) must
-    keep the grants its folder gave it. A failed ACL unlinks the temp file and raises."""
+    token): the temp file is CREATED owner-only (`winacl.create_private_file`: on Windows the
+    descriptor is part of the create, so no other account can ever hold a handle to it), and
+    `os.replace` carries that to the target. The default leaves the inherited ACL alone: a committed
+    or user-owned file (`.gitignore`, a spec, the constitution, a manifest) must keep the grants its
+    folder gave it. A create that cannot be made owner-only raises, and nothing is left behind."""
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    fd, tmp = _exclusive_temp(parent or ".", tmp_prefix, tmp_suffix)
+    fd, tmp = _exclusive_temp(parent or ".", tmp_prefix, tmp_suffix, private)
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline=newline) as fh:
-            if private:                      # Windows ignores 0o600: the DACL, at size 0
-                from .winacl import owner_only
-                owner_only(tmp)
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
