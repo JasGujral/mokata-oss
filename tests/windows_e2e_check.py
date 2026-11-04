@@ -106,6 +106,23 @@ class Server:
         self.proc = subprocess.Popen(
             [resolve("mokata-mcp")], cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, bufsize=1)
+        # stderr is drained from the first byte by its own thread: a server that writes more than a
+        # pipe holds would otherwise block on stderr, and a failure report that READS stderr after
+        # the fact would block for as long as anything (a child the server started) kept the pipe
+        # open — which hung this check for the job's whole ten minutes with no output at all.
+        self._err = []
+        self._drain = threading.Thread(target=self._drain_stderr, daemon=True)
+        self._drain.start()
+
+    def _drain_stderr(self):
+        try:
+            for chunk in iter(self.proc.stderr.readline, ""):
+                self._err.append(chunk)
+        except (OSError, ValueError):
+            pass
+
+    def stderr_tail(self):
+        return "".join(self._err)[-2000:]
 
     def _readline(self):
         holder = {}
@@ -121,16 +138,17 @@ class Server:
         reader.join(READ_TIMEOUT)
         if reader.is_alive():
             raise StepFailed("the server did not answer within %.0fs — it started and then went "
-                             "quiet, which is a different failure from not starting"
-                             % READ_TIMEOUT)
+                             "quiet, which is a different failure from not starting. stderr:\n%s"
+                             % (READ_TIMEOUT, self.stderr_tail()))
         line = holder.get("line")
         if not line:
-            err = ""
             try:
-                err = (self.proc.stderr.read() or "")[-2000:]
-            except Exception:                                 # pragma: no cover
-                pass
-            raise StepFailed("the server closed its stdout without answering. stderr:\n" + err)
+                code = self.proc.wait(timeout=READ_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                code = None
+            self._drain.join(5)
+            raise StepFailed("the server closed its stdout without answering (exit code %s). "
+                             "stderr:\n%s" % (code, self.stderr_tail()))
         return line
 
     def call(self, method, params=None, request_id=1):

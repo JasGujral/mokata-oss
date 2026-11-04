@@ -196,7 +196,12 @@ def missing_evidence(root: str, run_id: str, facts: Optional[LogFacts] = None) -
     if suite is None:
         reasons.append("no test run is recorded for this run")
     elif not suite.get("passed"):
-        reasons.append("the last recorded test run FAILED")
+        if suite.get("not_run") and not suite.get("failed"):
+            # a run in which some tests could not even start is not a failing run (0.0.27 LB6-2)
+            reasons.append("not all tests ran in the last recorded test run ("
+                           + str(suite.get("reason") or "some tests did not run") + ")")
+        else:
+            reasons.append("the last recorded test run FAILED")
     elif wrote is not None and not (isinstance(suite.get("at"), (int, float))
                                     and suite["at"] >= wrote):
         reasons.append("the last recorded test run is OLDER than the run's last write — the code "

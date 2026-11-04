@@ -223,7 +223,7 @@
     const facts = el("p", "pf-facts",
       `${t.page.total_acs} AC(s) · ${t.page.total_tests} test(s) · ${t.page.total_code} changed definition(s) · ` +
       `${t.files.length} file(s) · graph: ${t.graph.basis}${t.graph.backend ? " (" + t.graph.backend + ")" : ""}` +
-      (t.record.last_suite ? ` · last suite ${t.record.last_suite.passed ? "passed" : "FAILED"} (${t.record.last_suite.command || "?"})` : " · no suite run recorded"));
+      (t.record.last_suite ? ` · last suite ${t.record.last_suite.passed ? "passed" : t.record.last_suite.passed === null ? "did not run every test" : "FAILED"} (${t.record.last_suite.command || "?"})` : " · no suite run recorded"));
     summaryEl.append(facts);
     const chips = el("div", "pf-chips");
     chip(chips, `${r.untested_acs.length} untested AC`, r.untested_acs.length ? "bad" : "ok");

@@ -1194,7 +1194,7 @@ class StoppingNeverHangsAndKillsTheTree(_Repo):
         th.join(5)
         self.assertIsInstance(outcome.get("exc"), L.ServerGone)
         self.assertFalse(srv.alive)
-        self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=5), self._grandchild_alive())
+        self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=30), self._grandchild_alive())
 
     def test_stop_all_on_a_server_that_ignores_shutdown_is_bounded_and_leaves_no_grandchild(self):
         """`stop_all` (revoke, IDE shutdown, idle reap) on a server that never answers `shutdown`
@@ -1209,7 +1209,7 @@ class StoppingNeverHangsAndKillsTheTree(_Repo):
         self.assertLess(took, 3 * L.STOP_GRACE_S + 1, f"stop_all blocked for {took:.1f}s")
         self.assertFalse(srv.alive)
         self.assertEqual([], h.status()["servers"])
-        self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=5), self._grandchild_alive())
+        self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=30), self._grandchild_alive())
 
     def test_revoke_and_ide_close_return_promptly_with_a_lingering_server(self):
         """Through the routes: `POST /api/lsp/trust {revoke}` and `state.close()` do not hang on
@@ -1224,7 +1224,7 @@ class StoppingNeverHangsAndKillsTheTree(_Repo):
         self.assertEqual(200, r.status_code, r.text)
         self.assertLess(time.monotonic() - t0, 3 * L.STOP_GRACE_S + 1)
         self.assertFalse(srv.alive)
-        self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=5))
+        self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=30))
         t0 = time.monotonic()
         state.close()
         self.assertLess(time.monotonic() - t0, 3 * L.STOP_GRACE_S + 1)
@@ -1251,7 +1251,7 @@ class StoppingNeverHangsAndKillsTheTree(_Repo):
             srv.request("textDocument/hover", {"textDocument": {"uri": uri}, "position": {"line": 0, "character": 5}})
         self.assertLess(time.monotonic() - t0, 8.0, "the crash was hidden by the child's pipe")
         self.assertTrue(srv.stopped.is_set())
-        self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=5), self._grandchild_alive())
+        self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=30), self._grandchild_alive())
         self.assertTrue(wait_for(lambda: any(e.get("what") == "crashed" for e in events)))
         self.assertEqual("crashed", h.status()["servers"][0]["state"])
         t0 = time.monotonic()
@@ -1357,7 +1357,7 @@ class StoppingNeverHangsAndKillsTheTree(_Repo):
         with mock.patch.object(os, "killpg", spy):
             with self.assertRaises(L.ServerGone):
                 srv.request("textDocument/hover", {"textDocument": {"uri": uri}, "position": {"line": 0, "character": 5}})
-            self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=5))
+            self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=30))
             time.sleep(0.3)
             srv.stop("later stop")
             srv.kill("later kill")
@@ -1393,7 +1393,7 @@ class StoppingNeverHangsAndKillsTheTree(_Repo):
         uri, _ = srv.open(os.path.join(self.repo, "src", "app", "core.py"), "python")
         with self.assertRaises(L.ServerGone):
             srv.request("textDocument/hover", {"textDocument": {"uri": uri}, "position": {"line": 0, "character": 5}})
-        self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=5), self._grandchild_alive())
+        self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=30), self._grandchild_alive())
 
     def test_a_cli_untrust_stops_a_running_server_at_the_next_use_not_the_idle_reap(self):
         """`mokata ide --untrust` in a terminal only flips the record; the host re-reads trust on

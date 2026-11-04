@@ -24,6 +24,7 @@
 .rv-h { font: 10px var(--mono); width: 15px; height: 15px; display: inline-flex; align-items: center; justify-content: center; border-radius: 3px; }
 .rv-h-green { background: var(--add-bg); color: var(--accent-ink); }
 .rv-h-red, .rv-h-error { background: var(--del-bg); color: var(--del); }
+.rv-h-not-run { background: var(--panel2); color: var(--muted, var(--text)); border: 1px dashed var(--line); }
 .rv-pager { display: flex; align-items: center; gap: 10px; padding: 10px 0; }
 .rv-unmapped { margin-top: 12px; font-size: 12px; }
 .rv-job { margin: 6px 0; }

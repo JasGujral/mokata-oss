@@ -414,19 +414,27 @@ class ReRun(unittest.TestCase):
 
         dead = mock.Mock(pid=77)
         dead.poll.return_value = 0                         # the runner exited long ago
-        with mock.patch("mokata.ide.review_context.os.name", "nt"), \
-                mock.patch("mokata.crg_resolve._end_tree", side_effect=lambda p: ended.append("taskkill")):
-            RC._kill_tree(dead, leftovers_only=True, job=Job())
+
+        class Watch:
+            def end(self):
+                ended.append("watch")
+
+        # `nt=True` is the platform handed to the function — nothing global is patched
+        with mock.patch("mokata.crg_resolve._end_tree", side_effect=lambda p: ended.append("taskkill")):
+            RC._kill_tree(dead, leftovers_only=True, job=Job(), nt=True)
             self.assertEqual(["job"], ended)
             ended.clear()
-            RC._kill_tree(dead, job=Job())                 # a cancel: the job as well, not taskkill
+            RC._kill_tree(dead, job=Job(), nt=True)        # a cancel: the job as well, not taskkill
             self.assertEqual(["job"], ended)
             ended.clear()
             bad = Job()
-            bad.ok = False                                 # no job could be made: the old route
-            RC._kill_tree(dead, job=bad)
-            RC._kill_tree(dead, leftovers_only=True, job=bad)
-            self.assertEqual(["taskkill"], ended)
+            bad.ok = False                                 # no job could be made: the fallback
+            RC._kill_tree(dead, job=bad, watch=Watch(), nt=True)
+            self.assertEqual(["taskkill", "watch"], ended, "a live leader is walked by taskkill, "
+                             "then what the watch remembered is ended")
+            ended.clear()
+            RC._kill_tree(dead, leftovers_only=True, job=bad, watch=Watch(), nt=True)
+            self.assertEqual(["watch"], ended, "the leader is dead: only what was remembered")
 
     def test_a_test_that_leaves_a_process_behind_still_finishes(self):
         """A test whose runner exits but leaves a helper holding its output still finishes (the
@@ -452,8 +460,15 @@ class ReRun(unittest.TestCase):
         os.chmod(os.path.join(env, "bin", "mk-p7-runner"), 0o755)
         _set_command(self.d, "mk-p7-runner")
         from unittest import mock
+        from mokata.ide import trust as T
+        home = tempfile.mkdtemp(prefix="mk-p7-home-")
+        self.addCleanup(lambda: shutil.rmtree(home, True))
         clean = {k: v for k, v in os.environ.items() if k not in ("VIRTUAL_ENV", "CONDA_PREFIX")}
+        clean.update(HOME=home, USERPROFILE=home)
         with mock.patch.dict(os.environ, clean, clear=True):   # no activated env: the repo's wins
+            # the runner lives INSIDE the repo (its own venv): it runs once the user trusted the
+            # workspace — the same decision that lets a language server start from that venv
+            T._write(self.d, {"trusted": True, "root": os.path.realpath(self.d), "by": "test"})
             r = self.start({"tests": ["t_ok"]})
             self.assertEqual(200, r.status_code, r.text)
             res = wait_job(self.c, r.json()["id"])["result"]

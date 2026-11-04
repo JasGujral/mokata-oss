@@ -76,7 +76,8 @@ def run_full_suite(root: str, target: str, *, environ: Optional[Dict[str, str]] 
     # The ONE resolver the preflight and the IDE re-run use: a bare name is found on absolute PATH
     # entries only (never the cwd), on Windows npm/npx/pnpm/yarn run through node and their own JS
     # entry, and a `.cmd`/`.bat` is never started (cmd.exe would re-parse the arguments).
-    head, why = resolve_runner(main, cmd["argv"][0], _path_of(run_env))
+    head, why = resolve_runner(main, cmd["argv"][0], _path_of(run_env), None,
+                               list(penv.bin_dirs) if penv is not None else [])
     if head is None:
         raise SuiteError(why or "the test command could not be resolved")
     argv = [*head, *cmd["argv"][1:]]

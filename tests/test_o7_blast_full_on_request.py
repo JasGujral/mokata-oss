@@ -180,12 +180,14 @@ class TheIdeOffersTheFullWalkOnACappedImpact(unittest.TestCase):
         c = TestClient(server.build_app(server.AppState(self.root, "tok", 9999, None, False)),
                        base_url="http://127.0.0.1:9999")
         c.get("/pair?t=tok")
+        from _ide_follow import Following
+        c = Following(c)         # a page follows the job handle; a slow box is entitled to a 202
         base = "/api/impact?path=src/app/hub.py&lines=1-2"
         self.assertEqual(400, c.get(base + "&budget=full").status_code)
         self.assertEqual(400, c.get(base + "&symbols=hub,c1&budget=full").status_code)
         self.assertEqual(400, c.get(base + "&symbols=hub&budget=huge").status_code)
         with mock.patch.object(AB, "BLAST_RADIUS_MAX_REFS", SMALL_CAP):
-            got = c.get(base + "&symbols=hub&budget=full&sync_ms=2000").json()
+            got = c.get(base + "&symbols=hub&budget=full").json()
         self.assertEqual(2 * N, got["symbols"][0]["blast"]["count"])
         # 0.0.26 P32 — the route has no deadline of its own any more: a long walk is a job.
         self.assertFalse(hasattr(server, "FULL_IMPACT_DEADLINE_SECS"))

@@ -36,12 +36,12 @@ import shlex
 import subprocess
 import threading
 import time
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from ..knowledge.cancel import cancelled, checkpoint, kill_on_cancel, report
-from ..exe_path import path_dirs, which_in
+from ..exe_path import _under, is_batch, path_dirs, which_in
 from ..quiet_spawn import hidden
-from .lsp import spawn_jobbed
+from .lsp import TreeWatch, spawn_jobbed
 from .server import BadRequest
 
 #: ACs per page and tests per AC when the page does not say (paging, not a cap: `page` walks all).
@@ -61,7 +61,8 @@ _TEST_ID = re.compile(r"^[\w./\\:\[\]=+,@#~][\w./\\:\[\]=+,@#~-]{0,299}$")
 #: `sh -c`.
 _SHELLY = re.compile(r"(&&|\|\||[|;<>`]|\$\()")
 #: What `cmd.exe` also reads as syntax and a POSIX split does not: a lone `&` (a second command),
-#: `^` (its escape) and a line break. Refused on Windows even though no cmd.exe is ever started.
+#: `^` (its escape) and a line break. Refused on Windows even though the IDE re-run and the gated
+#: merge start no cmd.exe.
 _SHELLY_NT = re.compile(r"[&^\r\n]")
 _HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
@@ -91,7 +92,12 @@ def test_history(tid: str, red: set, green: set, suite: Optional[Dict[str, Any]]
     if suite_ids is None and suite:
         suite_ids = frozenset(suite.get("tests") or ())
     if suite and tid in suite_ids:
-        st = "green" if suite.get("passed") else "red"
+        # A run whose tests did not all end alike names the ones that FAILED; a test that ran
+        # green in it is green, whatever the suite's own verdict was (0.0.27 LB6-2). A run with
+        # no such list is one verdict for every test it names.
+        failed = suite.get("failed")
+        st = ("red" if tid in failed else "green") if isinstance(failed, list) \
+            else ("green" if suite.get("passed") else "red")
         if st != latest:
             hist.append({"state": st, "basis": "last suite run", "at": suite.get("at"),
                          "source": suite.get("source") or "cli"})
@@ -292,50 +298,100 @@ def _shim_in(dirs: List[str], name: str) -> Optional[str]:
     return None
 
 
+#: What a repo-supplied runner needs before it is run (see `resolve_runner`).
+_IN_REPO_NEEDS_TRUST = (
+    "`{name}` resolves to {hit}, a file INSIDE this repository (its own environment), so the repo "
+    "chose what runs. Mark the workspace trusted first (`mokata ide --trust` in a terminal — the "
+    "same decision that lets the IDE start a language server from this repo's venv), or set "
+    "`settings.baseline.test_command` to a runner outside the repo")
+
+
+def _repo_runner_ok(root: str, name: str, hit: str, project_bins: Sequence[str]) -> Optional[str]:
+    """None when a runner found INSIDE the repo may run, else why not.
+
+    THE RULE (0.0.27 LB4-5; the same trust model as `ide/lsp.py`, whose project venv copy of a
+    built-in server runs only in a TRUSTED workspace): a runner whose realpath lies inside the
+    repo is accepted only if (1) it sits in a `bin`/`Scripts` directory of the project's OWN
+    Python environment (the one `project_env` resolved — a venv in the repo is where a project's
+    `pytest` legitimately lives) and (2) the workspace is trusted (`ide/trust`, the user's own
+    record, never the repo's). Anything else in the repo — `tools/pytest.exe`, `node_modules`
+    — is the repo choosing, and is refused whatever the trust."""
+    if not _under(hit, root):
+        return None
+    home = next((b for b in project_bins if _under(hit, b) and _under(b, root)), None)
+    if home is None:
+        return (f"`{name}` resolves to {hit}, a file inside this repository that is not in the "
+                f"project's own Python environment — a repo does not get to choose what runs")
+    from . import trust
+    try:
+        trusted = bool(trust.status(root)["trusted"])
+    except (OSError, ValueError, KeyError):
+        trusted = False
+    return None if trusted else _IN_REPO_NEEDS_TRUST.format(name=name, hit=hit)
+
+
 def resolve_runner(root: str, name: str, path_var: Optional[str],
-                   nt: Optional[bool] = None) -> Tuple[Optional[List[str]], Optional[str]]:
+                   nt: Optional[bool] = None, project_bins: Sequence[str] = ()
+                   ) -> Tuple[Optional[List[str]], Optional[str]]:
     """`(argv head, None)` when `name` can be started WITHOUT a shell, else `(None, why)` — a why
     that is true and says what to do. A bare name is found by the product's finder (absolute PATH
-    entries, never the repo); on Windows, where npm/npx/pnpm/yarn are `.cmd` shims, the head is
-    `[node.exe, <the tool's own JS entry>]` found as the LSP finder finds node servers. A `.cmd`/
-    `.bat` is never run (cmd.exe would parse the test id and the repo's files). An explicit path is
-    used as written, unless it is such a shim."""
+    entries, never the repo's own files — a hit inside the repo runs only from the project's own
+    Python env in a trusted workspace, `_repo_runner_ok`); on Windows, where npm/npx/pnpm/yarn are
+    `.cmd` shims, the head is `[node.exe, <the tool's own JS entry>]` found as the LSP finder
+    finds node servers. A `.cmd`/`.bat` — however Windows spells it (`run.cmd.`, `run.bat `) — is
+    never run (cmd.exe would parse the test id and the repo's files). An explicit path is used as
+    written, unless it is such a shim."""
     from .lsp import _global_node_package_bin
     nt = (os.name == "nt") if nt is None else nt
     bare = os.path.basename(name) == name and not os.path.isabs(name)
     if not bare:
-        if nt and name.lower().endswith((".cmd", ".bat")):
+        if nt and is_batch(name):
             return None, _shim_why(name, name, None)
         return [name], None
     dirs = path_dirs({"PATH": path_var or ""}, cwd=root)
-    exe = which_in(name, dirs, nt=nt)
+    key = name
+    if nt:
+        key = name.lower()
+        if is_batch(name):                               # `npm.cmd`: the tool is `npm`
+            key = name.rstrip(". ")[:-4].lower()
+    exe = None if (nt and is_batch(name)) else which_in(name, dirs, nt=nt)
     if exe:
-        return [exe], None
+        bad = _repo_runner_ok(root, name, exe, project_bins)
+        return ([exe], None) if bad is None else (None, bad)
     if not nt:
         return None, _not_found(name)
-    shim = _shim_in(dirs, name)
+    shim = _shim_in(dirs, key)
     env = {"PATH": path_var or ""}
     tried = ""
-    for pkg in JS_RUNNERS.get(name, ()):
-        head, w = _global_node_package_bin(root, name, pkg, env)
+    for pkg in JS_RUNNERS.get(key, ()):
+        if pkg == "corepack" and shim is None:
+            # corepack only supplies pnpm/yarn when the user ENABLED it (its shims are on PATH):
+            # running it otherwise would download whatever the repo's `packageManager` names, with
+            # no prompt (0.0.27 LB4-2).
+            continue
+        head, w = _global_node_package_bin(root, key, pkg, env)
         if head is not None:
             return head, None
         tried = tried or w
     if shim is None:
-        return None, _not_found(name)
-    return None, _shim_why(name, shim, name in JS_RUNNERS, tried)
+        return None, _not_found(name, key if nt else None)
+    return None, _shim_why(name, shim, key in JS_RUNNERS, tried)
 
 
-def _not_found(name: str) -> str:
-    return f"`{name}` is not an executable on the project's PATH"
+def _not_found(name: str, how_key: Optional[str] = None) -> str:
+    base = f"`{name}` is not an executable on the project's PATH"
+    if how_key in ("pnpm", "yarn"):
+        return (base + f" — install it (`npm install -g {how_key}`) or enable Node's bundled "
+                       f"copy with `corepack enable {how_key}`, then reopen the panel")
+    return base
 
 
 def _shim_why(name: str, shim: str, js: Optional[bool], tried: str = "") -> str:
     """Why a Windows batch file is not started — the same words for the IDE re-run and the gated
     merge's full-suite run, so it says neither "test id" nor "IDE"."""
     base = os.path.basename(shim)
-    return (f"`{name}` is a Windows batch file ({shim}) and mokata never runs a .cmd/.bat — "
-            f"cmd.exe would re-parse the command line"
+    return (f"`{name}` is a Windows batch file ({shim}) and mokata's test re-run and gated merge "
+            f"never start a .cmd/.bat — cmd.exe would re-parse the command line"
             + (f"; its own JavaScript entry (run through node) was not found either"
                + (f" ({tried})" if tried else "") if js else "")
             + f". mokata cannot run this project's tests on Windows, so a gated merge is not "
@@ -354,7 +410,7 @@ def test_command(root: str, nt: Optional[bool] = None) -> Dict[str, Any]:
     if problem:
         return {"configured": False, "text": "", "argv": [], "runnable": False,
                 "note": f"the manifest cannot be read, so the test command is unknown — {problem}"}
-    cmd = baseline_command(man)
+    cmd = (baseline_command(man) or "").strip()      # a trailing newline is not shell syntax (LB5-3)
     if not cmd:
         return {"configured": False, "text": "", "argv": [], "runnable": False,
                 "note": "no test command set — set `settings.baseline.test_command` "
@@ -380,8 +436,8 @@ def test_command(root: str, nt: Optional[bool] = None) -> Dict[str, Any]:
     # project whose env a tool could still supply — only what is certain is refused.
     penv = project_env.resolve(root, project_env.settings_python(man), penv_env, ask_tools=False)
     run_env = project_env.activated(penv_env, penv)
-    head, why = resolve_runner(root, argv[0], _path_of(run_env), nt)
-    if head is None and why == _not_found(argv[0]) and penv is None and (
+    head, why = resolve_runner(root, argv[0], _path_of(run_env), nt, _env_bins(penv))
+    if head is None and why.startswith(_not_found(argv[0])) and penv is None and (
             os.path.exists(os.path.join(root, "pyproject.toml"))
             or os.path.exists(os.path.join(root, "Pipfile"))) and any(
             which_in(tool, path_dirs({"PATH": _path_of(penv_env)}, cwd=root), nt=nt,
@@ -396,6 +452,11 @@ def test_command(root: str, nt: Optional[bool] = None) -> Dict[str, Any]:
         return {"configured": True, "text": cmd, "argv": argv, "runnable": False, "note": why}
     return {"configured": True, "text": cmd, "argv": argv, "runnable": True,
             "note": "each test runs as `" + cmd + " <test id>` in the project's env"}
+
+
+def _env_bins(penv: Any) -> List[str]:
+    """The project's own Python environment's executable directories (none when there is none)."""
+    return list(penv.bin_dirs) if penv is not None else []
 
 
 def split_command(cmd: str) -> List[str]:
@@ -434,13 +495,17 @@ def record_rerun(root: str, run_id: str, command: str, results: List[Dict[str, A
     ran = [r for r in results if r["state"] in ("green", "red")]
     if not ran:                  # nothing ran (could not start): there is no outcome to record
         return {}
+    skipped = [r["id"] for r in results if r["state"] == "not-run"]
     outcome = {r["id"]: r["state"] == "green" for r in ran}
     codes = [r.get("rc") for r in ran]
     bad = next((c for c in codes if c != 0), 0)
     return record_test_run(root, run_id, passed=complete and all(outcome.values())
-                           and len(ran) == len(results),
+                           and not skipped,
                            command=command, results=outcome, source="ide",
-                           actor=ide_actor(), exit_code=bad if isinstance(bad, int) else -1)
+                           actor=ide_actor(), exit_code=bad if isinstance(bad, int) else -1,
+                           not_run=skipped,
+                           reason="" if complete else "the run was cancelled before every "
+                                                      "test ran")
 
 
 def check_test_ids(ids: Iterable[Any]) -> List[str]:
@@ -458,26 +523,33 @@ def check_test_ids(ids: Iterable[Any]) -> List[str]:
 
 #: How often the re-run loop looks at its pipe, its cancel flag and its runner.
 _POLL_S = 0.1
+#: How often the fallback (`lsp.TreeWatch`, used only when no Job Object could be made) looks at
+#: the runner's descendants while it runs.
+_WATCH_EVERY_S = 0.25
 #: After the runner has exited and its group was ended, output is drained until the pipe has been
 #: quiet this long — a bound on draining a dead run's pipe, never on the run itself.
 _DRAIN_IDLE_S = 1.0
 
 
-def _kill_tree(proc: Any, leftovers_only: bool = False, job: Any = None) -> None:
+def _kill_tree(proc: Any, leftovers_only: bool = False, job: Any = None, watch: Any = None,
+               nt: Optional[bool] = None) -> None:
     """End the runner's whole tree. POSIX: SIGKILL to its process group (its pid, as it leads a
     new session). Windows: the runner's Job Object (`lsp.spawn_jobbed`: the runner is created suspended, put in the job, then resumed) — it holds the
     tree whether or not the runner still lives, so what a test left behind after the runner
-    exited is ended too (`taskkill /T` needs a LIVE root to walk from, so it reaches nothing then:
-    the leftover held the project directory open and could not be deleted). Only when no job could
-    be made does it fall back to `taskkill /F /T` (`crg_resolve._end_tree`) for a live runner.
-    `leftovers_only`: the runner has already exited — end what it left in its group. Never
-    raises."""
-    if os.name == "nt":
+    exited is ended too. Only when no job could be made does it fall back: `taskkill /F /T`
+    (`crg_resolve._end_tree`) while the runner is ALIVE (it walks the tree from a live root), then
+    the `TreeWatch` — the descendants remembered while it ran — which still reaches what a test
+    left behind after the runner exited (documented on `TreeWatch`: what it cannot reach).
+    `leftovers_only`: the runner has already exited — end what it left. Never raises."""
+    if (os.name == "nt") if nt is None else nt:
         if job is not None and job.ok:
             job.terminate()
-        elif not leftovers_only:
+            return
+        if not leftovers_only:
             from ..crg_resolve import _end_tree
             _end_tree(proc)
+        if watch is not None:
+            watch.end()
         return
     import signal
     try:
@@ -529,7 +601,7 @@ def run_tests(root: str, argv: List[str], ids: List[str],
     # a BARE name is found only by the finder — and when it finds nothing the run does not start
     # (handing the bare name to Popen would let the OS search `.` or a relative PATH entry,
     # which is the repo).
-    head, not_found = resolve_runner(root, argv[0], path_var)
+    head, not_found = resolve_runner(root, argv[0], path_var, None, _env_bins(penv))
     argv = [*(head or [argv[0]]), *argv[1:]]
     out = {"tail": bytearray(), "bytes": 0}
     results: List[Dict[str, Any]] = []
@@ -568,8 +640,10 @@ def run_tests(root: str, argv: List[str], ids: List[str],
                     on_test(tid, "not-run", time.time())
                 emit(f"{tid}: could not start")
                 continue
+            watch = TreeWatch(proc.pid) if os.name == "nt" and job is not None \
+                and not job.ok else None
             try:
-                rc = _drive(proc, take, lambda: emit(f"running {tid}"), job)
+                rc = _drive(proc, take, lambda: emit(f"running {tid}"), job, watch)
             finally:
                 if job is not None:
                     job.terminate()         # releases the handle; a no-op once the tree is ended
@@ -591,7 +665,7 @@ def run_tests(root: str, argv: List[str], ids: List[str],
 
 
 def _drive(proc: Any, take: Callable[[bytes], None], tick: Callable[[], None],
-           job: Any = None) -> int:
+           job: Any = None, watch: Any = None) -> int:
     """Read one runner's output until its pipe ends, watching the cancel flag between reads (the
     read is on its own thread, so a Cancel never waits on it). Returns the runner's exit code;
     raises `Cancelled` — after ending the runner's whole tree — when the job is cancelled."""
@@ -600,11 +674,14 @@ def _drive(proc: Any, take: Callable[[bytes], None], tick: Callable[[], None],
                               name="mokata-test-output")
     reader.start()
     rc: Optional[int] = None
-    idle, last = 0, 0.0
+    idle, last, seen = 0, 0.0, 0.0
     try:
         while True:
+            if watch is not None and rc is None and time.time() - seen > _WATCH_EVERY_S:
+                seen = time.time()
+                watch.observe()                    # no Job Object: remember the tree while it lives
             if cancelled():
-                _kill_tree(proc, job=job)
+                _kill_tree(proc, job=job, watch=watch)
                 checkpoint()                       # raises Cancelled: the job ends NOW
             try:
                 chunk = pipe.get(timeout=_POLL_S)
@@ -624,17 +701,17 @@ def _drive(proc: Any, take: Callable[[bytes], None], tick: Callable[[], None],
                 # worker) is ended too, so the pipe reaches EOF and the lane is free; anything that
                 # escaped the group cannot hold the job: the dead run's pipe is drained until quiet.
                 rc = proc.returncode
-                _kill_tree(proc, leftovers_only=True, job=job)
+                _kill_tree(proc, leftovers_only=True, job=job, watch=watch)
             elif rc is not None:
                 idle += 1
                 if idle * _POLL_S >= _DRAIN_IDLE_S:
                     break
         rc = proc.wait() if rc is None else rc
-        _kill_tree(proc, leftovers_only=True, job=job)      # nothing a test started outlives its run
+        _kill_tree(proc, leftovers_only=True, job=job, watch=watch)      # nothing a test started outlives its run
         return rc
     finally:
         if proc.poll() is None:                    # an exception mid-read: never leave it running
-            _kill_tree(proc, job=job)
+            _kill_tree(proc, job=job, watch=watch)
         reader.join(_DRAIN_IDLE_S)                 # the tree is dead: its pipe ends at once
         if not reader.is_alive() and proc.stdout is not None:
             proc.stdout.close()

@@ -125,10 +125,15 @@ def baseline_status(command: Optional[str], cwd: Optional[str] = None,
     env_line = project_env.describe(penv)
     run_env = project_env.activated(base_env, penv)
     try:
-        # Justification for the B602 suppression: `command` is the USER's OWN test command (their
-        # `settings.baseline` config / CLI arg), run in their own shell exactly as they'd run it;
-        # not attacker-controlled input. A shell is required so a normal test one-liner
-        # (`pytest -q && ruff .`, pipes, globs) works. Bounded by `timeout`; degrade-clean.
+        # Justification for the B602 suppression, and WHY THIS ONE SPAWN STAYS A SHELL (0.0.27
+        # LB5-2): `command` is the USER's OWN test one-liner (their `settings.baseline` config / CLI
+        # arg), run in their own shell exactly as they would type it — `pytest -q && ruff .`, pipes
+        # and globs are the documented use, and a shell-free split would refuse them. Unlike the
+        # IDE re-run and the gated merge (`ide/review_context.run_tests`, `merge_suite`, which are
+        # shell-free), nothing is APPENDED to it: no test id and no repo file name is ever parsed by
+        # the shell here. On Windows that shell is cmd.exe, so a `.cmd`/`.bat` named in the command
+        # runs as it would in the user's terminal; the claim "mokata never starts a .cmd/.bat" is
+        # made, and true, only for the other two paths. Bounded by `timeout`; degrade-clean.
         # `stdin=DEVNULL`, not inherited. A test command is a BATCH command: if it asks a
         # question it must get EOF and decide, never sit on a fd nobody is going to write to.
         # Inheriting mokata's stdin makes the bound above a lie — `timeout` bounds the wait, but

@@ -54,7 +54,7 @@ from .. import __version__
 from ..errors import MokataError
 from ..knowledge import cancel as C
 from ..quiet_spawn import detached, hidden
-from ..exe_path import _under, path_dirs, which_in
+from ..exe_path import _under, path_dirs, shim_in, which_in
 from ..repo_paths import name_of, split_path
 
 # ------------------------------------------------------------------------ the method allowlist
@@ -253,26 +253,52 @@ def _node_package_bin(root: str, name: str) -> Tuple[Optional[List[str]], str]:
     return _package_bin(os.path.join(root, "node_modules"), root, root, name)
 
 
+def _global_module_dirs(entry: str) -> List[Tuple[str, str]]:
+    """`(node_modules, anchor it must stay inside)` for each place a GLOBAL install can sit, for
+    one absolute PATH entry:
+
+      * npm's Windows prefix IS the PATH entry — `<entry>/node_modules` (shims beside it);
+      * pnpm's global store — `<entry>/global/<n>/node_modules`, newest `<n>` first
+        (`%LOCALAPPDATA%\\pnpm` is on PATH, the packages are one level down);
+      * yarn v1's — `<...>/Yarn/bin` is on PATH, the packages are in `<...>/Yarn/Data/global/
+        node_modules`.
+    Only directories that exist, and only under entries the USER put on PATH (0.0.27: a global
+    pnpm/yarn was reported "not installed" because only the first layout was read)."""
+    out = [(os.path.join(entry, "node_modules"), entry)]
+    store = os.path.join(entry, "global")
+    if os.path.isdir(store):
+        try:
+            nums = sorted(os.listdir(store), reverse=True)
+        except OSError:
+            nums = []
+        out += [(os.path.join(store, n, "node_modules"), entry) for n in nums]
+    if os.path.basename(os.path.normpath(entry)).lower() == "bin":
+        up = os.path.dirname(os.path.normpath(entry))
+        out.append((os.path.join(up, "Data", "global", "node_modules"), up))
+    return [(m, a) for m, a in out if os.path.isdir(m)]
+
+
 def _global_node_package_bin(root: str, name: str, pkg: Optional[str] = None,
                              environ: Optional[Dict[str, str]] = None
                              ) -> Tuple[Optional[List[str]], str]:
-    """A GLOBAL npm install the user made, found through PATH without reading its shim: npm's
-    Windows prefix is the PATH directory itself (`%APPDATA%\\npm\\x.cmd` beside
+    """A GLOBAL npm/pnpm/yarn install the user made, found through PATH without reading its shim:
+    npm's Windows prefix is the PATH directory itself (`%APPDATA%\\npm\\x.cmd` beside
     `%APPDATA%\\npm\\node_modules\\<pkg>`), so each absolute PATH entry outside the repo is
-    asked for `<entry>/node_modules/<pkg>/package.json`. (On POSIX the global bin is a symlink
-    `which_in` already finds.)"""
+    asked for `<entry>/node_modules/<pkg>/package.json` (and the pnpm/yarn layouts of
+    `_global_module_dirs`). (On POSIX the global bin is a symlink `which_in` already finds.)"""
     why = ""
     for d in path_dirs(environ, cwd=root):
         if _under(d, root):
             continue
-        head, w = _package_bin(os.path.join(d, "node_modules"), d, root, name, pkg, environ)
-        if head is not None:
-            return head, ""
-        why = why or w
+        for modules, anchor in _global_module_dirs(d):
+            head, w = _package_bin(modules, anchor, root, name, pkg, environ)
+            if head is not None:
+                return head, ""
+            why = why or w
     return None, why
 
 
-def find_server(root: str, language: str) -> Dict[str, Any]:
+def find_server(root: str, language: str, nt: Optional[bool] = None) -> Dict[str, Any]:
     """`{found, binary, argv, name, candidates:[{name, install, found}]}` for one language — the
     exact command line trusting would allow. No element of `argv` ever reaches a shell. For a
     built-in name: the project's own copy (`node_modules/<pkg>` `bin`, the venv), else the SAME
@@ -285,6 +311,7 @@ def find_server(root: str, language: str) -> Dict[str, Any]:
     cands = []
     pick = None
     note = ""
+    shim_note = ""
     for name, tail, install in spec["servers"]:
         head: Optional[List[str]] = None
         user = bool(spec.get("user"))
@@ -297,12 +324,22 @@ def find_server(root: str, language: str) -> Dict[str, Any]:
         if head is None and not user:
             head, why = _global_node_package_bin(root, name)
             note = note or why
+        if head is None and not shim_note and (os.name == "nt" if nt is None else nt):
+            shim = shim_in(name, path_dirs(cwd=root))
+            if shim:
+                # Windows ships npm/gem/Maven tools as `.cmd`/`.bat`/`.ps1` wrappers. They are
+                # found and NOT run (cmd.exe / PowerShell would re-parse the command line); say
+                # so instead of "not on PATH", which is false.
+                shim_note = (f"{name} was found only as {shim}, and mokata never runs a "
+                             f".cmd/.bat/.ps1 (cmd.exe or PowerShell would re-parse its command "
+                             f"line) — name the server's real executable (an .exe, or node and "
+                             f"its script) in {USER_CONFIG}")
         cands.append({"name": name, "install": install, "found": head is not None})
         if head is not None and pick is None:
             pick = (name, [*head, *tail])
     if pick is None:
         return {"found": False, "binary": None, "argv": None, "name": None, "candidates": cands,
-                "note": note or (f"no {language} language server on PATH, in the venv or node_modules"
+                "note": note or shim_note or (f"no {language} language server on PATH, in the venv or node_modules"
                                  f" — install one yourself: "
                                  + " · ".join(c["install"] for c in cands if c["install"]))}
     return {"found": True, "binary": pick[1][0], "argv": pick[1], "name": pick[0], "candidates": cands}
@@ -322,6 +359,11 @@ def will_run(root: str) -> List[Dict[str, Any]]:
 # ------------------------------------------------------------------------ positions and uris
 def to_uri(path: str) -> str:
     return Path(os.path.abspath(path)).as_uri()
+
+
+#: Names Windows resolves to a DEVICE in any directory, with or without an extension.
+_DEVICE_NAMES = frozenset({"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+                          | {f"COM{i}" for i in range(1, 10)} | {f"LPT{i}" for i in range(1, 10)})
 
 
 def from_uri(uri: str, nt: Optional[bool] = None) -> Optional[str]:
@@ -346,6 +388,12 @@ def from_uri(uri: str, nt: Optional[bool] = None) -> Optional[str]:
     m = re.match(r"^[/\\]?([A-Za-z]):([/\\].*)?$", path)
     if not m:
         return None
+    for part in re.split(r"[/\\]", m.group(2) or ""):
+        # A device (`CON`, `NUL.txt`, `COM1`) is not a file in the repo whatever its directory,
+        # and `a.py::$DATA` / `a.py:stream` names an NTFS stream, not the file. Neither is a
+        # source location a language server can honestly point at.
+        if ":" in part or part.rstrip(" .").split(".")[0].upper() in _DEVICE_NAMES:
+            return None
     return ntpath.normpath(m.group(1).upper() + ":" + (m.group(2) or "/"))
 
 
@@ -452,6 +500,148 @@ class WinJob:
             self._k32.CloseHandle(job)
         except (OSError, AttributeError, ValueError, TypeError):
             pass
+
+
+def _win_process_table() -> List[Tuple[int, int]]:
+    """`[(pid, parent pid)]` of every process, from a ToolHelp snapshot (ctypes only; Windows)."""
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    class _Entry(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+                    ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long),
+                    ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_wchar * 260)]
+
+    k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    k32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    k32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_Entry)]
+    k32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_Entry)]
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    snap = k32.CreateToolhelp32Snapshot(0x2, 0)                  # TH32CS_SNAPPROCESS
+    if not snap or int(snap) in (-1, 0xFFFFFFFF, 0xFFFFFFFFFFFFFFFF):
+        return []
+    out: List[Tuple[int, int]] = []
+    try:
+        entry = _Entry()
+        entry.dwSize = ctypes.sizeof(_Entry)
+        ok = k32.Process32FirstW(snap, ctypes.byref(entry))
+        while ok:
+            out.append((int(entry.th32ProcessID), int(entry.th32ParentProcessID)))
+            ok = k32.Process32NextW(snap, ctypes.byref(entry))
+    finally:
+        k32.CloseHandle(snap)
+    return out
+
+
+def _win_open(pid: int, access: int) -> Any:
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    return k32.OpenProcess(access, False, pid) or None
+
+
+def _win_created(pid: int) -> Optional[int]:
+    """The process's creation time (FILETIME as one int), or None when it is gone/unreadable."""
+    import ctypes
+    from ctypes import wintypes
+    h = _win_open(pid, 0x1000)                       # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return None
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    ft = [wintypes.FILETIME() for _ in range(4)]
+    try:
+        if not k32.GetProcessTimes(h, *[ctypes.byref(f) for f in ft]):
+            return None
+        return (ft[0].dwHighDateTime << 32) | ft[0].dwLowDateTime
+    finally:
+        k32.CloseHandle(h)
+
+
+def _win_kill_pid(pid: int) -> None:
+    import ctypes
+    from ctypes import wintypes
+    h = _win_open(pid, 0x0001)                       # PROCESS_TERMINATE
+    if not h:
+        return
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    try:
+        k32.TerminateProcess(h, 1)
+    finally:
+        k32.CloseHandle(h)
+
+
+class TreeWatch:
+    """The fallback when no Job Object could be made (`WinJob.ok` False): remember the runner's
+    descendants WHILE it lives, so they can still be ended after it has exited.
+
+    `taskkill /F /T` needs a live root to walk from, and Windows does not re-parent an orphan: a
+    child still names its dead parent's pid. So `observe()` (called every few hundred ms while the
+    leader runs) records every process whose parent is the leader or an already-known descendant
+    and which was CREATED AFTER that parent (a pid Windows reused for an unrelated process is older
+    than whatever names it, so it is never taken); `end()` kills what is known and still the same
+    process (same pid AND creation time).
+
+    WHAT IT CANNOT REACH, said exactly: a process started AND orphaned between two `observe()`
+    calls (so its parent is gone before it was ever seen), a descendant that is not in a chain of
+    recorded parents (one that detached itself with a new parent via a handle-inheritance trick),
+    and a descendant created after the last `observe()`/`end()` pass. The Job Object has none of
+    those holes; this is only the fallback. Every probe is injectable; never raises."""
+
+    def __init__(self, leader_pid: int, table: Optional[Callable[[], List[Tuple[int, int]]]] = None,
+                 created: Optional[Callable[[int], Optional[int]]] = None,
+                 kill: Optional[Callable[[int], None]] = None) -> None:
+        self.table = table or _win_process_table
+        self.created = created or _win_created
+        self.kill = kill or _win_kill_pid
+        self.leader = leader_pid
+        self.known: Dict[int, int] = {}                   # pid -> creation time
+        self._leader_created = self.created(leader_pid)
+
+    def observe(self) -> None:
+        try:
+            rows = self.table()
+            roots = {self.leader: self._leader_created}
+            roots.update(self.known)
+            kids: Dict[int, List[int]] = {}
+            for pid, ppid in rows:
+                kids.setdefault(ppid, []).append(pid)
+            todo = [p for p in roots if p in kids]
+            while todo:
+                parent = todo.pop()
+                born = roots.get(parent)
+                for pid in kids.get(parent, ()):
+                    if pid in self.known or pid == self.leader:
+                        continue
+                    c = self.created(pid)
+                    if c is None or (born is not None and c < born):
+                        continue                          # gone, or a reused pid older than its "parent"
+                    self.known[pid] = c
+                    roots[pid] = c
+                    todo.append(pid)
+        except (OSError, AttributeError, ValueError, TypeError):
+            pass
+
+    def end(self) -> List[int]:
+        """Kill every remembered descendant that is still the same process. Returns the pids."""
+        self.observe()
+        ended = []
+        for pid, c in list(self.known.items()):
+            try:
+                if self.created(pid) == c:
+                    self.kill(pid)
+                    ended.append(pid)
+            except (OSError, AttributeError, ValueError, TypeError):
+                pass
+        return ended
 
 
 def _resume_process(proc: Any) -> None:

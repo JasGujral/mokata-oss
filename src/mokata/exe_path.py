@@ -9,6 +9,8 @@ extra. One implementation; `ide/lsp.py` imports it.
     repo, so the repo could answer for a name the user chose.
   * `which_in` — a name as an executable file in exactly the given directories; never a
     `.cmd`/`.bat` shim; optionally never a hit whose realpath lies inside a given directory.
+  * `is_batch` / `shim_in` — what Windows runs through cmd.exe (a `.cmd`/`.bat`, however it is
+    spelled: `run.cmd.` and `run.cmd ` are the same file to Windows), and finding one to say so.
 
 Pure functions; the platform and PATHEXT are injectable so a test can fake Windows.
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
@@ -25,26 +27,81 @@ def path_dirs(environ: Optional[Dict[str, str]] = None, cwd: Optional[str] = Non
     directory are dropped (re-verification R2: CPython's `shutil.which` on Windows searches the
     cwd first even with `path=`, and `mokata ide`'s cwd is the repo — so the repo could choose)."""
     env = os.environ if environ is None else environ
-    here = os.path.normcase(os.path.realpath(cwd or os.getcwd()))
+    here = cwd or os.getcwd()
     out = []
     for d in (env.get("PATH") or "").split(os.pathsep):
         d = d.strip('"')
         if not d or not os.path.isabs(d):
             continue
-        if os.path.normcase(os.path.realpath(d)) == here:
+        if same_place(d, here):
             continue
         out.append(d)
     return out
 
 
-def _under(path: str, base: str) -> bool:
-    """`path` (realpath'd) is `base` or inside it (realpath'd, case-folded where the FS folds)."""
-    p = os.path.normcase(os.path.realpath(path))
-    b = os.path.normcase(os.path.realpath(base))
+def same_place(a: str, b: str) -> bool:
+    """`a` and `b` name the same directory — by identity, not by spelling. A string compare of
+    realpaths is wrong on a case-INSENSITIVE filesystem (macOS APFS, Windows): `/Repo/tools` and
+    `/repo/tools` are one directory, and realpath/normcase fold case only on Windows (0.0.27
+    LB5-1: a case-flipped PATH entry into the repo passed `refuse_under`). So: the folded strings
+    first (cheap, and right for paths that do not exist), then `os.path.samestat` of the two."""
+    ra, rb = os.path.realpath(a), os.path.realpath(b)
+    if os.path.normcase(ra) == os.path.normcase(rb):
+        return True
     try:
-        return os.path.commonpath([p, b]) == b
-    except ValueError:                                  # another drive on Windows
+        return os.path.samestat(os.stat(ra), os.stat(rb))
+    except OSError:
         return False
+
+
+def _under(path: str, base: str) -> bool:
+    """`path` is `base` or inside it, compared by IDENTITY (`same_place`) up the path's ancestors,
+    so a differently-cased spelling of the repo is still the repo on a case-insensitive FS."""
+    cur = os.path.realpath(path)
+    b = os.path.realpath(base)
+    try:
+        base_stat = os.stat(b)
+    except OSError:
+        base_stat = None
+    nb = os.path.normcase(b)
+    while True:
+        if os.path.normcase(cur) == nb:
+            return True
+        if base_stat is not None:
+            try:
+                if os.path.samestat(os.stat(cur), base_stat):
+                    return True
+            except OSError:
+                pass
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return False
+        cur = parent
+
+
+def is_batch(name: str) -> bool:
+    """A file Windows runs through cmd.exe: `.cmd`/`.bat`, and the spellings Windows treats as the
+    same file — trailing dots and spaces are stripped by the Win32 path layer (`run.cmd.`,
+    `run.cmd..`, `run.bat `), so `CreateProcess` starts cmd.exe for them (0.0.27 LB4-1)."""
+    return name.rstrip(". ").lower().endswith((".cmd", ".bat"))
+
+
+#: Wrappers Windows starts through a shell/host: what `shim_in` reports.
+_SHIM_EXTS = (".cmd", ".bat", ".ps1")
+
+
+def shim_in(name: str, dirs: Sequence[str]) -> Optional[str]:
+    """The `name.cmd` / `.bat` / `.ps1` wrapper in these directories, if one exists — a thing
+    mokata finds but never runs (cmd.exe / PowerShell would parse the command line). Used only to
+    SAY so, never to run it."""
+    for d in dirs:
+        if not d or not os.path.isabs(d):
+            continue
+        for ext in _SHIM_EXTS:
+            cand = os.path.join(d, name + ext)
+            if os.path.isfile(cand):
+                return cand
+    return None
 
 
 #: The only Windows suffixes a program can be started from without a shell.
@@ -67,28 +124,46 @@ def which_in(name: str, dirs: Sequence[str], nt: Optional[bool] = None,
         # Only what CreateProcess can run by itself: a PATHEXT of `.VBS;.JS;.WSF;.MSC` (the
         # default) must never make a script the answer, nor shadow a later real `.exe`.
         exts = [e for e in exts if e.lower() in _RUNNABLE]
+        # CreateProcess does not consult PATHEXT: `.exe`/`.com` are always runnable, so a PATHEXT
+        # that lacks them (a user's own, `.PY;.BAT`) must not make every real program invisible.
+        have = {e.lower() for e in exts}
+        exts += [e.upper() for e in _RUNNABLE if e not in have]
         names = ([name] if os.path.splitext(name)[1].lower() in _RUNNABLE else []) \
             + [name + e for e in exts]
     else:
         names = [name]
-    here = os.path.normcase(os.path.realpath(os.getcwd()))
+    here = os.getcwd()
     for d in dirs:
         if not d or not os.path.isabs(d) or not os.path.isdir(d):
             continue
-        if os.path.normcase(os.path.realpath(d)) == here:
+        if same_place(d, here):
             continue                                    # the cwd, however it was spelled
         for n in names:
             cand = os.path.join(d, n)
             if not os.path.isfile(cand):
                 continue
-            if cand.lower().endswith((".cmd", ".bat")):
+            if is_batch(cand):
                 continue
             if not is_nt and not os.access(cand, os.X_OK):
                 continue
             if refuse_under is not None and _under(cand, refuse_under):
                 continue
-            return cand
+            return _as_found(cand) if is_nt else cand
     return None
 
 
-__all__ = ["path_dirs", "which_in"]
+def _as_found(path: str) -> str:
+    """`path` spelled as the directory spells the file. PATHEXT is upper-case (`.EXE`), so a hit
+    came back as `node.EXE` where the disk says `node.exe` — and that is what the trust prompt
+    showed the user (0.0.27 round-2 Low). Windows folds case, so only the SHOWN spelling changes."""
+    d, n = os.path.split(path)
+    try:
+        for entry in os.listdir(d):
+            if entry.lower() == n.lower():
+                return os.path.join(d, entry)
+    except OSError:
+        pass
+    return path
+
+
+__all__ = ["is_batch", "path_dirs", "same_place", "shim_in", "which_in"]

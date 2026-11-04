@@ -184,7 +184,7 @@
   function historyChips(h) {
     const box = el("span", "rv-hist");
     for (const x of h) {
-      const c = el("span", "rv-h rv-h-" + x.state, x.state === "green" ? "G" : x.state === "red" ? "R" : "E");
+      const c = el("span", "rv-h rv-h-" + x.state, x.state === "green" ? "G" : x.state === "red" ? "R" : x.state === "not-run" ? "N" : "E");
       c.title = `${x.state} · ${x.basis}${x.at ? " · " + ago(x.at) : ""}`;
       box.append(c);
     }
@@ -317,11 +317,11 @@
     }
     box.append(res);
     if (j.snap && j.snap.state === "done" && j.result) {
-      box.append(el("p", "small rv-job-sum", `${j.result.passed} passed · ${j.result.failed} failed · ran in ${j.result.env || "the project env"}`));
+      box.append(el("p", "small rv-job-sum", `${j.result.passed} passed · ${j.result.failed} failed · ${j.result.not_run || 0} not run · ran in ${j.result.env || "the project env"}`));
     }
     if (j.output) {
       const det = el("details", "rv-output");
-      det.open = !!(j.snap && !["done"].includes(j.snap.state)) || (j.result && j.result.failed > 0);
+      det.open = !!(j.snap && !["done"].includes(j.snap.state)) || (j.result && (j.result.failed > 0 || j.result.not_run > 0));
       det.append(el("summary", "small", "output" + (j.bytes > j.output.length ? ` (last ${Math.round(j.output.length / 1024)} KB of ${Math.round(j.bytes / 1024)} KB)` : "")));
       const pre = el("pre", "mono rv-out", j.output);
       det.append(pre);
