@@ -41,6 +41,9 @@ def _tmp(case, prefix):
     return d
 
 
+_TASKKILL = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "taskkill.exe")
+
+
 def _node(directory):
     """A file the finder reads as `node` on this OS (only its name is resolved here)."""
     n = "node" + (".exe" if os.name == "nt" else "")
@@ -103,10 +106,10 @@ class TreeWatchNeverEndsAProcessThatIsNotOurs(unittest.TestCase):
                                    "import subprocess, sys; "
                                    "subprocess.Popen([sys.executable, '-c', %r]); "
                                    "import time; time.sleep(300)" % sleeper])
-        self.addCleanup(lambda: subprocess.run(["taskkill", "/F", "/T", "/PID", str(holder.pid)],
+        self.addCleanup(lambda: subprocess.run([_TASKKILL, "/F", "/T", "/PID", str(holder.pid)],
                                                capture_output=True))
         me = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"])
-        self.addCleanup(lambda: subprocess.run(["taskkill", "/F", "/PID", str(me.pid)],
+        self.addCleanup(lambda: subprocess.run([_TASKKILL, "/F", "/PID", str(me.pid)],
                                                capture_output=True))
         w = TreeWatch(me.pid)
         # `holder` is not ours; pretend the pid we once recorded for a descendant is now its pid
@@ -166,7 +169,7 @@ class TheGatedMergeSuiteLeavesNothingBehind(P21._Merge):
             if pid is None:
                 return
             if os.name == "nt":
-                subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+                subprocess.run([_TASKKILL, "/F", "/PID", str(pid)], capture_output=True)
             else:
                 try:
                     os.kill(pid, 9)

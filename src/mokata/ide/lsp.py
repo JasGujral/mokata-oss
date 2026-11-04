@@ -374,8 +374,8 @@ _NT_RESERVED_CHARS = frozenset({chr(i) for i in range(32)} | set('"*:<>?|'))
 
 def _nt_reserved_name(name: str) -> bool:
     """One path component Windows cannot honestly treat as the file it spells (3.13
-    `ntpath._isreservedname`): a trailing dot or space is folded away (`a.py.` IS `a.py`, so it is
-    an alias, not a source location), reserved characters, and a device name — `CON`, `nul .py`,
+    `ntpath._isreservedname`): a trailing dot or space is folded away (`x.` IS `x`, so a trailing-dot
+    spelling is an alias, not a source location), reserved characters, and a device name — `CON`, `nul .py`,
     `COM\u00b9`, `LPT2.txt` — whatever follows the first dot and however many spaces precede it."""
     if not name or name in (".", ".."):
         return False
