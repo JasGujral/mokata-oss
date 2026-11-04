@@ -251,9 +251,11 @@ class OnWindowsOnlyASecretIsOwnerOnly(unittest.TestCase):
         atomic_write_text(secret, "S", private=True)
         atomic_write_text(plain, "x\n")
         assert_owner_only(self, secret)
-        entries = acl_entries(plain)
-        self.assertTrue(any("(I)" in e for e in entries), "an ordinary file inherits: %s" % entries)
-        self.assertGreater(len(entries), 1, entries)
+        control = os.path.join(d, "control.txt")        # what the folder gives a plain new file
+        with open(control, "w", encoding="utf-8") as fh:
+            fh.write("x")
+        self.assertEqual(acl_entries(control), acl_entries(plain))
+        self.assertNotEqual(acl_entries(control), acl_entries(secret))
 
 
 class TheHookSpoolStaysInTheProfile(unittest.TestCase):

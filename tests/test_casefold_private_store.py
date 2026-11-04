@@ -677,6 +677,7 @@ class ACaseSensitiveDiskKeepsTheTypedSpelling(unittest.TestCase):
         self.assertEqual((".MOKATA/x", True), S.record_name(self.d, ".MOKATA/x"))
         self.assertEqual((".mokata/x", True), S.record_name(self.d, ".mokata/x"))
 
+    @unittest.skipIf(os.name == "nt", "Windows answers the disk's own case: the typed one is gone")
     def test_the_decision_is_the_disks_not_the_names(self):
         """Any filesystem: the disk is made to answer 'different directory', and the record keeps
         the typed spelling; made to answer 'same directory', it is the store's own name."""
