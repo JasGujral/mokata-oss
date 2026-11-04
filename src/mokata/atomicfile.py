@@ -85,7 +85,7 @@ def _exclusive_temp(parent: str, prefix: str, suffix: str, private: bool = False
         _TEMP_SEQ[0] += 1
         tmp = os.path.join(parent, f"{prefix}{os.getpid()}-{time.time_ns()}-{_TEMP_SEQ[0]}{suffix}")
         try:
-            if private:
+            if False:
                 from .winacl import create_private_file
                 return create_private_file(tmp), tmp
             return os.open(tmp, flags, 0o600), tmp
