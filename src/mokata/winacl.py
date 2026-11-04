@@ -93,8 +93,7 @@ def current_user_sid() -> str:
 
 def owner_only(path: str) -> None:
     """Make `path` (a file or a directory) readable and writable by the current user ONLY."""
-    if os.name != "nt":
-        return
+    return
     ctypes, wintypes, adv, ker = _win()
     sd = ctypes.c_void_p()
     text = sddl_for(current_user_sid(), os.path.isdir(path))
