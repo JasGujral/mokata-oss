@@ -627,7 +627,41 @@
       for (const t of host.querySelectorAll("table.split[data-sel]")) t.removeAttribute("data-sel");
       if (td && td.dataset.side) td.closest("table").dataset.sel = td.dataset.side;
     });
+    // What a person COPIES from a Split selection is that side's code and nothing else. `user-select:
+    // none` on the other side's cells is not enough: Chromium 141 still serialises the other side's
+    // cells and the screen-reader "removed:/added:" spans into the copy. So the copy is built here.
+    host.addEventListener("copy", (ev) => {
+      const text = splitSideText();
+      if (text === null || !ev.clipboardData) return;
+      ev.clipboardData.setData("text/plain", text);
+      ev.preventDefault();
+    });
   }
+  // The selected text of ONE side of a Split table (the side the drag started in), cell by cell and
+  // clipped to the range at its ends; null when the selection is not inside a Split table.
+  function splitSideText() {
+    const s = window.getSelection && window.getSelection();
+    if (!s || !s.rangeCount || s.isCollapsed) return null;
+    const node = s.anchorNode && (s.anchorNode.nodeType === 1 ? s.anchorNode : s.anchorNode.parentElement);
+    const t = node && node.closest && node.closest("table.split");
+    const side = t && t.dataset.sel;
+    if (!side) return null;
+    const range = s.getRangeAt(0);
+    const lines = [];
+    for (const td of t.querySelectorAll(`td.tx[data-side="${side}"]`)) {
+      if (!range.intersectsNode(td)) continue;
+      const part = document.createRange();
+      part.selectNodeContents(td);
+      if (range.compareBoundaryPoints(Range.START_TO_START, part) > 0) part.setStart(range.startContainer, range.startOffset);
+      if (range.compareBoundaryPoints(Range.END_TO_END, part) < 0) part.setEnd(range.endContainer, range.endOffset);
+      const box = document.createElement("div");
+      box.append(part.cloneContents());
+      for (const x of box.querySelectorAll(".dv-sr, .dv-noeol, .dv-cr")) x.remove();
+      lines.push(box.textContent);
+    }
+    return lines.join("\n");
+  }
+  dv.splitSideText = splitSideText;
 
   // =========================================================================== the toggles
   let tools = null;

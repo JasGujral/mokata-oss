@@ -394,7 +394,10 @@ class NoTestReachesAPromptOnTheAmbientStdin(unittest.TestCase):
     def test_the_stall_limit_scales_with_the_slowest_gap_and_never_drops_below_the_floor(self):
         self.assertEqual(STALL_FLOOR_S, stall_limit(0.0))
         self.assertEqual(STALL_FLOOR_S, stall_limit(STALL_FLOOR_S / STALL_FACTOR / 2))
-        self.assertEqual(STALL_FACTOR * 50, stall_limit(50))
+        # a gap long enough that the factor, not the floor, decides (50 s x 10 is under the
+        # Windows floor of 600 s): derived from the floor, so it holds on every platform
+        gap = STALL_FLOOR_S
+        self.assertEqual(STALL_FACTOR * gap, stall_limit(gap))
         self.assertGreaterEqual(STALL_FLOOR_S, 60, "no small timeouts: the floor is generous")
 
     # ⚠ THE WHOLE-SUBSET READING LIVES IN `test_a35_...`, AND THE SPLIT IS A COST DECISION.

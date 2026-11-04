@@ -65,10 +65,13 @@ def finder_for(*knobs: str):
     return finder
 
 
-def _exe(d, name, nt=False):
-    """An executable file `name` (+ .exe when `nt`) in `d`; returns its path."""
+def _exe(d, name, nt=None):
+    """An executable file `name` in `d`; returns its path. `nt=None` is the NATIVE spelling: with
+    `.exe` on Windows (where a file with no PATHEXT extension is not an executable — the rule the
+    finder states), bare on POSIX. `nt=True`/`False` forces one spelling (the tests that fake the
+    other platform)."""
     os.makedirs(d, exist_ok=True)
-    p = os.path.join(d, name + (".exe" if nt else ""))
+    p = os.path.join(d, name + (".exe" if (os.name == "nt" if nt is None else nt) else ""))
     with open(p, "w", encoding="utf-8") as fh:
         fh.write("#!/bin/sh\n")
     os.chmod(p, 0o755)
@@ -88,6 +91,13 @@ def _pkg(root, pkg, bin_rel, binname=None, root_is_node_modules=False, create_sc
         with open(script, "w", encoding="utf-8") as fh:
             fh.write("// server\n")
     return script
+
+
+def same_argv(a, b):
+    """Two argv lists name the same command: every element equal, paths compared the way the
+    filesystem compares them (`solargraph.EXE` from PATHEXT is the file `solargraph.exe` on
+    Windows; POSIX is exact)."""
+    return len(a) == len(b) and all(os.path.normcase(x) == os.path.normcase(y) for x, y in zip(a, b))
 
 
 def wait_for(pred, timeout=20.0, step=0.05):
@@ -731,7 +741,10 @@ class ProcessManagement(_Repo):
             self.assertNotIn("shell", kw)
             self.assertTrue(kw.get("start_new_session") or kw.get("creationflags"), kw)
         self.assertFalse(hasattr(L, "resolve_cmd_shim"), "shim text is never parsed (decoy-REM finding)")
-        hostile = os.path.join(self.d, 'a&calc %TEMP% ^x "q" |y')
+        # `"` and `|` cannot be in a Windows file name (WinError 123), so the spelling of the
+        # hostile directory is the most hostile one the platform's file system allows.
+        hostile = os.path.join(self.d, 'a&calc %TEMP% ^x "q" |y' if os.name != "nt"
+                               else "a&calc %TEMP% ^x 'q' !y")
         node_dir = os.path.join(self.d, "nodebin")
         node = _exe(node_dir, "node", nt=os.name == "nt")
         script = _pkg(hostile, "typescript-language-server", "lib/cli.mjs")
@@ -742,7 +755,7 @@ class ProcessManagement(_Repo):
         with mock.patch.dict(os.environ, {"PATH": os.pathsep.join([decoy, node_dir]), "PATHEXT": ".COM;.EXE;.BAT;.CMD"}):
             found = L.find_server(hostile, "typescript")
         self.assertTrue(found["found"], found)
-        self.assertEqual([node, script, "--stdio"], found["argv"])
+        self.assertTrue(same_argv([node, script, "--stdio"], found["argv"]), found["argv"])
         joined = " ".join(found["argv"]).lower()
         for forbidden in ("cmd.exe", "comspec", "evil"):
             self.assertNotIn(forbidden, joined)
@@ -756,8 +769,9 @@ class ProcessManagement(_Repo):
         decoy = _exe(self.repo, "solargraph")
         _exe(self.repo, "solargraph", nt=True)
         good_dir = os.path.join(self.d, "realbin")
-        good = _exe(good_dir, "solargraph")
+        good = _exe(good_dir, "solargraph", nt=False)
         good_nt = _exe(good_dir, "solargraph", nt=True)
+        native = good_nt if os.name == "nt" else good       # what the real finder can find here
         env = {"PATH": os.pathsep.join(["", ".", self.repo, "relative/bin", good_dir])}
         old = os.getcwd()
         os.chdir(self.repo)
@@ -776,10 +790,10 @@ class ProcessManagement(_Repo):
             with open(cfg, "w", encoding="utf-8") as fh:
                 json.dump({"languages": {"ruby": {"exts": [".rb"], "id": "ruby",
                                                   "servers": [["solargraph", ["stdio"], "gem install solargraph"]]}}}, fh)
-            _exe(os.path.join(self.repo, ".venv", "bin"), "solargraph")
+            _exe(os.path.join(self.repo, ".venv", "Scripts" if os.name == "nt" else "bin"), "solargraph")
             with mock.patch.dict(os.environ, env):
                 found = L.find_server(self.repo, "ruby")
-            self.assertEqual([good, "stdio"], found["argv"])
+            self.assertTrue(same_argv([native, "stdio"], found["argv"]), found["argv"])
         finally:
             os.chdir(old)
         # a `.cmd` on a real PATH dir is skipped (it would need cmd.exe), an .exe beside it wins
@@ -798,7 +812,7 @@ class ProcessManagement(_Repo):
         yarn = os.path.join(self.d, "yarn")
         script = _pkg(yarn, "typescript-language-server", "lib/cli.mjs")
         with mock.patch.dict(os.environ, env):
-            self.assertEqual([node, script, "--stdio"], L.find_server(yarn, "typescript")["argv"])
+            self.assertTrue(same_argv([node, script, "--stdio"], L.find_server(yarn, "typescript")["argv"]))
         # pnpm: node_modules/<pkg> is a symlink into the .pnpm store
         pnpm = os.path.join(self.d, "pnpm")
         store = os.path.join(pnpm, "node_modules", ".pnpm", "typescript-language-server@4.0.0", "node_modules")
@@ -807,7 +821,7 @@ class ProcessManagement(_Repo):
         os.symlink(os.path.dirname(os.path.dirname(real)), os.path.join(pnpm, "node_modules", "typescript-language-server"))
         with mock.patch.dict(os.environ, env):
             found = L.find_server(pnpm, "typescript")
-        self.assertEqual([node, os.path.realpath(real), "--stdio"], found["argv"])
+        self.assertTrue(same_argv([node, os.path.realpath(real), "--stdio"], found["argv"]), found["argv"])
         # a bin that escapes the package is refused — and the PATH fallback is tried
         evil = os.path.join(self.d, "evil")
         _pkg(evil, "typescript-language-server", "../../../../tmp/evil.js", create_script=False)
@@ -818,13 +832,13 @@ class ProcessManagement(_Repo):
         glob_dir = os.path.join(self.d, "globalbin")
         glob = _exe(glob_dir, "typescript-language-server")
         with mock.patch.dict(os.environ, {"PATH": os.pathsep.join([node_dir, glob_dir])}):
-            self.assertEqual([glob, "--stdio"], L.find_server(evil, "typescript")["argv"])
+            self.assertTrue(same_argv([glob, "--stdio"], L.find_server(evil, "typescript")["argv"]))
             # no package at all: the global one
-            self.assertEqual([glob, "--stdio"], L.find_server(self.repo, "typescript")["argv"])
+            self.assertTrue(same_argv([glob, "--stdio"], L.find_server(self.repo, "typescript")["argv"]))
         # pyright installed with npm in the project resolves through its package too
         py = _pkg(self.repo, "pyright", "langserver.index.js", binname="pyright-langserver")
         with mock.patch.dict(os.environ, env):
-            self.assertEqual([node, py, "--stdio"], L.find_server(self.repo, "python")["argv"])
+            self.assertTrue(same_argv([node, py, "--stdio"], L.find_server(self.repo, "python")["argv"]))
 
     def test_a_path_entry_inside_the_repo_never_answers_for_a_users_server_or_for_node(self):
         """Re-verification R2: a PATH entry INSIDE the repo (`<repo>/tools`, as direnv or an npm
@@ -839,8 +853,9 @@ class ProcessManagement(_Repo):
         node = _exe(real_dir, "node")
         link_dir = os.path.join(self.d, "linkbin")
         os.makedirs(link_dir)
-        os.symlink(os.path.join(tools, "node"), os.path.join(link_dir, "node"))
-        os.symlink(os.path.join(tools, "solargraph"), os.path.join(link_dir, "solargraph"))
+        ext = ".exe" if os.name == "nt" else ""
+        os.symlink(os.path.join(tools, "node" + ext), os.path.join(link_dir, "node" + ext))
+        os.symlink(os.path.join(tools, "solargraph" + ext), os.path.join(link_dir, "solargraph" + ext))
         cfg = os.path.join(self.home, ".mokata", "lsp.json")
         os.makedirs(os.path.dirname(cfg), exist_ok=True)
         with open(cfg, "w", encoding="utf-8") as fh:
@@ -848,8 +863,8 @@ class ProcessManagement(_Repo):
                                               "servers": [["solargraph", ["stdio"], ""]]}}}, fh)
         script = _pkg(self.repo, "typescript-language-server", "lib/cli.mjs")
         with mock.patch.dict(os.environ, {"PATH": os.pathsep.join([tools, link_dir, real_dir])}):
-            self.assertEqual([good, "stdio"], L.find_server(self.repo, "ruby")["argv"])
-            self.assertEqual([node, script, "--stdio"], L.find_server(self.repo, "typescript")["argv"])
+            self.assertTrue(same_argv([good, "stdio"], L.find_server(self.repo, "ruby")["argv"]))
+            self.assertTrue(same_argv([node, script, "--stdio"], L.find_server(self.repo, "typescript")["argv"]))
         with mock.patch.dict(os.environ, {"PATH": os.pathsep.join([tools, link_dir])}):
             ruby = L.find_server(self.repo, "ruby")
             ts = L.find_server(self.repo, "typescript")
@@ -880,7 +895,7 @@ class ProcessManagement(_Repo):
             fh.write('@"%~dp0\\..\\..\\tmp\\evil.js" %*\r\n')
         with mock.patch.dict(os.environ, {"PATH": os.pathsep.join([node_dir, prefix])}):
             found = L.find_server(self.repo, "typescript")
-        self.assertEqual([node, os.path.realpath(gscript), "--stdio"], found["argv"])
+        self.assertTrue(same_argv([node, os.path.realpath(gscript), "--stdio"], found["argv"]), found["argv"])
         self.assertNotIn("evil", " ".join(found["argv"]))
 
     def test_a_node_modules_symlinked_out_of_the_repo_is_refused(self):
@@ -900,7 +915,7 @@ class ProcessManagement(_Repo):
         self.assertIn("resolves outside", found["note"])
         glob = _exe(os.path.join(self.d, "globalbin"), "typescript-language-server")
         with mock.patch.dict(os.environ, {"PATH": os.pathsep.join([node_dir, os.path.dirname(glob)])}):
-            self.assertEqual([glob, "--stdio"], L.find_server(self.repo, "typescript")["argv"])
+            self.assertTrue(same_argv([glob, "--stdio"], L.find_server(self.repo, "typescript")["argv"]))
         self.assertTrue(os.path.isfile(node))
 
     def test_the_project_venv_is_searched_before_path(self):
@@ -910,8 +925,9 @@ class ProcessManagement(_Repo):
         other = _exe(os.path.join(self.d, "pathbin"), "pylsp")
         with mock.patch.dict(os.environ, {"PATH": os.path.join(self.d, "pathbin")}):
             found = L.find_server(self.repo, "python")
-        self.assertEqual(("pylsp", exe), (found["name"], found["binary"]))
-        self.assertNotEqual(other, found["binary"])
+        self.assertEqual("pylsp", found["name"])
+        self.assertTrue(same_argv([exe], [found["binary"]]), found["binary"])
+        self.assertNotEqual(os.path.normcase(other), os.path.normcase(found["binary"]))
         self.assertEqual("ruby", L.language_of("lib/a.rb")) if False else None
 
     def test_closing_the_ide_stops_its_servers(self):
@@ -1089,7 +1105,9 @@ class ARepoNeverChoosesWhatExecutes(_Repo):
         exe = _exe(bindir, "pyright-langserver")
         with mock.patch.dict(os.environ, {"PATH": os.path.join(self.d, "nowhere")}):
             runs = L.will_run(self.repo)
-            self.assertEqual([("python", [exe, "--stdio"])], [(r["language"], r["argv"]) for r in runs])
+            self.assertEqual(["python"], [r["language"] for r in runs])
+            self.assertTrue(same_argv([exe, "--stdio"], runs[0]["argv"]), runs)
+            exe = runs[0]["argv"][0]            # the spelling the finder printed is the spelling shown
             c, state = boot(self.repo, tty=True)
             try:
                 body = c.get("/api/lsp").json()
@@ -1210,7 +1228,10 @@ class StoppingNeverHangsAndKillsTheTree(_Repo):
         self.assertTrue(h.start("python", by_human=True)["started"])
         srv = h.get("python")
         self.assertTrue(wait_for(lambda: os.path.exists(self.pidfile)))
-        self.assertEqual(srv.pgid, srv.proc.pid)
+        if os.name == "nt":                 # no process groups: the tree's handle is its Job Object
+            self.assertTrue(srv.job is not None and srv.job.ok, "no Job Object holds the tree")
+        else:
+            self.assertEqual(srv.pgid, srv.proc.pid)
         uri, _ = srv.open(os.path.join(self.repo, "src", "app", "core.py"), "python")
         t0 = time.monotonic()
         with self.assertRaises(L.ServerGone):

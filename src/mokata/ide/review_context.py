@@ -357,13 +357,19 @@ _POLL_S = 0.1
 _DRAIN_IDLE_S = 1.0
 
 
-def _kill_tree(proc: Any, leftovers_only: bool = False) -> None:
+def _kill_tree(proc: Any, leftovers_only: bool = False, job: Any = None) -> None:
     """End the runner's whole tree. POSIX: SIGKILL to its process group (its pid, as it leads a
-    new session). Windows: `taskkill /F /T` by absolute path (`crg_resolve._end_tree`, the 0.0.26
-    helper). `leftovers_only`: the runner has already exited — end what it left in its group.
-    Never raises."""
+    new session). Windows: the runner's Job Object (`lsp.WinJob`, made at spawn) — it holds the
+    tree whether or not the runner still lives, so what a test left behind after the runner
+    exited is ended too (`taskkill /T` needs a LIVE root to walk from, so it reaches nothing then:
+    the leftover held the project directory open and could not be deleted). Only when no job could
+    be made does it fall back to `taskkill /F /T` (`crg_resolve._end_tree`) for a live runner.
+    `leftovers_only`: the runner has already exited — end what it left in its group. Never
+    raises."""
     if os.name == "nt":
-        if not leftovers_only:
+        if job is not None and job.ok:
+            job.terminate()
+        elif not leftovers_only:
             from ..crg_resolve import _end_tree
             _end_tree(proc)
         return
@@ -446,7 +452,15 @@ def run_tests(root: str, argv: List[str], ids: List[str],
                     on_test(tid, "error", time.time())
                 emit(f"{tid}: could not start")
                 continue
-            rc = _drive(proc, take, lambda: emit(f"running {tid}"))
+            job = None
+            if os.name == "nt":
+                from .lsp import WinJob
+                job = WinJob(proc)          # the tree's handle, taken before the runner starts work
+            try:
+                rc = _drive(proc, take, lambda: emit(f"running {tid}"), job)
+            finally:
+                if job is not None:
+                    job.terminate()         # releases the handle; a no-op once the tree is ended
             st = "green" if rc == 0 else "red"
             results.append({"id": tid, "state": st, "rc": rc,
                             "seconds": round(time.time() - t0, 2)})
@@ -463,7 +477,8 @@ def run_tests(root: str, argv: List[str], ids: List[str],
             "failed": sum(1 for r in results if r["state"] != "green")}
 
 
-def _drive(proc: Any, take: Callable[[bytes], None], tick: Callable[[], None]) -> int:
+def _drive(proc: Any, take: Callable[[bytes], None], tick: Callable[[], None],
+           job: Any = None) -> int:
     """Read one runner's output until its pipe ends, watching the cancel flag between reads (the
     read is on its own thread, so a Cancel never waits on it). Returns the runner's exit code;
     raises `Cancelled` — after ending the runner's whole tree — when the job is cancelled."""
@@ -476,7 +491,7 @@ def _drive(proc: Any, take: Callable[[bytes], None], tick: Callable[[], None]) -
     try:
         while True:
             if cancelled():
-                _kill_tree(proc)
+                _kill_tree(proc, job=job)
                 checkpoint()                       # raises Cancelled: the job ends NOW
             try:
                 chunk = pipe.get(timeout=_POLL_S)
@@ -496,17 +511,17 @@ def _drive(proc: Any, take: Callable[[bytes], None], tick: Callable[[], None]) -
                 # worker) is ended too, so the pipe reaches EOF and the lane is free; anything that
                 # escaped the group cannot hold the job: the dead run's pipe is drained until quiet.
                 rc = proc.returncode
-                _kill_tree(proc, leftovers_only=True)
+                _kill_tree(proc, leftovers_only=True, job=job)
             elif rc is not None:
                 idle += 1
                 if idle * _POLL_S >= _DRAIN_IDLE_S:
                     break
         rc = proc.wait() if rc is None else rc
-        _kill_tree(proc, leftovers_only=True)      # nothing a test started outlives its run
+        _kill_tree(proc, leftovers_only=True, job=job)      # nothing a test started outlives its run
         return rc
     finally:
         if proc.poll() is None:                    # an exception mid-read: never leave it running
-            _kill_tree(proc)
+            _kill_tree(proc, job=job)
         reader.join(_DRAIN_IDLE_S)                 # the tree is dead: its pipe ends at once
         if not reader.is_alive() and proc.stdout is not None:
             proc.stdout.close()

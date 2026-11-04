@@ -77,9 +77,18 @@ RUNNER = (
 
 def _gone(pid, within=10.0):
     """True once `pid` is dead (a zombie awaiting its reaper counts as dead)."""
-    if os.name == "nt":
-        return True
     t0 = time.time()
+    if os.name == "nt":
+        import subprocess
+        exe = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "tasklist.exe")
+        while time.time() - t0 < within:
+            out = subprocess.run([exe, "/FI", f"PID eq {pid}", "/NH"], stdin=subprocess.DEVNULL,
+                                 capture_output=True, text=True, encoding="utf-8",
+                                 errors="replace").stdout
+            if f" {pid} " not in f" {out} ":
+                return True
+            time.sleep(0.1)
+        return False
     while time.time() - t0 < within:
         try:
             with open(f"/proc/{pid}/status", encoding="utf-8") as fh:
@@ -285,7 +294,18 @@ class ReRun(unittest.TestCase):
         self.c = _client(self.d)
 
     def tearDown(self):
-        self._t.cleanup()
+        # Windows will not delete a directory a process still has open, and a process that was
+        # just ended releases its working directory a moment later: retry for a generous while
+        # (the product ends the tree; this only waits out the OS releasing the handle).
+        end = time.time() + 40
+        while True:
+            try:
+                self._t.cleanup()
+                return
+            except OSError:
+                if os.name != "nt" or time.time() > end:
+                    raise
+                time.sleep(0.25)
 
     def start(self, body):
         return self.c.post("/api/review/tests/run", json={"run": RUN, **body}, headers=ORIGIN)
@@ -379,6 +399,37 @@ class ReRun(unittest.TestCase):
         self.assertTrue(_gone(helper), "the test's helper process outlived Cancel")
         nxt = self.start({"tests": ["t_ok"]})
         self.assertEqual("done", wait_job(self.c, nxt.json()["id"], timeout=30)["job"]["state"])
+
+    def test_on_windows_what_a_test_left_behind_is_ended_through_the_runners_job(self):
+        """`taskkill /T` walks the tree from a LIVE root, so once the runner has exited it reaches
+        nothing and a leftover (a server a test booted) held the project directory open. The
+        runner is put in a Job Object at spawn and the leftovers' kill terminates the JOB — also
+        when the runner is long dead — and never needs `taskkill` then. (Faked off Windows.)"""
+        from unittest import mock
+        from mokata.ide import review_context as RC
+        ended = []
+
+        class Job:
+            ok = True
+
+            def terminate(self):
+                ended.append("job")
+
+        dead = mock.Mock(pid=77)
+        dead.poll.return_value = 0                         # the runner exited long ago
+        with mock.patch("mokata.ide.review_context.os.name", "nt"), \
+                mock.patch("mokata.crg_resolve._end_tree", side_effect=lambda p: ended.append("taskkill")):
+            RC._kill_tree(dead, leftovers_only=True, job=Job())
+            self.assertEqual(["job"], ended)
+            ended.clear()
+            RC._kill_tree(dead, job=Job())                 # a cancel: the job as well, not taskkill
+            self.assertEqual(["job"], ended)
+            ended.clear()
+            bad = Job()
+            bad.ok = False                                 # no job could be made: the old route
+            RC._kill_tree(dead, job=bad)
+            RC._kill_tree(dead, leftovers_only=True, job=bad)
+            self.assertEqual(["taskkill"], ended)
 
     def test_a_test_that_leaves_a_process_behind_still_finishes(self):
         """A test whose runner exits but leaves a helper holding its output still finishes (the
