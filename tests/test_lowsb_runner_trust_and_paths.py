@@ -54,7 +54,7 @@ def _exe(directory, name):
 
 def _case_insensitive_fs(d):
     probe = os.path.join(d, "CaseProbe")
-    open(probe, "w").close()
+    open(probe, "w", encoding="utf-8").close()
     return os.path.exists(os.path.join(d, "cASEpROBE"))
 
 

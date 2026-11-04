@@ -420,7 +420,7 @@ class ReRun(unittest.TestCase):
                 ended.append("watch")
 
         # `nt=True` is the platform handed to the function — nothing global is patched
-        with mock.patch("mokata.crg_resolve._end_tree", side_effect=lambda p: ended.append("taskkill")):
+        with mock.patch("mokata.crg_resolve._end_tree", side_effect=lambda p: ended.append("end_tree")):
             RC._kill_tree(dead, leftovers_only=True, job=Job(), nt=True)
             self.assertEqual(["job"], ended)
             ended.clear()
@@ -430,7 +430,7 @@ class ReRun(unittest.TestCase):
             bad = Job()
             bad.ok = False                                 # no job could be made: the fallback
             RC._kill_tree(dead, job=bad, watch=Watch(), nt=True)
-            self.assertEqual(["taskkill", "watch"], ended, "a live leader is walked by taskkill, "
+            self.assertEqual(["end_tree", "watch"], ended, "a live leader is walked by taskkill, "
                              "then what the watch remembered is ended")
             ended.clear()
             RC._kill_tree(dead, leftovers_only=True, job=bad, watch=Watch(), nt=True)
