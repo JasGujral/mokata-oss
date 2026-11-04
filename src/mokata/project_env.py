@@ -28,6 +28,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
@@ -105,18 +106,11 @@ def _in_repo(root: str) -> Optional[ProjectEnv]:
     return None
 
 
-def _ask_tool(argv, root: str, environ: Optional[Mapping[str, str]] = None) -> Optional[str]:
-    """Ask `poetry`/`pipenv` where the project's env is. The tool is found ONLY on the user's
-    absolute PATH entries — never the cwd (the repo), never a hit inside the repo — and its
-    ABSOLUTE path is what runs, so the OS never searches `.` for the bare name."""
-    from .exe_path import path_dirs, which_in
-    environ = os.environ if environ is None else environ
-    path = next((v for k, v in environ.items() if k.upper() == "PATH"), "")
-    exe = which_in(argv[0], path_dirs({"PATH": path}, cwd=root), refuse_under=root)
-    if not exe:
+def _ask_tool(argv, root: str) -> Optional[str]:
+    if not shutil.which(argv[0]):
         return None
     try:
-        proc = subprocess.run([exe, *argv[1:]], cwd=root, capture_output=True, text=True,
+        proc = subprocess.run(argv, cwd=root, capture_output=True, text=True,
                               stdin=subprocess.DEVNULL, timeout=TOOL_TIMEOUT_SECONDS)
     except (OSError, subprocess.SubprocessError):
         return None
@@ -151,7 +145,7 @@ def resolve(root: str, settings_value: Optional[str] = None,
     if ask_tools and (os.path.exists(os.path.join(root, "pyproject.toml"))
                       or os.path.exists(os.path.join(root, "Pipfile"))):
         for argv, how in ((["poetry", "env", "info", "-p"], "poetry"), (["pipenv", "--venv"], "pipenv")):
-            path = _ask_tool(argv, root, environ)
+            path = _ask_tool(argv, root)
             if path:
                 return ProjectEnv(path, how, conda=_is_conda(path))
     return None
