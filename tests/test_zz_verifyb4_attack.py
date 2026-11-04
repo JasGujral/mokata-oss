@@ -241,6 +241,27 @@ class Attack(unittest.TestCase):
         self.addCleanup(os.chdir, old)
         say("shutil.which npm with cwd planted:", shutil.which("npm", path=path))
 
+    def test_a8_preflight_GET_executes_repo_planted_poetry(self):
+        """test_command (the /api/review/tests GET) now runs project_env.resolve -> poetry/pipenv."""
+        from mokata.ide import review_context as RC
+        node = shutil.which("node")
+        root = self.root("pytest -q")
+        _w(root, "pyproject.toml", "[project]\nname = 'x'\n")
+        shutil.copy(node, os.path.join(root, "poetry.exe"))
+        mark = os.path.join(root, "PLANTED_RAN.txt")
+        _w(root, "env", "require('fs').writeFileSync(%s, process.argv.join(' '));" % json.dumps(mark))
+        env_bak = {k: os.environ.pop(k) for k in ("VIRTUAL_ENV", "CONDA_PREFIX") if k in os.environ}
+        self.addCleanup(os.environ.update, env_bak)
+        old = os.getcwd()
+        os.chdir(root)                      # mokata ide's cwd is the repo
+        self.addCleanup(os.chdir, old)
+        say("shutil.which poetry (cwd=repo):", shutil.which("poetry"))
+        import time
+        t = time.time()
+        got = RC.test_command(root)
+        say("preflight GET took", round(time.time() - t, 2), "s runnable", got["runnable"])
+        say("repo-planted poetry.exe ran on a GET:", os.path.exists(mark))
+
 
 if __name__ == "__main__":
     unittest.main()
