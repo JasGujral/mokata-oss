@@ -206,6 +206,32 @@ class TheRules(Repo):
             self.assertFalse(RP.aliases_private(self.d, "src/app.py"))
             self.assertFalse(RP.aliases_private(self.d, ".mokata/private.txt"))
 
+    def test_a_malformed_name_ends_the_walk_but_a_failure_to_look_still_refuses(self):
+        """Windows answers `core.py:3:x` (a malformed stream name) with ERROR_INVALID_NAME: the
+        same fact as "no such file", so it must not read as "could not look" - which would call a
+        mistyped location `another name for the private store`. A REAL failure to look (access
+        denied) is still undecidable, and undecidable is private."""
+        def invalid(p, *a, **k):
+            err = OSError(22, "The filename, directory name, or volume label syntax is incorrect")
+            err.winerror = 123
+            raise err
+
+        def denied(p, *a, **k):
+            err = PermissionError(13, "Access is denied")
+            err.winerror = 5
+            raise err
+        real = os.stat
+
+        def stat_after_root(fake):
+            def inner(p, *a, **k):
+                return fake(p) if os.path.basename(str(p)) == "core.py:3:x" else real(p, *a, **k)
+            return inner
+        with mock.patch.object(RP.os, "stat", side_effect=stat_after_root(invalid)):
+            self.assertFalse(RP.aliases_private(self.d, "src/core.py:3:x"))
+        with mock.patch.object(RP.os, "stat", side_effect=stat_after_root(denied)):
+            with self.assertRaises(PermissionError):
+                RP.aliases_private(self.d, "src/core.py:3:x")
+
     def test_the_identity_rule_sees_the_git_dir_too(self):
         try:
             os.symlink(os.path.join(self.d, ".git"), os.path.join(self.d, "meta"))
@@ -493,8 +519,10 @@ class AWriteIntoAPrivatePathIsRecordedPathOnly(unittest.TestCase):
                                            "tool_input": {"file_path": os.path.join(self.d, rel),
                                                           "content": MARK}}, self.d)
                 self.assertIsNotNone(ev)
-                self.assertEqual((bus.EDIT, rel, True, hook),
-                                 (ev["kind"], ev["path"], ev["private"], ev["git_hook"]))
+                # the path is the file as the OS names it: a case-insensitive disk (Windows) answers
+                # `.mokata/x` for `.MOKATA/x`; the rule is that it is recorded, flagged, path-only
+                self.assertEqual((bus.EDIT, rel.casefold(), True, hook),
+                                 (ev["kind"], ev["path"].casefold(), ev["private"], ev["git_hook"]))
                 self.assertEqual(S.PRIVATE_NOTE, ev["note"])
                 self.assertNotIn(MARK, repr(ev))
         ev = bus.from_neutral({"kind": bus.EDIT, "path": os.path.join(self.d, self.HOOK)}, self.d)
