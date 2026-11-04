@@ -486,7 +486,7 @@ def spawn_jobbed(argv: Sequence[str], nt: Optional[bool] = None,
     kw = dict(popen_kw)
     if not is_nt:
         return subprocess.Popen(list(argv), **kw), None
-    kw["creationflags"] = int(kw.get("creationflags") or 0)
+    kw["creationflags"] = int(kw.get("creationflags") or 0) | _CREATE_SUSPENDED
     proc = subprocess.Popen(list(argv), **kw)
     job = WinJob(proc)
     try:

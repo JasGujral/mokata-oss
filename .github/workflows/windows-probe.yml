@@ -58,7 +58,7 @@ env:
   # Currently (0.0.25 B-01): the Windows cmd-window fix, observed on a real desktop —
   # `test_win_no_console_windows` (control-gated: it SKIPS, saying why, on a runner that cannot
   # show a console window), plus the flag/shim/server-light modules it stands on.
-  PROBE_MODULES: "test_p24_ide_lsp_readonly"
+  PROBE_MODULES: "test_p24_ide_lsp_readonly test_p4_copy_context_usages test_p7_ide_review_context test_a35_the_tty_sweep_instrument_works test_c3_ide_visuals test_c1_ide_navigation test_p29_ide_uninitialized_repo test_p41_mcp_follows_worktree test_ls_ide_light_at_scale test_p39_ide_first_run test_c2_ide_search"
 
 jobs:
   probe:
