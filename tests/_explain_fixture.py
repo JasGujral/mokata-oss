@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 import subprocess
 
-import _support  # noqa: F401
+import _srcpath  # noqa: F401  (puts src/ on the path; NOT the provisioning gate)
 from _plan import sealed
 
 CART_OLD = (

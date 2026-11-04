@@ -583,6 +583,7 @@ class TheIndexLock(unittest.TestCase):
                     lock.commit_index(tmp)
                 self.assertIn(b"original", open(os.path.join(self.gd, "index"), "rb").read())
                 self.assertEqual("m2", ML.read_record(ML.lock_path(self.gd))[0]["merge"])
+        lock.release()      # the refused commit left the lock held; Windows cannot delete an open file
 
 
 class StaleLocksAreProvenNotGuessed(unittest.TestCase):
@@ -948,7 +949,19 @@ class OneTargetOneBaseNothingDestroyed(_Merge):
         _git(case, "update-index", "--add", "--cacheinfo", "100644," + blob + ",readme.md")
         _git(case, "commit", "-qm", "a path that differs from README.md only by case")
         self.assertIn(MG.CASE, {b["code"] for b in MG.plan_merge(self.main, case).blocked})
-        bad = self.session(name="w", sid="S5", run="R5", files={"aux.txt": "x\n"})
+        bad = self.session(name="w", sid="S5", run="R5")
+        # Windows' git refuses the name `aux.txt` outright - not `git add`, not `update-index` - so a
+        # commit that carries it can only come from another OS. Build that tree with plumbing
+        # (`mktree` does not check names), exactly as such a commit arrives over a fetch.
+        blob = subprocess.run(["git", "-C", bad, "hash-object", "-w", "--stdin"], input=b"x\n",
+                              capture_output=True, check=True).stdout.strip()
+        tree = subprocess.run(["git", "-C", bad, "ls-tree", "-z", "HEAD"], capture_output=True,
+                              check=True).stdout + b"100644 blob " + blob + b"\taux.txt\0"
+        new_tree = subprocess.run(["git", "-C", bad, "mktree", "-z"], input=tree,
+                                  capture_output=True, check=True).stdout.decode().strip()
+        commit = _git(bad, "commit-tree", new_tree, "-p", "HEAD", "-m",
+                      "a path Windows cannot hold").strip()
+        _git(bad, "update-ref", "HEAD", commit)
         self.assertIn(MG.UNPORTABLE, {b["code"] for b in MG.plan_merge(self.main, bad, nt=True).blocked})
         self.assertNotIn(MG.UNPORTABLE, {b["code"] for b in MG.plan_merge(self.main, bad, nt=False).blocked})
 

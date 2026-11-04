@@ -256,7 +256,8 @@ def aliases_private(root: str, name: str) -> bool:
     It catches what no spelling rule can: an 8.3 short name (`MOKATA~1`), a directory symlink or
     junction called anything at all, whatever folding THIS filesystem applies beyond the name
     rule's, and (0.0.27 SEC-HARDEN) a second hard-link name for a store file. A component that does
-    not exist ends the walk (nothing past it can be the store); any OTHER failure to look
+    not exist (or, on Windows, whose name is malformed) ends the walk (nothing past it can be the
+    store); any OTHER failure to look
     (permission, a loop) raises, and the caller refuses — fail closed. An identity of inode 0 (a
     filesystem without stable ids) is not used; the name rule still is."""
     targets = _store_ids(root)
@@ -269,9 +270,23 @@ def aliases_private(root: str, name: str) -> bool:
             st = os.stat(here)
         except (FileNotFoundError, NotADirectoryError):
             return False
+        except OSError as exc:
+            if _is_invalid_name(exc):
+                return False          # a name the filesystem cannot hold names no file at all
+            raise
         if (st.st_dev, st.st_ino) in targets:
             return True
     return st is not None and hardlinked_private(root, st)
+
+
+#: Windows' ERROR_INVALID_NAME: `os.stat('core.py:3:x')` is a malformed alternate-data-stream name, so
+#: it answers EINVAL (not "not found"). It is the same fact as a missing component - no file has this
+#: name, so none of it can be the store - and must not be read as "could not look" (which refuses).
+_WIN_INVALID_NAME = 123
+
+
+def _is_invalid_name(exc: OSError) -> bool:
+    return getattr(exc, "winerror", None) == _WIN_INVALID_NAME
 
 
 def _nearest_repo(path: str) -> "str | None":
@@ -537,6 +552,9 @@ def spool_entry(spool: str, argv: list, raw: bytes, observed: dict = None) -> st
     os.makedirs(spool, mode=0o700, exist_ok=True)
     if os.name != "nt" and os.stat(spool).st_mode & 0o077:
         os.chmod(spool, 0o700)               # owner-only, even if something else created it
+    if os.name == "nt":
+        from mokata.winacl import owner_only  # Windows ignores the mode: set the DACL itself
+        owner_only(spool)
     env = [f"{k}={v}" for k, v in os.environ.items()
            if k.startswith(ENV_PREFIXES) and k != SPOOL_ENV]
     obs = list((observed or {}).items())
@@ -556,6 +574,8 @@ def spool_entry(spool: str, argv: list, raw: bytes, observed: dict = None) -> st
             for blob in blobs:
                 fh.write(blob)
             fh.write(raw)
+        if os.name == "nt":
+            owner_only(tmp)
         return _publish(spool, tmp, ns)
     except BaseException:
         try:

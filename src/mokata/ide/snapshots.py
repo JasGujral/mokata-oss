@@ -113,7 +113,27 @@ def record_name(root: str, path: str, cwd: Optional[str] = None) -> Optional[Tup
         private = bool(RP.is_private_name(rel) or RP.aliases_private(real_root, rel))
     except (OSError, ValueError, TypeError):
         private = True
+    if private:
+        rel = _canonical_store_name(rel)
     return rel, private
+
+
+def _canonical_store_name(rel: str) -> str:
+    """The recorded spelling of a private path: every component that IS `.git` or `.mokata` (case,
+    Windows trailing dot/space, Unicode folding) is written as the store's own name. Without this a
+    write to `.MOKATA/x` was recorded `.mokata/x` on Windows (realpath answers the disk's case) and
+    `.MOKATA/x` on macOS (it keeps the typed case): one file, two records. The rest of the path is
+    left as the OS named it."""
+    from .. import repo_paths as RP
+    try:
+        parts = RP.split_path(rel)
+        out = []
+        for part in parts:
+            key = RP.fold_component(part)
+            out.append(key if key in (".git", ".mokata") else part)
+        return "/".join(out)
+    except (ValueError, TypeError):
+        return rel
 
 
 #: The plain words of a read refusal for each kind of private path (0.0.27 SEC-HARDEN). A refusal

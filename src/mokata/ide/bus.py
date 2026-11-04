@@ -122,6 +122,8 @@ def ensure_bridge(root: str) -> Dict[str, Any]:
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump(rec, fh)
+    from ..winacl import owner_only
+    owner_only(tmp)                      # Windows ignores 0o600: set the DACL itself
     os.replace(tmp, path)
     return rec
 

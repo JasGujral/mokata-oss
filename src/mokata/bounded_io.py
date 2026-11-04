@@ -80,6 +80,12 @@ def read_bounded(reader: Callable[[], str], timeout: float,
     daemon, so a parked reader never delays interpreter shutdown, and it unwinds by itself the
     moment the stream is closed underneath it.
     """
+    # A1 (0.0.27 CI-FIX) - the cancel is asked BEFORE a read starts and AGAIN after it returns, not
+    # only when the 0.1 s slice times out: a peer that keeps delivering faster than that slice
+    # (a trickling partial-clone fetch) never lets the slice expire, so a departed client was never
+    # noticed and the peer was read to the end. Every caller of this one function is fixed here.
+    if cancelled is not None and cancelled():
+        return BoundedReadResult(READ_CANCELLED)
     holder: dict = {}
 
     def _pump() -> None:
@@ -102,6 +108,8 @@ def read_bounded(reader: Callable[[], str], timeout: float,
                 return BoundedReadResult(READ_CANCELLED)
     if thread.is_alive():
         return BoundedReadResult(READ_TIMEOUT)
+    if cancelled is not None and cancelled():
+        return BoundedReadResult(READ_CANCELLED)   # the read came back, but nobody wants it now
     error = holder.get("error")
     if error is not None:
         return BoundedReadResult(READ_ERROR, error=error)

@@ -380,6 +380,14 @@ class SpillWriter:
             os.makedirs(directory, mode=0o700, exist_ok=True)
             fd, self.path = tempfile.mkstemp(prefix=f"{SPILL_PREFIX}{os.getpid()}-{kind}-",
                                              suffix=".spill", dir=directory)
+            try:
+                from ..winacl import owner_only      # Windows ignores 0o600: set the DACL itself
+                owner_only(directory)
+                owner_only(self.path)
+            except OSError:
+                os.close(fd)
+                _unlink(self.path)
+                raise
         except OSError as exc:
             raise SpillFull(f"no spill file could be made in {directory}: {exc}") from None
         self.fh = os.fdopen(fd, "wb")

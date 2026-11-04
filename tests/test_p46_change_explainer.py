@@ -825,21 +825,26 @@ class TheTerminalHandOffIsOneSafeArgument(unittest.TestCase):
         """The hand-off reuses the terminal's `claude` program (its billing notice included) and
         appends one argument; it never resumes and never uses another program."""
         from mokata.ide import terminal as T
-        host = T.TerminalHost.__new__(T.TerminalHost)
-        host.root = HERE
-        host._lock = threading.Lock()
-        host._terms = {}
-        host._reaper = threading.Thread(target=lambda: None)
-        host._reaper.start()
-        host.enabled = (True, "")
-        host.programs = {"claude": lambda resume: ["/bin/claude"], "shell": lambda r: ["/bin/sh"]}
+        # A REAL host: `__new__` skipped `__init__`, and the reaper thread `open` starts then died on
+        # a missing `idle_secs` (an AttributeError on a background thread, seen only in the Windows
+        # CI log). No thread of the host may die, and the host is closed so its reaper ends.
+        died = []
+        hook = threading.excepthook
+        threading.excepthook = lambda args: died.append(repr(args.exc_value))
+        self.addCleanup(setattr, threading, "excepthook", hook)
+        host = T.TerminalHost(HERE, programs={"claude": lambda resume: ["/bin/claude"],
+                                              "shell": lambda r: ["/bin/sh"]},
+                              idle_secs=0.4, enabled=(True, ""))
         made = {}
 
         def fake(tid, program, argv, root, cols, rows):
             made["argv"], made["program"] = argv, program
-            return mock.Mock(alive=True, id=tid)
+            return mock.Mock(alive=True, id=tid, last_poll=time.time() + 3600.0)
         with mock.patch.object(T, "_make_terminal", fake):
+            self.addCleanup(host.close_all)
             host.open("claude", explain="session S1")
+            time.sleep(0.6)                  # the reaper (sweeps every 0.1 s) has run
+            self.assertEqual([], died, "a terminal-host thread died")
             self.assertEqual(["/bin/claude", "/mokata:explain session S1"], made["argv"])
             with self.assertRaises(T.TerminalRefused):
                 host.open("shell", explain="session S1")
@@ -1463,7 +1468,11 @@ class AnOversizeBundleIsSpilledNotHeldNorRebuiltInline(unittest.TestCase):
                 self.assertLess(os.path.getsize(os.path.join(bdir, n)), 64 * 1024, n)
             sp = self.SP.get(d, h)
             self.assertTrue(os.path.isfile(sp.path))
-            self.assertEqual(0o600, os.stat(sp.path).st_mode & 0o777)
+            if os.name != "nt":
+                self.assertEqual(0o600, os.stat(sp.path).st_mode & 0o777)
+            else:                    # no mode bits there: the ACL is the promise (owner only)
+                from _winacl_assert import assert_owner_only
+                assert_owner_only(self, sp.path)
             self.assertTrue(os.path.basename(sp.path).startswith("p4-"))
             got = ST.load_bundle(d, h)
             self.assertEqual(built["blobs"]["head:src/big/f007.txt"],
@@ -1593,7 +1602,12 @@ class AnOversizeBundleIsSpilledNotHeldNorRebuiltInline(unittest.TestCase):
                 self.assertIsNone(self.SP.get(d, h1))
                 p2 = self.SP.get(d, h2).path
                 with mock.patch.object(self.SP, "IDLE_S", 0.0):
-                    time.sleep(0.01)
+                    # idle means "the clock has moved past its last use": Windows' monotonic clock
+                    # ticks every ~16 ms, so wait on the clock itself, not on a guessed sleep
+                    last = self.SP.live(d)[0].used
+                    deadline = time.monotonic() + 60
+                    while time.monotonic() <= last and time.monotonic() < deadline:
+                        time.sleep(0.005)
                     self.assertIsNone(self.SP.get(d, h2))
                 self.assertFalse(os.path.exists(p2), "an idle spill was kept")
                 three = ST.cache_bundle(d, B.build(d, B.parse_target("live")))

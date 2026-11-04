@@ -549,6 +549,9 @@ class TheSpillIsOwnedAndCleaned(unittest.TestCase):
         w.close()
         if POSIX:
             self.assertEqual(0o600, stat.S_IMODE(os.stat(w.path).st_mode))
+        else:
+            from _winacl_assert import assert_owner_only
+            assert_owner_only(self, w.path)
         st = U.Store(d)
         st.asked("J1", "p", st.ask())
         st.put(U.Result("r1", "usages", {}, files={"rows": w.path}, job="J1"))

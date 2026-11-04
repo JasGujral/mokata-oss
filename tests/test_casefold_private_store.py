@@ -206,6 +206,32 @@ class TheRules(Repo):
             self.assertFalse(RP.aliases_private(self.d, "src/app.py"))
             self.assertFalse(RP.aliases_private(self.d, ".mokata/private.txt"))
 
+    def test_a_malformed_name_ends_the_walk_but_a_failure_to_look_still_refuses(self):
+        """Windows answers `core.py:3:x` (a malformed stream name) with ERROR_INVALID_NAME: the
+        same fact as "no such file", so it must not read as "could not look" - which would call a
+        mistyped location `another name for the private store`. A REAL failure to look (access
+        denied) is still undecidable, and undecidable is private."""
+        def invalid(p, *a, **k):
+            err = OSError(22, "The filename, directory name, or volume label syntax is incorrect")
+            err.winerror = 123
+            raise err
+
+        def denied(p, *a, **k):
+            err = PermissionError(13, "Access is denied")
+            err.winerror = 5
+            raise err
+        real = os.stat
+
+        def stat_after_root(fake):
+            def inner(p, *a, **k):
+                return fake(p) if os.path.basename(str(p)) == "core.py:3:x" else real(p, *a, **k)
+            return inner
+        with mock.patch.object(RP.os, "stat", side_effect=stat_after_root(invalid)):
+            self.assertFalse(RP.aliases_private(self.d, "src/core.py:3:x"))
+        with mock.patch.object(RP.os, "stat", side_effect=stat_after_root(denied)):
+            with self.assertRaises(PermissionError):
+                RP.aliases_private(self.d, "src/core.py:3:x")
+
     def test_the_identity_rule_sees_the_git_dir_too(self):
         try:
             os.symlink(os.path.join(self.d, ".git"), os.path.join(self.d, "meta"))
@@ -266,8 +292,8 @@ class TheRules(Repo):
         self.assertIn("mokata's own record", str(cm.exception))
 
 
-class TheRoutes(Repo):
-    """R1/R2 through every IDE read route that takes a path, as the page calls it."""
+class RoutesHarness(Repo):
+    """The repo and the IDE app, with every read door callable on a path."""
 
     def setUp(self):
         super().setUp()
@@ -309,6 +335,11 @@ class TheRoutes(Repo):
                 if status:
                     self.assertEqual(400, r.status_code, (label, path, body[:200]))
                     self.assertIn(r.json().get("error"), ("PathRefused", "BadRequest"))
+
+
+
+class TheRoutes(RoutesHarness):
+    """R1/R2 through every IDE read route that takes a path, as the page calls it."""
 
     def test_the_exact_names_are_refused_by_every_route(self):
         self.assert_refused(".mokata/private.txt")
@@ -383,7 +414,50 @@ class TheRoutes(Repo):
 
 
 
+@unittest.skipUnless(os.name == "nt", "a junction (a directory reparse point) exists only on Windows")
+class AJunctionIntoTheStoreCombinedWithAStreamIsRefused(RoutesHarness):
+    """0.0.27 CI-FIX Lows C (verify L4): a junction `jxm` -> `.mokata` (or `jxg` -> `.git`) opens the
+    store by another name, and an NTFS stream suffix (`::$DATA`, `:s`, `::$INDEX_ALLOCATION`)
+    is another spelling of the same bytes. Combined, every read door still refuses. The junction
+    name is 3 letters on purpose: ntpath reads a one-letter `J:` as a DRIVE, and the verifier's first
+    probe of this tested nothing."""
+
+    def junction(self, name, target):
+        link = os.path.join(self.d, name)
+        subprocess.run(["cmd", "/c", "mklink", "/J", link, os.path.join(self.d, target)],
+                       check=True, capture_output=True, stdin=subprocess.DEVNULL)
+
+    def spellings(self, jn, tail):
+        return [f"{jn}/{tail}", f"{jn}/{tail}::$DATA", f"{jn}/{tail}:s", f"{jn}/{tail}.",
+                f"{jn}./{tail}", f"{jn}::$INDEX_ALLOCATION/{tail}",
+                f"{jn}::$INDEX_ALLOCATION/{tail}::$DATA", f"{jn}:$I30:$INDEX_ALLOCATION/{tail}",
+                f"{jn.upper()}/{tail}::$DATA"]
+
+    def test_every_read_door_refuses_a_junction_plus_stream_spelling(self):
+        self.junction("jxm", ".mokata")
+        self.junction("jxg", ".git")
+        # the junction is real: the plain name opens the store's bytes (else this proves nothing)
+        with open(os.path.join(self.d, "jxm", "private.txt"), encoding="utf-8") as fh:
+            self.assertIn(MARK, fh.read())
+        for jn, tail in (("jxm", "private.txt"), ("jxg", "config")):
+            for spelled in self.spellings(jn, tail):
+                with self.subTest(spelled=spelled):
+                    opens = os.path.exists(os.path.join(self.d, *spelled.split("/")))
+                    if opens:        # it names the store's bytes on THIS disk: refused by identity
+                        self.assertIsNone(S.rel_path(self.d, spelled))
+                        self.assertTrue(RP.aliases_private(self.d, spelled)
+                                        or RP.is_private_name(spelled))
+                    self.assert_refused(spelled, status=opens)   # and in no case do the bytes leak
+
+
+
 # ======================================================================== RECORD, never READ (round 2)
+CANONICAL = {".git/hooks/pre-commit": ".git/hooks/pre-commit", ".MOKATA/x": ".mokata/x",
+             ".git/config": ".git/config",
+             ".GIT/hooks/pre-commit": ".git/hooks/pre-commit",
+             ".Mokata./x": ".mokata/x"}
+
+
 class AWriteIntoAPrivatePathIsRecordedPathOnly(unittest.TestCase):
     """R6 (coordinator ruling on verify M1): "may I READ this path" and "may I RECORD a write to it"
     are two questions. A file-tool write into `.git/` or `.mokata/` (any spelling) still produces
@@ -447,6 +521,21 @@ class AWriteIntoAPrivatePathIsRecordedPathOnly(unittest.TestCase):
             self.assertIsNone(S.content_of(self.d, s))
         self.assertEqual(before, self.objects(), "no byte of a private file enters the store")
 
+    def test_every_spelling_of_the_store_is_recorded_under_the_stores_own_name(self):
+        """One file, one record: the same canonical name whatever case or trailing dot was typed,
+        on every platform (the exact string, not a casefolded comparison)."""
+        from mokata.ide import bus
+        for typed, want in ((".MOKATA/x", ".mokata/x"), (".Mokata/x", ".mokata/x"),
+                            (".GIT/hooks/pre-commit", ".git/hooks/pre-commit"),
+                            (".Git/config", ".git/config")):
+            with self.subTest(typed=typed):
+                ev = bus.from_claude_hook({"hook_event_name": "PostToolUse", "session_id": "S1",
+                                           "tool_name": "Edit", "cwd": self.d,
+                                           "tool_input": {"file_path": os.path.join(self.d, typed)}},
+                                          self.d)
+                self.assertEqual(want, ev["path"])
+        self.assertEqual((".mokata/x", True), S.record_name(self.d, ".MOKATA/x"))
+
     def test_a_case_flipped_store_write_is_recorded_path_only(self):
         before = self.objects()
         self.write_through_the_hooks(".MOKATA/x", tool="Edit")
@@ -493,7 +582,9 @@ class AWriteIntoAPrivatePathIsRecordedPathOnly(unittest.TestCase):
                                            "tool_input": {"file_path": os.path.join(self.d, rel),
                                                           "content": MARK}}, self.d)
                 self.assertIsNotNone(ev)
-                self.assertEqual((bus.EDIT, rel, True, hook),
+                # ONE spelling on every platform: the store component is recorded by the store's own
+                # name (`.mokata/x` for `.MOKATA/x`), not as typed (macOS) or as on disk (Windows)
+                self.assertEqual((bus.EDIT, CANONICAL[rel], True, hook),
                                  (ev["kind"], ev["path"], ev["private"], ev["git_hook"]))
                 self.assertEqual(S.PRIVATE_NOTE, ev["note"])
                 self.assertNotIn(MARK, repr(ev))

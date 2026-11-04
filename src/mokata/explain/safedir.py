@@ -131,6 +131,9 @@ class SafeDir:
         done = False
         try:
             with os.fdopen(fd, "wb") as fh:
+                if os.name == "nt":              # Windows ignores 0o600: set the DACL itself
+                    from ..winacl import owner_only
+                    owner_only(os.path.join(self.path, tmp))
                 fh.write(data)
                 fh.flush()
                 os.fsync(fh.fileno())
@@ -169,7 +172,11 @@ def _step(parent: SafeDir, part: str, create: bool) -> Optional[SafeDir]:
             if parent.fd is not None:
                 os.mkdir(part, 0o700, dir_fd=parent.fd)
             else:
-                os.mkdir(os.path.join(parent.path, part), 0o700)
+                made = os.path.join(parent.path, part)
+                os.mkdir(made, 0o700)
+                if os.name == "nt":              # Windows ignores 0o700: set the DACL itself
+                    from ..winacl import owner_only
+                    owner_only(made)
         except FileExistsError:
             pass
     st = parent._lstat(part)

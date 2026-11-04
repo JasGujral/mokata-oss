@@ -573,6 +573,18 @@
   function selectionCite() {
     const s = window.getSelection && window.getSelection();
     if (!s || !s.rangeCount || s.isCollapsed) return null;
+    const cells = splitSideCells();
+    if (cells && cells.length) {                       // a Split drag: that side, over every hunk it reaches
+      const f = curFile(cells[0].td.closest("table.d"));
+      const nums = [];
+      for (const { td } of cells) {
+        const no = td.closest("tr").querySelector(`td.no[data-side="${dragSide}"]`);
+        if (no && no.dataset.n) nums.push(+no.dataset.n);
+      }
+      if (!f || !nums.length) return null;
+      const a = Math.min(...nums), b = Math.max(...nums);
+      return `${citePath(f, dragSide)}:${a}${b > a ? "-" + b : ""}`;
+    }
     const node = s.anchorNode && (s.anchorNode.nodeType === 1 ? s.anchorNode : s.anchorNode.parentElement);
     const td0 = node && node.closest && node.closest("td.tx");
     const t = td0 && td0.closest("table.d");
@@ -580,8 +592,14 @@
     const f = curFile(t);
     const side = td0.dataset.side || (td0.closest("tr").classList.contains("del") ? "old" : "new");
     const nums = [];
+    const ranges = [];
+    for (let i = 0; i < s.rangeCount; i++) ranges.push(s.getRangeAt(i));
     for (const tr of t.querySelectorAll("tr")) {
       if (!s.containsNode(tr, true)) continue;
+      // A browser snaps a selection that ends on text it will not select (the other side of a Split
+      // view) to the START of the next row: that row is touched, not selected - its line is not cited.
+      const tx = tr.querySelector(side && tr.querySelector(`td.tx[data-side="${side}"]`) ? `td.tx[data-side="${side}"]` : "td.tx");
+      if (tx && !ranges.some((r) => selectedIn(tx, r))) continue;
       const no = tr.querySelector(`td.no[data-side="${side}"]`);
       if (no && no.dataset.n) nums.push(+no.dataset.n);
     }
@@ -621,13 +639,120 @@
       const td = ev.target.closest && ev.target.closest("table.d td.no[data-n]");
       if (td) cite(td);
     });
-    // a drag that starts on one side of a Split view selects that side only
+    // a drag that starts on one side of a Split view selects that side only. The side is held HERE,
+    // for the whole drag, not on the table it started in: a Split view is one table per hunk, so a
+    // drag from hunk 1 into hunk 2 crosses the gap row between them and its anchor can land outside
+    // every table - the side must survive that.
     host.addEventListener("mousedown", (ev) => {
       const td = ev.target.closest && ev.target.closest("table.split td.tx");
-      for (const t of host.querySelectorAll("table.split[data-sel]")) t.removeAttribute("data-sel");
-      if (td && td.dataset.side) td.closest("table").dataset.sel = td.dataset.side;
+      dragSide = td && td.dataset.side ? td.dataset.side : null;
+      dragSig = null;
+      dragging = !!dragSide;
+      // every hunk's table, so the other side is unselectable all along a drag that crosses hunks
+      for (const t of host.querySelectorAll("table.split")) {
+        if (dragSide) t.dataset.sel = dragSide; else t.removeAttribute("data-sel");
+      }
+    });
+    // The one-side rule belongs to the selection THIS drag made - and to nothing else. The selection's
+    // two ends are noted while the button is down and when it comes up; a later selection (Ctrl/Cmd+A,
+    // find-in-page, a script) has other ends, so it is the browser's own and copies natively.
+    // The other side stops being unselectable the moment the selection is not the drag's: the browser
+    // then selects (and find-in-page matches) it like any text.
+    document.addEventListener("selectionchange", () => {
+      if (dragging) { dragSig = selSig(); return; }
+      if (dragSide && dragSig && !sameSig(dragSig, selSig())) {
+        dragSide = null; dragSig = null;
+        for (const t of host.querySelectorAll("table.split")) t.removeAttribute("data-sel");
+      }
+    });
+    document.addEventListener("mouseup", () => { if (dragging) { dragging = false; dragSig = selSig(); } }, true);
+    // What a person COPIES from a Split selection is that side's code and nothing else. `user-select:
+    // none` on the other side's cells is not enough: Chromium 141 still serialises the other side's
+    // cells and the screen-reader "removed:/added:" spans into the copy. So the copy is built here.
+    host.addEventListener("copy", (ev) => {
+      const text = splitSideText();
+      if (text === null || !ev.clipboardData) return;
+      ev.clipboardData.setData("text/plain", text);
+      ev.preventDefault();
     });
   }
+  // The side a drag started on in a Split view ("old" | "new"), or null when the last mousedown was
+  // anywhere else. Set by the mousedown above.
+  let dragSide = null;
+  let dragging = false;
+  let dragSig = null;
+  function selSig() {
+    const s = window.getSelection && window.getSelection();
+    return s && s.rangeCount ? [s.anchorNode, s.anchorOffset, s.focusNode, s.focusOffset] : null;
+  }
+  function sameSig(a, b) { return !!a && !!b && a.every((v, i) => v === b[i]); }
+  // The cells of the dragged side that a selection covers, across EVERY hunk's table and EVERY range
+  // (Firefox splits a selection around `user-select:none` into several), each with the range that
+  // reaches it. Gap rows hold no `td.tx[data-side]`, so they contribute nothing. null when there is
+  // no Split drag or the selection does not touch a Split table at all.
+  function splitSideCells() {
+    const s = window.getSelection && window.getSelection();
+    if (!dragSide || dragging || !s || !s.rangeCount || s.isCollapsed) return null;
+    if (!sameSig(dragSig, selSig())) return null;     // not the selection the drag made
+    const ranges = [];
+    for (let i = 0; i < s.rangeCount; i++) ranges.push(s.getRangeAt(i));
+    const tables = [...document.querySelectorAll("table.split")]
+      .filter((t) => ranges.some((r) => r.intersectsNode(t)));
+    if (!tables.length) return null;
+    const out = [];
+    for (const t of tables) {
+      for (const td of t.querySelectorAll(`td.tx[data-side="${dragSide}"]`)) {
+        const range = ranges.find((r) => r.intersectsNode(td));
+        if (range) out.push({ td, range });
+      }
+    }
+    return out.length ? out : null;                    // nothing of the dragged side covered: not ours
+  }
+  // The text of one code cell that `range` covers: the cell clipped to the range at its ends, minus
+  // the screen-reader / no-newline / CR spans.
+  function clippedText(td, range) {
+    const part = document.createRange();
+    part.selectNodeContents(td);
+    if (range.compareBoundaryPoints(Range.START_TO_START, part) > 0) part.setStart(range.startContainer, range.startOffset);
+    if (range.compareBoundaryPoints(Range.END_TO_END, part) < 0) part.setEnd(range.endContainer, range.endOffset);
+    const box = document.createElement("div");
+    box.append(part.cloneContents());
+    for (const x of box.querySelectorAll(".dv-sr, .dv-noeol, .dv-cr")) x.remove();
+    return box.textContent;
+  }
+  // Whether `range` really selects something of this cell (a blank line has nothing to clip: it counts
+  // when the range reaches into it).
+  function selectedIn(td, range) {
+    if (!range.intersectsNode(td)) return false;
+    const whole = document.createRange();
+    whole.selectNodeContents(td);
+    const own = clippedText(td, whole);
+    return own === "" ? true : clippedText(td, range) !== "";
+  }
+  // The selected text of ONE side of a Split view (the side the drag started in) over every hunk the
+  // selection reaches, cell by cell and clipped to the range at its ends; null when the selection is
+  // not in a Split view. Where lines of the side were elided between two cells (the gap between hunks),
+  // an honest marker line stands in for them - a paste never reads as contiguous code that is not.
+  function splitSideText() {
+    const cells = splitSideCells();
+    if (!cells) return null;
+    const lines = [];
+    let last = null;
+    for (const { td, range } of cells) {
+      const no = td.closest("tr").querySelector(`td.no[data-side="${dragSide}"]`);
+      const n = no && no.dataset.n ? +no.dataset.n : null;
+      if (n !== null) {
+        if (last !== null && n > last + 1) {
+          const k = n - last - 1;
+          lines.push(`\u22ef ${k.toLocaleString("en-US")} unchanged line${k === 1 ? "" : "s"} \u22ef`);
+        }
+        last = n;
+      }
+      lines.push(clippedText(td, range));
+    }
+    return lines.join("\n");
+  }
+  dv.splitSideText = splitSideText;
 
   // =========================================================================== the toggles
   let tools = null;
