@@ -40,7 +40,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..knowledge.cancel import cancelled, checkpoint, kill_on_cancel, report
 from ..exe_path import path_dirs, which_in
-from ..quiet_spawn import detached, hidden
+from ..quiet_spawn import hidden
 from .lsp import spawn_jobbed
 from .server import BadRequest
 
@@ -458,7 +458,7 @@ def run_tests(root: str, argv: List[str], ids: List[str],
                     raise OSError(not_found)
                 proc, job = spawn_jobbed([*argv, tid], cwd=root, env=run_env,  # nosec B603 argv
                                          stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                         stderr=subprocess.STDOUT, **detached())
+                                         stderr=subprocess.STDOUT)
             except OSError as exc:
                 results.append({"id": tid, "state": "error", "rc": None,
                                 "seconds": 0.0,

@@ -1478,7 +1478,7 @@ class TheTreeIsInItsJobBeforeItRuns(unittest.TestCase):
                 mock.patch("mokata.ide.lsp.WinJob", side_effect=winjob), \
                 mock.patch("mokata.ide.lsp._resume_process", side_effect=resume):
             try:
-                got = L.spawn_jobbed(["x"], nt=True, creationflags=0x200 | 0x08000000)
+                got = L.spawn_jobbed(["x"], stdin=None, nt=True)
             except OSError as exc:
                 got = exc
         return calls, proc, job, got
@@ -1487,7 +1487,8 @@ class TheTreeIsInItsJobBeforeItRuns(unittest.TestCase):
         calls, proc, job, got = self._spawn()
         self.assertEqual(["popen", "job", "resume"], [c[0] for c in calls], calls)
         self.assertTrue(calls[0][1] & 0x4, "not created CREATE_SUSPENDED")
-        self.assertEqual(0x200 | 0x08000000, calls[0][1] & ~0x4, "the caller's flags were lost")
+        self.assertEqual(0x200 | 0x08000000, calls[0][1] & ~0x4,
+                         "its own process group and hidden console must survive")
         self.assertEqual((proc, job), got)
 
     def test_a_job_that_could_not_be_made_still_lets_the_process_run_and_says_so(self):
@@ -1503,9 +1504,9 @@ class TheTreeIsInItsJobBeforeItRuns(unittest.TestCase):
 
     def test_on_posix_it_is_a_plain_popen_with_no_job(self):
         with mock.patch("mokata.ide.lsp.subprocess.Popen") as popen:
-            proc, job = L.spawn_jobbed(["x"], nt=False, start_new_session=True)
+            proc, job = L.spawn_jobbed(["x"], stdin=None, nt=False)
         self.assertIsNone(job)
-        self.assertEqual({"start_new_session": True}, popen.call_args.kwargs)
+        self.assertEqual({"stdin": None, "start_new_session": True}, popen.call_args.kwargs)
 
     def _launcher_fixture(self):
         import subprocess
@@ -1533,8 +1534,7 @@ class TheTreeIsInItsJobBeforeItRuns(unittest.TestCase):
         for i in range(runs):
             pidfile = os.path.join(venv, f"{tag}{i}")
             proc, job = L.spawn_jobbed([launcher, script, pidfile], stdin=subprocess.DEVNULL,
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                       **L.detached())
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.assertTrue(job.ok, "no Job Object holds the tree")
             self.assertTrue(wait_for(lambda: os.path.exists(pidfile), timeout=120), f"run {i}: no pids")
             with open(pidfile, encoding="utf-8") as fh:
@@ -1625,8 +1625,8 @@ class OnlyARunnableProgramIsEverFound(unittest.TestCase):
         for d in (d1, d2):
             self.addCleanup(lambda d=d: __import__("shutil").rmtree(d, True))
         for n in ("srv.VBS", "srv.JS", "srv.cmd", "srv.BAT", "srv.msc", "other.vbs"):
-            open(os.path.join(d1, n), "w").close()
-        open(os.path.join(d2, "srv.EXE"), "w").close()
+            open(os.path.join(d1, n), "w", encoding="utf-8").close()
+        open(os.path.join(d2, "srv.EXE"), "w", encoding="utf-8").close()
         ext = ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
         self.assertEqual(os.path.join(d2, "srv.EXE"), L.which_in("srv", [d1, d2], nt=True, pathext=ext))
         self.assertIsNone(L.which_in("other", [d1, d2], nt=True, pathext=ext))

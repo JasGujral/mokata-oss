@@ -340,8 +340,7 @@ def from_uri(uri: str, nt: Optional[bool] = None) -> Optional[str]:
         return None
     if not is_nt:
         return posixpath.normpath(path)
-    path = path.replace("\\", "/")
-    m = re.match(r"^/?([A-Za-z]):(/.*)?$", path)
+    m = re.match(r"^[/\\]?([A-Za-z]):([/\\].*)?$", path)
     if not m:
         return None
     return ntpath.normpath(m.group(1).upper() + ":" + (m.group(2) or "/"))
@@ -452,9 +451,6 @@ class WinJob:
             pass
 
 
-_CREATE_SUSPENDED = 0x00000004
-
-
 def _resume_process(proc: Any) -> None:
     """Let a process created CREATE_SUSPENDED run: `NtResumeProcess` on its handle (Popen drops
     the primary thread's handle, so there is no thread to `ResumeThread`). ctypes only. Raises
@@ -469,36 +465,38 @@ def _resume_process(proc: Any) -> None:
         raise OSError(f"NtResumeProcess failed: NTSTATUS {status & 0xFFFFFFFF:#x}")
 
 
-def spawn_jobbed(argv: Sequence[str], nt: Optional[bool] = None,
+def spawn_jobbed(argv: Sequence[str], stdin: Any, nt: Optional[bool] = None,
                  **popen_kw: Any) -> "tuple[subprocess.Popen, Optional[WinJob]]":
-    """Start `argv` so that it, and everything it ever starts, is in OUR Job Object from its very
-    first instruction. POSIX: a plain Popen (the caller's `start_new_session` makes the group);
-    the job is None. Windows: the process is created CREATE_SUSPENDED, assigned to a new
-    KILL_ON_JOB_CLOSE job (no breakaway of any kind is allowed), and only then resumed. Assigning
-    AFTER a running start lost a race (1 in 40 on a real runner): a launcher — a venv's
-    `Scripts\\python.exe`, `pytest.exe`, `pylsp.exe` — starts its real child within milliseconds,
-    and a child that started first is in no job of ours, so `terminate` never reached it.
+    """Start `argv` — in its own session / process group, with no console window (`detached()`) —
+    so that it, and everything it ever starts, is in OUR Job Object from its very first
+    instruction. POSIX: a plain Popen (`start_new_session` makes the group); the job is None.
+    Windows: the process is created CREATE_SUSPENDED, assigned to a new KILL_ON_JOB_CLOSE job (no
+    breakaway of any kind is allowed), and only then resumed. Assigning AFTER a running start lost
+    a race (1 in 40 on a real runner): a launcher — a venv's `Scripts\\python.exe`, `pytest.exe`,
+    `pylsp.exe` — starts its real child within milliseconds, and a child that started first is in
+    no job of ours, so `terminate` never reached it.
     If the job could not be made (`job.ok` False) the process is still resumed and the caller's
     fallback (`taskkill /F /T` from the live leader, before it exits) is all there is: that
     fallback cannot reach what a leader left behind AFTER it died. Raises OSError (the process
-    killed first) if it cannot be resumed."""
+    killed first) if it cannot be resumed. `nt` injects the platform for the tests."""
     is_nt = (os.name == "nt") if nt is None else nt
-    kw = dict(popen_kw)
+    proc = subprocess.Popen(list(argv), stdin=stdin, **popen_kw,
+                            **detached(suspended=is_nt, nt=is_nt))
     if not is_nt:
-        return subprocess.Popen(list(argv), **kw), None
-    kw["creationflags"] = int(kw.get("creationflags") or 0) | _CREATE_SUSPENDED
-    proc = subprocess.Popen(list(argv), **kw)
+        return proc, None
     job = WinJob(proc)
+    resumed = False
     try:
         _resume_process(proc)
-    except BaseException:
-        job.terminate()
-        try:
-            proc.kill()
-            proc.wait(timeout=STOP_GRACE_S)
-        except (OSError, subprocess.SubprocessError):
-            pass
-        raise
+        resumed = True
+    finally:
+        if not resumed:                         # never leave a suspended process behind
+            job.terminate()
+            try:
+                proc.kill()
+                proc.wait(timeout=STOP_GRACE_S)
+            except (OSError, subprocess.SubprocessError):
+                pass
     return proc, job
 
 
@@ -581,7 +579,7 @@ class Server:
         # a launcher's first child is in the job too.
         self.proc, self.job = spawn_jobbed(
             self.argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            cwd=self.root, close_fds=True, **detached())   # own session / group, hidden console
+            cwd=self.root, close_fds=True)   # own session / group, hidden console
         self.pgid = self.proc.pid if os.name != "nt" else None     # its session's id, kept
         self._stop_readers = threading.Event()
         threading.Thread(target=self._read_loop, daemon=True,
