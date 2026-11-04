@@ -201,9 +201,10 @@ def find_binary(root: str, name: str, project: bool = True) -> Optional[str]:
     return which_in(name, path_dirs(cwd=root), refuse_under=None if project else root)
 
 
-def node_on_path(root: str) -> Optional[str]:
-    """`node` from the user's PATH — never the cwd, never a copy inside the repo (R2)."""
-    return which_in("node", path_dirs(cwd=root), refuse_under=root)
+def node_on_path(root: str, environ: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """`node` from the user's PATH — never the cwd, never a copy inside the repo (R2).
+    `environ` is the environment whose PATH is read (default: this process's)."""
+    return which_in("node", path_dirs(environ, cwd=root), refuse_under=root)
 
 
 #: Built-in server name -> the npm package that ships it (`package.json` `bin`).
@@ -211,8 +212,8 @@ NODE_PACKAGES = {"typescript-language-server": "typescript-language-server",
                  "pyright-langserver": "pyright", "basedpyright-langserver": "basedpyright"}
 
 
-def _package_bin(modules: str, anchor: str, root: str,
-                 name: str) -> Tuple[Optional[List[str]], str]:
+def _package_bin(modules: str, anchor: str, root: str, name: str, pkg: Optional[str] = None,
+                 environ: Optional[Dict[str, str]] = None) -> Tuple[Optional[List[str]], str]:
     """`<modules>/<pkg>/package.json` `bin[name]` as `[node, script]`, without a shim and without
     a shell (re-verification R3, ruled). Containment holds on REALPATHS, twice (verify2 N2):
     `modules` itself must sit inside `anchor` (the repo root for a project install — so a
@@ -220,7 +221,7 @@ def _package_bin(modules: str, anchor: str, root: str,
     `modules` — pnpm's `.pnpm` store and yarn v1's hoisted tree are inside it; a package
     directory symlinked out of it, or a `bin` that climbs out (`../../..`), is refused (L4). node
     comes from the user's PATH (`node_on_path`). `.cmd` files are never read."""
-    pkg = NODE_PACKAGES.get(name)
+    pkg = pkg or NODE_PACKAGES.get(name)       # `pkg`: a non-server tool (npm, corepack…) by name
     if pkg is None:
         return None, ""
     if os.path.isdir(modules) and not _under(modules, anchor):
@@ -241,7 +242,7 @@ def _package_bin(modules: str, anchor: str, root: str,
     if not _under(script, modules) or not os.path.isfile(script):
         return None, (f"{pkg}/package.json: bin {rel!r} resolves outside {modules} "
                       f"({script}) — refused")
-    node = node_on_path(root)
+    node = node_on_path(root, environ)
     if not node:
         return None, f"{pkg} is installed in {modules} but node is not on PATH"
     return [node, script], ""
@@ -252,17 +253,19 @@ def _node_package_bin(root: str, name: str) -> Tuple[Optional[List[str]], str]:
     return _package_bin(os.path.join(root, "node_modules"), root, root, name)
 
 
-def _global_node_package_bin(root: str, name: str) -> Tuple[Optional[List[str]], str]:
+def _global_node_package_bin(root: str, name: str, pkg: Optional[str] = None,
+                             environ: Optional[Dict[str, str]] = None
+                             ) -> Tuple[Optional[List[str]], str]:
     """A GLOBAL npm install the user made, found through PATH without reading its shim: npm's
     Windows prefix is the PATH directory itself (`%APPDATA%\\npm\\x.cmd` beside
     `%APPDATA%\\npm\\node_modules\\<pkg>`), so each absolute PATH entry outside the repo is
     asked for `<entry>/node_modules/<pkg>/package.json`. (On POSIX the global bin is a symlink
     `which_in` already finds.)"""
     why = ""
-    for d in path_dirs(cwd=root):
+    for d in path_dirs(environ, cwd=root):
         if _under(d, root):
             continue
-        head, w = _package_bin(os.path.join(d, "node_modules"), d, root, name)
+        head, w = _package_bin(os.path.join(d, "node_modules"), d, root, name, pkg, environ)
         if head is not None:
             return head, ""
         why = why or w

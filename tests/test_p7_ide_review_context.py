@@ -764,5 +764,136 @@ class TheRepoDoesNotChooseTheRunner(unittest.TestCase):
         self.assertEqual("green", got["tests"][0]["state"], got)
 
 
+def _fake_npm(prefix, js_body):
+    """A global npm layout as Windows has it: `npm.cmd` (the shim) beside
+    `node_modules/npm/{package.json, bin/npm-cli.js}`."""
+    _write(prefix, "npm.cmd", "@echo off\r\nrem the shim\r\n")
+    _write(prefix, "node_modules/npm/package.json", json.dumps({"name": "npm",
+                                                                "bin": {"npm": "bin/npm-cli.js"}}))
+    _write(prefix, "node_modules/npm/bin/npm-cli.js", js_body)
+
+
+class JsAndMavenTestsOnWindows(unittest.TestCase):
+    """CI-FIX 0.0.27 round 4 (MB3-1). On Windows npm/npx/yarn/pnpm exist only as `.cmd` shims and
+    mvn only as `mvn.cmd`. The IDE never runs a shim (cmd.exe), but a JS user must still be able
+    to re-run a test: npm is run as `node npm-cli.js`. What cannot be run is said UP FRONT, in
+    true words that say what to do — and the panel never offers a run that cannot happen."""
+
+    def _root(self, cmd):
+        d = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-js-"))
+        self.addCleanup(lambda: shutil.rmtree(d, True))
+        init_repo(root=d, profile="standard", assume_yes=True, out=_silent)
+        _set_command(d, cmd)
+        return d
+
+    def _tool_dir(self, name):
+        d = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-bin-"))
+        self.addCleanup(lambda: shutil.rmtree(d, True))
+        return d
+
+    def test_maven_that_exists_only_as_a_cmd_is_refused_before_the_click_and_honestly(self):
+        from mokata.ide import review_context as RC
+        root = self._root("mvn -q test -Dtest=")
+        bindir = self._tool_dir("mvn")
+        _write(bindir, "mvn.cmd", "@echo off\r\n")
+        old = os.environ["PATH"]
+        os.environ["PATH"] = bindir
+        self.addCleanup(os.environ.__setitem__, "PATH", old)
+        got = RC.test_command(root, nt=True)
+        self.assertFalse(got["runnable"], "the panel must not offer a run that cannot happen")
+        note = got["note"]
+        self.assertIn(os.path.join(bindir, "mvn.cmd"), note, "says what it found")
+        self.assertIn(".cmd/.bat", note, "says why it will not run it")
+        self.assertIn("terminal", note, "says what the user can do")
+        self.assertNotIn("not an executable on the project's PATH", note, "the shim IS on PATH")
+
+    def test_a_tool_that_is_nowhere_says_so_and_is_not_offered(self):
+        from mokata.ide import review_context as RC
+        root = self._root("mvn test")
+        old = os.environ["PATH"]
+        os.environ["PATH"] = self._tool_dir("empty")
+        self.addCleanup(os.environ.__setitem__, "PATH", old)
+        got = RC.test_command(root, nt=True)
+        self.assertFalse(got["runnable"])
+        self.assertIn("is not an executable on the project's PATH", got["note"])
+
+    def test_an_explicit_cmd_is_refused_at_preflight_too(self):
+        from mokata.ide import review_context as RC
+        root = self._root("C:/tools/gradlew.bat test")
+        got = RC.test_command(root, nt=True)
+        self.assertFalse(got["runnable"])
+        self.assertIn(".cmd/.bat", got["note"])
+
+    def test_npm_on_windows_is_resolved_to_node_and_its_own_js_entry(self):
+        """Resolution, on any OS: `npm` found only as `npm.cmd` beside a real npm package becomes
+        `[node, .../bin/npm-cli.js]`; the shim is never in the argv; the preflight offers it."""
+        from mokata.ide import review_context as RC
+        node_dir = self._tool_dir("node")
+        node = os.path.join(node_dir, "node")
+        _write(node_dir, "node", "#!/bin/sh\n")
+        os.chmod(node, 0o755)
+        prefix = self._tool_dir("npm")
+        _fake_npm(prefix, "// npm\n")
+        path = os.pathsep.join([prefix, node_dir])
+        head, why = RC.resolve_runner(self._root("npm test --"), "npm", path, nt=True)
+        self.assertIsNone(why)
+        self.assertEqual(os.path.join(prefix, "node_modules", "npm", "bin", "npm-cli.js"),
+                         head[1], head)
+        self.assertEqual(os.path.realpath(node), os.path.realpath(head[0]))
+        self.assertFalse(any(a.lower().endswith((".cmd", ".bat")) for a in head))
+
+    def test_npm_whose_entry_is_missing_is_honest_about_both_facts(self):
+        from mokata.ide import review_context as RC
+        prefix = self._tool_dir("npm")
+        _write(prefix, "npm.cmd", "@echo off\r\n")
+        head, why = RC.resolve_runner(self._root("npm test"), "npm", prefix, nt=True)
+        self.assertIsNone(head)
+        self.assertIn("npm.cmd", why)
+        self.assertIn("JavaScript entry", why)
+        self.assertIn("terminal", why)
+
+    @unittest.skipUnless(os.name == "nt", "Windows: the real thing — node.exe and a shim-only npm")
+    def test_a_fake_npm_layout_reruns_a_test_through_node_exe(self):
+        from mokata.ide import review_context as RC
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("no Node on this machine")
+        prefix = self._tool_dir("npm")
+        mark = os.path.join(prefix, "ARGV.txt")
+        _fake_npm(prefix, "require('fs').writeFileSync(%s, process.argv.slice(2).join('|'));"
+                          "process.exit(0);\n" % json.dumps(mark))
+        root = self._root("npm test --")
+        env = {**os.environ, "PATH": os.pathsep.join([prefix, os.path.dirname(node)])}
+        got = RC.run_tests(root, ["npm", "test", "--"], ["t1"], environ=env)
+        self.assertEqual("green", got["tests"][0]["state"], got)
+        with open(mark, encoding="utf-8") as fh:
+            self.assertEqual("test|--|t1", fh.read())
+
+    @unittest.skipUnless(os.name == "nt", "Windows: the real npm of the runner's Node install")
+    def test_the_real_npm_of_this_machine_is_run_without_cmd_exe(self):
+        from mokata.ide import review_context as RC
+        if not shutil.which("node") or not shutil.which("npm"):
+            self.skipTest("no Node/npm on this machine")
+        root = self._root("npm")
+        self.assertTrue(RC.test_command(root)["runnable"], RC.test_command(root))
+        got = RC.run_tests(root, ["npm", "--version", "--"], ["t1"])
+        # `npm --version -- t1` prints the version and exits 0 — a real npm, run via node.
+        self.assertEqual("green", got["tests"][0]["state"], got)
+
+    @unittest.skipIf(os.name == "nt", "POSIX behaviour")
+    def test_on_posix_a_bare_runner_is_still_found_on_path_and_run(self):
+        from mokata.ide import review_context as RC
+        bindir = self._tool_dir("bin")
+        _write(bindir, "myrunner", "#!/bin/sh\nexit 0\n")
+        os.chmod(os.path.join(bindir, "myrunner"), 0o755)
+        root = self._root("myrunner")
+        old = os.environ["PATH"]
+        os.environ["PATH"] = bindir
+        self.addCleanup(os.environ.__setitem__, "PATH", old)
+        self.assertTrue(RC.test_command(root)["runnable"])
+        got = RC.run_tests(root, ["myrunner"], ["t1"], environ={"PATH": bindir})
+        self.assertEqual("green", got["tests"][0]["state"], got)
+
+
 if __name__ == "__main__":
     unittest.main()
