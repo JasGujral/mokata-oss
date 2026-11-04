@@ -58,7 +58,7 @@ env:
   # Currently (0.0.25 B-01): the Windows cmd-window fix, observed on a real desktop —
   # `test_win_no_console_windows` (control-gated: it SKIPS, saying why, on a runner that cannot
   # show a console window), plus the flag/shim/server-light modules it stands on.
-  PROBE_MODULES: "test_zz_verifyb6_attack test_p7_ide_review_context.ATestThatNeverRanIsNeverRecordedRed test_p7_ide_review_context.OpeningThePanelStartsNoProgram test_p7_ide_review_context.TheWindowsCommandLineIsNotAShellEither test_p21_gated_merge.TheMergeRunsTheTestCommandTheWayThePreflightSaysItDoes"
+  PROBE_MODULES: "test_a35_the_tty_sweep_instrument_works"
 
 jobs:
   probe:
@@ -157,4 +157,4 @@ jobs:
           which mokata-mcp
           mokata --version
       - name: END-TO-END — init · mcp start · tools/list · gated remember · approve · recall
-        run: python tests/windows_e2e_check.py
+        run: python -c "import faulthandler,runpy; faulthandler.dump_traceback_later(120, exit=True); runpy.run_path('tests/windows_e2e_check.py', run_name='__main__')"
