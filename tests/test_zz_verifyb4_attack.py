@@ -208,14 +208,16 @@ class Attack(unittest.TestCase):
         oldp = os.environ["PATH"]
         os.environ["PATH"] = path
         self.addCleanup(os.environ.__setitem__, "PATH", oldp)
-        for cmd in ("npm test", "mvn -q test"):
+        inj = os.path.join(prefix, "INJECTED_DIR")
+        for cmd in ("npm test", "mvn -q test", "npm test & mkdir " + inj):
             mf = os.path.join(m.main, ".mokata", "manifest.json")
             with open(mf, encoding="utf-8") as fh:
                 data = json.load(fh)
             data["settings"]["baseline"]["test_command"] = cmd
             with open(mf, "w", encoding="utf-8") as fh:
                 json.dump(data, fh)
-            wt = m.session(name="s" + cmd[:3], sid="S" + cmd[:3], run="R" + cmd[:3])
+            tag = str(len(cmd))
+            wt = m.session(name="s" + tag, sid="S" + tag, run="R" + tag)
             tc = RC.test_command(m.main)
             say("merge preflight", cmd, tc["runnable"], tc["note"][:200])
             if os.path.exists(mark):
@@ -230,6 +232,7 @@ class Attack(unittest.TestCase):
                     say("merge marker", cmd, repr(fh.read()))
             else:
                 say("merge marker", cmd, "none")
+            say("merge injected file exists", cmd, os.path.exists(inj))
         # cwd-first: a batch named like the runner in the PROCESS cwd
         cwdtool = self.tmp("v4cwd-")
         _w(cwdtool, "npm.bat", "@echo off\r\necho CWDBAT >> \"%s\"\r\n" % mark)
