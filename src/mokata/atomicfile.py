@@ -82,18 +82,9 @@ def _exclusive_temp(parent: str, prefix: str, suffix: str) -> "tuple":
         _TEMP_SEQ[0] += 1
         tmp = os.path.join(parent, f"{prefix}{os.getpid()}-{time.time_ns()}-{_TEMP_SEQ[0]}{suffix}")
         try:
-            fd = os.open(tmp, flags, 0o600)
+            return os.open(tmp, flags, 0o600), tmp
         except FileExistsError:
             continue
-        if os.name == "nt":                  # Windows ignores 0o600: set the DACL itself
-            from .winacl import owner_only
-            try:
-                owner_only(tmp)
-            except OSError:
-                os.close(fd)
-                os.remove(tmp)
-                raise
-        return fd, tmp
     raise FileExistsError(f"no free temporary name in {parent}")
 
 
@@ -117,6 +108,9 @@ def atomic_write_text(path: str, text: str, *, tmp_prefix: str = ".tmp-",
     fd, tmp = _exclusive_temp(parent or ".", tmp_prefix, tmp_suffix)
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline=newline) as fh:
+            if os.name == "nt":              # Windows ignores 0o600: set the DACL itself
+                from .winacl import owner_only
+                owner_only(tmp)
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())

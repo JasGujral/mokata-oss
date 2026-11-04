@@ -424,7 +424,7 @@ class AJunctionIntoTheStoreCombinedWithAStreamIsRefused(RoutesHarness):
 
     def junction(self, name, target):
         link = os.path.join(self.d, name)
-        subprocess.run(["cmd", "/c", "mklink", "/J", link, os.path.join(self.d, target)],
+        subprocess.run([os.environ["COMSPEC"], "/c", "mklink", "/J", link, os.path.join(self.d, target)],
                        check=True, capture_output=True, stdin=subprocess.DEVNULL)
 
     def spellings(self, jn, tail):

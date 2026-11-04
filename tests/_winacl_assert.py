@@ -14,7 +14,8 @@ from typing import List
 
 def acl_entries(path: str) -> List[str]:
     """The ACE lines `icacls` prints for `path` (`NAME:(flags)`), the path column stripped."""
-    out = subprocess.run(["icacls", path], capture_output=True, text=True, check=True).stdout
+    icacls = os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "System32", "icacls.exe")
+    out = subprocess.run([icacls, path], capture_output=True, text=True, check=True).stdout
     entries = []
     for line in out.splitlines():
         line = line.strip()

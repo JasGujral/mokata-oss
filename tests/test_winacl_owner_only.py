@@ -18,6 +18,8 @@ import sys
 import tempfile
 import unittest
 
+import _support  # noqa: F401
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
@@ -41,7 +43,7 @@ class TheDescriptorIsProtectedAndSingle(unittest.TestCase):
             self.skipTest("the no-op is the non-Windows branch")
         d = _tmp(self)
         p = os.path.join(d, "f")
-        open(p, "w").close()
+        open(p, "w", encoding="utf-8").close()
         os.chmod(p, 0o644)
         winacl.owner_only(p)
         self.assertEqual(0o644, stat.S_IMODE(os.stat(p).st_mode))
@@ -51,11 +53,11 @@ class TheDescriptorIsProtectedAndSingle(unittest.TestCase):
 class OnWindowsTheAclIsReallyOwnerOnly(unittest.TestCase):
     def test_a_file_is_readable_by_the_current_user_only(self):
         p = os.path.join(_tmp(self), "f.txt")
-        with open(p, "w") as fh:
+        with open(p, "w", encoding="utf-8") as fh:
             fh.write("x")
         winacl.owner_only(p)
         assert_owner_only(self, p)
-        with open(p) as fh:                      # and the owner can still read it
+        with open(p, encoding="utf-8") as fh:                      # and the owner can still read it
             self.assertEqual("x", fh.read())
 
     def test_a_directory_is_owner_only_and_what_is_made_in_it_inherits_that(self):
@@ -63,7 +65,7 @@ class OnWindowsTheAclIsReallyOwnerOnly(unittest.TestCase):
         os.mkdir(d)
         winacl.owner_only(d)
         child = os.path.join(d, "c.txt")
-        with open(child, "w") as fh:
+        with open(child, "w", encoding="utf-8") as fh:
             fh.write("y")
         from _winacl_assert import acl_entries
         entries = acl_entries(child)

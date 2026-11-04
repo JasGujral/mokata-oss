@@ -21,6 +21,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 from __future__ import annotations
 
 import os
+import sys
 from typing import Optional
 
 _ERROR_NOT_SUPPORTED = 50
@@ -93,7 +94,8 @@ def current_user_sid() -> str:
 
 def owner_only(path: str) -> None:
     """Make `path` (a file or a directory) readable and writable by the current user ONLY."""
-    return
+    if sys.platform != "win32":
+        return
     ctypes, wintypes, adv, ker = _win()
     sd = ctypes.c_void_p()
     text = sddl_for(current_user_sid(), os.path.isdir(path))
