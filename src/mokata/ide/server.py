@@ -151,7 +151,7 @@ def _write_record(root: str, data: Dict[str, Any]) -> None:
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump(data, fh)
-    from ..winacl import owner_only
+    from mokata_emit.winacl import owner_only
     owner_only(tmp)                      # Windows ignores 0o600: set the DACL itself
     os.replace(tmp, path)
 

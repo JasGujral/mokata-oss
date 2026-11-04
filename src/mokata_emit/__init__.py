@@ -553,7 +553,7 @@ def spool_entry(spool: str, argv: list, raw: bytes, observed: dict = None) -> st
     if os.name != "nt" and os.stat(spool).st_mode & 0o077:
         os.chmod(spool, 0o700)               # owner-only, even if something else created it
     if os.name == "nt":
-        from mokata.winacl import owner_only  # Windows ignores the mode: set the DACL itself
+        from mokata_emit.winacl import owner_only  # Windows ignores the mode: set the DACL itself
         owner_only(spool)
     env = [f"{k}={v}" for k, v in os.environ.items()
            if k.startswith(ENV_PREFIXES) and k != SPOOL_ENV]

@@ -132,7 +132,7 @@ class SafeDir:
         try:
             with os.fdopen(fd, "wb") as fh:
                 if os.name == "nt":              # Windows ignores 0o600: set the DACL itself
-                    from ..winacl import owner_only
+                    from mokata_emit.winacl import owner_only
                     owner_only(os.path.join(self.path, tmp))
                 fh.write(data)
                 fh.flush()
@@ -175,7 +175,7 @@ def _step(parent: SafeDir, part: str, create: bool) -> Optional[SafeDir]:
                 made = os.path.join(parent.path, part)
                 os.mkdir(made, 0o700)
                 if os.name == "nt":              # Windows ignores 0o700: set the DACL itself
-                    from ..winacl import owner_only
+                    from mokata_emit.winacl import owner_only
                     owner_only(made)
         except FileExistsError:
             pass

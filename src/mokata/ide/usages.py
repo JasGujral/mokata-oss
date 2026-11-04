@@ -381,7 +381,7 @@ class SpillWriter:
             fd, self.path = tempfile.mkstemp(prefix=f"{SPILL_PREFIX}{os.getpid()}-{kind}-",
                                              suffix=".spill", dir=directory)
             try:
-                from ..winacl import owner_only      # Windows ignores 0o600: set the DACL itself
+                from mokata_emit.winacl import owner_only      # Windows ignores 0o600: set the DACL itself
                 owner_only(directory)
                 owner_only(self.path)
             except OSError:

@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
 from _winacl_assert import assert_owner_only  # noqa: E402
-from mokata import winacl  # noqa: E402
+from mokata_emit import winacl  # noqa: E402
 
 
 def _tmp(case):

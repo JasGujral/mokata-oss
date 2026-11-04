@@ -20,7 +20,7 @@ only two primitives a shared-file writer needs:
 Callers render their own text (this module has no opinion on JSON formatting), so every fixed path
 keeps its exact byte-for-byte output.
 
-Stdlib-only; imports nothing from mokata but its own stdlib-only `winacl` (like ``oslock``, so it can be imported from anywhere
+Stdlib-only; imports nothing from mokata but the stdlib-only `mokata_emit.winacl` (like ``oslock``, so it can be imported from anywhere
 without a cycle). Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
 
@@ -86,7 +86,7 @@ def _exclusive_temp(parent: str, prefix: str, suffix: str) -> "tuple":
         except FileExistsError:
             continue
         if os.name == "nt":                  # Windows ignores 0o600: set the DACL itself
-            from .winacl import owner_only
+            from mokata_emit.winacl import owner_only
             try:
                 owner_only(tmp)
             except OSError:
