@@ -361,29 +361,9 @@ def to_uri(path: str) -> str:
     return Path(os.path.abspath(path)).as_uri()
 
 
-#: Names Windows resolves to a DEVICE in any directory, with or without an extension. Ported from
-#: CPython 3.13's `ntpath` (the floor here is 3.10, so the rule is copied, not called): COM and LPT
-#: ports 1-9 AND the superscript digits (`COM\u00b9` is COM1 to Windows).
+#: Names Windows resolves to a DEVICE in any directory, with or without an extension.
 _DEVICE_NAMES = frozenset({"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
-                          | {f"COM{c}" for c in "123456789\u00b9\u00b2\u00b3"}
-                          | {f"LPT{c}" for c in "123456789\u00b9\u00b2\u00b3"})
-#: Characters Win32 never allows in a file name (control characters included); `:` also begins an
-#: NTFS stream (`a.py::$DATA`).
-_NT_RESERVED_CHARS = frozenset({chr(i) for i in range(32)} | set('"*:<>?|'))
-
-
-def _nt_reserved_name(name: str) -> bool:
-    """One path component Windows cannot honestly treat as the file it spells (3.13
-    `ntpath._isreservedname`): a trailing dot or space is folded away (`a.py.` IS `a.py`, so it is
-    an alias, not a source location), reserved characters, and a device name — `CON`, `nul .py`,
-    `COM\u00b9`, `LPT2.txt` — whatever follows the first dot and however many spaces precede it."""
-    if not name or name in (".", ".."):
-        return False
-    if name[-1] in ". ":
-        return True
-    if _NT_RESERVED_CHARS.intersection(name):
-        return True
-    return name.partition(".")[0].rstrip(" ").upper() in _DEVICE_NAMES
+                          | {f"COM{i}" for i in range(1, 10)} | {f"LPT{i}" for i in range(1, 10)})
 
 
 def from_uri(uri: str, nt: Optional[bool] = None) -> Optional[str]:
@@ -412,7 +392,7 @@ def from_uri(uri: str, nt: Optional[bool] = None) -> Optional[str]:
         # A device (`CON`, `NUL.txt`, `COM1`) is not a file in the repo whatever its directory,
         # and `a.py::$DATA` / `a.py:stream` names an NTFS stream, not the file. Neither is a
         # source location a language server can honestly point at.
-        if _nt_reserved_name(part):
+        if ":" in part or part.rstrip(" .").split(".")[0].upper() in _DEVICE_NAMES:
             return None
     return ntpath.normpath(m.group(1).upper() + ":" + (m.group(2) or "/"))
 
@@ -606,10 +586,9 @@ class TreeWatch:
     `taskkill /F /T` needs a live root to walk from, and Windows does not re-parent an orphan: a
     child still names its dead parent's pid. So `observe()` (called every few hundred ms while the
     leader runs) records every process whose parent is the leader or an already-known descendant
-    and which was CREATED AFTER that parent and BEFORE any newer process that now holds the parent's
-    pid (a pid Windows reused for an unrelated process is older than whatever names it, and the
-    children of a reused pid are born after the pid's new holder — neither is ever taken);
-    `end()` kills what is known and still the same process (same pid AND creation time).
+    and which was CREATED AFTER that parent (a pid Windows reused for an unrelated process is older
+    than whatever names it, so it is never taken); `end()` kills what is known and still the same
+    process (same pid AND creation time).
 
     WHAT IT CANNOT REACH, said exactly: a process started AND orphaned between two `observe()`
     calls (so its parent is gone before it was ever seen), a descendant that is not in a chain of
@@ -639,21 +618,12 @@ class TreeWatch:
             while todo:
                 parent = todo.pop()
                 born = roots.get(parent)
-                # Is `parent` still the process we recorded? A pid Windows gave to an UNRELATED
-                # process after ours exited has a different creation time: its children are not
-                # ours — except those born before that newer holder existed, which can only have
-                # been started by the process we recorded (orphans of it), so the window for a
-                # child is [recorded, current holder's creation).
-                now = self.created(parent)
-                before = now if (born is not None and now is not None and now != born) else None
                 for pid in kids.get(parent, ()):
                     if pid in self.known or pid == self.leader:
                         continue
                     c = self.created(pid)
                     if c is None or (born is not None and c < born):
                         continue                          # gone, or a reused pid older than its "parent"
-                    if before is not None and c >= before:
-                        continue                          # a child of the pid's NEW, unrelated holder
                     self.known[pid] = c
                     roots[pid] = c
                     todo.append(pid)
