@@ -114,26 +114,40 @@ def record_name(root: str, path: str, cwd: Optional[str] = None) -> Optional[Tup
     except (OSError, ValueError, TypeError):
         private = True
     if private:
-        rel = _canonical_store_name(rel)
+        rel = _canonical_store_name(rel, real_root)
     return rel, private
 
 
-def _canonical_store_name(rel: str) -> str:
+def _canonical_store_name(rel: str, real_root: str) -> str:
     """The recorded spelling of a private path: every component that IS `.git` or `.mokata` (case,
     Windows trailing dot/space, Unicode folding) is written as the store's own name. Without this a
     write to `.MOKATA/x` was recorded `.mokata/x` on Windows (realpath answers the disk's case) and
     `.MOKATA/x` on macOS (it keeps the typed case): one file, two records. The rest of the path is
-    left as the OS named it."""
+    left as the OS named it.
+
+    Only where the two spellings are the SAME directory on disk (`samefile`): on a case-sensitive
+    filesystem `.MOKATA` is a different directory from `.mokata`, a write into it is not a write to
+    mokata's store, and it is recorded as typed."""
     from .. import repo_paths as RP
     try:
         parts = RP.split_path(rel)
         out = []
         for part in parts:
             key = RP.fold_component(part)
-            out.append(key if key in (".git", ".mokata") else part)
+            if key in (".git", ".mokata") and part != key and _same_dir(real_root, out, part, key):
+                part = key
+            out.append(part)
         return "/".join(out)
     except (ValueError, TypeError):
         return rel
+
+
+def _same_dir(real_root: str, done: List[str], typed: str, canonical: str) -> bool:
+    try:
+        return os.path.samefile(os.path.join(real_root, *done, typed),
+                                os.path.join(real_root, *done, canonical))
+    except (OSError, ValueError):
+        return False
 
 
 #: The plain words of a read refusal for each kind of private path (0.0.27 SEC-HARDEN). A refusal

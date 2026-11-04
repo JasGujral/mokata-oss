@@ -102,7 +102,7 @@ class _FileTransport:
         # MS.S6 — atomic replace: a teammate reading a bundle mid-push can never get a half-written
         # one (which `verify_bundle` would reject as corrupt, losing a session that was in fact fine).
         path = self._path(tag)
-        atomic_write_text(path, blob)
+        atomic_write_text(path, blob, private=True)
         return path
 
     def read_bundle(self, tag: str) -> Optional[str]:

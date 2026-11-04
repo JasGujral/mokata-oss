@@ -89,7 +89,8 @@ def _exclusive_temp(parent: str, prefix: str, suffix: str) -> "tuple":
 
 
 def atomic_write_text(path: str, text: str, *, tmp_prefix: str = ".tmp-",
-                      tmp_suffix: str = ".tmp", newline: Optional[str] = None) -> None:
+                      tmp_suffix: str = ".tmp", newline: Optional[str] = None,
+                      private: bool = False) -> None:
     """Replace `path` with `text` atomically — a reader sees the whole old file or the whole new
     one, never a fragment, and a crash at any point leaves the previous content intact.
 
@@ -101,14 +102,20 @@ def atomic_write_text(path: str, text: str, *, tmp_prefix: str = ".tmp-",
 
     `newline` is passed to the text layer: `None` (the default) is the platform's translation, and
     `"\n"` writes LF on every OS — for a file that is COMMITTED, where a CRLF on Windows would churn
-    every diff (L7b's `.mokata/specs/`)."""
+    every diff (L7b's `.mokata/specs/`).
+
+    `private=True` is for a file whose CONTENT is a secret (a session bundle, a trust record, a
+    token): the temp file gets an owner-only ACL on Windows (`winacl.owner_only`) BEFORE the first
+    byte is written, and `os.replace` carries it to the target. The default leaves the inherited ACL
+    alone: a committed or user-owned file (`.gitignore`, a spec, the constitution, a manifest) must
+    keep the grants its folder gave it. A failed ACL unlinks the temp file and raises."""
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
     fd, tmp = _exclusive_temp(parent or ".", tmp_prefix, tmp_suffix)
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline=newline) as fh:
-            if os.name == "nt":              # Windows ignores 0o600: set the DACL itself
+            if private:                      # Windows ignores 0o600: the DACL, at size 0
                 from .winacl import owner_only
                 owner_only(tmp)
             fh.write(text)

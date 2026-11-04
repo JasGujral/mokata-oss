@@ -455,7 +455,16 @@ class AJunctionIntoTheStoreCombinedWithAStreamIsRefused(RoutesHarness):
 CANONICAL = {".git/hooks/pre-commit": ".git/hooks/pre-commit", ".MOKATA/x": ".mokata/x",
              ".git/config": ".git/config",
              ".GIT/hooks/pre-commit": ".git/hooks/pre-commit",
-             ".Mokata./x": ".mokata/x"}
+             ".Mokata./x": ".mokata/x", ".Mokata/x": ".mokata/x", ".Git/config": ".git/config"}
+
+
+def recorded_as(root: str, typed: str) -> str:
+    """The name the record must carry: the store's own spelling when THIS filesystem opens the
+    typed one as the store (case-insensitive: one file, one record); the typed one where it does
+    not (case-sensitive: `.MOKATA` is another directory, and naming it `.mokata` would claim a
+    write into mokata's store that never happened)."""
+    want = CANONICAL[typed]
+    return want if aliases_on_disk(root, typed, want) else typed
 
 
 class AWriteIntoAPrivatePathIsRecordedPathOnly(unittest.TestCase):
@@ -533,8 +542,9 @@ class AWriteIntoAPrivatePathIsRecordedPathOnly(unittest.TestCase):
                                            "tool_name": "Edit", "cwd": self.d,
                                            "tool_input": {"file_path": os.path.join(self.d, typed)}},
                                           self.d)
-                self.assertEqual(want, ev["path"])
-        self.assertEqual((".mokata/x", True), S.record_name(self.d, ".MOKATA/x"))
+                self.assertEqual(recorded_as(self.d, typed), ev["path"])
+        self.assertEqual((recorded_as(self.d, ".MOKATA/x"), True),
+                         S.record_name(self.d, ".MOKATA/x"))
 
     def test_a_case_flipped_store_write_is_recorded_path_only(self):
         before = self.objects()
@@ -584,7 +594,7 @@ class AWriteIntoAPrivatePathIsRecordedPathOnly(unittest.TestCase):
                 self.assertIsNotNone(ev)
                 # ONE spelling on every platform: the store component is recorded by the store's own
                 # name (`.mokata/x` for `.MOKATA/x`), not as typed (macOS) or as on disk (Windows)
-                self.assertEqual((bus.EDIT, CANONICAL[rel], True, hook),
+                self.assertEqual((bus.EDIT, recorded_as(self.d, rel), True, hook),
                                  (ev["kind"], ev["path"], ev["private"], ev["git_hook"]))
                 self.assertEqual(S.PRIVATE_NOTE, ev["note"])
                 self.assertNotIn(MARK, repr(ev))
@@ -646,6 +656,38 @@ class AWriteIntoAPrivatePathIsRecordedPathOnly(unittest.TestCase):
                     r = c.get(route, params={"path": path})
                     self.assertEqual(400, r.status_code)
                     self.assertNotIn(MARK, r.text)
+
+class ACaseSensitiveDiskKeepsTheTypedSpelling(unittest.TestCase):
+    """L4 (verify): `.MOKATA` is mokata's store only where the disk opens it as `.mokata`. On a
+    case-sensitive filesystem it is another directory, and recording it as `.mokata/x` would claim
+    (in the activity feed, the first-write index) a write into mokata's own store that never
+    happened - and merge two different files under one key."""
+
+    def setUp(self):
+        self._t = tempfile.TemporaryDirectory()
+        self.addCleanup(self._t.cleanup)
+        self.d = os.path.realpath(self._t.name)
+        os.makedirs(os.path.join(self.d, ".mokata"))
+
+    def test_on_a_real_case_sensitive_disk(self):
+        os.makedirs(os.path.join(self.d, ".MOKATA"), exist_ok=True)
+        if len([e for e in os.listdir(self.d) if e.lower() == ".mokata"]) < 2:
+            self.skipTest("this filesystem is case-insensitive: .MOKATA IS .mokata here")
+        write(self.d, ".MOKATA/x", "y")
+        self.assertEqual((".MOKATA/x", True), S.record_name(self.d, ".MOKATA/x"))
+        self.assertEqual((".mokata/x", True), S.record_name(self.d, ".mokata/x"))
+
+    def test_the_decision_is_the_disks_not_the_names(self):
+        """Any filesystem: the disk is made to answer 'different directory', and the record keeps
+        the typed spelling; made to answer 'same directory', it is the store's own name."""
+        write(self.d, ".mokata/x", "y")
+        real = os.path.samefile
+        with mock.patch.object(os.path, "samefile", side_effect=lambda a, b: False):
+            self.assertEqual((".MOKATA/x", True), S.record_name(self.d, ".MOKATA/x"))
+        with mock.patch.object(os.path, "samefile", side_effect=real):
+            want = ".mokata/x" if aliases_on_disk(self.d, ".MOKATA/x", ".mokata/x") else ".MOKATA/x"
+            self.assertEqual((want, True), S.record_name(self.d, ".MOKATA/x"))
+
 
 if __name__ == "__main__":
     unittest.main()

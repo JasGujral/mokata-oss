@@ -118,13 +118,8 @@ def ensure_bridge(root: str) -> Dict[str, Any]:
     rec = {"port": _pick_port(root), "token": secrets.token_urlsafe(24)}
     path = bridge_path(root)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + f".tmp-{os.getpid()}"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        json.dump(rec, fh)
-    from ..winacl import owner_only
-    owner_only(tmp)                      # Windows ignores 0o600: set the DACL itself
-    os.replace(tmp, path)
+    from ..atomicfile import atomic_write_text      # the hook token is in it: owner-only at size 0
+    atomic_write_text(path, json.dumps(rec), private=True)
     return rec
 
 

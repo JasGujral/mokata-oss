@@ -147,13 +147,8 @@ def _write_record(root: str, data: Dict[str, Any]) -> None:
     path = record_path(root)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     note_repo(root)                  # P29 — a user-level state dir names the repo it belongs to
-    tmp = path + f".tmp-{os.getpid()}"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        json.dump(data, fh)
-    from ..winacl import owner_only
-    owner_only(tmp)                      # Windows ignores 0o600: set the DACL itself
-    os.replace(tmp, path)
+    from ..atomicfile import atomic_write_text      # the page token is in it: owner-only at size 0
+    atomic_write_text(path, json.dumps(data), private=True)
 
 
 def _remove_record(root: str, pid: int) -> None:

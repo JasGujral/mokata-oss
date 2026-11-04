@@ -836,6 +836,15 @@ class TheTerminalHandOffIsOneSafeArgument(unittest.TestCase):
                                               "shell": lambda r: ["/bin/sh"]},
                               idle_secs=0.4, enabled=(True, ""))
         made = {}
+        swept = threading.Event()
+        real_reap = host.reap
+
+        def counted_reap(*a, **k):
+            try:
+                return real_reap(*a, **k)
+            finally:
+                swept.set()
+        host.reap = counted_reap             # the reaper loop calls self.reap: see its sweeps
 
         def fake(tid, program, argv, root, cols, rows):
             made["argv"], made["program"] = argv, program
@@ -843,7 +852,9 @@ class TheTerminalHandOffIsOneSafeArgument(unittest.TestCase):
         with mock.patch.object(T, "_make_terminal", fake):
             self.addCleanup(host.close_all)
             host.open("claude", explain="session S1")
-            time.sleep(0.6)                  # the reaper (sweeps every 0.1 s) has run
+            # WAIT FOR the observed sweep (it comes every ~0.1 s; 30 s is >100x slack) - a deadline
+            # that is hit is RED, never a pass that tested nothing.
+            self.assertTrue(swept.wait(30.0), "the reaper never swept: nothing was proven")
             self.assertEqual([], died, "a terminal-host thread died")
             self.assertEqual(["/bin/claude", "/mokata:explain session S1"], made["argv"])
             with self.assertRaises(T.TerminalRefused):

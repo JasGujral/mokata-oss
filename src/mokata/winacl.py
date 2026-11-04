@@ -13,8 +13,9 @@ one answer is not an error; every other failure raises `OSError` — owner-only 
 promise that could not be kept is not quietly dropped.
 
 Not used by the hook spool: a hook may import the standard library alone and pays no `ctypes`
-(`test_o3_hook_emitter`), and the spool lives under the user profile (`~/.mokata/hook-spool`),
-whose inherited ACL is already owner-only. Stdlib-only; imports nothing from mokata.
+(`test_o3_hook_emitter`). The spool must live under the user profile (`~/.mokata/hook-spool`), whose
+inherited ACL admits this user, the administrators and SYSTEM, and no other standard account; a
+spool outside the profile is refused on Windows (the hook then runs inline). Stdlib-only; imports nothing from mokata.
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
 

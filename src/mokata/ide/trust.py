@@ -104,7 +104,7 @@ def _write(root: str, rec: Dict[str, Any]) -> None:
     from ..atomicfile import atomic_write_text
     path = record_path(root)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    atomic_write_text(path, json.dumps(rec, indent=1, sort_keys=True) + "\n")
+    atomic_write_text(path, json.dumps(rec, indent=1, sort_keys=True) + "\n", private=True)
     statedir.note_repo(root)
 
 

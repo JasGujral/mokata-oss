@@ -479,6 +479,15 @@ def spool_dir() -> str:
     return os.path.join(os.path.expanduser("~"), ".mokata", "hook-spool")
 
 
+def under_profile(path: str, home: str) -> bool:
+    """True when `path` is `home` or inside it (symlinks, 8.3 names and case resolved first)."""
+    try:
+        p, h = os.path.normcase(os.path.realpath(path)), os.path.normcase(os.path.realpath(home))
+        return os.path.commonpath([p, h]) == h
+    except ValueError:                  # another drive: commonpath refuses to compare
+        return False
+
+
 def pending(spool: str) -> list:
     """The spooled entries not yet drained, in arrival order."""
     try:
@@ -543,13 +552,21 @@ def _publish(spool: str, tmp: str, ns: int) -> str:
 
 
 def spool_entry(spool: str, argv: list, raw: bytes, observed: dict = None) -> str:
-    """Write ONE entry, owner-only (0600 in a 0700 directory; on Windows the default spool sits under
-    the user profile, whose inherited ACL is owner-only, and a hook may not pay for `ctypes`), publish it under its arrival
-    name; return its path. Raises OSError (the caller then runs the hook inline).
+    """Write ONE entry (0600 in a 0700 directory), publish it under its arrival name; return its
+    path. Raises OSError (the caller then runs the hook inline).
+
+    Windows ignores both modes, and a hook may not pay for `ctypes`, so the spool relies on the ACL
+    of the user profile it must sit under: readable by this user, the administrators and SYSTEM
+    only (not by any other standard account). A spool outside the profile (`MOKATA_HOOK_SPOOL=D:\\x`)
+    would inherit the grants of whatever folder it is in, so it is REFUSED there: `OSError`, and the
+    hook runs inline.
 
     Format: `MKS2 \0 cwd \0 argc \0 argv… \0 envc \0 K=V… \0 obsc \0 (path \0 state \0 size
     \0 t \0 len \0)…` then the observed files' bytes back to back, then the raw hook payload."""
     ns = time.time_ns()
+    if os.name == "nt" and not under_profile(spool, os.path.expanduser("~")):
+        raise OSError("MOKATA_HOOK_SPOOL is outside the user profile: its ACL is not this user's "
+                      "alone, so the hook runs inline instead of spooling %s" % spool)
     os.makedirs(spool, mode=0o700, exist_ok=True)
     if os.name != "nt" and os.stat(spool).st_mode & 0o077:
         os.chmod(spool, 0o700)               # owner-only, even if something else created it
@@ -975,4 +992,4 @@ def main(argv: "list | None" = None) -> int:
 __all__ = ["DEFERRED", "PRIVATE_DIRS", "QUIET_OUTSIDE_MOKATA", "SYNC_OBSERVE", "aliases_private",
            "drain", "emit", "fold_component", "hardlinked_private", "is_private_name", "loads",
            "main", "pending", "private_path", "registered_run", "split_any", "spool_dir",
-           "spool_entry", "store_dirs", "surely_not_mokata"]
+           "spool_entry", "store_dirs", "surely_not_mokata", "under_profile"]

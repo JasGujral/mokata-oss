@@ -377,6 +377,7 @@ class SpillWriter:
 
     def __init__(self, directory: str, kind: str) -> None:
         try:
+            fresh = not os.path.isdir(directory)
             os.makedirs(directory, mode=0o700, exist_ok=True)
             fd, self.path = tempfile.mkstemp(prefix=f"{SPILL_PREFIX}{os.getpid()}-{kind}-",
                                              suffix=".spill", dir=directory)
@@ -388,7 +389,8 @@ class SpillWriter:
         self.index: List[Tuple[Any, int]] = []
         try:
             from ..winacl import owner_only          # Windows ignores 0o600: set the DACL itself
-            owner_only(directory)
+            if fresh:                  # once, when WE made the folder: re-applying a directory ACL
+                owner_only(directory)  # walks every child (O(spills)), and its entry is inherited
             owner_only(self.path)
         except OSError as exc:
             self.discard()
