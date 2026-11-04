@@ -86,11 +86,20 @@ class VLC2(unittest.TestCase):
         set_sddl(p, "D:P(A;;FA;;;%s)" % winacl.current_user_sid())
 
     def test_2_race_private_temp_opened_under_inherited_acl(self):
-        """A watcher opens every new file in the folder as fast as it can and records the DACL it
-        saw THROUGH ITS HANDLE at open time; after the writer finishes, the watcher reads the
-        content through that same handle."""
+        """A folder that admits BUILTIN\\Users read (a repo on D:\\ made by a default Windows root).
+        A watcher opens every new temp file (sharing read/write/delete, so it never blocks the
+        rename) and records the DACL it saw THROUGH ITS HANDLE right after open; after the writer
+        is done it reads the content through that same handle."""
+        import ctypes, msvcrt
+        from ctypes import wintypes
+        ker = ctypes.WinDLL("kernel32", use_last_error=True)
+        ker.CreateFileW.argtypes = [ctypes.c_wchar_p, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                    wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p]
+        ker.CreateFileW.restype = ctypes.c_void_p
+        INVALID = ctypes.c_void_p(-1).value
         d = base()
-        P("race folder ACL", acl(d))
+        r = subprocess.run([ICACLS, d, "/grant", "*S-1-5-32-545:(OI)(CI)(RX)"], capture_output=True, text=True)
+        P("race folder ACL", r.returncode, acl(d))
         stop = threading.Event()
         held = {}
 
@@ -103,22 +112,24 @@ class VLC2(unittest.TestCase):
                 for n in names:
                     if n in held or not n.startswith(".tmp-"):
                         continue
-                    try:
-                        fd = os.open(os.path.join(d, n), os.O_RDONLY)
-                    except OSError:
+                    h = ker.CreateFileW(os.path.join(d, n), 0x80000000 | 0x00020000, 7, None, 3, 0, None)
+                    if not h or h == INVALID:
                         continue
+                    fd = msvcrt.open_osfhandle(h, os.O_RDONLY)
                     held[n] = (fd, handle_sddl(fd))
         t = threading.Thread(target=watch, daemon=True)
         t.start()
-        N = 3000
+        N, errs = 3000, 0
         for i in range(N):
-            atomicfile.atomic_write_text(os.path.join(d, "secret%d.json" % (i % 20)), "TOKEN-%06d" % i,
-                                         private=True)
+            try:
+                atomicfile.atomic_write_text(os.path.join(d, "secret%d.json" % i), "TOKEN-%06d" % i,
+                                             private=True)
+            except OSError:
+                errs += 1
         time.sleep(0.5)
         stop.set()
         t.join(5)
-        inherited, leaked = 0, 0
-        sample = None
+        inherited, leaked, sample = 0, 0, None
         for n, (fd, sddl) in held.items():
             if sddl and "D:P(" not in sddl:
                 inherited += 1
@@ -128,9 +139,9 @@ class VLC2(unittest.TestCase):
                     leaked += 1
                     sample = sample or (n, sddl, data)
             os.close(fd)
-        P("race: %d private writes, watcher caught %d temp files, %d opened while the ACL was still "
-          "INHERITED, %d of those then read the secret through the old handle; sample=%r"
-          % (N, len(held), inherited, leaked, sample))
+        P("race: %d private writes (%d errors), watcher caught %d temp files, %d opened while the ACL "
+          "was still INHERITED (Users RX), %d of those then read the secret through the old handle; "
+          "sample=%r" % (N, errs, len(held), inherited, leaked, sample))
 
     def test_3_ordinary_writes_keep_inherited(self):
         d = base()
