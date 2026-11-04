@@ -60,6 +60,9 @@ _TEST_ID = re.compile(r"^[\w./\\:\[\]=+,@#~][\w./\\:\[\]=+,@#~-]{0,299}$")
 #: (`&&`, pipes, redirects, `;`, backticks, `$(`) is refused with the remedy — never run through
 #: `sh -c`.
 _SHELLY = re.compile(r"(&&|\|\||[|;<>`]|\$\()")
+#: What `cmd.exe` also reads as syntax and a POSIX split does not: a lone `&` (a second command),
+#: `^` (its escape) and a line break. Refused on Windows even though no cmd.exe is ever started.
+_SHELLY_NT = re.compile(r"[&^\r\n]")
 _HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 STATUS = ("green", "red", "unrun")
@@ -309,7 +312,7 @@ def resolve_runner(root: str, name: str, path_var: Optional[str],
     if exe:
         return [exe], None
     if not nt:
-        return None, f"`{name}` is not an executable on the project's PATH"
+        return None, _not_found(name)
     shim = _shim_in(dirs, name)
     env = {"PATH": path_var or ""}
     tried = ""
@@ -319,19 +322,27 @@ def resolve_runner(root: str, name: str, path_var: Optional[str],
             return head, None
         tried = tried or w
     if shim is None:
-        return None, f"`{name}` is not an executable on the project's PATH"
+        return None, _not_found(name)
     return None, _shim_why(name, shim, name in JS_RUNNERS, tried)
 
 
+def _not_found(name: str) -> str:
+    return f"`{name}` is not an executable on the project's PATH"
+
+
 def _shim_why(name: str, shim: str, js: Optional[bool], tried: str = "") -> str:
+    """Why a Windows batch file is not started — the same words for the IDE re-run and the gated
+    merge's full-suite run, so it says neither "test id" nor "IDE"."""
     base = os.path.basename(shim)
     return (f"`{name}` is a Windows batch file ({shim}) and mokata never runs a .cmd/.bat — "
-            f"cmd.exe would re-parse the test id"
+            f"cmd.exe would re-parse the command line"
             + (f"; its own JavaScript entry (run through node) was not found either"
                + (f" ({tried})" if tried else "") if js else "")
-            + f". Run these tests in your terminal, or set `settings.baseline.test_command` to a "
-              f"real executable (for example `node <path to the runner's .js>`) — {base} itself "
-              f"cannot be re-run from the IDE")
+            + f". Set `settings.baseline.test_command` to a real executable"
+            + (" (for example `node <path to the runner's .js>`)" if js else "")
+            + f" — {base} itself is never run, by the IDE re-run or by the gated merge's full-suite "
+              f"run. Run these tests in your terminal; to merge without the runner's suite "
+              f"evidence, a human records `mokata worktree merge-override`")
 
 
 def test_command(root: str, nt: Optional[bool] = None) -> Dict[str, Any]:
@@ -348,7 +359,7 @@ def test_command(root: str, nt: Optional[bool] = None) -> Dict[str, Any]:
                 "note": "no test command set — set `settings.baseline.test_command` "
                         "(`mokata config set baseline.test_command \"pytest -q\"`); mokata "
                         "never guesses one"}
-    if _SHELLY.search(cmd):
+    if _SHELLY.search(cmd) or ((os.name == "nt" if nt is None else nt) and _SHELLY_NT.search(cmd)):
         return {"configured": True, "text": cmd, "argv": [], "runnable": False,
                 "note": "the test command uses shell syntax (&&, |, ;, redirects) — the IDE runs "
                         "a test without a shell; put the runner alone in "
@@ -363,9 +374,19 @@ def test_command(root: str, nt: Optional[bool] = None) -> Dict[str, Any]:
                 "note": "the test command is empty"}
     from .. import project_env
     penv_env = dict(os.environ)
-    run_env = project_env.activated(penv_env, project_env.resolve(
-        root, project_env.settings_python(man), penv_env))
+    # A READ never starts a program: no `poetry`/`pipenv` is asked where the env is (the panel
+    # opening is not a click). So a runner missing from the base PATH is not "known missing" in a
+    # project whose env a tool could still supply — only what is certain is refused.
+    penv = project_env.resolve(root, project_env.settings_python(man), penv_env, ask_tools=False)
+    run_env = project_env.activated(penv_env, penv)
     head, why = resolve_runner(root, argv[0], _path_of(run_env), nt)
+    if head is None and why == _not_found(argv[0]) and penv is None and (
+            os.path.exists(os.path.join(root, "pyproject.toml"))
+            or os.path.exists(os.path.join(root, "Pipfile"))):
+        return {"configured": True, "text": cmd, "argv": argv, "runnable": True,
+                "note": f"`{argv[0]}` is not on the base PATH; it is looked up in the project's "
+                        f"poetry/pipenv environment when a test runs (the panel starts no tool to "
+                        f"ask). Each test runs as `{cmd} <test id>`"}
     if head is None:
         return {"configured": True, "text": cmd, "argv": argv, "runnable": False, "note": why}
     return {"configured": True, "text": cmd, "argv": argv, "runnable": True,

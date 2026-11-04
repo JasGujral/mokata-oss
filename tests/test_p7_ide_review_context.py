@@ -948,8 +948,7 @@ class OpeningThePanelStartsNoProgram(unittest.TestCase):
             self.assertIn("command", r.json())
         for _ in range(3):
             RC.test_command(d)
-        self.assertFalse(os.path.exists(log), "a tool was started by a READ: "
-                         + (open(log).read() if os.path.exists(log) else ""))
+        self.assertFalse(os.path.exists(log), "a tool was started by a READ")
 
     @unittest.skipIf(os.name == "nt", "POSIX script stands in for the tool; Windows has its own test")
     def test_a_runner_only_the_tool_could_supply_is_not_declared_missing_by_a_read(self):
@@ -989,7 +988,10 @@ class OpeningThePanelStartsNoProgram(unittest.TestCase):
         here = os.getcwd()
         os.chdir(d)                                   # `mokata ide` runs with the repo as cwd
         self.addCleanup(os.chdir, here)
+        saved = os.environ["PATH"]
+        self.addCleanup(os.environ.__setitem__, "PATH", saved)
         for path in (".", "", "relative/dir", d, d + os.sep + ".." + os.sep + os.path.basename(d)):
+            os.environ["PATH"] = path             # what the OS and `shutil.which` would search
             project_env.resolve(d, None, {"PATH": path})                      # a run's lookup
             RC.run_tests(d, ["mk-p7-none"], ["t1"], environ={"PATH": path})   # the click
             self.assertFalse(os.path.exists(mark), f"the repo's own poetry/pipenv ran (PATH={path!r})")
