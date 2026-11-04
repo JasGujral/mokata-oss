@@ -143,11 +143,14 @@ def create_private_file(path: str) -> int:
                 return None                       # a volume with no ACLs: nothing to protect
             raise ctypes.WinError(err)
         import msvcrt
+        wrapped = False
         try:
-            return msvcrt.open_osfhandle(h, 0)
-        except BaseException:
-            ker.CloseHandle(h)
-            raise
+            fd = msvcrt.open_osfhandle(h, 0)
+            wrapped = True
+            return fd
+        finally:
+            if not wrapped:                   # the fd owns the handle once it exists
+                ker.CloseHandle(h)
     fd = _born_with_descriptor(False, create)
     return os.open(path, _plain_flags(), 0o600) if fd is None else fd
 

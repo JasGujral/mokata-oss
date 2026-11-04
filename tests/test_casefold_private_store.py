@@ -728,11 +728,12 @@ class ACaseSensitiveDiskKeepsTheTypedSpelling(unittest.TestCase):
                 S.record_name(self.d, typed)
         self.assertEqual(1, probe.call_count)
 
-    def test_a_root_with_no_letter_to_flip_is_probed_with_a_file_that_is_removed(self):
+    def test_a_root_with_no_letter_to_flip_asks_another_name_and_creates_nothing(self):
+        """The probe reads names that exist (an ancestor, an entry); it never writes into the repo."""
         digits = os.path.join(self.d, "123")
         os.makedirs(digits)
-        self.assertIn(S._probe_folds_case(digits), (True, False))
-        self.assertEqual([], [e for e in os.listdir(digits)], "the probe file was left behind")
+        self.assertEqual(S._probe_folds_case(self.d), S._probe_folds_case(digits))
+        self.assertEqual([], os.listdir(digits), "the probe left something in the repo")
 
 
 if __name__ == "__main__":

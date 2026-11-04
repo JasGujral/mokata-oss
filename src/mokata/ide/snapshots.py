@@ -152,9 +152,9 @@ _FOLDS_CASE: Dict[int, bool] = {}
 
 def volume_folds_case(real_root: str) -> bool:
     """Does the volume holding `real_root` open `Name` and `nAME` as the same file? Asked of the disk
-    through the root's own name (it exists, so nothing is created); a root whose name has no letter
-    case to flip is probed with a short-lived file beside it. Undecidable means it does NOT fold
-    (the typed spelling is kept, which is also what a case-sensitive disk is owed)."""
+    through a name that EXISTS (the root's own, an ancestor's, or an entry in it), so nothing is
+    ever created in the repo. Undecidable means it does NOT fold (the typed spelling is kept, which
+    is also what a case-sensitive disk is owed)."""
     try:
         dev = os.stat(real_root).st_dev
     except OSError:
@@ -164,25 +164,37 @@ def volume_folds_case(real_root: str) -> bool:
     return _FOLDS_CASE[dev]
 
 
-def _probe_folds_case(real_root: str) -> bool:
-    parent, name = os.path.split(real_root.rstrip("/\\"))
-    flipped = name.swapcase()
-    if parent and name and flipped != name:
-        try:
-            return os.path.samefile(real_root, os.path.join(parent, flipped))
-        except (OSError, ValueError):
-            return False
-    import secrets
-    probe = os.path.join(real_root, ".mokata-case-probe-" + secrets.token_hex(4))
+def _existing_names(real_root: str) -> Iterator[Tuple[str, str]]:
+    """`(parent, name)` of names that exist: the root and each ancestor, then what is in the root."""
+    cur = real_root
+    while True:
+        parent, name = os.path.split(cur.rstrip("/\\"))
+        if not name or parent == cur:
+            break
+        yield parent, name
+        cur = parent
     try:
-        with open(probe, "x", encoding="utf-8"):
-            pass
-        try:
-            return os.path.exists(os.path.join(real_root, os.path.basename(probe).swapcase()))
-        finally:
-            os.remove(probe)
+        with os.scandir(real_root) as it:
+            for entry in it:
+                yield real_root, entry.name
     except OSError:
-        return False
+        return
+
+
+def _probe_folds_case(real_root: str) -> bool:
+    dev = os.stat(real_root).st_dev
+    for parent, name in _existing_names(real_root):
+        flipped = name.swapcase()
+        if not name.isascii() or flipped == name:
+            continue                            # no ASCII letter case to flip: ask another name
+        here = os.path.join(parent, name)
+        try:
+            if os.stat(here).st_dev != dev:
+                continue                        # another volume (a mount): its answer is not ours
+            return os.path.samefile(here, os.path.join(parent, flipped))
+        except (OSError, ValueError):
+            return False                        # the flipped spelling opens nothing: case-sensitive
+    return False
 
 
 #: The plain words of a read refusal for each kind of private path (0.0.27 SEC-HARDEN). A refusal

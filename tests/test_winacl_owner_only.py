@@ -310,22 +310,36 @@ class TheHookSpoolStaysInTheProfile(unittest.TestCase):
         self.assertFalse(E.under_profile(_tmp(self), home))
         self.assertFalse(E.under_profile(home + "-sibling", home))
 
+    def test_no_word_of_the_spools_documentation_calls_it_owner_only(self):
+        """N-L3: on Windows the spool inherits the profile's ACL - this user, the administrators and
+        SYSTEM - so "owner-only" is not true of it, in the module that writes it or in the doc that
+        tells a user what mokata keeps in their home."""
+        import mokata_emit as E
+        here = os.path.dirname(os.path.abspath(__file__))
+        # CORPUS: THE WORKING TREE - the one public doc that lists what is kept in the home folder.
+        with open(os.path.join(here, "..", "docs", "security.md"), encoding="utf-8") as fh:
+            doc = " ".join(fh.read().split())
+        module = " ".join((E.__doc__ or "").split())
+        self.assertNotIn("hook spool (owner-only)", doc)
+        self.assertNotIn("owner-only file in the per-user spool", module)
+        self.assertIn("hook spool (readable by you, administrators and SYSTEM only", doc)
+
     def test_with_no_profile_a_relative_spool_is_not_in_it(self):
         """N-L2: `%USERPROFILE%` unset leaves `~` unexpanded, so the default spool is the RELATIVE
         `~\\.mokata\\hook-spool` - a folder of the working directory (the repo). It is not the
         profile, and a relative `home` is never one either."""
         import mokata_emit as E
         cwd = _tmp(self)
-        relative = os.path.join("~", ".mokata", "hook-spool")
+        relative = "~/.mokata/hook-spool"
         with mock.patch("os.getcwd", return_value=cwd):
             self.assertFalse(E.under_profile(relative, "~"))
             self.assertFalse(E.under_profile(os.path.join(cwd, "~", ".mokata", "x"), "~"))
-        self.assertFalse(E.under_profile(os.path.join(cwd, "x"), os.path.join("rel", "home")))
+        self.assertFalse(E.under_profile(os.path.join(cwd, "x"), "rel-home"))
         self.assertTrue(E.under_profile(os.path.join(cwd, "x"), cwd))
 
     def test_on_windows_no_profile_means_the_spool_is_refused_and_says_why(self):
         import mokata_emit as E
-        why = E.spool_refusal(os.path.join("~", ".mokata", "hook-spool"), "~", windows=True)
+        why = E.spool_refusal("~/.mokata/hook-spool", "~", windows=True)
         self.assertIn("USERPROFILE", why)
         self.assertIn("inline", why)
 
