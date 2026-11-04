@@ -896,5 +896,158 @@ class JsAndMavenTestsOnWindows(unittest.TestCase):
         self.assertEqual("green", got["tests"][0]["state"], got)
 
 
+class OpeningThePanelStartsNoProgram(unittest.TestCase):
+    """CI-FIX 0.0.27 round 5 (MB4-1). The Proof panel is a READ: opening it, paging it or changing
+    its filter must not start `poetry`/`pipenv` to ask where the env is (10 s each, and on Windows
+    a `poetry.exe` the repo planted would run with no click and no trust prompt). The tool is
+    asked only when a test is actually run — and then only the one the USER has on an absolute
+    PATH entry, by its absolute path."""
+
+    def _repo(self, cmd="pytest -q"):
+        d = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-poetry-"))
+        self.addCleanup(lambda: shutil.rmtree(d, True))
+        init_repo(root=d, profile="standard", assume_yes=True, out=_silent)
+        _set_command(d, cmd)
+        _write(d, "pyproject.toml", "[project]\nname = 'x'\n")
+        for var in ("VIRTUAL_ENV", "CONDA_PREFIX"):
+            if var in os.environ:
+                self.addCleanup(os.environ.__setitem__, var, os.environ.pop(var))
+        return d
+
+    def _fake_tool(self, name, log):
+        """A `poetry`/`pipenv` on the USER's PATH (outside the repo) that logs its argv[0]."""
+        bindir = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-userbin-"))
+        self.addCleanup(lambda: shutil.rmtree(bindir, True))
+        _write(bindir, name, f"#!/bin/sh\necho \"$0 $*\" >> '{log}'\nexit 1\n")
+        os.chmod(os.path.join(bindir, name), 0o755)
+        return bindir
+
+    def _path(self, *dirs):
+        old = os.environ["PATH"]
+        os.environ["PATH"] = os.pathsep.join([*dirs, "/usr/bin", "/bin"])
+        self.addCleanup(os.environ.__setitem__, "PATH", old)
+
+    @unittest.skipIf(os.name == "nt", "POSIX script stands in for the tool; Windows has its own test")
+    def test_opening_paging_and_filtering_the_panel_never_calls_poetry_or_pipenv(self):
+        from mokata.ide import review_context as RC
+        d = tempfile.mkdtemp(prefix="mk-p7-panel-")
+        self.addCleanup(lambda: shutil.rmtree(d, True))
+        plant(d, tests={"t_ok": ["AC-1"]}, red=["t_ok"])
+        _set_command(d, "pytest -q")
+        _write(d, "pyproject.toml", "[project]\nname = 'x'\n")
+        log = os.path.join(d, "..", f"tool-calls-{os.path.basename(d)}.log")
+        self.addCleanup(lambda: os.path.exists(log) and os.remove(log))
+        bindir = self._fake_tool("poetry", log)
+        _write(bindir, "pipenv", f"#!/bin/sh\necho \"$0 $*\" >> '{log}'\nexit 1\n")
+        os.chmod(os.path.join(bindir, "pipenv"), 0o755)
+        self._path(bindir)
+        c = _client(d)
+        for q in ("", "&page=2", "&status=red", "&ac=AC-1"):
+            r = c.get(f"/api/review/tests?run={RUN}{q}")
+            self.assertEqual(200, r.status_code, r.text)
+            self.assertIn("command", r.json())
+        for _ in range(3):
+            RC.test_command(d)
+        self.assertFalse(os.path.exists(log), "a tool was started by a READ: "
+                         + (open(log).read() if os.path.exists(log) else ""))
+
+    @unittest.skipIf(os.name == "nt", "POSIX script stands in for the tool; Windows has its own test")
+    def test_a_runner_only_the_tool_could_supply_is_not_declared_missing_by_a_read(self):
+        """With env discovery skipped the panel cannot know `pytest` is absent from a poetry env,
+        so it does not say so: it offers the run and says where the runner will be looked up."""
+        from mokata.ide import review_context as RC
+        d = self._repo("mk-p7-no-such-runner")
+        self._path()
+        got = RC.test_command(d)
+        self.assertTrue(got["runnable"], got)
+        self.assertIn("poetry/pipenv", got["note"])
+        self.assertNotIn("not an executable on the project's PATH", got["note"])
+
+    @unittest.skipIf(os.name == "nt", "POSIX scripts")
+    def test_the_tool_is_asked_by_its_absolute_path_when_a_test_runs(self):
+        """When asking IS allowed (a run), the user's own `poetry` is found on an absolute PATH
+        entry and started by its absolute path — never the bare name."""
+        from mokata import project_env
+        d = self._repo()
+        log = os.path.join(d, "..", f"abs-{os.path.basename(d)}.log")
+        self.addCleanup(lambda: os.path.exists(log) and os.remove(log))
+        bindir = self._fake_tool("poetry", log)
+        project_env.resolve(d, None, {"PATH": bindir})
+        with open(log, encoding="utf-8") as fh:
+            first = fh.read().split()[0]
+        self.assertEqual(os.path.join(bindir, "poetry"), first)
+
+    @unittest.skipIf(os.name == "nt", "POSIX scripts")
+    def test_a_poetry_the_repo_planted_is_never_run_by_any_path(self):
+        from mokata import project_env
+        from mokata.ide import review_context as RC
+        d = self._repo()
+        mark = os.path.join(d, "PLANTED_RAN")
+        for name in ("poetry", "pipenv"):
+            _write(d, name, f"#!/bin/sh\necho x > '{mark}'\nexit 1\n")
+            os.chmod(os.path.join(d, name), 0o755)
+        here = os.getcwd()
+        os.chdir(d)                                   # `mokata ide` runs with the repo as cwd
+        self.addCleanup(os.chdir, here)
+        for path in (".", "", "relative/dir", d, d + os.sep + ".." + os.sep + os.path.basename(d)):
+            project_env.resolve(d, None, {"PATH": path})                      # a run's lookup
+            RC.run_tests(d, ["mk-p7-none"], ["t1"], environ={"PATH": path})   # the click
+            self.assertFalse(os.path.exists(mark), f"the repo's own poetry/pipenv ran (PATH={path!r})")
+        RC.test_command(d)                                                     # the read
+        self.assertFalse(os.path.exists(mark))
+
+    @unittest.skipUnless(os.name == "nt", "Windows: CreateProcess searches the parent's cwd first")
+    def test_on_windows_a_poetry_exe_in_the_repo_is_never_run(self):
+        from mokata import project_env
+        from mokata.ide import review_context as RC
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("no Node on this machine")
+        d = self._repo()
+        shutil.copy(node, os.path.join(d, "poetry.exe"))
+        mark = os.path.join(d, "PLANTED_RAN.txt")
+        _write(d, "env", "require('fs').writeFileSync(%s, 'ran');" % json.dumps(mark))
+        here = os.getcwd()
+        os.chdir(d)
+        self.addCleanup(os.chdir, here)
+        RC.test_command(d)
+        self.assertFalse(os.path.exists(mark), "a READ ran the repo's poetry.exe")
+        project_env.resolve(d, None, dict(os.environ))
+        self.assertFalse(os.path.exists(mark), "a run's lookup ran the repo's poetry.exe")
+
+
+class TheWindowsCommandLineIsNotAShellEither(unittest.TestCase):
+    """CI-FIX 0.0.27 round 5 (MB4-2). On Windows no `cmd.exe` is ever started for a test command,
+    and a command that only `cmd.exe` would read as two commands (`&`) or escape (`^`) is refused
+    up front with the remedy — it can never run its second half."""
+
+    def _root(self, cmd):
+        d = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-cmdmeta-"))
+        self.addCleanup(lambda: shutil.rmtree(d, True))
+        init_repo(root=d, profile="standard", assume_yes=True, out=_silent)
+        _set_command(d, cmd)
+        return d
+
+    def test_a_lone_ampersand_or_caret_is_refused_on_windows_with_the_remedy(self):
+        from mokata.ide import review_context as RC
+        for cmd in ("npm test & mkdir X", "npm test ^ x", "pytest -q &mkdir X"):
+            got = RC.test_command(self._root(cmd), nt=True)
+            self.assertFalse(got["runnable"], cmd)
+            self.assertIn("shell syntax", got["note"], cmd)
+
+    def test_the_shim_refusal_reads_true_for_the_ide_and_for_the_gated_merge(self):
+        from mokata.ide import review_context as RC
+        bindir = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-mvn-"))
+        self.addCleanup(lambda: shutil.rmtree(bindir, True))
+        _write(bindir, "mvn.cmd", "@echo off\r\n")
+        head, why = RC.resolve_runner(self._root("mvn test"), "mvn", bindir, nt=True)
+        self.assertIsNone(head)
+        self.assertNotIn("test id", why)
+        self.assertIn("gated merge", why)
+        self.assertIn("merge-override", why)
+        self.assertIn("terminal", why)
+        self.assertNotIn("node <path", why, "a JS remedy is not offered to Maven")
+
+
 if __name__ == "__main__":
     unittest.main()
