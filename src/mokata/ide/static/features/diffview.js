@@ -573,6 +573,18 @@
   function selectionCite() {
     const s = window.getSelection && window.getSelection();
     if (!s || !s.rangeCount || s.isCollapsed) return null;
+    const cells = splitSideCells();
+    if (cells && cells.length) {                       // a Split drag: that side, over every hunk it reaches
+      const f = curFile(cells[0].td.closest("table.d"));
+      const nums = [];
+      for (const { td } of cells) {
+        const no = td.closest("tr").querySelector(`td.no[data-side="${dragSide}"]`);
+        if (no && no.dataset.n) nums.push(+no.dataset.n);
+      }
+      if (!f || !nums.length) return null;
+      const a = Math.min(...nums), b = Math.max(...nums);
+      return `${citePath(f, dragSide)}:${a}${b > a ? "-" + b : ""}`;
+    }
     const node = s.anchorNode && (s.anchorNode.nodeType === 1 ? s.anchorNode : s.anchorNode.parentElement);
     const td0 = node && node.closest && node.closest("td.tx");
     const t = td0 && td0.closest("table.d");
@@ -621,13 +633,72 @@
       const td = ev.target.closest && ev.target.closest("table.d td.no[data-n]");
       if (td) cite(td);
     });
-    // a drag that starts on one side of a Split view selects that side only
+    // a drag that starts on one side of a Split view selects that side only. The side is held HERE,
+    // for the whole drag, not on the table it started in: a Split view is one table per hunk, so a
+    // drag from hunk 1 into hunk 2 crosses the gap row between them and its anchor can land outside
+    // every table - the side must survive that.
     host.addEventListener("mousedown", (ev) => {
       const td = ev.target.closest && ev.target.closest("table.split td.tx");
-      for (const t of host.querySelectorAll("table.split[data-sel]")) t.removeAttribute("data-sel");
-      if (td && td.dataset.side) td.closest("table").dataset.sel = td.dataset.side;
+      dragSide = td && td.dataset.side ? td.dataset.side : null;
+      // every hunk's table, so the other side is unselectable all along a drag that crosses hunks
+      for (const t of host.querySelectorAll("table.split")) {
+        if (dragSide) t.dataset.sel = dragSide; else t.removeAttribute("data-sel");
+      }
+    });
+    // What a person COPIES from a Split selection is that side's code and nothing else. `user-select:
+    // none` on the other side's cells is not enough: Chromium 141 still serialises the other side's
+    // cells and the screen-reader "removed:/added:" spans into the copy. So the copy is built here.
+    host.addEventListener("copy", (ev) => {
+      const text = splitSideText();
+      if (text === null || !ev.clipboardData) return;
+      ev.clipboardData.setData("text/plain", text);
+      ev.preventDefault();
     });
   }
+  // The side a drag started on in a Split view ("old" | "new"), or null when the last mousedown was
+  // anywhere else. Set by the mousedown above.
+  let dragSide = null;
+  // The cells of the dragged side that a selection covers, across EVERY hunk's table and EVERY range
+  // (Firefox splits a selection around `user-select:none` into several), each with the range that
+  // reaches it. Gap rows hold no `td.tx[data-side]`, so they contribute nothing. null when there is
+  // no Split drag or the selection does not touch a Split table at all.
+  function splitSideCells() {
+    const s = window.getSelection && window.getSelection();
+    if (!dragSide || !s || !s.rangeCount || s.isCollapsed) return null;
+    const ranges = [];
+    for (let i = 0; i < s.rangeCount; i++) ranges.push(s.getRangeAt(i));
+    const tables = [...document.querySelectorAll("table.split")]
+      .filter((t) => ranges.some((r) => r.intersectsNode(t)));
+    if (!tables.length) return null;
+    const out = [];
+    for (const t of tables) {
+      for (const td of t.querySelectorAll(`td.tx[data-side="${dragSide}"]`)) {
+        const range = ranges.find((r) => r.intersectsNode(td));
+        if (range) out.push({ td, range });
+      }
+    }
+    return out;
+  }
+  // The selected text of ONE side of a Split view (the side the drag started in) over every hunk the
+  // selection reaches, cell by cell and clipped to the range at its ends; null when the selection is
+  // not in a Split view. Unchanged lines elided between two hunks are not in the copy.
+  function splitSideText() {
+    const cells = splitSideCells();
+    if (!cells) return null;
+    const lines = [];
+    for (const { td, range } of cells) {
+      const part = document.createRange();
+      part.selectNodeContents(td);
+      if (range.compareBoundaryPoints(Range.START_TO_START, part) > 0) part.setStart(range.startContainer, range.startOffset);
+      if (range.compareBoundaryPoints(Range.END_TO_END, part) < 0) part.setEnd(range.endContainer, range.endOffset);
+      const box = document.createElement("div");
+      box.append(part.cloneContents());
+      for (const x of box.querySelectorAll(".dv-sr, .dv-noeol, .dv-cr")) x.remove();
+      lines.push(box.textContent);
+    }
+    return lines.join("\n");
+  }
+  dv.splitSideText = splitSideText;
 
   // =========================================================================== the toggles
   let tools = null;
