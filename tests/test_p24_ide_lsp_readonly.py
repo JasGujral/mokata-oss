@@ -100,6 +100,20 @@ def same_argv(a, b):
     return len(a) == len(b) and all(os.path.normcase(x) == os.path.normcase(y) for x, y in zip(a, b))
 
 
+def lsp_get(c, url, within=60.0):
+    """A language-server READ the way a page makes it: a question that outlasts the short sync
+    window (a cold Windows runner starting a Python server is slower than 0.3 s) is answered with
+    a job handle (202), and the page then fetches the finished answer by that handle. So: ask with
+    the widest window, and follow the handle until the answer is final. The response is returned
+    like `c.get` (`.json()`, `.status_code`)."""
+    sep = "&" if "?" in url else "?"
+    r = c.get(f"{url}{sep}sync_ms=2000")
+    end = time.monotonic() + within
+    while r.status_code == 202 and time.monotonic() < end:
+        r = c.get(f"{url}{sep}sync_ms=2000&job={r.json()['job']}")
+    return r
+
+
 def wait_for(pred, timeout=20.0, step=0.05):
     end = time.monotonic() + timeout
     while time.monotonic() < end:
@@ -179,7 +193,7 @@ class UntrustedMeansNoProcess(_Repo):
                     self.assertEqual("untrusted", body["lsp"]["state"])
                     self.assertIn("not trusted", body["lsp"]["note"])
                 popen.assert_not_called()
-            d = c.get("/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
+            d = lsp_get(c, "/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
             self.assertEqual("parse", d["symbol"])
             self.assertTrue(any(r["path"] == "src/app/core.py" and r["line"] == 1 for r in d["results"]),
                             d["results"])
@@ -513,27 +527,27 @@ class DefinitionAndReferencesRoundTrip(_Repo):
             srv = state.lsp.get("python")
             self.assertTrue(wait_for(srv.is_ready))
 
-            d = c.get("/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
+            d = lsp_get(c, "/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
             self.assertEqual("lsp", d.get("source"), d)
             self.assertEqual("fake-lsp", d["lsp"]["server"])
             self.assertEqual([("src/app/core.py", 1, 5)],
                              [(x["path"], x["line"], x["col"]) for x in d["results"]])
             self.assertEqual("def parse(text):", d["results"][0]["snippet"])
 
-            refs = c.get("/api/lsp/references?path=src/app/core.py&line=1&col=5").json()
+            refs = lsp_get(c, "/api/lsp/references?path=src/app/core.py&line=1&col=5").json()
             self.assertEqual("lsp", refs["source"])
             self.assertEqual([1, 8], sorted(x["line"] for x in refs["results"]))
             self.assertTrue(all(x["path"] == "src/app/core.py" for x in refs["results"]))
 
-            hov = c.get("/api/lsp/hover?path=src/app/core.py&line=8&col=16").json()
+            hov = lsp_get(c, "/api/lsp/hover?path=src/app/core.py&line=8&col=16").json()
             self.assertIn("(function) parse", hov["hover"])
 
-            sym = c.get("/api/lsp/symbols?path=src/app/core.py").json()
+            sym = lsp_get(c, "/api/lsp/symbols?path=src/app/core.py").json()
             self.assertEqual([("parse", "function", 1), ("total", "function", 7)],
                              [(s["name"], s["kind"], s["line"]) for s in sym["results"]])
 
             self.assertTrue(wait_for(lambda: srv.diagnostics))
-            diag = c.get("/api/lsp/diagnostics?path=src/app/core.py").json()
+            diag = lsp_get(c, "/api/lsp/diagnostics?path=src/app/core.py").json()
             self.assertEqual("lsp", diag["source"])
             self.assertEqual([(8, "warning", "fake-lsp")],
                              [(x["line"], x["severity"], x["source"]) for x in diag["results"]])
@@ -618,11 +632,11 @@ class ProcessManagement(_Repo):
             state.lsp.finder = finder_for("--crash-on", "textDocument/hover", "--index-seconds", "0.1")
             self.assertEqual(200, c.post("/api/lsp/start", json={"language": "python"}, headers=ORIGIN).status_code)
             self.assertTrue(wait_for(state.lsp.get("python").is_ready))
-            hov = c.get("/api/lsp/hover?path=src/app/core.py&line=1&col=5").json()
+            hov = lsp_get(c, "/api/lsp/hover?path=src/app/core.py&line=1&col=5").json()
             self.assertEqual("graph", hov["source"])
             self.assertEqual("crashed", hov["lsp"]["state"])
             self.assertIn("fake-lsp", hov["lsp"]["note"])
-            d = c.get("/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
+            d = lsp_get(c, "/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
             self.assertEqual("lsp", d["source"])
             self.assertEqual("restarted", d["lsp"]["state"])
             self.assertEqual(1, c.get("/api/lsp").json()["servers"][0]["restarts"])
@@ -964,7 +978,7 @@ class IndexingIsAVisibleJob(_Repo):
             self.assertIn("fake-lsp indexing", idx[0]["label"])
             self.assertTrue(wait_for(lambda: "Indexing" in (state.jobs.get(idx[0]["id"]).note or "")))
             self.assertTrue(idx[0]["keep"])                 # outlives the page, like an index build
-            d = c.get("/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
+            d = lsp_get(c, "/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
             self.assertEqual("graph", d["source"])
             self.assertEqual("indexing", d["lsp"]["state"])
             self.assertEqual(idx[0]["id"], d["lsp"]["job"])
@@ -973,7 +987,7 @@ class IndexingIsAVisibleJob(_Repo):
             self.assertEqual("indexing", c.get("/api/lsp").json()["servers"][0]["state"])
             self.assertTrue(wait_for(srv.is_ready, timeout=10))
             self.assertTrue(wait_for(lambda: state.jobs.get(idx[0]["id"]).state == "done"))
-            d = c.get("/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
+            d = lsp_get(c, "/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
             self.assertEqual("lsp", d["source"])
             self.assertEqual("ready", c.get("/api/lsp").json()["servers"][0]["state"])
         finally:
@@ -1017,7 +1031,7 @@ class TheMokataEdge(_Repo):
             # the fake server only knows the documents it was handed: open the tests too
             for rel in ("tests/test_core.py", "tests/test_more.py"):
                 srv.open(os.path.join(self.repo, *rel.split("/")), "python")
-            refs = c.get("/api/lsp/references?path=src/app/core.py&line=1&col=5").json()
+            refs = lsp_get(c, "/api/lsp/references?path=src/app/core.py&line=1&col=5").json()
             self.assertEqual("lsp", refs["source"])
             edge = refs["edge"]
             tests = [r for r in refs["results"] if r["test"]]
@@ -1045,9 +1059,9 @@ class TheMokataEdge(_Repo):
                 self.assertEqual(200, c.post("/api/lsp/start", json={"language": "python"}, headers=ORIGIN).status_code)
                 srv = state.lsp.get("python")
                 self.assertTrue(wait_for(srv.is_ready))
-                c.get("/api/lsp/symbols?path=src/app/core.py")
+                lsp_get(c, "/api/lsp/symbols?path=src/app/core.py")
                 self.assertTrue(wait_for(lambda: srv.diagnostics))
-                diag = c.get("/api/lsp/diagnostics?path=src/app/core.py").json()
+                diag = lsp_get(c, "/api/lsp/diagnostics?path=src/app/core.py").json()
                 self.assertEqual([("total", ["AC-2", "AC-9"])],
                                  [(d["symbol"], d["ac"]) for d in diag["results"]])
                 self.assertEqual(["AC-2", "AC-9"], [t["ac"] for t in diag["edge"]["ac"]])
