@@ -98,9 +98,11 @@ class Breakaway(unittest.TestCase):
         d = tempfile.mkdtemp(prefix="vb3b-")
         deep = os.path.join(d, "deep.py")
         open(deep, "w").write(DEEP)
-        for interp_name, interp in (("base", sys.executable),):
+        subprocess.run([sys.executable, "-m", "venv", "--without-pip", os.path.join(d, "v")], check=True)
+        vpy = os.path.join(d, "v", "Scripts", "python.exe")
+        for interp_name, interp in (("base", sys.executable), ("venv-launcher", vpy)):
             for flags_name, flags in (("BREAKAWAY", 0x01000000), ("BREAKAWAY|NEW_GROUP|NO_WINDOW", 0x01000000 | 0x200 | 0x08000000)):
-                pf = os.path.join(d, f"pids-{flags_name.replace('|', '_')}")
+                pf = os.path.join(d, f"pids-{interp_name}-{flags_name.replace('|', '_')}")
                 leader = ("import subprocess,sys,time\n"
                           f"b=subprocess.Popen([{interp!r},{deep!r},{pf!r}],creationflags={flags})\n"
                           "print(b.pid,flush=True);time.sleep(120)\n")
@@ -111,14 +113,20 @@ class Breakaway(unittest.TestCase):
                 end = time.monotonic() + 60
                 while not os.path.exists(pf) and time.monotonic() < end:
                     time.sleep(0.05)
+                if not os.path.exists(pf):
+                    job.terminate()
+                    rest = proc.stdout.read().decode(errors="replace")
+                    P(flags_name, interp_name, "NO PIDFILE; leader said:", repr(first), repr(rest[-1500:]))
+                    proc.stdout.close()
+                    continue
                 bp, bc = map(int, open(pf).read().split())
-                P(flags_name, "leader", proc.pid, "in our job:", in_job(proc.pid, job.handle),
+                P(flags_name, interp_name, "leader", proc.pid, "in our job:", in_job(proc.pid, job.handle),
                   "| breakaway", bp, "(printed", first, ") in our job:", in_job(bp, job.handle),
                   "in any job:", in_any_job(bp), "| its child", bc, "in our job:", in_job(bc, job.handle))
                 job.terminate()
                 proc.wait(timeout=60)
                 res = {pid: wait_dead(pid, 20) for pid in (proc.pid, bp, bc)}
-                P(flags_name, "dead after terminate:", res)
+                P(flags_name, interp_name, "dead after terminate:", res)
                 for pid, dead in res.items():
                     if not dead:
                         subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
