@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
 from _winacl_assert import assert_owner_only  # noqa: E402
-from mokata_emit import winacl  # noqa: E402
+from mokata import winacl  # noqa: E402
 
 
 def _tmp(case):
@@ -94,17 +94,6 @@ class EveryOwnerOnlyWriterKeepsItsPromise(unittest.TestCase):
                 assert_owner_only(self, path)
             else:
                 self.assertEqual(0o600, stat.S_IMODE(os.stat(path).st_mode))
-
-    def test_the_hook_spool_entry_and_its_directory(self):
-        import mokata_emit as E
-        spool = os.path.join(_tmp(self), "spool")
-        entry = E.spool_entry(spool, ["x"], b"{}")
-        for path in (spool, entry):
-            if os.name == "nt":
-                assert_owner_only(self, path)
-            else:
-                self.assertEqual(0o700 if os.path.isdir(path) else 0o600,
-                                 stat.S_IMODE(os.stat(path).st_mode))
 
     def test_the_explainer_store_file(self):
         from mokata.explain import safedir

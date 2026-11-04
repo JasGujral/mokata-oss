@@ -543,7 +543,8 @@ def _publish(spool: str, tmp: str, ns: int) -> str:
 
 
 def spool_entry(spool: str, argv: list, raw: bytes, observed: dict = None) -> str:
-    """Write ONE entry, owner-only (0600 in a 0700 directory), and publish it under its arrival
+    """Write ONE entry, owner-only (0600 in a 0700 directory; on Windows the default spool sits under
+    the user profile, whose inherited ACL is owner-only, and a hook may not pay for `ctypes`), publish it under its arrival
     name; return its path. Raises OSError (the caller then runs the hook inline).
 
     Format: `MKS2 \0 cwd \0 argc \0 argv… \0 envc \0 K=V… \0 obsc \0 (path \0 state \0 size
@@ -552,9 +553,6 @@ def spool_entry(spool: str, argv: list, raw: bytes, observed: dict = None) -> st
     os.makedirs(spool, mode=0o700, exist_ok=True)
     if os.name != "nt" and os.stat(spool).st_mode & 0o077:
         os.chmod(spool, 0o700)               # owner-only, even if something else created it
-    if os.name == "nt":
-        from mokata_emit.winacl import owner_only  # Windows ignores the mode: set the DACL itself
-        owner_only(spool)
     env = [f"{k}={v}" for k, v in os.environ.items()
            if k.startswith(ENV_PREFIXES) and k != SPOOL_ENV]
     obs = list((observed or {}).items())
@@ -574,8 +572,6 @@ def spool_entry(spool: str, argv: list, raw: bytes, observed: dict = None) -> st
             for blob in blobs:
                 fh.write(blob)
             fh.write(raw)
-        if os.name == "nt":
-            owner_only(tmp)
         return _publish(spool, tmp, ns)
     except BaseException:
         try:

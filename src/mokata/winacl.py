@@ -12,9 +12,9 @@ with no ACLs (FAT, exFAT) answers ERROR_NOT_SUPPORTED: there is nothing to prote
 one answer is not an error; every other failure raises `OSError` — owner-only is a promise, and a
 promise that could not be kept is not quietly dropped.
 
-Lives in `mokata_emit` (not `mokata`) because the hook spool needs it and a hook may import the
-standard library alone (`test_o3_hook_emitter`); `mokata` imports it from here, like `repo_paths`
-does `fold_component`. Stdlib-only.
+Not used by the hook spool: a hook may import the standard library alone and pays no `ctypes`
+(`test_o3_hook_emitter`), and the spool lives under the user profile (`~/.mokata/hook-spool`),
+whose inherited ACL is already owner-only. Stdlib-only; imports nothing from mokata.
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
 
