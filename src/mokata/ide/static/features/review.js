@@ -310,7 +310,8 @@
     const res = el("ul", "rv-job-tests");
     for (const t of j.tests || []) {
       const li = el("li", "", "");
-      li.append(el("span", "rv-chip rv-st-" + (t.state === "error" ? "red" : t.state), t.state), el("span", "mono", t.id),
+      li.append(el("span", "rv-chip rv-st-" + (t.state === "not-run" ? "unrun" : t.state), t.state === "not-run" ? "not run" : t.state), el("span", "mono", t.id),
+                el("span", "dim small", t.state === "not-run" ? ` ${t.note || "could not start"}` : ""),
                 el("span", "dim small", t.seconds !== undefined ? ` ${t.seconds}s` : ""));
       res.append(li);
     }

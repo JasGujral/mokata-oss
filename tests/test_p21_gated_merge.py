@@ -1222,7 +1222,9 @@ class TheMergeRunsTheTestCommandTheWayThePreflightSaysItDoes(_Merge):
             MS.run_full_suite(self.main, wt)
         why = str(caught.exception)
         self.assertIn("mvn.cmd", why)
-        self.assertIn("merge-override", why)
+        self.assertIn("gated merge is not possible", why)
+        self.assertNotIn("merge-override", why)
+        self.assertIn("macOS, Linux or WSL", why)
         self.assertNotIn("test id", why)
         self.assertFalse(os.path.exists(mark), "the batch file was started")
 

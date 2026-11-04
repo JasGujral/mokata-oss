@@ -338,11 +338,12 @@ def _shim_why(name: str, shim: str, js: Optional[bool], tried: str = "") -> str:
             f"cmd.exe would re-parse the command line"
             + (f"; its own JavaScript entry (run through node) was not found either"
                + (f" ({tried})" if tried else "") if js else "")
-            + f". Set `settings.baseline.test_command` to a real executable"
+            + f". mokata cannot run this project's tests on Windows, so a gated merge is not "
+              f"possible here: it needs the suite's result and {base} is never run. Set "
+              f"`settings.baseline.test_command` to a real executable"
             + (" (for example `node <path to the runner's .js>`)" if js else "")
-            + f" — {base} itself is never run, by the IDE re-run or by the gated merge's full-suite "
-              f"run. Run these tests in your terminal; to merge without the runner's suite "
-              f"evidence, a human records `mokata worktree merge-override`")
+            + ", or merge this project from macOS, Linux or WSL. Run the tests yourself in a "
+              "terminal meanwhile")
 
 
 def test_command(root: str, nt: Optional[bool] = None) -> Dict[str, Any]:
@@ -382,7 +383,11 @@ def test_command(root: str, nt: Optional[bool] = None) -> Dict[str, Any]:
     head, why = resolve_runner(root, argv[0], _path_of(run_env), nt)
     if head is None and why == _not_found(argv[0]) and penv is None and (
             os.path.exists(os.path.join(root, "pyproject.toml"))
-            or os.path.exists(os.path.join(root, "Pipfile"))):
+            or os.path.exists(os.path.join(root, "Pipfile"))) and any(
+            which_in(tool, path_dirs({"PATH": _path_of(penv_env)}, cwd=root), nt=nt,
+                     refuse_under=root) for tool in ("poetry", "pipenv")):
+        # (`which_in` only looks: no process is started. The claim is made only when a tool that
+        # could supply the env is installed — otherwise it is the plain "not found" below.)
         return {"configured": True, "text": cmd, "argv": argv, "runnable": True,
                 "note": f"`{argv[0]}` is not on the base PATH; it is looked up in the project's "
                         f"poetry/pipenv environment when a test runs (the panel starts no tool to "
@@ -422,12 +427,18 @@ def record_rerun(root: str, run_id: str, command: str, results: List[Dict[str, A
     """Write an IDE re-run into the run's test record (`test_runs.record_test_run`, the record the
     Stop gate reads) with its provenance — ruled 2026-10-28: it counts as evidence and is always
     told apart from an agent run. Each test RED or GREEN by its own exit; the run "passed" only
-    when every test passed AND the run completed (a cancelled run never reads as passing)."""
+    when every test passed AND the run completed (a cancelled run never reads as passing).
+    A test that never RAN (`not-run`: the runner could not start) is not an outcome — never RED,
+    never in the record; a job in which nothing ran records nothing."""
     from ..test_runs import record_test_run
-    outcome = {r["id"]: r["state"] == "green" for r in results}
-    codes = [r.get("rc") for r in results]
+    ran = [r for r in results if r["state"] in ("green", "red")]
+    if not ran:                  # nothing ran (could not start): there is no outcome to record
+        return {}
+    outcome = {r["id"]: r["state"] == "green" for r in ran}
+    codes = [r.get("rc") for r in ran]
     bad = next((c for c in codes if c != 0), 0)
-    return record_test_run(root, run_id, passed=complete and all(outcome.values()),
+    return record_test_run(root, run_id, passed=complete and all(outcome.values())
+                           and len(ran) == len(results),
                            command=command, results=outcome, source="ide",
                            actor=ide_actor(), exit_code=bad if isinstance(bad, int) else -1)
 
@@ -550,11 +561,11 @@ def run_tests(root: str, argv: List[str], ids: List[str],
                                          stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                          stderr=subprocess.STDOUT)
             except OSError as exc:
-                results.append({"id": tid, "state": "error", "rc": None,
+                results.append({"id": tid, "state": "not-run", "rc": None,
                                 "seconds": 0.0,
                                 "note": (f"could not start: {exc}")[:300]})
                 if on_test:
-                    on_test(tid, "error", time.time())
+                    on_test(tid, "not-run", time.time())
                 emit(f"{tid}: could not start")
                 continue
             try:
@@ -575,7 +586,8 @@ def run_tests(root: str, argv: List[str], ids: List[str],
     return {"tests": results, "command": " ".join(argv), "env": env_line,
             "output": out["tail"].decode("utf-8", "replace"), "output_bytes": out["bytes"],
             "passed": sum(1 for r in results if r["state"] == "green"),
-            "failed": sum(1 for r in results if r["state"] != "green")}
+            "failed": sum(1 for r in results if r["state"] == "red"),
+            "not_run": sum(1 for r in results if r["state"] == "not-run")}
 
 
 def _drive(proc: Any, take: Callable[[bytes], None], tick: Callable[[], None],

@@ -751,7 +751,7 @@ class TheRepoDoesNotChooseTheRunner(unittest.TestCase):
         self.addCleanup(os.chdir, here)
         for path in (".", "", "relative/dir", d + os.sep + "..", ):
             got = RC.run_tests(d, ["mk-p7-planted"], ["t1"], environ={"PATH": path})
-            self.assertEqual("error", got["tests"][0]["state"], path)
+            self.assertEqual("not-run", got["tests"][0]["state"], path)
             self.assertIn("not an executable on the project's PATH", got["tests"][0]["note"], path)
             self.assertFalse(os.path.exists(mark), f"the repo chose the runner (PATH={path!r})")
 
@@ -951,16 +951,34 @@ class OpeningThePanelStartsNoProgram(unittest.TestCase):
         self.assertFalse(os.path.exists(log), "a tool was started by a READ")
 
     @unittest.skipIf(os.name == "nt", "POSIX script stands in for the tool; Windows has its own test")
-    def test_a_runner_only_the_tool_could_supply_is_not_declared_missing_by_a_read(self):
-        """With env discovery skipped the panel cannot know `pytest` is absent from a poetry env,
-        so it does not say so: it offers the run and says where the runner will be looked up."""
+    def test_a_runner_only_an_installed_tool_could_supply_is_not_declared_missing_by_a_read(self):
+        """With env discovery skipped the panel cannot know `pytest` is absent from a poetry env —
+        but only when poetry/pipenv IS installed (found without starting it). Then it offers the
+        run and says where the runner will be looked up."""
         from mokata.ide import review_context as RC
         d = self._repo("mk-p7-no-such-runner")
-        self._path()
+        log = os.path.join(d, "..", f"never-{os.path.basename(d)}.log")
+        self._path(self._fake_tool("poetry", log))
         got = RC.test_command(d)
         self.assertTrue(got["runnable"], got)
         self.assertIn("poetry/pipenv", got["note"])
-        self.assertNotIn("not an executable on the project's PATH", got["note"])
+        self.assertFalse(os.path.exists(log), "finding the tool started it")
+
+    def test_with_neither_poetry_nor_pipenv_installed_the_read_claims_no_lookup(self):
+        """MB5-1: "looked up in the poetry/pipenv env" is a promise; with no such tool anywhere
+        on the user's PATH it is false, so the read says plainly the runner was not found."""
+        from mokata.ide import review_context as RC
+        d = self._repo("mk-p7-no-such-runner")
+        empty = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-nopath-"))
+        self.addCleanup(lambda: shutil.rmtree(empty, True))
+        old = os.environ["PATH"]
+        os.environ["PATH"] = empty
+        self.addCleanup(os.environ.__setitem__, "PATH", old)
+        got = RC.test_command(d)
+        self.assertFalse(got["runnable"], got)
+        self.assertNotIn("poetry", got["note"])
+        self.assertIn("not an executable on the project's PATH", got["note"])
+
 
     @unittest.skipIf(os.name == "nt", "POSIX scripts")
     def test_the_tool_is_asked_by_its_absolute_path_when_a_test_runs(self):
@@ -1045,10 +1063,61 @@ class TheWindowsCommandLineIsNotAShellEither(unittest.TestCase):
         head, why = RC.resolve_runner(self._root("mvn test"), "mvn", bindir, nt=True)
         self.assertIsNone(head)
         self.assertNotIn("test id", why)
-        self.assertIn("gated merge", why)
-        self.assertIn("merge-override", why)
-        self.assertIn("terminal", why)
+        self.assertIn("gated merge is not possible", why)
+        self.assertNotIn("merge-override", why, "that override cannot unblock this merge")
+        self.assertIn("real executable", why)
+        self.assertIn("macOS, Linux or WSL", why)
         self.assertNotIn("node <path", why, "a JS remedy is not offered to Maven")
+
+
+class ATestThatNeverRanIsNeverRecordedRed(unittest.TestCase):
+    """MB5-1: a re-run whose runner could not start (not found, spawn failed, a trailing-dot
+    spelling) has no outcome. It must not enter the TDD red set, must not make the last suite
+    run read as failed, and the panel shows it as not run — it was never red."""
+
+    def test_a_click_on_a_runner_that_cannot_start_records_nothing_red(self):
+        from mokata import tdd_state
+        from mokata.ide import review_context as RC
+        from mokata.test_runs import read_test_record
+        d = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-falsered-"))
+        self.addCleanup(lambda: shutil.rmtree(d, True))
+        plant(d, tests={"t_ok": ["AC-1"]}, green=["t_ok"])
+        _set_command(d, "mk-p7-no-such-runner -q")
+        empty = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-nopath-"))
+        self.addCleanup(lambda: shutil.rmtree(empty, True))
+        before = read_test_record(d, RUN)
+        got = RC.run_tests(d, ["mk-p7-no-such-runner", "-q"], ["t_ok"], environ={"PATH": empty},
+                           on_done=lambda res, done: RC.record_rerun(d, RUN, "x", res, done))
+        self.assertEqual("not-run", got["tests"][0]["state"])
+        self.assertIsNone(got["tests"][0]["rc"])
+        self.assertEqual((0, 1), (got["failed"], got["not_run"]))
+        red, green = tdd_state.load(_store(d, RUN), RUN)
+        self.assertNotIn("t_ok", red)
+        self.assertIn("t_ok", green, "the earlier green was overwritten by a run that never ran")
+        self.assertEqual(before.get("last_suite"), read_test_record(d, RUN).get("last_suite"))
+
+    def test_record_rerun_ignores_not_run_and_keeps_ran_ones(self):
+        from mokata import tdd_state
+        from mokata.ide import review_context as RC
+        from mokata.test_runs import read_test_record
+        d = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-mixed-"))
+        self.addCleanup(lambda: shutil.rmtree(d, True))
+        plant(d, tests={"t_a": ["AC-1"], "t_b": ["AC-1"]})
+        RC.record_rerun(d, RUN, "x", [{"id": "t_a", "state": "green", "rc": 0},
+                                      {"id": "t_b", "state": "not-run", "rc": None}], True)
+        red, green = tdd_state.load(_store(d, RUN), RUN)
+        self.assertIn("t_a", green)
+        self.assertNotIn("t_b", red | green)
+        self.assertFalse(read_test_record(d, RUN)["last_suite"]["passed"],
+                         "a pass cannot be claimed with a test that did not run")
+
+    def test_the_panel_shows_a_test_that_did_not_run_as_not_run_not_red(self):
+        path = os.path.join(os.path.dirname(__file__), "..", "src", "mokata", "ide", "static",
+                            "features", "review.js")
+        with open(path, encoding="utf-8") as fh:
+            js = fh.read()
+        self.assertIn('t.state === "not-run" ? "unrun"', js)
+        self.assertNotIn('t.state === "error" ? "red"', js)
 
 
 if __name__ == "__main__":
