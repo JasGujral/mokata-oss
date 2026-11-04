@@ -102,10 +102,15 @@ class Server:
     reports as an infrastructure problem rather than as the product defect it is.
     """
 
-    def __init__(self, cwd):
+    def __init__(self, cwd, argv=None):
         self.proc = subprocess.Popen(
-            [resolve("mokata-mcp")], cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True, bufsize=1)
+            argv or [resolve("mokata-mcp")], cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, bufsize=1,
+            # The server speaks UTF-8 on stdio (MCP). `text=True` alone decodes with the Windows
+            # ANSI code page (cp1252), which cannot read the em dashes in `tools/list` — the
+            # reader thread died of UnicodeDecodeError, looked like an EOF, and the check then
+            # waited for a server that was alive and fine. That was the whole ten-minute "hang".
+            encoding="utf-8", errors="replace")
         # stderr is drained from the first byte by its own thread: a server that writes more than a
         # pipe holds would otherwise block on stderr, and a failure report that READS stderr after
         # the fact would block for as long as anything (a child the server started) kept the pipe
@@ -140,6 +145,8 @@ class Server:
             raise StepFailed("the server did not answer within %.0fs — it started and then went "
                              "quiet, which is a different failure from not starting. stderr:\n%s"
                              % (READ_TIMEOUT, self.stderr_tail()))
+        if "exc" in holder:
+            raise StepFailed("reading the server's answer failed: %r" % (holder["exc"],))
         line = holder.get("line")
         if not line:
             try:
@@ -192,6 +199,7 @@ class Server:
 
 def _run(argv, cwd):
     proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace",
                           stdin=subprocess.DEVNULL, timeout=180)
     return proc
 
