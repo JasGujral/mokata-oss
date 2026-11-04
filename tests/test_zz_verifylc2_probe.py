@@ -86,24 +86,63 @@ class VLC2(unittest.TestCase):
         set_sddl(p, "D:P(A;;FA;;;%s)" % winacl.current_user_sid())
 
     def test_2_race_private_temp_opened_under_inherited_acl(self):
-        """A folder that admits BUILTIN\\Users read (a repo on D:\\ made by a default Windows root).
-        A watcher opens every new temp file (sharing read/write/delete, so it never blocks the
-        rename) and records the DACL it saw THROUGH ITS HANDLE right after open; after the writer
-        is done it reads the content through that same handle."""
+        """ORACLE: a watcher thread impersonates a RESTRICTED copy of this token in which the user's
+        own SID and BUILTIN\\Administrators are DENY-ONLY - so it can open a file only through an
+        ACE for some OTHER principal (here BUILTIN\\Users, inherited from a D:\\ folder): exactly
+        what another standard local account could open. It opens every new temp file it sees
+        (sharing r/w/delete, never blocking the rename); after the writes, the content is read
+        through the handles it got."""
         import ctypes, msvcrt
         from ctypes import wintypes
         ker = ctypes.WinDLL("kernel32", use_last_error=True)
-        ker.CreateFileW.argtypes = [ctypes.c_wchar_p, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
-                                    wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p]
-        ker.CreateFileW.restype = ctypes.c_void_p
+        adv = ctypes.WinDLL("advapi32", use_last_error=True)
+        vp = ctypes.c_void_p
+        ker.CreateFileW.argtypes = [ctypes.c_wchar_p, wintypes.DWORD, wintypes.DWORD, vp,
+                                    wintypes.DWORD, wintypes.DWORD, vp]
+        ker.CreateFileW.restype = vp
+        ker.GetCurrentProcess.restype = vp
+        adv.OpenProcessToken.argtypes = [vp, wintypes.DWORD, ctypes.POINTER(vp)]
+        adv.ConvertStringSidToSidW.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(vp)]
+
+        class SAA(ctypes.Structure):
+            _fields_ = [("Sid", vp), ("Attributes", wintypes.DWORD)]
+        adv.CreateRestrictedToken.argtypes = [vp, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(SAA),
+                                              wintypes.DWORD, vp, wintypes.DWORD, vp, ctypes.POINTER(vp)]
+        adv.ImpersonateLoggedOnUser.argtypes = [vp]
         INVALID = ctypes.c_void_p(-1).value
+        tok = vp()
+        assert adv.OpenProcessToken(ker.GetCurrentProcess(), 0x0002 | 0x0008 | 0x0004 | 0x0001, ctypes.byref(tok))
+        sids = (SAA * 2)()
+        for i, s_ in enumerate((winacl.current_user_sid(), "S-1-5-32-544")):
+            psid = vp()
+            assert adv.ConvertStringSidToSidW(s_, ctypes.byref(psid))
+            sids[i].Sid = psid
+        rtok = vp()
+        ok = adv.CreateRestrictedToken(tok, 0, 2, sids, 0, None, 0, None, ctypes.byref(rtok))
+        P("restricted token", ok, ctypes.get_last_error())
+
         d = base()
         r = subprocess.run([ICACLS, d, "/grant", "*S-1-5-32-545:(OI)(CI)(RX)"], capture_output=True, text=True)
         P("race folder ACL", r.returncode, acl(d))
+        plain = os.path.join(d, "plain.txt"); open(plain, "w").write("p")
+        own = os.path.join(d, "own.txt"); open(own, "w").write("o"); winacl.owner_only(own)
+
+        def try_open(path):
+            h = ker.CreateFileW(path, 0x80000000, 7, None, 3, 0, None)
+            if not h or h == INVALID:
+                return None, ctypes.get_last_error()
+            return h, 0
         stop = threading.Event()
-        held = {}
+        held, calib = {}, {}
 
         def watch():
+            if not adv.ImpersonateLoggedOnUser(rtok):
+                calib["imp"] = ctypes.get_last_error(); return
+            h, e = try_open(plain); calib["plain(inherited Users RX)"] = "OPENED" if h else "refused %d" % e
+            if h: ker.CloseHandle(vp(h))
+            h, e = try_open(own); calib["owner-only"] = "OPENED" if h else "refused %d" % e
+            if h: ker.CloseHandle(vp(h))
+            calib["ready"] = True
             while not stop.is_set():
                 try:
                     names = os.listdir(d)
@@ -112,13 +151,17 @@ class VLC2(unittest.TestCase):
                 for n in names:
                     if n in held or not n.startswith(".tmp-"):
                         continue
-                    h = ker.CreateFileW(os.path.join(d, n), 0x80000000 | 0x00020000, 7, None, 3, 0, None)
-                    if not h or h == INVALID:
-                        continue
-                    fd = msvcrt.open_osfhandle(h, os.O_RDONLY)
-                    held[n] = (fd, handle_sddl(fd))
+                    h, e = try_open(os.path.join(d, n))
+                    if h:
+                        held[n] = msvcrt.open_osfhandle(h, os.O_RDONLY)
+            adv.RevertToSelf()
         t = threading.Thread(target=watch, daemon=True)
         t.start()
+        for _ in range(200):
+            if calib.get("ready") or "imp" in calib:
+                break
+            time.sleep(0.05)
+        P("oracle calibration (restricted identity):", calib)
         N, errs = 3000, 0
         for i in range(N):
             try:
@@ -129,19 +172,17 @@ class VLC2(unittest.TestCase):
         time.sleep(0.5)
         stop.set()
         t.join(5)
-        inherited, leaked, sample = 0, 0, None
-        for n, (fd, sddl) in held.items():
-            if sddl and "D:P(" not in sddl:
-                inherited += 1
-                os.lseek(fd, 0, 0)
-                data = os.read(fd, 100)
-                if data.startswith(b"TOKEN-"):
-                    leaked += 1
-                    sample = sample or (n, sddl, data)
+        leaked, sample = 0, None
+        for n, fd in held.items():
+            os.lseek(fd, 0, 0)
+            data = os.read(fd, 100)
+            if data.startswith(b"TOKEN-"):
+                leaked += 1
+                sample = sample or (n, data)
             os.close(fd)
-        P("race: %d private writes (%d errors), watcher caught %d temp files, %d opened while the ACL "
-          "was still INHERITED (Users RX), %d of those then read the secret through the old handle; "
-          "sample=%r" % (N, errs, len(held), inherited, leaked, sample))
+        P("race: %d private writes (%d errors); the RESTRICTED identity opened %d temp files, and %d of "
+          "those handles then read the secret; sample=%r; final ACL of one target: %s"
+          % (N, errs, len(held), leaked, sample, acl(os.path.join(d, "secret0.json"))))
 
     def test_3_ordinary_writes_keep_inherited(self):
         d = base()
