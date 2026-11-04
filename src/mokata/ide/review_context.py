@@ -268,73 +268,7 @@ def _manifest(root: str) -> Tuple[Any, str]:
         return None, str(exc)[:300]
 
 
-#: A JS runner's own JavaScript entry: name -> the npm packages (global installs) whose `bin` has
-#: it. On Windows these tools exist as `.cmd` shims only; the entry run by `node` is the same
-#: program without cmd.exe. (corepack ships `pnpm` and `yarn` entries.)
-JS_RUNNERS = {"npm": ("npm",), "npx": ("npm",), "pnpm": ("pnpm", "corepack"),
-              "yarn": ("yarn", "corepack")}
-
-
-def _path_of(env: Dict[str, str]) -> Optional[str]:
-    return next((v for k, v in env.items() if k.upper() == "PATH"), None)     # Win: "Path"
-
-
-def _shim_in(dirs: List[str], name: str) -> Optional[str]:
-    """The `.cmd`/`.bat` that is the only thing named `name` on these directories, if any."""
-    for d in dirs:
-        for ext in (".cmd", ".bat"):
-            cand = os.path.join(d, name + ext)
-            if os.path.isfile(cand):
-                return cand
-    return None
-
-
-def resolve_runner(root: str, name: str, path_var: Optional[str],
-                   nt: Optional[bool] = None) -> Tuple[Optional[List[str]], Optional[str]]:
-    """`(argv head, None)` when `name` can be started WITHOUT a shell, else `(None, why)` — a why
-    that is true and says what to do. A bare name is found by the product's finder (absolute PATH
-    entries, never the repo); on Windows, where npm/npx/pnpm/yarn are `.cmd` shims, the head is
-    `[node.exe, <the tool's own JS entry>]` found as the LSP finder finds node servers. A `.cmd`/
-    `.bat` is never run (cmd.exe would parse the test id and the repo's files). An explicit path is
-    used as written, unless it is such a shim."""
-    from .lsp import _global_node_package_bin
-    nt = (os.name == "nt") if nt is None else nt
-    bare = os.path.basename(name) == name and not os.path.isabs(name)
-    if not bare:
-        if nt and name.lower().endswith((".cmd", ".bat")):
-            return None, _shim_why(name, name, None)
-        return [name], None
-    dirs = path_dirs({"PATH": path_var or ""}, cwd=root)
-    exe = which_in(name, dirs, nt=nt)
-    if exe:
-        return [exe], None
-    if not nt:
-        return None, f"`{name}` is not an executable on the project's PATH"
-    shim = _shim_in(dirs, name)
-    env = {"PATH": path_var or ""}
-    tried = ""
-    for pkg in JS_RUNNERS.get(name, ()):
-        head, w = _global_node_package_bin(root, name, pkg, env)
-        if head is not None:
-            return head, None
-        tried = tried or w
-    if shim is None:
-        return None, f"`{name}` is not an executable on the project's PATH"
-    return None, _shim_why(name, shim, name in JS_RUNNERS, tried)
-
-
-def _shim_why(name: str, shim: str, js: Optional[bool], tried: str = "") -> str:
-    base = os.path.basename(shim)
-    return (f"`{name}` is a Windows batch file ({shim}) and mokata never runs a .cmd/.bat — "
-            f"cmd.exe would re-parse the test id"
-            + (f"; its own JavaScript entry (run through node) was not found either"
-               + (f" ({tried})" if tried else "") if js else "")
-            + f". Run these tests in your terminal, or set `settings.baseline.test_command` to a "
-              f"real executable (for example `node <path to the runner's .js>`) — {base} itself "
-              f"cannot be re-run from the IDE")
-
-
-def test_command(root: str, nt: Optional[bool] = None) -> Dict[str, Any]:
+def test_command(root: str) -> Dict[str, Any]:
     """`{configured, text, argv, runnable, note}` — the project's own test command, and whether
     the IDE can run it WITHOUT a shell."""
     from ..baseline import baseline_command
@@ -361,13 +295,6 @@ def test_command(root: str, nt: Optional[bool] = None) -> Dict[str, Any]:
     if not argv:
         return {"configured": True, "text": cmd, "argv": [], "runnable": False,
                 "note": "the test command is empty"}
-    from .. import project_env
-    penv_env = dict(os.environ)
-    run_env = project_env.activated(penv_env, project_env.resolve(
-        root, project_env.settings_python(man), penv_env))
-    head, why = resolve_runner(root, argv[0], _path_of(run_env), nt)
-    if head is None:
-        return {"configured": True, "text": cmd, "argv": argv, "runnable": False, "note": why}
     return {"configured": True, "text": cmd, "argv": argv, "runnable": True,
             "note": "each test runs as `" + cmd + " <test id>` in the project's env"}
 
@@ -492,13 +419,17 @@ def run_tests(root: str, argv: List[str], ids: List[str],
     # The runner as the PROJECT's env finds it (its bin/ first on PATH): `pytest` is the venv's.
     # The product's own finder (`exe_path`): absolute PATH entries only, never the cwd — which is
     # the repo — and on Windows only a real `.exe`/`.com`, never a `.cmd` shim (cmd.exe).
-    path_var = _path_of(run_env)
+    path_var = next((v for k, v in run_env.items() if k.upper() == "PATH"), None)  # Win: "Path"
     # An explicit path (`/abs/pytest`, `./gradlew`: the manifest's own words) is used as written;
     # a BARE name is found only by the finder — and when it finds nothing the run does not start
     # (handing the bare name to Popen would let the OS search `.` or a relative PATH entry,
     # which is the repo).
-    head, not_found = resolve_runner(root, argv[0], path_var)
-    argv = [*(head or [argv[0]]), *argv[1:]]
+    bare = os.path.basename(argv[0]) == argv[0] and not os.path.isabs(argv[0])
+    exe = which_in(argv[0], path_dirs({"PATH": path_var or ""})) if bare else argv[0]
+    not_found = (f"`{argv[0]}` is not an executable on the project's PATH"
+                 + (" (a .cmd/.bat shim is never run)" if os.name == "nt" else "")
+                 ) if bare and not exe else None
+    argv = [exe or argv[0], *argv[1:]]
     out = {"tail": bytearray(), "bytes": 0}
     results: List[Dict[str, Any]] = []
 

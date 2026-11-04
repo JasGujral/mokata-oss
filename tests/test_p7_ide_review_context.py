@@ -829,8 +829,9 @@ class JsAndMavenTestsOnWindows(unittest.TestCase):
         `[node, .../bin/npm-cli.js]`; the shim is never in the argv; the preflight offers it."""
         from mokata.ide import review_context as RC
         node_dir = self._tool_dir("node")
-        node = os.path.join(node_dir, "node")
-        _write(node_dir, "node", "#!/bin/sh\n")
+        node_name = "node.exe" if os.name == "nt" else "node"   # only its NAME is resolved here
+        node = os.path.join(node_dir, node_name)
+        _write(node_dir, node_name, "#!/bin/sh\n")
         os.chmod(node, 0o755)
         prefix = self._tool_dir("npm")
         _fake_npm(prefix, "// npm\n")
