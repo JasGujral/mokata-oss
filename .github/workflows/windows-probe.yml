@@ -55,10 +55,10 @@ env:
   # Point it at the modules whose Windows behaviour you are trying to observe; everything else
   # in this file stays put. Keep it SHORT — the value of this workflow is its wall clock.
   #
-  # Currently (0.0.27 WIN-LOCK-WAIT): the fair state lock on `msvcrt` — `test_win_lock_wait` (its
-  # Windows-only test is control-gated: it SKIPS, saying why, off Windows), the O14 stress test
-  # whose Windows-only 45 s allowance the probe run re-derives, and the lock/StateStore module.
-  PROBE_MODULES: "test_p24_ide_lsp_readonly test_p4_copy_context_usages test_a35_the_tty_sweep_instrument_works test_p7_ide_review_context"
+  # Currently (0.0.25 B-01): the Windows cmd-window fix, observed on a real desktop —
+  # `test_win_no_console_windows` (control-gated: it SKIPS, saying why, on a runner that cannot
+  # show a console window), plus the flag/shim/server-light modules it stands on.
+  PROBE_MODULES: "test_zz_verifyb_probe test_p7_ide_review_context"
 
 jobs:
   probe:
@@ -105,14 +105,7 @@ jobs:
         env:
           MOKATA_REQUIRE_MCP_SDK: '1'
         working-directory: tests
-        run: |
-          python -c "import faulthandler,sys,unittest; faulthandler.dump_traceback_later(400, exit=True); unittest.main(module=None, argv=['x','-v']+sys.argv[1:])" ${PROBE_MODULES} > ../probe.log 2>&1 &
-          pid=$!
-          for i in $(seq 1 450); do kill -0 $pid 2>/dev/null || break; sleep 1; done
-          wait $pid; rc=$?
-          cat ../probe.log
-          taskkill //F //IM python.exe || true
-          exit $rc
+        run: python -m unittest -v ${PROBE_MODULES}
       - name: Skip inventory — WHICH tests do not run on Windows, and why
         # ⭐ ALWAYS, even when the probe above went red: the inventory is the answer to a
         # different question and withholding it because something else failed is how "204 skips"
