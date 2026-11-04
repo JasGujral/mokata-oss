@@ -58,7 +58,7 @@ env:
   # Currently (0.0.25 B-01): the Windows cmd-window fix, observed on a real desktop —
   # `test_win_no_console_windows` (control-gated: it SKIPS, saying why, on a runner that cannot
   # show a console window), plus the flag/shim/server-light modules it stands on.
-  PROBE_MODULES: "test_zz_verifyb5_attack test_zz_verifyb4_attack test_p7_ide_review_context.OpeningThePanelStartsNoProgram test_p7_ide_review_context.TheWindowsCommandLineIsNotAShellEither test_p21_gated_merge.TheMergeRunsTheTestCommandTheWayThePreflightSaysItDoes"
+  PROBE_MODULES: "test_zz_verifyb5_attack test_p7_ide_review_context test_p21_gated_merge"
 
 jobs:
   probe:
